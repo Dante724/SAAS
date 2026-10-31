@@ -8,7 +8,7 @@ income transaction to the chosen account (or to client debt).
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -28,7 +28,7 @@ from backend.models import (
     Payment,
     Transaction,
 )
-from backend.services.auth import assert_perm, has_perm, require_perm, record_scope
+from backend.services.auth import assert_perm, get_current_employee, has_perm, require_perm, record_scope
 from backend.core import paging as _paging
 from backend.services.money import add_to_column, claim_status, q2
 
@@ -536,10 +536,12 @@ class OrderPaymentIn(BaseModel):
 async def order_payment_context(
     order_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_view_finance")),
+    current: Employee = Depends(get_current_employee),
 ):
     """What the close-order payment window needs: order total, and the accounts
-    available per payment method."""
+    available per payment method. Open to anyone who can take payments, not only finance."""
+    if not (await has_perm(db, current, "can_take_payments") or await has_perm(db, current, "can_view_finance")):
+        raise HTTPException(403, "Your role does not allow this action (can_take_payments)")
     o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
@@ -556,12 +558,14 @@ async def order_payment_context(
     )).scalar() or 0
     return {
         "order_total": o.total or 0,
+        "location_id": o.location_id,
         "item_cost": (o.labour_total or 0) + (o.parts_total or 0),
         "already_paid": await net_paid(db, order_id),
         "credited": await credited(db, order_id),
         "prepaid": prepaid,
         "remaining": await balance_due(db, o),
         "overpaid": await overpaid(db, o),   # refund due if prepayments exceed total
+        "written_off": float(o.written_off or 0),   # unpaid balance of a dropped job
         "accounts_by_method": by_method,
     }
 
@@ -635,9 +639,26 @@ async def post_order_payment(db, org_id, o, amount, acc, method, *, actor_id=Non
 async def pay_order(
     order_id: str,
     data: OrderPaymentIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_view_finance")),
+    current: Employee = Depends(require_perm("can_take_payments")),
 ):
+    # A retried tap with the same Idempotency-Key returns the first payment's answer: the row
+    # lock below only stops a second "pay the balance", not a part payment sent twice.
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "cash.pay_order")
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        result = await _pay_order(order_id, data, db, current)
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
+
+
+async def _pay_order(order_id: str, data: OrderPaymentIn, db: AsyncSession, current: Employee):
     # Lock the order row so two concurrent "pay" requests serialize (Postgres) — combined with the
     # remaining<=0 guard below this prevents a double-click / webhook-race from double-posting a
     # payment. (with_for_update is a no-op on SQLite, which already serializes writes.)
@@ -659,25 +680,25 @@ async def pay_order(
     # Never more than the balance due (credit notes included): money for later goes in as a
     # prepayment, an invoice overpayment through Invoices › Record payment.
     if q2(amount) > q2(remaining):
-        raise HTTPException(400, f"Payment exceeds the balance due ({q2(remaining):g})")
+        raise HTTPException(400, f"That's more than is owed. The balance due is {q2(max(remaining, 0)):.2f}.")
 
     from backend.routers.feed import log_system_event
 
     from backend.services.invoice_money import apply_order_payment, notify_payment_received
     if data.method == "balance":
+        # Paid out of credit the client already has with the shop (an advance, an overpayment).
+        # No money moves and the ledger already holds that credit, so nothing is posted to it:
+        # posting "income" here erased real debt when the client had no credit at all (B3).
+        from backend.services.ledger import available_credit
+        credit = await available_credit(db, current.org_id, o.client_id, order_id)
+        if q2(amount) > credit:
+            raise HTTPException(400, f"This client has only {credit:.2f} of credit to pay from. "
+                                     "Take the rest in cash or by card.")
         await _before_new_invoice(db, current.org_id, o, True)
-        # Close on account — no cash movement; the payment reduces the client's receivable.
-        # Build 124: post it through the unified ledger so the balance moves *and* the
-        # movement is auditable (was a silent Client.balance write before).
-        pays = await apply_order_payment(db, o, amount, method="balance", received_by_id=current.id,
-                                         reference="Closed on account")
-        if o.client_id:
-            from backend.services.ledger import post_contact_ledger
-            await post_contact_ledger(db, current.org_id, o.client_id, "income", -abs(amount),
-                                      note=f"Payment for {o.order_number}", ref_type="payment",
-                                      ref_id=pays[0].id, created_by_id=current.id)
+        await apply_order_payment(db, o, amount, method="balance", received_by_id=current.id,
+                                  reference="Paid from client credit")
         await log_system_event(db, current.org_id, "order", order_id,
-                               f"Closed on client balance: {amount}")
+                               f"Paid from client credit: {amount}")
         await db.flush()
         await cancel_open_pay_links(db, o)
         await db.commit()
@@ -921,18 +942,23 @@ async def _txn_summary(db, q, day: Optional[str]) -> dict:
 
     from sqlalchemy import case
     sub = q.where(func.coalesce(Transaction.status, "") != "deleted").subquery()
+    # Money in or out is the sign, whatever the type: sales post as invoice_payment and refunds as
+    # refund/expense, and counting only "income" showed a day of sales as "In today 0" (B3).
+    # Transfers between the shop's own accounts are neither.
     absamt = func.abs(sub.c.amount)
+    moves = func.coalesce(sub.c.txn_type, "") != "transfer"
+    is_in, is_out = moves & (sub.c.amount > 0), moves & (sub.c.amount < 0)
     cols = [func.count(),
-            func.coalesce(func.sum(case((sub.c.txn_type == "income", sub.c.amount), else_=0)), 0),
-            func.coalesce(func.sum(case((sub.c.txn_type == "expense", absamt), else_=0)), 0)]
+            func.coalesce(func.sum(case((is_in, sub.c.amount), else_=0)), 0),
+            func.coalesce(func.sum(case((is_out, absamt), else_=0)), 0)]
     if day:
         try:
             d0 = datetime.combine(_date.fromisoformat(day), datetime.min.time())
         except ValueError:
             raise HTTPException(422, "day must be YYYY-MM-DD")
         on_day = (sub.c.actual_date >= d0) & (sub.c.actual_date < d0 + timedelta(days=1))
-        cols += [func.coalesce(func.sum(case((on_day & (sub.c.txn_type == "income"), absamt), else_=0)), 0),
-                 func.coalesce(func.sum(case((on_day & (sub.c.txn_type == "expense"), absamt), else_=0)), 0)]
+        cols += [func.coalesce(func.sum(case((on_day & is_in, absamt), else_=0)), 0),
+                 func.coalesce(func.sum(case((on_day & is_out, absamt), else_=0)), 0)]
     r = (await db.execute(select(*cols).select_from(sub))).one()
     out = {"count": r[0], "income": float(r[1] or 0), "expense": float(r[2] or 0)}
     if day:
@@ -961,8 +987,9 @@ async def cash_summary(
 ):
     accts = (await db.execute(select(Account).where(Account.org_id == current.org_id, Account.active == True))).scalars().all()  # noqa: E712
     total = sum(a.balance for a in accts if not a.is_virtual)
+    # Client balance > 0 means the client owes the shop (services/ledger.py sign convention).
     debt = (await db.execute(
-        select(func.coalesce(func.sum(Client.balance), 0)).where(Client.org_id == current.org_id, Client.balance < 0)
+        select(func.coalesce(func.sum(Client.balance), 0)).where(Client.org_id == current.org_id, Client.balance > 0)
     )).scalar() or 0
     return {
         "total_cash": total,

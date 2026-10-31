@@ -13,10 +13,6 @@ from backend.services.dates import now_utc
 
 log = logging.getLogger("tekly.jobs")
 
-_MAX_ATTEMPTS = 5
-_STALE_SEND_MIN = 10     # a send times out after seconds; "sending" this long means the worker died
-
-
 @job_runner.every(600, "status-sla-sweep")
 async def sweep_status_sla() -> None:
     """Flag work orders that have exceeded their status time limit.
@@ -53,8 +49,11 @@ async def sweep_notifications() -> None:
         org_ids = (await db.execute(
             select(Organisation.id).where(Organisation.active == True)  # noqa: E712
         )).scalars().all()
-        queued = sent = 0
-        for oid in org_ids:
+    queued = sent = 0
+    for oid in org_ids:
+        # A session per org: a DB error leaves its session unusable until rolled back, and with
+        # one shared session every org after the failing one failed too (512 orgs, 510 failed).
+        async with AsyncSessionLocal() as db:
             try:
                 queued += await nr.queue_reminders(db, org_id=oid)
                 queued += await nr.queue_appointment_reminders(db, org_id=oid)
@@ -85,8 +84,9 @@ async def sweep_contact_lifecycle() -> None:
         org_ids = (await db.execute(
             select(Organisation.id).where(Organisation.active == True)  # noqa: E712
         )).scalars().all()
-        sent = 0
-        for oid in org_ids:
+    sent = 0
+    for oid in org_ids:
+        async with AsyncSessionLocal() as db:   # per org, as in notification-sweep
             try:
                 sent += await nr.notify_contact_birthdays(db, org_id=oid)
                 await db.commit()
@@ -97,61 +97,39 @@ async def sweep_contact_lifecycle() -> None:
             log.info("contact-lifecycle-sweep: sent %d birthday message(s)", sent)
 
 
-@job_runner.every(300, "webhook-retry-sweep")
-async def retry_failed_webhooks() -> None:
-    """Re-attempt webhook deliveries that failed, with a hard attempt cap.
-
-    Moves transient webhook failures off the request path: the original POST is
-    best-effort during the request; this sweep gives it durable retries.
-    """
-    from datetime import datetime, timedelta
-
-    from sqlalchemy import and_, or_, update
-
+@job_runner.every(3600, "membership-sweep")
+async def sweep_memberships() -> None:
+    """Memberships (docs/SPEC_memberships.md): monthly and renewal invoices, missed-payment pause
+    and lapse, included-item reminders. Hourly, but every step is idempotent per day."""
     from backend.db.database import AsyncSessionLocal
-    from backend.models import WebhookDelivery, WebhookEndpoint
-    from backend.services.webhooks import _attempt, claim_delivery
+    from backend.models import Membership, Organisation
+    from backend.services import memberships as mb
 
     async with AsyncSessionLocal() as db:
-        now = datetime.utcnow()
-        # R3: a worker that died mid-send left the row at "sending" forever. After the send
-        # timeout has long passed, count that try as a failed attempt and let it be retried.
-        stale = now - timedelta(minutes=_STALE_SEND_MIN)
-        await db.execute(update(WebhookDelivery).where(
-            WebhookDelivery.status == "sending",
-            or_(WebhookDelivery.claimed_at < stale,
-                and_(WebhookDelivery.claimed_at.is_(None), WebhookDelivery.created_at < stale)),
-        ).values(status="failed", attempts=WebhookDelivery.attempts + 1, next_attempt_at=None,
-                 error="Interrupted while sending").execution_options(synchronize_session=False))
-        # Out of attempts: say so, instead of sitting at "failed" forever.
-        await db.execute(update(WebhookDelivery).where(
-            WebhookDelivery.status == "failed", WebhookDelivery.attempts >= _MAX_ATTEMPTS,
-        ).values(status="abandoned").execution_options(synchronize_session=False))
-        await db.commit()
-        rows = (await db.execute(
-            select(WebhookDelivery).where(
-                WebhookDelivery.status.in_(("failed", "pending")),
-                WebhookDelivery.attempts < _MAX_ATTEMPTS,
-                # R3 backoff: a failed delivery waits longer after each try
-                or_(WebhookDelivery.next_attempt_at.is_(None), WebhookDelivery.next_attempt_at <= now),
-            ).limit(100)
-        )).scalars().all()
-        if not rows:
-            return
-        retried = 0
-        for d in rows:
-            ep = (await db.execute(
-                select(WebhookEndpoint).where(WebhookEndpoint.id == d.endpoint_id)
-            )).scalar_one_or_none()
-            if not ep or not ep.active:
-                d.status = "abandoned"
-                continue
-            if not await claim_delivery(db, d, ("failed", "pending")):
-                continue      # another worker (or the post-commit outbox) is on it
-            await _attempt(d, ep.url, ep.secret, d.payload)
-            await db.commit()
-            retried += 1
-        await db.commit()
+        org_ids = (await db.execute(select(Membership.org_id).distinct())).scalars().all()
+        for oid in org_ids:
+            try:
+                org = (await db.execute(select(Organisation).where(
+                    Organisation.id == oid, Organisation.active == True))).scalar_one_or_none()  # noqa: E712
+                if org:
+                    stats = await mb.sweep(db, org)
+                    await db.commit()
+                    if any(stats.values()):
+                        log.info("membership-sweep %s: %s", oid, stats)
+            except Exception:  # noqa: BLE001 — one bad org never stalls the sweep
+                await db.rollback()
+                log.exception("membership-sweep failed for org %s", oid)
+
+
+@job_runner.every(60, "webhook-retry-sweep")
+async def retry_failed_webhooks() -> None:
+    """Re-attempt webhook deliveries on the backoff schedule (1m, 5m, 30m, 2h, 8h, 24h), reclaim
+    rows a crashed worker left in "sending", and switch off endpoints that have failed for 24 hours.
+    The work lives in services.webhooks.retry_sweep (concurrent, bounded per endpoint)."""
+    from backend.services.webhooks import retry_sweep
+
+    retried = await retry_sweep()
+    if retried:
         log.info("webhook-retry-sweep: re-attempted %d delivery(ies)", retried)
 
 
@@ -210,3 +188,74 @@ async def encrypt_plain_passcodes() -> None:
         await db.commit()
         if done:
             log.info("passcode-encrypt-sweep: encrypted %d record(s)", done)
+
+
+@job_runner.every(3600, "idempotency-sweep")
+async def sweep_idempotency_keys() -> None:
+    """Forget Idempotency-Keys older than 48h (services/idempotency.py)."""
+    from backend.db.database import AsyncSessionLocal
+    from backend.routers.mobile_messages import expire_open_handoffs
+    from backend.services.idempotency import sweep
+
+    async with AsyncSessionLocal() as db:
+        removed = await sweep(db)
+        if removed:
+            log.info("idempotency-sweep: removed %d old key(s)", removed)
+        expired = await expire_open_handoffs(db)
+        if expired:
+            log.info("idempotency-sweep: %d phone message(s) never confirmed, marked unknown", expired)
+
+
+@job_runner.every(900, "sense-brief-sweep")
+async def sweep_morning_briefs() -> None:
+    """Tekly Sense: send each shop's morning brief once a day, after the owner's chosen hour
+    in the shop's time zone. Only shops that turned email or push on have anything to send;
+    send_briefs claims the day before sending, so a restart never sends twice."""
+    from backend.db.database import AsyncSessionLocal
+    from backend.models import AutomationSetting, Organisation
+    from backend.services import sense
+
+    async with AsyncSessionLocal() as db:
+        org_ids = (await db.execute(
+            select(AutomationSetting.org_id)
+            .join(Organisation, Organisation.id == AutomationSetting.org_id)
+            .where(AutomationSetting.key == sense.SETTING_KEY, AutomationSetting.enabled == True,  # noqa: E712
+                   Organisation.active == True))).scalars().all()  # noqa: E712
+        sent = 0
+        for oid in org_ids:
+            try:
+                sent += await sense.send_briefs(db, oid)
+            except Exception:  # noqa: BLE001 — one bad org never stalls the sweep
+                await db.rollback()
+                log.exception("sense-brief-sweep failed for org %s", oid)
+        if sent:
+            log.info("sense-brief-sweep: sent %d brief(s)", sent)
+
+
+
+@job_runner.every(3600, "sense-agents-sweep")
+async def sweep_sense_agents() -> None:
+    """Tekly Sense agents: draft (or schedule) collections, quote follow-up and win-back
+    messages for shops that turned an agent on. Sending happens in notification-sweep, which
+    re-checks consent, opening hours and the switches at the moment of sending."""
+    from backend.db.database import AsyncSessionLocal
+    from backend.models import AutomationSetting, Organisation
+    from backend.services import sense, sense_agents
+
+    if sense_agents.platform_off():
+        return
+    async with AsyncSessionLocal() as db:
+        org_ids = (await db.execute(
+            select(AutomationSetting.org_id)
+            .join(Organisation, Organisation.id == AutomationSetting.org_id)
+            .where(AutomationSetting.key == sense.SETTING_KEY, AutomationSetting.enabled == True,  # noqa: E712
+                   Organisation.active == True))).scalars().all()  # noqa: E712
+        made = 0
+        for oid in org_ids:
+            try:
+                made += await sense_agents.run_agents(db, oid)
+            except Exception:  # noqa: BLE001 — one bad org never stalls the sweep
+                await db.rollback()
+                log.exception("sense-agents-sweep failed for org %s", oid)
+        if made:
+            log.info("sense-agents-sweep: %d message(s) drafted or scheduled", made)

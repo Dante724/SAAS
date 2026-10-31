@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
+import PrintSetupCard from "../../components/PrintSetupCard";
 
 /* Settings › Document templates — a gallery of what you print, one section per kind of document,
    each template shown as a real page filled with a recent job (/documents/preview). Kinds with no
@@ -12,10 +13,17 @@ const KINDS: { key: string; label: string; hint: string; icon: string }[] = [
   { key: "estimate", label: "Estimate", hint: "Sent for approval", icon: "request_quote" },
   { key: "invoice", label: "Invoice", hint: "What the customer pays", icon: "receipt_long" },
   { key: "credit_note", label: "Credit note", hint: "Money credited back to a client", icon: "undo" },
-  { key: "receipt", label: "Payment receipt", hint: "After they pay", icon: "payments" },
+  { key: "receipt", label: "Receipts", hint: "POS sales and payments", icon: "payments" },
   { key: "label", label: "Labels and price tags", hint: "Stickers for items and shelves", icon: "label" },
   { key: "other", label: "Other documents", hint: "Anything else you print", icon: "description" },
 ];
+
+const WHEN: Record<string, string> = { create: "job created", close: "job closed", sale: "sale" };
+// " · prints by itself: job created, sale" — or nothing when it only prints on request.
+function autoText(events?: string[]) {
+  const on = (events || []).filter((e) => WHEN[e]);
+  return on.length ? ` · prints by itself: ${on.map((e) => WHEN[e]).join(", ")}` : "";
+}
 
 function Thumb({ t }: { t: any }) {
   const [html, setHtml] = useState<string | null>(null);
@@ -82,7 +90,7 @@ export default function DocumentTemplatesPage({ templates, onOpen, onChanged, on
             <span className="text-sm font-medium text-ink-primary truncate">{t.name}</span>
             {t.is_default && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 flex-shrink-0">Default</span>}
           </div>
-          <div className="text-[11px] text-ink-tertiary">{t.doc_type === "label" ? "Label" : (t.page_size || "a4").toUpperCase()}{(t.print_statuses || []).length ? ` · only in ${(t.print_statuses || []).length} status${(t.print_statuses || []).length === 1 ? "" : "es"}` : ""}</div>
+          <div className="text-[11px] text-ink-tertiary">{t.doc_type === "label" ? "Label" : (t.page_size || "a4").toUpperCase()}{(t.print_statuses || []).length ? ` · only in ${(t.print_statuses || []).length} status${(t.print_statuses || []).length === 1 ? "" : "es"}` : ""}{autoText(t.auto_print_events)}</div>
         </div>
       </button>
       <button aria-label={`More actions for ${t.name}`} onClick={(e) => { e.stopPropagation(); setMenu(menu === t.id ? null : t.id); }}
@@ -105,6 +113,8 @@ export default function DocumentTemplatesPage({ templates, onOpen, onChanged, on
         <p className="text-xs text-ink-tertiary">Receipts, estimates, invoices and labels. Each preview is filled with your latest job so you see exactly what customers get.</p>
         <button onClick={() => onOpen(null)} className="mt-3 inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90"><M n="add" c="text-sm" />New template</button>
       </div>
+
+      <PrintSetupCard />
 
       {templates == null && <div className="text-xs text-ink-tertiary">Loading…</div>}
       {templates && KINDS.map((k) => {

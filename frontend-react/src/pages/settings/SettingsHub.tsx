@@ -10,6 +10,7 @@ import { resetTerminology } from "../../lib/useTerminology";
 import { confirmDialog, alertDialog, promptDialog } from "../../lib/dialog";
 import { useMe } from "../../context/Me";
 import { NAV, CATS, SEC_CAT, searchSections, type SectionId } from "./settingsRegistry";
+import { FEATURES } from "../../lib/features";
 import { SetupChecklist } from "./SetupChecklist";
 import { Avatar } from "../orders/look";
 import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
@@ -42,9 +43,11 @@ const ChecklistEditor = lazy(() => import("./ChecklistSettings").then((m) => ({ 
 const CardReadersCard = lazy(() => import("./CardReadersCard"));
 const TelephonySettings = lazy(() => import("./TelephonySettings"));
 const ApiKeysCard = lazy(() => import("./ApiKeysCard"));
+const CheckinPointsSettings = lazy(() => import("./CheckinPointsSettings"));
+const MembershipSettings = lazy(() => import("./MembershipSettings"));
+const WebhooksSettings = lazy(() => import("./WebhooksSettings"));
 const sectionLoading = <div className="text-xs text-ink-tertiary py-6">Loading…</div>;
 import RetentionCard from "./RetentionCard";
-
 
 // Full section set = the registry sections + a few that have no nav entry of their own.
 type Section = SectionId | "overview" | "automation" | "payroll-rules";
@@ -302,6 +305,8 @@ export default function SettingsHub() {
         prohibit_dup_phone: co.prohibit_dup_phone, prohibit_dup_email: co.prohibit_dup_email,
         require_mfa: co.require_mfa, clock_wo_enabled: co.clock_wo_enabled, clock_attendance_enabled: co.clock_attendance_enabled,
         clock_labour_billing: co.clock_labour_billing, rounding_enabled: co.rounding_enabled,
+        default_comment_visibility: co.default_comment_visibility || "private",
+        default_file_visibility: co.default_file_visibility || "private",
       });
       // Switching industry also seeds its starter brands/models and refreshes the app's wording.
       const prevInd = coSaved.current?.industry_template;
@@ -452,8 +457,9 @@ export default function SettingsHub() {
           )}
 
           {sec === "finance" && <InvoiceSettings />}
+          {sec === "memberships" && <MembershipSettings />}
           {sec === "finance" && <FinanceNumbering currency={co?.currency || "$"} shop={{ name: co?.name, address: co?.company_address, phone: co?.company_phone, email: co?.company_email, logo: co?.logo_data }} />}
-          {sec === "ecommerce" && <EcommerceSettings />}
+          {sec === "ecommerce" && FEATURES.ecommerce && <EcommerceSettings />}
           {sec === "sso" && <SsoSettings />}
           {sec === "approvals" && <ApprovalsSettings />}
 
@@ -484,13 +490,14 @@ export default function SettingsHub() {
           {sec === "directories" && <DirectoriesManager />}
 
           {sec === "public" && <PublicPagesSettings shopName={co?.name || ""} logo={co?.logo_data} StatusPicker={(pp) => <StatusMultiSelect value={pp.value} list={pp.list} onChange={pp.onChange} />} />}
+          {sec === "public" && <div className="mt-8"><CheckinPointsSettings /></div>}
 
           {sec === "integrations" && (
             <div className="max-w-4xl space-y-5">
               <IntegrationsHub data={integrations} goSection={setSec} reload={() => setIntegrations(null)} />
               <CardReadersCard />
               <TelephonySettings />
-              <ApiKeysSection />
+              <ApiKeysCard />
               <WebhooksCard />
             </div>
           )}
@@ -1147,6 +1154,7 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
   const emailOn = (data.email?.accounts?.length || 0) > 0;
   const payGw = data.pay?.gateway; const payLive = !!data.pay?.live;
   const payAvail = Object.entries(data.pay?.available || {}).filter(([, v]) => v).map(([k]) => k);
+  const hooks: { stripe?: string; square?: string } = data.pay?.webhook_urls || {};
   const telOn = !!data.tel?.enabled; const telProv = data.tel?.provider;
   const ecomN = data.ecom?.length || 0;
   const origin = typeof window !== "undefined" ? window.location.origin : "";
@@ -1157,18 +1165,21 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
   };
   type Badge = { text: string; tone: "on" | "off" | "neutral" };
   const B = { on: "bg-emerald-100 text-emerald-700", off: "bg-slate-100 text-ink-secondary", neutral: "bg-indigo-50 text-indigo-700" } as const;
-  const groups: { group: string; cards: { name: string; desc: string; badge: Badge; hint?: string; action?: { label: string; onClick: () => void } }[] }[] = [
+  type Webhook = { url: string; help: string };
+  const allGroups: { group: string; cards: { name: string; desc: string; badge: Badge; hint?: string; action?: { label: string; onClick: () => void }; webhook?: Webhook }[] }[] = [
     { group: "Payments", cards: [
       { name: "Online payments (Stripe)", desc: "Hosted checkout & payment links; reconciles into your cashboxes.",
         badge: payLive ? { text: `Live: ${payGw}`, tone: "on" } : keyBadge("stripe"),
         hint: payAvail.length ? `Set up: ${payAvail.join(", ")}` : "Add your Stripe account keys to take card payments",
-        action: keyAction("stripe") },
+        action: keyAction("stripe"),
+        webhook: hooks.stripe ? { url: hooks.stripe, help: "Paste this into Stripe under Developers › Webhooks › Add endpoint, and pick the event checkout.session.completed, so paid links mark jobs as paid." } : undefined },
       { name: "Square", desc: "In-person & online card payments with Square.",
-        badge: keyBadge("square"), action: keyAction("square") },
+        badge: keyBadge("square"), action: keyAction("square"),
+        webhook: hooks.square ? { url: hooks.square, help: "Paste this into your Square Developer Dashboard under Webhooks › Subscriptions, so Square payments show up in Tekly." } : undefined },
       { name: "SumUp", desc: "Card terminal & hosted checkout with SumUp.",
         badge: keyBadge("sumup"), action: keyAction("sumup") } ] },
     { group: "Accounting", cards: [
-      { name: "QuickBooks Online", desc: "Two-way sync of invoices, payments and contacts.",
+      { name: "QuickBooks Online", desc: "Send invoices, payments and contacts to QuickBooks.",
         badge: data.qbo?.connected ? { text: "Connected", tone: "on" } : { text: data.qbo?.configured ? "Not connected" : "Not configured", tone: "off" },
         hint: data.qbo?.configured ? undefined : "Contact Tekly support to turn this on" },
       { name: "Xero", desc: "Sync invoices, payments and clients both ways.",
@@ -1200,6 +1211,9 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
       { name: "Repair-status widget", desc: "Embed a status checker on your site — customers look up a job by order # + phone.",
         badge: { text: "Available", tone: "on" }, action: { label: "Copy embed code", onClick: copyWidget } } ] },
   ];
+  // Xero and E-commerce stay hidden until their sync is real (see lib/features).
+  const hidden = new Set([...(FEATURES.xero ? [] : ["Xero"]), ...(FEATURES.ecommerce ? [] : ["Shopify / WooCommerce"])]);
+  const groups = allGroups.map((g) => ({ ...g, cards: g.cards.filter((c) => !hidden.has(c.name)) })).filter((g) => g.cards.length > 0);
   return (
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
       <div className="px-5 pt-4 pb-1">
@@ -1219,6 +1233,7 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
                   </div>
                   <p className="text-xs text-ink-secondary leading-snug">{c.desc}</p>
                   {c.hint && <p className="text-xs text-ink-tertiary mt-0.5">{c.hint}</p>}
+                  {c.webhook && <WebhookUrl {...c.webhook} />}
                   {c.action && <button type="button" onClick={c.action.onClick} className={`mt-1 self-start ${btnSecondary}`}>{c.action.label}</button>}
                 </div>
               ))}
@@ -1229,6 +1244,25 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
       {keyProv && <CredDrawer provider={keyProv} status={creds[keyProv]}
         onClose={() => setKeyProv(null)}
         onSaved={() => { setKeyProv(null); reload && reload(); }} />}
+    </div>
+  );
+}
+
+/* The shop's own webhook address for a payment provider, with a copy button and where to paste it. */
+function WebhookUrl({ url, help }: { url: string; help: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try { await navigator.clipboard.writeText(url); setCopied(true); setTimeout(() => setCopied(false), 2000); }
+    catch { await promptDialog("Copy your webhook address:", { defaultValue: url }); }
+  }
+  return (
+    <div className="mt-1 rounded-xl bg-slate-50 border border-slate-200 p-2.5 space-y-1.5">
+      <p className="text-xs font-medium text-ink-secondary">Your webhook address</p>
+      <div className="flex items-center gap-1.5">
+        <code className="flex-1 min-w-0 truncate text-xs font-mono text-ink-primary" title={url}>{url}</code>
+        <button type="button" onClick={copy} aria-label="Copy webhook address" className={`shrink-0 ${btnSecondary}`}>{copied ? "Copied" : "Copy"}</button>
+      </div>
+      <p className="text-xs text-ink-tertiary leading-snug">{help}</p>
     </div>
   );
 }
@@ -1300,28 +1334,9 @@ function CredDrawer({ provider, status, onClose, onSaved }: {
     </div>, document.body);
 }
 
-/* ── API keys → ./ApiKeysCard (WS-C: scoped keys, per-key limits) ── */
-function ApiKeysSection() { return <ApiKeysCard Card={SectionCard} />; }
-
-/* ── Webhooks (create / delete) → /webhooks ── */
+/* ── Webhooks → /webhooks (B15: endpoints, events, delivery log, test, secret) ── */
 function WebhooksCard() {
-  const [hooks, setHooks] = useState<any[] | null>(null);
-  const [events, setEvents] = useState<string[]>([]);
-  const [nf, setNf] = useState({ url: "", events: "*" }); const [busy, setBusy] = useState(false);
-  const load = () => api.get<any>("/webhooks").then((r) => { setHooks(r.items || []); setEvents(r.available_events || []); }).catch(() => setHooks([]));
-  useEffect(() => { load(); }, []);
-  async function create() { if (!nf.url.trim()) return; setBusy(true); try { await api.post("/webhooks", { url: nf.url.trim(), events: nf.events }); setNf({ url: "", events: nf.events }); load(); } catch (e: any) { alertDialog(e.message); } finally { setBusy(false); } }
-  async function remove(id: string) { if (!(await confirmDialog("Delete this webhook?", { danger: true, confirmLabel: "Delete" }))) return; try { await api.del(`/webhooks/${id}`); load(); } catch (e: any) { alertDialog(e.message); } }
-  return (
-    <SectionCard title="Webhooks" count={hooks?.length ?? undefined}>
-      <div className="p-4 flex items-end gap-2">
-        <div className="flex-1"><label className={lbl}>Endpoint URL</label><input value={nf.url} onChange={(e) => setNf({ ...nf, url: e.target.value })} placeholder="https://example.com/hook" className={field} /></div>
-        <div><label className={lbl}>Events</label><select value={nf.events} onChange={(e) => setNf({ ...nf, events: e.target.value })} className={field}><option value="*">All events</option>{events.map((e) => <option key={e} value={e}>{e}</option>)}</select></div>
-        <button onClick={create} disabled={busy} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">Create</button>
-      </div>
-      <SecTable rows={hooks} onDelete={(w) => remove(w.id)} cols={[["URL", (w) => w?.url || "—"], ["Events", (w) => w?.events || "*"], ["Active", (w) => (w?.active === false ? "Off" : "On")]]} />
-    </SectionCard>
-  );
+  return <WebhooksSettings />;
 }
 
 function SectionCard({ title, count, onAdd, children }: { title: string; count?: number; onAdd?: () => void; children: React.ReactNode }) {

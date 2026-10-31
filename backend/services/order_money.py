@@ -56,13 +56,6 @@ async def credited(db: AsyncSession, order_id: str) -> float:
     return q2(total)
 
 
-async def balance_due(db: AsyncSession, order: Order) -> float:
-    """Amount still owed on the order (never negative), net of payments, credit notes and what
-    was written off when the job was dropped."""
-    return q2(max(0.0, float(order.total or 0) - float(getattr(order, "written_off", 0) or 0)
-                  - await net_paid(db, order.id) - await credited(db, order.id)))
-
-
 async def resync_write_off(db: AsyncSession, order: Order, actor_id: str | None = None) -> None:
     """A dropped job's write-off follows the money the shop actually kept: when money comes back
     to the customer (a refund) after the job was dropped, the written-off part grows by the same
@@ -85,10 +78,59 @@ async def resync_write_off(db: AsyncSession, order: Order, actor_id: str | None 
                                       ref_type="order", ref_id=order.id, created_by_id=actor_id)
 
 
+async def _unsettled(db: AsyncSession, order: Order) -> float:
+    return q2(max(0.0, float(order.total or 0) - await net_paid(db, order.id) - await credited(db, order.id)))
+
+
+async def balance_due(db: AsyncSession, order: Order) -> float:
+    """Amount still owed on the order (never negative), net of payments, credit notes and any
+    balance written off when the job was dropped."""
+    return q2(max(0.0, await _unsettled(db, order) - float(getattr(order, "written_off", 0) or 0)))
+
+
 async def overpaid(db: AsyncSession, order: Order) -> float:
     """Amount received beyond the order total (refundable as overpayment)."""
     # A negative total (older data, before the floor in _recalc_order) never counts as money owed back.
     return q2(max(0.0, await net_paid(db, order.id) - max(float(order.total or 0), 0.0)))
+
+
+async def apply_deposits(db: AsyncSession, inv: Invoice, order: Order) -> float:
+    """Put the job's deposits on its invoice (B3). A prepayment is taken before any invoice exists,
+    so it was never counted on the invoice: a fully paid job's invoice stayed Partial and Home
+    offered to "Remind" the customer. Links each loose prepayment to ``inv``, raises amount_paid
+    (never beyond the total) and settles the status. Idempotent. Returns the amount applied.
+    Caller commits."""
+    from backend.services.invoicing import settle_status
+    loose = (await db.execute(select(Payment).where(
+        Payment.order_id == order.id, Payment.kind == "prepayment",
+        Payment.invoice_id.is_(None)))).scalars().all()
+    applied = 0.0
+    for p in loose:
+        room = q2(float(inv.total or 0) - float(inv.amount_paid or 0))
+        if room <= 0:
+            break
+        p.invoice_id = inv.id
+        add = min(float(p.amount or 0), room)
+        inv.amount_paid = q2(float(inv.amount_paid or 0) + add)
+        applied = q2(applied + add)
+    if applied:
+        settle_status(inv)
+    return applied
+
+
+async def open_receivables(db: AsyncSession, order_ids: list[str]) -> float:
+    """"To collect": what the given jobs still owe — totals net of the money already taken for them
+    (payments and deposits, less refunds) and write-offs — in two SQL aggregates."""
+    if not order_ids:
+        return 0.0
+    from sqlalchemy import case
+    totals = dict((await db.execute(select(
+        Order.id, func.coalesce(Order.total, 0) - func.coalesce(Order.written_off, 0))
+        .where(Order.id.in_(order_ids)))).all())
+    paid = dict((await db.execute(select(Payment.order_id, func.coalesce(func.sum(case(
+        (Payment.kind == "refund", -func.abs(Payment.amount)), else_=Payment.amount)), 0))
+        .where(Payment.order_id.in_(order_ids)).group_by(Payment.order_id))).all())
+    return q2(sum(max(0.0, float(t or 0) - float(paid.get(oid) or 0)) for oid, t in totals.items()))
 
 
 async def primary_invoice(db: AsyncSession, order_id: str):
@@ -159,11 +201,10 @@ async def _expire_stripe_checkout(db: AsyncSession, intent: PaymentIntent) -> bo
 
     import httpx
 
-    from backend.config import settings
     from backend.services import org_creds
     from backend.services.payment_guard import LivePaymentsRefused
     try:
-        key = (await org_creds.effective(db, intent.org_id, "stripe")).get("secret_key") or settings.STRIPE_SECRET_KEY
+        key = (await org_creds.effective(db, intent.org_id, "stripe", own_only=True)).get("secret_key")
     except LivePaymentsRefused:
         return False   # F4: live keys refused on this server; the link is still cancelled here
     if not key:
@@ -186,15 +227,14 @@ async def _delete_square_link(db: AsyncSession, intent: PaymentIntent) -> bool:
 
     import httpx
 
-    from backend.config import settings
     from backend.services import org_creds
     from backend.services.payment_guard import LivePaymentsRefused
     from backend.services.payments import SquareGateway
     try:
-        c = await org_creds.effective(db, intent.org_id, "square")
+        c = await org_creds.effective(db, intent.org_id, "square", own_only=True)
     except LivePaymentsRefused:
         return False   # F4: live keys refused on this server; the link is still cancelled here
-    token = c.get("access_token") or settings.SQUARE_ACCESS_TOKEN
+    token = c.get("access_token")
     if not token:
         return False
     try:

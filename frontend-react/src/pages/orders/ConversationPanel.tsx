@@ -6,6 +6,7 @@ import { useEffect, useRef, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { deliveryText, deliveryTone, type Delivery, type Flash } from "../../lib/delivery";
+import { sectionCard } from "../../components/Section";
 
 export type ThreadMsg = { id: string; from: "staff" | "customer"; who?: string; body: string; at?: string };
 export type SendChannel = "auto" | "email" | "sms";
@@ -77,15 +78,17 @@ export default function ConversationPanel({ orderId, onFlash, reloadKey, onSent 
   }
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
-      <div className="px-4 py-2.5 border-b border-slate-100 flex items-center gap-2">
-        <M n="forum" c="text-base text-primary" />
-        <span className="text-xs font-bold text-ink-primary">Customer conversation</span>
-        <span className="text-[11px] text-ink-tertiary font-semibold ml-auto">Messages here show on the customer's status page</span>
+    <div className={`${sectionCard} overflow-hidden`}>
+      <div className="px-4 py-3 border-b border-slate-100">
+        <div className="flex items-center gap-2">
+          <M n="forum" c="text-base text-ink-tertiary" />
+          <h4 className="text-sm font-semibold text-ink-primary">Customer conversation</h4>
+        </div>
+        <p className="mt-0.5 text-xs text-ink-tertiary">Messages here show on the customer's status page.</p>
       </div>
       <div className="max-h-64 overflow-y-auto p-3 space-y-2 bg-slate-50/40">
         {!msgs && <div className="text-xs text-ink-tertiary py-6 text-center">Loading…</div>}
-        {msgs?.length === 0 && <div className="text-xs text-ink-tertiary py-6 text-center">No messages yet. Say hello — the customer sees it on their status link.</div>}
+        {msgs?.length === 0 && <div className="text-xs text-ink-tertiary py-6 text-center">No messages yet. Messages you send here show on the customer's status page.</div>}
         {(msgs || []).map((m) => {
           const staff = m.from === "staff";
           return (

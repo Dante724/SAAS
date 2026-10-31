@@ -180,6 +180,12 @@ async def change_status(
     if new == "canceled" and prev in ("in_transit", "received") and not data.return_location_id:
         # goods already left the source — caller names the receiving warehouse
         raise HTTPException(400, "Goods already shipped: pass return_location_id to choose the warehouse taking them back")
+    # A transfer made "ready" before the count-once fix held its units as reserved AND off the
+    # shelf, and logged nothing until it shipped: those still release the hold the old way.
+    # (Read before the claim below moves t.status on.)
+    legacy_ready = prev == "ready" and not (await db.execute(select(StockMovement.id).where(
+        StockMovement.ref_type == "transfer", StockMovement.ref_id == t.id,
+        StockMovement.movement_type == "transfer_out").limit(1))).scalar_one_or_none()
     # Claim the move before touching stock: a second identical request (double click, retry)
     # read the same old status, and must not reserve, ship, credit or un-reserve a second time.
     if not await claim_status(db, t, prev, new):
@@ -187,10 +193,15 @@ async def change_status(
 
     if new == "canceled":
         if prev == "ready":
-            # un-reserve back to availability at source
+            # the units were set aside (taken off the shelf) at "ready": put them back
             for l in lines:
-                await stock_rows.reserve(db, l.part_id, t.from_location_id, -l.qty)
                 await stock_rows.add(db, l.part_id, t.from_location_id, l.qty)
+                if legacy_ready:
+                    await stock_rows.reserve(db, l.part_id, t.from_location_id, -l.qty)
+                else:
+                    db.add(StockMovement(part_id=l.part_id, location_id=t.from_location_id,
+                                         movement_type="transfer_cancel", qty=l.qty,
+                                         ref_type="transfer", ref_id=t.id))
         elif prev in ("in_transit", "received"):
             # goods already left the source — caller names the receiving warehouse
             back = data.return_location_id
@@ -206,24 +217,33 @@ async def change_status(
         return {"ok": True, "status": t.status}
 
     if new == "ready":
-        # reserve at source: guarded decrement so two transfers can't grab the same units
+        # Set the units aside at the source: they come off the shelf now (guarded decrement so two
+        # transfers can't grab the same units) and are counted ONCE — not also held as reserved,
+        # which used to count them twice (10 on hand, 3 boxed → only 4 left reservable). Units
+        # other jobs have reserved can't be boxed.
         for l in lines:
-            avail, _held = await stock_rows.totals(db, l.part_id, t.from_location_id)
-            if avail < l.qty:
+            await stock_rows.rows(db, l.part_id, t.from_location_id, lock=True)
+            avail, held = await stock_rows.totals(db, l.part_id, t.from_location_id)
+            free = avail - max(held, 0)
+            if free < l.qty:
                 part = (await db.execute(select(Part).where(Part.id == l.part_id))).scalar_one_or_none()
-                raise HTTPException(409, f"Only {avail:g} of '{part.name if part else l.part_id}' at the source warehouse")
-            try:      # ii144a: guarded per-bin decrements, then held on the location
+                raise HTTPException(409, f"Only {max(free, 0):g} of '{part.name if part else l.part_id}' free "
+                                         f"at the source warehouse")
+            try:      # ii144a: guarded per-bin decrements
                 await stock_rows.draw(db, l.part_id, t.from_location_id, l.qty)
             except stock_rows.NotEnoughStock:
                 raise HTTPException(409, "Stock changed while reserving — retry")
-            await stock_rows.reserve(db, l.part_id, t.from_location_id, l.qty)
-    elif new == "in_transit":
-        # leave the source: reservation lifts; goods now ride on the transfer itself
-        for l in lines:
-            await stock_rows.reserve(db, l.part_id, t.from_location_id, -l.qty)
             db.add(StockMovement(part_id=l.part_id, location_id=t.from_location_id,
                                  movement_type="transfer_out", qty=-l.qty,
                                  ref_type="transfer", ref_id=t.id))
+    elif new == "in_transit":
+        # leave the source: already off the shelf (and logged) since "ready"
+        if legacy_ready:
+            for l in lines:
+                await stock_rows.reserve(db, l.part_id, t.from_location_id, -l.qty)
+                db.add(StockMovement(part_id=l.part_id, location_id=t.from_location_id,
+                                     movement_type="transfer_out", qty=-l.qty,
+                                     ref_type="transfer", ref_id=t.id))
     elif new == "received":
         t.received_at = now_utc()   # arrived, held for verification
     elif new == "completed":

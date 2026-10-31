@@ -73,7 +73,10 @@ if settings.is_sqlite:
 
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
-from backend.db import tenancy  # noqa: E402,F401 — registers the cross-tenant reference guard
+from backend.db import (
+    actors,  # noqa: E402,F401 — records who discounted, refunded, closed a drawer
+    tenancy,  # noqa: E402,F401 — registers the cross-tenant reference guard
+)
 
 
 class Base(DeclarativeBase):
@@ -179,6 +182,20 @@ async def init_db():
             "  SELECT o.org_id FROM orders o WHERE o.device_id = devices.id"
             "  ORDER BY o.created_at DESC LIMIT 1"
             ") WHERE org_id IS NULL"))
+        # Admin panel: dev databases that predate shop account IDs get one each (production
+        # does this in migration ad144s1). Idempotent: only shops still without an ID.
+        if settings.is_sqlite:
+            from backend.services.account_id import new_account_id as _new_id
+            taken = {r[0] for r in (await conn.execute(_text(
+                "SELECT account_id FROM organisations WHERE account_id IS NOT NULL"))).fetchall()}
+            for (oid,) in (await conn.execute(_text("SELECT id FROM organisations WHERE account_id IS NULL"))).fetchall():
+                aid = _new_id()
+                while aid in taken:
+                    aid = _new_id()
+                taken.add(aid)
+                await conn.execute(_text("UPDATE organisations SET account_id = :a WHERE id = :i"), {"a": aid, "i": oid})
+            await conn.execute(_text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_organisations_account_id ON organisations (account_id)"))
 
     # Build 144am — unify suppliers with contacts. A supplier is the same real-world
     # entity as a Contact, and the app now opens the one contact form (with a

@@ -2,7 +2,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional
 from datetime import date, datetime, timedelta
 from backend.db.database import get_db
@@ -24,6 +24,21 @@ class InvoiceLineIn(BaseModel):
     qty: float = 1.0
     unit_price: float = 0.0
 
+    # B3: a 0 or negative quantity or price made negative invoices.
+    @field_validator("qty")
+    @classmethod
+    def _qty_positive(cls, v):
+        if v is None or v <= 0:
+            raise ValueError("Quantity must be greater than zero")
+        return v
+
+    @field_validator("unit_price")
+    @classmethod
+    def _price_non_negative(cls, v):
+        if v is None or v < 0:
+            raise ValueError("Prices can't be negative")
+        return v
+
 class InvoiceIn(BaseModel):
     order_id: Optional[str] = None
     order_ids: list[str] = []                       # 144ed: bill several orders at create
@@ -42,6 +57,21 @@ class InvoiceIn(BaseModel):
     issued_at: Optional[str] = None                 # 144ed: ISO date
     due_at: Optional[str] = None                    # 144ed: ISO date
     lines: list[InvoiceLineIn] = []                 # 144ed: free-form catalog/manual lines
+
+    # B3: a 150% discount saved an invoice at −50. Percentages are 0–100; money is never negative.
+    @field_validator("discount", "tax")
+    @classmethod
+    def _percent_range(cls, v):
+        if v is None or v < 0 or v > 100:
+            raise ValueError("Discount and tax are percentages between 0 and 100")
+        return v
+
+    @field_validator("subtotal")
+    @classmethod
+    def _subtotal_non_negative(cls, v):
+        if v is None or v < 0:
+            raise ValueError("The subtotal can't be negative")
+        return v
 
 class PaymentIn(BaseModel):
     method: str  # cash|card|transfer|balance|online
@@ -112,6 +142,9 @@ async def _invoice_detail(db, inv) -> dict:
     out["orders"] = [{"id": o.id, "order_number": o.order_number,
                       "complaint": getattr(o, "complaint", None),
                       "total": float(o.total or 0)} for o in await invoice_orders(db, inv)]
+    # B2: the pay dialog preselects the till at the job's location.
+    out["location_id"] = (await db.execute(select(Order.location_id).where(
+        Order.id == inv.order_id))).scalar_one_or_none() if inv.order_id else None
     # 144dw — resolve payer + customer names so the UI can show "Bill to"
     for key, cid in (("payer", getattr(inv, "payer_client_id", None)), ("customer", inv.client_id)):
         if cid:
@@ -621,6 +654,14 @@ async def record_payment(
             raise HTTPException(422, "This invoice has no client to keep the difference for. Refund it instead.")
         if data.overpay == "refund":
             await assert_perm(db, current, "can_create_returns")    # paying money back out
+    if data.method == "balance":
+        # Paid out of credit the client already holds: no money moves and the ledger already shows
+        # that credit, so nothing is posted to it below. Without credit it used to erase debt (B3).
+        from backend.services.ledger import available_credit
+        credit = await available_credit(db, current.org_id, inv.client_id, inv.order_id)
+        if float(applied) > credit + 0.005:
+            raise HTTPException(400, f"This client has only {credit:.2f} of credit to pay from. "
+                                     "Take the rest in cash or by card.")
     # When the money came in: today by default; an earlier day is a retroactive cash entry.
     paid_at, retro = now_utc(), False
     if data.paid_at:
@@ -679,9 +720,10 @@ async def record_payment(
         await post_transaction(db, current.org_id, acc.id, "invoice_payment", float(received),
                                comment=f"Payment for invoice {label}", ref_type="invoice", ref_id=invoice_id,
                                employee_id=current.id, is_retroactive=retro, actual_date=paid_at)
-    await post_contact_ledger(db, current.org_id, inv.client_id, "income", -float(received),
-                              note=f"Payment for invoice {label}", ref_type="payment",
-                              ref_id=payment.id, created_by_id=current.id)
+    if data.method != "balance":
+        await post_contact_ledger(db, current.org_id, inv.client_id, "income", -float(received),
+                                  note=f"Payment for invoice {label}", ref_type="payment",
+                                  ref_id=payment.id, created_by_id=current.id)
     kept = refunded = Decimal(0)
     if excess > 0 and data.overpay == "keep_balance":
         kept = excess
@@ -702,10 +744,13 @@ async def record_payment(
                     reference=f"Overpayment on invoice {label} refunded")
         await db.flush()
         if moves_cash:
-            await post_transaction(db, current.org_id, acc.id, "expense", -float(excess),
-                                   comment=f"Refund overpayment on invoice {label}", ref_type="invoice",
-                                   ref_id=invoice_id, employee_id=current.id, is_retroactive=retro,
-                                   actual_date=paid_at)
+            change = await post_transaction(db, current.org_id, acc.id, "expense", -float(excess),
+                                            comment=f"Refund overpayment on invoice {label}", ref_type="invoice",
+                                            ref_id=invoice_id, employee_id=current.id, is_retroactive=retro,
+                                            actual_date=paid_at)
+            # The drawer counts the change once, through the refund payment above. Linking this
+            # leg to the shift as "manual cash" too made every close read "over" (B3).
+            change.shift_id = None
         await post_contact_ledger(db, current.org_id, inv.client_id, "refund", float(excess),
                                   note=f"Overpayment on invoice {label} refunded", ref_type="payment",
                                   ref_id=back.id, created_by_id=current.id)
@@ -980,6 +1025,11 @@ async def drawer_movement(
         raise HTTPException(409, "This drawer is closed")
     if data.direction not in ("in", "out"):
         raise HTTPException(422, "direction must be in|out")
+    if data.direction == "out":
+        # Cash leaving the till is an expense: the same rights as recording one in Cash.
+        # "View the cash drawer" alone let a Specialist pay money out.
+        await assert_perm(db, current, "can_view_finance")
+        await assert_perm(db, current, "can_create_expenses")
     amt = q2(data.amount)
     if amt <= 0:
         raise HTTPException(422, "Amount must be positive")

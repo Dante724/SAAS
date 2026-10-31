@@ -25,7 +25,7 @@ log = logging.getLogger("tekly.push")
 VALID_KINDS = {
     "job.assigned", "schedule.changed", "chat.message",
     "estimate.approved", "appointment.cancelled", "payment.received",
-    "inventory.reorder",
+    "inventory.reorder", "membership.alert",
 }
 
 

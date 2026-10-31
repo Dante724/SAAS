@@ -16,7 +16,6 @@ from typing import Annotated, Optional
 from datetime import date as _date
 from datetime import datetime as _dt
 from backend.db.database import get_db
-from backend.services.public_names import display_name as _public_name
 from backend.models import (
     Order, Client, Device, Organisation, Location,
     OrderStatusLog, EventFeedItem, DocumentSignature,
@@ -191,8 +190,12 @@ async def _decide_estimate(db: AsyncSession, order: "Order", decision: str,
         # Build 75: record WHEN the customer approved, so the approval is auditable
         # independently of the status the estimate happens to land in.
         order.estimate_approved_at = now_utc()
-        from backend.services.webhooks import emit_event   # WS-C: was registered but never fired
-        await emit_event(db, order.org_id, "estimate.accepted", {"id": order.id, "number": order.order_number})
+        try:
+            from backend.services.webhooks import emit_event   # WS-C: was registered but never fired
+            await emit_event(db, order.org_id, "estimate.accepted", {
+                "id": order.id, "number": order.order_number, "total": order.total})
+        except Exception:  # noqa: BLE001 — webhooks never block the customer's decision
+            pass
 
     # G1 — the shop hears about it: owner, the job's manager and its assignee.
     from backend.services.customer_messages import notify_staff_about_customer
@@ -852,7 +855,7 @@ async def portal_respond(token: str, order_id: str, data: AcceptIn, request: Req
 # ── Customer → shop messages (land in the work-order feed) — 144ba ──
 class MessageIn(BaseModel):
     body: str
-    name: Optional[str] = None
+    name: Optional[str] = Field(None, max_length=120)
 
 
 async def _can_sign(db: AsyncSession, order: "Order") -> bool:
@@ -1083,13 +1086,21 @@ async def _post_client_message(db: AsyncSession, order: "Order", body: str, who:
 
 
 @router.post("/track/{token}/message")
-async def track_message(token: str, data: MessageIn, request: Request, db: AsyncSession = Depends(get_db)):
-    from backend.services.ratelimit import aenforce as _rate, client_ip as _ip
-    await _rate("track_msg", f"{_ip(request)}:{token}", limit=10, window_sec=600)
+async def track_message(token: str, data: MessageIn, request: Request,
+                        db: AsyncSession = Depends(get_db)):
+    from backend.core.webhook_security import client_ip
+    from backend.services.ratelimit import aenforce
+    from backend.services.ratelimit import client_ip as _ip
+    await aenforce("track_msg", f"{_ip(request)}:{token}", limit=10, window_sec=600)
+    await aenforce("track_msg_ip", client_ip(request), 30, 600)
     order = await _load(db, token)
-    who = data.name or (
-        (await db.execute(select(Client).where(Client.id == order.client_id))).scalar_one_or_none().name
-        if order.client_id else "Customer")
+    await aenforce("track_msg", order.id, 10, 600)   # no flooding a shop's inbox from one link
+    who = data.name
+    if not who and order.client_id:
+        c = (await db.execute(select(Client).where(
+            Client.id == order.client_id, Client.org_id == order.org_id))).scalar_one_or_none()
+        who = c.name if c else None
+    who = who or "Customer"
     await _post_client_message(db, order, data.body, who)
     await db.commit()
     return {"ok": True}
@@ -1216,8 +1227,9 @@ async def portal_decide_recs(token: str, order_id: str, data: RecDecideIn, reque
 #  No auth. A client opens /book/{slug}, picks a service + slot,
 #  enters contact details, and the appointment lands in the schedule.
 # ════════════════════════════════════════════════════════════
-from datetime import datetime, timedelta, time as dt_time
+from datetime import datetime, timedelta
 from backend.models import Organisation as _Org, Service, Employee, Appointment, Client, Order
+from backend.services.public_name import public_staff_name
 from backend.services.money import q2
 
 
@@ -1232,106 +1244,21 @@ async def _org_by_slug(db: AsyncSession, slug: str) -> _Org:
 
 
 # ── Build 144bo: availability engine helpers ──────────────────────────────
-_WEEKDAY_KEYS = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
-
-
-def _parse_hhmm(v, default_min):
-    """'HH:MM' → minutes past midnight; falls back to default on junk."""
-    try:
-        h, m = str(v).split(":")
-        return int(h) * 60 + int(m)
-    except (ValueError, AttributeError):
-        return default_min
-
-
-def _day_window(location, day):
-    """Open window for a weekday as (open_min, close_min), or None when the
-    branch is closed. Reads Location.working_hours ({mon:{open,close,closed}}).
-    A location with no configured hours falls back to 09:00-18:00 so existing
-    orgs keep working until they set hours."""
-    wh = getattr(location, "working_hours", None) if location else None
-    if not wh:
-        return (540, 1080)  # 09:00-18:00 default
-    d = wh.get(_WEEKDAY_KEYS[day.weekday()]) or {}
-    if d.get("closed"):
-        return None
-    o = _parse_hhmm(d.get("open"), 540)
-    c = _parse_hhmm(d.get("close"), 1080)
-    return (o, c) if c > o else None
-
-
-def _local_now(tzname):
-    """Build 144br: 'now' as naive local wall-clock in the location's timezone.
-    Appointments are stored as naive local time and working hours are local, so all
-    lead-time / window / past-slot comparisons must use the same clock — not UTC.
-    Falls back to UTC on an unknown tz."""
-    from datetime import timezone as _tz
-    try:
-        from zoneinfo import ZoneInfo
-        return datetime.now(ZoneInfo(tzname or "UTC")).replace(tzinfo=None)
-    except Exception:
-        return datetime.now(_tz.utc).replace(tzinfo=None)
-
-
-async def _resolve_location(db, org, location_id):
-    q = select(Location).where(Location.org_id == org.id, Location.active == True)  # noqa: E712
-    if location_id:
-        q = q.where(Location.id == location_id)
-    return (await db.execute(q)).scalars().first()
-
-
-async def _busy_windows(db, org, location, day, employee_id):
-    """(start,end) datetimes already taken on `day` — appointments, and optionally
-    scheduled work orders when appointment_consider_orders is on. Scoped to the
-    location and, if given, one employee."""
-    day_start = datetime.combine(day, dt_time(0, 0))
-    day_end = day_start + timedelta(days=1)
-    q = select(Appointment).where(
-        Appointment.org_id == org.id, Appointment.status == "booked",
-        Appointment.scheduled_for >= day_start, Appointment.scheduled_for < day_end)
-    if location:
-        q = q.where(Appointment.location_id == location.id)
-    if employee_id:
-        q = q.where(Appointment.employee_id == employee_id)
-    rows = (await db.execute(q)).scalars().all()
-    busy = [(b.scheduled_for, b.scheduled_for + timedelta(minutes=b.duration_min or 60)) for b in rows]
-    if org.appointment_consider_orders:
-        oq = select(Order).where(
-            Order.org_id == org.id, Order.scheduled_for.isnot(None),
-            Order.scheduled_for >= day_start, Order.scheduled_for < day_end)
-        if location:
-            oq = oq.where(Order.location_id == location.id)
-        for o in (await db.execute(oq)).scalars().all():
-            busy.append((o.scheduled_for, o.scheduled_for + timedelta(minutes=60)))
-    return busy
-
-
-def _slot_is_free(cur, slot_end, busy, allow_multiple):
-    """When multiple appointments per slot are allowed the window is never 'full'
-    (capacity is unbounded); otherwise any overlap makes it busy."""
-    if allow_multiple:
-        return True
-    return not any(cur < be and bs < slot_end for bs, be in busy)
-
-
-def _day_slots(org, location, day, busy, dur, now):
-    """List of 'HH:MM' start times bookable on `day` for a job of `dur` mins."""
-    win = _day_window(location, day)
-    if win is None:
-        return None  # closed
-    open_min, close_min = win
-    step = org.appointment_time_slot or 60
-    lead = timedelta(minutes=org.appointment_lead_min or 0)
-    earliest = now + lead
-    out = []
-    cur = datetime.combine(day, dt_time(0, 0)) + timedelta(minutes=open_min)
-    win_end = datetime.combine(day, dt_time(0, 0)) + timedelta(minutes=close_min)
-    while cur + timedelta(minutes=dur) <= win_end:
-        slot_end = cur + timedelta(minutes=dur)
-        if cur >= earliest and _slot_is_free(cur, slot_end, busy, org.appointment_allow_multiple):
-            out.append(cur.strftime("%H:%M"))
-        cur += timedelta(minutes=step)
-    return out
+# The engine lives in services/booking_slots.py so API v2 gives the same answer; the old
+# private names stay importable from here.
+from backend.services.booking_slots import (  # noqa: E402
+    WEEKDAY_KEYS as _WEEKDAY_KEYS,  # noqa: F401
+    busy_windows as _busy_windows,
+    day_slots as _day_slots,
+    day_window as _day_window,
+    local_now as _local_now,
+    parse_hhmm as _parse_hhmm,  # noqa: F401
+    resolve_location as _resolve_location,
+    service_duration as _service_duration,
+    slot_is_free as _slot_is_free,  # noqa: F401
+    slots_for_day as _slots_for_day,
+)
+from backend.services.dates import location_tz as _location_tz  # noqa: E402
 
 
 # ── Back-compat (144dx): old /api/public/booking/* → /api/public/appointment/* ──
@@ -1389,7 +1316,9 @@ async def appointment_config(slug: str, response: Response, db: AsyncSession = D
                       "employee_ids": getattr(s, "allowed_employee_ids", None) or [],
                       "category": (_svc_cats.get(s.category_id) if s.category_id else None) or s.category}
                      for s in services],
-        "staff": [{"id": e.id, "name": _public_name(e, getattr(org, "public_employee_name", None))}
+        # Customers see the name the shop chose (Settings › Public pages): full, first,
+        # first + initial, or custom.
+        "staff": [{"id": e.id, "name": public_staff_name(e, getattr(org, "public_employee_name", None))}
                   for e in staff],
         "locations": [{"id": l.id, "name": l.name,
                        "address": l.address, "phone": l.phone,
@@ -1428,15 +1357,6 @@ def _booking_id_note(org, raw: Optional[str]) -> Optional[str]:
     return f"{_BOOKING_ID[kind][0].split(' (')[0]}: {v}" if v else None
 
 
-async def _service_duration(db, org, service_id):
-    dur = org.appointment_time_slot or 60
-    if service_id:
-        svc = (await db.execute(select(Service).where(Service.id == service_id))).scalar_one_or_none()
-        if svc and svc.duration_min:
-            dur = svc.duration_min
-    return dur
-
-
 @router.get("/appointment/{slug}/slots")
 async def appointment_slots(slug: str, date: str, response: Response, employee_id: Optional[str] = None,
                         location_id: Optional[str] = None, service_id: Optional[str] = None,
@@ -1457,21 +1377,12 @@ async def appointment_slots(slug: str, date: str, response: Response, employee_i
     except ValueError:
         raise HTTPException(400, "Bad date")
 
-    location = await _resolve_location(db, org, location_id)
-    now = _local_now(location.timezone if location else "UTC")
-    window_days = org.appointment_window_days or 30
-    if day < now.date():
-        return {"date": date, "step": org.appointment_time_slot or 60, "slots": [], "reason": "in the past"}
-    if day > (now.date() + timedelta(days=window_days)):
-        return {"date": date, "step": org.appointment_time_slot or 60, "slots": [],
-                "reason": f"beyond the {window_days}-day appointment window"}
-
-    dur = await _service_duration(db, org, service_id)
-    busy = await _busy_windows(db, org, location, day, employee_id)
-    slots = _day_slots(org, location, day, busy, dur, now)
-    if slots is None:
-        return {"date": date, "step": org.appointment_time_slot or 60, "slots": [], "reason": "closed"}
-    return {"date": date, "step": org.appointment_time_slot or 60, "slots": slots,
+    ans = await _slots_for_day(db, org, day, location_id=location_id, employee_id=employee_id,
+                               service_id=service_id)
+    if ans["reason"]:
+        return {"date": date, "step": ans["step"], "slots": [], "reason": ans["reason"]}
+    location = ans["location"]
+    return {"date": date, "step": ans["step"], "slots": ans["slots"],
             "location_id": location.id if location else None}
 
 
@@ -1489,7 +1400,7 @@ async def appointment_days(slug: str, response: Response, start: Optional[str] =
     # appointments, so it is never cached/shared. Indexed reads keep it cheap.
     response.headers["Cache-Control"] = "no-store"
     location = await _resolve_location(db, org, location_id)
-    now = _local_now(location.timezone if location else "UTC")
+    now = _local_now(_location_tz(location, org))
     try:
         first = datetime.fromisoformat(start).date() if start else now.date()
     except ValueError:
@@ -1542,7 +1453,7 @@ async def create_public_appointment(slug: str, data: PublicAppointmentIn, reques
 
     # the location taking the appointment + its working hours for that weekday
     loc = await _resolve_location(db, org, data.location_id)
-    now = _local_now(loc.timezone if loc else "UTC")
+    now = _local_now(_location_tz(loc, org))
     # lead time + appointment window (server re-validates; never trust the client)
     if start < now + timedelta(minutes=org.appointment_lead_min or 0):
         raise HTTPException(409, "That time is too soon to book — please pick a later slot")
@@ -1678,25 +1589,26 @@ async def appointment_request(slug: str, data: AppointmentRequestIn, request: Re
 
 
 class HelloIn(BaseModel):
-    phone: str
+    phone: str = Field(max_length=32)
 
 
 @router.post("/appointment/{slug}/hello")
 async def appointment_hello(slug: str, data: HelloIn, request: Request,
                         db: AsyncSession = Depends(get_db)):
     """Returning-customer recognition: last-10-digit phone match within this org.
-    Returns only a first name (never full contact data) and is rate-limited to
+    Returns only whether the number is known (never a name or contact data) and is rate-limited to
     keep it from being an enumeration oracle."""
-    from backend.core.webhook_security import client_ip, enforce_rate_limit, lookup_limiter
-    enforce_rate_limit(lookup_limiter, f"hello:{client_ip(request)}")
+    from backend.core.webhook_security import client_ip
+    from backend.services.ratelimit import aenforce
     org = await _org_by_slug(db, slug)
+    await aenforce("appt_hello", f"{org.id}:{client_ip(request)}", 10, 60)
     from backend.services.call_contacts import digits, find_client   # same rule as calls/chats
     if len(digits(data.phone)) < 7:
         return {"known": False}
     c = await find_client(db, org.id, data.phone)
     if c:
-        first = (c.name or "").strip().split(" ")[0]
-        return {"known": True, "name": first or None}
+        # Known, but no name: a phone number must not reveal who it belongs to.
+        return {"known": True}
     return {"known": False}
 
 
@@ -1709,10 +1621,25 @@ async def public_pay_info(intent_id: str, db: AsyncSession = Depends(get_db)):
     i = (await db.execute(select(PaymentIntent).where(PaymentIntent.id == intent_id))).scalar_one_or_none()
     if not i:
         raise HTTPException(404, "Payment not found")
-    order_no = None
+    order_no, o = None, None
     if i.order_id:
         o = (await db.execute(select(Order).where(Order.id == i.order_id))).scalar_one_or_none()
         order_no = o.order_number if o else None
+    # The customer must see who is asking for money: the shop's own name, logo and address,
+    # never ours. A pay page branded "Tekly" reads as phishing to someone who's never heard of us.
+    org = (await db.execute(select(Organisation).where(Organisation.id == i.org_id))).scalar_one_or_none()
+    loc = None
+    if o is not None and o.location_id:
+        loc = (await db.execute(select(Location).where(Location.id == o.location_id))).scalar_one_or_none()
+    _show_logo = getattr(org, "page_show_logo", True) or getattr(org, "oe_show_logo", True)
+    shop = {
+        "shop_name": org.name if org else "Repair shop",
+        "logo_data": (org.logo_data if (org and _show_logo) else None),
+        "shop_address": (loc.address if (loc and loc.address) else getattr(org, "company_address", None)),
+        "shop_phone": (loc.phone if (loc and loc.phone) else getattr(org, "company_phone", None)),
+    }
+    # A cancelled request, or one for nothing, must never show a live Pay button.
+    payable = i.status in ("created", "pending", "failed") and (i.amount or 0) > 0
     # Build 144dv — when the intent bills an invoice, show its line items exactly as
     # the invoice's Order-display mode resolves them, so the client sees the same
     # breakdown (per-line, per-ticket, or a single line) as the printed document.
@@ -1727,29 +1654,34 @@ async def public_pay_info(intent_id: str, db: AsyncSession = Depends(get_db)):
     return {"intent_id": i.id, "amount": i.amount, "currency": i.currency,
             "status": i.status, "order_number": order_no,
             "invoice_number": invoice_number, "display_mode": display_mode, "lines": lines,
-            "provider": i.provider, "checkout_url": i.checkout_url}
+            "provider": i.provider, "checkout_url": i.checkout_url,
+            "payable": payable, **shop}
 
 
 # ══ Build 109: public status lookup + embeddable widget ══════════════════════
 class LookupIn(BaseModel):
-    order_number: str
-    phone: str
-    shop: Optional[str] = None   # org subdomain/slug (or id) — scopes the lookup to one tenant
+    order_number: str = Field(max_length=40)
+    phone: str = Field(max_length=32)
+    shop: Optional[str] = Field(None, max_length=64)   # org subdomain/slug (or id) — scopes the lookup to one tenant
 
 
 @router.post("/lookup")
 async def lookup_order(data: LookupIn, request: Request, db: AsyncSession = Depends(get_db)):
-    from backend.core.webhook_security import client_ip, enforce_rate_limit, lookup_limiter
-    # Build 110: throttle per caller AND per order number, so neither a single IP nor a
-    # distributed guess against one order can brute-force the phone pairing.
-    enforce_rate_limit(lookup_limiter, f"ip:{client_ip(request)}")
-    enforce_rate_limit(lookup_limiter, f"num:{data.order_number.strip().lstrip('#')}")
     """Find an order from its number plus the customer's phone — the two things a
     customer actually has to hand. Both must match: the order number alone is guessable,
     so pairing it with the phone on file is what keeps this from leaking one customer's
     repair to another. Returns the public token, which the widget then renders through
     the existing /track view — no new rendering path, no new way to get status wrong.
     """
+    from backend.core.webhook_security import client_ip
+    from backend.services.ratelimit import aenforce
+    # Throttle per caller, and per caller per order number, shared across workers (Redis when
+    # configured). Guessing the phone that pairs with an order is a 10-digit search, so the
+    # per-caller bucket is what matters; there is deliberately no bucket shared by everyone,
+    # because order numbers repeat between shops and a shared one let anyone lock every
+    # shop's "#1001" customers out with a handful of requests.
+    ip = client_ip(request)
+    await aenforce("lookup_ip", ip, 20, 60)
     num = data.order_number.strip().lstrip("#")
     phone = "".join(ch for ch in data.phone if ch.isdigit())[-10:]  # last 10 digits, format-agnostic
     if not num or not phone:
@@ -1770,6 +1702,7 @@ async def lookup_order(data: LookupIn, request: Request, db: AsyncSession = Depe
             # same opaque 404 — don't confirm whether the shop/number/phone exists
             raise HTTPException(404, "No matching order — check the number and phone")
         q = q.where(Order.org_id == org.id)
+    await aenforce("lookup_num", f"{org.id if data.shop else '*'}:{ip}:{num}", 5, 3600)
 
     candidates = (await db.execute(q)).scalars().all()
     order = None
@@ -1841,3 +1774,44 @@ async def status_widget_js():
 })();"""
     return Response(content=js, media_type="application/javascript",
                     headers={"Cache-Control": "public, max-age=3600"})
+
+
+# ── Tekly Sense: one-click unsubscribe from a shop's automatic emails ─────────────
+_UNSUB_PAGE = """<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1">
+<title>Unsubscribe</title><style>body{{font-family:-apple-system,system-ui,sans-serif;max-width:420px;margin:12vh auto;padding:0 20px;color:#14213f}}
+button{{background:#1e40af;color:#fff;border:0;border-radius:10px;padding:12px 18px;font-size:15px;cursor:pointer}}</style></head>
+<body>{body}</body></html>"""
+
+
+@router.get("/unsubscribe/{token}")
+async def unsubscribe_page(token: str, request: Request):
+    """Shows a confirm button. Opening the link changes nothing (mail scanners open links)."""
+    from backend.core.webhook_security import client_ip
+    from backend.services.ratelimit import aenforce
+    from backend.services.sense_agents import read_unsubscribe_token
+    await aenforce("unsub_ip", client_ip(request), 30, 600)
+    if not read_unsubscribe_token(token[:300]):
+        raise HTTPException(404, "This link isn't valid")
+    return _unsub_html(
+        "<h2>Stop emails from this shop?</h2><p>You won't get emails from this shop any more, "
+        "including reminders, offers and job updates.</p>"
+        '<form method="post"><button type="submit">Unsubscribe</button></form>')
+
+
+@router.post("/unsubscribe/{token}")
+async def unsubscribe_confirm(token: str, request: Request, db: AsyncSession = Depends(get_db)):
+    from backend.core.webhook_security import client_ip
+    from backend.services.ratelimit import aenforce
+    from backend.services.sense_agents import read_unsubscribe_token, unsubscribe
+    await aenforce("unsub_ip", client_ip(request), 30, 600)
+    ids = read_unsubscribe_token(token[:300])
+    if not ids or not await unsubscribe(db, *ids):
+        raise HTTPException(404, "This link isn't valid")
+    await db.commit()
+    return _unsub_html("<h2>You're unsubscribed.</h2><p>You won't get emails from this shop any more.</p>")
+
+
+def _unsub_html(body: str):
+    from fastapi.responses import HTMLResponse
+    return HTMLResponse(_UNSUB_PAGE.format(body=body), headers={
+        "Referrer-Policy": "no-referrer", "Cache-Control": "no-store", "X-Robots-Tag": "noindex"})

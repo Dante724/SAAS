@@ -221,6 +221,30 @@ async def receive_inbound(
 
 # ── Provider webhooks ─────────────────────────────────────────────────────────
 
+def _digits(n: str) -> str:
+    return "".join(ch for ch in (n or "").replace("whatsapp:", "") if ch.isdigit())
+
+
+async def _check_twilio_tenant(db, org_id, form, presented, urls, params) -> None:
+    """B12: a post signed with the shop's own auth token is that shop's. One signed only with the
+    operator-wide token (shared by every shop) must also come from the operator's account and be
+    addressed to a number this shop registered — like the voice webhook — so ?org_id= can't
+    file a text under another shop."""
+    from backend.config import settings as _settings
+    from backend.services import org_creds
+    from backend.services.twilio_voice import signature_ok
+    own = await org_creds.effective(db, org_id, "twilio", read_only=True, own_only=True)
+    if own.get("auth_token") and signature_ok(own["auth_token"], presented, urls, params):
+        if own.get("account_sid") and form.get("AccountSid") and form.get("AccountSid") != own["account_sid"]:
+            raise HTTPException(403, "This message belongs to a different Twilio account")
+        return
+    if _settings.TWILIO_ACCOUNT_SID and form.get("AccountSid") != _settings.TWILIO_ACCOUNT_SID:
+        raise HTTPException(403, "This message belongs to a different Twilio account")
+    numbers = {_digits(own.get(k) or "") for k in ("from", "whatsapp_from")} - {""}
+    if not numbers or _digits(form.get("To") or "") not in numbers:
+        raise HTTPException(403, "This number isn't registered to this shop")
+
+
 @router.post("/webhook/twilio")
 async def twilio_inbound(request: Request, db: AsyncSession = Depends(get_db),
                          org_id: str = Query(..., description="target org for this Twilio number")):
@@ -240,6 +264,8 @@ async def twilio_inbound(request: Request, db: AsyncSession = Depends(get_db),
     urls = request_urls(request)       # S4: also the public URL Twilio signed behind a proxy
     verified = any(signature_ok(s, presented, urls, params) for s in secrets)
     require_signature(secrets, verified, "Twilio", status=403)
+    if secrets:
+        await _check_twilio_tenant(db, org_id, form, presented, urls, params)
     twiml = Response(content="<?xml version='1.0' encoding='UTF-8'?><Response></Response>",
                      media_type="application/xml")
     raw_from = (form.get("From") or "").strip()

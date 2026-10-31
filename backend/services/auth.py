@@ -95,7 +95,10 @@ def assert_org_active(org, today=None) -> None:
         return
     today = today or platform_today()
     if org.sub_status == "suspended":
-        raise HTTPException(status_code=403, detail=ACCOUNT_OFF)
+        # The admin panel can leave the shop a message ("Payment overdue, call us on ..."); without
+        # one, the same reply as a disabled person, so it says nothing about which it is.
+        msg = (getattr(org, "suspend_message", None) or "").strip()
+        raise HTTPException(status_code=403, detail=msg or ACCOUNT_OFF)
     if getattr(org, "sub_end", None) and org.sub_end < today:
         raise HTTPException(status_code=403, detail="Your subscription has ended. Please contact support to renew.")
 
@@ -138,6 +141,9 @@ async def get_current_employee(
         from backend.services.permissions import role_allows
         from backend.services.redact import COST_PERM
         request.state.can_see_costs = role is not None and role_allows(role, COST_PERM)
+    else:
+        # No role: the shop owner sees everything, a roleless invitee nothing.
+        request.state.can_see_costs = await is_shop_owner(db, employee)
     # Lost-device logout: a token carrying a stale version is rejected. Tokens
     # minted before this feature have no "tv" claim and stay valid until expiry.
     tv = payload.get("tv")
@@ -180,6 +186,9 @@ async def get_current_employee(
         if not request.url.path.startswith(MFA_ENROLLMENT_PATHS):
             raise HTTPException(status_code=403, detail="Set up two-factor authentication to continue.",
                                 headers={"X-MFA-Enrollment-Required": "1"})
+    # Who is acting on this request's session: backend/db/actors.py stamps it on discounts,
+    # refunds and drawer closes, whichever route makes them.
+    db.info["actor_id"] = employee.id
     return employee
 
 
@@ -201,9 +210,14 @@ async def assert_not_self(db: AsyncSession, current: Employee, employee_id: str,
 
 async def has_perm(db: AsyncSession, employee: Employee, perm_key: str) -> bool:
     """Does this person's role grant the permission? (services/permissions.role_allows.)
-    Employees with no role (org owners) have every permission."""
-    if not employee.role_id or await is_shop_owner(db, employee):
+    The shop owner has every permission. Anyone else with no role has none: an invitee
+    accepted without a role used to be treated as the owner."""
+    if getattr(employee, "api_key_id", None):
+        return True           # an API v2 key (orders.ApiActor): its key scope is its permission
+    if await is_shop_owner(db, employee):
         return True
+    if not employee.role_id:
+        return False
     from backend.models import Role
     from backend.services.permissions import role_allows
     role = (await db.execute(select(Role).where(Role.id == employee.role_id))).scalar_one_or_none()
@@ -220,8 +234,8 @@ async def assert_perm(db: AsyncSession, employee: Employee, perm_key: str) -> No
 
 
 def require_perm(perm_key: str):
-    """Dependency factory for role-based gating (see has_perm). Employees with no role
-    (org owners) are always allowed."""
+    """Dependency factory for role-based gating (see has_perm). The shop owner is always
+    allowed."""
     async def _checker(
         db: AsyncSession = Depends(get_db),
         current: Employee = Depends(get_current_employee),

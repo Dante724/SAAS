@@ -1,13 +1,18 @@
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
-import { api } from "../../api/client";
+import { api, getLocationScope } from "../../api/client";
 import { loadFailed } from "../../lib/notice";
 import { clickable } from "../../lib/clickable";
+import { useClientSearch } from "../../hooks/useClientSearch";
+import { fmtDay, wallDate } from "../../lib/serverTime";
 
 type Appointment = { id: string; client_name?: string; service_name?: string; employee_name?: string; scheduled_for?: string; ends_at?: string; duration_min?: number; status?: string; note?: string; order_id?: string | null };
 type Emp = { id: string; name: string };
 type Service = { id: string; name?: string; duration_min?: number };
+type ClientLite = { id: string; name: string; phone?: string };
+type DayHours = { open?: string; close?: string; closed?: boolean };
+type Loc = { id: string; active?: boolean; working_hours?: Record<string, DayHours> | null };
 
 // Appointment status keys match the backend (booked|done|canceled|no_show). Changing status
 // fires the org's appointment notification rules server-side (confirm / cancel / no-show / done).
@@ -16,8 +21,34 @@ const STATUS_LABEL: Record<string, string> = { booked: "Booked", done: "Done", c
 function F({ l, v }: { l: string; v: string }) {
   return <div><div className="text-[11px] font-bold text-ink-tertiary mb-0.5">{l}</div><div className="text-sm font-semibold text-ink-primary">{v || "—"}</div></div>;
 }
-const dayKey = (iso?: string) => (iso ? new Date(iso).toLocaleDateString([], { weekday: "long", day: "numeric", month: "long" }) : "Unscheduled");
-const time = (iso?: string) => (iso ? new Date(iso).toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "—");
+// scheduled_for / ends_at are shop wall-clock times: read them with wallDate, never new Date(iso).
+const dayKey = (iso?: string) => { const d = wallDate(iso); return d ? d.toLocaleDateString([], { weekday: "long", day: "numeric", month: "long" }) : "Unscheduled"; };
+const time = (iso?: string) => { const d = wallDate(iso); return d ? d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) : "—"; };
+const pad = (n: number) => String(n).padStart(2, "0");
+const ymd = (d: Date) => `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`;
+const todayYmd = () => ymd(new Date());
+const addDays = (day: string, n: number) => { const d = wallDate(`${day}T00:00`) || new Date(); d.setDate(d.getDate() + n); return ymd(d); };
+/** "Thu, Oct 30, 2026" for a "YYYY-MM-DD" shop day. */
+const dayLabel = (day: string) => { const d = wallDate(`${day}T00:00`); return d ? `${d.toLocaleDateString([], { weekday: "short" })}, ${fmtDay(day)}` : ""; };
+const WEEKDAY_KEYS = ["sun", "mon", "tue", "wed", "thu", "fri", "sat"];   // Date.getDay() → working_hours key
+const hourOf = (hm?: string) => { const m = /^(\d{1,2}):(\d{2})/.exec(hm || ""); return m ? { h: Number(m[1]), m: Number(m[2]) } : null; };
+const fmtHm = (hm: string) => { const t = hourOf(hm); if (!t) return hm; const d = new Date(2000, 0, 1, t.h, t.m); return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }); };
+
+/** The scheduler's hour rows for a day: the location's opening hours for that weekday, or 09:00–17:00
+ *  (the server's default booking window) when the day is closed or no hours are saved — always
+ *  widened so no appointment falls outside. */
+function dayWindow(loc: Loc | null | undefined, day: string, appts: { scheduled_for?: string }[]) {
+  const wd = wallDate(`${day}T00:00`);
+  const dh = wd && loc?.working_hours ? loc.working_hours[WEEKDAY_KEYS[wd.getDay()]] : undefined;
+  const closed = !!dh?.closed;
+  const o = !closed ? hourOf(dh?.open) : null; const c = !closed ? hourOf(dh?.close) : null;
+  let first = 9, last = 16, open: { open: string; close: string } | null = null;
+  if (o && c && (c.h * 60 + c.m) > (o.h * 60 + o.m)) {
+    first = o.h; last = c.m > 0 ? c.h : c.h - 1; open = { open: dh!.open!, close: dh!.close! };
+  }
+  for (const a of appts) { const d = wallDate(a.scheduled_for); if (d) { first = Math.min(first, d.getHours()); last = Math.max(last, d.getHours()); } }
+  return { hours: Array.from({ length: last - first + 1 }, (_, i) => first + i), closed, open };
+}
 
 export default function AppointmentsHub() {
   const [rows, setRows] = useState<Appointment[] | null>(null);
@@ -30,6 +61,14 @@ export default function AppointmentsHub() {
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2200); };
   const [view, setView] = useState<"agenda" | "scheduler">("agenda");
   const [drag, setDrag] = useState<string | null>(null);
+  // The scheduler's day ("YYYY-MM-DD", shop wall-clock). Shared by both views so switching keeps it.
+  const [day, setDay] = useState(todayYmd);
+  const [dayRows, setDayRows] = useState<Appointment[] | null>(null);
+  const [locs, setLocs] = useState<Loc[]>([]);
+  // Client picker: search existing clients, or keep the typed name as a new walk-in.
+  const [clientQ, setClientQ] = useState(""); const [clientOpen, setClientOpen] = useState(false);
+  const clientResults = useClientSearch<ClientLite>(clientQ, clientOpen && !f.client_id, 6);
+  const [customTime, setCustomTime] = useState(false);
   // New-appointment availability: pick a day → show real open slots from the schedule engine (legacy /appointments/availability).
   const [bkDate, setBkDate] = useState("");
   const [slots, setSlots] = useState<{ start: string; end: string; start_iso: string }[] | null>(null);
@@ -46,10 +85,11 @@ export default function AppointmentsHub() {
     }).catch(() => { setSlots([]); setSlotMsg("Couldn't load slots"); });
   }, [drawer, bkDate, f.employee_id, f.service_id, f.duration_min]);
   async function moveToHour(id: string, hour: number) {
-    const b = (rows || []).find((x) => x.id === id); if (!b || !b.scheduled_for) return;
+    const b = (dayRows || rows || []).find((x) => x.id === id); if (!b || !b.scheduled_for) return;
     // Scheduled times are shop wall-clock: keep the day as stored and send the new hour as-is.
     const iso = `${b.scheduled_for.slice(0, 10)}T${String(hour).padStart(2, "0")}:00:00`;
     setRows((cur) => (cur || []).map((x) => x.id === id ? { ...x, scheduled_for: iso } : x)); // optimistic
+    setDayRows((cur) => (cur || []).map((x) => x.id === id ? { ...x, scheduled_for: iso } : x));
     try { await api.patch(`/appointments/${id}`, { scheduled_for: iso }); flash("Rescheduled"); } catch { load(); }
   }
 
@@ -77,15 +117,36 @@ export default function AppointmentsHub() {
     } catch (e: any) { flash(e.message || "Convert failed"); } finally { setSelBusy(false); }
   }
 
-  function load() { api.get<{ items: Appointment[] }>("/appointments").then((r) => setRows(r.items || [])).catch(() => setRows([])); }
-  useEffect(() => { load(); api.get<any>("/staff/employees").then((r) => setEmps(r.items || r || [])).catch(loadFailed("the staff list")); api.get<{ items: Service[] }>("/catalog/services").then((r) => setServices(r.items || [])).catch(loadFailed("services")); }, []);
+  // The agenda lists every appointment; the scheduler asks the server for one day (?date_str=YYYY-MM-DD).
+  function loadDay(d = day) {
+    api.get<{ items: Appointment[] }>(`/appointments?date_str=${d}`)
+      .then((r) => setDayRows((r.items || []).filter((b) => b.scheduled_for?.slice(0, 10) === d)))
+      .catch(() => setDayRows([]));
+  }
+  function load() { api.get<{ items: Appointment[] }>("/appointments").then((r) => setRows(r.items || [])).catch(() => setRows([])); if (view === "scheduler") loadDay(); }
+  useEffect(() => {
+    load(); api.get<any>("/staff/employees").then((r) => setEmps(r.items || r || [])).catch(loadFailed("the staff list")); api.get<{ items: Service[] }>("/catalog/services").then((r) => setServices(r.items || [])).catch(loadFailed("services"));
+    api.get<any>("/staff/locations").then((r) => setLocs(r.items || r || [])).catch(() => setLocs([]));
+  }, []);  // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { if (view === "scheduler") { setDayRows(null); loadDay(day); } }, [view, day]);  // eslint-disable-line react-hooks/exhaustive-deps
+  const scopeId = getLocationScope();
+  const loc = locs.find((l) => l.id === scopeId) || locs.find((l) => l.active !== false) || locs[0] || null;
+
+  const blank = { client_id: "", client_name: "", service_id: "", employee_id: "", scheduled_for: "", duration_min: 60, note: "" };
+  function openNew(prefillDay = day) {
+    setF(blank); setClientQ(""); setClientOpen(false); setCustomTime(false); setBkDate(prefillDay); setDrawer(true);
+  }
+  function pickDate(d: string) {
+    setBkDate(d);
+    if (f.scheduled_for && f.scheduled_for.slice(0, 10) !== d) setF({ ...f, scheduled_for: "" });
+  }
 
   async function create() {
-    if (!f.scheduled_for) { flash("Pick a date & time"); return; }
+    if (!f.scheduled_for) { flash("Pick a date and a time"); return; }
     setBusy(true);
     try {
-      await api.post("/appointments", { client_name: f.client_name || null, service_id: f.service_id || null, employee_id: f.employee_id || null, scheduled_for: f.scheduled_for, duration_min: Number(f.duration_min) || null, note: f.note || null });
-      setDrawer(false); setF({ client_name: "", service_id: "", employee_id: "", scheduled_for: "", duration_min: 60, note: "" }); setBkDate(""); setSlots(null); load(); flash("Appointment created");
+      await api.post("/appointments", { client_id: f.client_id || null, client_name: f.client_name || null, service_id: f.service_id || null, employee_id: f.employee_id || null, scheduled_for: f.scheduled_for, duration_min: Number(f.duration_min) || null, note: f.note || null });
+      setDrawer(false); setF(blank); setClientQ(""); setCustomTime(false); setBkDate(""); setSlots(null); load(); flash("Appointment created");
     } catch (e: any) { flash(`Failed: ${e.message}`); } finally { setBusy(false); }
   }
 
@@ -96,27 +157,48 @@ export default function AppointmentsHub() {
   return (
     <Shell title="Appointments">
       <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
-        <div className="flex items-center gap-2">
-          <button onClick={() => setDrawer(true)} className="h-9 px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New appointment</button>
+        <div className="flex flex-wrap items-center gap-2">
+          <button onClick={() => openNew()} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New appointment</button>
           <div className="h-9 flex items-center bg-slate-100 p-0.5 rounded-xl border border-slate-200/70 text-xs">
-            <button onClick={() => setView("agenda")} className={`h-full px-2.5 rounded-lg font-semibold flex items-center gap-1 ${view === "agenda" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="table_rows" c="text-xs" />Agenda</button>
-            <button onClick={() => setView("scheduler")} className={`h-full px-2.5 rounded-lg font-semibold flex items-center gap-1 ${view === "scheduler" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="calendar_month" c="text-xs" />Scheduler</button>
+            <button onClick={() => setView("agenda")} aria-pressed={view === "agenda"} className={`h-full px-2.5 rounded-lg font-semibold flex items-center gap-1 ${view === "agenda" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="table_rows" c="text-xs" />Agenda</button>
+            <button onClick={() => setView("scheduler")} aria-pressed={view === "scheduler"} className={`h-full px-2.5 rounded-lg font-semibold flex items-center gap-1 ${view === "scheduler" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="calendar_month" c="text-xs" />Scheduler</button>
           </div>
+          {view === "scheduler" && (
+            <div className="flex items-center gap-1.5">
+              <button aria-label="Previous day" onClick={() => setDay(addDays(day, -1))} className="h-9 w-9 rounded-xl border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 grid place-items-center"><M n="chevron_left" c="text-sm" /></button>
+              <button onClick={() => setDay(todayYmd())} disabled={day === todayYmd()} className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 disabled:opacity-50">Today</button>
+              <button aria-label="Next day" onClick={() => setDay(addDays(day, 1))} className="h-9 w-9 rounded-xl border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 grid place-items-center"><M n="chevron_right" c="text-sm" /></button>
+              <DateField mode="date" value={day} onChange={(v) => v && setDay(v)} className="w-44" label="Jump to date" />
+            </div>
+          )}
         </div>
-        {!rows && <p className="text-xs text-ink-tertiary">Loading…</p>}
-        {view === "scheduler" && rows && (() => {
-          const todayStr = new Date().toDateString();
-          const today = rows.filter((b) => b.scheduled_for && new Date(b.scheduled_for).toDateString() === todayStr);
-          const hours = Array.from({ length: 12 }, (_, i) => i + 8); // 08:00–19:00
+        {!rows && view === "agenda" && <p className="text-xs text-ink-tertiary">Loading…</p>}
+        {view === "scheduler" && (() => {
+          const list = dayRows || [];
+          const win = dayWindow(loc, day, list);
           return (
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-              <div className="px-5 py-3 border-b border-slate-100 text-xs font-bold text-ink-primary">Today — drag an appointment to reschedule</div>
+              <div className="px-5 py-3 border-b border-slate-100 flex flex-wrap items-center gap-x-3 gap-y-1">
+                <span className="text-sm font-bold text-ink-primary" data-testid="scheduler-day">{dayLabel(day)}</span>
+                <span className="text-xs text-ink-tertiary flex items-center gap-1"><M n="schedule" c="text-xs" />{win.closed ? "Closed" : win.open ? `Open ${fmtHm(win.open.open)}–${fmtHm(win.open.close)}` : "No opening hours saved"}</span>
+                {list.length > 0 && <span className="text-xs text-ink-tertiary">· Drag an appointment to another hour to reschedule</span>}
+              </div>
+              {!dayRows && <p className="px-5 py-6 text-xs text-ink-tertiary">Loading…</p>}
+              {dayRows && list.length === 0 && (
+                <div className="px-6 py-14 text-center">
+                  <M n="calendar_today" c="mx-auto text-2xl text-ink-placeholder" />
+                  <p className="text-sm font-semibold text-ink-secondary mt-2">No appointments on this day</p>
+                  <p className="text-xs text-ink-tertiary mt-0.5">{win.closed ? "The shop is closed this day." : "The day is open for bookings."}</p>
+                  <button onClick={() => openNew(day)} className="mt-4 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 inline-flex items-center gap-1.5"><M n="add" c="text-sm" />New appointment</button>
+                </div>
+              )}
+              {list.length > 0 && (
               <div className="divide-y divide-slate-100">
-                {hours.map((h) => {
-                  const cards = today.filter((b) => new Date(b.scheduled_for!).getHours() === h);
+                {win.hours.map((h) => {
+                  const cards = list.filter((b) => wallDate(b.scheduled_for)?.getHours() === h);
                   return (
                     <div key={h} onDragOver={(e) => e.preventDefault()} onDrop={() => { if (drag) { moveToHour(drag, h); setDrag(null); } }} className="flex gap-3 px-5 py-2 min-h-[52px] hover:bg-blue-50/20">
-                      <div className="w-14 flex-shrink-0 text-[11px] tabular-nums font-bold text-ink-tertiary pt-1.5">{String(h).padStart(2, "0")}:00</div>
+                      <div className="w-14 flex-shrink-0 text-[11px] tabular-nums font-bold text-ink-tertiary pt-1.5">{pad(h)}:00</div>
                       <div className="flex-1 flex flex-wrap gap-2">
                         {cards.length === 0 && <div className="text-[11px] text-ink-placeholder pt-1.5">—</div>}
                         {cards.map((b) => (
@@ -130,10 +212,11 @@ export default function AppointmentsHub() {
                   );
                 })}
               </div>
+              )}
             </div>
           );
         })()}
-        {view === "agenda" && rows?.length === 0 && <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-12 text-center"><M n="calendar_month" c="mx-auto mb-2 text-3xl text-ink-placeholder" /><p className="text-sm font-bold text-ink-secondary mt-2">No appointments yet</p><p className="text-xs text-ink-tertiary">Create an appointment or wait for online requests.</p><button onClick={() => setDrawer(true)} className="mt-4 h-9 px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 inline-flex items-center gap-1.5"><M n="add" c="text-sm" />New appointment</button></div>}
+        {view === "agenda" && rows?.length === 0 && <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-12 text-center"><M n="calendar_month" c="mx-auto mb-2 text-3xl text-ink-placeholder" /><p className="text-sm font-bold text-ink-secondary mt-2">No appointments yet</p><p className="text-xs text-ink-tertiary">Create an appointment or wait for online requests.</p><button onClick={() => openNew()} className="mt-4 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 inline-flex items-center gap-1.5"><M n="add" c="text-sm" />New appointment</button></div>}
         {view === "agenda" && Object.entries(groups).map(([day, list]) => (
           <div key={day}>
             <div className="text-[11px] font-bold text-ink-tertiary mb-2">{day}</div>
@@ -162,11 +245,39 @@ export default function AppointmentsHub() {
             <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
             <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70"><h3 className="text-base font-bold text-ink-primary">New appointment</h3><button aria-label="Close" onClick={() => setDrawer(false)} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
             <div className="flex-1 overflow-y-auto p-6 space-y-4 text-xs">
-              <div><label className="block font-semibold text-ink-secondary mb-1">Client</label><input value={f.client_name} onChange={(e) => setF({ ...f, client_name: e.target.value })} className={inp} placeholder="Client name" /></div>
+              <div className="relative">
+                <label className="block font-semibold text-ink-secondary mb-1">Client</label>
+                {f.client_id ? (
+                  <div className="glass-input rounded-xl px-3 py-2 text-sm font-semibold text-ink-primary flex items-center justify-between">
+                    <span className="flex items-center gap-1.5"><M n="person" c="text-sm text-ink-tertiary" />{f.client_name}</span>
+                    <button type="button" onClick={() => { setF({ ...f, client_id: "", client_name: "" }); setClientQ(""); setClientOpen(true); }} className="text-xs text-primary font-semibold">Change</button>
+                  </div>
+                ) : (
+                  <>
+                    <input value={clientQ} autoComplete="off" role="combobox" aria-expanded={clientOpen} aria-label="Client"
+                      onChange={(e) => { setClientQ(e.target.value); setF({ ...f, client_id: "", client_name: e.target.value }); setClientOpen(true); }}
+                      onFocus={() => setClientOpen(true)} onBlur={() => setTimeout(() => setClientOpen(false), 150)}
+                      onKeyDown={(e) => { if (e.key === "Escape") setClientOpen(false); }}
+                      className={inp} placeholder="Search clients, or type a walk-in name" />
+                    {clientOpen && (clientResults.length > 0 || clientQ.trim()) && (
+                      <div role="listbox" className="absolute z-20 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5 max-h-64 overflow-y-auto">
+                        {!clientQ.trim() && <div className="px-2.5 pt-1 pb-0.5 text-[11px] text-ink-tertiary">Recent clients</div>}
+                        {clientResults.map((r) => (
+                          <button key={r.id} type="button" role="option" aria-selected={false} onMouseDown={(e) => { e.preventDefault(); setF({ ...f, client_id: r.id, client_name: r.name }); setClientQ(r.name); setClientOpen(false); }}
+                            className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-sm"><span className="font-semibold text-ink-primary">{r.name}</span>{r.phone && <span className="text-ink-tertiary font-mono text-xs">{r.phone}</span>}</button>
+                        ))}
+                        {clientQ.trim() && (
+                          <button type="button" onMouseDown={(e) => { e.preventDefault(); setClientOpen(false); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-slate-50 text-xs text-ink-secondary"><M n="person_add" c="text-sm" />Use "{clientQ.trim()}" as a walk-in</button>
+                        )}
+                      </div>
+                    )}
+                  </>
+                )}
+              </div>
               <div><label className="block font-semibold text-ink-secondary mb-1">Service</label><select value={f.service_id} onChange={(e) => { const s = services.find((x) => x.id === e.target.value); setF({ ...f, service_id: e.target.value, duration_min: s?.duration_min || f.duration_min }); }} className={`${inp} appearance-none`}><option value="">— Select —</option>{services.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
               <div><label className="block font-semibold text-ink-secondary mb-1">Specialist</label><select value={f.employee_id} onChange={(e) => setF({ ...f, employee_id: e.target.value })} className={`${inp} appearance-none`}><option value="">— Unassigned —</option>{emps.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select></div>
               <div className="grid grid-cols-2 gap-3">
-                <div><label className="block font-semibold text-ink-secondary mb-1">Day</label><DateField mode="date" value={bkDate} onChange={setBkDate} /></div>
+                <div><label className="block font-semibold text-ink-secondary mb-1">Date</label><DateField mode="date" value={bkDate} onChange={pickDate} label="Date" /></div>
                 <div><label className="block font-semibold text-ink-secondary mb-1">Duration (min)</label><input type="number" value={f.duration_min} onChange={(e) => setF({ ...f, duration_min: e.target.value })} className={`${inp} font-mono`} /></div>
               </div>
               {bkDate && (
@@ -183,12 +294,20 @@ export default function AppointmentsHub() {
                     </div>
                   )}
                   {slots && slots.length === 0 && <div className="text-amber-700 py-1">{slotMsg}</div>}
+                  {!customTime ? (
+                    <button type="button" onClick={() => setCustomTime(true)} className="mt-2 text-xs font-semibold text-primary hover:underline">Custom time</button>
+                  ) : (
+                    <div className="mt-2 flex items-center gap-2">
+                      <label className="font-semibold text-ink-secondary flex items-center gap-1"><M n="schedule" c="text-xs" />Custom time</label>
+                      <DateField mode="time" value={f.scheduled_for ? f.scheduled_for.slice(11, 16) : ""} onChange={(t) => setF({ ...f, scheduled_for: t ? `${bkDate}T${t}` : "" })} className="w-32" label="Custom time" />
+                    </div>
+                  )}
                 </div>
               )}
-              <div><label className="block font-semibold text-ink-secondary mb-1">Exact time {f.scheduled_for ? "" : "(or pick a slot above)"}</label><DateField mode="datetime" value={f.scheduled_for ? f.scheduled_for.slice(0, 16) : ""} onChange={(v) => setF({ ...f, scheduled_for: v })} /></div>
+              {!bkDate && <p className="text-ink-tertiary">Pick a date to see open times.</p>}
               <div><label className="block font-semibold text-ink-secondary mb-1">Note</label><textarea value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} className={`${inp} h-20 resize-none`} placeholder="Optional…" /></div>
             </div>
-            <div className="p-4 border-t border-slate-100 bg-slate-50/70 flex items-center justify-end gap-2"><button onClick={() => setDrawer(false)} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button><button onClick={create} disabled={busy} className="px-5 py-2 rounded-lg bg-primary text-white font-bold text-xs shadow-clay-sm disabled:opacity-50">{busy ? "Creating…" : "Create appointment"}</button></div>
+            <div className="p-4 border-t border-slate-100 bg-slate-50/70 flex items-center justify-end gap-2"><button onClick={() => setDrawer(false)} className="h-9 px-3.5 rounded-xl border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button><button onClick={create} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white font-semibold text-xs shadow-clay-sm disabled:opacity-50">{busy ? "Creating…" : "Create appointment"}</button></div>
           </div>
         </div>
       )}

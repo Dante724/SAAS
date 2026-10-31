@@ -19,12 +19,13 @@ import TagFilterChip from "./TagFilterChip";
 import { useMe } from "../../context/Me";
 import { Avatar } from "../orders/look";
 import { MoreMenu, btnDanger, btnGhost, btnPrimary } from "../invoices/billing";
+import MembershipsView from "../memberships/MembershipsView";
 import { hueText, tint } from "../../lib/tint";
 import ImportDrawer from "../../components/ImportDrawer";
 import { clickableRow } from "../../lib/clickable";
 
 type Client = { id: string; name?: string; phone?: string; email?: string; loyalty_tier?: string; balance?: number; devices?: any[]; order_count?: number };
-type Tab = "clients" | "suppliers";
+type Tab = "clients" | "memberships" | "suppliers";
 
 /* Tier is an exception worth seeing (VIP, gold, silver), so it only shows when a client has
    one; "standard" or no tier reads as a quiet dash. */
@@ -39,7 +40,7 @@ export function TierPill({ tier }: { tier?: string | null }) {
 export default function ClientsHub() {
   const term = useTerminology();
   const { can } = useMe();
-  const [tab, setTab] = useState<Tab>("clients");
+  const [tab, setTab] = useState<Tab>(() => (new URLSearchParams(window.location.search).get("tab") === "memberships" ? "memberships" : "clients"));
   const [importing, setImporting] = useState<"clients" | "suppliers" | null>(null);
   const [suppliers, setSuppliers] = useState<Supplier[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -131,7 +132,7 @@ export default function ClientsHub() {
       {importing && <ImportDrawer kind={importing} onClose={() => setImporting(null)} onDone={() => { if (importing === "clients") loadClients(); else loadSuppliers(); }} />}
       <div className="flex-1 overflow-y-auto">
         <div className="px-6 pt-4 flex items-center gap-1 border-b border-slate-200/70">
-          {(["clients", "suppliers"] as Tab[]).map((t) => (
+          {(["clients", "memberships", "suppliers"] as Tab[]).map((t) => (
             <button key={t} onClick={() => { setTab(t); clearSel(); }}
               className={`px-3 py-2 text-sm font-semibold rounded-t-lg -mb-px border-b-2 capitalize ${tab === t ? "text-primary border-primary" : "text-ink-tertiary border-transparent hover:text-ink-primary"}`}>
               {t}
@@ -146,15 +147,18 @@ export default function ClientsHub() {
                   {can("can_create_clients") && <button onClick={() => setNewClient(true)} className={btnPrimary}><M n="add" c="text-sm" />New client</button>}
                   {can("can_create_clients") && <button onClick={() => setImporting("clients")} className={`${btnGhost} bg-white`}><M n="upload" c="text-sm" />Import</button>}
                 </div>
-              : <div className="flex items-center gap-2">
+              : tab === "suppliers" ? <div className="flex items-center gap-2">
                   <button onClick={() => setNewSupplier(true)} className={btnPrimary}><M n="add" c="text-sm" />New supplier</button>
                   {can("can_manage_inventory") && <button onClick={() => setImporting("suppliers")} className={`${btnGhost} bg-white`}><M n="upload" c="text-sm" />Import</button>}
-                </div>}
+                </div>
+              : <a href="/catalog?tab=plans" className={`${btnGhost} bg-white`}><M n="workspace_premium" c="text-sm" />Manage plans</a>}
             <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
               {tab === "clients" && <TagFilterChip value={tagId} onChange={(id) => { setTagId(id); clearSel(); }} />}
               <div className="relative w-full sm:w-72"><M n="search" c="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" /><input value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search contacts" className="glass-input w-full h-9 rounded-xl pl-8 pr-3 py-2 text-sm text-ink-primary" placeholder="Search name, phone or email…" /></div>
             </div>
           </div>
+
+          {tab === "memberships" && <MembershipsView q={dq} />}
 
           {tab === "clients" && merged && (
             <div className="bg-emerald-50 rounded-2xl border border-emerald-200 shadow-clay-sm px-4 py-2.5 flex items-center gap-2 text-xs font-semibold">

@@ -5,19 +5,23 @@
   last_call_at), an idempotency key unique per shop (Tekly Go offline create) and updated_at.
 - clients: structured address (street/city/region/postcode/country). The existing single
   `address` line is left exactly as it is, so nothing already on documents changes.
-- organisations.public_employee_name: how staff names show on public pages.
+- organisations.public_employee_name: widened to 16 for the new "first_initial" mode (the column
+  itself comes from ojj1, which added it with full | first | custom).
 - api_keys.rate_limit_per_min: per-key limit (null = default).
 
 Additive only: no column is dropped or rewritten.
 
+Re-chained after whh1 when claude/ws-c-inquiries was merged onto api/harden-and-docs, so the
+history stays linear: ... opd1 → ojj1 → apih1 → whh1 → wsc1.
+
 Revision ID: wsc1
-Revises: opd1
+Revises: whh1
 """
 import sqlalchemy as sa
 from alembic import op
 
 revision = "wsc1"
-down_revision = "opd1"
+down_revision = "whh1"
 branch_labels = None
 depends_on = None
 
@@ -57,8 +61,8 @@ def upgrade() -> None:
         b.add_column(sa.Column("addr_country", sa.String(length=2), nullable=True))
 
     with op.batch_alter_table("organisations") as b:
-        b.add_column(sa.Column("public_employee_name", sa.String(length=16), nullable=False,
-                               server_default="full"))
+        b.alter_column("public_employee_name", existing_type=sa.String(length=10), type_=sa.String(length=16),
+                       existing_nullable=False, existing_server_default="full")
 
     with op.batch_alter_table("api_keys") as b:
         b.add_column(sa.Column("rate_limit_per_min", sa.Integer(), nullable=True))
@@ -67,8 +71,11 @@ def upgrade() -> None:
 def downgrade() -> None:
     with op.batch_alter_table("api_keys") as b:
         b.drop_column("rate_limit_per_min")
+    # "first_initial" doesn't exist before wsc1 and doesn't fit the narrower column.
+    op.execute("UPDATE organisations SET public_employee_name = 'first' WHERE public_employee_name = 'first_initial'")
     with op.batch_alter_table("organisations") as b:
-        b.drop_column("public_employee_name")
+        b.alter_column("public_employee_name", existing_type=sa.String(length=16), type_=sa.String(length=10),
+                       existing_nullable=False, existing_server_default="full")
     with op.batch_alter_table("clients") as b:
         for c in ("addr_country", "addr_postcode", "addr_region", "addr_city", "addr_street"):
             b.drop_column(c)

@@ -175,6 +175,16 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
                 {pick("appointment_window_days", "Book up to", WINDOWS, "How far ahead")}
               </div>
               {sw("book_show_employee_step", "Let customers choose a technician", "Off: you assign someone later.", "booking")}
+              <label className="flex flex-wrap items-center gap-3 py-3 border-t border-slate-100" onMouseEnter={() => setPage("booking")}>
+                <span className="min-w-0"><span className="block text-sm text-ink-primary">How your team's names appear</span><span className="block text-xs text-ink-tertiary">On the booking page and in customer messages. Custom uses each person's “Name on documents” in Team.</span></span>
+                <select value={cfg.public_employee_name || "full"} onChange={(e) => save({ public_employee_name: e.target.value })} aria-label="How your team's names appear"
+                  className="ml-auto glass-input rounded-xl px-3 py-2 text-sm">
+                  <option value="full">Full name</option>
+                  <option value="first_initial">First name and initial</option>
+                  <option value="first">First name only</option>
+                  <option value="custom">Custom name</option>
+                </select>
+              </label>
               {sw("appointment_allow_multiple", "Allow more than one booking at the same time", undefined, "booking")}
               {sw("appointment_consider_orders", "Keep times free when jobs are scheduled", "Scheduled work orders block booking slots too.", "booking")}
             </div>
@@ -197,6 +207,14 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
 
           {approval("oe", est, "estimate")}
           {approval("oe_wo", wo, "work order")}
+
+          <Card icon="draw" title="Drop-off terms" hint="What the customer reads and signs on the tablet when they leave an item (Tekly Go). Leave empty to use the standard wording.">
+            <textarea value={cfg.dropoff_terms ?? ""} maxLength={4000} rows={4} aria-label="Drop-off terms"
+              onChange={(e) => setCfg({ ...cfg, dropoff_terms: e.target.value })}
+              onBlur={() => save({ dropoff_terms: (cfg.dropoff_terms || "").trim() })}
+              placeholder="I'm leaving this item for diagnosis and repair. I've backed up my data; the shop isn't responsible for data loss…"
+              className="glass-input w-full rounded-xl px-3 py-2 text-sm" />
+          </Card>
         </div>
 
         {/* Live preview */}
@@ -227,7 +245,7 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
                       ))}
                     </div>
                     {cfg.book_show_employee_step && (
-                      <div className="flex gap-1.5">{["Any", "Priya", "Amit"].map((p, i) => <span key={p} className="px-2.5 py-1 rounded-full border text-[11px]" style={i === 0 ? { borderColor: accent, color: accent } : { borderColor: "#e2e8f0" }}>{p}</span>)}</div>
+                      <div className="flex flex-wrap gap-1.5">{["Any", ...(cfg.public_employee_name === "first" ? ["Priya", "Amit"] : cfg.public_employee_name === "first_initial" ? ["Priya S.", "Amit R."] : cfg.public_employee_name === "custom" ? ["Priya S.", "Amit (lead tech)"] : ["Priya Shah", "Amit Rao"])].map((p, i) => <span key={p} className="px-2.5 py-1 rounded-full border text-[11px]" style={i === 0 ? { borderColor: accent, color: accent } : { borderColor: "#e2e8f0" }}>{p}</span>)}</div>
                     )}
                     <div className="grid grid-cols-4 gap-1.5">
                       {["9:00", "9:30", "10:00", "10:30", "11:00", "1:00", "1:30", "2:00"].map((t, i) => (

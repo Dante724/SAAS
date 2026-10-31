@@ -5,6 +5,7 @@ import { api } from "../../api/client";
 import Pager from "../../components/Pager";
 import InquiryDrawer from "./InquiryDrawer";
 import InquiryFields from "./InquiryFields";
+import WalkinsView from "./WalkinsView";
 import { callsLabel, channelLabel, deviceLine, fmt, newIdempotencyKey, sla, SRC_ICON, type Column, type Lead, type LeadType } from "./inquiries";
 import { clickableRow } from "../../lib/clickable";
 
@@ -52,7 +53,8 @@ export default function InquiriesHub() {
   const navigate = useNavigate();
   const [cols, setCols] = useState<Column[] | null>(null);
   const [types, setTypes] = useState<LeadType[]>([]);
-  const [view, setView] = useState<"board" | "list">("board");
+  // ?view=walkins opens the self check-in queue (the staff alert links here).
+  const [view, setView] = useState<"board" | "list" | "walkins">(() => (new URLSearchParams(window.location.search).get("view") === "walkins" ? "walkins" : "board"));
   const [sel, setSel] = useState<Lead | null>(null);
   const [create, setCreate] = useState(false);
   const [showTypes, setShowTypes] = useState(false);
@@ -115,9 +117,12 @@ export default function InquiriesHub() {
           <div className="h-9 flex items-center bg-slate-100/90 p-0.5 rounded-xl border border-slate-200/60 text-xs">
             <button onClick={() => setView("board")} className={`h-full px-2.5 rounded-lg font-semibold flex items-center gap-1.5 ${view === "board" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="view_kanban" c="text-xs" />Pipeline</button>
             <button onClick={() => setView("list")} className={`h-full px-2.5 rounded-lg font-semibold flex items-center gap-1.5 ${view === "list" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="table_rows" c="text-xs" />List</button>
+            <button onClick={() => setView("walkins")} className={`h-full px-2.5 rounded-lg font-semibold flex items-center gap-1.5 ${view === "walkins" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="how_to_reg" c="text-xs" />Walk-ins</button>
           </div>
           <button onClick={() => setShowTypes(true)} className="h-9 px-3 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100 flex items-center gap-1"><M n="label" c="text-sm" />Types</button>
         </div>
+
+        {view === "walkins" && <WalkinsView />}
 
         {view === "list" && (
           <div className="flex-1 overflow-y-auto px-6 pb-6">

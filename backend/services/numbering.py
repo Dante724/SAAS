@@ -27,6 +27,11 @@ DEFAULT_TEMPLATES = {
     "po": "PO-{C:5}",
     "transfer": "T-{C:5}",
     "credit_note": "CN-{C:5}",
+    # Stock documents (routers/stock_docs.py). Orgs that already issued one keep the template on
+    # their sequence row (the old fallback, e.g. PURCHASE_RETURN-00001); new orgs get these.
+    "purchase_return": "RET-{C:5}",
+    "write_off": "WOF-{C:5}",
+    "posting": "POST-{C:5}",
 }
 
 _TOKEN = re.compile(r"\{(D|M|Y|C(?::(\d+))?|CAT|T)\}")
@@ -77,7 +82,9 @@ async def _find_sequence(db, org_id, doc_type, location_id, entity_id):
 
 _DOC_MODEL = {"order": ("Order", "org_id"), "invoice": ("Invoice", "org_id"),
               "inquiry": ("Order", "org_id"), "sale": ("Sale", "org_id"),
-              "po": ("PurchaseOrder", None), "transfer": ("StockTransfer", "org_id")}
+              "po": ("PurchaseOrder", None), "transfer": ("StockTransfer", "org_id"),
+              "purchase_return": ("PurchaseReturn", "org_id"), "write_off": ("WriteOff", "org_id"),
+              "posting": ("Posting", "org_id")}
 
 
 async def _existing_count(db, org_id, doc_type) -> int:
@@ -88,7 +95,8 @@ async def _existing_count(db, org_id, doc_type) -> int:
     import backend.models as M
     name = {"order": "Order", "invoice": "Invoice", "sale": "Sale",
             "po": "PurchaseOrder", "transfer": "StockTransfer", "inquiry": "Order",
-            "credit_note": "CreditNote"}.get(doc_type)
+            "credit_note": "CreditNote",
+            "purchase_return": "PurchaseReturn", "write_off": "WriteOff", "posting": "Posting"}.get(doc_type)
     model = getattr(M, name, None) if name else None
     if model is None or not hasattr(model, "org_id"):
         return 0
@@ -151,6 +159,84 @@ async def _number_taken(db: AsyncSession, org_id: str, doc_type: str, number: st
     model, number_col = col
     return (await db.execute(select(model.id).where(
         model.org_id == org_id, number_col == number).limit(1))).scalar_one_or_none() is not None
+
+
+# Where each doc type's issued numbers live: (model, number column). PurchaseOrder has no org_id,
+# so it's scoped through its location.
+_NUMBER_COLUMN = {"order": ("Order", "order_number"), "inquiry": ("Order", "order_number"),
+                  "invoice": ("Invoice", "invoice_number"), "sale": ("Sale", "sale_number"),
+                  "po": ("PurchaseOrder", "po_number"), "transfer": ("StockTransfer", "transfer_number"),
+                  "purchase_return": ("PurchaseReturn", "number"), "write_off": ("WriteOff", "number"),
+                  "posting": ("Posting", "number"), "credit_note": ("CreditNote", "number")}
+
+
+def _counter_pattern(template: str) -> re.Pattern:
+    """A regex matching numbers rendered from `template`, capturing the first {C} counter."""
+    out, pos, captured = [], 0, False
+    for m in _TOKEN.finditer(template):
+        out.append(re.escape(template[pos:m.start()]))
+        tok = m.group(1)
+        if tok in ("D", "M"):
+            out.append(r"\d{2}")
+        elif tok == "Y":
+            out.append(r"\d{4}")
+        elif tok in ("CAT", "T"):
+            out.append(r".*?")
+        else:
+            digits = rf"\d{{{m.group(2)},}}" if m.group(2) else r"\d+"
+            out.append(f"({digits})" if not captured else f"(?:{digits})")
+            captured = True
+        pos = m.end()
+    out.append(re.escape(template[pos:]))
+    return re.compile("".join(out) + r"\Z")
+
+
+async def _highest_issued_counter(db: AsyncSession, org_id: str, doc_type: str, template: str) -> int:
+    """Highest counter among this org's existing documents whose number fits `template`."""
+    import backend.models as M
+    spec = _NUMBER_COLUMN.get(doc_type)
+    model = getattr(M, spec[0], None) if spec else None
+    if model is None:
+        return 0
+    col = getattr(model, spec[1])
+    q = select(col).where(col.is_not(None))
+    if hasattr(model, "org_id"):
+        q = q.where(model.org_id == org_id)
+    elif hasattr(model, "location_id"):
+        q = q.join(M.Location, M.Location.id == model.location_id).where(M.Location.org_id == org_id)
+    else:
+        return 0
+    pat = _counter_pattern(template)
+    best = 0
+    for (num,) in (await db.execute(q)).all():
+        m = pat.match(num or "")
+        if m and m.group(1):
+            best = max(best, int(m.group(1)))
+    return best
+
+
+async def last_issued(db: AsyncSession, org_id: str, doc_type: str, scope_key: str,
+                      template: str) -> tuple[int, str | None]:
+    """The highest counter already issued for doc_type/scope, and that number as issued.
+
+    Takes the larger of the sequence's own counter (it only moves forward) and the counters of
+    existing documents that fit the template (legacy count-based numbers, imports, numbers issued
+    under an earlier sequence). (0, None) when nothing has been issued.
+    """
+    seq = (await db.execute(select(NumberSequence).where(
+        NumberSequence.org_id == org_id, NumberSequence.doc_type == doc_type,
+        NumberSequence.scope_key == scope_key))).scalar_one_or_none()
+    if seq is not None:
+        counter, tmpl = (seq.next_value or 1) - 1, seq.template
+    elif scope_key == "org":
+        # what a lazily created sequence would treat as already used
+        counter, tmpl = await _existing_count(db, org_id, doc_type), DEFAULT_TEMPLATES.get(doc_type, template)
+    else:
+        counter, tmpl = 0, template
+    scanned = await _highest_issued_counter(db, org_id, doc_type, template)
+    if scanned > counter:
+        counter, tmpl = scanned, template
+    return counter, (render(tmpl, counter) if counter > 0 else None)
 
 
 async def peek_example(template: str, begins_from: int | None = None) -> str:

@@ -87,6 +87,11 @@ describe("CreditNoteDrawer", () => {
   it("prefills from the invoice at its discount and tax, or the remainder once part is credited", () => {
     // discount and tax are amounts: 10 off 100, then 4.50 tax on the 90 left is 5%
     expect(linesFromInvoice(inv({ subtotal: 100, discount: 10, tax: 4.5, total: 94.5 }))).toEqual([{ description: "Screen", qty: 1, unit_price: 90, tax_rate: 5 }]);
+    // discount is a money amount, not a percent: 20 off 200 leaves 90% of each line
+    expect(linesFromInvoice(inv({ subtotal: 200, discount: 20, tax: 9, total: 189,
+      lines: [{ description: "Screen", qty: 1, unit_price: 150, total: 150 }, { description: "Battery", qty: 2, unit_price: 25, total: 50 }] })))
+      .toEqual([{ description: "Screen", qty: 1, unit_price: 135, tax_rate: 5 }, { description: "Battery", qty: 2, unit_price: 22.5, tax_rate: 5 }]);
+    // auto-drafted invoices carry the tax AMOUNT in .tax: the rate comes from the totals
     expect(linesFromInvoice(inv({ subtotal: 300, tax: 9, total: 309 }))[0].tax_rate).toBe(3);
     expect(linesFromInvoice(inv({ credited: 40, tax: 0 }))[0]).toMatchObject({ unit_price: 60, qty: 1 });
   });

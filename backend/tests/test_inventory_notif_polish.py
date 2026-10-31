@@ -208,7 +208,10 @@ async def test_reminder_rule_queues_before_appointment(client, tenant, db):
         "module": "order", "event": "reminder", "channel": "email",
         "reminder_offset_min": 120}, headers=tenant)
     o = await _order_with_client(client, tenant)
-    soon = now_utc() + timedelta(minutes=60)
+    # Scheduled times are the shop's wall clock (the test shop runs on the default India time),
+    # not UTC: "UTC + 1h" was 4.5 hours in the past there (launch B6).
+    from backend.services.dates import local_now
+    soon = local_now("Asia/Kolkata") + timedelta(minutes=60)
     r = await client.patch(f"/api/orders/{o['id']}/schedule", json={
         "scheduled_for": soon.strftime("%Y-%m-%dT%H:%M")}, headers=tenant)
     assert r.status_code == 200, r.text

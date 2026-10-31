@@ -37,7 +37,8 @@ async def _move(client, h, oid, key):
 async def _logs(db, oid, event):
     db.expire_all()
     return (await db.execute(select(NotificationLog).where(
-        NotificationLog.order_id == oid, NotificationLog.trigger_event == event))).scalars().all()
+        NotificationLog.order_id == oid, NotificationLog.trigger_event == event)
+        .order_by(NotificationLog.created_at))).scalars().all()   # Postgres has no implicit order
 
 
 # ── planner (pure) ──────────────────────────────────────────────────────────────────────────
@@ -244,3 +245,50 @@ async def test_own_status_message_replaces_every_status_message(client, tenant, 
     # _logs has no order (Postgres returns rows in any order): "ready" sent the own rule once,
     # "diagnosed" sent a different one.
     assert len(logs) == 2 and [lg.rule_id for lg in logs].count(own) == 1
+
+
+# ── email transport: the shop's connected mailbox first, like the old template path ────────────
+@pytest.mark.asyncio
+async def test_rule_email_goes_out_from_connected_mailbox(client, tenant, db, monkeypatch):
+    from backend.models import EmailConnection
+    from backend.services import notifications
+    org = await _org(client, tenant)
+    await _statuses(client, tenant)
+
+    oauth_sent, smtp_sent = [], []
+
+    async def _fake_oauth(conn, *, recipient, subject, body):
+        oauth_sent.append((conn.email_address, recipient))
+        return {"status": "sent", "error": None}
+    monkeypatch.setattr("backend.services.email_oauth.send_via_connection", _fake_oauth)
+
+    real_adapter_for = notifications._adapter_for
+
+    def _spy_adapter_for(channel, creds=None):
+        adapter = real_adapter_for(channel, creds)
+        orig = adapter.send
+
+        async def _send(**kw):
+            smtp_sent.append((channel, kw["recipient"]))
+            return await orig(**kw)
+        adapter.send = _send
+        return adapter
+    monkeypatch.setattr("backend.services.notification_rules._adapter_for", _spy_adapter_for)
+
+    # No connected account yet → the seeded email rule falls back to SMTP / simulated.
+    oid = await _order(client, tenant)
+    smtp_sent.clear()                                       # ignore any order-created sends
+    await _move(client, tenant, oid, "diagnosed")
+    assert [(lg.channel, lg.status) for lg in await _logs(db, oid, "status_changed")] == [("email", "sent")]
+    assert oauth_sent == [] and smtp_sent == [("email", "sam@example.com")]
+
+    # Connect a mailbox → the next status message is sent through it, not SMTP.
+    db.add(EmailConnection(org_id=org, provider="gmail", email_address="shop@acme.test",
+                           access_token="at", connected=True, is_default=True))
+    await db.commit()
+    smtp_sent.clear()
+    await _move(client, tenant, oid, "ready")
+    logs = await _logs(db, oid, "status_changed")
+    assert [(lg.channel, lg.status) for lg in logs] == [("email", "sent"), ("email", "sent")]
+    assert oauth_sent == [("shop@acme.test", "sam@example.com")]
+    assert smtp_sent == []

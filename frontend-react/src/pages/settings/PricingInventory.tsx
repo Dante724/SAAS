@@ -218,6 +218,7 @@ export function InventoryPage({ warehouses, currency, onAdd, onEdit, onDelete }:
   const [orig, setOrig] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [patterns, setPatterns] = useState(false);
   useEffect(() => { api.get<any>("/staff/inventory-settings").then((r) => { setC(r || {}); setOrig(JSON.stringify(r || {})); }).catch(() => { setC({}); setOrig("{}"); }); }, []);
   const set = (k: string, v: any) => setC((s: any) => ({ ...s, [k]: v }));
   const dirty = !!c && JSON.stringify(c) !== orig;
@@ -310,21 +311,31 @@ export function InventoryPage({ warehouses, currency, onAdd, onEdit, onDelete }:
           <div className="space-y-4">
             <div>
               <div className="text-sm font-medium text-ink-primary mb-1.5">Each product is unique by</div>
-              <Seg value={c.unique_identifier || "sku"} set={(v) => set("unique_identifier", v)} opts={[["name", "Name"], ["sku", "SKU"], ["barcode", "Barcode"], ["code", "Code"]]} />
-              <p className="text-[11px] text-ink-tertiary mt-1.5">Two products can't share it, and imports use it to find the product to update. SKUs and barcodes are always unique.</p>
+              <Seg value={c.unique_identifier || "name"} set={(v) => set("unique_identifier", v)} opts={[["name", "Name"], ["sku", "SKU"], ["barcode", "Barcode"], ["code", "Code"]]} />
+              <p className="text-xs text-ink-tertiary mt-1.5">Two products can't share it, and imports use it to find the product to update. SKUs and barcodes are always unique.</p>
             </div>
             <div className="grid sm:grid-cols-2 gap-3">
               <Field label="New products start as"><input value={c.default_product_type || "default"} onChange={(e) => set("default_product_type", e.target.value)} className={inp} /></Field>
-              <Field label="SKU pattern" hint="Fills the SKU of new products left blank. {CAT} = first letters of the category. Empty = off.">
-                <input value={c.sku_template || ""} onChange={(e) => set("sku_template", e.target.value)} placeholder="{CAT}-{C:5}" maxLength={40} className={`${inp} font-mono`} /></Field>
-              <Field label="Serial number pattern" hint="For units that arrive without a serial. {C:6} = a 6-digit counter.">
-                <input value={c.product_serial_template || ""} onChange={(e) => set("product_serial_template", e.target.value)} placeholder="SN{C:6}" maxLength={40} className={`${inp} font-mono`} /></Field>
-              <Field label="Bin code pattern" hint="The code printed on a new shelf or bin label.">
-                <input value={c.bin_template || ""} onChange={(e) => set("bin_template", e.target.value)} placeholder="BIN-{C:4}" maxLength={40} className={`${inp} font-mono`} /></Field>
               <Field label="New barcodes start with" hint="20–29 is set aside for a shop's own barcodes, so they never match a manufacturer's.">
                 <select value={c.barcode_prefix || "20"} onChange={(e) => set("barcode_prefix", e.target.value)} aria-label="Barcode prefix" className={inp}>
                   {Array.from({ length: 10 }, (_, i) => String(20 + i)).map((v) => <option key={v} value={v}>{v}</option>)}
                 </select></Field>
+            </div>
+            <div>
+              <button type="button" onClick={() => setPatterns((v) => !v)} aria-expanded={patterns} className="inline-flex items-center gap-1 text-xs font-semibold text-primary">
+                <M n={patterns ? "expand_less" : "expand_more"} c="text-sm" />Custom patterns for new codes
+              </button>
+              {!patterns && <p className="text-xs text-ink-tertiary mt-1">{[c.sku_template, c.product_serial_template, c.bin_template].some(Boolean) ? "Your own patterns are in use for new SKUs, serials or bin codes." : "New SKUs, serials and bin codes use the standard format."}</p>}
+              {patterns && (
+                <div className="grid sm:grid-cols-2 gap-3 mt-3">
+                  <Field label="SKU pattern" hint="Fills the SKU of new products left blank. {CAT} = first letters of the category. Empty = off.">
+                    <input value={c.sku_template || ""} onChange={(e) => set("sku_template", e.target.value)} placeholder="{CAT}-{C:5}" maxLength={40} className={`${inp} font-mono`} /></Field>
+                  <Field label="Serial number pattern" hint="For units that arrive without a serial. {C:6} = a 6-digit counter.">
+                    <input value={c.product_serial_template || ""} onChange={(e) => set("product_serial_template", e.target.value)} placeholder="SN{C:6}" maxLength={40} className={`${inp} font-mono`} /></Field>
+                  <Field label="Bin code pattern" hint="The code printed on a new shelf or bin label.">
+                    <input value={c.bin_template || ""} onChange={(e) => set("bin_template", e.target.value)} placeholder="BIN-{C:4}" maxLength={40} className={`${inp} font-mono`} /></Field>
+                </div>
+              )}
             </div>
           </div>
         </Card>

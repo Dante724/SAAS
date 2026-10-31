@@ -18,8 +18,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import Employee, Order, TimeEntry, TimeEntryAudit
-from backend.services.dates import day_start_utc, parse_dt, shop_tzname, today_in
-from backend.services.dates import now_utc
+from backend.services.dates import day_start_utc, now_utc, parse_dt, shop_tzname, today_in, utc_iso
 
 
 def _udt(value, field: str):
@@ -68,8 +67,8 @@ def _shift_elapsed(s) -> int:
 
 def _ser_shift(s) -> dict:
     return {"id": s.id, "location_id": s.location_id,
-            "started_at": s.started_at.isoformat() if s.started_at else None,
-            "ended_at": s.ended_at.isoformat() if s.ended_at else None,
+            "started_at": utc_iso(s.started_at),
+            "ended_at": utc_iso(s.ended_at),
             "elapsed_sec": _shift_elapsed(s),
             "hours_worked": q2(s.hours_worked or 0), "open": s.ended_at is None}
 
@@ -151,7 +150,7 @@ async def roster(db: AsyncSession = Depends(get_db),
     on_shift = [{
         "employee_id": s.employee_id, "employee_name": names.get(s.employee_id, "—"),
         "location_id": s.location_id, "location_name": locs.get(s.location_id, "—"),
-        "started_at": s.started_at.isoformat() if s.started_at else None,
+        "started_at": utc_iso(s.started_at),
         "elapsed_sec": _shift_elapsed(s),
     } for s in open_shifts]
     # running job/task timers across the org
@@ -165,7 +164,7 @@ async def roster(db: AsyncSession = Depends(get_db),
             "employee_id": e.employee_id, "employee_name": names.get(e.employee_id, "—"),
             "order_number": order_nos.get(e.order_id),
             "category": e.category, "location_name": locs.get(e.location_id, "—"),
-            "started_at": e.started_at.isoformat() if e.started_at else None,
+            "started_at": utc_iso(e.started_at),
             "elapsed_sec": _elapsed_sec(e),
         })
     return {"on_shift": on_shift, "timers": timers,
@@ -198,8 +197,8 @@ def _ser(e: TimeEntry, order_no: Optional[str] = None, emp_name: Optional[str] =
     out = {
         "id": e.id, "employee_id": e.employee_id, "employee_name": emp_name,
         "order_id": e.order_id, "order_line_id": getattr(e, "order_line_id", None), "task_id": e.task_id, "order_number": order_no, "task_title": task_title, "category": e.category,
-        "started_at": e.started_at.isoformat() if e.started_at else None,
-        "ended_at": e.ended_at.isoformat() if e.ended_at else None,
+        "started_at": utc_iso(e.started_at),
+        "ended_at": utc_iso(e.ended_at),
         "duration_sec": sec, "duration_min": round(sec / 60, 1),
         "running": e.ended_at is None and e.state == "running",
         "billable": e.billable, "cost_rate": e.cost_rate, "billable_rate": e.billable_rate,
@@ -753,7 +752,7 @@ async def entry_audit(
     rows = (await db.execute(select(TimeEntryAudit).where(
         TimeEntryAudit.time_entry_id == eid).order_by(TimeEntryAudit.at.asc()))).scalars().all()
     return {"items": [{"action": a.action, "field": a.field, "old": a.old_value, "new": a.new_value,
-                       "actor": names.get(a.actor_id, "—"), "at": a.at.isoformat()} for a in rows]}
+                       "actor": names.get(a.actor_id, "—"), "at": utc_iso(a.at)} for a in rows]}
 
 
 @router.post("/entries/{eid}/reopen")
@@ -844,19 +843,24 @@ async def my_work(
             today_s += s
     active = await _running_for(db, current.org_id, current.id)
 
-    # open service/labour lines assigned to me, with booked + measured actual
+    # open service/labour lines assigned to me, with booked + measured actual. Only the tech's
+    # own lines on open jobs are read, and the follow-up queries join on that set instead of
+    # binding an id per order: this used to put every open order in the shop into one IN list,
+    # which failed with "too many SQL variables" at 33,208 orders.
+    my_line_q = (select(OrderLine).join(Order, Order.id == OrderLine.order_id).where(
+        OrderLine.technician_id == current.id, Order.org_id == current.org_id,
+        Order.is_estimate == False, Order.archived == False,   # noqa: E712
+        Order.closed_at.is_(None)))
+    lines = (await db.execute(my_line_q)).scalars().all()
+    my_line_ids = select(my_line_q.subquery().c.id)
     open_orders = (await db.execute(select(Order).where(
-        Order.org_id == current.org_id, Order.is_estimate == False,   # noqa: E712
-        Order.archived == False))).scalars().all()   # noqa: E712
+        Order.id.in_(select(my_line_q.subquery().c.order_id))))).scalars().all()
     open_ids = {o.id: o.order_number for o in open_orders}
-    lines = (await db.execute(select(OrderLine).where(
-        OrderLine.technician_id == current.id,
-        OrderLine.order_id.in_(list(open_ids.keys()) or ["__none__"])))).scalars().all()
     # measured actual seconds per line (job time, any tech) via shared helper source
     line_secs: dict = {}
     for e in (await db.execute(select(TimeEntry).where(
             TimeEntry.org_id == current.org_id,
-            TimeEntry.order_line_id.in_([l.id for l in lines] or ["__none__"])))).scalars().all():
+            TimeEntry.order_line_id.in_(my_line_ids)))).scalars().all():
         if is_job_actual(e):
             line_secs[e.order_line_id] = line_secs.get(e.order_line_id, 0) + entry_seconds(e)
     my_lines = [{
@@ -874,20 +878,22 @@ async def my_work(
     orders = []
     my_order_ids = list(dict.fromkeys(l["order_id"] for l in my_lines))
     if my_order_ids:
+        from sqlalchemy import case
         from backend.models import OrderChecklistItem, OrderStatus, Client, Device
-        from backend.routers.statuses import ensure_seeded
+        from backend.routers.statuses import ensure_seeded, is_transition_allowed
         await ensure_seeded(db, current.org_id)
         wf = (await db.execute(select(OrderStatus).where(
             OrderStatus.org_id == current.org_id, OrderStatus.record_type == "work_order",
             OrderStatus.active == True).order_by(OrderStatus.sort_order))).scalars().all()  # noqa: E712
         by_key = {s.key: s for s in wf}
         order_by_id = {o.id: o for o in open_orders}
+        mine_orders = select(my_line_q.subquery().c.order_id)
         # checklist progress per order (done/total)
-        prog: dict = {}
-        for it in (await db.execute(select(OrderChecklistItem).where(
-                OrderChecklistItem.order_id.in_(my_order_ids)))).scalars().all():
-            d, t = prog.get(it.order_id, (0, 0))
-            prog[it.order_id] = (d + (1 if it.done else 0), t + 1)
+        prog = {oid: (int(d or 0), int(t)) for oid, d, t in (await db.execute(
+            select(OrderChecklistItem.order_id,
+                   func.sum(case((OrderChecklistItem.done == True, 1), else_=0)), func.count())  # noqa: E712
+            .where(OrderChecklistItem.order_id.in_(mine_orders))
+            .group_by(OrderChecklistItem.order_id))).all()}
         from backend.services.batching import names_by_id
         mine = [order_by_id[oid] for oid in my_order_ids if oid in order_by_id]
         clients = await names_by_id(db, Client.id, Client.name, [o.client_id for o in mine],
@@ -902,8 +908,13 @@ async def my_work(
             cur = by_key.get(o.status)
             nxt = None
             if cur and not cur.is_terminal:
-                nxt = next((s for s in wf if s.sort_order > cur.sort_order and not s.is_terminal), None) \
-                    or next((s for s in wf if s.sort_order > cur.sort_order), None)
+                # B11: the next step is the next main-path status this role may move to. A
+                # "pending" status (Waiting parts…) is a detour, not the next step for every job.
+                later = [s for s in wf if s.sort_order > cur.sort_order]
+                ok = [s for s in later if await is_transition_allowed(
+                    db, current.org_id, current.role_id, o.status, s.key)]
+                nxt = next((s for s in ok if not s.is_terminal and s.status_group != "pending"), None) \
+                    or next((s for s in ok if not s.is_terminal), None) or next(iter(ok), None)
             dv = devices.get(o.device_id)
             done, total = prog.get(oid, (0, 0))
             orders.append({

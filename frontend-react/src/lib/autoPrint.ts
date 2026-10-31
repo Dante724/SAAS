@@ -1,17 +1,33 @@
-// WS-C #20 — print the shop's "print when a job is created" labels (usually the device label)
-// right after a job is saved. Silent when no template is set up; never blocks the save.
+// Documents switched on to print by themselves (the printer button on the new-job, close-job and
+// POS screens, or Settings › Documents). The server renders them; each prints through a hidden
+// frame, so with the browser's print dialog turned off they come straight out of the printer.
+// Never blocks or fails the job or sale: a print problem only shows up as a missing print.
 import { api } from "../api/client";
 import { printHtmlInFrame } from "./safeHtml";
 
-type Item = { template_id: string; name: string; count: number; html: string };
+export type AutoPrintEvent = "create" | "close" | "sale";
 
-export async function autoPrintAfterCreate(orderId: string, print: (html: string) => void = printHtmlInFrame): Promise<number> {
+async function printAll(url: string, print: (html: string) => void): Promise<number> {
   try {
-    const r = await api.get<{ items: Item[] }>(`/auto-print/order-created/${encodeURIComponent(orderId)}`);
-    const items = (r?.items || []).filter((i) => i.count > 0 && i.html);
-    items.forEach((i) => print(i.html));
-    return items.length;
+    const r = await api.post<{ docs: { name: string; html: string }[] }>(url, {});
+    for (const d of r?.docs || []) print(d.html);
+    return r?.docs?.length || 0;
   } catch {
-    return 0;   // printing is a convenience; the job is already saved
+    return 0;
   }
+}
+
+export function autoPrintForJob(orderId: string, event: "create" | "close" = "create",
+                                print: (html: string) => void = printHtmlInFrame): Promise<number> {
+  return printAll(`/documents/auto-print/${orderId}?event=${event}`, print);
+}
+
+export function autoPrintForSale(saleId: string, print: (html: string) => void = printHtmlInFrame): Promise<number> {
+  return printAll(`/documents/auto-print-sale/${saleId}`, print);
+}
+
+/** After a status change: a job that just closed prints what's switched on for closing. */
+export function autoPrintIfClosed(orderId: string, r: { is_closing?: boolean } | null | undefined,
+                                  print: (html: string) => void = printHtmlInFrame): Promise<number> {
+  return r?.is_closing ? autoPrintForJob(orderId, "close", print) : Promise.resolve(0);
 }

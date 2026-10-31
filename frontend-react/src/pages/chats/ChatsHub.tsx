@@ -54,7 +54,16 @@ export default function ChatsHub() {
   const [layout, setLayout] = useState<"split" | "list">("split");
   const [channel, setChannel] = useState("");
   const [sel, setSel] = useState<Thread | null>(null);
-  const [msgs, setMsgs] = useState<Msg[]>([]);
+  // Messages are kept with the chat they belong to, so a slow reply for one customer can never show
+  // under another's name (B10): only the open chat's messages render.
+  const [thread, setThread] = useState<{ id: string | null; items: Msg[] }>({ id: null, items: [] });
+  const msgs = thread.id && thread.id === sel?.id ? thread.items : [];
+  const clearMsgs = () => setThread({ id: null, items: [] });
+  // The latest list / conversation request; an answer to an older one is dropped.
+  const loadSeq = useRef(0);
+  const openSeq = useRef(0);
+  const selId = useRef<string | null>(null);
+  selId.current = sel?.id ?? null;
   const [text, setText] = useState("");
   const [convMenu, setConvMenu] = useState(false);
   const [more, setMore] = useState(false);
@@ -72,16 +81,18 @@ export default function ChatsHub() {
   // Reload the current tab (and its counts); keep the open conversation in sync with the server copy.
   function load(t: Tab = tab, keep: string | null = sel?.id ?? null) {
     setLoadErr(null);
+    const seq = ++loadSeq.current;
     return api.get<{ items: Thread[]; counts?: Counts }>(threadsUrl(t)).then((r) => {
+      if (seq !== loadSeq.current) return;
       const items = r.items || [];
       setThreads(items); setCounts(r.counts || {});
       const still = keep ? items.find((x) => x.id === keep) : null;
-      if (still) setSel(still);
+      if (still) { if (still.id === selId.current) setSel(still); }
       else if (keep === null && items[0] && window.matchMedia?.("(min-width: 768px)")?.matches !== false) open(items[0]);
-    }).catch((e: any) => { setThreads([]); setLoadErr(e?.message || "Couldn't load conversations"); });
+    }).catch((e: any) => { if (seq !== loadSeq.current) return; setThreads([]); setLoadErr(e?.message || "Couldn't load conversations"); });
   }
   useEffect(() => { load(); }, []);  // eslint-disable-line
-  function pickTab(t: Tab) { setTab(t); setThreads(null); setSel(null); setMsgs([]); load(t, null); }
+  function pickTab(t: Tab) { setTab(t); setThreads(null); setSel(null); clearMsgs(); load(t, null); }
   async function update(patch: { status?: ChatStatus; is_spam?: boolean }, done: string) {
     if (!sel || busy) return;
     setBusy(true); setMore(false);
@@ -90,11 +101,19 @@ export default function ChatsHub() {
       flash(done);
       // Spam / restore moves the chat out of this list; a status change may too (filtered tab).
       const leaves = patch.is_spam !== undefined || (tab !== "all" && tab !== "spam" && t.status !== tab);
-      if (leaves) { setSel(null); setMsgs([]); await load(tab, ""); } else { setSel({ ...sel, ...t }); await load(tab, sel.id); }
+      if (selId.current !== sel.id) { await load(tab, selId.current); return; }   // moved on to another chat meanwhile
+      if (leaves) { setSel(null); clearMsgs(); await load(tab, ""); } else { setSel((cur) => (cur?.id === t.id ? { ...cur, ...t } : cur)); await load(tab, sel.id); }
     } catch (e: any) { flash(`Failed: ${e.message}`); }
     finally { setBusy(false); }
   }
-  function open(t: Thread) { setSel(t); setConvMenu(false); setMore(false); api.get<{ items: Msg[] }>(`/chats/threads/${t.id}/messages`).then((r) => setMsgs(r.items || [])).catch(() => setMsgs([])); }
+  function open(t: Thread) {
+    const seq = ++openSeq.current;
+    selId.current = t.id;
+    setSel(t); setConvMenu(false); setMore(false);
+    setThread((cur) => (cur.id === t.id ? cur : { id: t.id, items: [] }));   // a reload of the same chat keeps what's shown
+    const got = (items: Msg[]) => { if (seq === openSeq.current) setThread({ id: t.id, items }); };
+    api.get<{ items: Msg[] }>(`/chats/threads/${t.id}/messages`).then((r) => got(r.items || [])).catch(() => got([]));
+  }
   async function send(body?: string) {
     const b = (body ?? text).trim(); if (!b || !sel) return;
     try {
@@ -102,6 +121,7 @@ export default function ChatsHub() {
       setText("");
       // The reply may move the chat out of a filtered tab; keep its header status true anyway.
       const now = { ...sel, status: r?.thread_status || sel.status };
+      if (selId.current !== sel.id) { load(tab, selId.current); return; }   // moved on to another chat meanwhile
       open(now); load(tab, sel.id);
     } catch (e: any) { flash(`Failed: ${e.message}`); }
   }
@@ -301,7 +321,7 @@ export default function ChatsHub() {
               </div>
               <div className="p-3 md:p-4 pt-2 bg-white flex items-center gap-2">
                 {/* No channel can send images yet, so there is no attach button (it could only ever fail). */}
-                <input ref={composerRef} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} className={`${fieldCls} flex-1 min-w-0 h-10 px-3 text-sm rounded-xl`} placeholder="Message…" />
+                <input ref={composerRef} value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} className={`${fieldCls} flex-1 min-w-0 h-10`} placeholder="Message…" />
                 <button onClick={() => send()} disabled={!text.trim()} className="h-10 px-4 rounded-xl bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50 flex items-center gap-1.5"><span>Send</span><M n="send" c="text-sm" /></button>
               </div>
             </>

@@ -1,7 +1,7 @@
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -10,7 +10,7 @@ from sqlalchemy.orm import selectinload
 from backend.routers.assets import public_custom
 from backend.db.database import get_db
 from backend.models import Client, Device, Employee
-from backend.services.auth import get_current_employee, require_perm, record_scope
+from backend.services.auth import assert_perm, get_current_employee, require_perm, record_scope
 from backend.core import paging as _paging
 from backend.services.money import q2
 from backend.core.spreadsheet import MAX_IMPORT_ROWS, safe_row
@@ -160,9 +160,26 @@ async def list_clients(
 @router.post("", status_code=201)
 async def create_client(
     data: ClientIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_create_clients")),
 ):
+    # A retried create with the same Idempotency-Key returns the first customer.
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "clients.create")
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        await _guard_standing_discount(db, current, None, data.model_dump())
+        result = await _create_client(data, db, current)
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
+
+
+async def _create_client(data: ClientIn, db: AsyncSession, current: Employee):
     from backend.models import Organisation
     org = (await db.execute(select(Organisation).where(
         Organisation.id == current.org_id))).scalar_one()
@@ -280,6 +297,20 @@ async def issue_portal_link(
     return {"portal_token": raw, "portal_url": f"/portal/{raw}", "expires_in_days": portal_links.LINK_DAYS}
 
 
+_DISCOUNT_FIELDS = ("disc_services_mode", "disc_services_value", "disc_services_price_type_id",
+                    "disc_materials_mode", "disc_materials_value", "disc_materials_price_type_id")
+
+
+async def _guard_standing_discount(db, current: Employee, client: Optional[Client], sent: dict) -> None:
+    """A client's standing discount applies to every future job, so changing it takes the
+    discount right (a zero-permission Viewer set 60% here). Re-sending the saved values, as
+    a full-form save does, needs nothing. client=None: a new client, compared with no discount."""
+    def now(k):
+        return getattr(client, k) if client is not None else ClientIn.model_fields[k].default
+    if any(k in sent and sent[k] != now(k) for k in _DISCOUNT_FIELDS):
+        await assert_perm(db, current, "can_set_discount")
+
+
 @router.put("/{client_id}")
 async def update_client(
     client_id: str, data: ClientIn,
@@ -290,6 +321,7 @@ async def update_client(
     client = result.scalar_one_or_none()
     if not client:
         raise HTTPException(404, "Client not found")
+    await _guard_standing_discount(db, current, client, data.model_dump())
     if "address" in data.model_fields_set and not any(k in data.model_fields_set for k in _addr.PARTS):
         _addr.typed_line(client, data.address)
     for k, v in data.model_dump().items():
@@ -357,6 +389,7 @@ async def patch_client(
     if not client:
         raise HTTPException(404, "Client not found")
     fields = data.model_dump(exclude_unset=True)
+    await _guard_standing_discount(db, current, client, fields)
     cd = fields.pop("custom_data", None)
     addr = {k: fields.pop(k) for k in _addr.PARTS if k in fields}
     if "address" in fields and not addr:
@@ -916,11 +949,12 @@ async def client_calls(
     rows = (await db.execute(select(Call).where(
         Call.org_id == current.org_id, Call.client_id == client_id)
         .order_by(Call.id.desc()).limit(100))).scalars().all()
+    from backend.routers.comms import safe_recording_url as _safe_rec
     return {"items": [{
         "id": c.id, "direction": c.direction, "provider": c.provider,
         "from_number": c.from_number, "to_number": c.to_number,
         "duration_s": getattr(c, "duration_s", None),
-        "recording_url": getattr(c, "recording_url", None),
+        "recording_url": _safe_rec(getattr(c, "recording_url", None)),   # B9
         "created_at": c.created_at.isoformat() if getattr(c, "created_at", None) else None,
     } for c in rows]}
 

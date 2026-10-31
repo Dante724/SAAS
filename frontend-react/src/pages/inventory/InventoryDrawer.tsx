@@ -19,11 +19,14 @@ import { rowLabel } from "../../lib/stockBins";
 import { KIT_PRINT_LABELS } from "../../lib/kitGroups";
 import { fmtDay, fmtServerTime } from "../../lib/serverTime";
 import { loadFailed } from "../../lib/notice";
+import Switch from "../../components/Switch";
+import { sectionCard } from "../../components/Section";
+import { fitWithin } from "../../go/lib/photos";
 
 export type DrawerKind = "product" | "service" | "asset" | "bundle";
 type Props = { kind: DrawerKind; id?: string | null; initial?: any; onClose: () => void; onSaved?: () => void };
 
-const BREADCRUMB: Record<DrawerKind, string> = { product: "Inventory › Stock", service: "Catalog › Services", asset: "Inventory › Devices & assets", bundle: "Catalog › Job Kits" };
+const BREADCRUMB: Record<DrawerKind, string> = { product: "Inventory › Stock", service: "Catalog › Services", asset: "Inventory › Devices & assets", bundle: "Catalog › Job kits" };
 const lbl = "block font-semibold text-ink-secondary mb-1";
 const field = "glass-input w-full px-3 py-2 rounded-xl text-ink-primary text-xs";
 
@@ -39,6 +42,31 @@ type LocLite = { id: string; name: string };
 const fmtDate = (s?: string) => (!s ? "—" : (s.length <= 10 ? fmtDay(s) : fmtServerTime(s, { month: "short", day: "numeric", year: "numeric" })) || "—");
 // A raw API value ("goods_received") as sentence-case words ("Goods received").
 const sentence = (v?: string | null) => { const h = humanize(v).toLowerCase(); return h ? h[0].toUpperCase() + h.slice(1) : ""; };
+
+// Product photo: redrawn on a canvas at most 800px on the long edge as JPEG (which also drops
+// EXIF/GPS), stepping the quality down until it fits the server's 400 KB limit.
+export const PHOTO_EDGE = 800;
+export const PHOTO_MAX_BYTES = 400 * 1024;
+export const dataUrlBytes = (d: string) => Math.floor((d.length - d.indexOf(",") - 1) * 3 / 4);
+export async function productPhoto(file: Blob): Promise<string> {
+  if (!/^image\//.test(file.type)) throw new Error("Choose a photo (JPG, PNG or WebP)");
+  const img = await new Promise<HTMLImageElement>((res, rej) => {
+    const url = URL.createObjectURL(file);
+    const i = new Image();
+    i.onload = () => { URL.revokeObjectURL(url); res(i); };
+    i.onerror = () => { URL.revokeObjectURL(url); rej(new Error("That file isn't a photo we can read")); };
+    i.src = url;
+  });
+  const { w, h } = fitWithin(img.naturalWidth, img.naturalHeight, PHOTO_EDGE);
+  const c = document.createElement("canvas");
+  c.width = w; c.height = h;
+  c.getContext("2d")!.drawImage(img, 0, 0, w, h);
+  for (const q of [0.82, 0.7, 0.55]) {
+    const d = c.toDataURL("image/jpeg", q);
+    if (dataUrlBytes(d) <= PHOTO_MAX_BYTES) return d;
+  }
+  throw new Error("That photo is too large even after shrinking");
+}
 
 // Inlines the authed barcode/QR SVG (/catalog/code.svg needs the bearer, so <img src> can't be used).
 type CodeType = BarcodeType;
@@ -137,9 +165,15 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
     if (!id) { flash("Save the product first, then generate a code"); return; }
     setCodeBusy(true);
     try {
-      const r = await api.post<{ barcode: string; barcode_type: string }>(`/catalog/products/${id}/barcode/generate?type=${type}`, {});
-      set("barcode", r.barcode); set("barcode_type", r.barcode_type); setShowCode(true); setCodes(null);
-      flash(type === "qr" ? "QR generated" : "Barcode generated");
+      const r = await api.post<{ barcode: string; barcode_type: string; is_main?: boolean }>(`/catalog/products/${id}/barcode/generate?type=${type}`, {});
+      setCodes(null);
+      if (r.is_main === false) {
+        // The product already had a barcode: it stays the main one (it's on the box and still scans).
+        flash(type === "qr" ? "QR added as an extra code" : "Barcode added as an extra code");
+      } else {
+        set("barcode", r.barcode); set("barcode_type", r.barcode_type); setShowCode(true);
+        flash(type === "qr" ? "QR generated" : "Barcode generated");
+      }
     } catch (e: any) { flash(e.message || "Could not generate code"); }
     finally { setCodeBusy(false); }
   }
@@ -180,11 +214,23 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
       flash("Stock adjusted");
       setAdjOpen(false); setAdjQty(""); setAdjNote("");
       setStock(null); setMoves(null); setBatches(null);   // refetch affected tabs
-    } catch (e: any) { flash(e.message || "Adjust failed"); } finally { setAdjBusy(false); }
+    } catch (e: any) { flash(e.message || "Couldn't adjust the stock"); } finally { setAdjBusy(false); }
   }
 
   const set = (k: string, v: any) => setP((s: any) => ({ ...s, [k]: v }));
   const margin = (() => { const sell = Number(p.sell_price ?? p.price ?? 0), cost = Number(p.cost_price ?? p.avg_cost ?? 0); return sell > 0 ? Math.round((sell - cost) / sell * 100) : 0; })();
+  const seeCost = can("can_view_purchase_price");
+  // Photo: only sent when it was changed here (lists carry a thumbnail, never sent back).
+  const [photoDirty, setPhotoDirty] = useState(false);
+  const [photoBusy, setPhotoBusy] = useState(false);
+  const [dragOver, setDragOver] = useState(false);
+  async function takePhoto(file?: File | null) {
+    if (!file) return;
+    setPhotoBusy(true);
+    try { set("image_data", await productPhoto(file)); setPhotoDirty(true); }
+    catch (e: any) { flash(e.message || "Couldn't read that photo"); }
+    finally { setPhotoBusy(false); }
+  }
 
   const layout = useFormLayout("product", kind === "product");
   const star = (k: string) => reqStar(layout, k);
@@ -195,10 +241,16 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
         if (m) { flash(m); return; }
         // Everything this drawer shows goes back; fields it doesn't show (weight, image…) are left out
         // and the API keeps them (it only writes what was sent).
-        const body = { name: p.name, code: p.code, sku: p.sku, mpn: (p.mpn || "").trim() || null, barcode: p.barcode, barcode_type: p.barcode_type || "code128", brand: p.brand, description: p.description,
-          category_id: p.category_id || null, uom: p.uom || "pcs", cost_price: Number(p.cost_price) || 0, sell_price: Number(p.sell_price) || 0,
+        if (!(p.name || "").trim()) { flash("Enter a name"); return; }
+        const num = (v: any) => (v === "" || v == null ? null : Number(v));
+        if ([p.cost_price, p.sell_price, p.repair_price, p.min_stock].some((v) => (num(v) ?? 0) < 0)) { flash("Prices and min stock can't be negative"); return; }
+        const body: Record<string, any> = { name: (p.name || "").trim(), code: p.code, sku: p.sku, mpn: (p.mpn || "").trim() || null, barcode: p.barcode, barcode_type: p.barcode_type || "code128", brand: p.brand, description: p.description,
+          category_id: p.category_id || null, uom: p.uom || "pcs", sell_price: Number(p.sell_price) || 0,
+          repair_price: num(p.repair_price) || null,
           min_stock: p.min_stock ?? 0, serialized: !!p.serialized, expiry_tracking: !!p.expiry_tracking, warranty_days: p.warranty_days ?? 0,
           compatibility_json: p.compatibility_json || {}, custom_data: p.custom_data || {} };
+        if (seeCost) body.cost_price = Number(p.cost_price) || 0;     // a cost-blind role never sends one
+        if (photoDirty) body.image_data = p.image_data || null;
         if (editing) await api.put(`/catalog/products/${id}`, body); else await api.post("/catalog/products", body);
       } else if (kind === "service") {
         const body = serviceBody(p);
@@ -212,7 +264,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
         if (editing) await api.put(`/bundles/${id}`, body); else await api.post("/bundles", body);
       } else { flash("Saved (view only for this type)"); onSaved?.(); return; }
       flash(editing ? "Saved" : "Created"); onSaved?.(); onClose();
-    } catch (e: any) { flash(`Failed: ${e.message}`); }
+    } catch (e: any) { flash(e.message || (kind === "product" ? "Couldn't save the product" : "Couldn't save")); }
   }
 
   const footerLabel = editing ? "Save changes"
@@ -222,7 +274,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={onClose} />
       <div className="relative h-full w-full max-w-[540px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
@@ -254,11 +306,11 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
 
         <div className="flex-1 overflow-y-auto p-6 space-y-5 text-xs">
           {kind === "product" && editing && ptab === "details" && (
-            <div className="grid grid-cols-4 gap-2.5">
-              {[["Available", (p.qty_available ?? 0), p.low_stock ? "text-rose-600" : "text-ink-primary"],
+            <div className={`grid ${seeCost ? "grid-cols-4" : "grid-cols-2"} gap-2.5`}>
+              {([["Available", (p.qty_available ?? 0), p.low_stock ? "text-rose-600" : "text-ink-primary"],
                 ["Reserved", (p.qty_reserved ?? 0), "text-ink-primary"],
-                ["Avg cost", money(p.avg_cost ?? p.cost_price ?? 0), "text-ink-primary"],
-                ["Stock value", money((p.qty_available ?? 0) * Number(p.avg_cost ?? p.cost_price ?? 0)), "text-emerald-600"]].map(([l, v, c]) => (
+                ...(seeCost ? [["Avg cost", money(p.avg_cost ?? p.cost_price ?? 0), "text-ink-primary"],
+                  ["Stock value", money((p.qty_available ?? 0) * Number(p.avg_cost ?? p.cost_price ?? 0)), "text-ink-primary"]] : [])] as [string, any, string][]).map(([l, v, c]) => (
                 <div key={l as string} className="bg-white rounded-xl p-3 border border-slate-200/90 shadow-sm">
                   <span className="text-[11px] font-bold text-ink-tertiary block">{l}</span>
                   <p className={`text-lg font-bold tabular-nums truncate ${c}`}>{v}</p>
@@ -266,19 +318,36 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
               ))}
             </div>
           )}
-          {(kind === "asset" || (kind === "product" && ptab === "details" && !(editing && p.image_data))) && (
-            <div className="border-2 border-dashed border-slate-200 hover:border-primary/50 rounded-2xl p-5 text-center cursor-pointer bg-slate-50/40 hover:bg-blue-50/20 transition-all">
-              <div className="w-10 h-10 rounded-xl bg-blue-50 border border-blue-100 text-primary flex items-center justify-center mx-auto mb-2"><M n="add_a_photo" c="text-xl" /></div>
-              <span className="text-xs font-semibold text-ink-secondary block">Drop image or browse, or take a photo</span>
-              <span className="text-[11px] text-ink-tertiary">PNG, JPG, WebP up to 5MB</span>
-            </div>
+          {kind === "product" && ptab === "details" && (
+            p.image_data ? (
+              <div className="flex items-center gap-3">
+                <img src={p.image_data} alt="Product photo" className="w-20 h-20 rounded-xl object-cover border border-slate-200" />
+                <div className="flex items-center gap-2">
+                  <label className="px-2.5 py-1 rounded-lg border border-slate-200 hover:bg-slate-50 text-ink-secondary text-xs font-medium cursor-pointer">
+                    Replace photo
+                    <input type="file" accept="image/*" className="sr-only" aria-label="Replace photo" onChange={(e) => { takePhoto(e.target.files?.[0]); e.target.value = ""; }} />
+                  </label>
+                  <button type="button" onClick={() => { set("image_data", null); setPhotoDirty(true); }} className="px-2.5 py-1 rounded-lg text-ink-tertiary hover:text-ink-primary text-xs font-medium">Remove</button>
+                </div>
+              </div>
+            ) : (
+              <label data-testid="photo-drop"
+                onDragOver={(e) => { e.preventDefault(); setDragOver(true); }}
+                onDragLeave={() => setDragOver(false)}
+                onDrop={(e) => { e.preventDefault(); setDragOver(false); takePhoto(e.dataTransfer.files?.[0]); }}
+                className={`block border-2 border-dashed rounded-2xl p-5 text-center cursor-pointer transition-colors ${dragOver ? "border-primary/60 bg-slate-50" : "border-slate-200 hover:border-primary/50 bg-slate-50/40"}`}>
+                <input type="file" accept="image/*" capture="environment" className="sr-only" aria-label="Add a photo" onChange={(e) => { takePhoto(e.target.files?.[0]); e.target.value = ""; }} />
+                <div className="w-10 h-10 rounded-xl bg-white border border-slate-200 text-ink-secondary flex items-center justify-center mx-auto mb-2"><M n="add_a_photo" c="text-xl" /></div>
+                <span className="text-xs font-semibold text-ink-secondary block">{photoBusy ? "Preparing photo…" : "Drop a photo here, browse, or take one"}</span>
+                <span className="text-[11px] text-ink-tertiary">JPG, PNG or WebP — shrunk to fit automatically</span>
+              </label>
+            )
           )}
 
           {kind === "product" && ptab === "details" && (<>
             <div className="space-y-3.5">
               <div><label className={lbl}>Name <span className="text-rose-500">*</span></label><input value={p.name || ""} onChange={(e) => set("name", e.target.value)} className={field} /></div>
               <div className="grid grid-cols-2 gap-3">
-                <div><label className={lbl}>Type</label><select value={p.type || "Part"} onChange={(e) => set("type", e.target.value)} className={`${field} appearance-none`}><option>Part</option><option>Accessory</option><option>Consumable</option></select></div>
                 <div><label className={lbl}>Unit <span className="text-rose-500">*</span></label><input value={p.uom || "pcs"} onChange={(e) => set("uom", e.target.value)} className={field} /></div>
               </div>
               <div className="pt-1 flex items-center gap-2 flex-wrap">
@@ -287,7 +356,8 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                   <M n="barcode" c="text-xs" />{showCode ? "Hide code" : "Show code"}</button>
                 <button type="button" onClick={() => genCode("ean13")} disabled={codeBusy || !editing || !!p.barcode} title={!editing ? "Save first" : p.barcode ? "This product already has a barcode" : ""}
                   className="px-2.5 py-1 rounded-lg border border-slate-200 hover:bg-slate-50 text-ink-secondary text-xs font-medium disabled:opacity-50">Generate barcode</button>
-                <button type="button" onClick={() => genCode("qr")} disabled={codeBusy || !editing} title={editing ? "" : "Save first"}
+                <button type="button" onClick={() => genCode("qr")} disabled={codeBusy || !editing}
+                  title={!editing ? "Save first" : p.barcode ? "Adds a QR as an extra code — the current barcode stays and keeps scanning" : ""}
                   className="px-2.5 py-1 rounded-lg border border-slate-200 hover:bg-slate-50 text-ink-secondary text-xs font-medium disabled:opacity-50">Generate QR</button>
               </div>
               {showCode && p.barcode && (
@@ -339,19 +409,22 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
               stock_policy: { el: <>
                 <div className="p-4 rounded-xl bg-slate-50/90 border border-slate-200/80 space-y-3">
                   <div className="text-[11px] font-bold text-ink-primary ">Stock tracking & policies</div>
-                  <label className="flex items-center justify-between cursor-pointer"><span className="text-ink-secondary font-medium">Expiration tracking</span><input type="checkbox" checked={!!p.expiry_tracking} onChange={(e) => set("expiry_tracking", e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>
-                  <label className="flex items-center justify-between cursor-pointer"><span className="text-ink-secondary font-medium">Enable serial-number tracking <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-bold bg-emerald-100 text-emerald-800">one-way</span></span><input type="checkbox" checked={!!p.serialized} disabled={!p.serialized && !can("can_track_serials")} onChange={(e) => set("serialized", e.target.checked)} className="w-4 h-4 rounded text-primary border-slate-300" /></label>
-                  <div className="flex items-center justify-between"><span className="text-ink-secondary font-medium">Min stock (reorder at)</span><input type="number" value={p.min_stock ?? 0} onChange={(e) => set("min_stock", Number(e.target.value))} className="glass-input w-20 px-3 py-2 rounded-xl text-xs text-right tabular-nums" /></div>
+                  <div className="flex items-center justify-between"><span className="text-ink-secondary font-medium">Expiration tracking</span><Switch size="sm" label="Expiration tracking" on={!!p.expiry_tracking} onChange={(v) => set("expiry_tracking", v)} /></div>
+                  <div className="flex items-center justify-between"><span className="text-ink-secondary font-medium">Serial-number tracking <span className="ml-1 inline-flex items-center px-1.5 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-ink-secondary">can't be turned off</span></span><Switch size="sm" label="Serial-number tracking" on={!!p.serialized} disabled={!p.serialized && !can("can_track_serials")} onChange={(v) => set("serialized", v)} /></div>
+                  <div className="flex items-center justify-between"><span className="text-ink-secondary font-medium">Min stock (reorder at)</span><input type="number" min={0} aria-label="Min stock" value={p.min_stock ?? 0} onChange={(e) => set("min_stock", Number(e.target.value))} className="glass-input w-20 px-3 py-2 rounded-xl text-xs text-right tabular-nums" /></div>
                 </div>
               </> },
               pricing: { el: <>
-                <div className="p-4 rounded-xl bg-blue-50/50 border border-blue-100 space-y-3">
-                  <div className="flex items-center justify-between"><span className="text-[11px] font-bold text-primary ">Pricing & margin</span><span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800">Margin: {margin}%</span></div>
+                <div className={`${sectionCard} p-4 space-y-3`}>
+                  <div className="flex items-center justify-between"><span className="text-[11px] font-bold text-ink-primary">{seeCost ? "Pricing & margin" : "Pricing"}</span>
+                    {seeCost && <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${margin < 0 ? "bg-rose-50 text-rose-700" : "bg-slate-100 text-ink-secondary"}`}>Margin {margin}%</span>}</div>
                   <div className="grid grid-cols-2 gap-3">
-                    <div><label className={lbl}>Cost price ({currencySymbol()})</label><input type="number" value={p.cost_price ?? 0} onChange={(e) => set("cost_price", e.target.value)} className={`${field} font-mono font-bold bg-white`} /></div>
-                    <div><label className={lbl}>Store price ({currencySymbol()})</label><input type="number" value={p.sell_price ?? 0} onChange={(e) => set("sell_price", e.target.value)} className={`${field} font-mono font-bold bg-white`} /></div>
+                    {seeCost && <div><label htmlFor="prod-cost" className={lbl}>Cost price ({currencySymbol()})</label><input id="prod-cost" type="number" min={0} value={p.cost_price ?? 0} onChange={(e) => set("cost_price", e.target.value)} className={`${field} font-mono font-bold bg-white`} /></div>}
+                    <div><label htmlFor="prod-sell" className={lbl}>Store price ({currencySymbol()})</label><input id="prod-sell" type="number" min={0} value={p.sell_price ?? 0} onChange={(e) => set("sell_price", e.target.value)} className={`${field} font-mono font-bold bg-white`} /></div>
+                    <div><label htmlFor="prod-repair" className={lbl}>Repair price ({currencySymbol()}) <span className="font-normal text-ink-tertiary">(on work orders)</span></label>
+                      <input id="prod-repair" type="number" min={0} value={p.repair_price ? p.repair_price : ""} placeholder={`Same as store price (${money(Number(p.sell_price) || 0)})`}
+                        onChange={(e) => set("repair_price", e.target.value)} className={`${field} font-mono bg-white`} /></div>
                   </div>
-                  <div className="text-[11px] text-ink-tertiary flex items-center justify-between pt-1"><span>Repair price (on work orders):</span><span className="font-semibold text-ink-secondary">= store price ({money(Number(p.sell_price) || 0)})</span></div>
                 </div>
               </> },
               compatibility: { el: <>
@@ -369,9 +442,9 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                       {fits.length === 0 && <p className="text-[11px] text-ink-tertiary">None yet.</p>}
                       {fits.map((f, i) => (
                         <div key={i} className="flex items-center gap-1.5">
-                          <input className={field} placeholder="Brand (e.g. Apple)" value={f.brand || ""} onChange={(e) => setFits(fits.map((x, j) => j === i ? { ...x, brand: e.target.value } : x))} />
+                          <input className={field} placeholder="Brand" value={f.brand || ""} onChange={(e) => setFits(fits.map((x, j) => j === i ? { ...x, brand: e.target.value } : x))} />
                           <input className={field} placeholder="Model (blank = any)" value={f.model || ""} onChange={(e) => setFits(fits.map((x, j) => j === i ? { ...x, model: e.target.value } : x))} />
-                          <button aria-label="Close" type="button" onClick={() => setFits(fits.filter((_, j) => j !== i))} className="text-ink-tertiary hover:text-rose-500 shrink-0"><M n="close" c="text-sm" /></button>
+                          <button aria-label="Remove line" type="button" onClick={() => setFits(fits.filter((_, j) => j !== i))} className="text-ink-tertiary hover:text-rose-500 shrink-0"><M n="close" c="text-sm" /></button>
                         </div>
                       ))}
                     </div>
@@ -392,7 +465,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                   <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Location</label>
                     <div className="relative"><select value={adjLoc} onChange={(e) => setAdjLoc(e.target.value)} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-xl appearance-none">{locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select><M n="expand_more" c="absolute right-2 top-2 text-ink-tertiary pointer-events-none text-xs" /></div></div>
                   <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Type</label>
-                    <div className="relative"><select value={adjType} onChange={(e) => setAdjType(e.target.value)} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-xl appearance-none"><option value="receive">Receive (+)</option><option value="writeoff">Write-off (−)</option><option value="adjust">Correction</option></select><M n="expand_more" c="absolute right-2 top-2 text-ink-tertiary pointer-events-none text-xs" /></div></div>
+                    <div className="relative"><select value={adjType} onChange={(e) => setAdjType(e.target.value)} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-xl appearance-none"><option value="receive">Receive (+)</option><option value="writeoff">Write off (damaged or lost)</option><option value="adjust">Correction</option></select><M n="expand_more" c="absolute right-2 top-2 text-ink-tertiary pointer-events-none text-xs" /></div></div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Quantity</label><input type="number" value={adjQty} onChange={(e) => setAdjQty(e.target.value)} className="glass-input font-mono block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-xl" placeholder="0" /></div>
@@ -422,7 +495,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                       <span className="text-ink-tertiary text-[11px] self-center">Total</span>
                       <span className="text-right tabular-nums">{stock.total_reserved ?? 0}</span>
                       <span className="text-right tabular-nums">{stock.total_available}</span>
-                      <span className="text-right tabular-nums text-emerald-600">{stock.total_value == null ? "—" : money(stock.total_value)}</span>
+                      <span className="text-right tabular-nums">{stock.total_value == null ? "—" : money(stock.total_value)}</span>
                       <span className="w-12" />
                     </div>
                   </div>}
@@ -468,7 +541,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                           <div className="min-w-0"><span className="font-bold text-ink-primary tabular-nums">{b.document || "—"}</span>{b.supplier && <span className="ml-2 text-ink-tertiary">{b.supplier}</span>}<div className="text-[11px] text-ink-tertiary">{[b.warehouse, b.location].filter(Boolean).join(" · ") || "—"} · {fmtDate(b.received_at || undefined)}</div></div>
                           <span className="text-right tabular-nums text-ink-secondary">{money(b.unit_cost ?? 0)}</span>
                           <span className="text-right tabular-nums font-bold text-ink-primary">{b.qty_remaining ?? 0}<span className="text-ink-tertiary font-normal">/{b.qty_received ?? 0}</span></span>
-                          <span className="text-right tabular-nums text-emerald-600">{money(b.amount ?? 0)}</span>
+                          <span className="text-right tabular-nums text-ink-secondary">{money(b.amount ?? 0)}</span>
                           <span className="text-right text-ink-tertiary whitespace-nowrap">{b.expiry_date ? fmtDate(b.expiry_date) : "—"}</span>
                         </div>
                       ))}
@@ -569,15 +642,15 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
               <div><label className={lbl}>Job kit name <span className="text-rose-500">*</span></label><input value={p.name || ""} onChange={(e) => set("name", e.target.value)} className={field} /></div>
               <div className="p-4 rounded-xl bg-slate-50/90 border border-slate-200/80 space-y-2.5">
                 <div className="text-[11px] font-bold text-ink-primary ">Services & products</div>
-                {comps.length === 0 && <p className="text-[11px] text-ink-tertiary">No items yet — search below to add services and products.</p>}
+                {comps.length === 0 && <p className="text-[11px] text-ink-tertiary">No items yet</p>}
                 {comps.map((c: any, idx: number) => (
                   <div key={c.ref_id + idx} className="bg-white rounded-lg border border-slate-200/80 px-2.5 py-1.5 space-y-1">
                     <div className="flex items-center gap-2">
-                      <span className={`text-[11px]  font-bold px-1.5 py-0.5 rounded ${c.ref_type === "service" ? "bg-emerald-100 text-emerald-700" : "bg-blue-100 text-primary"}`}>{c.ref_type === "service" ? "Service" : "Product"}</span>
+                      <span className="text-[11px] font-bold px-1.5 py-0.5 rounded bg-slate-100 text-ink-secondary">{c.ref_type === "service" ? "Service" : "Product"}</span>
                       <span className="flex-1 text-xs font-semibold text-ink-primary truncate">{c.name || c.ref_id}{c.missing && <span className="ml-1 text-[11px] font-bold text-amber-700">missing</span>}</span>
                       <input type="number" min={1} value={c.qty} onChange={(e) => setQty(idx, Number(e.target.value))} className="w-16 glass-input px-2 py-2 text-xs rounded-xl text-center tabular-nums" aria-label="Quantity" />
                       <span className="w-16 text-right tabular-nums text-[11px] text-ink-tertiary">{money((c.std_price || 0) * (c.qty || 1))}</span>
-                      <button type="button" onClick={() => removeComp(idx)} aria-label="Remove" className="text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>
+                      <button type="button" onClick={() => removeComp(idx)} aria-label="Remove line" className="text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>
                     </div>
                     {c.ref_type === "product" && (
                       <button type="button" onClick={() => toggleVariant(idx)} className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-tertiary hover:text-primary pl-0.5" title="At apply-time, swap this part for the one in its category that fits the work order's device">

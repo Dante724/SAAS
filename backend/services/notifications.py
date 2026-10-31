@@ -76,7 +76,7 @@ class ChannelAdapter:
     name = "base"
 
     async def send(self, *, recipient: str, subject: Optional[str], body: str,
-                   html: Optional[bool] = None) -> dict:
+                   html: Optional[bool] = None, headers: Optional[dict] = None) -> dict:
         raise NotImplementedError
 
 
@@ -86,7 +86,7 @@ class SimulatedAdapter(ChannelAdapter):
         self.name = channel
 
     async def send(self, *, recipient: str, subject: Optional[str], body: str,
-                   html: Optional[bool] = None) -> dict:
+                   html: Optional[bool] = None, headers: Optional[dict] = None) -> dict:
         if not recipient:
             return {"status": "failed", "error": "No recipient address/number on file"}
         from backend.config import settings
@@ -111,9 +111,11 @@ class SmtpEmailAdapter(ChannelAdapter):
         self.creds = creds or {}   # 144jn: this shop's own SMTP settings
 
     async def send(self, *, recipient: str, subject: Optional[str], body: str,
-                   attachment: Optional[tuple] = None, html: Optional[bool] = None) -> dict:
+                   attachment: Optional[tuple] = None, html: Optional[bool] = None,
+                   headers: Optional[dict] = None) -> dict:
         """``attachment`` is an optional (filename, bytes, mimetype), e.g. an invoice PDF. ``html``
-        says whether the body is HTML (from the template); None means guess from the body."""
+        says whether the body is HTML (from the template); None means guess from the body.
+        ``headers`` are extra mail headers (e.g. List-Unsubscribe)."""
         if not recipient:
             return {"status": "failed", "error": "No email address on file"}
         import asyncio
@@ -158,6 +160,8 @@ class SmtpEmailAdapter(ChannelAdapter):
             msg["Subject"] = one_line(subject) or "Update on your order"
             msg["From"] = from_addr
             msg["To"] = recipient
+            for hk, hv in (headers or {}).items():   # e.g. List-Unsubscribe on Tekly Sense emails
+                msg[hk] = hv
             try:
                 with smtplib.SMTP(timeout=10) as s:
                     s.connect(connect_to, port)
@@ -183,7 +187,7 @@ class TwilioAdapter(ChannelAdapter):
         self.creds = creds or {}   # 144jn: this shop's own Twilio account
 
     async def send(self, *, recipient: str, subject: Optional[str], body: str,
-                   html: Optional[bool] = None) -> dict:
+                   html: Optional[bool] = None, headers: Optional[dict] = None) -> dict:
         if not recipient:
             return {"status": "failed", "error": "No phone number on file"}
         from backend.config import settings

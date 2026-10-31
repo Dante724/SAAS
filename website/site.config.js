@@ -9,8 +9,11 @@ window.TEKLY_SITE = {
   signInPath: "/login",
   signUpPath: "/signup",
 
-  // Demo requests. If `demoEndpoint` is set, the form POSTs JSON to it.
-  // Otherwise it opens the visitor's email app addressed to `demoEmail`.
+  // Demo requests (form and assistant) go to the first of these that's set up:
+  //   1. `demoEndpoint` — the form POSTs JSON to it;
+  //   2. `assistant.booking.slug` — lands as a web lead in Tekly → Inquiries (needs the
+  //      "Tekly Demos" shop with online appointments on, and this site in CORS_ORIGINS);
+  //   3. otherwise it opens the visitor's email app addressed to `demoEmail`.
   demoEndpoint: "",
   demoEmail: "hello@tekly.app",
 
@@ -62,12 +65,12 @@ window.TEKLY_SITE = {
       tagline: "A full shop with a team, stock and regular customers.",
       monthly: 69,
       extraLocation: 49,
-      extraSeat: 4,
+      extraSeat: 6,
       unit: "for the first location, per month",
-      seats: "8 team members shared across your locations · unlimited jobs",
+      seats: "4 team members shared across your locations · unlimited jobs",
       cta: "Start free trial",
       featured: true,
-      badge: "Most popular",
+      badge: "Best for most shops",
       features: [
         "Everything in Solo",
         "Inventory, stock and suppliers",
@@ -84,7 +87,8 @@ window.TEKLY_SITE = {
       monthly: 129,
       extraLocation: 79,
       unit: "for the first location, per month",
-      seats: "Unlimited team members, locations and jobs",
+      extraSeat: 6,
+      seats: "8 team members shared across your locations · unlimited jobs",
       cta: "Start free trial",
       features: [
         "Everything in Shop",
@@ -92,7 +96,7 @@ window.TEKLY_SITE = {
         "Payroll and commissions",
         "Stock transfers between locations",
         "AI estimate drafting and parts recognition",
-        "QuickBooks and Xero sync",
+        "QuickBooks Online export",
         "Single sign-on and API keys",
       ],
     },

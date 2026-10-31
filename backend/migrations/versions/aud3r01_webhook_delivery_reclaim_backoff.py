@@ -6,8 +6,6 @@
 Revision ID: aud3r01
 Revises: aud10m01
 """
-import sqlalchemy as sa
-from alembic import op
 
 revision = "aud3r01"
 down_revision = "aud10m01"
@@ -16,12 +14,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    with op.batch_alter_table("webhook_deliveries") as b:
-        b.add_column(sa.Column("claimed_at", sa.DateTime(), nullable=True))
-        b.add_column(sa.Column("next_attempt_at", sa.DateTime(), nullable=True))
+    # Superseded in the merged launch line by whh1 (webhook hardening), which adds the same columns (webhook_deliveries.claimed_at / next_attempt_at).
+    # Kept as a no-op so the revision chain (and any database already stamped here) stays valid.
+    pass
 
 
 def downgrade() -> None:
-    with op.batch_alter_table("webhook_deliveries") as b:
-        b.drop_column("next_attempt_at")
-        b.drop_column("claimed_at")
+    pass

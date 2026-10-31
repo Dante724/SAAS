@@ -41,7 +41,6 @@ function joinVal(mode: Mode, date: string, time: string): string {
 function pad(n: number) { return String(n).padStart(2, "0"); }
 function ymd(d: Date) { return `${d.getFullYear()}-${pad(d.getMonth() + 1)}-${pad(d.getDate())}`; }
 
-// The app's date format ("Oct 29, 2026"). A bare date is read as local midnight, not UTC.
 function fmtDate(iso: string): string {
   return fmtDay(iso);   // the app's one date format ("Oct 29, 2026")
 }

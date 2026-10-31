@@ -9,6 +9,7 @@ import Pager from "../../components/Pager";
 import { money } from "../orders/types";
 import { btnGhost, btnPrimary } from "../invoices/billing";
 import { fmtDay, fmtServerTime } from "../../lib/serverTime";
+import { balanceView } from "../../lib/balance";
 import { alertDialog, confirmDialog, promptDialog, selectDialog } from "../../lib/dialog";
 import { isoMonth } from "../../lib/localDate";
 import { useMe } from "../../context/Me";
@@ -67,7 +68,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
   const isoLocal = (d: Date) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
   const [pFrom, setPFrom] = useState(() => isoLocal(new Date(new Date().getFullYear(), new Date().getMonth(), 1)));
   const [pTo, setPTo] = useState(() => isoLocal(new Date()));
-  const cur = (n?: number) => money(n, pack?.currency_symbol, true);   // same formatter as Overview
+  const cur = (n?: number) => money(n, undefined, true);   // same formatter as Overview
   async function loadPnl() {
     setPnlBusy(true);
     try { setPnl(await api.get<any>(`/finance/pnl?date_from=${pFrom}&date_to=${pTo}`)); }
@@ -310,7 +311,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
                   <tr key={b.id} className="hover:bg-blue-50/30">
                     <td className="py-2.5 px-4 font-bold text-ink-primary">{b.name}</td>
                     <td className="py-2.5 px-4 tabular-nums">{b.phone || "—"}</td>
-                    <td className={`py-2.5 px-4 text-right tabular-nums font-bold ${(b.balance || 0) < 0 ? "text-rose-600" : "text-emerald-600"}`}>{(b.balance || 0) < 0 ? "Owes " : "Credit "}{money(Math.abs(b.balance || 0))}</td>
+                    {(() => { const bv = balanceView(b.balance); return <td className={`py-2.5 px-4 text-right tabular-nums font-bold ${bv.className}`}>{bv.label} {money(bv.amount)}</td>; })()}
                   </tr>
                 ))}
               </tbody>

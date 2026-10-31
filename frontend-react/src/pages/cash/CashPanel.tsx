@@ -8,7 +8,7 @@ import CashDrawer from "./CashDrawer";
 import Pager from "../../components/Pager";
 import { currencySymbol, money } from "../orders/types";
 import { promptDialog } from "../../lib/dialog";
-import { todayTotals } from "../../lib/cashStats";
+import { todayTotals, txnDirection } from "../../lib/cashStats";
 import { isoDate } from "../../lib/localDate";
 import { useServerPage } from "../../hooks/useServerPage";
 import { fmtServerTime } from "../../lib/serverTime";
@@ -187,7 +187,7 @@ export default function CashPanel() {
                   <tr><td colSpan={7} className="py-16 px-4 text-center"><div className="flex flex-col items-center gap-2"><M n="account_balance_wallet" c="text-3xl text-ink-placeholder" /><div className="text-sm font-bold text-ink-secondary">Nothing here yet</div><div className="text-xs text-ink-tertiary">Add income or expenses to track your transactions.</div></div></td></tr>
                 )}
                 {pageTxns.map((t) => {
-                  const inc = t.txn_type === "income";
+                  const inc = txnDirection(t) === "in";
                   const del = t.status === "deleted";
                   const corrected = t.status === "corrected";
                   return (

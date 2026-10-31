@@ -27,18 +27,30 @@ from backend.models import (
     NotificationTemplate,
     Order,
 )
-from backend.services.notifications import _adapter_for, channel_consented, notif_creds
+from backend.services.notifications import _adapter_for, channel_consented, notif_creds, try_oauth_email
 from backend.services.dates import now_utc
 
 
-async def _send(db, org_id, channel, *, recipient, subject, body, log=None):
+async def _send(db, org_id, channel, *, recipient, subject, body, log=None, headers=None):
     """144jn: send through THIS shop's own provider credentials (per-tenant).
     An email is HTML only when its template was when the message was filled (log.is_html, fixed
-    when the log row is first saved); built-in and template-less messages are plain text."""
+    when the log row is first saved); built-in and template-less messages are plain text.
+
+    Email goes out from the shop's connected Gmail/Outlook account when there is one
+    (same as the old template path, build 144ae) and falls back to SMTP / simulated.
+    Mail that carries extra headers (List-Unsubscribe on Tekly Sense emails) stays on
+    SMTP, since the mailbox send can't set them."""
     from backend.services.notifications import log_is_html
-    creds = await notif_creds(db, org_id, channel)
     html = await log_is_html(db, log) if log is not None else False
-    return await _adapter_for(channel, creds).send(recipient=recipient, subject=subject, body=body, html=html)
+    if channel == "email" and not headers:
+        result = await try_oauth_email(db, org_id, recipient=recipient, subject=subject, body=body, html=html)
+        if result is not None:
+            return result
+    creds = await notif_creds(db, org_id, channel)
+    adapter = _adapter_for(channel, creds)
+    if headers:
+        return await adapter.send(recipient=recipient, subject=subject, body=body, html=html, headers=headers)
+    return await adapter.send(recipient=recipient, subject=subject, body=body, html=html)
 
 WORK_START_MIN = 9 * 60      # 09:00
 WORK_END_MIN = 18 * 60       # 18:00
@@ -85,6 +97,38 @@ async def _location_window(db: AsyncSession, location_id: Optional[str],
         except Exception:
             return default
     return _m(day.get("open"), WORK_START_MIN), _m(day.get("close"), WORK_END_MIN)
+
+
+async def _into_working_hours(db: AsyncSession, org_id: str, location_id: Optional[str],
+                              send_at: datetime) -> datetime:
+    """Launch B6: send_at is UTC but opening hours are the shop's own clock. Shift on the shop's
+    clock, then hand back UTC (a 09:00 opening in New York is 13:00 or 14:00 UTC, not 09:00)."""
+    from backend.services.dates import shop_tzname, utc_to_wall, wall_to_utc
+    tz = await shop_tzname(db, org_id, location_id)
+    local = utc_to_wall(send_at, tz)
+    s, e = await _location_window(db, location_id, local)
+    return wall_to_utc(shift_into_working_hours(local, s, e), tz)
+
+
+# Scheduled times are shop wall-clock, `now` and send_at are UTC. No shop is more than 14 hours
+# from UTC, so a SQL window this much wider than the lead time can't miss an appointment; each
+# row is then checked exactly on its own shop's clock.
+_TZ_SLACK = timedelta(hours=14)
+
+
+async def _reminder_send_at(db: AsyncSession, org_id: str, location_id: Optional[str],
+                            start: datetime, lead: timedelta, now: datetime, tz_cache: dict):
+    """When a reminder for a `start` (shop wall-clock) should go out, in UTC, or None when the
+    start isn't inside the lead window yet (or has passed) on the shop's own clock."""
+    from backend.services.dates import shop_tzname, utc_to_wall, wall_to_utc
+    key = location_id or ""
+    if key not in tz_cache:
+        tz_cache[key] = await shop_tzname(db, org_id, location_id)
+    tz = tz_cache[key]
+    local_now = utc_to_wall(now, tz)
+    if not (local_now < start <= local_now + lead):
+        return None
+    return wall_to_utc(start - lead, tz)
 
 
 async def _latest_chat_channel(db: AsyncSession, org_id: str, client_id: str) -> Optional[str]:
@@ -208,8 +252,7 @@ async def evaluate(db: AsyncSession, *, org_id: str, order_id: str, event: str,
 
         send_at = now + timedelta(minutes=rule.delay_min or 0)
         if rule.working_hours_only:
-            s, e = await _location_window(db, order.location_id, send_at)
-            send_at = shift_into_working_hours(send_at, s, e)
+            send_at = await _into_working_hours(db, org_id, order.location_id, send_at)
 
         log = NotificationLog(
             org_id=org_id, scope="client", channel=channel, trigger_event=event,
@@ -245,28 +288,33 @@ async def queue_reminders(db: AsyncSession, *, org_id: str,
         NotificationRule.org_id == org_id, NotificationRule.event == "reminder",
         NotificationRule.active == True))).scalars().all()  # noqa: E712
     queued = 0
+    tz_cache: dict = {}
     for rule in rules:
         lead = timedelta(minutes=rule.reminder_offset_min or 0)
-        horizon = now + lead
         orders = (await db.execute(select(Order).where(
             Order.org_id == org_id, Order.scheduled_for.isnot(None),
-            Order.scheduled_for > now, Order.scheduled_for <= horizon,
+            Order.scheduled_for > now - _TZ_SLACK, Order.scheduled_for <= now + lead + _TZ_SLACK,
             Order.archived == False)  # noqa: E712
             .options(selectinload(Order.client), selectinload(Order.lines),
                      selectinload(Order.device), selectinload(Order.assigned_to)))).scalars().all()
         for order in orders:
             if rule.location_id and rule.location_id != order.location_id:
                 continue
+            send_at = await _reminder_send_at(db, org_id, order.location_id, order.scheduled_for,
+                                              lead, now, tz_cache)
+            if send_at is None:
+                continue
+            # Any earlier row is a duplicate, whatever its status: a send that failed (a Twilio
+            # timeout) used to be queued again on every 2-minute tick, ~30 texts an hour.
             dupe = (await db.execute(select(NotificationLog.id).where(
                 NotificationLog.rule_id == rule.id, NotificationLog.order_id == order.id,
-                NotificationLog.status.in_(["scheduled", "sent"])))).scalar_one_or_none()
+            ).limit(1))).scalar_one_or_none()
             if dupe:
                 continue
             subject, body, tpl_id = await _render(db, org_id, order, rule)
             client = order.client
             recipient = (client.email if rule.channel == "email" else client.phone) if client else None
             body = await with_opt_out(db, org_id, order.client_id, rule.channel, body)
-            send_at = order.scheduled_for - lead
             if not recipient:
                 status, err = "skipped", f"Client has no {rule.channel} on file"
             elif not channel_consented(client, rule.channel):
@@ -296,6 +344,31 @@ async def run_due(db: AsyncSession, *, org_id: str, now: Optional[datetime] = No
             log.status = "skipped"
             await db.commit()
             continue
+        # Tekly Sense agent messages: the agent must still be on (and the platform switch off),
+        # win-back still needs marketing consent, and nothing goes outside opening hours.
+        if (log.trigger_event or "").startswith("agent."):
+            from backend.services import sense_agents
+            verdict, why = await sense_agents.send_check(db, org_id, log, now)
+            if verdict == "later":
+                log.send_at = why
+                await db.commit()
+                continue
+            if verdict == "stop":
+                log.status, log.error = "skipped", why
+                await db.commit()
+                continue
+        # Consent is checked again at send time: a customer who replied STOP after this
+        # message was queued must not receive it.
+        if log.client_id:
+            from backend.models import Client
+            c = (await db.execute(select(Client).where(
+                Client.id == log.client_id, Client.org_id == org_id))).scalar_one_or_none()
+            if c is None or not channel_consented(c, log.channel):
+                log.status = "skipped"
+                log.error = ("Client no longer on file" if c is None
+                             else f"No client consent for {log.channel}")
+                await db.commit()
+                continue
         # Claim the row before sending and commit after each message: the old loop sent
         # everything and committed once at the end, so a crash mid-sweep re-sent every message
         # already delivered, and two runners could both send the same row. A row left in
@@ -306,8 +379,16 @@ async def run_due(db: AsyncSession, *, org_id: str, now: Optional[datetime] = No
         await db.commit()
         if claimed.rowcount == 0:
             continue
+        # Sense emails carry List-Unsubscribe headers (and have no template, so they are plain
+        # text either way); every other message passes its log so HTML-ness follows the template.
+        extra = {"log": log}
+        if (log.trigger_event or "").startswith("agent."):
+            from backend.services.sense_agents import email_headers
+            h = email_headers(log)
+            if h:
+                extra = {"headers": h}
         result = await _send(db, org_id, log.channel,
-            recipient=log.recipient, subject=log.subject, body=log.body, log=log)
+            recipient=log.recipient, subject=log.subject, body=log.body, **extra)
         log.status = result["status"]
         log.error = result.get("error")
         await db.commit()
@@ -354,8 +435,7 @@ async def evaluate_appointment(db: AsyncSession, *, org_id: str, appointment_id:
             subject, body = "Your appointment", f"Your appointment is booked for {when}."
         send_at = now + timedelta(minutes=rule.delay_min or 0)
         if rule.working_hours_only:
-            s, e = await _location_window(db, b.location_id, send_at)
-            send_at = shift_into_working_hours(send_at, s, e)
+            send_at = await _into_working_hours(db, org_id, b.location_id, send_at)
 
         log = NotificationLog(
             org_id=org_id, scope="client", channel=rule.channel, trigger_event=event,
@@ -365,6 +445,9 @@ async def evaluate_appointment(db: AsyncSession, *, org_id: str, appointment_id:
         if not recipient:
             log.status = "skipped"
             log.error = f"No {rule.channel} on file"
+        elif not await _appointment_consented(db, b, rule.channel):
+            log.status = "skipped"
+            log.error = f"No client consent for {rule.channel}"
         elif send_at <= now:
             res = await _send(db, org_id, rule.channel, 
                 recipient=recipient, subject=subject, body=body, log=log)
@@ -376,6 +459,17 @@ async def evaluate_appointment(db: AsyncSession, *, org_id: str, appointment_id:
             scheduled += 1
     await db.commit()
     return {"sent": sent, "scheduled": scheduled, "matched": len(rules)}
+
+
+async def _appointment_consented(db: AsyncSession, b: Appointment, channel: str) -> bool:
+    """Same consent gate as order notifications. A walk-in booking with no client record has
+    nothing to check against and is allowed (they gave the number to be contacted about it)."""
+    if not b.client_id:
+        return True
+    from backend.models import Client
+    c = (await db.execute(select(Client).where(
+        Client.id == b.client_id, Client.org_id == b.org_id))).scalar_one_or_none()
+    return c is not None and channel_consented(c, channel)   # a removed client gets nothing
 
 
 async def _appointment_recipient(db: AsyncSession, b: Appointment, channel: str) -> Optional[str]:
@@ -397,20 +491,26 @@ async def queue_appointment_reminders(db: AsyncSession, *, org_id: str,
         NotificationRule.event == "reminder",
         NotificationRule.active == True))).scalars().all()  # noqa: E712
     queued = 0
+    tz_cache: dict = {}
     for rule in rules:
         lead = timedelta(minutes=rule.reminder_offset_min or 0)
         rows = (await db.execute(select(Appointment).where(
             Appointment.org_id == org_id, Appointment.status == "booked",
-            Appointment.scheduled_for > now,
-            Appointment.scheduled_for <= now + lead))).scalars().all()
+            Appointment.scheduled_for > now - _TZ_SLACK,
+            Appointment.scheduled_for <= now + lead + _TZ_SLACK))).scalars().all()
         for b in rows:
             if rule.location_id and rule.location_id != b.location_id:
                 continue
+            send_at = await _reminder_send_at(db, org_id, b.location_id, b.scheduled_for,
+                                              lead, now, tz_cache)
+            if send_at is None:
+                continue
+            # Any earlier row for this appointment's slot is a duplicate, failed ones included.
             dupe = (await db.execute(select(NotificationLog.id).where(
                 NotificationLog.rule_id == rule.id,
                 NotificationLog.client_id == b.client_id,
                 NotificationLog.trigger_event == "reminder",
-                NotificationLog.status.in_(["scheduled", "sent"])))).scalar_one_or_none()
+                NotificationLog.send_at == send_at).limit(1))).scalar_one_or_none()
             if dupe:
                 continue
             recipient = await _appointment_recipient(db, b, rule.channel)
@@ -420,7 +520,7 @@ async def queue_appointment_reminders(db: AsyncSession, *, org_id: str,
                 recipient=recipient, subject="Appointment reminder",
                 body=(f"Reminder: your appointment is at "
                       f"{b.scheduled_for.strftime('%Y-%m-%d %H:%M')}."),
-                send_at=b.scheduled_for - lead,
+                send_at=send_at,
                 status="scheduled" if recipient else "skipped",
                 error=None if recipient else f"No {rule.channel} on file"))
             queued += 1

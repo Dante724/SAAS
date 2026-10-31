@@ -18,7 +18,9 @@ export async function loadSetupState(): Promise<SetupState> {
   ]);
   return {
     shop: !!(co?.name && co?.company_phone && (co?.company_address || co?.company_email)),
-    tax: n(taxes) > 0,
+    // Launch B4: a seeded 0% placeholder (US sales tax before the owner sets the state rate) isn't
+    // "tax done"; a real rate is.
+    tax: (taxes?.items || []).some((t: any) => Number(t?.rate) > 0),
     team: n(team) > 1 || n(invites) > 0,
     payments: !!pay?.live,
     texts: prov?.channels?.sms === "live" || prov?.channels?.whatsapp === "live",

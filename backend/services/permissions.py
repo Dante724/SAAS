@@ -48,6 +48,10 @@ CATALOG = {
         ("can_change_kit_print", "Change how a kit prints on a job"),
         ("can_change_kit_price", "Change a fixed kit price on a job"),
         ("can_print_itemised_copy", "Print an itemised copy for the customer"),
+        ("can_close_tickets", "Finish (close) jobs"),
+        ("can_take_payments", "Take payments on jobs (cash, card, pay link)"),
+        ("can_use_sense_suggestions", "See Tekly Sense suggestions on jobs"),
+        ("can_approve_agent_sends", "Approve automatic customer messages (Tekly Sense)"),
     ],
     "Inventory": [
         ("can_manage_inventory", "Manage inventory (stock, POs, receiving)"),
@@ -75,6 +79,12 @@ CATALOG = {
         ("can_edit_sale_price", "Edit price"),
         ("can_export_sales", "Export the sales"),
         ("can_take_card_payments", "Take card payments on a card reader"),
+    ],
+    "Memberships": [
+        ("can_sell_memberships", "Sell membership plans"),
+        ("can_apply_membership_benefits", "Apply plan benefits on work orders"),
+        ("can_change_memberships", "Pause, cancel, switch or move a membership"),
+        ("can_manage_membership_plans", "Set up membership plans and settings"),
     ],
     "Invoices": [
         ("can_view_invoices", "View invoices"),
@@ -150,6 +160,22 @@ ALL_CODES = {code for group in CATALOG.values() for code, _ in group}
 
 # Every catalogue code is enforced somewhere; tests/test_permission_catalog.py keeps it that way.
 
+def permission_errors(perms) -> list:
+    """Problems with a role's permissions dict, empty when valid. Valid = known codes only,
+    each set to a real boolean. Anything else would be stored but silently ignored by
+    enforcement (which only honours an explicit False), so it must be rejected."""
+    if not isinstance(perms, dict):
+        return ["permissions must be an object of {code: true|false}"]
+    errors = []
+    unknown = sorted(set(perms) - ALL_CODES)
+    if unknown:
+        errors.append(f"Unknown permission codes: {unknown}")
+    not_bool = sorted(k for k, v in perms.items() if k in ALL_CODES and not isinstance(v, bool))
+    if not_bool:
+        errors.append(f"Permission values must be true or false: {not_bool}")
+    return errors
+
+
 # Seed templates (deny-lists per template; anything not listed = allowed).
 # Money, payroll, exports and destructive deletes are off for anyone who isn't running the
 # shop: a technician or outside partner must not pay themselves, move money or bulk-export
@@ -169,19 +195,23 @@ _NOT_FOR_STAFF = {
     "can_refund_card_payments": False, "can_manage_terminals": False,
     "can_view_purchase_price": False, "can_see_profit": False, "can_set_cost_price": False,
     "can_see_asset_cost": False,
+    "can_take_payments": False, "can_create_payment_links": False,
 }
 TEMPLATES = {
-    "Full access": {},                       # nothing denied
-    "Manager": {"can_delete_transactions": False, "can_manage_roles": False},
+    "Full access": {"can_use_sense_suggestions": True, "can_approve_agent_sends": True},   # nothing denied
+    "Manager": {"can_delete_transactions": False, "can_manage_roles": False,
+                "can_use_sense_suggestions": True},
     "Partner": {"can_manage_settings": False, "can_manage_roles": False,
-                "can_manage_employees": False, "can_make_calls": False, **_NOT_FOR_STAFF},
+                "can_manage_employees": False, "can_make_calls": False, **_NOT_FOR_STAFF,
+                "can_manage_membership_plans": False, "can_change_memberships": False},
     "Specialist": {"can_manage_settings": False, "can_manage_roles": False,
-                   "can_manage_employees": False, **_NOT_FOR_STAFF},
+                   "can_manage_employees": False, **_NOT_FOR_STAFF,
+                   "can_manage_membership_plans": False, "can_change_memberships": False},
 }
 
 
 # Codes that were always opt-in (only an explicit True grants them), even for legacy roles.
-OPT_IN = {"can_override_reservation", "can_change_kit_price"}
+OPT_IN = {"can_override_reservation", "can_change_kit_price", "can_use_sense_suggestions", "can_approve_agent_sends"}
 
 
 def role_allows(role, perm_key: str) -> bool:
@@ -243,3 +273,58 @@ def in_location_scope(role, location_id) -> bool:
         return location_id in json.loads(role.location_ids or "[]")
     except Exception:
         return False
+
+
+def grant_go_codes(perms: dict, explicit: bool) -> tuple[dict, bool]:
+    """Migration gc144g1: closing and payments became permissions, and estimate / pay-link codes
+    started being enforced. Returns (new permissions, changed?) so nobody's access changes:
+    - explicit roles: can_close_tickets on (closing needed nothing before); can_take_payments and
+      can_create_payment_links copy can_view_finance (both were gated by it); can_create_estimates,
+      if missing, copies can_create_tickets.
+    - legacy (deny-wins) roles: the two money codes are written as False when the role already
+      denies can_view_finance, so they don't suddenly default to allowed.
+    The shop creator's admin role ({"all": "write"}) is left alone: it has everything."""
+    perms = dict(perms or {})
+    if perms.get("all") == "write":
+        return perms, False
+    before = dict(perms)
+    if explicit:
+        finance = perms.get("can_view_finance") is True
+        perms.setdefault("can_close_tickets", True)
+        perms.setdefault("can_create_estimates", perms.get("can_create_tickets") is True)
+        perms["can_take_payments"] = finance
+        perms["can_create_payment_links"] = finance
+    elif perms.get("can_view_finance") is False:
+        perms["can_take_payments"] = False
+        perms["can_create_payment_links"] = False
+    return perms, perms != before
+
+
+def grant_membership_codes(perms: dict, explicit: bool) -> tuple[dict, bool]:
+    """Migration mb145a1: the four membership codes, without anyone gaining or losing access
+    they'd expect. Selling and applying benefits follow "create work orders"; setting up and
+    changing memberships follow "manage settings".
+    - explicit (default-deny) roles: each code copies the code it follows.
+    - legacy (deny-wins) roles: a code is written False when the role already denies the code it
+      follows, so a restricted role doesn't suddenly get plan management by default.
+    The shop creator's admin role ({"all": "write"}) is left alone: it has everything."""
+    perms = dict(perms or {})
+    if perms.get("all") == "write":
+        return perms, False
+    changed = False
+    follow = {
+        "can_sell_memberships": "can_create_tickets",
+        "can_apply_membership_benefits": "can_create_tickets",
+        "can_change_memberships": "can_manage_settings",
+        "can_manage_membership_plans": "can_manage_settings",
+    }
+    for code, like in follow.items():
+        if code in perms:
+            continue
+        if explicit:
+            perms[code] = perms.get(like) is True
+            changed = True
+        elif perms.get(like) is False:
+            perms[code] = False
+            changed = True
+    return perms, changed

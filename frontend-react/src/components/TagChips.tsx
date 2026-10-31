@@ -2,7 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { api } from "../api/client";
 import { loadFailed } from "../lib/notice";
 
-export type Tag = { id: string; name: string; color: string };
+export type Tag = { id: string; name: string; color: string; system?: boolean };
 
 /** Reusable tag strip: shows an entity's tags, add existing / create new / remove.
  *  Backend: /api/tags (+ /attach, /detach, /for). entityType in contact|order|chat. */
@@ -44,7 +44,7 @@ export default function TagChips({ entityType, entityId, className = "" }:
   };
 
   const mineIds = new Set(mine.map((t) => t.id));
-  const candidates = all.filter((t) => !mineIds.has(t.id) &&
+  const candidates = all.filter((t) => !mineIds.has(t.id) && !t.system &&
     (!q || t.name.toLowerCase().includes(q.toLowerCase())));
 
   return (
@@ -53,7 +53,8 @@ export default function TagChips({ entityType, entityId, className = "" }:
         <span key={t.id} className="inline-flex items-center gap-1 pl-2 pr-1 py-0.5 rounded-full text-[11px] font-bold text-white"
               style={{ backgroundColor: t.color || "#64748b" }}>
           {t.name}
-          <button onClick={() => detach(t.id)} className="w-4 h-4 rounded-full grid place-items-center hover:bg-black/20" title="Remove">×</button>
+          {/* Membership tags are added and removed with the plan, not by hand. */}
+          {t.system ? <span className="w-1" /> : <button onClick={() => detach(t.id)} className="w-4 h-4 rounded-full grid place-items-center hover:bg-black/20" title="Remove">×</button>}
         </span>
       ))}
       <button onClick={() => setOpen((v) => !v)}
