@@ -91,7 +91,7 @@ export default function NewPODrawer({ products, onClose, onCreated }:
     const map = sheet.map.map((f, c) => (field !== "ignore" && f === field && c !== col ? "ignore" : f)) as PasteField[];
     map[col] = field;
     setSheet({ ...sheet, map });
-    api.put(`/imports/po/mapping${supQ(true)}`, { mapping: mapByHeader(sheet.headers, map) }).catch(() => {});
+    api.put(`/imports/po/mapping${supQ(true)}`, { mapping: mapByHeader(sheet.headers, map) }).catch(() => { /* silent: remembering the column mapping is only a convenience */ });
   }
   async function matchSheet() {
     if (!sheet) return;

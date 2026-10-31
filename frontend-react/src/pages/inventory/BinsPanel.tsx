@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
+import { loadFailed } from "../../lib/notice";
 import { M } from "../../components/Shell";
 import SkeletonRows from "../../components/SkeletonRows";
 import BinScanField from "../../components/BinScanField";
@@ -28,7 +29,7 @@ export default function BinsPanel() {
   const [q, setQ] = useState("");
 
   const load = () => api.get<any>("/bins").then((r) => setBins(r.items || [])).catch(() => setBins([]));
-  useEffect(() => { load(); api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); setNf((s) => ({ ...s, location_id: it[0]?.id || "" })); }).catch(() => {}); }, []);
+  useEffect(() => { load(); api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); setNf((s) => ({ ...s, location_id: it[0]?.id || "" })); }).catch(loadFailed("locations")); }, []);
   const loadContents = (id: string) => { setContents(null); api.get<any>(`/bins/${id}/contents`).then((r) => setContents(r.items || [])).catch(() => setContents([])); };
   function toggleOpen(id: string) { if (open === id) { setOpen(null); return; } setOpen(id); loadContents(id); }
 
@@ -132,7 +133,7 @@ export default function BinsPanel() {
 
       {edit && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Edit bin">
-          <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={() => setEdit(null)} />
+          <div aria-hidden="true" className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={() => setEdit(null)} />
           <div className="relative w-full max-w-sm bg-white rounded-2xl shadow-drawer border border-slate-200 p-5 space-y-3">
             <h3 className="font-bold text-ink-primary">Edit bin</h3>
             <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Name</label><input autoFocus value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} aria-label="Bin name" className={`${fld} w-full`} />

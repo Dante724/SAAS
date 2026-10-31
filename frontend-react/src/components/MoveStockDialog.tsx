@@ -36,7 +36,7 @@ export default function MoveStockDialog({ partId, partName, locationId, fromBinI
   const fld = "w-full bg-white border border-slate-200 rounded-lg text-sm px-2.5 py-2";
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Move stock">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div aria-hidden="true" className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
       <div className="relative w-full max-w-sm bg-white rounded-2xl shadow-drawer border border-slate-200 p-5 space-y-3">
         <div className="flex items-center justify-between"><h3 className="font-bold text-ink-primary">Move {partName}</h3><button aria-label="Close" onClick={onClose} className="w-7 h-7 rounded-lg hover:bg-slate-100 grid place-items-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
         <p className="text-xs text-ink-tertiary">From <b className="text-ink-secondary">{fromLabel}</b> · {max} here</p>

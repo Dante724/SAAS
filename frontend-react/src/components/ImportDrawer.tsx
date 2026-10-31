@@ -3,6 +3,7 @@
 // → 3 Review every row (green create, blue update, red needs fixing) → Import. The server does the
 // checking (POST /imports/{kind}/preview is a dry run); this only shows it.
 import { useEffect, useMemo, useRef, useState } from "react";
+import { loadFailed } from "../lib/notice";
 import { api, downloadAuthed } from "../api/client";
 import { M } from "./Shell";
 import { toXlsx } from "../lib/sheet";
@@ -52,9 +53,9 @@ export default function ImportDrawer({ kind, onClose, onDone }: { kind: ImportKi
 
   const loadLast = () => api.get<{ items: Batch[] }>(`/imports/batches?kind=${kind}`).then((r) => setLast(r.items?.[0] || null)).catch(() => setLast(null));
   useEffect(() => {
-    api.get<any>("/imports/kinds").then((r) => { setFields(r[kind]?.fields || []); setMatchOn(r[kind]?.match_on || ""); }).catch(() => {});
+    api.get<any>("/imports/kinds").then((r) => { setFields(r[kind]?.fields || []); setMatchOn(r[kind]?.match_on || ""); }).catch(loadFailed("the import columns"));
     loadLast();
-    if (kind === "products") api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setOpts((o) => ({ ...o, location_id: it[0].id })); }).catch(() => {});
+    if (kind === "products") api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setOpts((o) => ({ ...o, location_id: it[0].id })); }).catch(loadFailed("locations"));
   }, [kind]); // eslint-disable-line
 
   async function upload(f: File) {
@@ -117,7 +118,7 @@ export default function ImportDrawer({ kind, onClose, onDone }: { kind: ImportKi
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label={`Import ${many}`}>
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={busy ? undefined : onClose} />
+      <div aria-hidden="true" className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={busy ? undefined : onClose} />
       <div className="relative w-[760px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <div>

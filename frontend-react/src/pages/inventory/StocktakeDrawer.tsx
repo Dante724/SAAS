@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { loadFailed } from "../../lib/notice";
 import { M } from "../../components/Shell";
 import SkeletonRows from "../../components/SkeletonRows";
 import ScanButton from "../../components/ScanButton";
@@ -40,13 +41,13 @@ export default function StocktakeDrawer({ id, onClose, onDone }:
     setSheet(r);
   }
   useEffect(() => {
-    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); setForm((f) => ({ ...f, location_id: f.location_id || it[0]?.id || "" })); }).catch(() => {});
-    api.get<any>("/bins").then((r) => setBins(r.items || [])).catch(() => {});
+    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); setForm((f) => ({ ...f, location_id: f.location_id || it[0]?.id || "" })); }).catch(loadFailed("locations"));
+    api.get<any>("/bins").then((r) => setBins(r.items || [])).catch(loadFailed("bins"));
     api.get<any>("/catalog/categories?entity_type=product").then((r) => {
       const flat: Opt[] = [];
       const walk = (nodes: any[], d: number) => (nodes || []).forEach((n) => { flat.push({ id: n.id, name: `${"— ".repeat(d)}${n.name}` }); walk(n.children, d + 1); });
       walk(r.tree || [], 0); setCats(flat);
-    }).catch(() => {});
+    }).catch(loadFailed("categories"));
     if (id) load(id).catch(() => setErr("Could not load this stock take"));
   }, []); // eslint-disable-line
 
@@ -133,7 +134,7 @@ export default function StocktakeDrawer({ id, onClose, onDone }:
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div aria-hidden="true" className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
       <div className="relative w-[680px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h2 className="font-bold text-ink-primary flex items-center gap-2"><M n="fact_check" c="text-base text-primary" />{stId ? (posted ? "Stock take (posted)" : "Count in progress") : "New stock take"}

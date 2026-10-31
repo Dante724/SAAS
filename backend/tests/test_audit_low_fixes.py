@@ -267,6 +267,9 @@ async def test_smtp_sends_plain_template_as_plain_text_and_strips_subject_newlin
         def __exit__(self, *a):
             return False
 
+        def connect(self, *a):
+            pass
+
         def starttls(self):
             pass
 
@@ -276,7 +279,9 @@ async def test_smtp_sends_plain_template_as_plain_text_and_strips_subject_newlin
         def send_message(self, msg):
             sent["msg"] = msg
     import smtplib
+    from backend.core import ssrf
     monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+    monkeypatch.setattr(ssrf, "public_ip_for", lambda host, port: "93.184.216.34")   # a shop's host must resolve public
     ad = n.SmtpEmailAdapter({"host": "smtp.test", "from": "shop@test.dev"})
     r = await ad.send(recipient="c@test.dev", subject="Ready\r\nBcc: victim@evil.test",
                       body="Hi <b>Bo</b>", html=False)

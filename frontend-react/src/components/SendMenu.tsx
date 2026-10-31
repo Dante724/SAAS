@@ -37,7 +37,7 @@ export default function SendMenu({ label, busy, onSend, primary = true, small, w
         <M n="expand_more" c="text-sm" />
       </button>
       {pos && createPortal(<>
-        <div className="fixed inset-0 z-[70]" onClick={() => setPos(null)} />
+        <div aria-hidden="true" className="fixed inset-0 z-[70]" onClick={() => setPos(null)} />
         <div role="menu" style={{ top: pos.top, left: pos.left, width: 168 }} className="fixed z-[71] bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1">
           {ways.map((w) => (
             <button key={w} role="menuitem" type="button" onClick={() => { setPos(null); onSend(w); }}

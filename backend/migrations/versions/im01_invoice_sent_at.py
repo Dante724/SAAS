@@ -12,13 +12,13 @@ Invoices made in the manual editor before stored them as percentages. Those are 
 total (it only adds up the percentage way) and rewritten to amounts; the total doesn't change.
 
 Revision ID: im01
-Revises: mkw01
+Revises: ii144c01
 """
 import sqlalchemy as sa
 from alembic import op
 
 revision = "im01"
-down_revision = "mkw01"
+down_revision = "ii144c01"
 branch_labels = None
 depends_on = None
 

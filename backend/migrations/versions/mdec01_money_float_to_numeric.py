@@ -13,13 +13,13 @@ maps them with asdecimal=False for now, so Python still receives floats (no arit
 Existing values round to the column's scale (Postgres rounds half away from zero). Reversible.
 
 Revision ID: mdec01
-Revises: mkw01
+Revises: imc01
 """
 import sqlalchemy as sa
 from alembic import op
 
 revision = "mdec01"
-down_revision = "mkw01"
+down_revision = "imc01"
 branch_labels = None
 depends_on = None
 

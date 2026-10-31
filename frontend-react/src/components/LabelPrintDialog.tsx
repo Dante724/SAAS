@@ -42,7 +42,7 @@ export default function LabelPrintDialog({ title, count, noun, typeChoice, defau
   const fld = "w-full bg-white border border-slate-200 rounded-lg text-sm px-2.5 py-2 mb-3";
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label={title}>
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div aria-hidden="true" className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
       <div className="relative w-full max-w-sm bg-white rounded-2xl shadow-drawer border border-slate-200 p-5">
         <div className="flex items-center justify-between mb-3"><h3 className="font-bold text-ink-primary">{title}</h3><button aria-label="Close" onClick={onClose} className="w-7 h-7 rounded-lg hover:bg-slate-100 grid place-items-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
         <p className="text-xs text-ink-tertiary mb-3">{count} {count === 1 ? noun[0] : noun[1]} selected. Each label prints at the template's exact size.</p>

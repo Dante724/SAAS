@@ -38,7 +38,7 @@ export default function SerialPassport({ unitId, onClose }: { unitId: string; on
   const row = "flex items-start justify-between gap-3 py-2";
   return (
     <div className="fixed inset-0 z-[60] flex justify-end" role="dialog" aria-modal="true" aria-label="Unit passport">
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
+      <div aria-hidden="true" className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
       <div className="relative h-full w-full max-w-[440px] bg-white shadow-drawer flex flex-col border-l border-slate-200">
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
           <div className="min-w-0"><span className="text-[11px] font-bold text-primary block">Unit passport</span>

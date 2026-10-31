@@ -268,7 +268,7 @@ async def test_shipping_one_transfer_keeps_anothers_reservation(client, tenant, 
     assert (await client.patch(f"/api/transfers/{a['id']}/status", json={"status": "ready"},
                                headers=tenant)).status_code == 200
 
-    _slow(monkeypatch, transfers, "_level")      # A reads the stock row, then pauses
+    _slow(monkeypatch, transfers.stock_rows, "rows")   # A reads the stock rows, then pauses
     ship, reserve = await asyncio.gather(
         client.patch(f"/api/transfers/{a['id']}/status", json={"status": "in_transit"}, headers=tenant),
         client.patch(f"/api/transfers/{b['id']}/status", json={"status": "ready"}, headers=tenant))

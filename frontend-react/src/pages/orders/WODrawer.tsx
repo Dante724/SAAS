@@ -169,7 +169,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   }
   // J6 — the job's type and priority are real pickers now.
   const [types, setTypes] = useState<{ id: string; name: string }[]>([]);
-  useEffect(() => { api.get<any>("/forms/types").then((r) => setTypes(r.items || [])).catch(() => {}); }, []);
+  useEffect(() => { api.get<any>("/forms/types").then((r) => setTypes(r.items || [])).catch(loadFailed("job types")); }, []);
   async function changeType(typeId: string) {
     if (!typeId || typeId === (d as any).type_id) return;
     try {
