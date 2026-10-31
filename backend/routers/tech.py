@@ -8,7 +8,7 @@ from datetime import datetime, timedelta
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import and_, func, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -26,9 +26,10 @@ from backend.models import (
     StaffNotification,
     TimeEntry,
 )
-from backend.services.auth import get_current_employee
+from backend.services.auth import get_current_employee, record_scope
 
-router = APIRouter(prefix="/api/tech", tags=["technician"])
+router = APIRouter(prefix="/api/tech", tags=["technician"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 
 def _card(o: Order) -> dict:
@@ -52,8 +53,13 @@ async def dashboard(
     current: Employee = Depends(get_current_employee),
 ):
     """Today / upcoming / completed / overdue jobs for the signed-in technician,
-    plus quick stats, clock status and the unread notification count."""
-    now = datetime.utcnow()
+    plus quick stats, clock status and the unread notification count.
+
+    "Today" is the shop's day, not the UTC day: scheduled and due times are stored as shop-local
+    wall-clock time, so a 9am job in a UTC+5:30 shop used to land on the wrong day near midnight."""
+    from backend.services.dates import local_now, shop_timezone
+    tzname = await shop_timezone(db, current)
+    now = local_now(tzname)
     today_start = datetime(now.year, now.month, now.day)
     today_end = today_start + timedelta(days=1)
 
@@ -63,21 +69,23 @@ async def dashboard(
             OrderStatus.org_id == current.org_id, OrderStatus.is_terminal == True)  # noqa: E712
     )).scalars().all())
 
-    mine = (await db.execute(
-        select(Order).where(and_(
-            Order.org_id == current.org_id,
-            Order.assigned_to_id == current.id,
-            Order.is_estimate == False,  # noqa: E712
-        )).options(selectinload(Order.client), selectinload(Order.device))
-        .order_by(Order.scheduled_for.is_(None), Order.scheduled_for, Order.created_at)
-    )).scalars().all()
+    # Open jobs are loaded; finished ones are only counted, plus the 25 shown. A tech with
+    # years of closed jobs used to load every one of them on each open of Today.
+    base = and_(Order.org_id == current.org_id, Order.assigned_to_id == current.id,
+                Order.is_estimate == False)  # noqa: E712
+    done_cond = Order.closed_at.isnot(None)
+    if terminal_keys:
+        done_cond = or_(done_cond, Order.status.in_(terminal_keys))
+    order_by = (Order.scheduled_for.is_(None), Order.scheduled_for, Order.created_at)
+    cards = (selectinload(Order.client), selectinload(Order.device))
+    open_jobs = (await db.execute(
+        select(Order).where(base, ~done_cond).options(*cards).order_by(*order_by))).scalars().all()
+    completed = (await db.execute(
+        select(Order).where(base, done_cond).options(*cards).order_by(*order_by).limit(25))).scalars().all()
+    completed_n = (await db.execute(select(func.count()).select_from(Order).where(base, done_cond))).scalar() or 0
 
-    today, upcoming, completed, overdue = [], [], [], []
-    for o in mine:
-        done = o.closed_at is not None or o.status in terminal_keys
-        if done:
-            completed.append(o)
-            continue
+    today, upcoming, overdue = [], [], []
+    for o in open_jobs:
         if o.due_at and o.due_at < now:
             overdue.append(o)
         sched = o.scheduled_for
@@ -85,8 +93,8 @@ async def dashboard(
             today.append(o)
         elif sched and sched >= today_end:
             upcoming.append(o)
-        elif not sched:
-            today.append(o)  # unscheduled active work shows under Today
+        else:
+            today.append(o)  # unscheduled, or scheduled on an earlier day and still open: carry it over
 
     running = (await db.execute(
         select(TimeEntry).where(and_(
@@ -107,12 +115,12 @@ async def dashboard(
     return {
         "today": [_card(o) for o in today],
         "upcoming": [_card(o) for o in upcoming],
-        "completed": [_card(o) for o in completed[:25]],
+        "completed": [_card(o) for o in completed],
         "overdue": [_card(o) for o in overdue],
         "stats": {
             "today": len(today), "upcoming": len(upcoming),
-            "completed": len(completed), "overdue": len(overdue),
-            "assigned_total": len(mine),
+            "completed": completed_n, "overdue": len(overdue),
+            "assigned_total": len(open_jobs) + completed_n,
         },
         "clock": {
             "clocked_in": running is not None,
@@ -121,7 +129,9 @@ async def dashboard(
             "since": running.started_at.isoformat() if running else None,
         },
         "unread_notifications": int(unread),
-        "server_time": now.isoformat(),
+        "server_time": datetime.utcnow().isoformat(),
+        "shop_today": today_start.date().isoformat(),
+        "timezone": tzname,
     }
 
 
@@ -213,7 +223,7 @@ async def dismiss_all_notifications(
 
 # ── Notification preferences (Part 9) ─────────────────────────────────────────
 from backend.services.push import VALID_KINDS  # noqa: E402
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 
 @router.get("/preferences")
@@ -254,14 +264,15 @@ async def set_preference(
 
 
 # ── Customer & device history (Part 7) ────────────────────────────────────────
-def _balance(o: Order) -> float:
-    return q2(max(0.0, (o.total or 0) - (o.prepayment_total or 0)))
+async def _balance(db: AsyncSession, o: Order) -> float:
+    from backend.services.order_money import balance_due
+    return await balance_due(db, o)
 
 
 async def _order_history_cards(db: AsyncSession, org_id: str, orders: list[Order]) -> tuple[list, float]:
     cards, outstanding = [], 0.0
     for o in orders:
-        bal = _balance(o)
+        bal = await _balance(db, o)
         if o.closed_at is None:
             outstanding += bal
         cards.append({
@@ -298,7 +309,7 @@ async def client_history(
         .order_by(Invoice.created_at.desc()))).scalars().all()
     inv_out = [{"id": i.id, "invoice_number": i.invoice_number, "status": i.status,
                 "total": i.total, "amount_paid": i.amount_paid,
-                "balance": q2((i.total or 0) - (i.amount_paid or 0)),
+                "balance": q2(max((i.total or 0) - (i.amount_paid or 0) - (i.credited or 0), 0)),
                 "issued_at": i.issued_at.isoformat() if i.issued_at else None} for i in invoices]
 
     devices = (await db.execute(select(Device).where(

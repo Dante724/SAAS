@@ -5,7 +5,7 @@ StaffNotification (which powers the in-app unread count and the technician
 dashboard) and then best-effort delivers a Web Push message to that employee's
 subscribed devices.
 
-Delivery is gated like every other provider in RepairOS: without VAPID keys it
+Delivery is gated like every other provider in Tekly: without VAPID keys it
 is logged/simulated, never failing the caller. With keys + the `pywebpush`
 package installed it sends a real encrypted push.
 """
@@ -20,12 +20,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.config import settings
 from backend.models import PushSubscription, StaffNotification
 
-log = logging.getLogger("repairos.push")
+log = logging.getLogger("tekly.push")
 
 VALID_KINDS = {
     "job.assigned", "schedule.changed", "chat.message",
     "estimate.approved", "appointment.cancelled", "payment.received",
-    "inventory.reorder",
+    "inventory.reorder", "membership.alert",
 }
 
 
@@ -80,7 +80,7 @@ async def _dispatch_push(db: AsyncSession, employee_id: str, payload: dict) -> N
     except Exception:
         log.warning("pywebpush not installed; push not sent (employee=%s)", employee_id)
         return
-    claims = {"sub": f"mailto:{getattr(settings, 'VAPID_CLAIMS_EMAIL', 'admin@repairos.dev')}"}
+    claims = {"sub": f"mailto:{settings.VAPID_CLAIMS_EMAIL}"}
     for s in subs:
         try:
             webpush(

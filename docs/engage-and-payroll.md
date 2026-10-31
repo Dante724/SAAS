@@ -14,7 +14,7 @@ profile) and are multiplied by per-employee **coefficients** (seniority).
 Calculations aggregate on the Payroll page into one monthly **accrual** per
 employee onto their balance, then payouts.
 
-## What RepairOS already had (verified, not rebuilt)
+## What Tekly already had (verified, not rebuilt)
 `CommissionRule(event, calc_type percent|flat, percent_basis total|margin,
 coefficient, category, employee-specific > org-wide)`, an idempotent
 `EmployeeBalanceLedger` (exactly-once via idempotency keys), `PayrollRun`,

@@ -14,6 +14,21 @@ _NAMING_CONVENTION = {
     "pk": "pk_%(table_name)s",
 }
 
+def pg_connect_args(cfg) -> dict:
+    """asyncpg session settings: a statement_timeout so one runaway query can't hold a pooled
+    connection (and a worker) indefinitely, and an idle-in-transaction timeout so a leaked
+    transaction can't hold locks. Set either to 0 to leave it to the server (e.g. behind a
+    PgBouncer that rejects startup parameters — then set them on the database role instead)."""
+    if "asyncpg" not in (cfg.DATABASE_URL or ""):
+        return {}
+    server_settings = {}
+    if cfg.DB_STATEMENT_TIMEOUT_MS:
+        server_settings["statement_timeout"] = str(int(cfg.DB_STATEMENT_TIMEOUT_MS))
+    if cfg.DB_IDLE_IN_TX_TIMEOUT_MS:
+        server_settings["idle_in_transaction_session_timeout"] = str(int(cfg.DB_IDLE_IN_TX_TIMEOUT_MS))
+    return {"server_settings": server_settings} if server_settings else {}
+
+
 # SQLite needs check_same_thread=False; Postgres/asyncpg must NOT receive it.
 _connect_args = {"check_same_thread": False} if settings.is_sqlite else {}
 _engine_kwargs = dict(echo=False, connect_args=_connect_args)
@@ -27,8 +42,12 @@ if not settings.is_sqlite:
 
         _engine_kwargs["poolclass"] = NullPool
     else:
-        # Sensible pool defaults for a pooled server driver (asyncpg).
-        _engine_kwargs.update(pool_size=10, max_overflow=20, pool_pre_ping=True, pool_recycle=1800)
+        # Bounded pool per worker; a request that can't get a connection within the timeout fails
+        # fast instead of queueing forever behind a stuck query. All tunable from settings.
+        _engine_kwargs.update(pool_size=settings.DB_POOL_SIZE, max_overflow=settings.DB_MAX_OVERFLOW,
+                              pool_timeout=settings.DB_POOL_TIMEOUT_S, pool_pre_ping=True,
+                              pool_recycle=settings.DB_POOL_RECYCLE_S)
+    _connect_args.update(pg_connect_args(settings))
 
 engine = create_async_engine(settings.DATABASE_URL, **_engine_kwargs)
 
@@ -45,8 +64,27 @@ if settings.is_sqlite:
 
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
+from backend.db import (
+    actors,  # noqa: E402,F401 — records who discounted, refunded, closed a drawer
+    tenancy,  # noqa: E402,F401 — registers the cross-tenant reference guard
+)
+
+
 class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=_NAMING_CONVENTION)
+
+async def insert_ignore(db: AsyncSession, model, **values) -> bool:
+    """INSERT … ON CONFLICT DO NOTHING, for seeds that several requests can run at once (a new
+    shop's first page load, Settings › Industry & assets). Two seeds can both see "row missing"
+    and race to insert it; the loser must quietly skip rather than 500 on the unique constraint.
+    Returns True if this call inserted."""
+    if db.bind.dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    else:
+        from sqlalchemy.dialects.sqlite import insert
+    res = await db.execute(insert(model).values(**values).on_conflict_do_nothing())
+    return res.rowcount == 1
+
 
 async def get_db() -> AsyncSession:
     async with AsyncSessionLocal() as session:
@@ -111,9 +149,9 @@ async def init_db():
     import logging
 
     from backend.models import all_models  # noqa: F401 – import triggers registration
-    log = logging.getLogger("repairos.db")
+    log = logging.getLogger("tekly.db")
 
-    if settings.is_production and not settings.RUN_MIGRATIONS_ON_STARTUP:
+    if settings.is_deployed and not settings.RUN_MIGRATIONS_ON_STARTUP:
         log.info("Production mode: skipping runtime DDL; schema is managed by Alembic.")
         return
 
@@ -135,6 +173,20 @@ async def init_db():
             "  SELECT o.org_id FROM orders o WHERE o.device_id = devices.id"
             "  ORDER BY o.created_at DESC LIMIT 1"
             ") WHERE org_id IS NULL"))
+        # Admin panel: dev databases that predate shop account IDs get one each (production
+        # does this in migration ad144s1). Idempotent: only shops still without an ID.
+        if settings.is_sqlite:
+            from backend.services.account_id import new_account_id as _new_id
+            taken = {r[0] for r in (await conn.execute(_text(
+                "SELECT account_id FROM organisations WHERE account_id IS NOT NULL"))).fetchall()}
+            for (oid,) in (await conn.execute(_text("SELECT id FROM organisations WHERE account_id IS NULL"))).fetchall():
+                aid = _new_id()
+                while aid in taken:
+                    aid = _new_id()
+                taken.add(aid)
+                await conn.execute(_text("UPDATE organisations SET account_id = :a WHERE id = :i"), {"a": aid, "i": oid})
+            await conn.execute(_text(
+                "CREATE UNIQUE INDEX IF NOT EXISTS ix_organisations_account_id ON organisations (account_id)"))
 
     # Build 144am — unify suppliers with contacts. A supplier is the same real-world
     # entity as a Contact, and the app now opens the one contact form (with a
@@ -186,6 +238,28 @@ async def init_db():
         for oid in org_ids:
             made += await _seed_rules(session, oid)
         if made:
+            await session.commit()
+
+    # Retire OrderStatus.triggers_notification: turn flagged statuses into equivalent
+    # per-status rules (only where no rule already fires) and clear the flag. Runs after the
+    # starter-rule seed above so "covered" sees those rules. Idempotent. In production the
+    # equivalent runs inside Alembic migration nt144p4.
+    from backend.services import legacy_status_notifs as _legacy
+    async with AsyncSessionLocal() as session:
+        for oid in org_ids:
+            await _legacy.convert(session, oid)
+        await session.commit()
+
+    # Roles become explicit allow-lists (new permissions start off). Snapshot any legacy role
+    # so it grants exactly what it granted before. Idempotent. In production the equivalent
+    # runs inside Alembic migration rp144p8.
+    from sqlalchemy import select as _sel
+
+    from backend.models import Role as _Role
+    from backend.services.permissions import make_explicit as _make_explicit
+    async with AsyncSessionLocal() as session:
+        changed = [r for r in (await session.execute(_sel(_Role))).scalars().all() if _make_explicit(r)]
+        if changed:
             await session.commit()
 
     # 144an — seed the manual workflow stage for POs created before the field existed, mapping

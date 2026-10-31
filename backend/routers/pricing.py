@@ -14,7 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Employee, Location, Organisation, Part, PriceType, PriceTypeItem, Service
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 router = APIRouter(prefix="/api/pricing", tags=["pricing"])
 
@@ -204,15 +204,18 @@ async def line_unit_cost(db: AsyncSession, org_id: str, *, kind: Optional[str],
                          ref_id: Optional[str], cost_price: Optional[float] = None) -> float:
     """Unit cost basis for a line: an explicit cost wins, else the catalog item's
     cost (product avg_cost > cost_price; service cost_price)."""
-    if cost_price and cost_price > 0:
-        return cost_price
+    explicit = float(cost_price or 0) if cost_price and cost_price > 0 else 0.0
     if not ref_id:
-        return 0.0
+        return explicit
     if kind == "product":
         item = (await db.execute(select(Part).where(Part.id == ref_id, Part.org_id == org_id))).scalar_one_or_none()
-        return (item.avg_cost or item.cost_price or 0) if item else 0.0
-    item = (await db.execute(select(Service).where(Service.id == ref_id, Service.org_id == org_id))).scalar_one_or_none()
-    return (item.cost_price or 0) if item else 0.0
+        catalog = float((item.avg_cost or item.cost_price or 0) if item else 0)
+    else:
+        item = (await db.execute(select(Service).where(Service.id == ref_id, Service.org_id == org_id))).scalar_one_or_none()
+        catalog = float((item.cost_price or 0) if item else 0)
+    # A client-supplied cost may raise the basis (special-order parts) but never undercut the
+    # catalog cost: sending cost_price=0.01 used to fake a ~100% margin past the guard.
+    return max(explicit, catalog)
 
 
 def pretax_revenue(unit_price: float, qty: float, discount: float, discount_type: str) -> float:
@@ -242,7 +245,9 @@ async def evaluate_line_margin(db: AsyncSession, org_id: str, *, kind, ref_id, u
     rev = pretax_revenue(unit_price, qty, discount, discount_type)
     m = margin_pct(rev, cost_total)
     # ok unless we can measure a margin and it falls under the floor (and a cost exists)
-    below = (m is not None) and unit_cost > 0 and guard != "off" and m < floor
+    # Zero/negative revenue on a line that has a cost is the worst margin there is — it used to
+    # return None and pass (100% discounts, fixed discounts >= the price).
+    below = unit_cost > 0 and guard != "off" and (m is None or m < floor)
     return {"unit_cost": q2(unit_cost), "cost_total": q2(cost_total),
             "revenue": q2(rev), "margin_pct": m, "floor": floor,
             "guard": guard, "below_floor": below, "blocked": below and guard == "block"}

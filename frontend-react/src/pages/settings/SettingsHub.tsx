@@ -1,21 +1,67 @@
 import { useEffect, useRef, useState } from "react";
+import DeviceList from "../../components/DeviceList";
 import { createPortal } from "react-dom";
+import { useNavigate } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
-import { api, openAuthedDoc } from "../../api/client";
-import CurrencyManager from "../../components/CurrencyManager";
+import { api } from "../../api/client";
 import TemplateEditorDrawer from "./TemplateEditorDrawer";
+import DirectoriesManager from "./DirectoriesManager";
+import FormCustomizer, { type FormKey } from "../../components/FormCustomizer";
 import { resetTerminology } from "../../lib/useTerminology";
-import { getLang, setLang, LANGS } from "../../i18n";
 import { confirmDialog, alertDialog, promptDialog } from "../../lib/dialog";
+import { useMe } from "../../context/Me";
 import { NAV, CATS, SEC_CAT, searchSections, type SectionId } from "./settingsRegistry";
+import { FEATURES } from "../../lib/features";
 import { SetupChecklist } from "./SetupChecklist";
+import { StatusList, StatusEditor } from "./StatusesSettings";
+import GeneralSettings from "./GeneralSettings";
+import CustomerMessages from "./NotificationsPage";
+import PublicPagesSettings from "./PublicPagesSettings";
+import CheckinPointsSettings from "./CheckinPointsSettings";
+import { PricingPage, InventoryPage } from "./PricingInventory";
+import FinanceNumbering from "./FinanceNumbering";
+import InvoiceSettings from "./InvoiceSettings";
+import MembershipSettings from "./MembershipSettings";
+import DocumentTemplatesPage from "./DocumentTemplatesPage";
+import LocationsPage from "./LocationsPage";
+import { TeamPage, RoleEditor, Avatar } from "./TeamSettings";
+import { ChecklistList, ChecklistEditor } from "./ChecklistSettings";
+import CardReadersCard from "./CardReadersCard";
+import ApiKeysCard from "./ApiKeysCard";
+import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
+import TelephonySettings from "./TelephonySettings";
+import WebhooksSettings from "./WebhooksSettings";
+import Switch from "../../components/Switch";
+import SaveFooter from "../../components/SaveFooter";
+import { SettingRow, SettingGroup, NumField } from "../../components/SettingRow";
+import { money } from "../orders/types";
 
 // Full section set = the registry sections + a few that have no nav entry of their own.
 type Section = SectionId | "overview" | "automation" | "payroll-rules";
 
-const lbl = "block text-[11px] font-bold text-ink-tertiary uppercase mb-1";
-const field = "glass-input w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg";
+const lbl = "block text-sm font-medium text-ink-primary mb-1.5";
+const field = "glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary";
+const btnPrimary = "h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90 disabled:opacity-50 inline-flex items-center gap-1.5";
+const btnSecondary = "h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-ink-secondary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50 inline-flex items-center gap-1.5";
+
+// Plain-word labels for the stored option values shown in settings (events, actions, kinds…).
+const OPT_LABELS: Record<string, string> = {
+  status_change: "Status changes", status_changed: "Status changes", order_created: "Order created", order_closed: "Order closed",
+  payment_received: "Payment received", appointment_created: "Appointment booked", created: "Created", closed: "Closed", reminder: "Reminder",
+  sms: "SMS",
+  order: "Orders", client: "Clients", lead: "Inquiries", appointment: "Appointments", invoice: "Invoices",
+  email: "Email", push: "In-app / push", chat: "Chat",
+  estimate: "Estimate", receipt: "Receipt", work_order: "Work order", label: "Label", other: "Other",
+  a4: "A4", letter: "Letter", product: "Products", asset: "Assets", location: "One location", company: "Whole company",
+  new: "New", in_progress: "In progress", pending: "Pending", ready: "Ready", dropped: "Dropped",
+  all: "All locations", selected: "Selected locations",
+};
+// Turn a stored value like "quote_followup" into words ("Quote followup") when it has no label above.
+const humanize = (v: string) => { const s = String(v || "").replace(/_/g, " ").trim(); return s ? s[0].toUpperCase() + s.slice(1) : ""; };
+const optLabel = (v: string) => OPT_LABELS[v] || humanize(v);
+// What an automation rule does (its action_type).
+const ACTION_LABELS: Record<string, string> = { notify: "Send a notification", create_task: "Create a task", assign: "Assign someone", webhook: "Call a webhook", sms: "Send a text" };
 
 // General-settings option lists (legacy parity).
 // `country` is stored as an ISO 3166-1 alpha-2 code (String(2) column). Each country
@@ -78,18 +124,6 @@ const PAYROLL_TERMS: [string, string][] = [["any", "Any"], ["on_time", "Closed o
 const PAYROLL_LEVELS: [string, string][] = [["generic", "All items (generic)"], ["product", "Specific product"], ["category", "A category"], ["service", "Specific service"], ["profile", "Employee profile default"]];
 
 // Landing pages a role can start on (route → label). "" = default Home.
-const LANDING_PAGES: [string, string][] = [
-  ["", "Home (default)"], ["/my-work", "My work"], ["/orders", "Work orders"],
-  ["/inquiries", "Inquiries"], ["/appointments", "Appointments"], ["/invoices", "Invoices"],
-  ["/inventory", "Inventory"], ["/reports", "Reports"],
-];
-// Home-feed signal keys (must match backend reports.home_feed item keys).
-const FEED_SIGNALS: [string, string][] = [
-  ["overdue", "Overdue work orders"], ["messages", "Customer messages waiting"],
-  ["ready", "Ready for pickup"], ["urgent", "Urgent orders"],
-  ["unpaid", "Unpaid invoices"], ["lowstock", "Low / out of stock"],
-  ["tasks", "Open tasks"], ["inquiries", "Inquiries awaiting reply"],
-];
 const INDUSTRIES: [string, string][] = [["general", "Generic — Assets"], ["auto", "Auto repair — Vehicles (VIN)"],
   ["powersports", "Powersports — Vehicles (VIN)"], ["marine", "Marine — Vessels (HIN)"],
   ["mobile_phone", "Phone repair — Devices (IMEI/Serial)"], ["computer", "Computer repair — Devices (Serial)"],
@@ -97,18 +131,29 @@ const INDUSTRIES: [string, string][] = [["general", "Generic — Assets"], ["aut
   ["bike", "Bike / cycle — Bikes (Serial)"]];
 
 export default function SettingsHub() {
-  const [sec, setSec] = useState<Section>("overview");
+  const navigate = useNavigate();
+  // ?section=… deep-links a section (e.g. "Manage options" in a directory dropdown).
+  const [sec, setSec] = useState<Section>(() => (new URLSearchParams(window.location.search).get("section") as Section) || "overview");
   const [q, setQ] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [co, setCo] = useState<any>(null);
   const [statuses, setStatuses] = useState<any[]>([]);
   const [statusRT, setStatusRT] = useState<string>("work_order");  // 144ij — which pipeline is being edited
+  async function moveStatus(from: number, to: number) {
+    if (from === to || to < 0 || to >= statuses.length) return;
+    const prev = statuses;
+    const next = [...statuses]; const [it] = next.splice(from, 1); next.splice(to, 0, it);
+    setStatuses(next);
+    try { await api.post("/statuses/reorder", { ordered_ids: next.map((x: any) => x.id) }); flash("Order saved"); }
+    catch (e: any) { setStatuses(prev); flash(`Couldn't save the order: ${e.message}`); }
+  }
   const [lists, setLists] = useState<Record<string, any[] | null>>({});
   const [roles, setRoles] = useState<any[] | null>(null);
   const [toast, setToast] = useState<string | null>(null);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2200); };
 
-  useEffect(() => { api.get<any>("/staff/company").then(setCo).catch(() => setCo({})); }, []);
+  const coSaved = useRef<any>(null);   // last saved company settings (General shows a save bar when they differ)
+  useEffect(() => { api.get<any>("/staff/company").then((c) => { coSaved.current = c; setCo(c); }).catch(() => setCo({})); }, []);
   useEffect(() => {
     if (sec === "statuses" || sec === "team") {
       const rt = sec === "statuses" ? statusRT : "work_order";
@@ -175,47 +220,47 @@ export default function SettingsHub() {
       }));
     }
   }, [sec]);
-  const val = (o: any, keys: string[], fb = "—") => { for (const k of keys) { const v = o?.[k]; if (v !== undefined && v !== null && v !== "") return String(v); } return fb; };
 
   // ── Inline editors for config entities (create / edit / delete) ──
-  type Field = { k: string; label: string; type: "text" | "number" | "select" | "color" | "checkbox" | "textarea" | "date"; opts?: string[]; def?: any; req?: boolean; vars?: boolean; counter?: boolean };
+  type Field = { k: string; label: string; type: "text" | "number" | "select" | "color" | "checkbox" | "textarea" | "date"; opts?: string[]; choices?: { value: string; label: string }[]; def?: any; req?: boolean; vars?: boolean; counter?: boolean; unit?: string; help?: string; labels?: Record<string, string> };
   const EDITORS: Record<string, { create: string; upd?: (id: string) => string; updMethod?: "put" | "patch"; del?: (id: string) => string; fields: Field[]; reload: () => void }> = {
     automation: { create: "/automations", upd: (id) => `/automations/${id}`, del: (id) => `/automations/${id}`, reload: () => reloadSec("automation"), fields: [
       { k: "name", label: "Rule name", type: "text", req: true }, { k: "event", label: "Event", type: "select", opts: ["status_change", "order_created", "order_closed", "payment_received", "appointment_created"], def: "status_change" },
-      { k: "trigger_status", label: "When status is (key)", type: "text" }, { k: "action_type", label: "Action", type: "select", opts: ["notify", "create_task", "assign", "webhook", "sms"], def: "notify", req: true }, { k: "active", label: "Active", type: "checkbox", def: true } ] },
+      { k: "trigger_status", label: "When the status is", type: "text" }, { k: "action_type", label: "Action", type: "select", opts: ["notify", "create_task", "assign", "webhook", "sms"], labels: ACTION_LABELS, def: "notify", req: true }, { k: "active", label: "Active", type: "checkbox", def: true } ] },
     notifications: { create: "/notifications/rules", upd: (id) => `/notifications/rules/${id}`, updMethod: "patch", del: (id) => `/notifications/rules/${id}`, reload: () => reloadSec("notifications"), fields: [
       { k: "module", label: "Module", type: "select", opts: ["order", "client", "lead", "appointment", "invoice"], def: "order" }, { k: "event", label: "Event", type: "select", opts: ["status_change", "created", "closed", "payment_received", "reminder"], def: "status_change" },
-      { k: "channel", label: "Channel", type: "select", opts: ["email", "sms", "push", "chat"], def: "email" }, { k: "delay_min", label: "Delay (minutes)", type: "number", def: 0 }, { k: "working_hours_only", label: "Working hours only", type: "checkbox" }, { k: "active", label: "Active", type: "checkbox", def: true } ] },
+      { k: "channel", label: "Channel", type: "select", opts: ["email", "sms", "push", "chat"], def: "email" }, { k: "delay_min", label: "Delay", type: "number", unit: "min", def: 0 }, { k: "working_hours_only", label: "Working hours only", type: "checkbox" }, { k: "active", label: "Active", type: "checkbox", def: true } ] },
     templates: { create: "/documents/templates", upd: (id) => `/documents/templates/${id}`, del: (id) => `/documents/templates/${id}`, reload: () => reloadSec("templates"), fields: [
       { k: "name", label: "Template name", type: "text", req: true }, { k: "doc_type", label: "Document type", type: "select", opts: ["estimate", "invoice", "receipt", "work_order", "label", "other"], def: "estimate" },
       { k: "page_size", label: "Page size", type: "select", opts: ["a4", "letter", "label"], def: "a4" }, { k: "font_family", label: "Font", type: "text", def: "Inter" },
-      { k: "is_default", label: "Default for type", type: "checkbox" }, { k: "body_html", label: "Body (HTML — use {Variables})", type: "textarea", req: true, vars: true } ] },
+      { k: "is_default", label: "Default for type", type: "checkbox" }, { k: "body_html", label: "Body", help: "Click a variable on the right to drop in job or customer details.", type: "textarea", req: true, vars: true } ] },
     notif_templates: { create: "/notifications/templates", upd: (id) => `/notifications/templates/${id}`, del: (id) => `/notifications/templates/${id}`, reload: () => reloadNotifTemplates(), fields: [
       { k: "name", label: "Template name", type: "text" }, { k: "channel", label: "Channel", type: "select", opts: ["sms", "email", "push"], def: "sms" },
-      { k: "trigger_event", label: "Trigger event", type: "select", opts: ["status_change", "created", "closed", "reminder"], def: "status_change" }, { k: "trigger_status", label: "When status (key)", type: "text" },
-      { k: "subject", label: "Subject (email)", type: "text" }, { k: "body_template", label: "Message body", type: "textarea", req: true, vars: true, counter: true }, { k: "active", label: "Active", type: "checkbox", def: true } ] },
+      { k: "trigger_event", label: "Trigger event", type: "select", opts: ["status_change", "created", "closed", "reminder"], def: "status_change" }, { k: "trigger_status", label: "When the status is", type: "text" },
+      { k: "subject", label: "Email subject", type: "text" }, { k: "body_template", label: "Message body", type: "textarea", req: true, vars: true, counter: true }, { k: "active", label: "Active", type: "checkbox", def: true } ] },
     invites: { create: "/staff/invites", del: (id) => `/staff/invites/${id}`, reload: () => reloadInvites(), fields: [
-      { k: "email", label: "Email", type: "text", req: true }, { k: "name", label: "Name", type: "text" } ] },
+      { k: "email", label: "Email", type: "text", req: true }, { k: "name", label: "Name", type: "text" },
+      // Required: a teammate with no role can do nothing (only the shop owner has every right).
+      { k: "role_id", label: "Role", type: "select", req: true, choices: (roles || []).map((r: any) => ({ value: r.id, label: r.name })) } ] },
     forms: { create: "/forms/types", upd: (id) => `/forms/types/${id}`, del: (id) => `/forms/types/${id}`, reload: () => reloadSec("forms"), fields: [
-      { k: "name", label: "Form name", type: "text", req: true }, { k: "color", label: "Colour", type: "color", def: "#4f8ef7" }, { k: "initial_status", label: "Initial status (key)", type: "text", def: "new" }, { k: "is_default", label: "Default", type: "checkbox" } ] },
+      { k: "name", label: "Form name", type: "text", req: true }, { k: "color", label: "Colour", type: "color", def: "#4f8ef7" }, { k: "initial_status", label: "Starting status", type: "text", def: "new" }, { k: "is_default", label: "Default", type: "checkbox" } ] },
     warehouses: { create: "/settings/warehouses", upd: (id) => `/settings/warehouses/${id}`, del: (id) => `/settings/warehouses/${id}`, reload: () => reloadSec("warehouses"), fields: [
       { k: "name", label: "Name", type: "text", req: true }, { k: "kind", label: "Kind", type: "select", opts: ["product", "asset"], def: "product" },
       { k: "scope", label: "Scope", type: "select", opts: ["location", "company"], def: "location" }, { k: "active", label: "Active", type: "checkbox", def: true } ] },
     statuses: { create: "/statuses", upd: (id) => `/statuses/${id}`, del: (id) => `/statuses/${id}`, reload: () => reloadSec("statuses"), fields: [
-      { k: "name", label: "Name", type: "text", req: true }, { k: "status_group", label: "Group", type: "select", opts: ["new", "in_progress", "done", "delivered", "cancelled"], def: "in_progress" },
+      { k: "name", label: "Name", type: "text", req: true }, { k: "status_group", label: "Group", type: "select", opts: ["new", "in_progress", "pending", "ready", "closed", "dropped"], def: "in_progress" },
       { k: "color", label: "Colour", type: "color", def: "#888888" }, { k: "is_default", label: "Default status", type: "checkbox" },
-      { k: "triggers_invoice", label: "Triggers invoice", type: "checkbox" }, { k: "triggers_notification", label: "Triggers notification", type: "checkbox" }, { k: "triggers_payment", label: "Prompts payment", type: "checkbox" }, { k: "locks_edits", label: "Locks edits (freeze after this status)", type: "checkbox" },
-      { k: "time_limit_min", label: "Time limit (minutes, blank = none)", type: "number" }, { k: "moves_asset_to", label: "Auto-move asset to (warehouse/status key)", type: "text" },
+      { k: "triggers_invoice", label: "Triggers invoice", type: "checkbox" }, { k: "triggers_payment", label: "Prompts payment", type: "checkbox" }, { k: "locks_edits", label: "Locks edits (freeze after this status)", type: "checkbox" },
+      { k: "time_limit_min", label: "Time limit", help: "Leave blank for no limit.", type: "number", unit: "min" }, { k: "moves_asset_to", label: "Move the item to", help: "A warehouse or item status, when a job enters this status.", type: "text" },
       { k: "require_comment", label: "Require a comment before entering", type: "checkbox" }, { k: "require_checklist", label: "Require all checklist items done", type: "checkbox" }, { k: "require_payment", label: "Require full payment before entering", type: "checkbox" } ] },
     pricing: { create: "/pricing/types", upd: (id) => `/pricing/types/${id}`, del: (id) => `/pricing/types/${id}`, reload: () => reloadSec("pricing"), fields: [
-      { k: "name", label: "Name", type: "text", req: true }, { k: "markup_pct", label: "Markup %", type: "number", def: 0 },
+      { k: "name", label: "Name", type: "text", req: true }, { k: "markup_pct", label: "Markup", type: "number", unit: "%", def: 0 },
       { k: "is_default", label: "Default", type: "checkbox" }, { k: "location_scope", label: "Scope", type: "select", opts: ["all", "selected"], def: "all" },
       { k: "starts_at", label: "Promo starts (optional)", type: "date" }, { k: "ends_at", label: "Promo ends (optional)", type: "date" } ] },
     directories: { create: "/directories", del: (id) => `/directories/${id}`, reload: () => reloadSec("directories"), fields: [
       { k: "key", label: "Key", type: "text", req: true }, { k: "name", label: "Name", type: "text", req: true } ] },
   };
   const [editing, setEditing] = useState<{ sec: string; row: any | null; module?: string } | null>(null);
-  const [dirSel, setDirSel] = useState<any | null>(null);
   async function reloadSec(s: string) {
     if (s === "statuses") { const r = await api.get<any>(`/statuses?record_type=${statusRT}`).catch(() => null); if (r) setStatuses(r.items || r || []); return; }
     const url = SEC_URL[s]; if (!url) return;
@@ -232,7 +277,6 @@ export default function SettingsHub() {
     flash("Saved"); setEditing(null); cfg.reload();
   }
 
-  const set = (k: string, v: any) => setCo((s: any) => ({ ...s, [k]: v }));
   async function saveCompany() {
     try {
       await api.put("/staff/company", {
@@ -244,23 +288,19 @@ export default function SettingsHub() {
         prohibit_dup_phone: co.prohibit_dup_phone, prohibit_dup_email: co.prohibit_dup_email,
         require_mfa: co.require_mfa, clock_wo_enabled: co.clock_wo_enabled, clock_attendance_enabled: co.clock_attendance_enabled,
         clock_labour_billing: co.clock_labour_billing, rounding_enabled: co.rounding_enabled,
+        default_comment_visibility: co.default_comment_visibility || "private",
+        default_file_visibility: co.default_file_visibility || "private",
       });
+      // Switching industry also seeds its starter brands/models and refreshes the app's wording.
+      const prevInd = coSaved.current?.industry_template;
+      if (co.industry_template && co.industry_template !== prevInd) {
+        await api.put("/settings/industry-template", { template_key: co.industry_template });
+        resetTerminology();
+      }
       flash("Settings saved");
-    } catch (e: any) { flash(`Failed: ${e.message}`); }
+      return true;
+    } catch (e: any) { flash(`Failed: ${e.message}`); return false; }
   }
-  function onLogoPick(e: React.ChangeEvent<HTMLInputElement>) {
-    const f = e.target.files?.[0]; if (!f) return;
-    const r = new FileReader(); r.onload = () => set("logo_data", r.result as string); r.readAsDataURL(f);
-  }
-  // Country picker auto-fills timezone + currency (both stay editable after).
-  const pickCountry = (iso: string) => {
-    const m = COUNTRY_META.find((c) => c[0] === iso);
-    setCo((s: any) => ({ ...s, country: iso, ...(m ? { timezone: m[2], currency_code: m[3], currency: m[4] } : {}) }));
-  };
-  const pickCurrency = (code: string) => {
-    const c = CURRENCIES.find((x) => x[0] === code);
-    setCo((s: any) => ({ ...s, currency_code: code, ...(c ? { currency: c[1] } : {}) }));
-  };
   const [rebuilding, setRebuilding] = useState(false);
   async function rebuildBalances() {
     setRebuilding(true);
@@ -268,18 +308,13 @@ export default function SettingsHub() {
     catch (e: any) { flash(`Failed: ${e.message}`); } finally { setRebuilding(false); }
   }
 
-  const Toggle = ({ k, label, hint }: { k: string; label: string; hint?: string }) => (
-    <label className="flex items-center justify-between py-2.5 cursor-pointer">
-      <div><div className="text-xs font-semibold text-ink-primary">{label}</div>{hint && <div className="text-[11px] text-ink-tertiary">{hint}</div>}</div>
-      <button type="button" onClick={() => set(k, !co?.[k])} className={`w-10 h-6 rounded-full transition-colors flex-shrink-0 ${co?.[k] ? "bg-primary" : "bg-slate-300"} relative`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${co?.[k] ? "left-[18px]" : "left-0.5"}`} /></button>
-    </label>
-  );
+
 
   return (
     <Shell title="Settings">
       <div className="flex-1 overflow-hidden flex">
         {/* section nav */}
-        <aside className="w-60 flex-shrink-0 border-r border-slate-200/80 bg-white/50 p-3 overflow-y-auto">
+        <aside className="hidden md:block w-60 flex-shrink-0 border-r border-slate-200/80 bg-white/50 p-3 overflow-y-auto">
           <div className="relative mb-3">
             <M n="search" c="absolute left-2.5 top-2 text-base text-ink-tertiary pointer-events-none" />
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search settings…"
@@ -290,7 +325,7 @@ export default function SettingsHub() {
             const hits = searchSections(q);
             if (!hits.length) return <div className="text-xs text-ink-tertiary px-2.5 py-3">No settings match “{q}”.</div>;
             return hits.map((n) => (
-              <button key={n.id} onClick={() => { setSec(n.id); setQ(""); }} className="w-full text-left px-2.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-2.5 mb-0.5 text-ink-secondary hover:bg-slate-100"><M n={n.icon} c="text-base" />{n.label}<span className="ml-auto text-[10px] text-ink-tertiary font-medium">{CATS.find((c) => c.id === SEC_CAT[n.id])?.label}</span></button>
+              <button key={n.id} onClick={() => { setSec(n.id); setQ(""); }} className="w-full text-left px-2.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-2.5 mb-0.5 text-ink-secondary hover:bg-slate-100"><M n={n.icon} c="text-base" />{n.label}<span className="ml-auto text-[11px] text-ink-tertiary font-medium">{CATS.find((c) => c.id === SEC_CAT[n.id])?.label}</span></button>
             ));
           })() : CATS.map((cat) => {
             const items = NAV.filter((n) => SEC_CAT[n.id] === cat.id);
@@ -298,7 +333,7 @@ export default function SettingsHub() {
             const col = !!collapsed[cat.id];
             return (
               <div key={cat.id} className="mb-1">
-                <button onClick={() => setCollapsed((s) => ({ ...s, [cat.id]: !s[cat.id] }))} className="w-full flex items-center gap-1.5 px-2 py-1.5 text-[10px] font-bold uppercase tracking-wider text-ink-tertiary hover:text-ink-secondary">
+                <button onClick={() => setCollapsed((s) => ({ ...s, [cat.id]: !s[cat.id] }))} className="w-full flex items-center gap-1.5 px-2 py-1.5 text-[11px] font-bold text-ink-tertiary hover:text-ink-secondary">
                   {cat.label}<M n="expand_more" c={`text-sm ml-auto transition-transform ${col ? "-rotate-90" : ""}`} />
                 </button>
                 {!col && items.map((n) => (
@@ -311,263 +346,138 @@ export default function SettingsHub() {
 
         {/* pb-80: scroll room below the last card so dropdowns near the bottom
             (e.g. the Public-pages status pickers) have space to open downward. */}
-        <div className="flex-1 overflow-y-auto p-6 pb-80">
+        <div className="flex-1 min-w-0 overflow-y-auto p-6 pb-80">
+          {/* Narrow screens hide the section list; the Overview's category cards are the menu. */}
+          {sec !== "overview" && (
+            <button onClick={() => setSec("overview")} className="md:hidden mb-3 -ml-1 flex items-center gap-1.5 px-1 py-2 text-xs font-semibold text-primary"><M n="arrow_back" c="text-sm" />All settings</button>
+          )}
           {sec === "overview" && (
             <div className="max-w-3xl space-y-5">
-              <div>
-                <h2 className="text-[22px] font-extrabold text-ink-primary tracking-tight">Settings</h2>
-                <p className="text-[13px] text-ink-tertiary mt-0.5">Everything about your shop, grouped and searchable.</p>
+              <p className="text-sm text-ink-secondary">Set up your shop once, change anything later.</p>
+              <SetupChecklist goSection={setSec} navigate={(to) => navigate(to)} />
+              <div className="relative">
+                <M n="search" c="absolute left-4 top-3.5 text-lg text-ink-tertiary pointer-events-none" />
+                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a setting: tax, invoice number, reminder, technician…" aria-label="Find a setting"
+                  className="w-full bg-white border border-slate-200 rounded-2xl pl-11 pr-4 py-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 shadow-clay-card" />
               </div>
-              <SetupChecklist goSection={setSec} />
-              <div className="grid grid-cols-2 gap-3">
+              <div className="grid sm:grid-cols-2 gap-3">
                 {CATS.map((cat) => {
                   const items = NAV.filter((n) => SEC_CAT[n.id] === cat.id);
                   if (!items.length) return null;
                   return (
-                    <button key={cat.id} onClick={() => setSec(items[0].id)} className="text-left bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4 hover:shadow-clay-drawer transition-shadow">
-                      <div className="w-8 h-8 rounded-lg bg-slate-50 flex items-center justify-center mb-2"><M n={cat.icon} c="text-primary text-lg" /></div>
-                      <div className="text-sm font-bold text-ink-primary">{cat.label}</div>
-                      <div className="text-[11px] text-ink-tertiary mt-0.5 leading-snug">{items.map((i) => i.label).join(" · ")}</div>
-                    </button>
+                    <div key={cat.id} className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4">
+                      <div className="flex items-center gap-2.5 mb-2">
+                        <span className="w-8 h-8 rounded-lg bg-primary/10 text-primary grid place-items-center"><M n={cat.icon} c="text-base" /></span>
+                        <span className="text-sm font-semibold text-ink-primary">{cat.label}</span>
+                      </div>
+                      <div className="flex flex-col">
+                        {items.map((n) => (
+                          <button key={n.id} onClick={() => setSec(n.id)} className="group flex items-center gap-2.5 px-2 py-1.5 -mx-1 rounded-lg text-left hover:bg-slate-50">
+                            <M n={n.icon} c="text-[15px] text-ink-tertiary group-hover:text-primary" />
+                            <span className="text-xs text-ink-secondary group-hover:text-ink-primary">{n.label}</span>
+                            <M n="chevron_right" c="ml-auto text-sm text-ink-tertiary opacity-0 group-hover:opacity-100" />
+                          </button>
+                        ))}
+                      </div>
+                    </div>
                   );
                 })}
               </div>
             </div>
           )}
           {sec === "general" && co && (
-            <div className="max-w-2xl space-y-4">
-              {/* Company info */}
-              <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-5 space-y-4">
-                <h3 className="text-sm font-bold text-ink-primary">Company info</h3>
-                <p className="text-[11px] text-ink-tertiary -mt-2">These details appear on documents, invoices, and customer notifications.</p>
-                <div className="flex items-center gap-4">
-                  <div className="w-16 h-16 rounded-xl border border-slate-200 bg-slate-50 grid place-items-center overflow-hidden flex-shrink-0">
-                    {co.logo_data ? <img src={co.logo_data} alt="logo" className="w-full h-full object-contain" /> : <M n="image" c="text-2xl text-ink-placeholder" />}
-                  </div>
-                  <label className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50 cursor-pointer">
-                    Choose logo<input type="file" accept="image/*" onChange={onLogoPick} className="hidden" />
-                  </label>
-                  {co.logo_data && <button onClick={() => set("logo_data", "")} className="text-xs font-semibold text-rose-600">Remove</button>}
-                </div>
-                <div className="grid grid-cols-2 gap-4">
-                  <div><label className={lbl}>Company name</label><input value={co.name || ""} onChange={(e) => set("name", e.target.value)} className={field} /></div>
-                  <div><label className={lbl}>Website</label><input value={co.website || ""} onChange={(e) => set("website", e.target.value)} className={field} /></div>
-                  <div><label className={lbl}>Email</label><input value={co.company_email || ""} onChange={(e) => set("company_email", e.target.value)} className={field} /></div>
-                  <div><label className={lbl}>Phone</label><input value={co.company_phone || ""} onChange={(e) => set("company_phone", e.target.value)} className={`${field} font-mono`} /></div>
-                  <div className="col-span-2"><label className={lbl}>Address</label><input value={co.company_address || ""} onChange={(e) => set("company_address", e.target.value)} className={field} /></div>
-                  <div><label className={lbl}>Country</label>
-                    <select value={co.country || ""} onChange={(e) => pickCountry(e.target.value)} className={field}>
-                      <option value="">— Select country —</option>{COUNTRY_META.map((c) => <option key={c[0]} value={c[0]}>{c[1]}</option>)}
-                    </select></div>
-                  <div><label className={lbl}>Timezone</label>
-                    <select value={co.timezone || ""} onChange={(e) => set("timezone", e.target.value)} className={field}>
-                      <option value="">— Select timezone —</option>{TIMEZONES.map((t) => <option key={t} value={t}>{t}</option>)}
-                    </select></div>
-                  <div><label className={lbl}>Currency</label>
-                    <select value={co.currency_code || ""} onChange={(e) => pickCurrency(e.target.value)} className={field}>
-                      <option value="">— Select currency —</option>{CURRENCIES.map(([c, s]) => <option key={c} value={c}>{c} — {s}</option>)}
-                    </select></div>
-                  <div><label className={lbl}>Currency symbol</label><input value={co.currency || ""} onChange={(e) => set("currency", e.target.value)} className={field} /></div>
-                  <div><label className={lbl}>My display language</label>
-                    <select value={getLang()} onChange={(e) => setLang(e.target.value as any)} className={field}>
-                      {LANGS.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
-                    </select>
-                    <p className="text-[11px] text-ink-tertiary mt-1">Applies to you on this device. Arabic switches the layout to right-to-left.</p></div>
-                  <div><label className={lbl}>Document language — printed docs</label>
-                    <select value={co.document_language || "en"} onChange={(e) => set("document_language", e.target.value)} className={field}>
-                      {DOC_LANGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                    </select></div>
-                  <div><label className={lbl}>Company details (registration / tax ID)</label><input value={co.company_details || ""} onChange={(e) => set("company_details", e.target.value)} className={field} /></div>
-                  <div className="col-span-2"><label className={lbl}>Company note (printed on documents)</label><textarea value={co.company_note || ""} onChange={(e) => set("company_note", e.target.value)} rows={2} className={field} /></div>
-                </div>
-              </div>
-
-              {/* Additional currencies — real Currency table + rate history (/api/finance/currencies) */}
-              <CurrencyManager />
-
-              {/* Industry template */}
-              <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-5 space-y-2">
-                <h3 className="text-sm font-bold text-ink-primary">Industry template</h3>
-                <p className="text-[11px] text-ink-tertiary">Renames the asset entity app-wide (Vehicles / Vessels / Devices…).</p>
-                <select value={co.industry_template || "general"} onChange={(e) => set("industry_template", e.target.value)} className={field}>
-                  {INDUSTRIES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                </select>
-              </div>
-
-              {/* Time clocks + policies + security */}
-              <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-5 divide-y divide-slate-100">
-                <h3 className="text-sm font-bold text-ink-primary pb-1">Time clocks</h3>
-                <Toggle k="clock_wo_enabled" label="Work-order / job & task timer" hint="Time spent on orders and tasks" />
-                <Toggle k="clock_attendance_enabled" label="Shop attendance clock" hint="Clock in / out of the workplace" />
-                <Toggle k="clock_labour_billing" label="Bill labour from the job timer" hint="Tracked time × the employee's rate adds a labour line" />
-              </div>
-              <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-5 divide-y divide-slate-100">
-                <h3 className="text-sm font-bold text-ink-primary pb-1">Policies & security</h3>
-                <Toggle k="prohibit_dup_phone" label="Prohibit duplicate phone numbers" hint="Block creating two clients with the same phone" />
-                <Toggle k="prohibit_dup_email" label="Prohibit duplicate emails" />
-                <Toggle k="rounding_enabled" label="Round invoice totals" />
-                <Toggle k="require_mfa" label="Require two-factor authentication" hint="Org-wide mandatory TOTP; members can't turn their own off" />
-              </div>
-
-              {/* Contact balances */}
-              <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-5 space-y-2">
-                <h3 className="text-sm font-bold text-ink-primary">Contact balances</h3>
-                <p className="text-[11px] text-ink-tertiary">Rebuild every client and supplier balance from orders, payments, postings and returns. Safe to run repeatedly.</p>
-                <button onClick={rebuildBalances} disabled={rebuilding} className="px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50 disabled:opacity-60 flex items-center gap-1.5"><M n="refresh" c="text-sm" />{rebuilding ? "Rebuilding…" : "Rebuild balances from history"}</button>
-              </div>
-
-              <div className="flex justify-end"><button onClick={saveCompany} className="px-5 py-2 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="save" c="text-sm" />Save company info</button></div>
-            </div>
+            <GeneralSettings co={co} setCo={setCo} saved={coSaved} onSave={saveCompany} rebuilding={rebuilding} onRebuild={rebuildBalances}
+              opts={{ countries: COUNTRY_META, timezones: TIMEZONES, currencies: CURRENCIES, docLangs: DOC_LANGS, industries: INDUSTRIES }} />
           )}
 
           {sec === "statuses" && (
-            <div className="max-w-3xl space-y-5">
-              {/* 144ij — one engine, five pipelines. Orderry parity (breadth) with our richer per-status automation (depth). */}
-              <div className="flex flex-wrap gap-1.5">
-                {([["work_order", "Work orders"], ["estimate", "Estimates"], ["inquiry", "Inquiries"], ["invoice", "Invoices"], ["transfer", "Transfers"], ["purchase_order", "Purchase orders"]] as [string, string][]).map(([rt, label]) => (
-                  <button key={rt} onClick={() => { setStatusRT(rt); setStatuses([]); }}
-                    className={`px-3 py-1.5 rounded-full text-xs font-bold transition-colors ${statusRT === rt ? "bg-primary text-white shadow-clay-sm" : "bg-white border border-slate-200 text-ink-secondary hover:border-slate-300"}`}>{label}</button>
-                ))}
-              </div>
-              <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-                <div className="p-3.5 border-b border-slate-100 flex items-center justify-between">
-                  <span className="text-xs font-bold text-ink-primary uppercase tracking-wider">{({ work_order: "Work order", estimate: "Estimate", inquiry: "Inquiry", invoice: "Invoice", transfer: "Transfer", purchase_order: "Purchase order" } as Record<string, string>)[statusRT]} statuses</span>
-                  <button onClick={() => setStatusEdit("new")} className="text-primary text-xs font-semibold hover:underline flex items-center gap-1"><M n="add" c="text-sm" />Add status</button>
-                </div>
-                <div className="divide-y divide-slate-100">
-                  {statuses.length === 0 && <div className="p-5 text-xs text-ink-tertiary">Loading statuses…</div>}
-                  {statuses.map((s: any) => (
-                    <div key={s.id} className="px-5 py-3 flex items-center gap-3 text-xs group">
-                      <span className="w-3 h-3 rounded-full" style={{ background: s.color || "#94a3b8" }} />
-                      <span className="font-bold text-ink-primary">{s.name}</span>
-                      <span className="text-[10px] uppercase tracking-wide text-ink-tertiary bg-slate-100 px-1.5 py-0.5 rounded">{(s.status_group || "").replace(/_/g, " ")}</span>
-                      {s.time_limit_min ? <span className="text-[10px] text-sky-700 bg-sky-50 px-1.5 py-0.5 rounded font-bold">SLA {s.time_limit_min}m</span> : null}
-                      {(s.require_comment || s.require_payment || s.require_checklist) && <span className="text-[10px] text-amber-700 bg-amber-50 px-1.5 py-0.5 rounded font-bold">gated</span>}
-                      <span className="ml-auto font-mono text-ink-tertiary text-[11px]">{s.key}</span>
-                      <button onClick={() => setStatusEdit(s)} className="text-primary font-semibold hover:underline">Edit</button>
-                      <button onClick={() => delRow("statuses", s)} className="text-rose-600 font-semibold hover:underline">Delete</button>
-                    </div>
-                  ))}
-                </div>
-              </div>
-              {(statusRT === "work_order" || statusRT === "estimate") && <TransitionsCard statuses={statuses} onFlash={flash} />}
-            </div>
+            <StatusList statuses={statuses} recordType={statusRT} onRecordType={(rt) => { setStatusRT(rt); setStatuses([]); }}
+              onOpen={(s) => setStatusEdit(s)} onAdd={() => setStatusEdit("new")} onMove={moveStatus}
+              onDeleted={() => reloadSec("statuses")} onFlash={flash} />
           )}
 
           {sec === "team" && (
-            <div className="space-y-5 max-w-3xl">
-              <SectionCard title="Employees" count={lists.team?.length} onAdd={() => setEmpEdit("new")}>
-                <SecTable rows={lists.team} onRowClick={(e) => setEmpEdit(e)} cols={[
-                  ["Name", (e) => val(e, ["name"])],
-                  ["Position", (e) => val(e, ["position", "role_name"])],
-                  ["Email", (e) => val(e, ["email"])],
-                  ["Phone", (e) => val(e, ["phone"])],
-                  ["Status", (e) => (e?.active === false ? "Blocked" : "Active")],
-                ]} />
-              </SectionCard>
-              <SectionCard title="Roles" count={rbacRoles?.length ?? undefined} onAdd={() => setRoleEdit("new")}>
-                <SecTable rows={rbacRoles} onRowClick={(r) => setRoleEdit(r)} cols={[["Role", (r) => val(r, ["name"])], ["Overrides", (r) => String(Object.keys(r?.permissions || {}).length)]]} />
-              </SectionCard>
-              <SectionCard title="Pending invites" count={invites?.length ?? undefined} onAdd={() => setEditing({ sec: "invites", row: null })}>
-                <SecTable rows={invites} onDelete={(r) => delRow("invites", r)} cols={[["Email", (i) => val(i, ["email"])], ["Name", (i) => val(i, ["name"])], ["Status", (i) => val(i, ["status"], "pending")]]} />
-              </SectionCard>
-              <SectionCard title="Payroll rules — commission events" count={lists["payroll-rules"]?.length} onAdd={() => setPayrollEdit("new")}>
-                <SecTable rows={lists["payroll-rules"]} onRowClick={(r) => setPayrollEdit(r)} cols={[
-                  ["Rule", (r) => val(r, ["name"])],
-                  ["Event", (r) => PAYROLL_EVENT_LABELS[r?.event] || val(r, ["event"])],
-                  ["Employee", (r) => (lists.team || []).find((e: any) => e.id === r?.employee_id)?.name || "All / by role"],
-                  ["Amount", (r) => r?.calc_type === "flat" ? `${r?.amount}` : `${r?.amount}%${r?.percent_basis === "margin" ? " of margin" : ""}`],
-                ]} />
-              </SectionCard>
-            </div>
+            <TeamPage team={lists.team} roles={rbacRoles} invites={invites} rules={lists["payroll-rules"]} catalog={rbacCatalog}
+              payLabel={(r) => ({ event: PAYROLL_EVENT_LABELS[r?.event] || r?.event || "", amount: r?.calc_type === "flat" ? `${r?.amount}` : `${r?.amount}%${r?.percent_basis === "margin" ? " of margin" : ""}` })}
+              onEditPerson={(e) => setEmpEdit(e)} onNewPerson={() => setEmpEdit("new")} onInvite={() => setEditing({ sec: "invites", row: null })}
+              onEditRole={(r) => setRoleEdit(r)} onNewRole={() => setRoleEdit("new")} onEditRule={(r) => setPayrollEdit(r)} onNewRule={() => setPayrollEdit("new")}
+              onChanged={reloadInvites} onFlash={flash} />
           )}
 
-          {sec === "locations" && <LocationsEditor />}
+          {sec === "locations" && <LocationsPage companyTz={co?.timezone || undefined} />}
 
           {sec === "feedback" && <FeedbackSettingsEditor />}
 
           {sec === "warehouses" && (
-            <div className="max-w-3xl space-y-5">
-              <InventorySettingsCard />
-              <SectionCard title="Warehouses" count={lists.warehouses?.length} onAdd={() => setEditing({ sec: "warehouses", row: null })}>
-                <SecTable rows={lists.warehouses} onRowClick={(r) => setEditing({ sec: "warehouses", row: r })} onDelete={(r) => delRow("warehouses", r)} cols={[["Name", (w) => val(w, ["name"])], ["Kind", (w) => val(w, ["kind"])], ["Scope", (w) => val(w, ["scope"])], ["Active", (w) => (w?.active ? "Yes" : "No")]]} />
-              </SectionCard>
-            </div>
+            <InventoryPage warehouses={lists.warehouses} currency={co?.currency || "$"} onAdd={() => setEditing({ sec: "warehouses", row: null })}
+              onEdit={(r) => setEditing({ sec: "warehouses", row: r })} onDelete={(r) => delRow("warehouses", r)} />
           )}
 
 
           {sec === "notifications" && (
-            <NotificationsSettings
-              rules={lists.notifications || []}
-              templates={notifTemplates || []}
-              automations={lists.automation || []}
-              reloadRules={() => reloadSec("notifications")}
-              reloadTemplates={() => reloadNotifTemplates()}
-              onEditAutomation={(row) => setEditing({ sec: "automation", row })}
-              onDeleteAutomation={(r) => delRow("automation", r)}
-              flash={flash}
-            />
+            <CustomerMessages rules={lists.notifications || []} templates={notifTemplates || []} shopName={co?.name || ""}
+              statusesFor={(rt) => api.get<any>(`/statuses?record_type=${rt}`).then((r) => r.items || [])}
+              reload={() => { reloadSec("notifications"); reloadNotifTemplates(); }} flash={flash}
+              renderOther={(v) => (
+                <NotificationsSettings fixedView={v}
+                  rules={lists.notifications || []}
+                  templates={notifTemplates || []}
+                  automations={lists.automation || []}
+                  reloadRules={() => reloadSec("notifications")}
+                  reloadTemplates={() => reloadNotifTemplates()}
+                  onEditAutomation={(row) => setEditing({ sec: "automation", row })}
+                  onDeleteAutomation={(r) => delRow("automation", r)}
+                  flash={flash}
+                />
+              )} />
           )}
 
           {sec === "templates" && (
-            <div className="max-w-3xl"><SectionCard title="Document templates" count={lists.templates?.length} onAdd={() => setEditing({ sec: "templates", row: null })}>
-              <SecTable rows={lists.templates} onRowClick={(r) => setEditing({ sec: "templates", row: r })} onDelete={(r) => delRow("templates", r)} cols={[["Template", (t) => val(t, ["name", "title"])], ["Type", (t) => val(t, ["doc_type", "group", "type"])], ["Size", (t) => val(t, ["page_size", "size"])], ["Default", (t) => (t?.is_default ? "Yes" : "—")]]} />
-            </SectionCard></div>
+            <DocumentTemplatesPage templates={lists.templates} onOpen={(row) => setEditing({ sec: "templates", row })}
+              onChanged={() => reloadSec("templates")} onFlash={flash} />
           )}
 
-          {sec === "finance" && <FinanceSettings />}
-          {sec === "ecommerce" && <EcommerceSettings />}
+          {sec === "finance" && <InvoiceSettings />}
+          {sec === "memberships" && <MembershipSettings />}
+          {sec === "finance" && <FinanceNumbering currency={co?.currency || "$"} shop={{ name: co?.name, address: co?.company_address, phone: co?.company_phone, email: co?.company_email, logo: co?.logo_data }} />}
+          {sec === "ecommerce" && FEATURES.ecommerce && <EcommerceSettings />}
           {sec === "sso" && <SsoSettings />}
           {sec === "approvals" && <ApprovalsSettings />}
 
           {sec === "forms" && (
-            <div className="max-w-3xl space-y-5">
-              <SectionCard title="Form types & custom fields" count={lists.forms?.length} onAdd={() => setEditing({ sec: "forms", row: null })}>
-                <SecTable rows={lists.forms} onRowClick={(r) => setFormFieldsFor(r)} onDelete={(r) => delRow("forms", r)} cols={[["Form", (t) => val(t, ["name", "label", "title"])], ["Initial status", (t) => val(t, ["initial_status"])], ["Default", (t) => (t?.is_default ? "Yes" : "—")], ["Fields", (t) => val(t, ["field_count"], String((t?.fields || []).length || 0))]]} />
-              </SectionCard>
-              <SystemFieldsEditor />
-              <EntityFieldsEditor />
-            </div>
+            <FormsDesigner types={lists.forms || []} onAddType={() => setEditing({ sec: "forms", row: null })}
+              onDeleteType={(r) => delRow("forms", r)} onAdvanced={(t) => setFormFieldsFor(t)} />
           )}
 
           {sec === "pricing" && (
-            <div className="max-w-3xl space-y-5">
-              <SectionCard title="Pricing types" count={lists.pricing?.length} onAdd={() => setEditing({ sec: "pricing", row: null })}>
-                <SecTable rows={lists.pricing} onRowClick={(r) => setEditing({ sec: "pricing", row: r })} onDelete={(r) => delRow("pricing", r)} cols={[["Name", (p) => val(p, ["name", "title"])], ["Markup %", (p) => val(p, ["markup_pct", "percent", "value"])], ["Default", (p) => (p?.is_default ? "Yes" : "—")], ["Scope", (p) => val(p, ["location_scope", "scope"])]]} />
-              </SectionCard>
-              <PricingDefaults types={lists.pricing || []} />
-              <TierManager types={lists.pricing || []} />
-            </div>
+            <PricingPage types={lists.pricing} currency={co?.currency || "$"} onAdd={() => setEditing({ sec: "pricing", row: null })}
+              onEdit={(r) => setEditing({ sec: "pricing", row: r })} onDelete={(r) => delRow("pricing", r)} tiers={<TierManager types={lists.pricing || []} />} />
           )}
 
           {sec === "industry" && (
             <div className="max-w-4xl space-y-5">
-              <IndustryTemplatePicker onSaved={() => reloadSec("industry")} />
+              <IndustryNote onChange={() => setSec("general")} />
+              <MultiAssetSwitch />
               <AssetCatalog />
             </div>
           )}
 
 
           {sec === "checklists" && (
-            <div className="max-w-3xl"><SectionCard title="Checklist templates" count={lists.checklists?.length} onAdd={() => setChecklistEdit(null)}>
-              <SecTable rows={lists.checklists} onRowClick={(r) => setChecklistEdit(r)} onDelete={(r) => delRow("checklists", r)} cols={[["Template", (t) => val(t, ["name", "title"])], ["Steps", (t) => String((t?.steps || []).length || 0)], ["Applies to", (t) => (t?.scope === "selected" ? `${(t?.type_ids || []).length} type(s)` : "All types")]]} />
-            </SectionCard></div>
+            <ChecklistList templates={lists.checklists} onOpen={(t) => setChecklistEdit(t)} onNew={(starter) => setChecklistEdit(starter || null)}
+              onChanged={() => reloadSec("checklists")} onFlash={flash} />
           )}
 
-          {sec === "directories" && (
-            <div className="max-w-4xl space-y-5">
-              <SectionCard title="Directories" count={lists.directories?.length} onAdd={() => setEditing({ sec: "directories", row: null })}>
-                <SecTable rows={lists.directories} onRowClick={(r) => setDirSel(r)} onDelete={(r) => delRow("directories", r)} cols={[["Directory", (d) => val(d, ["name", "title"])], ["Key", (d) => val(d, ["key", "slug"])]]} />
-              </SectionCard>
-              <DirectoryItemsPanel dir={dirSel} />
-            </div>
-          )}
+          {sec === "directories" && <DirectoriesManager />}
 
-          {sec === "public" && <PublicAppointmentEditor />}
+          {sec === "public" && <PublicPagesSettings shopName={co?.name || ""} logo={co?.logo_data} StatusPicker={(pp) => <StatusMultiSelect value={pp.value} list={pp.list} onChange={pp.onChange} />} />}
+          {sec === "public" && <div className="mt-8"><CheckinPointsSettings /></div>}
 
           {sec === "integrations" && (
             <div className="max-w-4xl space-y-5">
               <IntegrationsHub data={integrations} goSection={setSec} reload={() => setIntegrations(null)} />
+              <CardReadersCard />
+              <TelephonySettings />
               <ApiKeysCard />
               <WebhooksCard />
             </div>
@@ -592,7 +502,8 @@ export default function SettingsHub() {
         />
       )}
       {roleEdit && rbacCatalog && (
-        <RoleEditorDrawer role={roleEdit === "new" ? null : roleEdit} catalog={rbacCatalog} statuses={statuses}
+        <RoleEditor role={roleEdit === "new" ? null : roleEdit} catalog={rbacCatalog} statuses={statuses}
+          members={roleEdit === "new" ? 0 : (lists.team || []).filter((e: any) => e.role_id === roleEdit.id).length + (invites || []).filter((i: any) => i.role_id === roleEdit.id).length}
           onClose={() => setRoleEdit(null)} onSaved={() => { flash("Role saved"); setRoleEdit(null); reloadRbac(); }} />
       )}
       {empEdit && (
@@ -604,224 +515,24 @@ export default function SettingsHub() {
           onClose={() => setPayrollEdit(null)} onSaved={(m) => { flash(m || "Saved"); setPayrollEdit(null); reloadPayrollRules(); }} />
       )}
       {statusEdit && (
-        <StatusEditorDrawer status={statusEdit === "new" ? null : statusEdit} recordType={statusRT}
-          onClose={() => setStatusEdit(null)} onSaved={(m) => { flash(m || "Saved"); setStatusEdit(null); reloadSec("statuses"); }} />
+        <StatusEditor status={statusEdit === "new" ? null : statusEdit} recordType={statusRT} statuses={statuses}
+          onClose={() => setStatusEdit(null)} onSaved={(m) => { flash(m || "Saved"); setStatusEdit(null); reloadSec("statuses"); }}
+          onOpenNotifications={() => { setStatusEdit(null); setSec("notifications"); }} />
       )}
       {formFieldsFor && (
         <FormFieldsDrawer type={formFieldsFor} onClose={() => setFormFieldsFor(null)} onChanged={() => reloadSec("forms")} />
       )}
       {checklistEdit !== undefined && (
-        <ChecklistTemplateDrawer tpl={checklistEdit} onClose={() => setChecklistEdit(undefined)} onSaved={() => { setChecklistEdit(undefined); reloadSec("checklists"); }} />
+        <ChecklistEditor tpl={checklistEdit} onClose={() => setChecklistEdit(undefined)} onSaved={() => { setChecklistEdit(undefined); reloadSec("checklists"); }} />
       )}
       {toast && <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-clay-drawer z-[70]">{toast}</div>}
     </Shell>
   );
 }
 
-/* ── Status transition matrix (which status may follow which) → /statuses/transitions ── */
-function TransitionsCard({ statuses, onFlash }: { statuses: any[]; onFlash: (m: string) => void }) {
-  const [edges, setEdges] = useState<any[]>([]);
-  const [busy, setBusy] = useState(false);
-  const wo = statuses.filter((s) => !s.is_estimate);
-  const load = () => api.get<any>("/statuses/transitions").then((r) => setEdges(r.items || [])).catch(() => setEdges([]));
-  useEffect(() => { load(); }, []);
-  // org-wide edges only (role_id null); key = from>to
-  const orgEdges = edges.filter((e) => !e.role_id);
-  const edgeId = (fromId: string, toId: string) => orgEdges.find((e) => e.from_status_id === fromId && e.to_status_id === toId)?.id;
-  const toggle = async (fromId: string, toId: string) => {
-    if (busy) return; setBusy(true);
-    const existing = edgeId(fromId, toId);
-    try {
-      if (existing) await api.del(`/statuses/transitions/${existing}`);
-      else await api.post("/statuses/transitions", { from_status_id: fromId, to_status_id: toId });
-      await load();
-    } catch (e: any) { onFlash(`Failed: ${e.message}`); } finally { setBusy(false); }
-  };
-  const byId = (id: string) => wo.find((s) => s.id === id);
-  const targets = (fromId: string) => orgEdges.filter((e) => e.from_status_id === fromId).map((e) => e.to_status_id);
-  const [addFor, setAddFor] = useState<string | null>(null);
-  return (
-    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4 space-y-2">
-      <h3 className="text-xs font-bold text-ink-primary">Status transitions</h3>
-      <p className="text-[11px] text-ink-tertiary">Pick which statuses each one can move <span className="font-semibold">to</span>. A status with none set is <span className="text-emerald-600 font-semibold">open</span> — it can move to any status.</p>
-      {wo.length === 0 ? <div className="text-xs text-ink-tertiary py-2">Add statuses first.</div> : (
-        <div className="divide-y divide-slate-100">
-          {wo.map((fr) => {
-            const outs = targets(fr.id);
-            const remaining = wo.filter((t) => t.id !== fr.id && !outs.includes(t.id));
-            return (
-              <div key={fr.id} className="flex items-start gap-2 py-2.5 flex-wrap">
-                <span className="inline-flex items-center gap-1.5 font-bold text-xs text-ink-primary min-w-[104px] pt-1">
-                  <span className="w-2.5 h-2.5 rounded-full" style={{ background: fr.color }} />{fr.name}
-                </span>
-                <span className="text-[11px] text-ink-tertiary pt-1.5">can move to</span>
-                <div className="flex items-center gap-1.5 flex-wrap flex-1">
-                  {outs.length === 0 && <span className="text-[11px] font-semibold text-emerald-600 pt-1">open — any status</span>}
-                  {outs.map((toId) => { const t = byId(toId); if (!t) return null; return (
-                    <span key={toId} className="inline-flex items-center gap-1 pl-2 pr-1 py-1 rounded-full text-[11px] font-bold bg-blue-50 text-primary">
-                      {t.name}
-                      <button aria-label="Remove" onClick={() => toggle(fr.id, toId)} disabled={busy} title="Remove" className="w-4 h-4 rounded-full grid place-items-center hover:bg-blue-100"><M n="close" c="text-[11px]" /></button>
-                    </span>
-                  ); })}
-                  {remaining.length > 0 && (addFor === fr.id ? (
-                    <select autoFocus value="" onChange={(e) => { if (e.target.value) { toggle(fr.id, e.target.value); setAddFor(null); } }} onBlur={() => setAddFor(null)}
-                      className="glass-input py-1 px-2 text-[11px] font-semibold text-ink-primary rounded-full">
-                      <option value="">Select…</option>{remaining.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-                    </select>
-                  ) : (
-                    <button onClick={() => setAddFor(fr.id)} className="inline-flex items-center gap-1 px-2 py-1 rounded-full text-[11px] font-bold text-ink-tertiary border border-dashed border-slate-300 hover:border-primary hover:text-primary"><M n="add" c="text-[11px]" />add</button>
-                  ))}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
 
-/* ── Locations (working hours + per-location resources) → /staff/locations, /resources ── */
-const DAYS: [string, string][] = [["mon", "Mon"], ["tue", "Tue"], ["wed", "Wed"], ["thu", "Thu"], ["fri", "Fri"], ["sat", "Sat"], ["sun", "Sun"]];
-const TZS = ["UTC", "Asia/Kolkata", "Asia/Dubai", "Europe/London", "America/New_York", "America/Los_Angeles", "Asia/Singapore", "Australia/Sydney", "Europe/Berlin", "America/Chicago", "Asia/Tokyo", "Pacific/Auckland"];
-function LocationsEditor() {
-  const [items, setItems] = useState<any[] | null>(null);
-  const [edit, setEdit] = useState<any | "new" | null>(null);
-  const load = () => api.get<any>("/staff/locations").then((r) => setItems(r.items || r || [])).catch(() => setItems([]));
-  useEffect(() => { load(); }, []);
-  const openDays = (wh: any) => wh ? DAYS.filter(([k]) => wh[k] && !wh[k].closed).length : 0;
-  return (
-    <div className="max-w-3xl">
-      <SectionCard title="Locations" count={items?.length ?? undefined} onAdd={() => setEdit("new")}>
-        <SecTable rows={items} onRowClick={(l) => setEdit(l)}
-          cols={[["Name", (l) => l?.name || "—"], ["Timezone", (l) => l?.timezone || "UTC"], ["Hours", (l) => { const n = openDays(l?.working_hours); return n ? `${n} day(s) open` : "closed"; }], ["Status", (l) => (l?.active === false ? "Archived" : "Active")]]} />
-      </SectionCard>
-      {edit && <LocationDrawer loc={edit === "new" ? null : edit} onClose={() => setEdit(null)} onSaved={() => { setEdit(null); load(); }} />}
-    </div>
-  );
-}
-function LocationDrawer({ loc, onClose, onSaved }: { loc: any | null; onClose: () => void; onSaved: () => void }) {
-  const [f, setF] = useState<any>({ name: loc?.name || "", phone: loc?.phone || "", address: loc?.address || "", timezone: loc?.timezone || "UTC", receipt_header: loc?.receipt_header || "", legal_entity_id: loc?.legal_entity_id || "", price_type_id: loc?.price_type_id || "" });
-  const [wh, setWh] = useState<Record<string, any>>(loc?.working_hours || {});
-  const [legals, setLegals] = useState<any[]>([]);
-  const [priceTypes, setPriceTypes] = useState<any[]>([]);
-  useEffect(() => {
-    api.get<any>("/settings/legal-entities").then((r) => setLegals(r.items || r || [])).catch(() => {});
-    api.get<any>("/pricing/types").then((r) => setPriceTypes(r.items || r || [])).catch(() => {});
-  }, []);
-  const [res, setRes] = useState<any[] | null>(null);
-  const [nr, setNr] = useState({ name: "", kind: "bay" });
-  const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
-  const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
-  const dayVal = (k: string) => wh[k] || {};
-  const setDay = (k: string, patch: any) => setWh((s) => ({ ...s, [k]: { ...s[k], ...patch } }));
-  const loadRes = () => { if (loc?.id) api.get<any>("/resources").then((r) => setRes((r.items || []).filter((x: any) => x.location_id === loc.id))).catch(() => setRes([])); };
-  useEffect(() => { loadRes(); }, [loc?.id]);
-  async function save() {
-    if (!f.name.trim()) { setErr("Name is required"); return; }
-    setBusy(true); setErr(null);
-    const body = { ...f, legal_entity_id: f.legal_entity_id || null, price_type_id: f.price_type_id || null,
-      working_hours: Object.fromEntries(DAYS.map(([k]) => [k, wh[k]?.closed ? { closed: true } : { open: wh[k]?.open || "09:00", close: wh[k]?.close || "18:00" }])) };
-    try { if (loc?.id) await api.put(`/staff/locations/${loc.id}`, body); else await api.post("/staff/locations", body); onSaved(); }
-    catch (e: any) { setErr(e.message || "Save failed"); setBusy(false); }
-  }
-  async function addRes() { if (!nr.name.trim() || !loc?.id) return; try { await api.post("/resources", { name: nr.name.trim(), kind: nr.kind, color: "#2cd4c0", location_id: loc.id }); setNr({ name: "", kind: "bay" }); loadRes(); } catch (e: any) { setErr(e.message); } }
-  async function delRes(id: string) { if (!(await confirmDialog("Remove this resource?", { danger: true, confirmLabel: "Remove" }))) return; try { await api.del(`/resources/${id}`); loadRes(); } catch (e: any) { setErr(e.message); } }
-  async function archive() { if (!loc?.id || !(await confirmDialog("Archive this location?", { danger: true, confirmLabel: "Archive" }))) return; try { await api.del(`/staff/locations/${loc.id}`); onSaved(); } catch (e: any) { setErr(e.message); } }
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
-      <div className="relative w-[560px] max-w-full bg-white h-full shadow-drawer flex flex-col">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200"><h2 className="font-bold text-ink-primary">{loc ? "Edit location" : "New location"}</h2><button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
-        <div className="flex-1 overflow-y-auto p-5 space-y-4">
-          {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className={lbl}>Name *</label><input value={f.name} onChange={(e) => set("name", e.target.value)} className={field} /></div>
-            <div><label className={lbl}>Phone</label><input value={f.phone} onChange={(e) => set("phone", e.target.value)} className={field} /></div>
-          </div>
-          <div><label className={lbl}>Address</label><textarea value={f.address} onChange={(e) => set("address", e.target.value)} className={`${field} h-16 resize-none`} /></div>
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className={lbl}>Timezone</label><select value={f.timezone} onChange={(e) => set("timezone", e.target.value)} className={field}>{TZS.map((t) => <option key={t}>{t}</option>)}</select></div>
-            <div><label className={lbl}>Receipt header</label><input value={f.receipt_header} onChange={(e) => set("receipt_header", e.target.value)} className={field} /></div>
-            <div><label className={lbl}>Legal entity (invoices)</label>
-              <select value={f.legal_entity_id || ""} onChange={(e) => set("legal_entity_id", e.target.value)} className={field}><option value="">Company default</option>{legals.map((le) => <option key={le.id} value={le.id}>{le.name}</option>)}</select></div>
-            <div><label className={lbl}>Price type</label>
-              <select value={f.price_type_id || ""} onChange={(e) => set("price_type_id", e.target.value)} className={field}><option value="">Default pricing</option>{priceTypes.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}</select></div>
-          </div>
-          <div className="text-[11px] font-bold text-ink-tertiary uppercase tracking-wide pt-1">Working hours</div>
-          <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 space-y-1.5">
-            {DAYS.map(([k, l]) => { const d = dayVal(k); return (
-              <div key={k} className="flex items-center gap-2 text-xs">
-                <span className="w-9 font-bold text-ink-primary">{l}</span>
-                <label className="flex items-center gap-1 text-ink-secondary"><input type="checkbox" checked={!!d.closed} onChange={(e) => setDay(k, { closed: e.target.checked })} className="accent-primary" />Closed</label>
-                <DateField mode="time" disabled={d.closed} value={d.open || "09:00"} onChange={(v) => setDay(k, { open: v })} className="w-24" />
-                <span className="text-ink-tertiary">–</span>
-                <DateField mode="time" disabled={d.closed} value={d.close || "18:00"} onChange={(v) => setDay(k, { close: v })} className="w-24" />
-              </div>); })}
-          </div>
-          <div className="text-[11px] font-bold text-ink-tertiary uppercase tracking-wide pt-1">Location resources</div>
-          {!loc ? <div className="text-xs text-ink-tertiary">Save this location first, then reopen to add resources.</div> : (
-            <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 space-y-2">
-              {res == null && <div className="text-xs text-ink-tertiary">Loading…</div>}
-              {res?.length === 0 && <div className="text-xs text-ink-tertiary">No resources yet.</div>}
-              {res?.map((r) => (
-                <div key={r.id} className="flex items-center gap-2 text-xs">
-                  <span className="w-3 h-3 rounded" style={{ background: r.color || "#2cd4c0" }} />
-                  <span className="font-semibold text-ink-primary flex-1">{r.name}</span>
-                  <span className="text-[10px] uppercase bg-slate-200 text-ink-secondary px-1.5 py-0.5 rounded">{r.kind}</span>
-                  <button onClick={() => delRes(r.id)} className="text-rose-600 font-semibold">Remove</button>
-                </div>
-              ))}
-              <div className="flex items-end gap-2 pt-1">
-                <div className="flex-1"><label className={lbl}>Name</label><input value={nr.name} onChange={(e) => setNr({ ...nr, name: e.target.value })} placeholder="Car lift 1, Room A" className={field} /></div>
-                <div><label className={lbl}>Kind</label><select value={nr.kind} onChange={(e) => setNr({ ...nr, kind: e.target.value })} className={field}>{[["bay", "Bay / post"], ["room", "Room"], ["equipment", "Equipment"], ["other", "Other"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
-                <button onClick={addRes} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-semibold">Add</button>
-              </div>
-            </div>
-          )}
-        </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
-          {loc?.active !== false && loc && <button onClick={archive} className="text-xs font-semibold text-rose-600">Archive</button>}
-          <div className="ml-auto flex gap-2"><button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Cancel</button><button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Saving…" : loc ? "Save" : "Create location"}</button></div>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 /* ── Inventory settings card (bins/reservations/serial templates) → /staff/inventory-settings ── */
-function InventorySettingsCard() {
-  const [c, setC] = useState<any>(null); const [saved, setSaved] = useState(false);
-  useEffect(() => { api.get<any>("/staff/inventory-settings").then(setC).catch(() => setC({})); }, []);
-  const set = (k: string, v: any) => setC((s: any) => ({ ...s, [k]: v }));
-  async function save() {
-    const body = { enable_bins: !!c.enable_bins, enable_reservations: !!c.enable_reservations, reservation_max_days: Number(c.reservation_max_days) || 0,
-      unique_identifier: c.unique_identifier || "sku", default_product_type: c.default_product_type || "default",
-      product_serial_template: c.product_serial_template || null, default_vehicle_type: c.default_vehicle_type || "Car", asset_serial_template: c.asset_serial_template || null,
-      po_approval_threshold: Number(c.po_approval_threshold) || 0 };
-    try { await api.put("/staff/inventory-settings", body); setSaved(true); setTimeout(() => setSaved(false), 1500); } catch (e: any) { alertDialog(e.message); }
-  }
-  if (!c) return <SectionCard title="Inventory settings"><div className="p-5 text-xs text-ink-tertiary">Loading…</div></SectionCard>;
-  return (
-    <SectionCard title="Inventory settings">
-      <div className="p-5 space-y-4">
-        <label className="flex items-center gap-2 text-xs font-medium text-ink-secondary"><input type="checkbox" checked={!!c.enable_bins} onChange={(e) => set("enable_bins", e.target.checked)} className="accent-primary" />Enable bin locations (shelf/bin per warehouse)</label>
-        <label className="flex items-center gap-2 text-xs font-medium text-ink-secondary"><input type="checkbox" checked={!!c.enable_reservations} onChange={(e) => set("enable_reservations", e.target.checked)} className="accent-primary" />Enable product reservations</label>
-        <div className="grid grid-cols-2 gap-3">
-          <div><label className={lbl}>Max reservation period (days)</label><input type="number" min={0} value={c.reservation_max_days ?? 14} onChange={(e) => set("reservation_max_days", Number(e.target.value))} className={field} /></div>
-          <div><label className={lbl}>Unique product identifier</label><select value={c.unique_identifier || "sku"} onChange={(e) => set("unique_identifier", e.target.value)} className={field}>{[["name", "Name"], ["sku", "SKU"], ["barcode", "Barcode"], ["code", "Code"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
-          <div><label className={lbl}>Default product type</label><input value={c.default_product_type || "default"} onChange={(e) => set("default_product_type", e.target.value)} className={field} /></div>
-          <div><label className={lbl}>Product serial template</label><input value={c.product_serial_template || ""} onChange={(e) => set("product_serial_template", e.target.value)} placeholder="0-{C:19}" className={field} /></div>
-          <div><label className={lbl}>Default vehicle type</label><input value={c.default_vehicle_type || "Car"} onChange={(e) => set("default_vehicle_type", e.target.value)} className={field} /></div>
-          <div><label className={lbl}>Asset serial template</label><input value={c.asset_serial_template || ""} onChange={(e) => set("asset_serial_template", e.target.value)} placeholder="9-{C:4}" className={field} /></div>
-          <div><label className={lbl}>PO approval limit (₹)</label><input type="number" min={0} value={c.po_approval_threshold ?? 0} onChange={(e) => set("po_approval_threshold", Number(e.target.value))} placeholder="0 = no approval needed" className={field} /><span className="text-[10px] text-ink-tertiary">POs above this need a manager to send. 0 disables.</span></div>
-        </div>
-        <div className="flex justify-end items-center gap-2">{saved && <span className="text-[11px] font-semibold text-emerald-600">Saved</span>}<button onClick={save} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold">Save inventory settings</button></div>
-      </div>
-    </SectionCard>
-  );
-}
-
 /* ── Delivery status: which notification channels are live vs simulated (N-GAP-4) ── */
 function DeliveryStatusBanner() {
   const [ch, setCh] = useState<Record<string, string> | null>(null);
@@ -875,13 +586,15 @@ function eventsFor(internal: boolean, module: string): [string, string][] {
 }
 const EVENT_LABEL = (internal: boolean, m: string, e: string) => (eventsFor(internal, m).find(([k]) => k === e)?.[1]) || e.replace(/_/g, " ");
 
-function NotificationsSettings({ rules, templates, automations, reloadRules, reloadTemplates, onEditAutomation, onDeleteAutomation, flash }: {
+function NotificationsSettings({ fixedView, rules, templates, automations, reloadRules, reloadTemplates, onEditAutomation, onDeleteAutomation, flash }: {
+  fixedView?: "internal" | "automations";
   rules: any[]; templates: any[]; automations: any[];
   reloadRules: () => void; reloadTemplates: () => void;
   onEditAutomation: (row: any | null) => void; onDeleteAutomation: (r: any) => void;
   flash: (m: string) => void;
 }) {
-  const [view, setView] = useState<"external" | "internal" | "automations">("external");
+  const [viewState, setView] = useState<"external" | "internal" | "automations">("external");
+  const view = fixedView || viewState;
   const isInternal = view === "internal";
   const mods = isInternal ? INTERNAL_MODULES : EXTERNAL_MODULES;
   const [module, setModule] = useState<string>("order");
@@ -903,7 +616,7 @@ function NotificationsSettings({ rules, templates, automations, reloadRules, rel
   const remindersAllowed = !isInternal && (module === "order" || module === "appointment");
 
   const ruleCols: [string, (r: any) => string][] = [
-    ["Event", (r) => EVENT_LABEL(isInternal, r.module || "order", r.event) + (r.trigger_status_key ? ` → ${r.trigger_status_key}` : "")],
+    ["Event", (r) => EVENT_LABEL(isInternal, r.module || "order", r.event) + (r.trigger_status_key ? ` → ${humanize(r.trigger_status_key)}` : "")],
     ["Send via", (r) => (r.channel === "push" ? "In-app / push" : String(r.channel || "—").toUpperCase())],
     ["Template", (r) => (isInternal ? "—" : tplName(r.template_id))],
     ["Location", (r) => (r.location_id ? "Selected" : "All")],
@@ -915,24 +628,24 @@ function NotificationsSettings({ rules, templates, automations, reloadRules, rel
 
   return (
     <div className="max-w-3xl space-y-5">
-      <DeliveryStatusBanner />
+      {!fixedView && <DeliveryStatusBanner />}
 
       {/* External / Internal / Automations */}
-      <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
+      {!fixedView && <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
         {([["external", "External (clients)"], ["internal", "Internal (staff)"], ["automations", "Automations"]] as const).map(([v, label]) => (
           <button key={v} onClick={() => setView(v)}
             className={"px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors " + (view === v ? "bg-white text-ink-primary shadow-clay-sm" : "text-ink-tertiary hover:text-ink-secondary")}>
             {label}
           </button>
         ))}
-      </div>
+      </div>}
 
       {view === "automations" ? (
         <>
           <SectionCard title="Automation rules" count={automations?.length} onAdd={() => onEditAutomation(null)}>
             <p className="px-3.5 pt-3 text-[11px] text-ink-tertiary">Trigger an action when something happens — create a task, assign a tech, add a tag, call a webhook, or fire a notification. Also runs on overdue orders and low stock.</p>
             <SecTable rows={automations} onRowClick={(r) => onEditAutomation(r)} onDelete={onDeleteAutomation}
-              cols={[["Rule", (r) => r.name || "—"], ["Event", (r) => String(r.event || "—").replace(/_/g, " ")], ["Action", (r) => String(r.action_type || "—").replace(/_/g, " ")], ["Status", (r) => (r?.active ? "Active" : "Off")]]} />
+              cols={[["Rule", (r) => r.name || "—"], ["Event", (r) => (r.event ? optLabel(r.event) : "—")], ["Action", (r) => (r.action_type ? ACTION_LABELS[r.action_type] || humanize(r.action_type) : "—")], ["Status", (r) => (r?.active ? "Active" : "Off")]]} />
           </SectionCard>
         </>
       ) : (
@@ -982,7 +695,7 @@ function NotificationsSettings({ rules, templates, automations, reloadRules, rel
           <SectionCard title="Message templates" count={templates?.length ?? undefined} onAdd={() => setTplEdit("new")}>
             <SecTable rows={templates} onRowClick={(r) => setTplEdit(r)}
               onDelete={async (r) => { if (await confirmDialog("Delete this template?", { danger: true, confirmLabel: "Delete" })) { try { await api.del(`/notifications/templates/${r.id}`); flash("Deleted"); reloadTemplates(); } catch (e: any) { flash(`Failed: ${e.message}`); } } }}
-              cols={[["Title", (t) => t.name || t.trigger_event || "—"], ["Type", (t) => (t.channel === "email" ? "Email" : t.channel === "sms" ? "SMS" : String(t.channel || "—").toUpperCase())], ["Status", (t) => (t?.active ? "Active" : "Off")]]} />
+              cols={[["Title", (t) => t.name || (t.trigger_event ? optLabel(t.trigger_event) : "—")], ["Type", (t) => (t.channel === "email" ? "Email" : t.channel === "sms" ? "SMS" : String(t.channel || "—").toUpperCase())], ["Status", (t) => (t?.active ? "Active" : "Off")]]} />
           </SectionCard>
         </>
       )}
@@ -1073,7 +786,7 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
       <div className="relative w-[440px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <div>
-            <span className="text-[10px] font-bold uppercase tracking-wider text-primary block">{scopeLabel} · {modLabel}</span>
+            <span className="text-[11px] font-bold text-primary block">{scopeLabel} · {modLabel}</span>
             <h2 className="font-bold text-ink-primary">{rule?.id ? "Edit notification" : isReminder ? "New reminder" : "New notification"}</h2>
           </div>
           <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
@@ -1095,7 +808,7 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
               <div className="mt-1 text-[11px] text-ink-tertiary">Leave "Any" to fire on every status change, or pick a specific status.</div></div>
           )}
           {!isReminder && f.event === "status_changed" && !statusRT && (
-            <div><label className={lbl}>Only when status is (key, optional)</label>
+            <div><label className={lbl}>Only when the status is (optional)</label>
               <input value={f.trigger_status_key} onChange={(e) => set("trigger_status_key", e.target.value)} placeholder="blank = any" className={field} /></div>
           )}
           <div><label className={lbl}>Send via</label>
@@ -1106,22 +819,26 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
             <div><label className={lbl}>Template</label>
               <select value={f.template_id} onChange={(e) => set("template_id", e.target.value)} className={field}>
                 <option value="">Default message</option>
-                {tplOpts.map((t) => <option key={t.id} value={t.id}>{t.name || t.trigger_event}</option>)}
+                {tplOpts.map((t) => <option key={t.id} value={t.id}>{t.name || optLabel(t.trigger_event)}</option>)}
               </select>
               <div className="mt-1 text-[11px] text-ink-tertiary">No template → a sensible default message is sent.</div>
             </div>
           )}
           {isReminder && (
-            <div><label className={lbl}>Send how long before?</label>
-              <div className="flex items-center gap-2">
-                <input type="number" min={1} value={f.reminder_offset_min} onChange={(e) => set("reminder_offset_min", e.target.value)} className={field + " w-28"} />
-                <span className="text-xs text-ink-tertiary">minutes before the appointment</span>
-              </div></div>
+            <div><label htmlFor="nr-offset" className={lbl}>Send how long before?</label>
+              <div className="glass-input w-40 rounded-xl flex items-center pr-3 focus-within:ring-2 focus-within:ring-primary/30">
+                <input id="nr-offset" type="number" min={1} value={f.reminder_offset_min} onChange={(e) => set("reminder_offset_min", e.target.value)} className="w-full min-w-0 bg-transparent pl-3 py-2 text-sm tabular-nums text-ink-primary outline-none" />
+                <span className="text-xs text-ink-tertiary shrink-0">min</span>
+              </div>
+              <div className="mt-1 text-xs text-ink-tertiary">Minutes before the appointment.</div></div>
           )}
           {!isReminder && (
-            <div><label className={lbl}>Delay sending (minutes)</label>
-              <input type="number" min={0} value={f.delay_min} onChange={(e) => set("delay_min", e.target.value)} className={field} />
-              <div className="mt-1 text-[11px] text-ink-tertiary">0 = send immediately.</div></div>
+            <div><label htmlFor="nr-delay" className={lbl}>Delay sending</label>
+              <div className="glass-input w-40 rounded-xl flex items-center pr-3 focus-within:ring-2 focus-within:ring-primary/30">
+                <input id="nr-delay" type="number" min={0} value={f.delay_min} onChange={(e) => set("delay_min", e.target.value)} className="w-full min-w-0 bg-transparent pl-3 py-2 text-sm tabular-nums text-ink-primary outline-none" />
+                <span className="text-xs text-ink-tertiary shrink-0">min</span>
+              </div>
+              <div className="mt-1 text-xs text-ink-tertiary">0 sends right away.</div></div>
           )}
           {locations.length > 1 && (
             <div><label className={lbl}>Location</label>
@@ -1147,9 +864,9 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
 // {Tokens} render as non-editable chips; serialize converts them back to {Tokens}.
 function notifPill(tok: string) {
   const label = tok.replace(/^\{|\}$/g, "");
-  return `<span class="tok-pill" contenteditable="false" data-tok="${tok}">${label}</span>`;
+  return `<span class="tok-pill" contenteditable="false" data-tok="${escapeHtml(tok)}">${escapeHtml(label)}</span>`;
 }
-function notifHydrate(html: string) { return (html || "").replace(/\{[A-Z][^{}]*\}/g, (m) => notifPill(m)); }
+function notifHydrate(html: string) { return sanitizeHtml(html || "").replace(/\{[A-Z][^{}]*\}/g, (m) => notifPill(m)); }
 function notifSerialize(root: HTMLElement) {
   const clone = root.cloneNode(true) as HTMLElement;
   clone.querySelectorAll(".tok-pill").forEach((el) => el.replaceWith(document.createTextNode((el as HTMLElement).dataset.tok || "")));
@@ -1226,7 +943,7 @@ function RichTextEditor({ value, onChange, registerInsert }: {
       </div>
       {code !== null ? (
         <textarea value={code} onChange={(e) => setCode(e.target.value)} spellCheck={false}
-          className="w-full min-h-[240px] max-h-[420px] bg-slate-900 text-slate-100 font-mono text-xs p-3 outline-none resize-y" />
+          className="w-full min-h-[240px] max-h-[420px] bg-slate-900 text-slate-100 tabular-nums text-xs p-3 outline-none resize-y" />
       ) : (
         <div ref={ref} contentEditable suppressContentEditableWarning onInput={emit} onKeyUp={saveSel} onMouseUp={saveSel}
           className="min-h-[240px] max-h-[420px] overflow-y-auto px-3 py-2 text-sm text-ink-primary focus:outline-none" />
@@ -1313,12 +1030,12 @@ function NotifTemplateDrawer({ tpl, module, onClose, onSaved }: {
           )}
           <div>
             <label className={lbl}>Content *</label>
-            <div className="grid grid-cols-[1fr_260px] gap-3">
+            <div className="grid grid-cols-1 sm:grid-cols-[1fr_260px] gap-3">
               {isEmail ? (
                 <RichTextEditor value={f.body_template} onChange={(html) => set("body_template", html)} registerInsert={(fn) => { richInsert.current = fn; }} />
               ) : (
                 <textarea ref={areaRef} value={f.body_template} onChange={(e) => set("body_template", e.target.value)} rows={6}
-                  className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary font-mono" />
+                  className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary tabular-nums" />
               )}
               <VarPicker onInsert={(tok) => (isEmail ? richInsert.current?.(tok) : insertVar(tok))} module={module} />
             </div>
@@ -1339,41 +1056,58 @@ function NotifTemplateDrawer({ tpl, module, onClose, onSaved }: {
 
 function ToggleRow({ label, on, onToggle }: { label: string; on: boolean; onToggle: () => void }) {
   return (
-    <div className="flex items-center justify-between">
-      <span className="text-xs font-medium text-ink-secondary">{label}</span>
-      <button type="button" onClick={onToggle} className={`w-10 h-6 rounded-full transition-colors ${on ? "bg-primary" : "bg-slate-300"} relative`}>
-        <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${on ? "left-[18px]" : "left-0.5"}`} />
-      </button>
+    <div className="flex items-center justify-between gap-4">
+      <span className="text-sm font-medium text-ink-primary">{label}</span>
+      <Switch on={!!on} onChange={onToggle} label={label} />
     </div>
   );
 }
 
 /* ── Customer feedback settings → /feedback/settings ({settings} wrapper, SettingsIn) ── */
 function FeedbackSettingsEditor() {
-  const [c, setC] = useState<any>(null); const [saved, setSaved] = useState(false);
-  useEffect(() => { api.get<any>("/feedback/settings").then((r) => setC(r.settings || { system: "five_point", heading: "How did we do?", question: "How would you rate your experience?", clarify_question: "Tell us more", active: false })).catch(() => setC({})); }, []);
-  const set = (k: string, v: any) => setC((s: any) => ({ ...s, [k]: v }));
+  const [c, setC] = useState<any>(null); const [savedC, setSavedC] = useState<any>(null);
+  const [busy, setBusy] = useState(false); const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
+  useEffect(() => {
+    api.get<any>("/feedback/settings")
+      .then((r) => { const v = r.settings || { system: "five_point", heading: "How did we do?", question: "How would you rate your experience?", clarify_question: "Tell us more", active: false }; setC(v); setSavedC(v); })
+      .catch(() => { setC({}); setSavedC({}); });
+  }, []);
+  const set = (k: string, v: any) => { setC((s: any) => ({ ...s, [k]: v })); setMsg(null); };
+  const dirty = JSON.stringify(c) !== JSON.stringify(savedC);
   async function save() {
+    setBusy(true);
     try {
       await api.put("/feedback/settings", { system: c.system || "five_point", trigger_status_id: c.trigger_status_id || null, heading: c.heading || "How did we do?", subheading: c.subheading || null, question: c.question || "How would you rate your experience?", clarify_question: c.clarify_question || "Tell us more", bands: c.bands || {}, active: !!c.active, google_review_url: c.google_review_url || null });
-      setSaved(true); setTimeout(() => setSaved(false), 1500);
-    } catch (e: any) { alertDialog(e.message); }
+      setSavedC(c); setMsg({ ok: true, text: "Saved" });
+    } catch (e: any) { setMsg({ ok: false, text: e?.message || "Couldn't save" }); }
+    setBusy(false);
   }
+  const inp = "glass-input w-72 max-w-full rounded-xl px-3 py-2 text-sm text-ink-primary";
   return (
     <div className="max-w-3xl"><SectionCard title="Customer feedback">
       {!c ? <div className="p-5 text-xs text-ink-tertiary">Loading…</div> : (
-        <div className="p-5 space-y-4">
-          <label className="flex items-center gap-2 text-xs font-medium text-ink-secondary"><input type="checkbox" checked={!!c.active} onChange={(e) => set("active", e.target.checked)} className="accent-primary" />Ask customers for feedback after a work order closes</label>
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className={lbl}>Rating system</label><select value={c.system || "five_point"} onChange={(e) => set("system", e.target.value)} className={field}>{[["five_point", "5-point stars"], ["like", "Like / dislike"], ["nps", "NPS (0–10)"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
-            <div><label className={lbl}>Heading</label><input value={c.heading || ""} onChange={(e) => set("heading", e.target.value)} className={field} /></div>
+        <>
+          <SettingGroup title="When to ask">
+            <SettingRow label="Ask for feedback" help="Send a short rating request after a work order closes.">
+              <Switch on={!!c.active} onChange={(v) => set("active", v)} label="Ask customers for feedback after a work order closes" />
+            </SettingRow>
+            <SettingRow label="Rating system" htmlFor="fb-system" dim={!c.active}>
+              <select id="fb-system" value={c.system || "five_point"} onChange={(e) => set("system", e.target.value)} className={inp}>{[["five_point", "5-point stars"], ["like", "Like / dislike"], ["nps", "NPS (0–10)"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+            </SettingRow>
+          </SettingGroup>
+          <div className="border-t border-slate-100">
+            <SettingGroup title="What customers see">
+              <SettingRow label="Heading" htmlFor="fb-heading"><input id="fb-heading" value={c.heading || ""} onChange={(e) => set("heading", e.target.value)} className={inp} /></SettingRow>
+              <SettingRow label="Subheading" htmlFor="fb-sub"><input id="fb-sub" value={c.subheading || ""} onChange={(e) => set("subheading", e.target.value)} className={inp} /></SettingRow>
+              <SettingRow label="Question" htmlFor="fb-q"><input id="fb-q" value={c.question || ""} onChange={(e) => set("question", e.target.value)} className={inp} /></SettingRow>
+              <SettingRow label="Follow-up question" help="Asked after they rate." htmlFor="fb-clarify"><input id="fb-clarify" value={c.clarify_question || ""} onChange={(e) => set("clarify_question", e.target.value)} className={inp} /></SettingRow>
+              <SettingRow label="Public review link" help="Happy customers get a one-tap button to post a public review here." htmlFor="fb-review">
+                <input id="fb-review" value={c.google_review_url || ""} onChange={(e) => set("google_review_url", e.target.value)} placeholder="https://g.page/r/…/review" className={inp} />
+              </SettingRow>
+            </SettingGroup>
           </div>
-          <div><label className={lbl}>Subheading</label><input value={c.subheading || ""} onChange={(e) => set("subheading", e.target.value)} className={field} /></div>
-          <div><label className={lbl}>Question</label><input value={c.question || ""} onChange={(e) => set("question", e.target.value)} className={field} /></div>
-          <div><label className={lbl}>Clarify prompt (after rating)</label><input value={c.clarify_question || ""} onChange={(e) => set("clarify_question", e.target.value)} className={field} /></div>
-          <div><label className={lbl}>Public review link (shown to happy customers)</label><input value={c.google_review_url || ""} onChange={(e) => set("google_review_url", e.target.value)} placeholder="https://g.page/r/…/review" className={field} /><div className="mt-1 text-[11px] text-ink-tertiary">Everyone is asked to rate; high raters also get a one-tap button to post this public review.</div></div>
-          <div className="flex justify-end items-center gap-2">{saved && <span className="text-[11px] font-semibold text-emerald-600">Saved</span>}<button onClick={save} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold">Save settings</button></div>
-        </div>
+          <SaveFooter className="border-t border-slate-100" dirty={dirty} busy={busy} msg={msg} onSave={save} onDiscard={() => { setC(savedC); setMsg(null); }} />
+        </>
       )}
     </SectionCard></div>
   );
@@ -1390,86 +1124,94 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
   const keyBadge = (p: string): { text: string; tone: "on" | "off" | "neutral" } => {
     const s = srcOf(p);
     if (s === "org") return { text: "Your keys", tone: "on" };
-    if (s === "env") return { text: "Shared default", tone: "neutral" };
+    if (s === "env") return { text: "Tekly default", tone: "neutral" };
     return { text: "Not set", tone: "off" };
   };
   const keyAction = (p: string) => ({ label: srcOf(p) === "org" ? "Edit keys" : "Add keys", onClick: () => setKeyProv(p) });
   const emailOn = (data.email?.accounts?.length || 0) > 0;
   const payGw = data.pay?.gateway; const payLive = !!data.pay?.live;
   const payAvail = Object.entries(data.pay?.available || {}).filter(([, v]) => v).map(([k]) => k);
+  const hooks: { stripe?: string; square?: string } = data.pay?.webhook_urls || {};
   const telOn = !!data.tel?.enabled; const telProv = data.tel?.provider;
   const ecomN = data.ecom?.length || 0;
   const origin = typeof window !== "undefined" ? window.location.origin : "";
   const copyWidget = async () => {
-    const snip = `<div id="repairos-status"></div>\n<script src="${origin}/api/public/widget.js" data-api="${origin}"></script>`;
+    const snip = `<div id="tekly-status"></div>\n<script src="${origin}/api/public/widget.js" data-api="${origin}"></script>`;
     try { navigator.clipboard.writeText(snip); alertDialog("Website status-widget embed snippet copied to clipboard."); }
     catch { await promptDialog("Copy the embed snippet:", { defaultValue: snip }); }
   };
   type Badge = { text: string; tone: "on" | "off" | "neutral" };
   const B = { on: "bg-emerald-100 text-emerald-700", off: "bg-slate-100 text-ink-secondary", neutral: "bg-indigo-50 text-indigo-700" } as const;
-  const groups: { group: string; cards: { name: string; desc: string; badge: Badge; hint?: string; action?: { label: string; onClick: () => void } }[] }[] = [
+  type Webhook = { url: string; help: string };
+  const allGroups: { group: string; cards: { name: string; desc: string; badge: Badge; hint?: string; action?: { label: string; onClick: () => void }; webhook?: Webhook }[] }[] = [
     { group: "Payments", cards: [
       { name: "Online payments (Stripe)", desc: "Hosted checkout & payment links; reconciles into your cashboxes.",
         badge: payLive ? { text: `Live: ${payGw}`, tone: "on" } : keyBadge("stripe"),
-        hint: payAvail.length ? `Configured: ${payAvail.join(", ")}` : "Add your own Stripe secret key to go live",
-        action: keyAction("stripe") },
+        hint: payAvail.length ? `Set up: ${payAvail.join(", ")}` : "Add your Stripe account keys to take card payments",
+        action: keyAction("stripe"),
+        webhook: hooks.stripe ? { url: hooks.stripe, help: "Paste this into Stripe under Developers › Webhooks › Add endpoint, and pick the event checkout.session.completed, so paid links mark jobs as paid." } : undefined },
       { name: "Square", desc: "In-person & online card payments with Square.",
-        badge: keyBadge("square"), action: keyAction("square") },
+        badge: keyBadge("square"), action: keyAction("square"),
+        webhook: hooks.square ? { url: hooks.square, help: "Paste this into your Square Developer Dashboard under Webhooks › Subscriptions, so Square payments show up in Tekly." } : undefined },
       { name: "SumUp", desc: "Card terminal & hosted checkout with SumUp.",
         badge: keyBadge("sumup"), action: keyAction("sumup") } ] },
     { group: "Accounting", cards: [
-      { name: "QuickBooks Online", desc: "Two-way sync of invoices, payments and contacts.",
+      { name: "QuickBooks Online", desc: "Send invoices, payments and contacts to QuickBooks.",
         badge: data.qbo?.connected ? { text: "Connected", tone: "on" } : { text: data.qbo?.configured ? "Not connected" : "Not configured", tone: "off" },
-        hint: data.qbo?.configured ? undefined : "Set QBO_CLIENT_ID / SECRET on the server" },
+        hint: data.qbo?.configured ? undefined : "Contact Tekly support to turn this on" },
       { name: "Xero", desc: "Sync invoices, payments and clients both ways.",
         badge: data.xero?.connected ? { text: "Connected", tone: "on" } : { text: data.xero?.configured ? "Not connected" : "Not configured", tone: "off" },
-        hint: data.xero?.configured ? undefined : "Set XERO_CLIENT_ID / SECRET on the server" } ] },
+        hint: data.xero?.configured ? undefined : "Contact Tekly support to turn this on" } ] },
     { group: "Communication", cards: [
       { name: "Email (Gmail / Outlook)", desc: "Send from your own mailbox (OAuth). SMTP fallback available.",
         badge: emailOn ? { text: "Connected", tone: "on" } : keyBadge("smtp"),
-        hint: emailOn ? `${data.email.accounts.length} account(s) connected` : "Connect Gmail/Outlook, or add SMTP keys",
+        hint: emailOn ? `${data.email.accounts.length} account(s) connected` : "Connect Gmail or Outlook, or add your mail server details",
         action: keyAction("smtp") },
-      { name: "SMS & WhatsApp (Twilio)", desc: "Two-way messages; inbound webhook threads them to jobs.",
+      { name: "SMS & WhatsApp (Twilio)", desc: "Two-way messages; replies land on the right job.",
         badge: keyBadge("twilio"), action: keyAction("twilio") },
-      { name: "Calls / VoIP", desc: "Click-to-call and an inbound-call feed (Twilio, Aircall, Zadarma).",
-        badge: telOn ? { text: `Live: ${telProv}`, tone: "on" } : { text: "Simulated", tone: "off" }, hint: telOn ? undefined : "Configure a provider in Telephony" },
+      { name: "Calls / VoIP", desc: "Click-to-call and an inbound-call feed through your Twilio account.",
+        badge: telOn ? { text: telProv === "simulated" ? "Simulated" : telProv === "twilio" && data.tel?.twilio?.test_mode ? "Twilio: test mode" : `Live: ${telProv}`, tone: "on" } : { text: "Off", tone: "off" }, hint: telOn ? undefined : "Set up below in Calls & telephony" },
       { name: "Chat inbox (Messenger / Instagram / WhatsApp)", desc: "Meta channels land in one inbox, linked to clients & jobs.",
         badge: keyBadge("meta"), action: keyAction("meta") } ] },
     { group: "E-commerce", cards: [
       { name: "Shopify / WooCommerce", desc: "Sync products, orders and customers from your store.",
         badge: ecomN ? { text: `${ecomN} store(s)`, tone: "on" } : { text: "Not connected", tone: "off" },
         action: { label: "Manage stores", onClick: () => goSection("ecommerce") } } ] },
-    { group: "Automation & developer", cards: [
-      { name: "Zapier / Make / n8n", desc: "Trigger thousands of apps from RepairOS events — no code.",
-        badge: { text: "Available", tone: "on" }, hint: "Point them at your Webhooks (below)" },
+    { group: "Automation & custom apps", cards: [
+      { name: "Zapier / Make / n8n", desc: "Trigger thousands of apps from Tekly events — no code.",
+        badge: { text: "Available", tone: "on" }, hint: "Connect them through Webhooks, below" },
       { name: "Public REST API", desc: "Build custom integrations against orders, contacts, inventory & more.",
         badge: { text: "Available", tone: "on" }, hint: "Create an API key (below)" },
       { name: "Workflow AI (Anthropic)", desc: "Order summaries, estimate drafting, reply suggestions.",
-        badge: { text: "Server-keyed", tone: "neutral" }, hint: "Set ANTHROPIC_API_KEY on the server" } ] },
+        badge: { text: "Managed by Tekly", tone: "neutral" }, hint: "Contact Tekly support to turn this on" } ] },
     { group: "On your website", cards: [
       { name: "Repair-status widget", desc: "Embed a status checker on your site — customers look up a job by order # + phone.",
         badge: { text: "Available", tone: "on" }, action: { label: "Copy embed code", onClick: copyWidget } } ] },
   ];
+  // Xero and E-commerce stay hidden until their sync is real (see lib/features).
+  const hidden = new Set([...(FEATURES.xero ? [] : ["Xero"]), ...(FEATURES.ecommerce ? [] : ["Shopify / WooCommerce"])]);
+  const groups = allGroups.map((g) => ({ ...g, cards: g.cards.filter((c) => !hidden.has(c.name)) })).filter((g) => g.cards.length > 0);
   return (
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
       <div className="px-5 pt-4 pb-1">
-        <h3 className="text-sm font-bold text-ink-primary">Integrations</h3>
-        <p className="text-[12px] text-ink-tertiary mt-0.5">Connect RepairOS to the tools you already use. Credential-gated connectors go live the moment their keys are set on the server.</p>
+        <h3 className="text-sm font-semibold text-ink-primary">Integrations</h3>
+        <p className="text-xs text-ink-tertiary mt-0.5">Connect Tekly to the tools you already use. Each one starts working as soon as it's set up.</p>
       </div>
       <div className="p-4 space-y-5">
         {groups.map((g) => (
           <div key={g.group}>
-            <p className="text-[10px] font-bold text-ink-tertiary uppercase tracking-wide px-1 pb-2">{g.group}</p>
+            <p className="text-xs font-semibold text-ink-tertiary px-1 pb-2">{g.group}</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {g.cards.map((c) => (
                 <div key={c.name} className="border border-slate-200/90 rounded-xl p-3.5 flex flex-col gap-1.5 bg-white hover:border-slate-300 transition-colors">
                   <div className="flex items-start justify-between gap-2">
-                    <span className="text-[13px] font-bold text-ink-primary leading-tight">{c.name}</span>
-                    <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold whitespace-nowrap ${B[c.badge.tone]}`}>{c.badge.text}</span>
+                    <span className="text-sm font-semibold text-ink-primary leading-tight">{c.name}</span>
+                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${B[c.badge.tone]}`}>{c.badge.text}</span>
                   </div>
-                  <p className="text-[12px] text-ink-secondary leading-snug">{c.desc}</p>
-                  {c.hint && <p className="text-[11px] text-ink-tertiary mt-0.5">{c.hint}</p>}
-                  {c.action && <button type="button" onClick={c.action.onClick} className="mt-1 self-start px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-[11px] font-semibold text-ink-primary">{c.action.label}</button>}
+                  <p className="text-xs text-ink-secondary leading-snug">{c.desc}</p>
+                  {c.hint && <p className="text-xs text-ink-tertiary mt-0.5">{c.hint}</p>}
+                  {c.webhook && <WebhookUrl {...c.webhook} />}
+                  {c.action && <button type="button" onClick={c.action.onClick} className={`mt-1 self-start ${btnSecondary}`}>{c.action.label}</button>}
                 </div>
               ))}
             </div>
@@ -1479,6 +1221,25 @@ function IntegrationsHub({ data, goSection, reload }: { data: any; goSection: (s
       {keyProv && <CredDrawer provider={keyProv} status={creds[keyProv]}
         onClose={() => setKeyProv(null)}
         onSaved={() => { setKeyProv(null); reload && reload(); }} />}
+    </div>
+  );
+}
+
+/* The shop's own webhook address for a payment provider, with a copy button and where to paste it. */
+function WebhookUrl({ url, help }: { url: string; help: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try { await navigator.clipboard.writeText(url); setCopied(true); setTimeout(() => setCopied(false), 2000); }
+    catch { await promptDialog("Copy your webhook address:", { defaultValue: url }); }
+  }
+  return (
+    <div className="mt-1 rounded-xl bg-slate-50 border border-slate-200 p-2.5 space-y-1.5">
+      <p className="text-xs font-medium text-ink-secondary">Your webhook address</p>
+      <div className="flex items-center gap-1.5">
+        <code className="flex-1 min-w-0 truncate text-xs font-mono text-ink-primary" title={url}>{url}</code>
+        <button type="button" onClick={copy} aria-label="Copy webhook address" className={`shrink-0 ${btnSecondary}`}>{copied ? "Copied" : "Copy"}</button>
+      </div>
+      <p className="text-xs text-ink-tertiary leading-snug">{help}</p>
     </div>
   );
 }
@@ -1526,7 +1287,7 @@ function CredDrawer({ provider, status, onClose, onSaved }: {
         <div className="flex-1 overflow-y-auto p-5 space-y-3">
           {fields.map((f) => (
             <div key={f.key}>
-              <label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">{f.label}</label>
+              <label className="block text-[11px] font-semibold text-ink-tertiary mb-1">{f.label}</label>
               <input
                 type={f.secret ? "password" : "text"}
                 defaultValue={f.secret ? "" : (f.value || "")}
@@ -1550,55 +1311,17 @@ function CredDrawer({ provider, status, onClose, onSaved }: {
     </div>, document.body);
 }
 
-/* ── API keys (create once / revoke) → /api-keys ── */
-function ApiKeysCard() {
-  const [keys, setKeys] = useState<any[] | null>(null);
-  const [label, setLabel] = useState(""); const [fresh, setFresh] = useState<string | null>(null); const [busy, setBusy] = useState(false);
-  const load = () => api.get<any>("/api-keys").then((r) => setKeys(r.items || r || [])).catch(() => setKeys([]));
-  useEffect(() => { load(); }, []);
-  async function create() { if (!label.trim()) return; setBusy(true); try { const r = await api.post<any>("/api-keys", { name: label.trim() }); setFresh(r.key || null); setLabel(""); load(); } catch (e: any) { alertDialog(e.message); } finally { setBusy(false); } }
-  async function revoke(id: string) { if (!(await confirmDialog("Revoke this key?", { danger: true, confirmLabel: "Revoke" }))) return; try { await api.del(`/api-keys/${id}`); load(); } catch (e: any) { alertDialog(e.message); } }
-  return (
-    <SectionCard title="API keys" count={keys?.length ?? undefined}>
-      <div className="p-4 space-y-3">
-        {fresh && <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs px-3 py-2">Copy your key now — it won't be shown again:<br /><span className="font-mono break-all">{fresh}</span></div>}
-        <div className="flex items-end gap-2">
-          <div className="flex-1"><label className={lbl}>New key name</label><input value={label} onChange={(e) => setLabel(e.target.value)} placeholder="e.g. Zapier" className={field} /></div>
-          <button onClick={create} disabled={busy} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">Create</button>
-        </div>
-      </div>
-      <SecTable rows={keys} onDelete={(k) => revoke(k.id)} cols={[["Name", (k) => k?.name || "—"], ["Prefix", (k) => k?.prefix || "—"], ["Scopes", (k) => k?.scopes || "—"]]} />
-    </SectionCard>
-  );
-}
-
-/* ── Webhooks (create / delete) → /webhooks ── */
+/* ── Webhooks → /webhooks (B15: endpoints, events, delivery log, test, secret) ── */
 function WebhooksCard() {
-  const [hooks, setHooks] = useState<any[] | null>(null);
-  const [events, setEvents] = useState<string[]>([]);
-  const [nf, setNf] = useState({ url: "", events: "*" }); const [busy, setBusy] = useState(false);
-  const load = () => api.get<any>("/webhooks").then((r) => { setHooks(r.items || []); setEvents(r.available_events || []); }).catch(() => setHooks([]));
-  useEffect(() => { load(); }, []);
-  async function create() { if (!nf.url.trim()) return; setBusy(true); try { await api.post("/webhooks", { url: nf.url.trim(), events: nf.events }); setNf({ url: "", events: nf.events }); load(); } catch (e: any) { alertDialog(e.message); } finally { setBusy(false); } }
-  async function remove(id: string) { if (!(await confirmDialog("Delete this webhook?", { danger: true, confirmLabel: "Delete" }))) return; try { await api.del(`/webhooks/${id}`); load(); } catch (e: any) { alertDialog(e.message); } }
-  return (
-    <SectionCard title="Webhooks" count={hooks?.length ?? undefined}>
-      <div className="p-4 flex items-end gap-2">
-        <div className="flex-1"><label className={lbl}>Endpoint URL</label><input value={nf.url} onChange={(e) => setNf({ ...nf, url: e.target.value })} placeholder="https://example.com/hook" className={field} /></div>
-        <div><label className={lbl}>Events</label><select value={nf.events} onChange={(e) => setNf({ ...nf, events: e.target.value })} className={field}><option value="*">All events</option>{events.map((e) => <option key={e} value={e}>{e}</option>)}</select></div>
-        <button onClick={create} disabled={busy} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">Create</button>
-      </div>
-      <SecTable rows={hooks} onDelete={(w) => remove(w.id)} cols={[["URL", (w) => w?.url || "—"], ["Events", (w) => w?.events || "*"], ["Active", (w) => (w?.active === false ? "Off" : "On")]]} />
-    </SectionCard>
-  );
+  return <WebhooksSettings />;
 }
 
 function SectionCard({ title, count, onAdd, children }: { title: string; count?: number; onAdd?: () => void; children: React.ReactNode }) {
   return (
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-      <div className="p-3.5 border-b border-slate-100 flex items-center justify-between">
-        <span className="text-xs font-bold text-ink-primary uppercase tracking-wider">{title}{count != null && <span className="ml-2 text-[10px] font-bold bg-slate-100 text-ink-secondary px-2 py-0.5 rounded-full">{count}</span>}</span>
-        {onAdd && <button onClick={onAdd} className="text-primary text-xs font-semibold hover:underline flex items-center gap-1"><M n="add" c="text-sm" />Add</button>}
+      <div className="p-3.5 border-b border-slate-100">
+        <h3 className="text-sm font-semibold text-ink-primary flex items-center">{title}{count != null && <span className="ml-2 text-xs font-medium bg-slate-100 text-ink-secondary px-2 py-0.5 rounded-full">{count}</span>}</h3>
+        {onAdd && <button type="button" onClick={onAdd} className={`mt-2.5 ${btnPrimary}`}><M n="add" c="text-sm" />Add</button>}
       </div>
       {children}
     </div>
@@ -1606,175 +1329,6 @@ function SectionCard({ title, count, onAdd, children }: { title: string; count?:
 }
 
 // ── RBAC role editor (permission matrix) ───────────────────────────────
-function RoleEditorDrawer({ role, catalog, statuses, onClose, onSaved }: { role: any | null; catalog: Record<string, { code: string; label: string }[]>; statuses: any[]; onClose: () => void; onSaved: () => void }) {
-  const [name, setName] = useState<string>(role?.name || "");
-  const [perms, setPerms] = useState<Record<string, boolean>>(role?.permissions || {});
-  const [contactScope, setContactScope] = useState<string>(role?.contact_scope || "all");
-  const [orderScope, setOrderScope] = useState<string>(role?.order_scope || "all");
-  const [payrollDays, setPayrollDays] = useState<string>(role?.payroll_visibility_days != null ? String(role.payroll_visibility_days) : "");
-  const [hiddenStatuses, setHiddenStatuses] = useState<string[]>(role?.hidden_status_keys || []);
-  const [feedSources, setFeedSources] = useState<string[]>(role?.home_feed_sources || []);
-  const [homeRoute, setHomeRoute] = useState<string>(role?.home_route || "");
-  const [open, setOpen] = useState<Record<string, boolean>>({});
-  const [tab, setTab] = useState<"permissions" | "access" | "statuses">("permissions");
-  const [q, setQ] = useState("");
-  const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
-  const allowed = (code: string) => perms[code] !== false;                    // deny-wins: absent = allowed
-  const toggle = (code: string) => setPerms((p) => ({ ...p, [code]: !(p[code] !== false) }));
-  const grantAll = (codes: { code: string }[], on: boolean) => setPerms((p) => { const n = { ...p }; codes.forEach((c) => { n[c.code] = on; }); return n; });
-  const setAllPerms = (on: boolean) => setPerms(() => { const n: Record<string, boolean> = {}; Object.values(catalog).flat().forEach((c) => { n[c.code] = on; }); return n; });
-  const toggleStatus = (key: string) => setHiddenStatuses((h) => h.includes(key) ? h.filter((k) => k !== key) : [...h, key]);
-  // Search filters the catalog to matching blocks/rows; matching blocks auto-expand.
-  const ql = q.trim().toLowerCase();
-  const filtered = Object.entries(catalog)
-    .map(([g, codes]) => [g, ql ? codes.filter((c) => c.label.toLowerCase().includes(ql) || g.toLowerCase().includes(ql)) : codes] as [string, { code: string; label: string }[]])
-    .filter(([, codes]) => codes.length > 0);
-  const totalOn = Object.values(catalog).flat().filter((c) => allowed(c.code)).length;
-  const totalAll = Object.values(catalog).flat().length;
-
-  async function save() {
-    if (!name.trim()) { setErr("Role name is required"); return; }
-    setBusy(true); setErr(null);
-    const body = {
-      name: name.trim(), permissions: perms,
-      contact_scope: contactScope, order_scope: orderScope,
-      warehouse_scope: role?.warehouse_scope || "all", warehouse_ids: role?.warehouse_ids || [],
-      payroll_visibility_days: payrollDays === "" ? null : Number(payrollDays),
-      hidden_status_keys: hiddenStatuses,
-      home_feed_sources: feedSources,
-      home_route: homeRoute,
-    };
-    try {
-      if (role?.id) await api.put(`/settings/rbac/roles/${role.id}`, body);
-      else await api.post("/settings/rbac/roles", body);
-      onSaved();
-    } catch (e: any) { setErr(e?.message || "Could not save"); setBusy(false); }
-  }
-
-  const sel = "glass-input w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg appearance-none";
-  const lblc = "block text-[11px] font-bold text-ink-tertiary uppercase mb-1";
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
-      <div className="relative w-[560px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
-        <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
-        <div className="px-5 py-4 border-b border-slate-100">
-          <div className="flex items-center justify-between mb-3">
-            <div><span className="text-[10px] font-bold uppercase tracking-wider text-primary block">Team › Roles</span><h2 className="font-bold text-ink-primary">{role ? "Edit role" : "New role"}</h2></div>
-            <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
-          </div>
-          <label className={lblc}>Role name *</label>
-          <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Front-desk, Technician, Manager" className="glass-input w-full text-sm px-3 py-2 rounded-lg font-semibold text-ink-primary" />
-        </div>
-        <nav className="px-5 border-b border-slate-100 flex gap-5 text-xs font-semibold">
-          {([["permissions", `Permissions · ${totalOn}/${totalAll}`], ["access", "Data access"], ["statuses", "Statuses"]] as [string, string][]).map(([id, label]) => (
-            <button key={id} onClick={() => setTab(id as any)} className={`py-3 border-b-2 transition-colors ${tab === id ? "text-primary border-primary font-bold" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{label}</button>
-          ))}
-        </nav>
-
-        <div className="flex-1 overflow-y-auto p-5 space-y-3">
-          {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
-
-          {tab === "permissions" && (<>
-            <div className="flex items-center gap-2">
-              <div className="relative flex-1">
-                <M n="search" c="absolute left-2.5 top-2 text-base text-ink-tertiary" />
-                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search permissions…" className="glass-input w-full pl-9 pr-3 py-2 text-xs font-semibold text-ink-primary rounded-lg" />
-              </div>
-              <button type="button" onClick={() => setAllPerms(true)} className="px-2.5 py-2 rounded-lg bg-emerald-50 text-emerald-700 text-[11px] font-bold hover:bg-emerald-100 whitespace-nowrap">Full access</button>
-              <button type="button" onClick={() => setAllPerms(false)} className="px-2.5 py-2 rounded-lg bg-rose-50 text-rose-600 text-[11px] font-bold hover:bg-rose-100 whitespace-nowrap">No access</button>
-            </div>
-            {filtered.length === 0 && <div className="text-xs text-ink-tertiary py-4 text-center">No permissions match “{q}”.</div>}
-            {filtered.map(([group, codes]) => {
-              const isOpen = (open[group] ?? false) || !!ql;               // auto-expand while searching
-              const onCount = codes.filter((c) => allowed(c.code)).length;
-              const allOn = onCount === codes.length;
-              return (
-                <div key={group} className="border border-slate-200/90 rounded-xl overflow-hidden">
-                  <div className="w-full px-3.5 py-2.5 bg-slate-50 flex items-center justify-between">
-                    <button type="button" onClick={() => setOpen((o) => ({ ...o, [group]: !isOpen }))} className="flex items-center gap-1.5 text-left">
-                      <M n={isOpen ? "expand_more" : "chevron_right"} c="text-sm text-ink-tertiary" />
-                      <span className="text-[11px] font-bold uppercase tracking-wide text-ink-secondary capitalize">{group.replace(/_/g, " ")}</span>
-                      <span className="text-[10px] font-bold text-ink-tertiary ml-1">{onCount}/{codes.length}</span>
-                    </button>
-                    <button type="button" onClick={() => grantAll(codes, !allOn)} className={`w-9 h-5 rounded-full flex-shrink-0 relative transition-colors ${allOn ? "bg-primary" : "bg-slate-300"}`} title={allOn ? "Turn all off" : "Turn all on"}><span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${allOn ? "left-[18px]" : "left-0.5"}`} /></button>
-                  </div>
-                  {isOpen && (
-                    <div className="divide-y divide-slate-100">
-                      {codes.map((c) => (
-                        <label key={c.code} className="flex items-center justify-between px-3.5 py-2 text-xs cursor-pointer hover:bg-blue-50/30">
-                          <span className="text-ink-primary pr-3">{c.label}</span>
-                          <input type="checkbox" checked={allowed(c.code)} onChange={() => toggle(c.code)} className="w-4 h-4 rounded border-slate-300 text-primary flex-shrink-0" />
-                        </label>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </>)}
-
-          {tab === "access" && (
-            <div className="bg-white rounded-xl border border-slate-200/90 shadow-clay-card p-4 space-y-3">
-              <p className="text-[11px] text-ink-tertiary">Limit which records this role can see, regardless of the permissions above.</p>
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className={lblc}>Contacts</label>
-                  <select value={contactScope} onChange={(e) => setContactScope(e.target.value)} className={sel}><option value="all">All contacts</option><option value="own">Only their own</option></select></div>
-                <div><label className={lblc}>Work orders</label>
-                  <select value={orderScope} onChange={(e) => setOrderScope(e.target.value)} className={sel}><option value="all">All orders</option><option value="own">Only assigned to them</option></select></div>
-              </div>
-              <div><label className={lblc}>Payroll visibility (days back, blank = all)</label>
-                <input type="number" min={0} value={payrollDays} onChange={(e) => setPayrollDays(e.target.value)} placeholder="All history" className="glass-input w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" /></div>
-
-              <div className="pt-2 border-t border-slate-100">
-                <label className={lblc}>Landing page — where this role starts</label>
-                <select value={homeRoute} onChange={(e) => setHomeRoute(e.target.value)} className={sel}>
-                  {LANDING_PAGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                </select>
-                <p className="text-[11px] text-ink-tertiary mt-1">When someone with this role opens the app, they land here instead of Home.</p>
-              </div>
-
-              <div className="pt-2 border-t border-slate-100">
-                <label className={lblc}>Home feed — what this role sees</label>
-                <p className="text-[11px] text-ink-tertiary mb-2">Tick the alerts this role gets on Home. Leave all unticked to show everything. With "Work orders → Only assigned", order alerts are limited to their own jobs.</p>
-                <div className="grid grid-cols-2 gap-1.5">
-                  {FEED_SIGNALS.map(([key, label]) => (
-                    <label key={key} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer text-xs">
-                      <input type="checkbox" checked={feedSources.includes(key)}
-                        onChange={() => setFeedSources((s) => s.includes(key) ? s.filter((k) => k !== key) : [...s, key])}
-                        className="w-4 h-4 rounded border-slate-300 text-primary" />
-                      <span className="text-ink-primary">{label}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-            </div>
-          )}
-
-          {tab === "statuses" && (
-            <div className="bg-white rounded-xl border border-slate-200/90 shadow-clay-card p-4 space-y-2">
-              <p className="text-[11px] text-ink-tertiary">Ticked statuses are hidden from this role in every order view.</p>
-              {statuses.length === 0 && <div className="text-xs text-ink-tertiary py-2">No statuses configured.</div>}
-              <div className="grid grid-cols-2 gap-1.5 pt-1">
-                {statuses.map((s) => (
-                  <label key={s.key} className="flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 cursor-pointer text-xs">
-                    <input type="checkbox" checked={hiddenStatuses.includes(s.key)} onChange={() => toggleStatus(s.key)} className="w-4 h-4 rounded border-slate-300 text-primary" />
-                    <span className="text-ink-primary">{s.name}</span>
-                  </label>
-                ))}
-              </div>
-            </div>
-          )}
-        </div>
-        <div className="px-5 py-4 border-t border-slate-100 flex justify-end gap-2 bg-slate-50/60">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Saving…" : "Save role"}</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
 // ── Employee editor (Orderry-style) ────────────────────────────────────
 function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | null; roles: any[]; onClose: () => void; onSaved: (m?: string) => void }) {
   const isNew = !emp?.id;
@@ -1783,6 +1337,10 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
   const [locations, setLocations] = useState<any[]>([]);
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
   const [pw, setPw] = useState("");
+  const { me } = useMe();
+  const isSelf = !!emp?.id && emp.id === me?.id;
+  // Your own email or password needs your current password (the API refuses without it).
+  const askCurrent = () => promptDialog("Enter your current password to confirm.", { title: "Confirm it's you", type: "password", confirmLabel: "Confirm" });
   const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
   useEffect(() => { api.get<any>("/staff/locations").then((r) => setLocations(r.items || r || [])).catch(() => setLocations([])); }, []);
 
@@ -1796,52 +1354,66 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
       hired_at: f.hired_at || null, note: f.note || null,
       role_id: f.role_id || null, location_id: f.location_id || null,
       wage_type: f.wage_type || "fixed", wage_value: Number(f.wage_value) || 0,
-      commission_labour: Number(f.commission_labour) || 0, commission_parts: Number(f.commission_parts) || 0,
+      hourly_basis: f.hourly_basis === "attendance" ? "attendance" : "labour",
       track_job_hours: f.track_job_hours !== false, track_attendance: f.track_attendance !== false,
     };
     try {
+      let current_password: string | undefined;
+      if (isSelf && (f.email || "").trim().toLowerCase() !== (emp.email || "").trim().toLowerCase()) {
+        const p = await askCurrent(); if (!p) { setBusy(false); return; }
+        current_password = p;
+      }
       if (isNew) await api.post("/staff/employees", body);
-      else await api.patch(`/staff/employees/${emp.id}`, { ...body, active: f.active !== false });
+      else await api.patch(`/staff/employees/${emp.id}`, { ...body, active: f.active !== false, ...(current_password ? { current_password } : {}) });
       onSaved(isNew ? "Employee added" : "Employee saved");
     } catch (e: any) { setErr(e?.message || "Could not save"); setBusy(false); }
   }
   async function resetPassword() {
     if (!pw.trim() || !emp?.id) return;
-    try { await api.post(`/staff/employees/${emp.id}/password`, { password: pw.trim() }); setPw(""); onSaved("Password updated"); }
+    let current_password: string | undefined;
+    if (isSelf) { const p = await askCurrent(); if (!p) return; current_password = p; }
+    try { await api.post(`/staff/employees/${emp.id}/password`, { password: pw.trim(), ...(current_password ? { current_password } : {}) }); setPw(""); onSaved("Password updated"); }
     catch (e: any) { setErr(e?.message || "Failed"); }
   }
   async function sendReset() { try { await api.post(`/staff/employees/${emp.id}/send-reset`, {}); onSaved("Reset link emailed"); } catch (e: any) { setErr(e?.message || "Failed"); } }
   async function resetMfa() { try { await api.post(`/staff/employees/${emp.id}/reset-mfa`, {}); onSaved("2FA reset"); } catch (e: any) { setErr(e?.message || "Failed"); } }
 
-  const lblc = "block text-[11px] font-bold text-ink-tertiary uppercase mb-1";
-  const fld = "glass-input w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg";
+  const lblc = "block text-xs font-medium text-ink-secondary mb-1.5";
+  const fld = "w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-ink-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/10";
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
       <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
       <div className="relative w-[540px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
-          <div><span className="text-[10px] font-bold uppercase tracking-wider text-primary block">Team › Employees</span><h2 className="font-bold text-ink-primary">{isNew ? "New employee" : f.name}</h2></div>
-          <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
+        <div className="px-5 pt-5 pb-3">
+          <div className="flex items-center gap-3">
+            {isNew ? <span className="w-11 h-11 rounded-full bg-slate-100 text-ink-tertiary grid place-items-center flex-shrink-0"><M n="person_add" c="text-lg" /></span> : <Avatar name={f.name || "?"} size={44} />}
+            <div className="flex-1 min-w-0">
+              <div className="text-lg font-semibold text-ink-primary truncate">{isNew ? "Add a teammate" : (f.name || "Teammate")}</div>
+              <div className="text-[11px] text-ink-tertiary truncate">{isNew ? "They get an account to sign in with" : [f.position, f.email].filter(Boolean).join(" · ")}</div>
+            </div>
+            {!isNew && f.active === false && <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-rose-50 text-rose-600">Blocked</span>}
+            <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 grid place-items-center text-ink-tertiary flex-shrink-0"><M n="close" c="text-base" /></button>
+          </div>
+          <div className="mt-4 inline-flex rounded-xl bg-slate-100 p-1">
+            {([["general", "Profile"], ["access", "Access"], ["payroll", "Pay"], ...(isNew ? [] : [["security", "Sign-in"]] as [string, string][])] as [string, string][]).map(([id, label]) => (
+              <button key={id} onClick={() => setTab(id as any)} aria-pressed={tab === id}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${tab === id ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>{label}</button>
+            ))}
+          </div>
         </div>
-        <nav className="px-5 border-b border-slate-100 flex gap-5 text-xs font-semibold">
-          {([["general", "General"], ["access", "Access"], ["payroll", "Payroll"], ...(isNew ? [] : [["security", "Security"]] as [string, string][])] as [string, string][]).map(([id, label]) => (
-            <button key={id} onClick={() => setTab(id as any)} className={`py-3 border-b-2 transition-colors ${tab === id ? "text-primary border-primary font-bold" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{label}</button>
-          ))}
-        </nav>
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
           {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
 
           {tab === "general" && (
-          <div className="bg-white rounded-xl border border-slate-200/90 shadow-clay-card p-4 space-y-3">
-            <h3 className="text-xs font-bold text-ink-primary">Profile</h3>
+          <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
-              <div><label className={lblc}>Full name *</label><input value={f.name || ""} onChange={(e) => set("name", e.target.value)} className={fld} /></div>
+              <div><label className={lblc}>Full name</label><input value={f.name || ""} onChange={(e) => set("name", e.target.value)} className={fld} /></div>
               <div><label className={lblc}>Position</label><input value={f.position || ""} onChange={(e) => set("position", e.target.value)} className={fld} placeholder="Technician" /></div>
-              <div><label className={lblc}>Email *</label><input value={f.email || ""} onChange={(e) => set("email", e.target.value)} className={fld} /></div>
-              <div><label className={lblc}>Phone</label><input value={f.phone || ""} onChange={(e) => set("phone", e.target.value)} className={`${fld} font-mono`} /></div>
-              <div><label className={lblc}>Public name (on documents)</label><input value={f.public_name || ""} onChange={(e) => set("public_name", e.target.value)} className={fld} /></div>
-              <div><label className={lblc}>Tax ID / ITN</label><input value={f.tax_id || ""} onChange={(e) => set("tax_id", e.target.value)} className={`${fld} font-mono`} /></div>
+              <div><label className={lblc}>Email</label><input value={f.email || ""} onChange={(e) => set("email", e.target.value)} className={fld} /></div>
+              <div><label className={lblc}>Phone</label><input value={f.phone || ""} onChange={(e) => set("phone", e.target.value)} className={`${fld} tabular-nums`} /></div>
+              <div><label className={lblc}>Name on documents</label><input value={f.public_name || ""} onChange={(e) => set("public_name", e.target.value)} className={fld} /></div>
+              <div><label className={lblc}>Tax ID</label><input value={f.tax_id || ""} onChange={(e) => set("tax_id", e.target.value)} className={`${fld} font-mono`} /></div>
               <div><label className={lblc}>Hired date</label><DateField mode="date" value={(f.hired_at || "").slice(0, 10)} onChange={(v) => set("hired_at", v)} /></div>
             </div>
             <div><label className={lblc}>Note</label><textarea value={f.note || ""} onChange={(e) => set("note", e.target.value)} rows={2} className={fld} /></div>
@@ -1849,11 +1421,10 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
           )}
 
           {tab === "access" && (
-          <div className="bg-white rounded-xl border border-slate-200/90 shadow-clay-card p-4 space-y-3">
-            <h3 className="text-xs font-bold text-ink-primary">Access</h3>
+          <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div><label className={lblc}>Role</label>
-                <select value={f.role_id || ""} onChange={(e) => set("role_id", e.target.value)} className={`${fld} appearance-none`}><option value="">— No role —</option>{roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
+                <select value={f.role_id || ""} onChange={(e) => set("role_id", e.target.value)} className={`${fld} appearance-none`}><option value="">No role (no access)</option>{roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
               <div><label className={lblc}>Home location</label>
                 <select value={f.location_id || ""} onChange={(e) => set("location_id", e.target.value)} className={`${fld} appearance-none`}><option value="">All locations</option>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
             </div>
@@ -1867,13 +1438,13 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
           )}
 
           {tab === "payroll" && (
-          <div className="bg-white rounded-xl border border-slate-200/90 shadow-clay-card p-4 space-y-3">
-            <h3 className="text-xs font-bold text-ink-primary">Payroll</h3>
+          <div className="space-y-4">
             <div className="grid grid-cols-3 gap-3">
               <div><label className={lblc}>Wage type</label>
                 <select value={f.wage_type || "fixed"} onChange={(e) => set("wage_type", e.target.value)} className={`${fld} appearance-none`}><option value="fixed">Fixed salary</option><option value="hourly">Hourly</option></select></div>
               <div><label className={lblc}>Wage value</label><input type="number" value={f.wage_value ?? ""} onChange={(e) => set("wage_value", e.target.value)} className={`${fld} font-mono`} /></div>
-              <div><label className={lblc}>Labour comm. %</label><input type="number" value={f.commission_labour ?? ""} onChange={(e) => set("commission_labour", e.target.value)} className={`${fld} font-mono`} /></div>
+              <div><label className={lblc}>Pay hours from</label>
+                <select value={f.hourly_basis === "attendance" ? "attendance" : "labour"} onChange={(e) => set("hourly_basis", e.target.value)} className={`${fld} appearance-none`}><option value="labour">Approved job timesheets</option><option value="attendance">Shop clock-in / out</option></select></div>
             </div>
             <div className="divide-y divide-slate-100">
               <label className="flex items-center justify-between py-2 cursor-pointer"><span className="text-xs font-semibold text-ink-primary">Work-order / job timer</span>
@@ -1886,9 +1457,8 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
           )}
 
           {tab === "security" && !isNew && (
-            <div className="bg-white rounded-xl border border-slate-200/90 shadow-clay-card p-4 space-y-3">
-              <h3 className="text-xs font-bold text-ink-primary">Security</h3>
-              <div className="flex items-end gap-2">
+            <div className="space-y-4">
+                <div className="flex items-end gap-2">
                 <div className="flex-1"><label className={lblc}>Set new password</label><input value={pw} onChange={(e) => setPw(e.target.value)} type="text" placeholder="Min 8 chars" className={fld} /></div>
                 <button onClick={resetPassword} disabled={!pw.trim()} className="px-3 py-2 rounded-lg border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50 disabled:opacity-50">Set</button>
               </div>
@@ -1896,12 +1466,18 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
                 <button onClick={sendReset} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">Email reset link</button>
                 <button onClick={resetMfa} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">Reset 2FA</button>
               </div>
+              {!isSelf && (
+                <div className="border-t border-slate-100 pt-4">
+                  <label className={lblc}>Signed-in devices</label>
+                  <DeviceList base={`/staff/employees/${emp.id}/sessions`} person={(f.name || emp.name || "This person").split(" ")[0]} />
+                </div>
+              )}
             </div>
           )}
         </div>
-        <div className="px-5 py-4 border-t border-slate-100 flex justify-end gap-2 bg-slate-50/60">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Saving…" : isNew ? "Add employee" : "Save"}</button>
+        <div className="px-5 py-4 border-t border-slate-100 flex items-center gap-2">
+          <button onClick={onClose} className="ml-auto px-4 py-2 rounded-xl border border-slate-200 text-ink-secondary hover:bg-slate-50 font-semibold text-xs">Cancel</button>
+          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-xl bg-ink-primary text-white font-semibold text-xs hover:opacity-90 disabled:opacity-60">{busy ? "Saving…" : isNew ? "Add teammate" : "Save"}</button>
         </div>
       </div>
     </div>
@@ -1939,7 +1515,7 @@ function PayrollRuleDrawer({ rule, employees, statuses, onClose, onSaved }: { ru
     try { await api.del(`/payroll/rules/${rule.id}`); onSaved("Rule deleted"); } catch (e: any) { setErr(e?.message || "Failed"); }
   }
 
-  const lblc = "block text-[11px] font-bold text-ink-tertiary uppercase mb-1";
+  const lblc = "block text-[11px] font-bold text-ink-tertiary  mb-1";
   const fld = "glass-input w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg";
   const isPct = f.calc_type === "percent";
   return (
@@ -1948,7 +1524,7 @@ function PayrollRuleDrawer({ rule, employees, statuses, onClose, onSaved }: { ru
       <div className="relative w-[520px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
-          <div><span className="text-[10px] font-bold uppercase tracking-wider text-primary block">Team › Payroll rules</span><h2 className="font-bold text-ink-primary">{isNew ? "New commission rule" : f.name}</h2></div>
+          <div><span className="text-[11px] font-bold text-primary block">Team › Payroll rules</span><h2 className="font-bold text-ink-primary">{isNew ? "New commission rule" : f.name}</h2></div>
           <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
         </div>
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
@@ -2012,263 +1588,8 @@ function PayrollRuleDrawer({ rule, employees, statuses, onClose, onSaved }: { ru
           {!isNew ? <button onClick={del} className="px-3 py-2 rounded-lg text-xs font-bold text-rose-600 hover:bg-rose-50">Delete</button> : <span />}
           <div className="flex gap-2">
             <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button>
-            <button onClick={save} disabled={busy} className="px-5 py-2 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Saving…" : isNew ? "Add rule" : "Save"}</button>
+            <button onClick={save} disabled={busy} className="px-5 py-2 rounded-lg bg-primary text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Saving…" : isNew ? "Add rule" : "Save"}</button>
           </div>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Status editor (Orderry-plus: live preview + plain-English summary) ──
-const STATUS_GROUPS: [string, string][] = [["new", "New"], ["in_progress", "In progress"], ["pending", "Pending"], ["ready", "Ready"], ["closed", "Closed"], ["dropped", "Dropped"]];
-const STATUS_SWATCHES = ["#1D9E75", "#378ADD", "#EF9F27", "#D4537E", "#7F77DD", "#D85A30", "#888780"];
-function StatusEditorDrawer({ status, recordType = "work_order", onClose, onSaved }: { status: any | null; recordType?: string; onClose: () => void; onSaved: (m?: string) => void }) {
-  const isNew = !status?.id;
-  const [f, setF] = useState<any>(status || { name: "", color: "#378ADD", status_group: "in_progress", is_default: false,
-    triggers_invoice: false, triggers_notification: false, triggers_payment: false, locks_edits: false,
-    moves_asset_to: "", time_limit_min: null, require_comment: false, require_payment: false, require_checklist: false, is_estimate: false });
-  const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
-  const [warehouses, setWarehouses] = useState<any[]>([]);
-  useEffect(() => { api.get<any>("/settings/warehouses").then((r) => setWarehouses(r.items || r || [])).catch(() => setWarehouses([])); }, []);
-  const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
-  const terminal = f.status_group === "closed" || f.status_group === "dropped";
-
-  async function save() {
-    if (!f.name?.trim()) { setErr("Name is required"); return; }
-    setBusy(true); setErr(null);
-    const body = {
-      name: f.name.trim(), color: f.color, status_group: f.status_group, is_default: !!f.is_default,
-      triggers_invoice: !!f.triggers_invoice, triggers_notification: !!f.triggers_notification,
-      triggers_payment: !!f.triggers_payment, locks_edits: !!f.locks_edits,
-      moves_asset_to: f.moves_asset_to || null, time_limit_min: f.time_limit_min ? Number(f.time_limit_min) : null,
-      require_comment: !!f.require_comment, require_payment: !!f.require_payment, require_checklist: !!f.require_checklist,
-      record_type: status?.record_type || recordType,
-    };
-    try {
-      if (isNew) await api.post("/statuses", body); else await api.put(`/statuses/${status.id}`, body);
-      onSaved(isNew ? "Status added" : "Status saved");
-    } catch (e: any) { setErr(e?.message || "Could not save"); setBusy(false); }
-  }
-
-  // Plain-English behaviour summary from the toggles.
-  const acts: string[] = [];
-  if (f.triggers_invoice) acts.push("creates an invoice");
-  if (f.triggers_notification) acts.push("notifies the customer");
-  if (f.triggers_payment) acts.push("prompts for payment");
-  if (f.locks_edits) acts.push("locks further edits");
-  if (f.moves_asset_to) acts.push(`moves the asset to ${f.moves_asset_to}`);
-  const reqs: string[] = [];
-  if (f.require_comment) reqs.push("a comment");
-  if (f.require_payment) reqs.push("full payment");
-  if (f.require_checklist) reqs.push("a completed checklist");
-  const nm = f.name?.trim() || "this status";
-  let summary = `Entering ${nm} `;
-  summary += acts.length ? acts.join(", ").replace(/, ([^,]*)$/, " and $1") : "does nothing automatic";
-  summary += ".";
-  if (reqs.length) summary += ` Requires ${reqs.join(" and ")} first.`;
-  if (f.time_limit_min) summary += ` Flags overdue after ${f.time_limit_min} min.`;
-  if (terminal) summary += " Closes the order (terminal).";
-
-  const lblc = "block text-[11px] font-bold text-ink-tertiary uppercase mb-1";
-  const fld = "glass-input w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg";
-  const Action = ({ k, icon, label }: { k: string; icon: string; label: string }) => (
-    <label className="flex items-center gap-2.5 py-2 border-t border-slate-100 first:border-0 cursor-pointer text-xs">
-      <M n={icon} c="text-base text-ink-tertiary" /><span className="text-ink-primary">{label}</span>
-      <button type="button" onClick={() => set(k, !f[k])} className={`ml-auto w-10 h-6 rounded-full flex-shrink-0 relative transition-colors ${f[k] ? "bg-primary" : "bg-slate-300"}`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${f[k] ? "left-[18px]" : "left-0.5"}`} /></button>
-    </label>
-  );
-  const ReqPill = ({ k, label }: { k: string; label: string }) => (
-    <button type="button" onClick={() => set(k, !f[k])} className={`text-[12px] px-3 py-1.5 rounded-full font-semibold border transition-colors ${f[k] ? "bg-primary/10 text-primary border-primary/30" : "border-slate-200 text-ink-secondary hover:border-slate-300"}`}>{f[k] && <M n="check" c="text-[12px] mr-0.5" />}{label}</button>
-  );
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
-      <div className="relative w-[480px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
-        <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
-        <div className="flex items-center gap-3 px-5 py-4 border-b border-slate-100">
-          <div className="min-w-0">
-            <span className="text-[10px] font-bold uppercase tracking-wider text-primary block">Statuses › {isNew ? "New" : "Edit"}</span>
-            <h2 className="font-bold text-ink-primary truncate">{f.name?.trim() || "New status"}</h2>
-          </div>
-          <span className="ml-auto inline-flex items-center px-3 py-1 rounded-full text-xs font-bold whitespace-nowrap" style={{ background: (f.color || "#888") + "22", color: f.color || "#888" }}>{f.name?.trim() || "Preview"}</span>
-          <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 grid place-items-center text-ink-tertiary flex-shrink-0"><M n="close" c="text-base" /></button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto p-5 space-y-5">
-          {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
-
-          <div className="space-y-3">
-            <div className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary"><M n="tag" c="text-xs mr-1" />Identity</div>
-            <div><label className={lblc}>Name</label><input value={f.name || ""} onChange={(e) => set("name", e.target.value)} className={fld} placeholder="e.g. Ready for pickup" /></div>
-            <div>
-              <label className={lblc}>Colour</label>
-              <div className="flex items-center gap-2 flex-wrap">
-                {STATUS_SWATCHES.map((c) => (
-                  <button key={c} type="button" onClick={() => set("color", c)} title={c}
-                    className={`w-7 h-7 rounded-full flex-shrink-0 grid place-items-center ${f.color === c ? "ring-2 ring-primary ring-offset-2" : ""}`} style={{ background: c }}>
-                    {f.color === c && <M n="check" c="text-xs text-white" />}
-                  </button>
-                ))}
-                <label className="w-7 h-7 rounded-full border border-dashed border-slate-300 grid place-items-center cursor-pointer text-ink-tertiary flex-shrink-0 hover:border-primary hover:text-primary" title="Custom colour">
-                  <M n="colorize" c="text-sm" /><input type="color" value={f.color || "#888888"} onChange={(e) => set("color", e.target.value)} className="sr-only" />
-                </label>
-              </div>
-            </div>
-            <div className="grid grid-cols-2 gap-3 items-end">
-              <div><label className={lblc}>Group</label>
-                <select value={f.status_group} onChange={(e) => set("status_group", e.target.value)} className={fld}>{STATUS_GROUPS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
-              <label className="flex items-center justify-between py-2 cursor-pointer text-xs"><span className="font-semibold text-ink-primary">Default for new orders</span>
-                <button type="button" onClick={() => set("is_default", !f.is_default)} className={`w-10 h-6 rounded-full flex-shrink-0 relative transition-colors ${f.is_default ? "bg-primary" : "bg-slate-300"}`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${f.is_default ? "left-[18px]" : "left-0.5"}`} /></button></label>
-            </div>
-          </div>
-
-          <div>
-            <div className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary mb-1"><M n="bolt" c="text-xs mr-1" />When an order enters this status</div>
-            <Action k="triggers_invoice" icon="receipt" label="Create an invoice" />
-            <Action k="triggers_notification" icon="notifications" label="Notify the customer" />
-            <Action k="triggers_payment" icon="payments" label="Prompt for payment" />
-            <Action k="locks_edits" icon="lock" label="Lock further edits" />
-            <div className="flex items-center gap-2.5 py-2 border-t border-slate-100 text-xs">
-              <M n="inventory_2" c="text-base text-ink-tertiary" /><span className="text-ink-primary">Move asset to</span>
-              <select value={f.moves_asset_to || ""} onChange={(e) => set("moves_asset_to", e.target.value)} className="ml-auto glass-input py-1.5 px-2 text-xs font-semibold text-ink-primary rounded-lg w-44">
-                <option value="">— Don't move —</option>
-                {warehouses.filter((w) => w.kind !== "product").map((w) => <option key={w.id} value={w.name}>{w.name}</option>)}
-                {f.moves_asset_to && !warehouses.some((w) => w.name === f.moves_asset_to) && <option value={f.moves_asset_to}>{f.moves_asset_to}</option>}
-              </select>
-            </div>
-          </div>
-
-          <div>
-            <div className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary mb-2"><M n="verified_user" c="text-xs mr-1" />Require before entering</div>
-            <div className="flex gap-2 flex-wrap">
-              <ReqPill k="require_comment" label="Comment" />
-              <ReqPill k="require_payment" label="Full payment" />
-              <ReqPill k="require_checklist" label="Checklist done" />
-            </div>
-          </div>
-
-          <div>
-            <div className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary mb-2"><M n="schedule" c="text-xs mr-1" />Timing</div>
-            <div className="flex items-center gap-2">
-              <span className="text-xs text-ink-secondary">Flag overdue after</span>
-              <input type="number" min={0} value={f.time_limit_min ?? ""} onChange={(e) => set("time_limit_min", e.target.value)} placeholder="—" className="glass-input py-1.5 px-2 text-xs font-mono font-bold text-ink-primary rounded-lg w-20 text-right" />
-              <span className="text-xs text-ink-secondary">min</span>
-            </div>
-          </div>
-
-          <div className="bg-blue-50/70 rounded-lg px-3 py-2.5 text-[12px] text-primary leading-relaxed"><M n="auto_awesome" c="text-sm mr-1" />{summary}</div>
-        </div>
-
-        <div className="px-5 py-4 border-t border-slate-100 flex justify-end gap-2 bg-slate-50/60">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Saving…" : isNew ? "Add status" : "Save status"}</button>
-        </div>
-      </div>
-    </div>
-  );
-}
-
-// ── Checklist template builder ─────────────────────────────────────────
-const CL_KINDS = ["check_result", "yes_no", "text", "textarea", "number", "date", "dropdown", "multiselect", "file"];
-function ChecklistTemplateDrawer({ tpl, onClose, onSaved }: { tpl: any | null; onClose: () => void; onSaved: () => void }) {
-  // Editor model: steps[{title, items[{label, field_kind, required, client_visible, affects_result, options}]}].
-  const flatten = (t: any) => (t?.steps || []).map((s: any) => ({
-    title: s.title || "",
-    items: (s.sections || []).flatMap((sec: any) => (sec.items || [])).map((i: any) => ({
-      label: i.label || "", field_kind: i.field_kind || "check_result", required: !!i.required,
-      client_visible: !!i.client_visible, affects_result: i.affects_result !== false, options: (i.options || []).join(", "),
-    })),
-  }));
-  const [name, setName] = useState(tpl?.name || "");
-  const [scope, setScope] = useState<string>(tpl?.scope || "all");
-  const [typeIds, setTypeIds] = useState<string[]>(tpl?.type_ids || []);
-  const [steps, setSteps] = useState<any[]>(tpl?.steps?.length ? flatten(tpl) : [{ title: "Step 1", items: [] }]);
-  const [types, setTypes] = useState<any[]>([]);
-  const [busy, setBusy] = useState(false);
-  useEffect(() => { api.get<any>("/forms/types").then((r) => setTypes(r.items || [])).catch(() => {}); }, []);
-
-  const upStep = (si: number, patch: any) => setSteps((s) => s.map((st, i) => i === si ? { ...st, ...patch } : st));
-  const addStep = () => setSteps((s) => [...s, { title: `Step ${s.length + 1}`, items: [] }]);
-  const delStep = (si: number) => setSteps((s) => s.filter((_, i) => i !== si));
-  const addItem = (si: number) => upStep(si, { items: [...steps[si].items, { label: "", field_kind: "check_result", required: true, client_visible: false, affects_result: true, options: "" }] });
-  const upItem = (si: number, ii: number, patch: any) => upStep(si, { items: steps[si].items.map((it: any, i: number) => i === ii ? { ...it, ...patch } : it) });
-  const delItem = (si: number, ii: number) => upStep(si, { items: steps[si].items.filter((_: any, i: number) => i !== ii) });
-
-  async function save() {
-    if (!name.trim()) { alertDialog("Name the template"); return; }
-    setBusy(true);
-    const body = {
-      name: name.trim(), scope, type_ids: scope === "selected" ? typeIds : [],
-      steps: steps.map((st) => ({
-        title: st.title || "Step", description: null,
-        sections: [{ title: "", allow_notes: false, items: st.items.filter((i: any) => i.label.trim()).map((i: any) => ({
-          label: i.label.trim(), field_kind: i.field_kind, required: i.required, client_visible: i.client_visible,
-          affects_result: i.affects_result, options: (["dropdown", "multiselect"].includes(i.field_kind) ? i.options.split(",").map((o: string) => o.trim()).filter(Boolean) : []),
-        })) }],
-      })),
-    };
-    try {
-      if (tpl?.id) await api.put(`/checklist-templates/${tpl.id}`, body);
-      else await api.post("/checklist-templates", body);
-      onSaved();
-    } catch (e: any) { alertDialog(e.message || "Could not save template"); }
-    finally { setBusy(false); }
-  }
-
-  return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
-      <div className="relative w-[560px] max-w-full bg-white h-full shadow-drawer flex flex-col">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
-          <h2 className="font-bold text-ink-primary">{tpl?.id ? "Edit checklist template" : "New checklist template"}</h2>
-          <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-5 space-y-4 text-xs">
-          <div>
-            <label className="block font-semibold text-ink-secondary mb-1">Template name</label>
-            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="e.g. Intake diagnostics" className="glass-input w-full px-3 py-2 rounded-lg" />
-          </div>
-          <div>
-            <label className="block font-semibold text-ink-secondary mb-1">Applies to</label>
-            <select value={scope} onChange={(e) => setScope(e.target.value)} className="glass-input px-3 py-2 rounded-lg"><option value="all">All work-order types</option><option value="selected">Selected types</option></select>
-            {scope === "selected" && (
-              <div className="flex flex-wrap gap-1.5 mt-2">{types.map((t) => { const on = typeIds.includes(t.id); return (
-                <button key={t.id} onClick={() => setTypeIds((s) => on ? s.filter((x) => x !== t.id) : [...s, t.id])} className={`px-2.5 py-1 rounded-full font-semibold border ${on ? "bg-primary text-white border-primary" : "bg-white text-ink-secondary border-slate-200"}`}>{t.name}</button>
-              ); })}</div>
-            )}
-          </div>
-          {steps.map((st, si) => (
-            <div key={si} className="rounded-xl border border-slate-200 p-3 space-y-2.5">
-              <div className="flex items-center gap-2">
-                <input value={st.title} onChange={(e) => upStep(si, { title: e.target.value })} placeholder="Step title" className="glass-input flex-1 px-2 py-1.5 rounded-lg font-semibold" />
-                <button aria-label="Delete" onClick={() => delStep(si)} className="text-ink-tertiary hover:text-rose-600"><M n="delete" c="text-sm" /></button>
-              </div>
-              {st.items.map((it: any, ii: number) => (
-                <div key={ii} className="rounded-lg bg-slate-50 border border-slate-200 p-2 space-y-1.5">
-                  <div className="flex items-center gap-1.5">
-                    <input value={it.label} onChange={(e) => upItem(si, ii, { label: e.target.value })} placeholder="Item label" className="glass-input flex-1 px-2 py-1 rounded" />
-                    <select value={it.field_kind} onChange={(e) => upItem(si, ii, { field_kind: e.target.value })} className="glass-input px-1.5 py-1 rounded">{CL_KINDS.map((k) => <option key={k} value={k}>{k}</option>)}</select>
-                    <button aria-label="Close" onClick={() => delItem(si, ii)} className="text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>
-                  </div>
-                  {["dropdown", "multiselect"].includes(it.field_kind) && (
-                    <input value={it.options} onChange={(e) => upItem(si, ii, { options: e.target.value })} placeholder="opt1, opt2" className="glass-input w-full px-2 py-1 rounded" />
-                  )}
-                  <div className="flex flex-wrap gap-3 text-[11px] text-ink-secondary">
-                    <label className="flex items-center gap-1"><input type="checkbox" checked={it.required} onChange={(e) => upItem(si, ii, { required: e.target.checked })} className="accent-primary" />Required</label>
-                    <label className="flex items-center gap-1"><input type="checkbox" checked={it.client_visible} onChange={(e) => upItem(si, ii, { client_visible: e.target.checked })} className="accent-primary" />Client-visible</label>
-                    <label className="flex items-center gap-1"><input type="checkbox" checked={it.affects_result} onChange={(e) => upItem(si, ii, { affects_result: e.target.checked })} className="accent-primary" />Fail fails checklist</label>
-                  </div>
-                </div>
-              ))}
-              <button onClick={() => addItem(si)} className="text-primary font-semibold hover:underline">+ Add item</button>
-            </div>
-          ))}
-          <button onClick={addStep} className="w-full py-2 rounded-lg border border-dashed border-slate-300 text-ink-secondary font-semibold hover:bg-slate-50">+ Add step</button>
-        </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2">
-          <button onClick={onClose} className="px-3 py-2 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50">{tpl?.id ? "Save changes" : "Create template"}</button>
         </div>
       </div>
     </div>
@@ -2311,17 +1632,18 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
             {fields?.length === 0 && <div className="p-4 text-xs text-ink-tertiary">No custom fields yet.</div>}
             {fields?.map((f) => (
               <div key={f.id} className="flex items-center justify-between px-4 py-2.5 text-xs">
-                <div><span className="font-bold text-ink-primary">{f.field_label}</span><span className="ml-2 text-[10px] uppercase bg-slate-100 text-ink-tertiary px-1.5 py-0.5 rounded">{f.field_type}</span>{f.required && <span className="ml-1 text-[10px] text-rose-600 font-semibold">required</span>}{f.show_when_field_key && <span className="ml-1 text-[10px] text-primary font-semibold">conditional</span>}{f.upsell_comparator && <span className="ml-1 text-[10px] text-amber-700 font-semibold">upsell</span>}{f.gate_status_key && <span className="ml-1 text-[10px] text-rose-600 font-semibold">gate</span>}</div>
+                <div><span className="font-bold text-ink-primary">{f.field_label}</span><span className="ml-2 text-[11px] bg-slate-100 text-ink-tertiary px-1.5 py-0.5 rounded">{f.field_type}</span>{f.required && <span className="ml-1 text-[11px] text-rose-600 font-semibold">required</span>}{f.show_when_field_key && <span className="ml-1 text-[11px] text-primary font-semibold">conditional</span>}{f.upsell_comparator && <span className="ml-1 text-[11px] text-amber-700 font-semibold">upsell</span>}{f.gate_status_key && <span className="ml-1 text-[11px] text-rose-600 font-semibold">gate</span>}</div>
                 <button onClick={() => del(f.id)} className="text-rose-600 font-semibold hover:underline">Delete</button>
               </div>
             ))}
           </div>
           <div className="rounded-xl border border-slate-200 p-4 space-y-3">
-            <div className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary">Add a field</div>
+            <div className="text-[11px] font-bold text-ink-tertiary">Add a field</div>
             <input value={nf.field_label} onChange={(e) => setNf({ ...nf, field_label: e.target.value })} placeholder="Field label" className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary" />
             <div className="flex items-center gap-3">
               <select value={nf.field_type} onChange={(e) => setNf({ ...nf, field_type: e.target.value })} className="bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 capitalize">
-                {["text", "number", "select", "date", "checkbox", "textarea"].map((t) => <option key={t} value={t}>{t}</option>)}
+                {/* "bool" is the server's yes/no type — the old "checkbox" option was rejected with a 400 */}
+                {[["text", "Short text"], ["textarea", "Long text"], ["number", "Number"], ["select", "Pick one"], ["multiselect", "Pick several"], ["bool", "Yes / no"], ["date", "Date"], ["link", "Link"]].map(([t, l]) => <option key={t} value={t}>{l}</option>)}
               </select>
               <label className="flex items-center gap-1.5 text-xs text-ink-secondary"><input type="checkbox" checked={nf.required} onChange={(e) => setNf({ ...nf, required: e.target.checked })} className="w-4 h-4 rounded border-slate-300 text-primary" />Required</label>
               <button onClick={add} disabled={busy} className="ml-auto px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-60">Add</button>
@@ -2382,7 +1704,7 @@ function SecTable({ rows, cols, onRowClick, onDelete }: { rows: any[] | null | u
   if (rows.length === 0) return <div className="p-5 text-xs text-ink-tertiary">Nothing here yet.</div>;
   return (
     <table className="w-full text-left border-collapse text-xs">
-      <thead><tr className="bg-slate-50/60 border-b border-slate-100 text-ink-tertiary text-[10px] font-bold uppercase tracking-wider">
+      <thead><tr className="bg-slate-50/60 border-b border-slate-100 text-ink-tertiary text-[11px] font-bold ">
         {cols.map(([h]) => <th key={h} className="py-2.5 px-4">{h}</th>)}
         {(onRowClick || onDelete) && <th className="py-2.5 px-4 text-right">Actions</th>}
       </tr></thead>
@@ -2428,7 +1750,7 @@ function VarPicker({ onInsert, module }: { onInsert: (tok: string) => void; modu
   return (
     <div className="border border-slate-200 rounded-lg bg-slate-50/60 flex flex-col max-h-[460px]">
       <div className="p-2 border-b border-slate-200">
-        <div className="text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1 px-1">Insert variable</div>
+        <div className="text-[11px] font-semibold text-ink-tertiary mb-1 px-1">Insert variable</div>
         <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search variables…" className="w-full bg-white border border-slate-200 rounded-md text-xs px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary" />
       </div>
       <div className="flex-1 overflow-y-auto p-1.5 space-y-1">
@@ -2439,14 +1761,14 @@ function VarPicker({ onInsert, module }: { onInsert: (tok: string) => void; modu
             <div key={g.group}>
               <button type="button" onClick={() => setOpen((o) => ({ ...o, [g.group]: !isOpen }))}
                 className="w-full flex items-center justify-between px-2 py-1.5 rounded-md hover:bg-slate-200/60 text-left">
-                <span className="text-[11px] font-bold text-ink-secondary uppercase tracking-wide">{g.group}</span>
+                <span className="text-[11px] font-bold text-ink-secondary ">{g.group}</span>
                 <M n={isOpen ? "expand_less" : "expand_more"} c="text-sm text-ink-tertiary" />
               </button>
               {isOpen && (
                 <div className="flex flex-wrap gap-1 px-1.5 pb-1.5">
                   {g.items.map((tok) => (
                     <button key={tok} type="button" onClick={() => onInsert(tok)} title={`Insert ${tok}`}
-                      className="text-[11px] font-mono px-1.5 py-0.5 rounded border border-slate-200 bg-white hover:bg-primary hover:text-white hover:border-primary transition-colors">
+                      className="text-[11px] tabular-nums px-1.5 py-0.5 rounded border border-slate-200 bg-white hover:bg-primary hover:text-white hover:border-primary transition-colors">
                       {tok.replace(/^\{|\}$/g, "")}
                     </button>
                   ))}
@@ -2490,6 +1812,7 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
   const set = (k: string) => (e: any) => setV({ ...v, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
   const hasVars = fields.some((f) => f.vars);
+  const edInp = "glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary";
   const areaRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
   // insert a {Token} at the caret of the field's textarea (append if not focused)
   function insertVar(k: string, tok: string) {
@@ -2518,39 +1841,54 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
           {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
           {fields.map((f) => (
+            f.type === "checkbox" ? (
+              <div key={f.k} className="flex items-center justify-between gap-4">
+                <span className="text-sm font-medium text-ink-primary">{f.label}</span>
+                <Switch on={!!v[f.k]} onChange={(x) => setV({ ...v, [f.k]: x })} label={f.label} />
+              </div>
+            ) : (
             <div key={f.k}>
-              <label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">{f.label}{f.req ? " *" : ""}</label>
-              {f.type === "checkbox" ? (
-                <button type="button" onClick={() => setV({ ...v, [f.k]: !v[f.k] })} className={`w-10 h-6 rounded-full transition-colors ${v[f.k] ? "bg-primary" : "bg-slate-300"} relative`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${v[f.k] ? "left-[18px]" : "left-0.5"}`} /></button>
+              <label htmlFor={`ed-${f.k}`} className="block text-sm font-medium text-ink-primary mb-1.5">{f.label}{f.req ? " *" : ""}</label>
+              {f.type === "select" && f.choices ? (
+                <select id={`ed-${f.k}`} value={v[f.k]} onChange={set(f.k)} className={edInp}><option value="">Choose…</option>{f.choices.map((o: { value: string; label: string }) => <option key={o.value} value={o.value}>{o.label}</option>)}</select>
               ) : f.type === "select" ? (
-                <select value={v[f.k]} onChange={set(f.k)} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary capitalize">{f.opts.map((o: string) => <option key={o} value={o}>{o.replace(/_/g, " ")}</option>)}</select>
+                <select id={`ed-${f.k}`} value={v[f.k]} onChange={set(f.k)} className={edInp}>{f.opts.map((o: string) => <option key={o} value={o}>{f.labels?.[o] || optLabel(o)}</option>)}</select>
               ) : f.type === "color" ? (
-                <input type="color" value={v[f.k]} onChange={set(f.k)} className="h-9 w-16 rounded border border-slate-200" />
+                <input id={`ed-${f.k}`} type="color" value={v[f.k]} onChange={set(f.k)} className="h-9 w-16 rounded-xl border border-slate-200" />
               ) : f.type === "textarea" ? (
                 f.vars ? (
                   <div>
-                    <div className="grid grid-cols-[1fr_260px] gap-3">
-                      <textarea ref={(el) => { areaRefs.current[f.k] = el; }} value={v[f.k]} onChange={set(f.k)} rows={12} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary font-mono" />
+                    <div className="grid grid-cols-1 sm:grid-cols-[1fr_260px] gap-3">
+                      <textarea id={`ed-${f.k}`} ref={(el) => { areaRefs.current[f.k] = el; }} value={v[f.k]} onChange={set(f.k)} rows={12} className={`${edInp} font-mono`} />
                       <VarPicker onInsert={(tok) => insertVar(f.k, tok)} module={varModule} />
                     </div>
                     {f.counter && <CharCounter text={String(v[f.k] ?? "")} sms={v.channel === "sms"} />}
                   </div>
                 ) : (
                   <div>
-                    <textarea ref={(el) => { areaRefs.current[f.k] = el; }} value={v[f.k]} onChange={set(f.k)} rows={5} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary font-mono" />
+                    <textarea id={`ed-${f.k}`} ref={(el) => { areaRefs.current[f.k] = el; }} value={v[f.k]} onChange={set(f.k)} rows={5} className={`${edInp} font-mono`} />
                     {f.counter && <CharCounter text={String(v[f.k] ?? "")} sms={v.channel === "sms"} />}
                   </div>
                 )
               ) : (
-                <input type={f.type} value={v[f.k]} onChange={set(f.k)} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary" />
+                f.type === "date"
+                  ? <DateField value={v[f.k] || ""} onChange={(x) => setV({ ...v, [f.k]: x })} label={f.label} />
+                  : f.unit
+                    ? <div className="glass-input w-40 rounded-xl flex items-center pr-3 focus-within:ring-2 focus-within:ring-primary/30">
+                        <input id={`ed-${f.k}`} type={f.type} value={v[f.k] ?? ""} onChange={set(f.k)} className="w-full min-w-0 bg-transparent pl-3 py-2 text-sm tabular-nums text-ink-primary outline-none" />
+                        <span className="text-xs text-ink-tertiary shrink-0">{f.unit}</span>
+                      </div>
+                    : <input id={`ed-${f.k}`} type={f.type} value={v[f.k]} onChange={set(f.k)} className={edInp} />
               )}
+              {f.help && <p className="mt-1 text-xs text-ink-tertiary">{f.help}</p>}
             </div>
+            )
           ))}
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
-          {onDelete && initial?.id && <button onClick={async () => { if (await confirmDialog("Delete this item?", { danger: true, confirmLabel: "Delete" })) { await onDelete(); } }} className="text-rose-600 font-semibold text-xs hover:underline mr-auto">Delete</button>}
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs ml-auto">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : "Save"}</button>
+          {onDelete && initial?.id && <button onClick={async () => { if (await confirmDialog("Delete this item?", { danger: true, confirmLabel: "Delete" })) { await onDelete(); } }} className="h-9 px-3.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 mr-auto">Delete</button>}
+          <button onClick={onClose} className="h-9 px-3.5 rounded-xl border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs ml-auto">Cancel</button>
+          <button onClick={save} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white font-semibold text-xs hover:opacity-90 disabled:opacity-60">{busy ? "Saving…" : "Save"}</button>
         </div>
       </div>
     </div>
@@ -2665,7 +2003,7 @@ function StatusMultiSelect({ value, list, onChange, single, placeholder }: {
             {shown.length === 0 && <div className="px-2 py-3 text-xs text-ink-tertiary text-center">{list.length === 0 ? "No statuses yet." : "No match"}</div>}
             {groups.map((g) => (
               <div key={g}>
-                <p className="px-2.5 pt-2 pb-0.5 text-[10px] font-bold text-ink-tertiary uppercase tracking-wide">{grpLabel(g)}</p>
+                <p className="px-2.5 pt-2 pb-0.5 text-[11px] font-bold text-ink-tertiary ">{grpLabel(g)}</p>
                 {shown.filter((s) => (s.status_group || "other") === g).map((s) => {
                   const sel = cur.includes(s.key);
                   return (
@@ -2687,526 +2025,60 @@ function StatusMultiSelect({ value, list, onChange, single, placeholder }: {
 }
 
 /* ── Public appointment page editor (link + branding + appointment rules) ─────────── */
-function PublicAppointmentEditor() {
-  const [cfg, setCfg] = useState<any>(null);
-  const [slug, setSlug] = useState("");
-  const [saved, setSaved] = useState<string | null>(null);
-  const [err, setErr] = useState<string | null>(null);
-  const [tab, setTab] = useState<"appointment" | "order">("appointment");
-  const [estStatuses, setEstStatuses] = useState<{ key: string; name: string; status_group?: string; color?: string }[]>([]);
-  const [woStatuses, setWoStatuses] = useState<{ key: string; name: string; status_group?: string; color?: string }[]>([]);
-  const flash = (m: string) => { setSaved(m); setTimeout(() => setSaved(null), 2000); };
-
-  function load() { api.get<any>("/staff/public-pages").then((c) => { setCfg(c); setSlug(c.slug || ""); }).catch(() => setCfg({})); }
-  useEffect(() => { load(); }, []);
-  useEffect(() => {
-    api.get<any>("/statuses?is_estimate=true").then((r) => setEstStatuses(r.items || [])).catch(() => {});
-    api.get<any>("/statuses?is_estimate=false").then((r) => setWoStatuses(r.items || [])).catch(() => {});
-  }, []);
-  if (!cfg) return <div className="max-w-3xl text-xs text-ink-tertiary">Loading…</div>;
-
-  const url = `${location.origin}/book/${cfg.slug}`;
-  const set = (k: string, v: any) => setCfg({ ...cfg, [k]: v });
-  async function save(patch: any) {
-    try { await api.put("/staff/public-pages", patch); flash("Saved"); } catch (e: any) { setErr(e.message || "Save failed"); }
-  }
-  async function saveSlug() {
-    if (!slug.trim() || slug === cfg.slug) return;
-    try { await api.put("/staff/public-pages/subdomain", { subdomain: slug.trim() }); flash("Link updated"); load(); }
-    catch (e: any) { setErr(e.message || "Could not change link"); }
-  }
-  const num = (k: string) => (e: any) => set(k, e.target.value === "" ? null : Number(e.target.value));
-
-  const Toggle = ({ k, label, hint }: { k: string; label: string; hint?: string }) => (
-    <label className="flex items-center justify-between gap-3 py-2 cursor-pointer">
-      <span><span className="text-sm font-semibold text-ink-primary">{label}</span>{hint && <span className="block text-[11px] text-ink-tertiary">{hint}</span>}</span>
-      <button type="button" onClick={() => { const v = !cfg[k]; set(k, v); save({ [k]: v }); }}
-        className={`w-10 h-6 rounded-full transition-colors flex-shrink-0 ${cfg[k] ? "bg-primary" : "bg-slate-300"}`}>
-        <span className={`block w-5 h-5 bg-white rounded-full shadow transform transition-transform ${cfg[k] ? "translate-x-4" : "translate-x-0.5"}`} />
-      </button>
-    </label>
-  );
-  const Num = ({ k, label, suffix }: { k: string; label: string; suffix?: string }) => (
-    <div><label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">{label}</label>
-      <div className="flex items-center gap-2"><input type="number" min={0} value={cfg[k] ?? ""} onChange={num(k)} onBlur={() => save({ [k]: cfg[k] })} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2" />{suffix && <span className="text-xs text-ink-tertiary">{suffix}</span>}</div></div>
-  );
-
-  const statusLabel = (s: { name: string; status_group?: string }) => (s.status_group ? s.status_group.replace(/_/g, " ").replace(/\b\w/g, (c) => c.toUpperCase()) + " › " : "") + s.name;
-  const OneStatus = ({ k, list }: { k: string; list: { key: string; name: string; status_group?: string }[] }) => (
-    <select value={cfg[k] || ""} onChange={(e) => { set(k, e.target.value); save({ [k]: e.target.value }); }} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2.5 py-2">
-      <option value="">— No status change —</option>
-      {list.map((s) => <option key={s.key} value={s.key}>{statusLabel(s)}</option>)}
-    </select>
-  );
-  const TabBtn = ({ id, label }: { id: "appointment" | "order"; label: string }) => (
-    <button onClick={() => setTab(id)} className={`px-4 py-2 text-sm font-semibold border-b-2 -mb-px transition-colors ${tab === id ? "border-primary text-primary" : "border-transparent text-ink-tertiary hover:text-ink-primary"}`}>{label}</button>
-  );
-
-  return (
-    <div className="max-w-3xl space-y-5">
-      {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
-      {saved && <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-drawer z-[70]">{saved}</div>}
-
-      <div className="flex items-center gap-2 border-b border-slate-200">
-        <TabBtn id="appointment" label="Online appointment" />
-        <TabBtn id="order" label="Order / Estimate page" />
-      </div>
-
-      {tab === "appointment" && (<>
-      {/* Link + status */}
-      <SectionCard title="Public appointment link">
-        <div className="p-5 space-y-4">
-          <label className="flex items-center justify-between gap-3">
-            <span><span className="text-sm font-semibold text-ink-primary">Online appointment</span><span className="block text-[11px] text-ink-tertiary">When on, anyone with the link can book.</span></span>
-            <button type="button" onClick={() => { const v = !cfg.appointment_enabled; set("appointment_enabled", v); save({ appointment_enabled: v }); }}
-              className={`w-10 h-6 rounded-full transition-colors flex-shrink-0 ${cfg.appointment_enabled ? "bg-primary" : "bg-slate-300"}`}>
-              <span className={`block w-5 h-5 bg-white rounded-full shadow transform transition-transform ${cfg.appointment_enabled ? "translate-x-4" : "translate-x-0.5"}`} />
-            </button>
-          </label>
-          <div>
-            <label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">Your link</label>
-            <div className="flex items-center gap-2">
-              <input readOnly value={url} className="flex-1 bg-slate-50 border border-slate-200 rounded-lg text-xs px-3 py-2 font-mono text-ink-secondary" />
-              <button onClick={() => { navigator.clipboard?.writeText(url); flash("Link copied"); }} className="px-3 py-2 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 text-xs font-semibold flex items-center gap-1"><M n="link" c="text-sm" />Copy</button>
-              <a href={url} target="_blank" rel="noreferrer" className="px-3 py-2 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 text-xs font-semibold flex items-center gap-1"><M n="open_in_new" c="text-sm" />Open</a>
-            </div>
-          </div>
-          <div>
-            <label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">Custom slug</label>
-            <div className="flex items-center gap-2">
-              <input value={slug} onChange={(e) => setSlug(e.target.value)} placeholder="my-shop" className="w-56 bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 font-mono" />
-              <button onClick={saveSlug} disabled={!slug.trim() || slug === cfg.slug} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-40">Update link</button>
-            </div>
-            <p className="text-[11px] text-ink-tertiary mt-1">3–40 chars: lowercase letters, numbers, hyphens.</p>
-          </div>
-        </div>
-      </SectionCard>
-
-      {/* Appointment rules */}
-      <SectionCard title="Appointment rules">
-        <div className="p-5 grid grid-cols-2 gap-4">
-          <Num k="appointment_time_slot" label="Slot size" suffix="min" />
-          <Num k="appointment_lead_min" label="Lead time" suffix="min" />
-          <Num k="appointment_window_days" label="Appointment window" suffix="days" />
-          <div className="col-span-2 border-t border-slate-100 pt-1">
-            <Toggle k="appointment_allow_multiple" label="Allow multiple per slot" hint="Let more than one appointment share a time." />
-            <Toggle k="appointment_consider_orders" label="Block times with scheduled orders" hint="Busy windows also count scheduled work orders." />
-            <Toggle k="book_show_employee_step" label="Let clients pick a specialist" hint="Off = you assign staff later." />
-          </div>
-        </div>
-      </SectionCard>
-
-      {/* Branding */}
-      <SectionCard title="Appearance">
-        <div className="p-5 space-y-4">
-          <div className="flex items-center gap-4">
-            <div><label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">Accent color</label>
-              <input type="color" value={cfg.page_color || "#3b6fe0"} onChange={(e) => set("page_color", e.target.value)} onBlur={() => save({ page_color: cfg.page_color })} className="w-16 h-9 rounded-lg border border-slate-200 cursor-pointer" /></div>
-            <div className="flex-1"><label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">Corner radius</label>
-              <input type="range" min={0} max={24} value={cfg.page_radius ?? 12} onChange={(e) => set("page_radius", Number(e.target.value))} onMouseUp={() => save({ page_radius: cfg.page_radius })} className="w-full accent-primary" /></div>
-          </div>
-          <div>
-            <label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">Background pattern</label>
-            <select value={cfg.page_background_pattern || "none"} onChange={(e) => { set("page_background_pattern", e.target.value); save({ page_background_pattern: e.target.value }); }} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2.5 py-2">
-              {["none", "topo", "gears", "dots", "waves"].map((p) => <option key={p} value={p}>{p[0].toUpperCase() + p.slice(1)}</option>)}
-            </select>
-          </div>
-          <div className="border-t border-slate-100 pt-1">
-            <Toggle k="page_show_logo" label="Show logo" />
-            <Toggle k="page_show_language" label="Show language switch" />
-          </div>
-        </div>
-      </SectionCard>
-      </>)}
-
-      {tab === "order" && (<>
-      {/* Order / Estimate page — header + display toggles */}
-      <SectionCard title="Appearance &amp; fields">
-        <div className="p-5 space-y-4">
-          <div>
-            <div className="text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">Header</div>
-            <Toggle k="oe_show_logo" label="Show company logo" />
-            <Toggle k="oe_show_name" label="Show company name" />
-            <Toggle k="oe_show_address" label="Show company address" />
-            <Toggle k="oe_show_email" label="Show company email" />
-            <Toggle k="oe_show_description" label="Show company description" />
-          </div>
-          <div className="border-t border-slate-100 pt-2">
-            <div className="text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">Products &amp; services</div>
-            <Toggle k="oe_separate_tables" label="Show products and services in separate tables" />
-            <Toggle k="oe_show_zero_price_products" label="Show products with a zero price" />
-            <Toggle k="oe_show_zero_price_services" label="Show services with a zero price" />
-          </div>
-          <div className="border-t border-slate-100 pt-2">
-            <div className="text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">Customer actions</div>
-            <Toggle k="oe_allow_messages" label="Let customers message the shop" />
-            <Toggle k="oe_allow_recommend" label="Let customers approve recommended services" />
-            <Toggle k="oe_allow_staff_reply" label="Let staff reply on the public page" />
-            <Toggle k="oe_show_scheduled" label="Show the scheduled date" />
-          </div>
-        </div>
-      </SectionCard>
-
-      {/* Estimates approval block — detail config hidden until enabled (clean) */}
-      <SectionCard title="Estimates — accept / decline">
-        <div className="p-5 space-y-3">
-          <Toggle k="oe_allow_approval" label="Let customers accept / decline estimates" hint="Adds Accept and Decline buttons to the estimate's public page." />
-          {cfg.oe_allow_approval && (
-            <div className="mt-1 pl-3 border-l-2 border-slate-100 space-y-4">
-              <Toggle k="oe_estimate_require_signature" label="Require client signature" />
-              <div>
-                <label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">Show in these statuses</label>
-                <StatusMultiSelect value={cfg.oe_approval_statuses || ""} list={estStatuses} onChange={(v) => { set("oe_approval_statuses", v); save({ oe_approval_statuses: v }); }} />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">If accepted, move to</label><OneStatus k="oe_estimate_accept_status" list={estStatuses} /></div>
-                <div><label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">If declined, move to</label><OneStatus k="oe_estimate_decline_status" list={estStatuses} /></div>
-              </div>
-            </div>
-          )}
-        </div>
-      </SectionCard>
-
-      {/* Work orders approval block — detail config hidden until enabled (clean) */}
-      <SectionCard title="Work orders — accept / decline">
-        <div className="p-5 space-y-3">
-          <Toggle k="oe_wo_allow_approval" label="Let customers accept / decline work orders" hint="Adds Accept and Decline buttons to the work order's public page." />
-          {cfg.oe_wo_allow_approval && (
-            <div className="mt-1 pl-3 border-l-2 border-slate-100 space-y-4">
-              <Toggle k="oe_wo_require_signature" label="Require client signature" />
-              <div>
-                <label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">Show in these statuses</label>
-                <StatusMultiSelect value={cfg.oe_wo_approval_statuses || ""} list={woStatuses} onChange={(v) => { set("oe_wo_approval_statuses", v); save({ oe_wo_approval_statuses: v }); }} />
-              </div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">If accepted, move to</label><OneStatus k="oe_wo_accept_status" list={woStatuses} /></div>
-                <div><label className="block text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide mb-1">If declined, move to</label><OneStatus k="oe_wo_decline_status" list={woStatuses} /></div>
-              </div>
-            </div>
-          )}
-        </div>
-      </SectionCard>
-      </>)}
-    </div>
-  );
-}
-
 /* ── System fields per entity: toggle built-in fields' Show/Required, persisted to /forms/system-layout ── */
-const SYS_CATALOG: Record<string, [string, string][]> = {
-  order: [["client", "Client"], ["vehicle", "Vehicle / asset"], ["manager", "Manager"], ["assignee", "Specialist (assignee)"], ["type", "Type"], ["scheduled_for", "Scheduled for"], ["due_at", "Due date"], ["priority", "Priority (urgent)"], ["complaint", "Malfunction / complaint"], ["tech_notes", "Manager notes"], ["payer", "Payer"], ["estimated_price", "Estimated price"], ["comment", "Comment"]],
-  invoice: [["client", "Client"], ["payer", "Payer"], ["issued_at", "Issue date"], ["due_at", "Due date"], ["discount", "Discount"], ["tax", "Tax"], ["comment", "Comment"]],
-  contact: [["name", "Name"], ["phone", "Phone"], ["email", "Email"], ["address", "Address"], ["company", "Company"], ["manager", "Manager"], ["contact_type", "Type (person / company)"], ["discount", "Discount"], ["comment", "Comment"]],
-  product: [["name", "Name"], ["sku", "SKU"], ["barcode", "Barcode"], ["category", "Category"], ["brand", "Brand"], ["cost", "Cost"], ["price", "Price"], ["unit", "Unit"], ["warranty", "Warranty"], ["description", "Description"]],
-  vehicle: [["owner", "Owner (we / client)"], ["client", "Client"], ["type", "Type"], ["vin", "VIN"], ["number_plate", "Number plate"], ["group", "Group"], ["brand", "Brand"], ["model", "Model"], ["year", "Year"], ["engine", "Engine"], ["tyre_size", "Tyre size"], ["color", "Colour"], ["condition", "Condition"], ["serial", "Serial / IMEI"], ["description", "Description"]],
-};
-function SystemFieldsEditor() {
-  const ENTITIES = [["order", "Work orders & estimates"], ["invoice", "Invoices"], ["contact", "Contacts"], ["product", "Products"], ["vehicle", "Vehicles / assets"]] as const;
-  const [entity, setEntity] = useState<string>("order");
-  const [rows, setRows] = useState<{ key: string; label: string; visible: boolean; required: boolean }[] | null>(null);
-  const [saved, setSaved] = useState(false);
-  useEffect(() => {
-    setRows(null); setSaved(false);
-    api.get<{ fields: { key: string; visible?: boolean; required?: boolean }[] }>(`/forms/system-layout?entity=${entity}`)
-      .then((r) => {
-        const byKey: Record<string, any> = {}; (r.fields || []).forEach((s) => (byKey[s.key] = s));
-        setRows((SYS_CATALOG[entity] || []).map(([key, label]) => ({ key, label, visible: byKey[key]?.visible !== false, required: !!byKey[key]?.required })));
-      })
-      .catch(() => setRows((SYS_CATALOG[entity] || []).map(([key, label]) => ({ key, label, visible: true, required: false }))));
-  }, [entity]);
-  async function persist(next: typeof rows) {
-    if (!next) return;
-    try { await api.put("/forms/system-layout", { entity, type_id: null, fields: next.map((f, i) => ({ key: f.key, visible: f.visible, required: f.required, sort: i })) }); setSaved(true); setTimeout(() => setSaved(false), 1500); }
-    catch (e: any) { alertDialog(e.message || "Could not save layout"); }
-  }
-  const toggle = (i: number, k: "visible" | "required") => { if (!rows) return; const next = rows.map((f, j) => j === i ? { ...f, [k]: !f[k] } : f); setRows(next); persist(next); };
-  return (
-    <SectionCard title="System fields" count={rows?.length}>
-      <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2">
-        <span className="text-[11px] font-semibold text-ink-tertiary uppercase tracking-wide">Form</span>
-        <select value={entity} onChange={(e) => setEntity(e.target.value)} className="bg-white border border-slate-200 rounded-lg text-sm px-3 py-1.5">{ENTITIES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
-        <span className="text-xs text-ink-tertiary">Toggle what shows on this form and what's required.</span>
-        {saved && <span className="ml-auto text-[11px] font-semibold text-emerald-600">Saved</span>}
-      </div>
-      <div className="divide-y divide-slate-50">
-        {rows == null && <div className="px-4 py-6 text-xs text-ink-tertiary">Loading…</div>}
-        {rows?.map((f, i) => (
-          <div key={f.key} className="flex items-center gap-4 px-4 py-2.5">
-            <span className="flex-1 text-sm font-semibold text-ink-primary">{f.label}</span>
-            <label className="flex items-center gap-1.5 text-xs font-medium text-ink-secondary cursor-pointer"><input type="checkbox" checked={f.visible} onChange={() => toggle(i, "visible")} className="accent-primary" />Show</label>
-            <label className="flex items-center gap-1.5 text-xs font-medium text-ink-secondary cursor-pointer"><input type="checkbox" checked={f.required} onChange={() => toggle(i, "required")} className="accent-primary" />Required</label>
-          </div>
-        ))}
-      </div>
-    </SectionCard>
-  );
-}
-
-/* ── Custom fields per entity (product / client / device) → render on their forms ── */
-function EntityFieldsEditor() {
-  const ENTITIES = [["product", "Products"], ["client", "Clients"], ["device", "Devices & assets"]] as const;
-  const TYPES = ["text", "textarea", "number", "select", "multiselect", "link", "date", "datetime", "bool", "header"];
-  const [entity, setEntity] = useState<"product" | "client" | "device">("product");
-  const [fields, setFields] = useState<any[] | null>(null);
-  const [dirs, setDirs] = useState<any[]>([]);
-  const [nf, setNf] = useState<any>({ field_label: "", field_type: "text", required: false, lock_after_create: false, show_on_print: false, autofill_source: "", options: "", directory_key: "", parent_field_key: "", show_when_field_key: "", show_when_op: "is", show_when_value: "" });
-  const ASSET_ATTRS = ["brand", "model", "serial", "imei", "vin", "hin", "asset_type", "color"];
-  const load = () => api.get<{ items: any[] }>(`/forms/entity-fields?entity=${entity}`).then((r) => setFields(r.items || [])).catch(() => setFields([]));
-  useEffect(() => { setFields(null); load(); }, [entity]);
-  useEffect(() => { api.get<{ items: any[] }>("/directories").then((r) => setDirs(r.items || [])).catch(() => {}); }, []);
-  async function add() {
-    if (!nf.field_label.trim()) return;
-    try {
-      const cond = nf.show_when_field_key ? { show_when_field_key: nf.show_when_field_key, show_when_op: nf.show_when_op, show_when_value: nf.show_when_op === "filled" ? null : nf.show_when_value } : {};
-      await api.post("/forms/entity-fields", { entity_type: entity, field_label: nf.field_label.trim(), field_type: nf.field_type,
-        required: nf.required, lock_after_create: nf.lock_after_create, show_on_print: nf.show_on_print, autofill_source: nf.autofill_source || null, directory_key: nf.directory_key || null, parent_field_key: nf.directory_key ? (nf.parent_field_key || null) : null, options: (!nf.directory_key && (nf.field_type === "select" || nf.field_type === "multiselect")) ? nf.options.split(",").map((s: string) => s.trim()).filter(Boolean) : [], ...cond });
-      setNf({ field_label: "", field_type: "text", required: false, lock_after_create: false, show_on_print: false, autofill_source: "", options: "", directory_key: "", parent_field_key: "", show_when_field_key: "", show_when_op: "is", show_when_value: "" }); load();
-    } catch (e: any) { alertDialog(e.message || "Could not add field"); }
-  }
-  async function del(id: string) { try { await api.del(`/forms/fields/${id}`); load(); } catch { /* ignore */ } }
-
-  return (
-    <SectionCard title="Custom fields (per entity)">
-      <div className="p-5 space-y-4">
-        <div className="flex items-center gap-1 text-xs">
-          {ENTITIES.map(([id, label]) => (
-            <button key={id} onClick={() => setEntity(id)} className={`px-3 py-1.5 rounded-lg font-semibold ${entity === id ? "bg-primary text-white" : "bg-slate-100 text-ink-secondary hover:bg-slate-200"}`}>{label}</button>
-          ))}
-        </div>
-        <div className="divide-y divide-slate-100 border border-slate-200/80 rounded-xl overflow-hidden">
-          {!fields && <div className="px-4 py-3 text-xs text-ink-tertiary">Loading…</div>}
-          {fields?.length === 0 && <div className="px-4 py-3 text-xs text-ink-tertiary">No custom fields yet — they appear on the {entity} form once added.</div>}
-          {fields?.map((f) => (
-            <div key={f.id} className="px-4 py-2.5 flex items-center gap-2 text-xs">
-              <span className="font-semibold text-ink-primary flex-1">{f.field_label}</span>
-              <span className="text-ink-tertiary">{f.field_type}</span>
-              {f.required && <span className="px-1.5 py-0.5 rounded bg-rose-50 text-rose-600 font-bold text-[10px]">required</span>}
-              {f.lock_after_create && <span className="px-1.5 py-0.5 rounded bg-slate-100 text-ink-secondary font-bold text-[10px]">locked</span>}
-              {f.show_on_print && <span className="px-1.5 py-0.5 rounded bg-emerald-50 text-emerald-700 font-bold text-[10px]">on print</span>}
-              {f.show_when_field_key && <span className="px-1.5 py-0.5 rounded bg-blue-50 text-primary font-bold text-[10px]" title={`Shows when ${f.show_when_field_key} ${f.show_when_op} ${f.show_when_value ?? ""}`}><M n="visibility" c="text-[11px]" /> conditional</span>}
-              <button aria-label="Delete" onClick={() => del(f.id)} className="text-ink-tertiary hover:text-rose-600"><M n="delete" c="text-sm" /></button>
-            </div>
-          ))}
-        </div>
-        <div className="flex flex-wrap items-end gap-2 pt-1">
-          <input value={nf.field_label} onChange={(e) => setNf({ ...nf, field_label: e.target.value })} placeholder="Field label" className="glass-input px-3 py-2 rounded-lg text-xs flex-1 min-w-[140px]" />
-          <select value={nf.field_type} onChange={(e) => setNf({ ...nf, field_type: e.target.value })} className="glass-input px-2 py-2 rounded-lg text-xs">{TYPES.map((t) => <option key={t} value={t}>{t}</option>)}</select>
-          {(nf.field_type === "select" || nf.field_type === "multiselect") && <>
-            <select value={nf.directory_key} onChange={(e) => setNf({ ...nf, directory_key: e.target.value })} className="glass-input px-2 py-2 rounded-lg text-xs" title="Pull options from a directory">
-              <option value="">Static options</option>
-              {dirs.map((d) => <option key={d.id} value={d.key}>{d.name}</option>)}
-            </select>
-            {!nf.directory_key && <input value={nf.options} onChange={(e) => setNf({ ...nf, options: e.target.value })} placeholder="opt1, opt2" className="glass-input px-3 py-2 rounded-lg text-xs w-32" />}
-            {nf.directory_key && (fields || []).length > 0 && <select value={nf.parent_field_key} onChange={(e) => setNf({ ...nf, parent_field_key: e.target.value })} className="glass-input px-2 py-2 rounded-lg text-xs" title="Cascade: filter to children of another field">
-              <option value="">No cascade</option>
-              {(fields || []).filter((x: any) => x.directory_key).map((x: any) => <option key={x.id} value={x.field_key}>under {x.field_label}</option>)}
-            </select>}
-          </>}
-          <label className="flex items-center gap-1 text-xs font-medium text-ink-secondary"><input type="checkbox" checked={nf.required} onChange={(e) => setNf({ ...nf, required: e.target.checked })} className="accent-primary" />Required</label>
-          <label className="flex items-center gap-1 text-xs font-medium text-ink-secondary"><input type="checkbox" checked={nf.lock_after_create} onChange={(e) => setNf({ ...nf, lock_after_create: e.target.checked })} className="accent-primary" />Lock after create</label>
-          <label className="flex items-center gap-1 text-xs font-medium text-ink-secondary"><input type="checkbox" checked={nf.show_on_print} onChange={(e) => setNf({ ...nf, show_on_print: e.target.checked })} className="accent-primary" />Show on printout</label>
-          <label className="flex items-center gap-1 text-xs font-medium text-ink-secondary"><M n="auto_awesome" c="text-[13px]" />Auto-fill<select value={nf.autofill_source} onChange={(e) => setNf({ ...nf, autofill_source: e.target.value })} className="glass-input px-2 py-1.5 rounded-lg text-xs"><option value="">off</option>{ASSET_ATTRS.map((a) => <option key={a} value={`asset.${a}`}>device {a}</option>)}</select></label>
-          <button onClick={add} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container">Add field</button>
-        </div>
-        {/* 144gp — conditional visibility: show this field only when another matches */}
-        <div className="flex flex-wrap items-center gap-2 pt-1 text-xs text-ink-secondary">
-          <span className="font-semibold"><M n="visibility" c="text-[13px] align-middle" /> Show only when</span>
-          <select value={nf.show_when_field_key} onChange={(e) => setNf({ ...nf, show_when_field_key: e.target.value })} className="glass-input px-2 py-1.5 rounded-lg text-xs">
-            <option value="">always</option>
-            {(fields || []).map((f) => <option key={f.id} value={f.field_key}>{f.field_label}</option>)}
-          </select>
-          {nf.show_when_field_key && <>
-            <select value={nf.show_when_op} onChange={(e) => setNf({ ...nf, show_when_op: e.target.value })} className="glass-input px-2 py-1.5 rounded-lg text-xs">
-              <option value="is">is</option><option value="is_not">is not</option>
-              <option value="gt">greater than</option><option value="lt">less than</option>
-              <option value="filled">is filled</option>
-            </select>
-            {nf.show_when_op !== "filled" && <input value={nf.show_when_value} onChange={(e) => setNf({ ...nf, show_when_value: e.target.value })} placeholder="value" className="glass-input px-3 py-1.5 rounded-lg text-xs w-28" />}
-          </>}
-        </div>
-      </div>
-    </SectionCard>
-  );
-}
-
-// ── Finance & numbering: full editors (numbering + legal entities + taxes + tax stack + exceptions) ──
-function FinanceSettings() {
-  const [num, setNum] = useState<any[] | null>(null);
-  const [taxes, setTaxes] = useState<any[] | null>(null);
-  const [ents, setEnts] = useState<any[] | null>(null);
-  const [stacks, setStacks] = useState<Record<string, string[]>>({});
-  const [exc, setExc] = useState<any[] | null>(null);
-  const [msg, setMsg] = useState("");
-  const [ent, setEnt] = useState<any>({ name: "", address: "", tax_id: "", details: "", is_default: false });
-  const [tax, setTax] = useState<any>({ name: "", rate: 0, mode: "imposed" });
-  const flash = (m: string) => { setMsg(m); setTimeout(() => setMsg(""), 2200); };
-  function reload() {
-    api.get<any>("/settings/numbering").then((r) => setNum(r.items || [])).catch(() => setNum([]));
-    api.get<any>("/catalog/taxes").then((r) => setTaxes(r.items || [])).catch(() => setTaxes([]));
-    api.get<any>("/settings/legal-entities").then((r) => setEnts(r.items || [])).catch(() => setEnts([]));
-    api.get<any>("/settings/tax-rules").then((r) => setStacks(r.stacks || {})).catch(() => setStacks({}));
-    api.get<any>("/settings/tax-exceptions").then((r) => setExc(r.items || [])).catch(() => setExc([]));
-  }
-  useEffect(reload, []);
-  const setNumRow = (i: number, k: string, v: any) => setNum((cur) => (cur || []).map((r, idx) => idx === i ? { ...r, [k]: v } : r));
-  async function saveNum(r: any) {
-    try { const res = await api.put<any>("/settings/numbering", { doc_type: r.doc_type, template: r.template, begins_from: Number(r.next_value) || 1, scope_key: r.scope_key || "org" }); flash(`Saved ${r.doc_type}`); setNum((cur) => (cur || []).map((x) => x.doc_type === r.doc_type && x.scope_key === r.scope_key ? { ...x, example: res.example, is_default: false } : x)); }
-    catch (e: any) { alertDialog(e.message || "Save failed"); }
-  }
-  async function previewNum(i: number, r: any) {
-    try { const res = await api.post<any>("/settings/numbering/preview", { doc_type: r.doc_type, template: r.template, begins_from: Number(r.next_value) || 1 }); setNumRow(i, "example", res.example); } catch { /* ignore */ }
-  }
-  async function addEntity() {
-    if (!ent.name.trim()) return;
-    try { await api.post("/settings/legal-entities", ent); setEnt({ name: "", address: "", tax_id: "", details: "", is_default: false }); reload(); flash("Legal entity added"); }
-    catch (e: any) { alertDialog(e.message || "Failed"); }
-  }
-  async function delEntity(id: string) { try { await api.del(`/settings/legal-entities/${id}`); reload(); } catch (e: any) { alertDialog(e.message); } }
-  async function makeDefaultEntity(e: any) { try { await api.put(`/settings/legal-entities/${e.id}`, { ...e, is_default: true }); reload(); } catch (er: any) { alertDialog(er.message); } }
-  async function addTax() {
-    if (!tax.name.trim()) return;
-    try { await api.post("/catalog/taxes", { name: tax.name, rate: Number(tax.rate) || 0, mode: tax.mode }); setTax({ name: "", rate: 0, mode: "imposed" }); reload(); flash("Tax added"); }
-    catch (e: any) { alertDialog(e.message || "Failed"); }
-  }
-  const taxName = (id: string) => (taxes || []).find((t) => t.id === id)?.name || id;
-  function toggleStack(fam: string, id: string) {
-    setStacks((s) => { const cur = s[fam] || []; return { ...s, [fam]: cur.includes(id) ? cur.filter((x) => x !== id) : [...cur, id] }; });
-  }
-  async function saveStack(fam: string) {
-    try { await api.put("/settings/tax-rules", { doc_family: fam, tax_ids: stacks[fam] || [] }); flash(`Saved ${fam} tax stack`); } catch (e: any) { alertDialog(e.message); }
-  }
-  async function delExc(id: string) { try { await api.del(`/settings/tax-exceptions/${id}`); reload(); } catch (e: any) { alertDialog(e.message); } }
-
-  const FAMILIES: [string, string][] = [["tickets_sales", "Tickets & sales"], ["posting", "Postings"]];
-  return (
-    <div className="max-w-3xl space-y-5">
-      <SectionCard title="Document numbering">
-        <div className="divide-y divide-slate-100">
-          {!num && <div className="px-5 py-4 text-xs text-ink-tertiary">Loading…</div>}
-          {(num || []).map((r, i) => (
-            <div key={`${r.doc_type}-${r.scope_key}`} className="px-5 py-3 flex items-end gap-3 flex-wrap">
-              <div className="w-24"><label className={lbl}>Document</label><div className="text-xs font-bold text-ink-primary capitalize py-2">{r.doc_type}</div></div>
-              <div className="flex-1 min-w-[140px]"><label className={lbl}>Template</label><input value={r.template} onChange={(e) => setNumRow(i, "template", e.target.value)} className={`${field} font-mono`} /></div>
-              <div className="w-24"><label className={lbl}>Next #</label><input type="number" value={r.next_value} onChange={(e) => setNumRow(i, "next_value", e.target.value)} className={`${field} font-mono`} /></div>
-              <div className="w-28"><label className={lbl}>Example</label><div className="text-xs font-mono font-bold text-primary py-2">{r.example}</div></div>
-              <button onClick={() => previewNum(i, r)} className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-[11px] font-bold text-ink-secondary hover:bg-slate-50">Preview</button>
-              <button onClick={() => saveNum(r)} className="px-3 py-1.5 rounded-lg bg-primary text-white text-[11px] font-bold shadow-clay-sm">Save</button>
-            </div>
-          ))}
-          <div className="px-5 py-2 text-[11px] text-ink-tertiary">Tokens: <span className="font-mono">{"{C:5}"}</span> counter, <span className="font-mono">{"{D}{M}{Y}"}</span> date. Template must contain a counter.</div>
-        </div>
-      </SectionCard>
-
-      <SectionCard title="Legal entities" count={ents?.length}>
-        <div className="divide-y divide-slate-100">
-          {(ents || []).map((e) => (
-            <div key={e.id} className="px-5 py-3 flex items-center gap-2 text-xs">
-              <div className="flex-1"><span className="font-bold text-ink-primary">{e.name}</span>{e.tax_id ? <span className="text-ink-tertiary"> · {e.tax_id}</span> : null}{e.address ? <div className="text-[11px] text-ink-tertiary">{e.address}</div> : null}</div>
-              {e.is_default ? <span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-emerald-100 text-emerald-700">Default</span> : <button onClick={() => makeDefaultEntity(e)} className="text-[11px] font-bold text-primary">Make default</button>}
-              <button aria-label="Delete" onClick={() => delEntity(e.id)} className="text-rose-600"><M n="delete" c="text-sm" /></button>
-            </div>
-          ))}
-          {ents && ents.length === 0 && <div className="px-5 py-3 text-xs text-ink-tertiary">No legal entities yet.</div>}
-          <div className="px-5 py-3 grid grid-cols-2 gap-2">
-            <input value={ent.name} onChange={(e) => setEnt({ ...ent, name: e.target.value })} placeholder="Entity name" className={field} />
-            <input value={ent.tax_id} onChange={(e) => setEnt({ ...ent, tax_id: e.target.value })} placeholder="Tax ID" className={field} />
-            <input value={ent.address} onChange={(e) => setEnt({ ...ent, address: e.target.value })} placeholder="Address" className={`${field} col-span-2`} />
-            <input value={ent.vat_no || ""} onChange={(e) => setEnt({ ...ent, vat_no: e.target.value })} placeholder="VAT no." className={field} />
-            <input value={ent.registration_no || ""} onChange={(e) => setEnt({ ...ent, registration_no: e.target.value })} placeholder="Registration no." className={field} />
-            <input value={ent.bank_name || ""} onChange={(e) => setEnt({ ...ent, bank_name: e.target.value })} placeholder="Bank name" className={field} />
-            <input value={ent.bank_account || ""} onChange={(e) => setEnt({ ...ent, bank_account: e.target.value })} placeholder="Bank account" className={field} />
-            <input value={ent.phone || ""} onChange={(e) => setEnt({ ...ent, phone: e.target.value })} placeholder="Phone" className={field} />
-            <input value={ent.email || ""} onChange={(e) => setEnt({ ...ent, email: e.target.value })} placeholder="Email" className={field} />
-            <input value={ent.director || ""} onChange={(e) => setEnt({ ...ent, director: e.target.value })} placeholder="Director" className={`${field} col-span-2`} />
-            <label className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-secondary"><input type="checkbox" checked={ent.is_default} onChange={(e) => setEnt({ ...ent, is_default: e.target.checked })} className="accent-primary" />Default</label>
-            <div className="text-right"><button onClick={addEntity} className="px-3 py-1.5 rounded-lg bg-primary text-white text-[11px] font-bold shadow-clay-sm">+ Add entity</button></div>
-          </div>
-        </div>
-      </SectionCard>
-
-      <SectionCard title="Taxes" count={taxes?.length}>
-        <div className="divide-y divide-slate-100">
-          {(taxes || []).map((t) => (
-            <div key={t.id} className="px-5 py-2.5 flex items-center gap-2 text-xs"><span className="font-bold text-ink-primary flex-1">{t.name}</span><span className="font-mono text-ink-secondary">{t.rate}%</span><span className="px-2 py-0.5 rounded-full text-[10px] font-bold bg-slate-100 text-ink-secondary">{t.mode}</span></div>
-          ))}
-          {taxes && taxes.length === 0 && <div className="px-5 py-3 text-xs text-ink-tertiary">No taxes yet.</div>}
-          <div className="px-5 py-3 flex items-end gap-2">
-            <div className="flex-1"><label className={lbl}>Name</label><input value={tax.name} onChange={(e) => setTax({ ...tax, name: e.target.value })} placeholder="e.g. VAT" className={field} /></div>
-            <div className="w-24"><label className={lbl}>Rate %</label><input type="number" value={tax.rate} onChange={(e) => setTax({ ...tax, rate: e.target.value })} className={`${field} font-mono`} /></div>
-            <div className="w-28"><label className={lbl}>Mode</label><select value={tax.mode} onChange={(e) => setTax({ ...tax, mode: e.target.value })} className={field}><option value="imposed">imposed</option><option value="included">included</option></select></div>
-            <button onClick={addTax} className="px-3 py-1.5 rounded-lg bg-primary text-white text-[11px] font-bold shadow-clay-sm">+ Add</button>
-          </div>
-        </div>
-      </SectionCard>
-
-      <SectionCard title="Tax stack (applied in order)">
-        <div className="divide-y divide-slate-100">
-          {FAMILIES.map(([fam, label]) => (
-            <div key={fam} className="px-5 py-3">
-              <div className="flex items-center justify-between mb-2"><span className="text-xs font-bold text-ink-primary">{label}</span><button onClick={() => saveStack(fam)} className="px-2.5 py-1 rounded-lg bg-primary text-white text-[11px] font-bold shadow-clay-sm">Save stack</button></div>
-              <div className="flex flex-wrap gap-1.5">
-                {(taxes || []).map((t) => { const on = (stacks[fam] || []).includes(t.id); const pos = (stacks[fam] || []).indexOf(t.id); return (
-                  <button key={t.id} onClick={() => toggleStack(fam, t.id)} className={`px-2.5 py-1.5 rounded-lg border text-[11px] font-semibold ${on ? "bg-primary text-white border-primary" : "bg-slate-50 text-ink-secondary border-slate-200/60 hover:bg-slate-100"}`}>{on ? `${pos + 1}. ` : ""}{t.name}</button>
-                ); })}
-                {(taxes || []).length === 0 && <span className="text-[11px] text-ink-tertiary">Add taxes above first.</span>}
-              </div>
-            </div>
-          ))}
-        </div>
-      </SectionCard>
-
-      <SectionCard title="Tax exceptions" count={exc?.length}>
-        <div className="divide-y divide-slate-100">
-          {(exc || []).map((e) => (
-            <div key={e.id} className="px-5 py-2.5 flex items-center gap-2 text-xs">
-              <span className="px-2 py-0.5 rounded bg-slate-100 text-[10px] font-bold">{e.doc_family}</span>
-              <span className="text-ink-secondary">{e.target_type}: {e.target_id}</span>
-              <div className="flex-1" />
-              <span className="font-semibold text-ink-primary">{e.exempt ? "Exempt" : taxName(e.tax_id)}</span>
-              <button aria-label="Delete" onClick={() => delExc(e.id)} className="text-rose-600"><M n="delete" c="text-sm" /></button>
-            </div>
-          ))}
-          {exc && exc.length === 0 && <div className="px-5 py-3 text-xs text-ink-tertiary">No tax exceptions. Lines follow the tax stack above.</div>}
-        </div>
-      </SectionCard>
-      {msg && <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-drawer z-[70]">{msg}</div>}
-    </div>
-  );
-}
-
 // ── E-commerce integrations (Shopify/WooCommerce) — legacy gap, backend /api/ecommerce/integrations ──
 function EcommerceSettings() {
   const [items, setItems] = useState<any[] | null>(null);
-  const [f, setF] = useState<any>({ platform: "shopify", store_url: "", sync_products: true, sync_orders: true });
+  const blank = { platform: "shopify", store_url: "", sync_products: true, sync_orders: true };
+  const [f, setF] = useState<any>(blank);
+  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false); const [msg, setMsg] = useState("");
   const flash = (m: string) => { setMsg(m); setTimeout(() => setMsg(""), 2000); };
   function reload() { api.get<any>("/ecommerce/integrations").then((r) => setItems(r.items || [])).catch(() => setItems([])); }
   useEffect(reload, []);
   async function add() {
     if (!f.store_url.trim()) return; setBusy(true);
-    try { await api.post("/ecommerce/integrations", f); setF({ platform: "shopify", store_url: "", sync_products: true, sync_orders: true }); reload(); flash("Store connected"); }
+    try { await api.post("/ecommerce/integrations", f); setF(blank); setOpen(false); reload(); flash("Store connected"); }
     catch (e: any) { alertDialog(e.message || "Failed"); } finally { setBusy(false); }
   }
+  const platformName = (p: string) => (p === "woocommerce" ? "WooCommerce" : p === "shopify" ? "Shopify" : humanize(p));
   return (
     <div className="max-w-3xl"><SectionCard title="E-commerce stores" count={items?.length}>
+      <div className="px-5 py-3 border-b border-slate-100">
+        {!open && <button type="button" onClick={() => setOpen(true)} className={btnPrimary}><M n="add" c="text-sm" />Connect store</button>}
+        {open && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-[180px_1fr] gap-3">
+              <div><label htmlFor="ecom-platform" className={lbl}>Platform</label><select id="ecom-platform" value={f.platform} onChange={(e) => setF({ ...f, platform: e.target.value })} className={field}><option value="shopify">Shopify</option><option value="woocommerce">WooCommerce</option></select></div>
+              <div><label htmlFor="ecom-url" className={lbl}>Store address</label><input id="ecom-url" value={f.store_url} onChange={(e) => setF({ ...f, store_url: e.target.value })} placeholder="my-shop.myshopify.com" className={field} /></div>
+            </div>
+            <div className="divide-y divide-slate-100">
+              <SettingRow label="Sync products" help="Keep your store's products and stock in step with Tekly.">
+                <Switch on={!!f.sync_products} onChange={(v) => setF({ ...f, sync_products: v })} label="Products" />
+              </SettingRow>
+              <SettingRow label="Sync orders" help="Bring store orders into Tekly.">
+                <Switch on={!!f.sync_orders} onChange={(v) => setF({ ...f, sync_orders: v })} label="Orders" />
+              </SettingRow>
+            </div>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={add} disabled={busy || !f.store_url.trim()} className={btnPrimary}>{busy ? "Connecting…" : "Connect store"}</button>
+              <button type="button" onClick={() => { setOpen(false); setF(blank); }} className={btnSecondary}>Cancel</button>
+            </div>
+          </div>
+        )}
+      </div>
       <div className="divide-y divide-slate-100">
         {(items || []).map((i) => (
-          <div key={i.id} className="px-5 py-3 flex items-center gap-2 text-xs">
-            <span className="px-2 py-0.5 rounded bg-slate-100 text-[10px] font-bold capitalize">{i.platform}</span>
-            <span className="font-semibold text-ink-primary">{i.store_url || "—"}</span>
-            <span className="text-ink-tertiary">{[i.sync_products && "products", i.sync_orders && "orders"].filter(Boolean).join(" + ")}</span>
+          <div key={i.id} className="px-5 py-3 flex items-center gap-2 text-sm">
+            <span className="px-2 py-0.5 rounded-md bg-slate-100 text-xs font-medium text-ink-secondary">{platformName(i.platform)}</span>
+            <span className="font-medium text-ink-primary">{i.store_url || "—"}</span>
+            <span className="text-xs text-ink-tertiary">{[i.sync_products && "Products", i.sync_orders && "Orders"].filter(Boolean).join(" + ")}</span>
             <div className="flex-1" />
-            <span className="text-[10px] text-ink-tertiary">{i.last_synced_at ? `synced ${new Date(i.last_synced_at).toLocaleDateString()}` : "never synced"}</span>
-            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${i.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-ink-secondary"}`}>{i.active ? "Active" : "Off"}</span>
+            <span className="text-xs text-ink-tertiary">{i.last_synced_at ? `Synced ${new Date(i.last_synced_at).toLocaleDateString()}` : "Never synced"}</span>
+            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${i.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-ink-secondary"}`}>{i.active ? "Active" : "Off"}</span>
           </div>
         ))}
         {items && items.length === 0 && <div className="px-5 py-3 text-xs text-ink-tertiary">No stores connected.</div>}
-        <div className="px-5 py-3 flex items-end gap-2 flex-wrap">
-          <div><label className={lbl}>Platform</label><select value={f.platform} onChange={(e) => setF({ ...f, platform: e.target.value })} className={field}><option value="shopify">Shopify</option><option value="woocommerce">WooCommerce</option></select></div>
-          <div className="flex-1 min-w-[180px]"><label className={lbl}>Store URL</label><input value={f.store_url} onChange={(e) => setF({ ...f, store_url: e.target.value })} placeholder="my-shop.myshopify.com" className={field} /></div>
-          <label className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-secondary"><input type="checkbox" checked={f.sync_products} onChange={(e) => setF({ ...f, sync_products: e.target.checked })} className="accent-primary" />Products</label>
-          <label className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-secondary"><input type="checkbox" checked={f.sync_orders} onChange={(e) => setF({ ...f, sync_orders: e.target.checked })} className="accent-primary" />Orders</label>
-          <button onClick={add} disabled={busy} className="px-3 py-1.5 rounded-lg bg-primary text-white text-[11px] font-bold shadow-clay-sm">Connect store</button>
-        </div>
       </div>
     </SectionCard>{msg && <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-drawer z-[70]">{msg}</div>}</div>
   );
@@ -3215,40 +2087,57 @@ function EcommerceSettings() {
 // ── Single sign-on (OIDC/SAML) — legacy gap, backend /api/sso/config ──
 function SsoSettings() {
   const [items, setItems] = useState<any[] | null>(null);
-  const [f, setF] = useState<any>({ protocol: "oidc", display_name: "", issuer: "", client_id: "", client_secret: "", metadata_url: "", email_domain: "", enabled: true });
+  const blank = { protocol: "oidc", display_name: "", issuer: "", client_id: "", client_secret: "", metadata_url: "", email_domain: "", enabled: true };
+  const [f, setF] = useState<any>(blank);
+  const [open, setOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   function reload() { api.get<any>("/sso/config").then((r) => setItems(r.items || [])).catch(() => setItems([])); }
   useEffect(reload, []);
   async function add() {
     if (!f.display_name.trim()) return; setBusy(true);
-    try { await api.post("/sso/config", f); setF({ protocol: "oidc", display_name: "", issuer: "", client_id: "", client_secret: "", metadata_url: "", email_domain: "", enabled: true }); reload(); }
+    try { await api.post("/sso/config", f); setF(blank); setOpen(false); reload(); }
     catch (e: any) { alertDialog(e.message || "Failed"); } finally { setBusy(false); }
   }
   async function del(id: string) { try { await api.del(`/sso/config/${id}`); reload(); } catch (e: any) { alertDialog(e.message); } }
+  const inp = (k: string, label: string, extra: { placeholder?: string; type?: string } = {}) => (
+    <div><label htmlFor={`sso-${k}`} className={lbl}>{label}</label><input id={`sso-${k}`} type={extra.type || "text"} value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })} placeholder={extra.placeholder} className={field} /></div>
+  );
   return (
     <div className="max-w-3xl"><SectionCard title="SSO connections" count={items?.length}>
+      <div className="px-5 py-3 border-b border-slate-100">
+        {!open && <button type="button" onClick={() => setOpen(true)} className={btnPrimary}><M n="add" c="text-sm" />Add connection</button>}
+        {open && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div><label htmlFor="sso-protocol" className={lbl}>Protocol</label><select id="sso-protocol" value={f.protocol} onChange={(e) => setF({ ...f, protocol: e.target.value })} className={field}><option value="oidc">OIDC</option><option value="saml">SAML</option></select></div>
+              {inp("display_name", "Display name", { placeholder: "Google Workspace" })}
+              {inp("metadata_url", "Issuer or metadata address", { placeholder: "https://…/.well-known/openid-configuration" })}
+              {inp("email_domain", "Email domain", { placeholder: "company.com" })}
+              {inp("client_id", "Client ID")}
+              {inp("client_secret", "Client secret", { type: "password" })}
+            </div>
+            <SettingRow label="Enabled" help="Staff with this email domain can sign in with it.">
+              <Switch on={!!f.enabled} onChange={(v) => setF({ ...f, enabled: v })} label="Enabled" />
+            </SettingRow>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={add} disabled={busy || !f.display_name.trim()} className={btnPrimary}>{busy ? "Adding…" : "Add connection"}</button>
+              <button type="button" onClick={() => { setOpen(false); setF(blank); }} className={btnSecondary}>Cancel</button>
+            </div>
+          </div>
+        )}
+      </div>
       <div className="divide-y divide-slate-100">
         {(items || []).map((s) => (
-          <div key={s.id} className="px-5 py-3 flex items-center gap-2 text-xs">
-            <span className="px-2 py-0.5 rounded bg-slate-100 text-[10px] font-bold uppercase">{s.protocol}</span>
-            <span className="font-semibold text-ink-primary">{s.display_name}</span>
-            {s.email_domain && <span className="text-ink-tertiary">@{s.email_domain}</span>}
+          <div key={s.id} className="px-5 py-3 flex items-center gap-2 text-sm">
+            <span className="px-2 py-0.5 rounded-md bg-slate-100 text-xs font-medium text-ink-secondary uppercase">{s.protocol}</span>
+            <span className="font-medium text-ink-primary">{s.display_name}</span>
+            {s.email_domain && <span className="text-xs text-ink-tertiary">@{s.email_domain}</span>}
             <div className="flex-1" />
-            <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold ${s.enabled ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-ink-secondary"}`}>{s.enabled ? "Enabled" : "Disabled"}</span>
-            <button aria-label="Delete" onClick={() => del(s.id)} className="text-rose-600"><M n="delete" c="text-sm" /></button>
+            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${s.enabled ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-ink-secondary"}`}>{s.enabled ? "Enabled" : "Disabled"}</span>
+            <button type="button" aria-label="Delete" onClick={() => del(s.id)} className="w-8 h-8 grid place-items-center rounded-lg text-ink-tertiary hover:text-rose-600 hover:bg-rose-50"><M n="delete" c="text-sm" /></button>
           </div>
         ))}
-        {items && items.length === 0 && <div className="px-5 py-3 text-xs text-ink-tertiary">No SSO connections. Staff sign in with email + password until one is enabled.</div>}
-        <div className="px-5 py-3 grid grid-cols-2 gap-2">
-          <div><label className={lbl}>Protocol</label><select value={f.protocol} onChange={(e) => setF({ ...f, protocol: e.target.value })} className={field}><option value="oidc">OIDC</option><option value="saml">SAML</option></select></div>
-          <div><label className={lbl}>Display name</label><input value={f.display_name} onChange={(e) => setF({ ...f, display_name: e.target.value })} placeholder="Google Workspace" className={field} /></div>
-          <div><label className={lbl}>Issuer / metadata URL</label><input value={f.metadata_url} onChange={(e) => setF({ ...f, metadata_url: e.target.value })} placeholder="https://…/.well-known/openid-configuration" className={field} /></div>
-          <div><label className={lbl}>Email domain</label><input value={f.email_domain} onChange={(e) => setF({ ...f, email_domain: e.target.value })} placeholder="company.com" className={field} /></div>
-          <div><label className={lbl}>Client ID</label><input value={f.client_id} onChange={(e) => setF({ ...f, client_id: e.target.value })} className={field} /></div>
-          <div><label className={lbl}>Client secret</label><input type="password" value={f.client_secret} onChange={(e) => setF({ ...f, client_secret: e.target.value })} className={field} /></div>
-          <label className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-secondary"><input type="checkbox" checked={f.enabled} onChange={(e) => setF({ ...f, enabled: e.target.checked })} className="accent-primary" />Enabled</label>
-          <div className="text-right"><button onClick={add} disabled={busy} className="px-3 py-1.5 rounded-lg bg-primary text-white text-[11px] font-bold shadow-clay-sm">+ Add connection</button></div>
-        </div>
+        {items && items.length === 0 && <div className="px-5 py-3 text-xs text-ink-tertiary">No SSO connections. Staff sign in with email and password until one is enabled.</div>}
       </div>
     </SectionCard></div>
   );
@@ -3269,21 +2158,24 @@ function ApprovalsSettings() {
   const pill = (s: string) => s === "approved" ? "bg-emerald-100 text-emerald-700" : s === "rejected" ? "bg-rose-100 text-rose-700" : "bg-amber-100 text-amber-700";
   return (
     <div className="max-w-3xl"><SectionCard title="Approval requests" count={items?.length}>
-      <div className="px-5 py-2 flex gap-1.5 border-b border-slate-100">
-        {(["pending", "all"] as const).map((s) => <button key={s} onClick={() => setFilter(s)} className={`px-2.5 py-1 rounded-lg text-[11px] font-semibold capitalize ${filter === s ? "bg-primary text-white" : "bg-slate-50 text-ink-secondary hover:bg-slate-100"}`}>{s}</button>)}
+      <div className="px-5 py-2.5 border-b border-slate-100">
+        <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
+          {([["pending", "Pending"], ["all", "All"]] as const).map(([s, l]) => <button key={s} type="button" onClick={() => setFilter(s)} aria-pressed={filter === s}
+            className={"px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors " + (filter === s ? "bg-white text-ink-primary shadow-clay-sm" : "text-ink-tertiary hover:text-ink-secondary")}>{l}</button>)}
+        </div>
       </div>
       <div className="divide-y divide-slate-100">
         {!items && <div className="px-5 py-4 text-xs text-ink-tertiary">Loading…</div>}
-        {items && items.length === 0 && <div className="px-5 py-4 text-xs text-ink-tertiary">No {filter === "pending" ? "pending" : ""} approval requests.</div>}
+        {items && items.length === 0 && <div className="px-5 py-4 text-xs text-ink-tertiary">No {filter === "pending" ? "pending " : ""}approval requests.</div>}
         {(items || []).map((r) => (
-          <div key={r.id} className="px-5 py-3 flex items-center gap-2 text-xs">
-            <span className="px-2 py-0.5 rounded bg-slate-100 text-[10px] font-bold capitalize">{(r.kind || "").replace(/_/g, " ")}</span>
-            {r.amount != null && <span className="font-mono font-bold text-ink-primary">{r.amount}</span>}
+          <div key={r.id} className="px-5 py-3 flex items-center gap-2 text-sm">
+            <span className="px-2 py-0.5 rounded-md bg-slate-100 text-xs font-medium text-ink-secondary">{humanize(r.kind || "")}</span>
+            {r.amount != null && <span className="tabular-nums font-semibold text-ink-primary">{money(Number(r.amount), undefined, true)}</span>}
             {r.reason && <span className="text-ink-secondary truncate max-w-[220px]">{r.reason}</span>}
             <div className="flex-1" />
             {r.status === "pending"
-              ? <><button onClick={() => decide(r.id, "approve")} disabled={busy} className="px-2.5 py-1 rounded-lg bg-emerald-600 text-white text-[11px] font-bold">Approve</button><button onClick={() => decide(r.id, "reject")} disabled={busy} className="px-2.5 py-1 rounded-lg border border-rose-200 text-rose-600 text-[11px] font-bold">Reject</button></>
-              : <span className={`px-2 py-0.5 rounded-full text-[10px] font-bold capitalize ${pill(r.status)}`}>{r.status}</span>}
+              ? <><button type="button" onClick={() => decide(r.id, "approve")} disabled={busy} className={btnPrimary}>Approve</button><button type="button" onClick={() => decide(r.id, "reject")} disabled={busy} className="h-9 px-3.5 rounded-xl border border-rose-200 bg-white text-rose-600 text-xs font-semibold hover:bg-rose-50 disabled:opacity-50">Reject</button></>
+              : <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${pill(r.status)}`}>{humanize(r.status || "")}</span>}
           </div>
         ))}
       </div>
@@ -3301,6 +2193,7 @@ function ApprovalsSettings() {
 const ID_LABEL: Record<string, string> = { imei: "IMEI", serial: "Serial", vin: "VIN", hin: "HIN", engine_serial: "Engine serial", barcode: "Barcode", asset_tag: "Asset tag" };
 function AssetCatalog() {
   const [tk, setTk] = useState<string>("");
+  const [tkLabel, setTkLabel] = useState<string>("");
   const [groups, setGroups] = useState<any[]>([]);
   const [brands, setBrands] = useState<any[]>([]);
   const [models, setModels] = useState<any[]>([]);
@@ -3320,6 +2213,7 @@ function AssetCatalog() {
   useEffect(() => {
     api.get<any>(`/settings/industry-template`).then((r) => {
       const t = r?.current || "general"; setTk(t);
+      setTkLabel((r?.templates || []).find((x: any) => x.key === t)?.label || humanize(t));
       loadGroups(t); loadBrands(t); loadModels(t); loadRules(t);
     }).catch(() => {});
   }, []);
@@ -3336,28 +2230,29 @@ function AssetCatalog() {
   async function runImport() { if (!csv.trim()) return; setBusy(true); try { const r = await api.post<any>(`/settings/asset-directory/import`, { template_key: tk, csv }); flash(`Imported ${r?.brands ?? 0} brands, ${r?.models ?? 0} models`); setCsv(""); setCsvOpen(false); loadBrands(tk); loadModels(tk); } catch (e: any) { flash(e.message || "Import failed"); } finally { setBusy(false); } }
 
   const box = "bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden";
-  const addInp = "glass-input flex-1 px-3 py-2 rounded-lg text-xs font-semibold text-ink-primary";
-  const addBtn = "px-3 py-2 rounded-lg bg-blue-50 text-primary border border-blue-100 text-xs font-bold hover:bg-blue-100 shrink-0";
+  const addInp = "glass-input flex-1 min-w-0 rounded-xl px-3 py-2 text-sm text-ink-primary";
+  const addBtn = `${btnSecondary} shrink-0`;
 
   return (
     <div className="space-y-4">
-      <div className="flex items-center justify-between">
-        <div><div className="text-sm font-extrabold text-ink-primary">Asset catalog</div><div className="text-xs text-ink-tertiary">Groups, brands, models &amp; identifier rules for the <span className="font-bold">{tk}</span> template.</div></div>
-        <button type="button" onClick={() => setCsvOpen((o) => !o)} className={addBtn}>{csvOpen ? "Close import" : "Import CSV"}</button>
+      <div>
+        <h3 className="text-sm font-semibold text-ink-primary">Asset catalog</h3>
+        <p className="text-xs text-ink-tertiary mt-0.5">Groups, brands, models and ID rules for {tkLabel ? <span className="font-medium text-ink-secondary">{tkLabel}</span> : "your shop"}.</p>
+        <button type="button" onClick={() => setCsvOpen((o) => !o)} className={`mt-2.5 ${btnSecondary}`}><M n={csvOpen ? "close" : "upload"} c="text-sm" />{csvOpen ? "Close import" : "Import CSV"}</button>
       </div>
 
       {csvOpen && (
         <div className="rounded-2xl bg-slate-50/70 border border-slate-200/80 p-3.5 space-y-2">
-          <div className="text-[11px] font-bold uppercase tracking-wider text-ink-tertiary">Bulk import — header row required: <span className="font-mono normal-case">brand,model,group</span></div>
-          <textarea value={csv} onChange={(e) => setCsv(e.target.value)} rows={5} className="glass-input block w-full py-2 px-3 text-xs font-mono text-ink-primary rounded-lg resize-none" placeholder={"brand,model,group\nApple,iPhone 15,Phone\nSamsung,Galaxy S24,Phone"} />
-          <div className="flex justify-end"><button type="button" onClick={runImport} disabled={busy} className="px-4 py-2 rounded-xl bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Importing…" : "Import"}</button></div>
+          <div className="text-xs text-ink-tertiary">Bulk import. The first row must be the headers: <span className="font-mono text-ink-secondary">brand,model,group</span></div>
+          <textarea value={csv} onChange={(e) => setCsv(e.target.value)} rows={5} aria-label="CSV to import" className="glass-input block w-full rounded-xl px-3 py-2 text-sm font-mono text-ink-primary resize-none" placeholder={"brand,model,group\nApple,iPhone 15,Phone\nSamsung,Galaxy S24,Phone"} />
+          <div><button type="button" onClick={runImport} disabled={busy} className={btnPrimary}>{busy ? "Importing…" : "Import"}</button></div>
         </div>
       )}
 
       <div className="grid grid-cols-1 lg:grid-cols-3 gap-4">
         {/* Groups */}
         <div className={box}>
-          <div className="px-4 py-2.5 border-b border-slate-100 text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">Groups ({groups.length})</div>
+          <div className="px-4 py-2.5 border-b border-slate-100 text-sm font-semibold text-ink-primary">Groups ({groups.length})</div>
           <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
             <button type="button" onClick={() => { setGsel(""); setBsel(""); }} className={`w-full text-left px-4 py-2 text-xs font-bold ${!gsel ? "bg-blue-50/60 text-primary" : "text-ink-secondary hover:bg-slate-50"}`}>All groups</button>
             {groups.map((g) => {
@@ -3366,7 +2261,7 @@ function AssetCatalog() {
                 <div key={g.id} className={`px-4 py-2 flex items-center gap-2 ${gsel === g.id ? "bg-blue-50/60" : "hover:bg-slate-50"}`}>
                   <button type="button" onClick={() => { setGsel(g.id); setBsel(""); }} className="flex-1 text-left min-w-0">
                     <div className="text-xs font-bold text-ink-primary truncate">{g.label}</div>
-                    {rule && <div className="text-[10px] text-ink-tertiary">ID: {(rule.allowed_kinds || []).map((k: string) => ID_LABEL[k] || k).join(" / ") || "—"}</div>}
+                    {rule && <div className="text-xs text-ink-tertiary">ID: {(rule.allowed_kinds || []).map((k: string) => ID_LABEL[k] || k).join(" / ") || "—"}</div>}
                   </button>
                   {!g.is_system && <button aria-label="Close" type="button" onClick={() => delRow("groups", g.id)} className="text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>}
                 </div>
@@ -3378,7 +2273,7 @@ function AssetCatalog() {
 
         {/* Brands */}
         <div className={box}>
-          <div className="px-4 py-2.5 border-b border-slate-100 text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">Brands ({shownBrands.length}){gsel ? ` · ${gName(gsel)}` : ""}</div>
+          <div className="px-4 py-2.5 border-b border-slate-100 text-sm font-semibold text-ink-primary">Brands ({shownBrands.length}){gsel ? ` · ${gName(gsel)}` : ""}</div>
           <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
             {shownBrands.length === 0 && <p className="px-4 py-3 text-xs text-ink-tertiary">No brands.</p>}
             {shownBrands.map((b) => (
@@ -3393,7 +2288,7 @@ function AssetCatalog() {
 
         {/* Models */}
         <div className={box}>
-          <div className="px-4 py-2.5 border-b border-slate-100 text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">Models ({shownModels.length}){bsel ? ` · ${brands.find((b) => b.id === bsel)?.name || ""}` : ""}</div>
+          <div className="px-4 py-2.5 border-b border-slate-100 text-sm font-semibold text-ink-primary">Models ({shownModels.length}){bsel ? ` · ${brands.find((b) => b.id === bsel)?.name || ""}` : ""}</div>
           <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
             {!bsel && <p className="px-4 py-3 text-xs text-ink-tertiary">Pick a brand to see and add its models.</p>}
             {bsel && shownModels.length === 0 && <p className="px-4 py-3 text-xs text-ink-tertiary">No models for this brand.</p>}
@@ -3412,129 +2307,71 @@ function AssetCatalog() {
   );
 }
 
-function IndustryTemplatePicker({ onSaved }: { onSaved?: () => void }) {
-  const [data, setData] = useState<any>(null);
-  const [pick, setPick] = useState("");
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
-  useEffect(() => {
-    api.get<any>("/settings/industry-template").then((r) => { setData(r); setPick(r?.current || ""); }).catch(() => setData({ templates: [] }));
-  }, []);
-  const cur = data?.describe;
-  async function save() {
-    if (!pick || pick === data?.current) return;
-    setBusy(true); setMsg("");
-    try {
-      await api.put("/settings/industry-template", { template_key: pick });
-      resetTerminology();
-      setMsg("Saved. New records use this template; existing ones keep their own wording.");
-      const r = await api.get<any>("/settings/industry-template"); setData(r);
-      onSaved?.();
-    } catch (e: any) { setMsg(e.message || "Could not switch template"); }
-    finally { setBusy(false); }
-  }
-  return (
-    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-5 space-y-3">
-      <div><h4 className="text-sm font-bold text-ink-primary">Industry template</h4>
-        <p className="text-xs text-ink-tertiary mt-0.5">Sets what an asset is called across the app{cur ? <> — currently <span className="font-semibold text-ink-secondary">{cur.asset_label}</span></> : ""}.</p></div>
-      <div className="flex flex-wrap items-end gap-2">
-        <div className="flex-1 min-w-[220px]">
-          <label className="block text-[11px] font-semibold text-ink-secondary mb-1">Template</label>
-          <select value={pick} onChange={(e) => setPick(e.target.value)} className="glass-input w-full px-3 py-2 rounded-lg text-xs">
-            {(data?.templates || []).map((t: any) => <option key={t.key} value={t.key}>{t.label} — {t.asset_label}</option>)}
-          </select>
-        </div>
-        <button onClick={save} disabled={busy || !pick || pick === data?.current} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50">Save</button>
-      </div>
-      {msg && <p className="text-[11px] text-ink-secondary">{msg}</p>}
-    </div>
-  );
-}
-
-// Default price per document (Settings ▸ Pricing). Which price type auto-applies
-// when you add a line to a Work Order / Sale / Invoice — Orderry's "Default price"
-// block. Backed by GET/PUT /pricing/defaults.
-function PricingDefaults({ types }: { types: any[] }) {
+/* Industry is chosen in General › What you repair; this section only says which one is active. */
+function IndustryNote({ onChange }: { onChange: () => void }) {
   const [d, setD] = useState<any>(null);
-  const [busy, setBusy] = useState(false);
-  const [msg, setMsg] = useState("");
-  useEffect(() => { api.get<any>("/pricing/defaults").then(setD).catch(() => setD({})); }, []);
-  const set = (k: string, v: any) => setD((s: any) => ({ ...s, [k]: v }));
-  async function save() {
-    setBusy(true); setMsg("");
-    try {
-      await api.put("/pricing/defaults", {
-        price_type_tickets_id: d.price_type_tickets_id || null,
-        price_type_sales_id: d.price_type_sales_id || null,
-        price_type_invoices_id: d.price_type_invoices_id || null,
-        price_decimals: d.price_decimals == null ? null : Number(d.price_decimals),
-        min_margin_pct: d.min_margin_pct == null ? 0 : Number(d.min_margin_pct),
-        margin_guard: d.margin_guard || "off",
-        discount_approval_pct: d.discount_approval_pct == null ? 0 : Number(d.discount_approval_pct),
-      });
-      setMsg("Saved.");
-    } catch (e: any) { setMsg(e.message || "Could not save"); }
-    finally { setBusy(false); }
-  }
-  if (!d) return null;
-  const opts = [<option key="" value="">Default pricing</option>, ...types.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)];
-  const Row = ({ lbl, k }: { lbl: string; k: string }) => (
-    <div className="space-y-1"><label className="block text-[11px] font-semibold text-ink-secondary">{lbl}</label>
-      <select value={d[k] || ""} onChange={(e) => set(k, e.target.value)} className="glass-input w-full px-3 py-2 rounded-lg text-xs">{opts}</select></div>
-  );
+  useEffect(() => { api.get<any>("/settings/industry-template").then(setD).catch(() => setD(null)); }, []);
+  const cur = (d?.templates || []).find((t: any) => t.key === d?.current);
   return (
-    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-5 space-y-3">
-      <div><h4 className="text-sm font-bold text-ink-primary">Default price per document</h4>
-        <p className="text-xs text-ink-tertiary mt-0.5">Which price type is auto-selected when you add a product to each document type.</p></div>
-      <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-        <Row lbl="Work Orders" k="price_type_tickets_id" />
-        <Row lbl="Sales" k="price_type_sales_id" />
-        <Row lbl="Invoices" k="price_type_invoices_id" />
+    <div className="flex items-center gap-3 bg-white rounded-2xl border border-slate-200/90 shadow-clay-card px-5 py-4">
+      <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n="handyman" c="text-lg" /></span>
+      <div className="min-w-0">
+        <div className="text-sm text-ink-primary">{cur ? <>Your shop repairs: <span className="font-semibold">{cur.label}</span></> : "What your shop repairs"}</div>
+        <div className="text-[11px] text-ink-tertiary">The brands, models and groups below follow this. Change it in General.</div>
       </div>
-      <div className="pt-3 mt-1 border-t border-slate-100">
-        <h5 className="text-xs font-bold text-ink-primary">Margin floor guardrail</h5>
-        <p className="text-[11px] text-ink-tertiary mt-0.5">Warn or block a line when its margin falls below your minimum. Orderry lets staff discount into a loss — this doesn't.</p>
-        <div className="grid grid-cols-1 sm:grid-cols-2 gap-3 mt-2">
-          <div className="space-y-1"><label className="block text-[11px] font-semibold text-ink-secondary">When a line is below floor</label>
-            <select value={d.margin_guard || "off"} onChange={(e) => set("margin_guard", e.target.value)} className="glass-input w-full px-3 py-2 rounded-lg text-xs">
-              <option value="off">Off</option><option value="warn">Warn only</option><option value="block">Block the line</option>
-            </select></div>
-          <div className="space-y-1"><label className="block text-[11px] font-semibold text-ink-secondary">Minimum margin %</label>
-            <input type="number" min={0} max={100} value={d.min_margin_pct ?? 0} onChange={(e) => set("min_margin_pct", e.target.value)} className="glass-input w-full px-3 py-2 rounded-lg text-xs" /></div>
+      <button onClick={onChange} className="ml-auto px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50 flex-shrink-0">Change</button>
+    </div>
+  );
+}
+
+// Several items per job — only offered to tools, small engine / equipment, phone and computer
+// shops (the server enforces the same list: services/multi_asset.ELIGIBLE). Other industries never see it.
+function MultiAssetSwitch() {
+  const [st, setSt] = useState<{ available: boolean; on: boolean } | null>(null);
+  const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
+  useEffect(() => { api.get<any>("/staff/company").then((c) => setSt({ available: !!c.multi_asset_available, on: !!c.multi_asset_jobs })).catch(() => setSt(null)); }, []);
+  if (!st?.available) return null;
+  async function flip() {
+    if (!st) return;
+    setBusy(true); setErr(null);
+    try { await api.put("/staff/company", { multi_asset_jobs: !st.on }); setSt({ ...st, on: !st.on }); }
+    catch (e: any) { setErr(e?.message || "Couldn't change this"); } finally { setBusy(false); }
+  }
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card px-5 py-4">
+      <div className="flex items-start gap-3">
+        <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n="inventory" c="text-lg" /></span>
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-ink-primary">Several items per job</div>
+          <div className="text-xs text-ink-tertiary leading-relaxed">For customers who drop off a batch, like six tools at once. One job holds every item, each with its own problem and result, and each service or part can be marked for one item.</div>
+          {err && <div className="mt-1 text-xs text-rose-600">{err}</div>}
         </div>
-        <div className="mt-3 space-y-1 max-w-[240px]"><label className="block text-[11px] font-semibold text-ink-secondary">Discount needing manager approval (over %)</label>
-          <input type="number" min={0} max={100} value={d.discount_approval_pct ?? 0} onChange={(e) => set("discount_approval_pct", e.target.value)} className="glass-input w-full px-3 py-2 rounded-lg text-xs" />
-          <p className="text-[10px] text-ink-tertiary">0 = off. A line discount above this is blocked for any role whose "approve discount" permission is turned off (owners always allowed).</p></div>
-      </div>
-      <div className="flex items-end gap-3">
-        <div className="space-y-1 w-40"><label className="block text-[11px] font-semibold text-ink-secondary">Price decimals</label>
-          <input type="number" min={0} max={4} value={d.price_decimals ?? 2} onChange={(e) => set("price_decimals", e.target.value)} className="glass-input w-full px-3 py-2 rounded-lg text-xs" /></div>
-        <button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50">Save</button>
-        {msg && <span className="text-[11px] text-ink-secondary pb-2">{msg}</span>}
+        <button type="button" role="switch" aria-checked={st.on} aria-label="Several items per job" disabled={busy} onClick={flip}
+          className={`ml-auto w-10 h-6 rounded-full relative transition-colors flex-shrink-0 disabled:opacity-60 ${st.on ? "bg-primary" : "bg-slate-300"}`}>
+          <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${st.on ? "left-[18px]" : "left-0.5"}`} />
+        </button>
       </div>
     </div>
   );
 }
 
-// Quantity break tiers (144he). Pick a price type, add "at qty N use markup %"
-// rows. The highest tier whose min_qty a line's quantity reaches wins, so bulk
-// lines auto-price cheaper — Orderry has no per-type volume breaks.
+// Quantity breaks per price level (Settings ▸ Pricing › Quantity breaks) → /pricing/types/{id}/tiers.
 function TierManager({ types }: { types: any[] }) {
   const [ptId, setPtId] = useState("");
   const [tiers, setTiers] = useState<any[]>([]);
-  const [minQty, setMinQty] = useState("");
-  const [markup, setMarkup] = useState("");
+  const [minQty, setMinQty] = useState<number | null>(null);
+  const [markup, setMarkup] = useState<number | null>(null);
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState("");
   useEffect(() => { if (!ptId) { setTiers([]); return; }
     api.get<any>(`/pricing/types/${ptId}/tiers`).then((r) => setTiers(r.items || [])).catch(() => setTiers([])); }, [ptId]);
   async function add() {
-    if (!ptId || minQty === "" || markup === "") return;
+    if (!ptId || minQty == null || markup == null) return;
     setBusy(true); setMsg("");
     try {
       await api.post(`/pricing/types/${ptId}/tiers`, { min_qty: Number(minQty), markup_pct: Number(markup) });
       const r = await api.get<any>(`/pricing/types/${ptId}/tiers`); setTiers(r.items || []);
-      setMinQty(""); setMarkup("");
+      setMinQty(null); setMarkup(null);
     } catch (e: any) { setMsg(e.message || "Could not add"); } finally { setBusy(false); }
   }
   async function del(id: string) {
@@ -3543,24 +2380,29 @@ function TierManager({ types }: { types: any[] }) {
   }
   return (
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-5 space-y-3">
-      <div><h4 className="text-sm font-bold text-ink-primary">Quantity break tiers</h4>
+      <div><h4 className="text-sm font-semibold text-ink-primary">Quantity break tiers</h4>
         <p className="text-xs text-ink-tertiary mt-0.5">Lower the markup automatically once a line reaches a quantity. The highest matching tier wins.</p></div>
-      <select value={ptId} onChange={(e) => setPtId(e.target.value)} className="glass-input px-3 py-2 rounded-lg text-xs max-w-xs">
+      <select value={ptId} onChange={(e) => setPtId(e.target.value)} aria-label="Price type" className="glass-input rounded-xl px-3 py-2 text-sm max-w-xs">
         <option value="">Choose a price type…</option>{types.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
       {ptId && <div className="space-y-2">
-        {tiers.length === 0 && <p className="text-[11px] text-ink-tertiary">No tiers — uses the type's base markup at every quantity.</p>}
+        {tiers.length === 0 && <p className="text-xs text-ink-tertiary">No tiers yet. The type's base markup applies at every quantity.</p>}
         {tiers.map((t) => (
-          <div key={t.id} className="flex items-center gap-3 text-xs">
-            <span className="text-ink-secondary">At qty ≥ <b>{t.min_qty}</b> → markup <b>{t.markup_pct}%</b></span>
-            <button onClick={() => del(t.id)} className="text-red-500 hover:underline text-[11px]">Remove</button></div>
+          <div key={t.id} className="flex items-center gap-3 text-sm">
+            <span className="text-ink-secondary">From <b className="font-semibold text-ink-primary">{t.min_qty}</b> or more: markup <b className="font-semibold text-ink-primary">{t.markup_pct}%</b></span>
+            <button type="button" onClick={() => del(t.id)} className="text-xs font-semibold text-rose-600 hover:underline">Remove</button></div>
         ))}
-        <div className="flex items-end gap-2 pt-1">
-          <div className="space-y-1"><label className="block text-[11px] font-semibold text-ink-secondary">Min qty</label>
-            <input type="number" min={1} value={minQty} onChange={(e) => setMinQty(e.target.value)} className="glass-input w-24 px-3 py-2 rounded-lg text-xs" /></div>
-          <div className="space-y-1"><label className="block text-[11px] font-semibold text-ink-secondary">Markup %</label>
-            <input type="number" value={markup} onChange={(e) => setMarkup(e.target.value)} className="glass-input w-24 px-3 py-2 rounded-lg text-xs" /></div>
-          <button onClick={add} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50">Add tier</button>
-          {msg && <span className="text-[11px] text-red-500 pb-2">{msg}</span>}
+        <div className="flex flex-wrap items-end gap-3 pt-1">
+          <div><label htmlFor="tier-min" className={lbl}>From quantity</label>
+            <NumField id="tier-min" value={minQty} onChange={setMinQty} unit="or more" width="w-36" /></div>
+          <div><label htmlFor="tier-markup" className={lbl}>Markup</label>
+            {/* A plain number input (not NumField) so a negative markup, which the API accepts, can still be typed. */}
+            <div className="glass-input h-9 w-28 rounded-xl flex items-center pr-3 focus-within:ring-2 focus-within:ring-primary/30">
+              <input id="tier-markup" type="number" value={markup ?? ""} onChange={(e) => setMarkup(e.target.value === "" ? null : Number(e.target.value))}
+                className="w-full min-w-0 bg-transparent pl-3 text-sm font-medium tabular-nums text-ink-primary outline-none" />
+              <span className="text-xs text-ink-tertiary shrink-0">%</span>
+            </div></div>
+          <button type="button" onClick={add} disabled={busy} className={btnPrimary}>Add tier</button>
+          {msg && <span className="text-xs text-rose-600 pb-2">{msg}</span>}
         </div>
       </div>}
     </div>
@@ -3569,70 +2411,37 @@ function TierManager({ types }: { types: any[] }) {
 
 // Directory item editor (144hi): add/delete items with an optional parent + per-location
 // scope, merge duplicates, and CSV import/export. Appears when a directory row is clicked.
-function DirectoryItemsPanel({ dir }: { dir: any | null }) {
-  const [items, setItems] = useState<any[]>([]);
-  const [locs, setLocs] = useState<any[]>([]);
-  const [nv, setNv] = useState(""); const [np, setNp] = useState(""); const [nl, setNl] = useState("");
-  const [mergeFrom, setMergeFrom] = useState(""); const [mergeTo, setMergeTo] = useState("");
-  const [csv, setCsv] = useState(""); const [showCsv, setShowCsv] = useState(false);
-  const [msg, setMsg] = useState("");
-  const load = () => { if (dir) api.get<any>(`/directories/${dir.id}/items`).then((r) => setItems(r.items || [])).catch(() => setItems([])); };
-  useEffect(() => { setItems([]); setMsg(""); load(); /* eslint-disable-next-line */ }, [dir?.id]);
-  useEffect(() => { api.get<any>("/staff/locations").then((r) => setLocs(r.items || r || [])).catch(() => {}); }, []);
-  if (!dir) return <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-5 text-xs text-ink-tertiary">Pick a directory above to edit its items.</div>;
-  const locName = (id: string) => locs.find((l) => l.id === id)?.name || id;
-  const add = async () => { if (!nv.trim()) return; await api.post(`/directories/${dir.id}/items`, { value: nv.trim(), parent_id: np || null, location_id: nl || null }); setNv(""); setNp(""); setNl(""); load(); };
-  const del = async (id: string) => {
-    try { await api.del(`/directories/items/${id}`); load(); }
-    catch (e: any) {
-      if (String(e?.status) === "409" && (await confirmDialog("This element has child elements. Delete anyway and unparent them?", { danger: true, confirmLabel: "Delete" }))) {
-        await api.del(`/directories/items/${id}?force=true`); load();
-      }
-    }
-  };
-  const merge = async () => { if (!mergeFrom || !mergeTo || mergeFrom === mergeTo) { setMsg("Pick two different elements."); return; } await api.post(`/directories/items/${mergeFrom}/merge`, { target_id: mergeTo }); setMergeFrom(""); setMergeTo(""); setMsg("Merged."); load(); };
-  const doImport = async () => { const r = await api.post<any>(`/directories/${dir.id}/import`, { csv }); setMsg(`Imported ${r.added}.`); setCsv(""); setShowCsv(false); load(); };
-  const doExport = () => { openAuthedDoc(`/directories/${dir.id}/export`).catch(() => setMsg("Export not available")); };
+
+
+// ── Forms & fields: pick a form, customize it in place ─────────────────────
+// One pill per work-order type plus the Client / Device / Product forms; the selected form opens
+// in FormCustomizer (drag to reorder, click to edit, add a field where it belongs).
+function FormsDesigner({ types, onAddType, onDeleteType, onAdvanced }: {
+  types: any[]; onAddType: () => void; onDeleteType: (t: any) => void; onAdvanced: (t: any) => void;
+}) {
+  const want = new URLSearchParams(window.location.search).get("form");
+  const [pick, setPick] = useState<string>(() => want || "");
+  const choices: { id: string; label: string; form: FormKey; typeId?: string; type?: any }[] = [
+    ...types.map((t) => ({ id: `type:${t.id}`, label: `Work order · ${t.name}`, form: "order" as FormKey, typeId: t.id, type: t })),
+    { id: "client", label: "Client", form: "client" }, { id: "device", label: "Device / asset", form: "device" },
+    { id: "product", label: "Product", form: "product" }, { id: "lead", label: "Inquiry", form: "lead" },
+  ];
+  const cur = choices.find((c) => c.id === pick) || choices[0];
+  const pill = (on: boolean) => `px-3.5 py-1.5 rounded-full text-xs font-semibold border transition-colors ${on ? "bg-primary text-white border-primary" : "bg-white text-ink-secondary border-slate-200 hover:border-slate-300"}`;
   return (
-    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-5 space-y-3">
-      <div className="flex items-center justify-between">
-        <div><h4 className="text-sm font-bold text-ink-primary">{dir.name} — elements</h4>
-          <p className="text-xs text-ink-tertiary mt-0.5">Feed dropdowns app-wide. Set a parent for hierarchy; leave location blank for all locations.</p></div>
-        <div className="flex gap-2">
-          <button onClick={() => setShowCsv((s) => !s)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Import CSV</button>
-          <a href="#" onClick={(e) => { e.preventDefault(); doExport(); }} className="px-3 py-1.5 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Export CSV</a>
+    <div className="max-w-6xl space-y-4">
+      <div className="flex flex-wrap items-center gap-2">
+        {choices.map((c) => <button key={c.id} onClick={() => setPick(c.id)} className={pill(c.id === cur?.id)}>{c.label}</button>)}
+        <button onClick={onAddType} className="px-3 py-1.5 rounded-full text-xs font-semibold text-primary hover:bg-blue-50 flex items-center gap-1"><M n="add" c="text-sm" />Work order type</button>
+      </div>
+      {cur?.type && (
+        <div className="flex flex-wrap items-center gap-3 text-xs text-ink-tertiary">
+          <span>New orders start as <span className="font-semibold text-ink-secondary">{cur.type.initial_status || "new"}</span>{cur.type.is_default ? " · default type" : ""}</span>
+          <button onClick={() => onAdvanced(cur.type)} className="font-semibold text-primary hover:underline">Advanced rules (show only when, upsell, block status)</button>
+          {!cur.type.is_default && <button onClick={() => onDeleteType(cur.type)} className="font-semibold text-rose-600 hover:underline">Delete this type</button>}
         </div>
-      </div>
-      {showCsv && <div className="space-y-1.5">
-        <textarea value={csv} onChange={(e) => setCsv(e.target.value)} placeholder={"value,parent\nSamsung,\nGalaxy S24,Samsung"} className="glass-input w-full h-24 px-3 py-2 rounded-lg text-xs font-mono" />
-        <button onClick={doImport} disabled={!csv.trim()} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-50">Import rows</button>
-      </div>}
-      <div className="divide-y divide-slate-100 border border-slate-200/80 rounded-xl overflow-hidden max-h-72 overflow-y-auto">
-        {items.length === 0 && <div className="px-4 py-3 text-xs text-ink-tertiary">No elements yet.</div>}
-        {items.map((i) => (
-          <div key={i.id} className="px-4 py-2 flex items-center gap-2 text-xs">
-            <span className="font-semibold text-ink-primary">{i.value}</span>
-            {i.parent_id && <span className="text-[10px] text-ink-tertiary">↳ {items.find((x) => x.id === i.parent_id)?.value || "parent"}</span>}
-            {i.location_id && <span className="px-1.5 py-0.5 rounded bg-blue-50 text-primary text-[10px] font-semibold">{locName(i.location_id)}</span>}
-            {i.child_count > 0 && <span className="px-1.5 py-0.5 rounded bg-slate-100 text-ink-secondary text-[10px] font-semibold">{i.child_count} child{i.child_count === 1 ? "" : "ren"}</span>}
-            <button aria-label="Delete" onClick={() => del(i.id)} className="ml-auto text-ink-tertiary hover:text-rose-600"><M n="delete" c="text-sm" /></button>
-          </div>
-        ))}
-      </div>
-      <div className="flex flex-wrap items-end gap-2">
-        <input value={nv} onChange={(e) => setNv(e.target.value)} placeholder="New element" className="glass-input px-3 py-2 rounded-lg text-xs flex-1 min-w-[120px]" />
-        <select value={np} onChange={(e) => setNp(e.target.value)} className="glass-input px-2 py-2 rounded-lg text-xs"><option value="">No parent</option>{items.map((i) => <option key={i.id} value={i.id}>{i.value}</option>)}</select>
-        <select value={nl} onChange={(e) => setNl(e.target.value)} className="glass-input px-2 py-2 rounded-lg text-xs"><option value="">All locations</option>{locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select>
-        <button onClick={add} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container">Add</button>
-      </div>
-      <div className="flex flex-wrap items-end gap-2 pt-2 border-t border-slate-100">
-        <span className="text-[11px] font-semibold text-ink-secondary self-center">Merge</span>
-        <select value={mergeFrom} onChange={(e) => setMergeFrom(e.target.value)} className="glass-input px-2 py-2 rounded-lg text-xs"><option value="">duplicate…</option>{items.map((i) => <option key={i.id} value={i.id}>{i.value}</option>)}</select>
-        <span className="text-[11px] text-ink-tertiary self-center">into</span>
-        <select value={mergeTo} onChange={(e) => setMergeTo(e.target.value)} className="glass-input px-2 py-2 rounded-lg text-xs"><option value="">keep…</option>{items.map((i) => <option key={i.id} value={i.id}>{i.value}</option>)}</select>
-        <button onClick={merge} className="px-3 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Merge</button>
-        {msg && <span className="text-[11px] text-ink-secondary self-center">{msg}</span>}
-      </div>
+      )}
+      {cur && <FormCustomizer key={cur.id} form={cur.form} typeId={cur.typeId} title={cur.label} />}
     </div>
   );
 }

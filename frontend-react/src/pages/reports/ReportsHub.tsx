@@ -1,4 +1,6 @@
 import SkeletonRows from "../../components/SkeletonRows";
+import PageSummary, { type SummaryStat } from "../../components/PageSummary";
+import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
@@ -8,25 +10,24 @@ import { alertDialog } from "../../lib/dialog";
 import Pager from "../../components/Pager";
 import { useTerminology } from "../../lib/useTerminology";
 import { getLocale } from "../../i18n";
+import { useMe } from "../../context/Me";
 import { useNavigate } from "react-router-dom";
 import { buildReportConfig, pickChartColumns } from "./reportConfig";
+import TotalProfit from "./TotalProfit";
+import { DEFAULT_FILTERS, REPORTS_PREF, REPORT_FILTERS, filterParams, readReportsPref, type ReportFilters } from "./profitView";
+import { cachedPref, loadPref, savePref } from "../../lib/userPref";
+import GoPilotReport from "./GoPilotReport";
 
 const REPORT_PAGE = 50;
 
 // Build a spreadsheet (xlsx/csv) from an array-of-arrays and trigger a download.
-// SheetJS is lazy-loaded so it never enters the main bundle. Shared by the report
+// The writer is lazy-loaded so it never enters the main bundle. Shared by the report
 // export and the custom-report export.
 async function exportAoa(aoa: (string | number)[][], fmt: "xlsx" | "csv", name: string) {
-  const XLSX = await import("xlsx");
-  const ws = XLSX.utils.aoa_to_sheet(aoa);
-  let blob: Blob;
-  if (fmt === "csv") {
-    blob = new Blob([XLSX.utils.sheet_to_csv(ws)], { type: "text/csv;charset=utf-8" });
-  } else {
-    const wb = XLSX.utils.book_new();
-    XLSX.utils.book_append_sheet(wb, ws, "Report");
-    blob = new Blob([XLSX.write(wb, { bookType: "xlsx", type: "array" })], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
-  }
+  const { toCsv, toXlsx } = await import("../../lib/sheet");
+  const blob = fmt === "csv"
+    ? new Blob(["\ufeff" + toCsv(aoa)], { type: "text/csv;charset=utf-8" })   // BOM: Excel reads UTF-8
+    : new Blob([toXlsx(aoa) as BlobPart], { type: "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" });
   const url = URL.createObjectURL(blob);
   const a = document.createElement("a");
   a.href = url; a.download = `${name}.${fmt}`;
@@ -52,16 +53,16 @@ function BarChart({ rows, fmt = (n: number) => n.toLocaleString(getLocale()), co
         const pos = r.value >= 0;
         const pct = Math.max(2, (Math.abs(r.value) / max) * 100);
         const fill = color ?? (pos
-          ? "bg-gradient-to-r from-primary to-primary-container"
-          : "bg-gradient-to-r from-rose-400 to-rose-500");
+          ? "bg-primary"
+          : "bg-rose-400");
         return (
           <div key={i} className="group flex items-center gap-2.5 text-xs">
-            <span className="w-4 shrink-0 text-right text-[10px] font-bold text-ink-placeholder tabular-nums">{i + 1}</span>
+            <span className="w-4 shrink-0 text-right text-[11px] font-bold text-ink-placeholder tabular-nums">{i + 1}</span>
             <span className="w-32 shrink-0 truncate text-ink-secondary group-hover:text-ink-primary transition-colors" title={r.label}>{r.label}</span>
             <div className="flex-1 h-5 rounded-full bg-slate-100/80 overflow-hidden ring-1 ring-inset ring-slate-200/50">
               <div className={`h-full rounded-full ${fill} shadow-sm transition-[width] duration-700 ease-out group-hover:brightness-105`} style={{ width: `${pct}%` }} />
             </div>
-            <span className={`w-24 shrink-0 text-right font-mono font-semibold tabular-nums ${pos ? "text-ink-primary" : "text-rose-600"}`}>{fmt(r.value)}</span>
+            <span className={`w-24 shrink-0 text-right tabular-nums font-semibold tabular-nums ${pos ? "text-ink-primary" : "text-rose-600"}`}>{fmt(r.value)}</span>
           </div>
         );
       })}
@@ -165,11 +166,11 @@ export function CustomView() {
 
   return (
     <div className="flex-1 overflow-y-auto px-6 py-5">
-      <div className="flex gap-4">
+      <div className="flex flex-col md:flex-row gap-4">
         {/* saved reports */}
-        <aside className="w-52 flex-shrink-0 bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-2 h-fit">
+        <aside className="md:w-52 flex-shrink-0 bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-2 h-fit">
           <button onClick={() => pickSource("")} className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-bold text-primary hover:bg-blue-50 flex items-center gap-1.5"><M n="add" c="text-sm" />New report</button>
-          <div className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary px-2 py-1.5 mt-1">Saved</div>
+          <div className="text-[11px] font-bold text-ink-tertiary px-2 py-1.5 mt-1">Saved</div>
           {saved.length === 0 && <div className="px-2.5 py-1 text-xs text-ink-tertiary">None yet.</div>}
           {saved.map((r) => (
             <button key={r.id} onClick={() => loadReport(r)} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center gap-2 ${curId === r.id ? "bg-blue-50/80 text-primary font-semibold" : "text-ink-secondary hover:bg-slate-100"}`}><M n="bar_chart" c="text-sm" /><span className="truncate">{r.name}</span></button>
@@ -180,7 +181,7 @@ export function CustomView() {
         <div className="flex-1 min-w-0 space-y-3">
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 space-y-3">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">Source</span>
+              <span className="text-[11px] font-bold text-ink-tertiary">Source</span>
               <select value={src} onChange={(e) => pickSource(e.target.value)} className="glass-input px-2.5 py-1.5 rounded-lg text-xs">
                 <option value="">Choose data…</option>
                 {sources && Object.entries(sources).map(([k, s]) => <option key={k} value={k}>{s.label}</option>)}
@@ -206,7 +207,7 @@ export function CustomView() {
                 ? <div className="text-[11px] text-ink-tertiary flex items-center gap-1.5"><M n="info" c="text-xs" />Columns are set by <span className="font-semibold text-ink-secondary">Group by</span> + <span className="font-semibold text-ink-secondary">Aggregates</span> below.</div>
                 : (
                 <div>
-                  <span className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">Columns</span>
+                  <span className="text-[11px] font-bold text-ink-tertiary">Columns</span>
                   <div className="flex flex-wrap gap-1.5 mt-1.5">
                     {fieldsOf.map((f) => {
                       const on = cols.includes(f.key);
@@ -220,7 +221,7 @@ export function CustomView() {
 
               {/* filters */}
               <div>
-                <div className="flex items-center gap-2"><span className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">Filters</span>
+                <div className="flex items-center gap-2"><span className="text-[11px] font-bold text-ink-tertiary">Filters</span>
                   <button onClick={() => setFilters((f) => [...f, { field: fieldsOf[0]?.key || "", op: "eq", value: "" }])} className="text-[11px] font-semibold text-primary hover:underline">+ Add</button></div>
                 {filters.map((flt, i) => (
                   <div key={i} className="flex items-center gap-1.5 mt-1.5">
@@ -230,7 +231,9 @@ export function CustomView() {
                     <select value={flt.op} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, op: e.target.value } : x))} className="glass-input px-2.5 py-1.5 rounded-lg text-xs min-w-[110px]">
                       {OPS_FOR(fType(flt.field)).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                     </select>
-                    <input value={flt.value} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} placeholder="value" className="glass-input px-2.5 py-1.5 rounded-lg text-xs w-32" />
+                    {fType(flt.field) === "date"
+                      ? <DateField className="w-40" value={flt.value} onChange={(d) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, value: d } : x))} label="Filter date" />
+                      : <input value={flt.value} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} placeholder="value" className="glass-input px-2.5 py-1.5 rounded-lg text-xs w-32" />}
                     <button aria-label="Remove filter" onClick={() => setFilters((fs) => fs.filter((_, j) => j !== i))} className="p-1 rounded-md text-ink-tertiary hover:text-rose-500 hover:bg-rose-50 shrink-0"><M n="close" c="text-sm" /></button>
                   </div>
                 ))}
@@ -239,7 +242,7 @@ export function CustomView() {
               {/* group by + aggregates — the "shape the output" panel */}
               <div className="rounded-xl bg-slate-50/70 border border-slate-200/70 p-3 flex flex-wrap items-start gap-x-6 gap-y-3">
                 <div className="min-w-[160px]">
-                  <span className="block text-[10px] font-bold uppercase tracking-wider text-ink-tertiary mb-1.5">Group by</span>
+                  <span className="block text-[11px] font-bold text-ink-tertiary mb-1.5">Group by</span>
                   <select value={groupBy} onChange={(e) => setGroupBy(e.target.value)} className="glass-input px-2.5 py-1.5 rounded-lg text-xs w-full">
                     <option value="">— none (list rows) —</option>
                     {fieldsOf.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
@@ -248,7 +251,7 @@ export function CustomView() {
                 {groupBy && (
                   <div className="min-w-[200px]">
                     <div className="flex items-center justify-between gap-3 mb-1.5">
-                      <span className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">Aggregates</span>
+                      <span className="text-[11px] font-bold text-ink-tertiary">Aggregates</span>
                       <button onClick={() => setAggs((a) => [...a, { fn: "sum", field: numFields[0]?.key || "" }])} className="flex items-center gap-0.5 text-[11px] font-semibold text-primary hover:underline"><M n="add" c="text-xs" />Add</button>
                     </div>
                     <div className="space-y-1.5">
@@ -273,7 +276,7 @@ export function CustomView() {
 
               {/* actions */}
               <div className="flex items-center gap-2 flex-wrap pt-1 border-t border-slate-100">
-                <button disabled={busy} onClick={run} className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-50">Run</button>
+                <button disabled={busy} onClick={run} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-50">Run</button>
                 <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Report name" className="glass-input px-2.5 py-1.5 rounded-lg text-xs w-44" />
                 <button disabled={busy} onClick={save} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-primary bg-blue-50 hover:bg-blue-100 disabled:opacity-50">{curId ? "Update" : "Save"}</button>
                 {curId && <button disabled={busy} onClick={del} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-rose-600 bg-rose-50 hover:bg-rose-100">Delete</button>}
@@ -290,7 +293,7 @@ export function CustomView() {
 
           {res && chartRows.length > 0 && (
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5">
-              <h4 className="text-xs font-bold text-ink-primary uppercase tracking-wider mb-3">Chart</h4>
+              <h4 className="text-xs font-bold text-ink-primary mb-3">Chart</h4>
               <BarChart rows={chartRows} />
             </div>
           )}
@@ -302,7 +305,7 @@ export function CustomView() {
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
               <div className="overflow-auto max-h-[62vh]">
                 <table className="w-full text-left border-collapse text-xs">
-                  <thead className="sticky top-0 z-10"><tr className="bg-slate-50 border-b border-slate-200 text-ink-tertiary text-[10px] font-bold uppercase tracking-wider shadow-[0_1px_0_rgba(0,0,0,0.04)]">
+                  <thead className="sticky top-0 z-10"><tr className="bg-slate-50 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold shadow-[0_1px_0_rgba(0,0,0,0.04)]">
                     {res.columns.map((c) => <th key={c.key} className={`py-3 px-4 bg-slate-50 ${c.align === "right" ? "text-right" : ""}`}>{c.label}</th>)}
                   </tr></thead>
                   <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
@@ -327,8 +330,15 @@ export function CustomView() {
   );
 }
 
+// Reports whose download needs its own right on top of seeing them (mirrors reports.EXPORT_PERMS).
+const EXPORT_PERMS: Record<string, string> = {
+  sold_products: "can_export_sales", provided_services: "can_export_sales",
+  payroll: "can_export_payroll", labor_cost: "can_export_payroll",
+};
+
 export default function ReportsHub() {
   const nav = useNavigate();
+  const { can } = useMe();
   const [dash, setDash] = useState<any>(null);
   const [cat, setCat] = useState<Catalog | null>(null);
   const [active, setActive] = useState<string | null>(null);
@@ -336,12 +346,16 @@ export default function ReportsHub() {
   const [loading, setLoading] = useState(false);
   const [from, setFrom] = useState(iso(new Date(Date.now() - 30 * 864e5)));
   const [to, setTo] = useState(iso(new Date()));
-  const [view, setView] = useState<"reports" | "profitability" | "insights" | "feedback" | "custom" | "fleet">("reports");
+  const [view, setView] = useState<"reports" | "total_profit" | "profitability" | "insights" | "feedback" | "custom" | "fleet" | "gopilot">("reports");
   const [profit, setProfit] = useState<any[] | null>(null);
   const [insights, setInsights] = useState<any[] | null>(null);
   const [feedback, setFeedback] = useState<any | null>(null);
   const [locs, setLocs] = useState<{ id: string; name: string }[]>([]);
-  const [locId, setLocId] = useState("");
+  const [locId, setLocId] = useState(() => readReportsPref(cachedPref(REPORTS_PREF, {})).locId);
+  // Report filters (turnover movement, hide zero amounts, dropped-job status/type), remembered per user.
+  const [filters, setFilters] = useState<ReportFilters>(() => readReportsPref(cachedPref(REPORTS_PREF, {})).filters);
+  const [dropStatuses, setDropStatuses] = useState<{ key: string; name: string }[]>([]);
+  const [woTypes, setWoTypes] = useState<{ id: string; name: string }[]>([]);
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<{ i: number; dir: 1 | -1 } | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -351,9 +365,29 @@ export default function ReportsHub() {
   const [page, setPage] = useState(1);
   const [ppage, setPpage] = useState(1);
 
-  useEffect(() => { api.get<any>("/reports/dashboard").then(setDash).catch(() => setDash({})); }, []);
+  useEffect(() => { api.get<any>("/reports/dashboard").then((r) => setDash(r?.stats || r || {})).catch(() => setDash({})); }, []);
   useEffect(() => { api.get<any>("/staff/locations").then((r) => setLocs(r.items || r || [])).catch(() => setLocs([])); }, []);
-  useEffect(() => { api.get<Catalog>("/reports/catalog").then((c) => { setCat(c); const first = c.tabs?.[0]?.reports?.[0]?.key; if (first) run(first); }).catch(() => setCat({ tabs: [] })); }, []);
+  useEffect(() => {
+    // Open the report you had last time (with its location and filters), else the first one.
+    Promise.all([api.get<Catalog>("/reports/catalog"), loadPref(REPORTS_PREF, {})]).then(([c, raw]) => {
+      setCat(c);
+      const pref = readReportsPref(raw);
+      setLocId(pref.locId); setFilters(pref.filters);
+      const keys = (c.tabs || []).flatMap((t) => t.reports.map((r) => r.key));
+      const first = pref.report && keys.includes(pref.report) ? pref.report : keys[0];
+      if (first) runWith(first, from, to, pref.filters, pref.locId);
+    }).catch(() => setCat({ tabs: [] }));
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    api.get<any>("/statuses?record_type=work_order").then((r) => setDropStatuses((r.items || r || []).filter((x: any) => x.status_group === "dropped"))).catch(() => {});
+    api.get<any>("/forms/types").then((r) => setWoTypes(r.items || [])).catch(() => {});
+  }, []);
+  const remember = (report: string | null, f: ReportFilters, loc: string) => savePref(REPORTS_PREF, { report, locId: loc, filters: f });
+  function changeFilter(patch: Partial<ReportFilters>) {
+    const f = { ...filters, ...patch };
+    setFilters(f);
+    if (active) runWith(active, from, to, f);
+  }
 
   // ── date presets (Orderry-style quick ranges) ──
   const presets: [string, () => [Date, Date]][] = [
@@ -372,7 +406,7 @@ export default function ReportsHub() {
 
   // Export the rows the user is actually looking at — filtered + sorted + totals —
   // built client-side from `viewRows` (see below) so the file matches the screen.
-  // SheetJS is loaded on demand so it never bloats the main bundle.
+  // The sheet writer is loaded on demand so it never bloats the main bundle.
   async function download(fmt: "xlsx" | "csv") {
     if (!active || !result) return;
     setExporting(true);
@@ -390,20 +424,21 @@ export default function ReportsHub() {
   }, [view]);
   const gv = (o: any, keys: string[], fb = "—") => { for (const k of keys) { const v = o?.[k]; if (v !== undefined && v !== null && v !== "") return String(v); } return fb; };
 
-  async function runWith(key: string, f: string, t: string) {
+  async function runWith(key: string, f: string, t: string, flt: ReportFilters = filters, loc: string = locId) {
     setActive(key); setLoading(true); setSort(null); setQ(""); setChartCol(null); setPrevTotals(null); setPage(1);
+    remember(key, flt, loc);
     try {
-      const qs = new URLSearchParams({ date_from: f, date_to: t });
-      if (locId) qs.set("location_id", locId);
+      const qs = new URLSearchParams({ date_from: f, date_to: t, ...filterParams(key, flt) });
+      if (loc) qs.set("location_id", loc);
       const r = await api.get<RunResult>(`/reports/run/${key}?${qs.toString()}`); setResult(r);
-      loadPrevPeriod(key, f, t, r);   // fire-and-forget; never blocks the table
+      loadPrevPeriod(key, f, t, r, flt, loc);   // fire-and-forget; never blocks the table
     } catch { setResult(null); } finally { setLoading(false); }
   }
   const run = (key: string) => runWith(key, from, to);
 
   // Period-over-period: fetch the immediately-preceding equal-length window and
   // total its numeric columns, so the totals row can show deltas.
-  async function loadPrevPeriod(key: string, f: string, t: string, cur: RunResult) {
+  async function loadPrevPeriod(key: string, f: string, t: string, cur: RunResult, flt: ReportFilters = filters, loc: string = locId) {
     try {
       const cols0 = cur.columns ?? [];
       const isNum = cols0.map((c, ci) => { const v = (cur.rows ?? []).map((r) => (Array.isArray(r) ? r[ci] : r[colKey(c, ci)])).filter((x) => x !== null && x !== undefined && x !== ""); return v.length > 0 && v.every((x) => typeof x === "number"); });
@@ -412,25 +447,27 @@ export default function ReportsHub() {
       const fD = new Date(f + "T00:00:00"), tD = new Date(t + "T00:00:00");
       const lenDays = Math.round((tD.getTime() - fD.getTime()) / dayMs) + 1;
       const prevTo = new Date(fD.getTime() - dayMs), prevFrom = new Date(fD.getTime() - lenDays * dayMs);
-      const qs = new URLSearchParams({ date_from: iso(prevFrom), date_to: iso(prevTo) });
-      if (locId) qs.set("location_id", locId);
+      const qs = new URLSearchParams({ date_from: iso(prevFrom), date_to: iso(prevTo), ...filterParams(key, flt) });
+      if (loc) qs.set("location_id", loc);
       const pr = await api.get<RunResult>(`/reports/run/${key}?${qs.toString()}`);
       const sums = cols0.map((c, ci) => isNum[ci] ? (pr.rows ?? []).reduce((s, r) => s + (Number(Array.isArray(r) ? r[ci] : r[colKey(c, ci)]) || 0), 0) : null);
       setPrevTotals(sums);
     } catch { /* deltas are best-effort; ignore */ }
   }
 
-  const KPIS: { l: string; v: any; icon: string; tint: string; accent: string; mono?: boolean; to?: string }[] = [
-    { l: "Total orders", v: dash?.total_orders ?? "—", icon: "handyman", tint: "bg-blue-50 text-primary", accent: "from-blue-400 to-primary", to: "/orders" },
-    { l: "Open orders", v: dash?.open_orders ?? "—", icon: "pending_actions", tint: "bg-amber-50 text-amber-600", accent: "from-amber-300 to-amber-500", to: "/orders" },
-    { l: "Clients", v: dash?.total_clients ?? "—", icon: "contacts", tint: "bg-indigo-50 text-indigo-600", accent: "from-indigo-300 to-indigo-500", to: "/clients" },
-    { l: "Revenue", v: money(dash?.revenue), icon: "trending_up", tint: "bg-emerald-50 text-emerald-600", accent: "from-emerald-300 to-emerald-500", mono: true, to: "/finance" },
-    { l: "Outstanding", v: money(dash?.outstanding), icon: "receipt_long", tint: "bg-rose-50 text-rose-600", accent: "from-rose-300 to-rose-500", mono: true, to: "/invoices" },
+  const kpiStats: SummaryStat[] = [
+    { label: "Jobs and estimates", value: dash?.total_orders ?? "—", onClick: () => nav("/orders") },
+    { label: "Still open", value: dash?.open_orders ?? "—", onClick: () => nav("/orders") },
+    { label: "Customers", value: dash?.total_clients ?? "—", onClick: () => nav("/clients") },
+    { label: "Paid invoices", value: money(dash?.revenue), onClick: () => nav("/finance") },
+    { label: "Still owed to you", value: money(dash?.outstanding), onClick: () => nav("/invoices") },
   ];
 
   const colLabel = (c: any) => typeof c === "string" ? c : (c.label || c.key);
   const colKey = (c: any, i: number) => typeof c === "string" ? c : (c.key ?? i);
-  const cell = (v: any) => (typeof v === "number" ? <span className={`font-mono tabular-nums ${v < 0 ? "text-rose-600 font-semibold" : ""}`}>{v.toLocaleString(getLocale())}</span> : String(v ?? "—"));
+  // Raw keys from the server ("technician", "in_repair") read as words; names and emails are left alone.
+  const cell = (v: any) => (typeof v === "number" ? <span className={`font-mono tabular-nums ${v < 0 ? "text-rose-600 font-semibold" : ""}`}>{v.toLocaleString(getLocale())}</span>
+    : typeof v === "string" && /^[a-z]+(_[a-z]+)*$/.test(v) ? humanize(v) : String(v ?? "—"));
   const cellVal = (row: any, c: any, ci: number) => Array.isArray(row) ? row[ci] : row[colKey(c, ci)];
 
   // ── derived view: search-filter + sort + numeric totals ──
@@ -480,23 +517,25 @@ export default function ReportsHub() {
     <Shell title="Reports">
       <div className="px-6 pt-3 border-b border-slate-200/60 bg-white/40 flex-shrink-0">
         <nav className="flex space-x-1 -mb-px text-xs font-semibold overflow-x-auto">
-          {([["reports", "Reports", "summarize"], ["custom", "Custom report", "tune"], ["fleet", "Business & analytics", "insights"], ["profitability", "Job profitability", "payments"], ["insights", "Insights", "lightbulb"], ["feedback", "Feedback", "reviews"]] as [typeof view, string, string][]).map(([id, label, icon]) => (
+          {([["reports", "Reports", "summarize"], ...(can("can_see_profit") ? [["total_profit", "Total profit", "savings"]] : []), ["custom", "Custom report", "tune"], ["fleet", "Business & analytics", "insights"], ["profitability", "Job profitability", "payments"], ["insights", "Insights", "lightbulb"], ["feedback", "Feedback", "reviews"], ...(can("can_manage_settings") ? [["gopilot", "Go pilot", "qr_code_scanner"]] : [])] as [typeof view, string, string][]).map(([id, label, icon]) => (
             <button key={id} onClick={() => setView(id)} className={`flex items-center gap-1.5 px-3 pb-3 pt-1 border-b-2 whitespace-nowrap transition-colors ${view === id ? "text-primary font-bold border-primary" : "text-ink-secondary hover:text-ink-primary hover:bg-slate-100/60 rounded-t-lg border-transparent"}`}><M n={icon} c="text-sm" />{label}</button>
           ))}
         </nav>
       </div>
 
       {view === "custom" && <CustomView />}
+      {view === "total_profit" && <div className="flex-1 overflow-y-auto px-6 py-5"><TotalProfit locs={locs} /></div>}
       {view === "fleet" && <FleetAnalytics />}
+      {view === "gopilot" && <GoPilotReport />}
 
-      {view !== "reports" && view !== "custom" && view !== "fleet" && (
+      {view !== "reports" && view !== "custom" && view !== "fleet" && view !== "total_profit" && view !== "gopilot" && (
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
           {view === "profitability" && (
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-              <div className="p-3.5 border-b border-slate-100 text-xs font-bold text-ink-primary uppercase tracking-wider">Job profitability</div>
+              <div className="p-3.5 border-b border-slate-100 text-xs font-bold text-ink-primary ">Job profitability</div>
               <table className="w-full text-left border-collapse text-xs">
-                <thead><tr className="bg-slate-50/60 border-b border-slate-100 text-ink-tertiary text-[10px] font-bold uppercase tracking-wider">
-                  <th className="py-3 px-4">Order</th><th className="py-3 px-4">Client</th><th className="py-3 px-4 text-right">Revenue</th><th className="py-3 px-4 text-right">Cost</th><th className="py-3 px-4 text-right">Profit</th><th className="py-3 px-4 text-right">Margin</th>
+                <thead><tr className="bg-slate-50/60 border-b border-slate-100 text-ink-tertiary text-[11px] font-bold ">
+                  <th className="py-3 px-4">Order</th><th className="py-3 px-4">Client</th><th className="py-3 px-4 text-right">Takings after tax</th><th className="py-3 px-4 text-right">Costs</th><th className="py-3 px-4 text-right">Profit</th><th className="py-3 px-4 text-right">Margin</th>
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
                   {profit == null && <SkeletonRows cols={6} />}
@@ -506,10 +545,10 @@ export default function ReportsHub() {
                     <tr key={r?.id || i} className="odd:bg-slate-50/40 hover:bg-blue-50/50 transition-colors">
                       <td className="py-2.5 px-4 font-bold text-primary font-mono">{gv(r, ["order_number", "order_id", "order"])}</td>
                       <td className="py-2.5 px-4">{gv(r, ["client_name", "client"])}</td>
-                      <td className="py-2.5 px-4 text-right font-mono">{money(r?.revenue ?? r?.total_revenue)}</td>
-                      <td className="py-2.5 px-4 text-right font-mono">{money(r?.cost ?? r?.total_cost)}</td>
-                      <td className="py-2.5 px-4 text-right font-mono font-bold text-ink-primary">{money(r?.profit ?? r?.gross_profit)}</td>
-                      <td className="py-2.5 px-4 text-right font-mono">{gv(r, ["margin_pct", "margin"], "—")}{(r?.margin_pct != null || r?.margin != null) ? "%" : ""}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums">{money(r?.revenue ?? r?.total_revenue)}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums">{r?.parts_cost === undefined ? "—" : money((r.parts_cost || 0) + (r.labour_cost || 0) + (r.commission || 0))}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums font-bold text-ink-primary">{r?.margin === undefined ? "—" : money(r.margin)}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums">{gv(r, ["margin_pct", "margin"], "—")}{(r?.margin_pct != null || r?.margin != null) ? "%" : ""}</td>
                     </tr>
                   ))}
                 </tbody>
@@ -528,8 +567,8 @@ export default function ReportsHub() {
               <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
                 {insights?.map((c, i) => (
                   <div key={c?.id || i} className="bg-white rounded-2xl border border-slate-200/80 shadow-clay-sm p-4">
-                    <p className="text-xs font-semibold uppercase tracking-wide text-ink-tertiary">{gv(c, ["title", "name", "label"])}</p>
-                    <p className="mt-2 text-2xl font-extrabold text-ink-primary font-mono">{gv(c, ["value", "total", "count"], "—")}</p>
+                    <p className="text-xs font-semibold text-ink-tertiary">{gv(c, ["title", "name", "label"])}</p>
+                    <p className="mt-2 text-2xl font-bold text-ink-primary tabular-nums">{gv(c, ["value", "total", "count"], "—")}</p>
                     {gv(c, ["subtitle", "hint", "description"], "") && <p className="mt-1 text-[11px] text-ink-tertiary">{gv(c, ["subtitle", "hint", "description"], "")}</p>}
                   </div>
                 ))}
@@ -555,21 +594,21 @@ export default function ReportsHub() {
                 <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
                   {cards.map((k) => (
                     <div key={k.l} className="bg-white rounded-xl p-3 border border-slate-200/80 shadow-clay-sm flex items-center justify-between">
-                      <div><span className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">{k.l}</span><p className="text-lg font-black text-ink-primary">{k.v}</p></div>
+                      <div><span className="text-[11px] font-bold text-ink-tertiary">{k.l}</span><p className="text-lg font-bold text-ink-primary">{k.v}</p></div>
                       <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${k.tint}`}><M n={k.icon} c="text-base" /></div>
                     </div>
                   ))}
                 </div>
                 {hasDist && (
                   <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5">
-                    <h4 className="text-xs font-bold text-ink-primary uppercase tracking-wider mb-3">Rating distribution</h4>
+                    <h4 className="text-xs font-bold text-ink-primary mb-3">Rating distribution</h4>
                     <BarChart rows={dist} color="bg-amber-400" fmt={(n) => String(n)} />
                   </div>
                 )}
                 <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-                  <div className="p-3.5 border-b border-slate-100 text-xs font-bold text-ink-primary uppercase tracking-wider">Comments</div>
+                  <div className="p-3.5 border-b border-slate-100 text-xs font-bold text-ink-primary ">Comments</div>
                   <table className="w-full text-left border-collapse text-xs">
-                    <thead><tr className="bg-slate-50/60 border-b border-slate-100 text-ink-tertiary text-[10px] font-bold uppercase tracking-wider">
+                    <thead><tr className="bg-slate-50/60 border-b border-slate-100 text-ink-tertiary text-[11px] font-bold ">
                       <th className="py-3 px-4">Date</th><th className="py-3 px-4">Order</th><th className="py-3 px-4">Rating</th><th className="py-3 px-4">Comment</th>
                     </tr></thead>
                     <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
@@ -578,7 +617,7 @@ export default function ReportsHub() {
                         <tr key={f?.id || i} className="odd:bg-slate-50/40 hover:bg-blue-50/50 transition-colors">
                           <td className="py-2.5 px-4">{f?.submitted_at ? new Date(f.submitted_at).toLocaleDateString() : "—"}</td>
                           <td className="py-2.5 px-4 font-bold text-primary font-mono">{f?.order_number ?? "—"}</td>
-                          <td className="py-2.5 px-4 font-mono">{f?.rating ?? "—"}</td>
+                          <td className="py-2.5 px-4 tabular-nums">{f?.rating ?? "—"}</td>
                           <td className="py-2.5 px-4 text-ink-tertiary truncate max-w-[360px]">{f?.comment || "—"}</td>
                         </tr>
                       ))}
@@ -593,37 +632,15 @@ export default function ReportsHub() {
 
       {view === "reports" && (
       <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
-        <div className="grid grid-cols-2 sm:grid-cols-5 gap-3">
-          {KPIS.map((k) => {
-            const clickable = !!k.to;
-            return (
-              <div key={k.l}
-                onClick={clickable ? () => nav(k.to!) : undefined}
-                role={clickable ? "button" : undefined}
-                tabIndex={clickable ? 0 : undefined}
-                onKeyDown={clickable ? (e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); nav(k.to!); } } : undefined}
-                className={`group relative overflow-hidden bg-white rounded-2xl p-4 border border-slate-200/80 shadow-clay-sm ${clickable ? "cursor-pointer hover:border-primary/40 hover:shadow-clay-card hover:-translate-y-0.5 transition-all duration-200 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40" : ""}`}>
-                <div className="flex items-start justify-between gap-2">
-                  <div className="min-w-0">
-                    <span className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">{k.l}</span>
-                    <p className={`mt-1 text-2xl font-black text-ink-primary leading-tight truncate ${k.mono ? "font-mono" : ""}`}>{k.v}</p>
-                  </div>
-                  <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${k.tint} group-hover:scale-105 transition-transform`}><M n={k.icon} c="text-base" /></div>
-                </div>
-                {clickable && <span className="absolute right-3 bottom-2.5 text-ink-placeholder opacity-0 group-hover:opacity-100 transition-opacity"><M n="arrow_forward" c="text-xs" /></span>}
-                <div className={`absolute inset-x-0 bottom-0 h-1 bg-gradient-to-r ${k.accent} opacity-70 group-hover:opacity-100 transition-opacity`} />
-              </div>
-            );
-          })}
-        </div>
+        <PageSummary stats={kpiStats} />
 
-        <div className="flex gap-4">
+        <div className="flex flex-col md:flex-row gap-4">
           {/* report catalog */}
-          <aside className="w-56 flex-shrink-0 bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-2 h-fit max-h-[70vh] overflow-y-auto">
+          <aside className="md:w-56 flex-shrink-0 bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-2 h-fit max-h-[40vh] md:max-h-[70vh] overflow-y-auto">
             {!cat && <div className="p-3 text-xs text-ink-tertiary">Loading…</div>}
             {cat?.tabs.map((t) => (
               <div key={t.name} className="mb-2">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary px-2 py-1.5">{t.name}</div>
+                <div className="text-[11px] font-bold text-ink-tertiary px-2 py-1.5">{t.name}</div>
                 {t.reports.map((r) => (
                   <button key={r.key} onClick={() => run(r.key)} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center gap-2 border-l-2 transition-colors ${active === r.key ? "bg-blue-50/80 text-primary font-semibold border-primary" : "text-ink-secondary hover:bg-slate-100 border-transparent"}`}><M n="bar_chart" c={`text-sm ${active === r.key ? "text-primary" : "text-ink-tertiary"}`} /><span className="truncate">{r.title}</span></button>
                 ))}
@@ -636,9 +653,9 @@ export default function ReportsHub() {
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 space-y-2.5">
               <div className="flex items-center gap-3 flex-wrap">
                 <h3 className="text-sm font-bold text-ink-primary">{result?.title || "Select a report"}</h3>
-                <div className="ml-auto flex items-center gap-2 text-xs">
+                <div className="ml-auto flex items-center gap-2 flex-wrap text-xs">
                   {locs.length > 1 && (
-                    <select value={locId} onChange={(e) => setLocId(e.target.value)} className="glass-input px-2.5 py-1.5 rounded-lg">
+                    <select value={locId} onChange={(e) => { setLocId(e.target.value); remember(active, filters, e.target.value); }} className="glass-input px-2.5 py-1.5 rounded-lg">
                       <option value="">All locations</option>
                       {locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
                     </select>
@@ -646,9 +663,41 @@ export default function ReportsHub() {
                   <DateField mode="date" value={from} onChange={setFrom} className="w-36" />
                   <span className="text-ink-tertiary">→</span>
                   <DateField mode="date" value={to} onChange={setTo} className="w-36" />
-                  <button onClick={() => active && run(active)} className="px-3 py-1.5 rounded-lg bg-gradient-to-r from-primary to-primary-container text-white text-xs font-bold shadow-clay-sm hover:brightness-110">Run</button>
+                  <button onClick={() => active && run(active)} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110">Run</button>
                 </div>
               </div>
+              {active && (REPORT_FILTERS[active] || []).length > 0 && (
+                <div className="flex items-center gap-2 flex-wrap text-xs" aria-label="Report filters">
+                  {REPORT_FILTERS[active].includes("movement") && (
+                    <select aria-label="Stock movement" value={filters.movement} onChange={(e) => changeFilter({ movement: e.target.value as ReportFilters["movement"] })} className="glass-input px-2.5 py-1.5 rounded-lg">
+                      <option value="with">Products that moved</option>
+                      <option value="without">Products that didn't move</option>
+                      <option value="all">All products</option>
+                    </select>
+                  )}
+                  {REPORT_FILTERS[active].includes("hideZero") && (
+                    <label className="inline-flex items-center gap-1.5 text-ink-secondary cursor-pointer">
+                      <input type="checkbox" className="accent-primary" checked={filters.hideZero} onChange={(e) => changeFilter({ hideZero: e.target.checked })} />
+                      Hide jobs with a zero total
+                    </label>
+                  )}
+                  {REPORT_FILTERS[active].includes("status") && dropStatuses.length > 1 && (
+                    <select aria-label="Status" value={filters.status} onChange={(e) => changeFilter({ status: e.target.value })} className="glass-input px-2.5 py-1.5 rounded-lg">
+                      <option value="">Any dropped status</option>
+                      {dropStatuses.map((st) => <option key={st.key} value={st.key}>{st.name}</option>)}
+                    </select>
+                  )}
+                  {REPORT_FILTERS[active].includes("typeId") && woTypes.length > 0 && (
+                    <select aria-label="Job type" value={filters.typeId} onChange={(e) => changeFilter({ typeId: e.target.value })} className="glass-input px-2.5 py-1.5 rounded-lg">
+                      <option value="">Any job type</option>
+                      {woTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </select>
+                  )}
+                  {JSON.stringify(filterParams(active, filters)) !== "{}" && (
+                    <button type="button" onClick={() => changeFilter(DEFAULT_FILTERS)} className="text-[11px] font-semibold text-ink-secondary hover:text-primary">Clear filters</button>
+                  )}
+                </div>
+              )}
               <div className="flex items-center gap-2 flex-wrap">
                 {presets.map(([label, fn]) => (
                   <button key={label} onClick={() => applyPreset(fn)} className="px-2.5 py-1 rounded-full text-[11px] font-semibold text-ink-secondary bg-slate-100 hover:bg-blue-50 hover:text-primary transition-colors">{label}</button>
@@ -656,8 +705,10 @@ export default function ReportsHub() {
                 {result && (
                   <div className="ml-auto flex items-center gap-2">
                     <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search rows…" aria-label="Search report rows" className="glass-input px-2.5 py-1.5 rounded-lg text-xs w-40" />
+                    {can(EXPORT_PERMS[active || ""]) && <>
                     <button disabled={exporting} onClick={() => download("xlsx")} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 flex items-center gap-1 disabled:opacity-50"><M n="table_view" c="text-sm" />Excel</button>
                     <button disabled={exporting} onClick={() => download("csv")} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-ink-secondary bg-slate-100 hover:bg-slate-200 flex items-center gap-1 disabled:opacity-50"><M n="download" c="text-sm" />CSV</button>
+                    </>}
                   </div>
                 )}
               </div>
@@ -666,16 +717,16 @@ export default function ReportsHub() {
               <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5">
                 <div className="flex items-center gap-2 mb-3">
                   <M n="bar_chart" c="text-sm text-primary" />
-                  <h4 className="text-xs font-bold text-ink-primary uppercase tracking-wider">Chart</h4>
+                  <h4 className="text-xs font-bold text-ink-primary ">Chart</h4>
                   {numericIdxs.length > 1 && (
                     <select value={activeChartCol} onChange={(e) => setChartCol(Number(e.target.value))} className="glass-input px-2 py-1 rounded-lg text-xs">
                       {numericIdxs.map((i) => <option key={i} value={i}>{colLabel(cols[i])}</option>)}
                     </select>
                   )}
-                  <button onClick={() => setShowChart((v) => !v)} className="ml-auto text-[11px] font-semibold text-ink-secondary hover:text-primary">{showChart ? "Hide" : "Show"}</button>
+                  <button onClick={() => setShowChart((v) => !v)} className="ml-auto px-2 py-1 -my-1 text-[11px] font-semibold text-ink-secondary hover:text-primary">{showChart ? "Hide" : "Show"}</button>
                 </div>
                 {showChart && (chartRows.length
-                  ? <><BarChart rows={chartRows} /><p className="mt-2 text-[10px] text-ink-tertiary">Top {chartRows.length} by {colLabel(cols[activeChartCol])}{q.trim() ? " (filtered)" : ""}.</p></>
+                  ? <><BarChart rows={chartRows} /><p className="mt-2 text-[11px] text-ink-tertiary">Top {chartRows.length} by {colLabel(cols[activeChartCol])}{q.trim() ? " (filtered)" : ""}.</p></>
                   : <div className="text-xs text-ink-tertiary py-3 text-center">No non-zero values to chart.</div>)}
               </div>
             )}
@@ -688,7 +739,7 @@ export default function ReportsHub() {
               {!loading && result && (
                 <div className="overflow-auto max-h-[62vh]">
                   <table className="w-full text-left border-collapse text-xs">
-                    <thead className="sticky top-0 z-10"><tr className="bg-slate-50 border-b border-slate-200 text-ink-tertiary text-[10px] font-bold uppercase tracking-wider shadow-[0_1px_0_rgba(0,0,0,0.04)]">
+                    <thead className="sticky top-0 z-10"><tr className="bg-slate-50 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold shadow-[0_1px_0_rgba(0,0,0,0.04)]">
                       {cols.map((c, i) => (
                         <th key={colKey(c, i)} scope="col" role="button" tabIndex={0}
                             aria-sort={sort?.i === i ? (sort.dir === 1 ? "ascending" : "descending") : "none"}
@@ -710,16 +761,16 @@ export default function ReportsHub() {
                     {hasTotals && viewRows.length > 0 && (
                       <tfoot><tr className="bg-slate-50/80 border-t-2 border-slate-200 font-bold text-ink-primary">
                         {cols.map((_c, ci) => {
-                          if (ci === totalsLabelIdx) return <td key={ci} className="py-2.5 px-4">Total{prevTotals && <span className="ml-1 font-normal text-[10px] text-ink-tertiary">vs prev period</span>}</td>;
+                          if (ci === totalsLabelIdx) return <td key={ci} className="py-2.5 px-4">Total{prevTotals && <span className="ml-1 font-normal text-[11px] text-ink-tertiary">vs prev period</span>}</td>;
                           if (totals[ci] == null) return <td key={ci} className="py-2.5 px-4" />;
                           const prev = prevTotals?.[ci];
                           const d = prev != null ? deltaPct(totals[ci]!, prev) : null;
                           const up = (totals[ci]! - (prev ?? 0)) >= 0;
                           return (
                             <td key={ci} className="py-2.5 px-4">
-                              <span className="font-mono block">{totals[ci]!.toLocaleString(getLocale(), { maximumFractionDigits: 2 })}</span>
+                              <span className="tabular-nums block">{totals[ci]!.toLocaleString(getLocale(), { maximumFractionDigits: 2 })}</span>
                               {prev != null && (
-                                <span className={`text-[10px] font-semibold ${up ? "text-emerald-600" : "text-rose-600"}`} title={`Previous: ${prev.toLocaleString(getLocale())}`}>
+                                <span className={`text-[11px] font-semibold ${up ? "text-emerald-600" : "text-rose-600"}`} title={`Previous: ${prev.toLocaleString(getLocale())}`}>
                                   {up ? "▲" : "▼"} {d == null ? "—" : `${Math.abs(d).toFixed(1)}%`}
                                 </span>
                               )}
@@ -735,7 +786,7 @@ export default function ReportsHub() {
                 <Pager total={viewRows.length} page={safePage} pageSize={REPORT_PAGE} onPage={setPage}
                        noun={q.trim() ? "matching rows" : "rows"} />
               )}
-              {!loading && !result && <div className="p-12 text-center"><M n="insert_chart" c="text-4xl text-ink-placeholder" /><p className="mt-2 text-xs text-ink-tertiary">Pick a report from the left to get started.</p></div>}
+              {!loading && !result && <div className="p-12 text-center"><M n="insert_chart" c="mx-auto mb-2 text-4xl text-ink-placeholder" /><p className="mt-2 text-xs text-ink-tertiary">Pick a report from the left to get started.</p></div>}
             </div>
           </div>
         </div>
@@ -771,11 +822,11 @@ function FleetAnalytics() {
     { l: "Avg turnaround", v: `${ins.avg_turnaround_hours ?? 0}h`, icon: "schedule", tint: "bg-amber-50 text-amber-600", accent: "from-amber-300 to-amber-500" },
   ] : [];
   const box = "bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden";
-  const th = "px-4 py-2.5 border-b border-slate-100 text-[10px] font-bold uppercase tracking-wider text-ink-tertiary";
+  const th = "px-4 py-2.5 border-b border-slate-100 text-[11px] font-bold   text-ink-tertiary";
   return (
     <div className="space-y-5">
       <div className="flex items-center gap-2">
-        <span className="text-[11px] font-bold uppercase tracking-wider text-ink-tertiary">Period</span>
+        <span className="text-[11px] font-bold text-ink-tertiary">Period</span>
         <div className="flex bg-slate-100 rounded-lg p-0.5 border border-slate-200/60">
           {[7, 30, 90].map((d) => <button key={d} type="button" onClick={() => setDays(d)} className={`px-3 py-1 rounded-md text-xs font-semibold ${days === d ? "bg-white text-primary shadow-xs" : "text-ink-secondary"}`}>{d}d</button>)}
         </div>
@@ -786,8 +837,8 @@ function FleetAnalytics() {
           <div key={k.l} className="group relative overflow-hidden bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-4">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <div className="text-[10px] font-bold uppercase tracking-wider text-ink-tertiary">{k.l}</div>
-                <div className="mt-1 text-2xl font-black text-ink-primary leading-tight truncate">{k.v}</div>
+                <div className="text-[11px] font-bold text-ink-tertiary">{k.l}</div>
+                <div className="mt-1 text-2xl font-bold text-ink-primary leading-tight truncate">{k.v}</div>
               </div>
               <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${k.tint}`}><M n={k.icon} c="text-base" /></div>
             </div>

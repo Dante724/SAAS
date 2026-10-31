@@ -27,10 +27,11 @@ from backend.models import (
     OrderLine,
     Organisation,
 )
-from backend.services.auth import get_current_employee, require_perm
-from backend.services.money import q2, q4
+from backend.services.auth import get_current_employee, require_perm, record_scope
+from backend.services.money import q2
 
-router = APIRouter(prefix="/api", tags=["engage"])
+router = APIRouter(prefix="/api", tags=["engage"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 TIERS = [(2000, "gold"), (500, "silver"), (0, "standard")]
 
@@ -141,7 +142,7 @@ async def redeem_giftcard(
     order_id: str,
     data: RedeemGiftIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_set_discount")),
 ):
     order = await _order_or_404(db, current.org_id, order_id)
     g = (await db.execute(select(GiftCard).where(
@@ -150,10 +151,15 @@ async def redeem_giftcard(
         raise HTTPException(404, "Gift card not found or inactive")
     if g.expires_at and g.expires_at < datetime.utcnow():
         raise HTTPException(400, "Gift card has expired")
-    order_balance = q2((order.total or 0) - (order.prepayment_total or 0))
+    from backend.services.order_money import balance_due
+    order_balance = await balance_due(db, order)
     amount = q2(data.amount if data.amount is not None else min(g.balance, max(order_balance, 0)))
     if amount <= 0:
         raise HTTPException(400, "Nothing to redeem")
+    if amount > order_balance + 0.005:
+        # an uncapped redemption drove the order total negative, which refund_overpayment then
+        # paid out in cash — turning gift-card balance into money
+        raise HTTPException(400, f"Amount exceeds the order balance ({order_balance:.2f})")
     if amount > g.balance:
         raise HTTPException(400, f"Amount exceeds card balance ({g.balance:.2f})")
     # 144bc — guarded atomic decrement: a concurrent redemption can't drive the balance negative.
@@ -229,7 +235,7 @@ async def generate_client_coupon(
     client_id: str,
     data: ClientCouponIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_set_discount")),   # same gate as the other coupon routes
 ):
     """144bi — mint a coupon issued to a specific returning client. Auto-codes so the
     front desk can generate one in a click and offer it now; it's redeemed on the
@@ -241,6 +247,10 @@ async def generate_client_coupon(
         raise HTTPException(404, "Client not found")
     if data.kind not in ("pct", "fixed") or data.value <= 0:
         raise HTTPException(422, "kind must be pct|fixed with a positive value")
+    if data.kind == "pct" and data.value > 100:
+        raise HTTPException(422, "A percentage coupon can't be more than 100%")
+    if not 1 <= data.max_uses <= 100:
+        raise HTTPException(422, "A returning-customer coupon can be used 1 to 100 times")
     import random
     import string
     # unique short code for this org
@@ -284,7 +294,7 @@ async def apply_coupon(
     order_id: str,
     data: ApplyCouponIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_set_discount")),
 ):
     order = await _order_or_404(db, current.org_id, order_id)
     c = (await db.execute(select(Coupon).where(
@@ -306,8 +316,22 @@ async def apply_coupon(
     if already:
         raise HTTPException(400, "Coupon already applied to this order")
     discount = q2((order.total or 0) * c.value / 100.0) if c.kind == "pct" else q2(c.value)
-    discount = min(discount, q2(order.total or 0))
-    c.uses += 1
+    # Cap at what's still owed, not the order total: a coupon on an order that's already
+    # (partly) paid would otherwise leave it "overpaid", and that overpayment can be refunded
+    # from the till — a coupon turned into cash (B12).
+    from backend.services.order_money import balance_due
+    owed = await balance_due(db, order)
+    if owed <= 0:
+        raise HTTPException(400, "Nothing is owed on this order, so a coupon can't be applied")
+    discount = min(discount, owed)
+    # Guarded atomic increment: `c.uses += 1` let concurrent redemptions both pass the
+    # max_uses check above and overshoot the limit.
+    res = await db.execute(sa_update(type(c)).where(
+        type(c).id == c.id,
+        (type(c).max_uses.is_(None)) | (type(c).max_uses == 0) | (type(c).uses < type(c).max_uses))
+        .values(uses=type(c).uses + 1).execution_options(synchronize_session=False))
+    if res.rowcount == 0:
+        raise HTTPException(409, "Coupon usage limit reached")
     await _add_discount_line(db, order, f"Coupon {c.code}", discount)
     await db.commit()
     return {"ok": True, "discount": discount, "new_total": order.total}
@@ -349,7 +373,7 @@ async def redeem_loyalty(
     order_id: str,
     data: RedeemPointsIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_set_discount")),
 ):
     order = await _order_or_404(db, current.org_id, order_id)
     if not order.client_id:
@@ -359,11 +383,16 @@ async def redeem_loyalty(
         raise HTTPException(400, "Loyalty redemption is not configured (loyalty_point_value)")
     if data.points <= 0:
         raise HTTPException(422, "points must be positive")
+    # Serialise redemptions per client (the POS path already does): two concurrent requests
+    # used to both read the same points balance and spend it twice.
+    from backend.models import Client as _Client
+    await db.execute(select(_Client.id).where(_Client.id == order.client_id).with_for_update())
     bal = await loyalty_balance(db, current.org_id, order.client_id)
     if data.points > bal:
         raise HTTPException(400, f"Client has only {bal:.0f} points")
     # 144bc — cap redeemed value at the order balance so points past what's owed aren't burned.
-    order_balance = q2((order.total or 0) - (order.prepayment_total or 0))
+    from backend.services.order_money import balance_due
+    order_balance = await balance_due(db, order)
     amount = q2(data.points * org.loyalty_point_value)
     used_points = data.points
     if amount > order_balance:

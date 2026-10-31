@@ -5,7 +5,7 @@ Postgres does not auto-index foreign keys, so the hottest tenant-key and FK colu
 adds single-column indexes to those columns. The models carry matching ``index=True`` so
 dev (SQLite) builds them via create_all; this migration owns them for production.
 
-Each create/drop is guarded so a pre-existing index name (e.g. already built from the model
+Each create/drop checks the live schema first, so a pre-existing index name (e.g. already built from the model
 on a freshly created DB) doesn't abort the migration.
 
 Revision ID: ix144an01
@@ -48,17 +48,24 @@ _INDEXES = [
 ]
 
 
+
+def _indexes(table: str) -> set:
+    """Index names that exist right now. Checking first (instead of try/except around DDL) matters
+    on Postgres: a failed statement aborts the whole migration transaction, so the except can't
+    recover and the upgrade fails later with a confusing error."""
+    import sqlalchemy as _sa
+    insp = _sa.inspect(op.get_bind())
+    if not insp.has_table(table):
+        return set()
+    return {i["name"] for i in insp.get_indexes(table)}
+
 def upgrade() -> None:
     for table, col in _INDEXES:
-        try:
+        if f"ix_{table}_{col}" not in _indexes(table):
             op.create_index(op.f(f"ix_{table}_{col}"), table, [col])
-        except Exception:
-            pass
 
 
 def downgrade() -> None:
     for table, col in _INDEXES:
-        try:
+        if f"ix_{table}_{col}" in _indexes(table):
             op.drop_index(op.f(f"ix_{table}_{col}"), table_name=table)
-        except Exception:
-            pass

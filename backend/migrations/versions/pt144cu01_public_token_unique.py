@@ -17,6 +17,17 @@ branch_labels = None
 depends_on = None
 
 
+
+def _indexes(table: str) -> set:
+    """Index names that exist right now. Checking first (instead of try/except around DDL) matters
+    on Postgres: a failed statement aborts the whole migration transaction, so the except can't
+    recover and the upgrade fails later with a confusing error."""
+    import sqlalchemy as _sa
+    insp = _sa.inspect(op.get_bind())
+    if not insp.has_table(table):
+        return set()
+    return {i["name"] for i in insp.get_indexes(table)}
+
 def upgrade() -> None:
     conn = op.get_bind()
     # 1) Regenerate any duplicate non-null tokens so the unique index can be built.
@@ -36,10 +47,8 @@ def upgrade() -> None:
             seen.add(tok)
 
     # 2) Replace the plain index with a unique one.
-    try:
+    if "ix_orders_public_token" in _indexes("orders"):   # may not exist on some DBs
         op.drop_index("ix_orders_public_token", table_name="orders")
-    except Exception:  # noqa: BLE001 — index name may differ / not exist on some DBs
-        pass
     op.create_index("ix_orders_public_token", "orders", ["public_token"], unique=True)
 
 

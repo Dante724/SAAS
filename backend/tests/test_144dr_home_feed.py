@@ -23,12 +23,12 @@ async def test_feed_empty_is_ok(client, tenant):
 @pytest.mark.asyncio
 async def test_overdue_order_surfaces(client, tenant, db):
     from backend.models import Order, OrderStatus
-    # Seed a couple of statuses so the status-group mapping path runs over real rows
-    # (regression: OrderStatus key field, not .status).
+    # The status-group mapping path must run over real rows (regression: OrderStatus key field,
+    # not .status). Signup seeds the work-order statuses (launch QA B2); they must be there.
     me = (await client.get("/api/auth/me", headers=tenant)).json()
-    db.add(OrderStatus(org_id=me["org_id"], key="done", name="Done", status_group="closed"))
-    db.add(OrderStatus(org_id=me["org_id"], key="ready", name="Ready", status_group="ready"))
-    await db.commit()
+    keys = set((await db.execute(select(OrderStatus.key).where(
+        OrderStatus.org_id == me["org_id"], OrderStatus.record_type == "work_order"))).scalars())
+    assert {"done", "ready"} <= keys
     loc = await _loc(client, tenant)
     cid = (await client.post("/api/clients", json={"name": "C"}, headers=tenant)).json()["id"]
     o = (await client.post("/api/orders", json={"client_id": cid, "location_id": loc, "complaint": "x"}, headers=tenant)).json()

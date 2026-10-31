@@ -3,6 +3,8 @@ import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import DateField from "../../components/DateField";
 import { Product, Supplier, money } from "./types";
+import PasteImport, { ImportedLine } from "./PasteImport";
+import { useMe } from "../../context/Me";
 
 /** Create a purchase order: supplier + location + line items → POST /inventory/po.
  * This is the entry point that was missing — the toolbar button used to open the
@@ -25,6 +27,8 @@ export default function NewPODrawer({ products, onClose, onCreated }:
   const [pool, setPool] = useState<Product[]>(products);
   // inline quick-create so an empty system is never a dead end
   const [newSup, setNewSup] = useState(false); const [supName, setSupName] = useState(""); const [supBusy, setSupBusy] = useState(false);
+  const { can } = useMe();
+  const [pasting, setPasting] = useState(false);       // 13b: paste the supplier's sheet
   const [newProd, setNewProd] = useState(false); const [prodName, setProdName] = useState(""); const [prodCost, setProdCost] = useState(""); const [prodBusy, setProdBusy] = useState(false);
 
   useEffect(() => {
@@ -34,6 +38,12 @@ export default function NewPODrawer({ products, onClose, onCreated }:
     if (!products || products.length === 0) api.get<any>("/catalog/products").then((r) => setPool(r.items || [])).catch(() => {});
   }, []);
 
+  // 13b: imported lines fill the empty first row, then append; new products join the picker.
+  function addImported(lines: ImportedLine[]) {
+    setPool((xs) => [...xs, ...lines.filter((l) => l.created && !xs.some((x) => x.id === l.part_id)).map((l) => ({ id: l.part_id, name: l.name, cost_price: l.cost } as any))]);
+    setRows((rs) => [...rs.filter((r) => r.part_id), ...lines.map((l) => ({ part_id: l.part_id, qty: l.qty, cost: l.cost }))]);
+    setPasting(false);
+  }
   const setRow = (i: number, patch: Partial<Row>) => setRows((rs) => rs.map((r, j) => j === i ? { ...r, ...patch } : r));
   const addRow = () => setRows((rs) => [...rs, { part_id: "", qty: 1, cost: 0 }]);
   const delRow = (i: number) => setRows((rs) => rs.filter((_, j) => j !== i));
@@ -85,12 +95,12 @@ export default function NewPODrawer({ products, onClose, onCreated }:
   }
 
   const fld = "glass-input rounded-lg px-3 py-2 text-sm w-full";
-  const lbl = "block text-[10px] font-bold uppercase text-ink-tertiary mb-1";
+  const lbl = "block text-[11px] font-bold  text-ink-tertiary mb-1";
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
       <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
-      <div className="relative h-full w-full max-w-[640px] bg-white dark:bg-[#151b2e] shadow-clay-card flex flex-col border-l border-slate-200/90">
+      <div className="relative h-full w-full max-w-[640px] bg-raised shadow-clay-card flex flex-col border-l border-slate-200/90">
         <div className="px-6 pt-5 pb-3 border-b border-slate-100 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
             <div className="w-10 h-10 rounded-xl bg-blue-50 text-primary grid place-items-center"><M n="receipt_long" c="text-xl" /></div>
@@ -109,7 +119,7 @@ export default function NewPODrawer({ products, onClose, onCreated }:
           <div className="grid grid-cols-2 gap-3">
             <div>
               <div className="flex items-center justify-between mb-1"><label className={lbl} style={{ margin: 0 }}>Supplier *</label>
-                <button type="button" onClick={() => setNewSup((v) => !v)} className="text-[10px] font-bold text-primary hover:underline">{newSup ? "Cancel" : "+ New"}</button></div>
+                <button type="button" onClick={() => setNewSup((v) => !v)} className="text-[11px] font-bold text-primary hover:underline">{newSup ? "Cancel" : "+ New"}</button></div>
               {newSup ? (
                 <div className="flex gap-1.5">
                   <input autoFocus value={supName} onChange={(e) => setSupName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addSupplier(); }} placeholder="Supplier name" className={fld} />
@@ -134,7 +144,7 @@ export default function NewPODrawer({ products, onClose, onCreated }:
 
           <div className="rounded-2xl border border-slate-200/80 overflow-hidden">
             <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50/70 text-[10px] font-bold uppercase text-ink-tertiary">
+              <thead className="bg-slate-50/70 text-[11px] font-bold text-ink-tertiary">
                 <tr><th className="py-2.5 px-3">Product</th><th className="py-2.5 px-2 text-right w-16">Qty</th><th className="py-2.5 px-2 text-right w-24">Unit cost</th><th className="py-2.5 px-2 text-right w-24">Total</th><th className="w-8" /></tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -148,7 +158,7 @@ export default function NewPODrawer({ products, onClose, onCreated }:
                     </td>
                     <td className="py-2 px-2"><input type="number" min={1} value={r.qty} onChange={(e) => setRow(i, { qty: Math.max(1, Number(e.target.value) || 1) })} className="glass-input rounded-lg px-2 py-1.5 text-xs w-full text-right font-mono" /></td>
                     <td className="py-2 px-2"><input type="number" min={0} value={r.cost} onChange={(e) => setRow(i, { cost: Math.max(0, Number(e.target.value) || 0) })} className="glass-input rounded-lg px-2 py-1.5 text-xs w-full text-right font-mono" /></td>
-                    <td className="py-2 px-2 text-right font-mono text-ink-primary">{money((r.qty > 0 ? r.qty : 0) * (r.cost || 0))}</td>
+                    <td className="py-2 px-2 text-right tabular-nums text-ink-primary">{money((r.qty > 0 ? r.qty : 0) * (r.cost || 0))}</td>
                     <td className="py-2 px-1 text-center">{rows.length > 1 && <button aria-label="Close" onClick={() => delRow(i)} className="text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>}</td>
                   </tr>
                 ))}
@@ -158,7 +168,9 @@ export default function NewPODrawer({ products, onClose, onCreated }:
           <div className="flex items-center gap-4">
             <button onClick={addRow} className="text-xs font-bold text-primary hover:underline flex items-center gap-1"><M n="add" c="text-sm" />Add line</button>
             <button onClick={() => setNewProd((v) => !v)} className="text-xs font-bold text-primary hover:underline flex items-center gap-1"><M n="add_box" c="text-sm" />{newProd ? "Cancel new product" : "New product"}</button>
+            <button onClick={() => setPasting((v) => !v)} className="text-xs font-bold text-primary hover:underline flex items-center gap-1"><M n="content_paste" c="text-sm" />Paste from Excel</button>
           </div>
+          {pasting && <PasteImport onAdd={addImported} onClose={() => setPasting(false)} canCreate={can("can_create_products")} />}
           {newProd && (
             <div className="flex gap-1.5 items-end rounded-xl bg-slate-50/70 border border-slate-200/70 p-2.5">
               <div className="flex-1"><label className={lbl}>New product name</label>

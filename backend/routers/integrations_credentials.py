@@ -33,7 +33,10 @@ async def set_credentials(data: CredIn, db: AsyncSession = Depends(get_db),
                           current: Employee = Depends(require_perm("can_manage_settings"))):
     if data.provider not in org_creds.PROVIDER_FIELDS:
         raise HTTPException(422, f"Unknown provider '{data.provider}'")
-    await org_creds.set_creds(db, current.org_id, data.provider, data.data or {})
+    try:
+        await org_creds.set_creds(db, current.org_id, data.provider, data.data or {})
+    except ValueError as e:   # F4: live payment keys outside production
+        raise HTTPException(422, str(e))
     return await org_creds.status(db, current.org_id)
 
 

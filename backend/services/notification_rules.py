@@ -27,13 +27,25 @@ from backend.models import (
     NotificationTemplate,
     Order,
 )
-from backend.services.notifications import _adapter_for, channel_consented, notif_creds
+from backend.services.notifications import _adapter_for, channel_consented, notif_creds, try_oauth_email
 
 
-async def _send(db, org_id, channel, *, recipient, subject, body):
-    """144jn: send through THIS shop's own provider credentials (per-tenant)."""
+async def _send(db, org_id, channel, *, recipient, subject, body, headers=None):
+    """144jn: send through THIS shop's own provider credentials (per-tenant).
+
+    Email goes out from the shop's connected Gmail/Outlook account when there is one
+    (same as the old template path, build 144ae) and falls back to SMTP / simulated.
+    Mail that carries extra headers (List-Unsubscribe on Tekly Sense emails) stays on
+    SMTP, since the mailbox send can't set them."""
+    if channel == "email" and not headers:
+        result = await try_oauth_email(db, org_id, recipient=recipient, subject=subject, body=body)
+        if result is not None:
+            return result
     creds = await notif_creds(db, org_id, channel)
-    return await _adapter_for(channel, creds).send(recipient=recipient, subject=subject, body=body)
+    adapter = _adapter_for(channel, creds)
+    if headers:
+        return await adapter.send(recipient=recipient, subject=subject, body=body, headers=headers)
+    return await adapter.send(recipient=recipient, subject=subject, body=body)
 
 WORK_START_MIN = 9 * 60      # 09:00
 WORK_END_MIN = 18 * 60       # 18:00
@@ -82,6 +94,38 @@ async def _location_window(db: AsyncSession, location_id: Optional[str],
     return _m(day.get("open"), WORK_START_MIN), _m(day.get("close"), WORK_END_MIN)
 
 
+async def _into_working_hours(db: AsyncSession, org_id: str, location_id: Optional[str],
+                              send_at: datetime) -> datetime:
+    """Launch B6: send_at is UTC but opening hours are the shop's own clock. Shift on the shop's
+    clock, then hand back UTC (a 09:00 opening in New York is 13:00 or 14:00 UTC, not 09:00)."""
+    from backend.services.dates import shop_tzname, utc_to_wall, wall_to_utc
+    tz = await shop_tzname(db, org_id, location_id)
+    local = utc_to_wall(send_at, tz)
+    s, e = await _location_window(db, location_id, local)
+    return wall_to_utc(shift_into_working_hours(local, s, e), tz)
+
+
+# Scheduled times are shop wall-clock, `now` and send_at are UTC. No shop is more than 14 hours
+# from UTC, so a SQL window this much wider than the lead time can't miss an appointment; each
+# row is then checked exactly on its own shop's clock.
+_TZ_SLACK = timedelta(hours=14)
+
+
+async def _reminder_send_at(db: AsyncSession, org_id: str, location_id: Optional[str],
+                            start: datetime, lead: timedelta, now: datetime, tz_cache: dict):
+    """When a reminder for a `start` (shop wall-clock) should go out, in UTC, or None when the
+    start isn't inside the lead window yet (or has passed) on the shop's own clock."""
+    from backend.services.dates import shop_tzname, utc_to_wall, wall_to_utc
+    key = location_id or ""
+    if key not in tz_cache:
+        tz_cache[key] = await shop_tzname(db, org_id, location_id)
+    tz = tz_cache[key]
+    local_now = utc_to_wall(now, tz)
+    if not (local_now < start <= local_now + lead):
+        return None
+    return wall_to_utc(start - lead, tz)
+
+
 async def _latest_chat_channel(db: AsyncSession, org_id: str, client_id: str) -> Optional[str]:
     """The channel of the client's most recent conversation, if any (whatsapp|sms|email).
     Used by rules with chat_first=True so a reply lands where the client last talked to us."""
@@ -113,10 +157,17 @@ def _rule_matches(rule: NotificationRule, *, event: str, status_key: Optional[st
     return True
 
 
+def _status_overrides(matched: list) -> list:
+    """A status's own message replaces the catch-all ("Every status change" / "Job finished")
+    on that channel, so the customer gets one message per channel, not two."""
+    own = {r.channel for r in matched if r.trigger_status_key}
+    return [r for r in matched if r.trigger_status_key or r.channel not in own]
+
+
 async def _render(db: AsyncSession, org_id: str, order: Order, rule: NotificationRule):
     """Render the rule's template against the order's variables. Falls back to a
     plain status line when the rule has no template attached."""
-    from backend.routers.documents import _apply, _resolve
+    from backend.routers.documents import _resolve
     variables = await _resolve(db, org_id, order)
     if isinstance(variables, tuple):   # build 144s made _resolve return (doc_map, rows)
         variables = variables[0]
@@ -125,8 +176,10 @@ async def _render(db: AsyncSession, org_id: str, order: Order, rule: Notificatio
         tpl = (await db.execute(select(NotificationTemplate).where(
             NotificationTemplate.id == rule.template_id))).scalar_one_or_none()
     if tpl:
-        return _apply(tpl.subject or "", variables) if tpl.subject else None, \
-               _apply(tpl.body_template or "", variables), tpl.id
+        from backend.services.message_vars import render_for_order
+        subject, body = await render_for_order(db, org_id, order, tpl.subject or None,
+                                               tpl.body_template or "", doc_vars=variables)
+        return subject, body, tpl.id
     # Sensible default per event when the rule has no template attached.
     ev = rule.event
     if ev == "created":
@@ -141,8 +194,25 @@ async def _render(db: AsyncSession, org_id: str, order: Order, rule: Notificatio
     if ev == "closed":
         return (f"Order {order.order_number} complete",
                 f"Your order {order.order_number} is complete.", None)
+    from backend.routers.documents import _status_name
+    status = await _status_name(db, org_id, order)
     return (f"Update on {order.order_number}",
-            f"Your order {order.order_number} is now: {order.status}", None)
+            f"Your order {order.order_number} is now: {status}", None)
+
+
+OPT_OUT_FOOTER = "Reply STOP to opt out."
+
+
+async def with_opt_out(db: AsyncSession, org_id: str, client_id: Optional[str], channel: str, body: str) -> str:
+    """US/Canada texting rules: the first text a customer gets from the shop says how to
+    stop them. Later texts stay short. Email is unaffected (it has its own unsubscribe)."""
+    if channel not in ("sms", "whatsapp") or not client_id or OPT_OUT_FOOTER in (body or ""):
+        return body
+    prior = (await db.execute(select(NotificationLog.id).where(
+        NotificationLog.org_id == org_id, NotificationLog.client_id == client_id,
+        NotificationLog.channel.in_(["sms", "whatsapp"]),
+        NotificationLog.status.in_(["sent", "scheduled"])).limit(1))).scalar_one_or_none()
+    return body if prior else f"{(body or '').rstrip()}\n{OPT_OUT_FOOTER}"
 
 
 async def evaluate(db: AsyncSession, *, org_id: str, order_id: str, event: str,
@@ -159,7 +229,8 @@ async def evaluate(db: AsyncSession, *, org_id: str, order_id: str, event: str,
     if not order:
         return {"sent": 0, "scheduled": 0}
 
-    matched = [r for r in rules if _rule_matches(r, event=event, status_key=status_key, order=order)]
+    matched = _status_overrides(
+        [r for r in rules if _rule_matches(r, event=event, status_key=status_key, order=order)])
     sent = scheduled = 0
     for rule in matched:
         subject, body, tpl_id = await _render(db, org_id, order, rule)
@@ -172,11 +243,11 @@ async def evaluate(db: AsyncSession, *, org_id: str, order_id: str, event: str,
             if chat_ch:
                 channel = chat_ch
         recipient = (client.email if channel == "email" else client.phone) if client else None
+        body = await with_opt_out(db, org_id, order.client_id, channel, body)
 
         send_at = now + timedelta(minutes=rule.delay_min or 0)
         if rule.working_hours_only:
-            s, e = await _location_window(db, order.location_id, send_at)
-            send_at = shift_into_working_hours(send_at, s, e)
+            send_at = await _into_working_hours(db, org_id, order.location_id, send_at)
 
         log = NotificationLog(
             org_id=org_id, scope="client", channel=channel, trigger_event=event,
@@ -212,27 +283,33 @@ async def queue_reminders(db: AsyncSession, *, org_id: str,
         NotificationRule.org_id == org_id, NotificationRule.event == "reminder",
         NotificationRule.active == True))).scalars().all()  # noqa: E712
     queued = 0
+    tz_cache: dict = {}
     for rule in rules:
         lead = timedelta(minutes=rule.reminder_offset_min or 0)
-        horizon = now + lead
         orders = (await db.execute(select(Order).where(
             Order.org_id == org_id, Order.scheduled_for.isnot(None),
-            Order.scheduled_for > now, Order.scheduled_for <= horizon,
+            Order.scheduled_for > now - _TZ_SLACK, Order.scheduled_for <= now + lead + _TZ_SLACK,
             Order.archived == False)  # noqa: E712
             .options(selectinload(Order.client), selectinload(Order.lines),
                      selectinload(Order.device), selectinload(Order.assigned_to)))).scalars().all()
         for order in orders:
             if rule.location_id and rule.location_id != order.location_id:
                 continue
+            send_at = await _reminder_send_at(db, org_id, order.location_id, order.scheduled_for,
+                                              lead, now, tz_cache)
+            if send_at is None:
+                continue
+            # Any earlier row is a duplicate, whatever its status: a send that failed (a Twilio
+            # timeout) used to be queued again on every 2-minute tick, ~30 texts an hour.
             dupe = (await db.execute(select(NotificationLog.id).where(
                 NotificationLog.rule_id == rule.id, NotificationLog.order_id == order.id,
-                NotificationLog.status.in_(["scheduled", "sent"])))).scalar_one_or_none()
+            ).limit(1))).scalar_one_or_none()
             if dupe:
                 continue
             subject, body, tpl_id = await _render(db, org_id, order, rule)
             client = order.client
             recipient = (client.email if rule.channel == "email" else client.phone) if client else None
-            send_at = order.scheduled_for - lead
+            body = await with_opt_out(db, org_id, order.client_id, rule.channel, body)
             if not recipient:
                 status, err = "skipped", f"Client has no {rule.channel} on file"
             elif not channel_consented(client, rule.channel):
@@ -256,19 +333,62 @@ async def run_due(db: AsyncSession, *, org_id: str, now: Optional[datetime] = No
         NotificationLog.org_id == org_id, NotificationLog.status == "scheduled",
         NotificationLog.send_at.isnot(None), NotificationLog.send_at <= now))).scalars().all()
     sent = failed = 0
+    from sqlalchemy import update as _update
     for log in due:
         if not log.recipient:
             log.status = "skipped"
+            await db.commit()
             continue
-        result = await _send(db, org_id, log.channel, 
-            recipient=log.recipient, subject=log.subject, body=log.body)
+        # Tekly Sense agent messages: the agent must still be on (and the platform switch off),
+        # win-back still needs marketing consent, and nothing goes outside opening hours.
+        if (log.trigger_event or "").startswith("agent."):
+            from backend.services import sense_agents
+            verdict, why = await sense_agents.send_check(db, org_id, log, now)
+            if verdict == "later":
+                log.send_at = why
+                await db.commit()
+                continue
+            if verdict == "stop":
+                log.status, log.error = "skipped", why
+                await db.commit()
+                continue
+        # Consent is checked again at send time: a customer who replied STOP after this
+        # message was queued must not receive it.
+        if log.client_id:
+            from backend.models import Client
+            c = (await db.execute(select(Client).where(
+                Client.id == log.client_id, Client.org_id == org_id))).scalar_one_or_none()
+            if c is None or not channel_consented(c, log.channel):
+                log.status = "skipped"
+                log.error = ("Client no longer on file" if c is None
+                             else f"No client consent for {log.channel}")
+                await db.commit()
+                continue
+        # Claim the row before sending and commit after each message: the old loop sent
+        # everything and committed once at the end, so a crash mid-sweep re-sent every message
+        # already delivered, and two runners could both send the same row. A row left in
+        # "sending" by a crash is never re-sent automatically (no duplicates to customers).
+        claimed = await db.execute(_update(NotificationLog)
+            .where(NotificationLog.id == log.id, NotificationLog.status == "scheduled")
+            .values(status="sending").execution_options(synchronize_session=False))
+        await db.commit()
+        if claimed.rowcount == 0:
+            continue
+        extra = {}
+        if (log.trigger_event or "").startswith("agent."):
+            from backend.services.sense_agents import email_headers
+            h = email_headers(log)
+            if h:
+                extra["headers"] = h
+        result = await _send(db, org_id, log.channel,
+            recipient=log.recipient, subject=log.subject, body=log.body, **extra)
         log.status = result["status"]
         log.error = result.get("error")
+        await db.commit()
         if log.status == "sent":
             sent += 1
         else:
             failed += 1
-    await db.commit()
     return {"due": len(due), "sent": sent, "failed": failed}
 
 
@@ -308,8 +428,7 @@ async def evaluate_appointment(db: AsyncSession, *, org_id: str, appointment_id:
             subject, body = "Your appointment", f"Your appointment is booked for {when}."
         send_at = now + timedelta(minutes=rule.delay_min or 0)
         if rule.working_hours_only:
-            s, e = await _location_window(db, b.location_id, send_at)
-            send_at = shift_into_working_hours(send_at, s, e)
+            send_at = await _into_working_hours(db, org_id, b.location_id, send_at)
 
         log = NotificationLog(
             org_id=org_id, scope="client", channel=rule.channel, trigger_event=event,
@@ -319,6 +438,9 @@ async def evaluate_appointment(db: AsyncSession, *, org_id: str, appointment_id:
         if not recipient:
             log.status = "skipped"
             log.error = f"No {rule.channel} on file"
+        elif not await _appointment_consented(db, b, rule.channel):
+            log.status = "skipped"
+            log.error = f"No client consent for {rule.channel}"
         elif send_at <= now:
             res = await _send(db, org_id, rule.channel, 
                 recipient=recipient, subject=subject, body=body)
@@ -330,6 +452,17 @@ async def evaluate_appointment(db: AsyncSession, *, org_id: str, appointment_id:
             scheduled += 1
     await db.commit()
     return {"sent": sent, "scheduled": scheduled, "matched": len(rules)}
+
+
+async def _appointment_consented(db: AsyncSession, b: Appointment, channel: str) -> bool:
+    """Same consent gate as order notifications. A walk-in booking with no client record has
+    nothing to check against and is allowed (they gave the number to be contacted about it)."""
+    if not b.client_id:
+        return True
+    from backend.models import Client
+    c = (await db.execute(select(Client).where(
+        Client.id == b.client_id, Client.org_id == b.org_id))).scalar_one_or_none()
+    return c is not None and channel_consented(c, channel)   # a removed client gets nothing
 
 
 async def _appointment_recipient(db: AsyncSession, b: Appointment, channel: str) -> Optional[str]:
@@ -351,20 +484,26 @@ async def queue_appointment_reminders(db: AsyncSession, *, org_id: str,
         NotificationRule.event == "reminder",
         NotificationRule.active == True))).scalars().all()  # noqa: E712
     queued = 0
+    tz_cache: dict = {}
     for rule in rules:
         lead = timedelta(minutes=rule.reminder_offset_min or 0)
         rows = (await db.execute(select(Appointment).where(
             Appointment.org_id == org_id, Appointment.status == "booked",
-            Appointment.scheduled_for > now,
-            Appointment.scheduled_for <= now + lead))).scalars().all()
+            Appointment.scheduled_for > now - _TZ_SLACK,
+            Appointment.scheduled_for <= now + lead + _TZ_SLACK))).scalars().all()
         for b in rows:
             if rule.location_id and rule.location_id != b.location_id:
                 continue
+            send_at = await _reminder_send_at(db, org_id, b.location_id, b.scheduled_for,
+                                              lead, now, tz_cache)
+            if send_at is None:
+                continue
+            # Any earlier row for this appointment's slot is a duplicate, failed ones included.
             dupe = (await db.execute(select(NotificationLog.id).where(
                 NotificationLog.rule_id == rule.id,
                 NotificationLog.client_id == b.client_id,
                 NotificationLog.trigger_event == "reminder",
-                NotificationLog.status.in_(["scheduled", "sent"])))).scalar_one_or_none()
+                NotificationLog.send_at == send_at).limit(1))).scalar_one_or_none()
             if dupe:
                 continue
             recipient = await _appointment_recipient(db, b, rule.channel)
@@ -374,7 +513,7 @@ async def queue_appointment_reminders(db: AsyncSession, *, org_id: str,
                 recipient=recipient, subject="Appointment reminder",
                 body=(f"Reminder: your appointment is at "
                       f"{b.scheduled_for.strftime('%Y-%m-%d %H:%M')}."),
-                send_at=b.scheduled_for - lead,
+                send_at=send_at,
                 status="scheduled" if recipient else "skipped",
                 error=None if recipient else f"No {rule.channel} on file"))
             queued += 1
@@ -495,12 +634,13 @@ async def notify_contact_birthdays(db: AsyncSession, *, org_id: str,
                 continue
             first = (c.name or "").split()[0] if c.name else "there"
             if tpl:
-                from backend.routers.documents import _apply
+                from backend.services import message_vars
                 cmap = {"{Client Name}": c.name or "", "{First Name}": first,
                         "{Client First Name}": first, "{Client Email}": c.email or "",
                         "{Client Phone}": c.phone or ""}
-                subject = _apply(tpl.subject or "Happy birthday!", cmap)
-                body = _apply(tpl.body_template or "", cmap)
+                short = await message_vars.client_values(db, org_id, c, tpl.subject, tpl.body_template)
+                subject = message_vars.apply(tpl.subject or "Happy birthday!", short, cmap)
+                body = message_vars.apply(tpl.body_template or "", short, cmap)
             else:
                 subject = "Happy birthday!"
                 body = f"Happy birthday, {first}! Wishing you a great day from all of us."

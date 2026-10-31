@@ -3,9 +3,10 @@
 import { useEffect, useRef, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
+import { sectionCard } from "../../components/Section";
 
 type Msg = { id: string; from: "staff" | "customer"; who?: string; body: string; at?: string };
-const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "2-digit", minute: "2-digit" }) : "");
+const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "");
 
 export default function ConversationPanel({ orderId }: { orderId: string }) {
   const [msgs, setMsgs] = useState<Msg[] | null>(null);
@@ -26,11 +27,13 @@ export default function ConversationPanel({ orderId }: { orderId: string }) {
   }
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
-      <div className="px-4 py-2.5 border-b border-slate-100 flex items-center gap-2">
-        <M n="forum" c="text-base text-primary" />
-        <span className="text-xs font-bold text-ink-primary">Customer conversation</span>
-        <span className="text-[10px] text-ink-tertiary font-semibold ml-auto">Messages here show on the customer's status page</span>
+    <div className={`${sectionCard} overflow-hidden`}>
+      <div className="px-4 py-3 border-b border-slate-100">
+        <div className="flex items-center gap-2">
+          <M n="forum" c="text-base text-ink-tertiary" />
+          <h4 className="text-sm font-semibold text-ink-primary">Customer conversation</h4>
+        </div>
+        <p className="mt-0.5 text-xs text-ink-tertiary">Messages here show on the customer's status page.</p>
       </div>
       <div className="max-h-64 overflow-y-auto p-3 space-y-2 bg-slate-50/40">
         {!msgs && <div className="text-xs text-ink-tertiary py-6 text-center">Loading…</div>}
@@ -41,7 +44,7 @@ export default function ConversationPanel({ orderId }: { orderId: string }) {
             <div key={m.id} className={`flex ${staff ? "justify-end" : "justify-start"}`}>
               <div className={`max-w-[78%] rounded-2xl px-3 py-2 ${staff ? "bg-primary text-white rounded-br-sm" : "bg-white border border-slate-200 text-ink-primary rounded-bl-sm"}`}>
                 <div className="text-[13px] leading-snug whitespace-pre-wrap break-words">{m.body}</div>
-                <div className={`text-[9px] mt-1 ${staff ? "text-white/70" : "text-ink-tertiary"}`}>{m.who || (staff ? "Staff" : "Customer")} · {fmt(m.at)}</div>
+                <div className={`text-[11px] mt-1 ${staff ? "text-white/70" : "text-ink-tertiary"}`}>{m.who || (staff ? "Staff" : "Customer")} · {fmt(m.at)}</div>
               </div>
             </div>
           );

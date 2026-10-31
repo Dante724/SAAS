@@ -17,7 +17,7 @@ from backend.db.database import get_db
 from backend.services.dates import parse_date
 from backend.models import Employee, TimeEntry, WorkSchedule
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 router = APIRouter(prefix="/api/schedules", tags=["schedules"])
 

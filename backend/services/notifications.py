@@ -8,7 +8,8 @@ channel adapter, and writes a NotificationLog row for the communication history.
 Delivery goes through a channel adapter. When provider credentials are configured
 (SMTP for email, Twilio for SMS/WhatsApp) the matching real adapter sends for real
 and records the provider result; when they are absent it falls back to a simulated
-adapter that logs and marks the message sent. Either way a NotificationLog row
+adapter that prints and marks the message sent in development, and fails (without logging the
+body) when deployed. Either way a NotificationLog row
 captures recipient, body, status (queued|sent|failed|skipped) and any error.
 """
 from typing import Optional
@@ -29,7 +30,7 @@ class ChannelAdapter:
     """Base adapter. Real providers subclass and implement send()."""
     name = "base"
 
-    async def send(self, *, recipient: str, subject: Optional[str], body: str) -> dict:
+    async def send(self, *, recipient: str, subject: Optional[str], body: str, headers: Optional[dict] = None) -> dict:
         raise NotImplementedError
 
 
@@ -38,10 +39,18 @@ class SimulatedAdapter(ChannelAdapter):
     def __init__(self, channel: str):
         self.name = channel
 
-    async def send(self, *, recipient: str, subject: Optional[str], body: str) -> dict:
+    async def send(self, *, recipient: str, subject: Optional[str], body: str, headers: Optional[dict] = None) -> dict:
         if not recipient:
             return {"status": "failed", "error": "No recipient address/number on file"}
-        # No provider configured for this channel: log and mark sent (dev behaviour).
+        from backend.config import settings
+        if settings.is_deployed:
+            # A real deploy with no provider for this channel: nothing was delivered, so say so.
+            # Never write the body here: it holds reset / verification / invite links.
+            import logging
+            logging.getLogger(__name__).error("No %s provider configured; message to %s not sent",
+                                              self.name, recipient[:3] + "…")
+            return {"status": "failed", "error": f"No {self.name} provider is configured"}
+        # Development / tests: print it so a developer can follow the link locally.
         print(f"[notify:{self.name}:simulated] -> {recipient}: {(subject + ' | ') if subject else ''}{body[:120]}")
         return {"status": "sent", "error": None}
 
@@ -54,7 +63,7 @@ class SmtpEmailAdapter(ChannelAdapter):
     def __init__(self, creds: Optional[dict] = None):
         self.creds = creds or {}   # 144jn: this shop's own SMTP settings
 
-    async def send(self, *, recipient: str, subject: Optional[str], body: str) -> dict:
+    async def send(self, *, recipient: str, subject: Optional[str], body: str, headers: Optional[dict] = None) -> dict:
         if not recipient:
             return {"status": "failed", "error": "No email address on file"}
         import asyncio
@@ -80,6 +89,8 @@ class SmtpEmailAdapter(ChannelAdapter):
             msg["Subject"] = subject or "Update on your order"
             msg["From"] = from_addr
             msg["To"] = recipient
+            for hk, hv in (headers or {}).items():   # e.g. List-Unsubscribe on Tekly Sense emails
+                msg[hk] = hv
             try:
                 with smtplib.SMTP(host, port, timeout=10) as s:
                     if use_tls:
@@ -100,7 +111,7 @@ class TwilioAdapter(ChannelAdapter):
         self.name = channel  # 'sms' or 'whatsapp'
         self.creds = creds or {}   # 144jn: this shop's own Twilio account
 
-    async def send(self, *, recipient: str, subject: Optional[str], body: str) -> dict:
+    async def send(self, *, recipient: str, subject: Optional[str], body: str, headers: Optional[dict] = None) -> dict:
         if not recipient:
             return {"status": "failed", "error": "No phone number on file"}
         from backend.config import settings
@@ -111,6 +122,10 @@ class TwilioAdapter(ChannelAdapter):
         from_addr = (c.get("whatsapp_from") or settings.TWILIO_WHATSAPP_FROM) if is_wa else (c.get("from") or settings.TWILIO_FROM)
         to_addr = f"whatsapp:{recipient}" if is_wa and not recipient.startswith("whatsapp:") else recipient
         text = ((subject + "\n\n") if subject else "") + body
+        from backend.services.twilio_voice import sms_refusal
+        refused = sms_refusal(c, whatsapp=is_wa)   # S7: no billed texts outside production
+        if refused:
+            return {"status": "failed", "error": refused}
         try:
             import httpx
             url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
@@ -222,7 +237,8 @@ async def dispatch_order_notifications(db: AsyncSession, *, org_id: str, order_i
         return 0
 
     # Reuse the document variable resolver so notification + document variables match.
-    from backend.routers.documents import _apply, _resolve
+    from backend.routers.documents import _resolve
+    from backend.services import message_vars
     variables = await _resolve(db, org_id, order)
     if isinstance(variables, tuple):   # build 144s made _resolve return (doc_map, rows)
         variables = variables[0]
@@ -230,8 +246,8 @@ async def dispatch_order_notifications(db: AsyncSession, *, org_id: str, order_i
 
     sent = 0
     for t in matched:
-        body = _apply(t.body_template or "", variables)
-        subject = _apply(t.subject or "", variables) if t.subject else None
+        subject, body = await message_vars.render_for_order(
+            db, org_id, order, t.subject or None, t.body_template or "", doc_vars=variables)
         recipient = None
         if client:
             recipient = client.email if t.channel == "email" else client.phone

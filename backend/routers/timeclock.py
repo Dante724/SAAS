@@ -6,18 +6,19 @@ timer auto-stops the previous (a 'switch'). Stopped entries roll up onto the ord
 (scheduled vs tracked vs billed) and, once a timesheet is approved, post hourly
 wages into the payroll ledger so the existing payroll run picks them up.
 """
+import hashlib
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import Employee, Order, TimeEntry, TimeEntryAudit
-from backend.services.dates import parse_dt
+from backend.services.dates import parse_dt, utc_iso
 
 
 def _udt(value, field: str):
@@ -35,10 +36,12 @@ def _audit(db, e, action, actor_id, *, field=None, old=None, new=None):
     db.add(TimeEntryAudit(org_id=e.org_id, time_entry_id=e.id, action=action, field=field,
                           old_value=None if old is None else str(old),
                           new_value=None if new is None else str(new), actor_id=actor_id))
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import assert_not_self, get_current_employee, require_perm, record_scope
+from backend.core import paging as _paging
 from backend.services.money import q2, q4
 
-router = APIRouter(prefix="/api/timeclock", tags=["timeclock"])
+router = APIRouter(prefix="/api/timeclock", tags=["timeclock"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 CATEGORIES = ("job", "task", "break", "admin", "other")
 
@@ -64,8 +67,8 @@ def _shift_elapsed(s) -> int:
 
 def _ser_shift(s) -> dict:
     return {"id": s.id, "location_id": s.location_id,
-            "started_at": s.started_at.isoformat() if s.started_at else None,
-            "ended_at": s.ended_at.isoformat() if s.ended_at else None,
+            "started_at": utc_iso(s.started_at),
+            "ended_at": utc_iso(s.ended_at),
             "elapsed_sec": _shift_elapsed(s),
             "hours_worked": q2(s.hours_worked or 0), "open": s.ended_at is None}
 
@@ -147,7 +150,7 @@ async def roster(db: AsyncSession = Depends(get_db),
     on_shift = [{
         "employee_id": s.employee_id, "employee_name": names.get(s.employee_id, "—"),
         "location_id": s.location_id, "location_name": locs.get(s.location_id, "—"),
-        "started_at": s.started_at.isoformat() if s.started_at else None,
+        "started_at": utc_iso(s.started_at),
         "elapsed_sec": _shift_elapsed(s),
     } for s in open_shifts]
     # running job/task timers across the org
@@ -160,7 +163,7 @@ async def roster(db: AsyncSession = Depends(get_db),
             "employee_id": e.employee_id, "employee_name": names.get(e.employee_id, "—"),
             "order_number": await _order_no(db, e.order_id),
             "category": e.category, "location_name": locs.get(e.location_id, "—"),
-            "started_at": e.started_at.isoformat() if e.started_at else None,
+            "started_at": utc_iso(e.started_at),
             "elapsed_sec": _elapsed_sec(e),
         })
     return {"on_shift": on_shift, "timers": timers,
@@ -187,13 +190,14 @@ def _elapsed_sec(e: TimeEntry, now: Optional[datetime] = None) -> int:
     return max(0, int((now - e.started_at).total_seconds()))
 
 
-def _ser(e: TimeEntry, order_no: Optional[str] = None, emp_name: Optional[str] = None, task_title: Optional[str] = None) -> dict:
+def _ser(e: TimeEntry, order_no: Optional[str] = None, emp_name: Optional[str] = None, task_title: Optional[str] = None,
+         *, show_pay: bool = True) -> dict:
     sec = _elapsed_sec(e)
-    return {
+    out = {
         "id": e.id, "employee_id": e.employee_id, "employee_name": emp_name,
         "order_id": e.order_id, "order_line_id": getattr(e, "order_line_id", None), "task_id": e.task_id, "order_number": order_no, "task_title": task_title, "category": e.category,
-        "started_at": e.started_at.isoformat() if e.started_at else None,
-        "ended_at": e.ended_at.isoformat() if e.ended_at else None,
+        "started_at": utc_iso(e.started_at),
+        "ended_at": utc_iso(e.ended_at),
         "duration_sec": sec, "duration_min": round(sec / 60, 1),
         "running": e.ended_at is None and e.state == "running",
         "billable": e.billable, "cost_rate": e.cost_rate, "billable_rate": e.billable_rate,
@@ -202,6 +206,9 @@ def _ser(e: TimeEntry, order_no: Optional[str] = None, emp_name: Optional[str] =
         "note": e.note, "source": e.source, "state": e.state, "needs_review": e.needs_review,
         "disputed": getattr(e, "disputed", False), "dispute_note": getattr(e, "dispute_note", None),
     }
+    if not show_pay:                 # someone else's pay rate the caller may not see
+        out["cost_rate"] = out["labor_cost"] = None
+    return out
 
 
 async def _emp_map(db: AsyncSession, org_id: str) -> dict:
@@ -356,7 +363,7 @@ async def stop_entry(
         TimeEntry.id == entry_id, TimeEntry.org_id == current.org_id))).scalar_one_or_none()
     if not e:
         raise HTTPException(404, "Time entry not found")
-    if e.employee_id != current.id and not await _can_manage(db, current):
+    if not await _can_manage_emp(db, current, e.employee_id):
         raise HTTPException(403, "Only a manager can stop another technician's timer")
     if e.ended_at is not None or e.state != "running":
         raise HTTPException(400, "That timer isn't running")
@@ -481,16 +488,23 @@ async def list_entries(
     state: Optional[str] = None,
     date_from: Optional[str] = None,
     date_to: Optional[str] = None,
-    limit: int = 500,
+    skip: int = _paging.skip_query(),
+    limit: int = _paging.limit_query(_paging.PAGE_MAX),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
+    limit = _paging.clamp(limit)
     q = select(TimeEntry).where(TimeEntry.org_id == current.org_id)
     # non-managers can only see their own time
     if not await _can_manage(db, current):
         q = q.where(TimeEntry.employee_id == current.id)
-    elif employee_id:
-        q = q.where(TimeEntry.employee_id == employee_id)
+    else:
+        from backend.services.payroll_views import payroll_scope_ids
+        scope = await payroll_scope_ids(db, current)
+        if scope is not None:           # E3: only the people the role's payroll scope covers
+            q = q.where(TimeEntry.employee_id.in_(scope | {current.id}))
+        if employee_id:
+            q = q.where(TimeEntry.employee_id == employee_id)
     if order_id:
         q = q.where(TimeEntry.order_id == order_id)
     if state:
@@ -499,13 +513,15 @@ async def list_entries(
         q = q.where(TimeEntry.started_at >= _udt(date_from, "date_from"))
     if date_to:
         q = q.where(TimeEntry.started_at < _udt(date_to, "date_to") + timedelta(days=1))
-    rows = (await db.execute(q.order_by(TimeEntry.started_at.desc()).limit(limit))).scalars().all()
+    total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
+    rows = (await db.execute(q.order_by(TimeEntry.started_at.desc(), TimeEntry.id.desc())
+                             .offset(skip).limit(limit))).scalars().all()
     names = await _emp_map(db, current.org_id)
-    nos = {}
-    for e in rows:
-        if e.order_id and e.order_id not in nos:
-            nos[e.order_id] = await _order_no(db, e.order_id)
-    return {"items": [_ser(e, nos.get(e.order_id), names.get(e.employee_id)) for e in rows]}
+    oids = {e.order_id for e in rows if e.order_id}
+    nos = dict((await db.execute(select(Order.id, Order.order_number).where(
+        Order.org_id == current.org_id, Order.id.in_(oids)))).all()) if oids else {}
+    return {"items": [_ser(e, nos.get(e.order_id), names.get(e.employee_id)) for e in rows],
+            "total": total, "skip": skip, "limit": limit}
 
 
 async def _can_manage(db: AsyncSession, emp: Employee) -> bool:
@@ -513,9 +529,35 @@ async def _can_manage(db: AsyncSession, emp: Employee) -> bool:
     if not emp.role_id:
         return True
     from backend.models import Role
+    from backend.services.permissions import role_allows
     role = (await db.execute(select(Role).where(Role.id == emp.role_id))).scalar_one_or_none()
-    perms = (role.permissions or {}) if role else {}
-    return perms.get("can_manage_payroll") is not False
+    return role is not None and role_allows(role, "can_manage_payroll")
+
+
+async def _can_manage_emp(db: AsyncSession, current: Employee, employee_id: Optional[str]) -> bool:
+    """May the caller manage this person's time (and see its cost)? Their own always; anyone
+    else's only with payroll rights AND inside the role's payroll scope (E3)."""
+    if employee_id == current.id:
+        return True
+    if not await _can_manage(db, current):
+        return False
+    from backend.services.payroll_views import in_scope, payroll_scope_ids
+    return in_scope(await payroll_scope_ids(db, current), employee_id)
+
+
+async def _assert_manage_emp(db: AsyncSession, current: Employee, employee_id: Optional[str]) -> None:
+    if not await _can_manage_emp(db, current, employee_id):
+        raise HTTPException(403, "This person's time and pay are outside what your role can manage")
+
+
+async def _pay_visible(db: AsyncSession, current: Employee):
+    """Predicate: may the caller see this employee's pay rate? Own always; others with
+    can_view_payroll inside the payroll scope."""
+    from backend.services.auth import has_perm
+    from backend.services.payroll_views import in_scope, payroll_scope_ids
+    see = await has_perm(db, current, "can_view_payroll")
+    scope = await payroll_scope_ids(db, current)
+    return lambda emp_id: emp_id == current.id or (see and in_scope(scope, emp_id))
 
 
 class ManualIn(BaseModel):
@@ -536,7 +578,7 @@ async def create_manual(
     current: Employee = Depends(get_current_employee),
 ):
     emp_id = data.employee_id or current.id
-    if emp_id != current.id and not await _can_manage(db, current):
+    if not await _can_manage_emp(db, current, emp_id):
         raise HTTPException(403, "You can only log your own time")
     if data.category not in CATEGORIES:
         raise HTTPException(400, f"category must be one of {CATEGORIES}")
@@ -599,7 +641,7 @@ async def edit_entry(
         TimeEntry.id == eid, TimeEntry.org_id == current.org_id))).scalar_one_or_none()
     if not e:
         raise HTTPException(404, "Entry not found")
-    if e.employee_id != current.id and not await _can_manage(db, current):
+    if not await _can_manage_emp(db, current, e.employee_id):
         raise HTTPException(403, "Not allowed")
     if e.state == "approved":
         raise HTTPException(409, "Entry is approved and locked; reopen it first")
@@ -645,7 +687,7 @@ async def void_entry(
         TimeEntry.id == eid, TimeEntry.org_id == current.org_id))).scalar_one_or_none()
     if not e:
         raise HTTPException(404, "Entry not found")
-    if e.employee_id != current.id and not await _can_manage(db, current):
+    if not await _can_manage_emp(db, current, e.employee_id):
         raise HTTPException(403, "Not allowed")
     if e.state == "approved":
         raise HTTPException(409, "Approved entry is locked; reopen it first")
@@ -666,6 +708,7 @@ async def approve_entry(
         TimeEntry.id == eid, TimeEntry.org_id == current.org_id))).scalar_one_or_none()
     if not e:
         raise HTTPException(404, "Entry not found")
+    await _assert_manage_emp(db, current, e.employee_id)
     if e.state == "running":
         raise HTTPException(409, "Stop the timer before approving")
     if e.state == "void":
@@ -688,13 +731,13 @@ async def entry_audit(
         TimeEntry.id == eid, TimeEntry.org_id == current.org_id))).scalar_one_or_none()
     if not e:
         raise HTTPException(404, "Entry not found")
-    if e.employee_id != current.id and not await _can_manage(db, current):
+    if not await _can_manage_emp(db, current, e.employee_id):
         raise HTTPException(403, "Not allowed")
     names = await _emp_map(db, current.org_id)
     rows = (await db.execute(select(TimeEntryAudit).where(
         TimeEntryAudit.time_entry_id == eid).order_by(TimeEntryAudit.at.asc()))).scalars().all()
     return {"items": [{"action": a.action, "field": a.field, "old": a.old_value, "new": a.new_value,
-                       "actor": names.get(a.actor_id, "—"), "at": a.at.isoformat()} for a in rows]}
+                       "actor": names.get(a.actor_id, "—"), "at": utc_iso(a.at)} for a in rows]}
 
 
 @router.post("/entries/{eid}/reopen")
@@ -707,6 +750,7 @@ async def reopen_entry(
         TimeEntry.id == eid, TimeEntry.org_id == current.org_id))).scalar_one_or_none()
     if not e:
         raise HTTPException(404, "Entry not found")
+    await _assert_manage_emp(db, current, e.employee_id)
     if e.state != "approved":
         raise HTTPException(409, "Only approved entries can be reopened")
     _audit(db, e, "reopen", current.id, field="state", old="approved", new="stopped")
@@ -731,7 +775,7 @@ async def dispute_entry(
         TimeEntry.id == eid, TimeEntry.org_id == current.org_id))).scalar_one_or_none()
     if not e:
         raise HTTPException(404, "Entry not found")
-    if e.employee_id != current.id and not await _can_manage(db, current):
+    if not await _can_manage_emp(db, current, e.employee_id):
         raise HTTPException(403, "Not allowed")
     e.disputed = True
     e.dispute_note = data.note
@@ -751,6 +795,7 @@ async def resolve_dispute(
         TimeEntry.id == eid, TimeEntry.org_id == current.org_id))).scalar_one_or_none()
     if not e:
         raise HTTPException(404, "Entry not found")
+    await _assert_manage_emp(db, current, e.employee_id)
     e.disputed = False
     _audit(db, e, "resolve_dispute", current.id, field="disputed", old=True, new=False)
     await db.commit()
@@ -782,19 +827,24 @@ async def my_work(
             today_s += s
     active = await _running_for(db, current.org_id, current.id)
 
-    # open service/labour lines assigned to me, with booked + measured actual
+    # open service/labour lines assigned to me, with booked + measured actual. Only the tech's
+    # own lines on open jobs are read, and the follow-up queries join on that set instead of
+    # binding an id per order: this used to put every open order in the shop into one IN list,
+    # which failed with "too many SQL variables" at 33,208 orders.
+    my_line_q = (select(OrderLine).join(Order, Order.id == OrderLine.order_id).where(
+        OrderLine.technician_id == current.id, Order.org_id == current.org_id,
+        Order.is_estimate == False, Order.archived == False,   # noqa: E712
+        Order.closed_at.is_(None)))
+    lines = (await db.execute(my_line_q)).scalars().all()
+    my_line_ids = select(my_line_q.subquery().c.id)
     open_orders = (await db.execute(select(Order).where(
-        Order.org_id == current.org_id, Order.is_estimate == False,   # noqa: E712
-        Order.archived == False))).scalars().all()   # noqa: E712
+        Order.id.in_(select(my_line_q.subquery().c.order_id))))).scalars().all()
     open_ids = {o.id: o.order_number for o in open_orders}
-    lines = (await db.execute(select(OrderLine).where(
-        OrderLine.technician_id == current.id,
-        OrderLine.order_id.in_(list(open_ids.keys()) or ["__none__"])))).scalars().all()
     # measured actual seconds per line (job time, any tech) via shared helper source
     line_secs: dict = {}
     for e in (await db.execute(select(TimeEntry).where(
             TimeEntry.org_id == current.org_id,
-            TimeEntry.order_line_id.in_([l.id for l in lines] or ["__none__"])))).scalars().all():
+            TimeEntry.order_line_id.in_(my_line_ids)))).scalars().all():
         if is_job_actual(e):
             line_secs[e.order_line_id] = line_secs.get(e.order_line_id, 0) + entry_seconds(e)
     my_lines = [{
@@ -812,24 +862,28 @@ async def my_work(
     orders = []
     my_order_ids = list(dict.fromkeys(l["order_id"] for l in my_lines))
     if my_order_ids:
+        from sqlalchemy import case
         from backend.models import OrderChecklistItem, OrderStatus, Client, Device
-        from backend.routers.statuses import ensure_seeded
+        from backend.routers.statuses import ensure_seeded, is_transition_allowed
         await ensure_seeded(db, current.org_id)
         wf = (await db.execute(select(OrderStatus).where(
             OrderStatus.org_id == current.org_id, OrderStatus.record_type == "work_order",
             OrderStatus.active == True).order_by(OrderStatus.sort_order))).scalars().all()  # noqa: E712
         by_key = {s.key: s for s in wf}
         order_by_id = {o.id: o for o in open_orders}
+        mine_orders = select(my_line_q.subquery().c.order_id)
         # checklist progress per order (done/total)
-        prog: dict = {}
-        for it in (await db.execute(select(OrderChecklistItem).where(
-                OrderChecklistItem.order_id.in_(my_order_ids)))).scalars().all():
-            d, t = prog.get(it.order_id, (0, 0))
-            prog[it.order_id] = (d + (1 if it.done else 0), t + 1)
+        prog = {oid: (int(d or 0), int(t)) for oid, d, t in (await db.execute(
+            select(OrderChecklistItem.order_id,
+                   func.sum(case((OrderChecklistItem.done == True, 1), else_=0)), func.count())  # noqa: E712
+            .where(OrderChecklistItem.order_id.in_(mine_orders))
+            .group_by(OrderChecklistItem.order_id))).all()}
         clients = {c.id: c.name for c in (await db.execute(select(Client).where(
-            Client.org_id == current.org_id))).scalars().all()}
+            Client.org_id == current.org_id,
+            Client.id.in_(select(Order.client_id).where(Order.id.in_(mine_orders)))))).scalars().all()}
         devices = {d.id: d for d in (await db.execute(select(Device).where(
-            Device.org_id == current.org_id))).scalars().all()}
+            Device.org_id == current.org_id,
+            Device.id.in_(select(Order.device_id).where(Order.id.in_(mine_orders)))))).scalars().all()}
         for oid in my_order_ids:
             o = order_by_id.get(oid)
             if not o:
@@ -837,8 +891,13 @@ async def my_work(
             cur = by_key.get(o.status)
             nxt = None
             if cur and not cur.is_terminal:
-                nxt = next((s for s in wf if s.sort_order > cur.sort_order and not s.is_terminal), None) \
-                    or next((s for s in wf if s.sort_order > cur.sort_order), None)
+                # B11: the next step is the next main-path status this role may move to. A
+                # "pending" status (Waiting parts…) is a detour, not the next step for every job.
+                later = [s for s in wf if s.sort_order > cur.sort_order]
+                ok = [s for s in later if await is_transition_allowed(
+                    db, current.org_id, current.role_id, o.status, s.key)]
+                nxt = next((s for s in ok if not s.is_terminal and s.status_group != "pending"), None) \
+                    or next((s for s in ok if not s.is_terminal), None) or next(iter(ok), None)
             dv = devices.get(o.device_id)
             done, total = prog.get(oid, (0, 0))
             orders.append({
@@ -874,6 +933,22 @@ def _overtime_split(entries: list[TimeEntry]) -> tuple[float, float]:
     return q4(straight), q4(overtime)
 
 
+def _day_wage(entries: list[TimeEntry]) -> Decimal:
+    """One day's pay: each entry at its own snapshotted rate, in time order; hours past the
+    daily threshold at the overtime multiplier."""
+    hours_so_far = 0.0
+    pay = 0.0
+    for e in sorted(entries, key=lambda x: x.started_at):
+        if e.state == "void" or not e.duration_sec:
+            continue
+        h = e.duration_sec / 3600
+        straight = max(0.0, min(h, OT_DAILY_THRESHOLD_H - hours_so_far))
+        rate = e.cost_rate or 0
+        pay += straight * rate + (h - straight) * rate * OT_MULTIPLIER
+        hours_so_far += h
+    return Decimal(str(q2(pay)))
+
+
 @router.get("/timesheet")
 async def timesheet(
     employee_id: Optional[str] = None,
@@ -883,7 +958,7 @@ async def timesheet(
     current: Employee = Depends(get_current_employee),
 ):
     emp_id = employee_id or current.id
-    if emp_id != current.id and not await _can_manage(db, current):
+    if not await _can_manage_emp(db, current, emp_id):
         raise HTTPException(403, "Not allowed")
     start = _udt(date_from, "date_from")
     end = _udt(date_to, "date_to") + timedelta(days=1)
@@ -937,26 +1012,59 @@ async def approve_timesheet(
         TimeEntry.started_at < end))).scalars().all()
     if not rows:
         raise HTTPException(404, "No stopped entries to approve in that window")
-    for e in rows:
-        e.state = "approved"
-        e.approved_by_id = current.id
-    # compute wages with daily overtime
-    all_in_window = (await db.execute(select(TimeEntry).where(
+    await assert_not_self(db, current, data.employee_id, "approve your own timesheet")
+    await _assert_manage_emp(db, current, data.employee_id)
+    # Price only the entries approved now, one ledger row per day worked. Re-pricing every
+    # approved entry in the window paid hours again whenever a wider window was approved
+    # later, and a window spanning two months was counted in both months' runs.
+    days = sorted({e.started_at.date() for e in rows})
+    already = (await db.execute(select(TimeEntry).where(
         TimeEntry.org_id == current.org_id, TimeEntry.employee_id == data.employee_id,
         TimeEntry.state == "approved", TimeEntry.started_at >= start,
         TimeEntry.started_at < end))).scalars().all()
-    straight_h, ot_h = _overtime_split(all_in_window)
-    rate = (all_in_window[0].cost_rate if all_in_window else 0) or 0
-    wage = Decimal(str(q2(straight_h * rate + ot_h * rate * OT_MULTIPLIER)))
+    for e in rows:
+        e.state = "approved"
+        e.approved_by_id = current.id
+    emp = (await db.execute(select(Employee).where(
+        Employee.id == data.employee_id, Employee.org_id == current.org_id))).scalar_one_or_none()
+    from backend.services import audit
+    if emp and emp.hourly_basis == "attendance":
+        # One clock pays. This employee's hours are paid from shop attendance, so approving
+        # the labour timesheet locks it for job costing but posts no wage (else both pay).
+        await audit.record(db, org_id=current.org_id, actor_id=current.id, action="payroll.timesheet_approve",
+                           entity_type="employee", entity_id=data.employee_id,
+                           diff={"window": [data.date_from, data.date_to], "entries": len(rows),
+                                 "amount": 0, "paid_from": "attendance"})
+        await db.commit()
+        return {"ok": True, "approved": len(rows), "straight_hours": 0.0, "overtime_hours": 0.0,
+                "wage_posted": 0.0, "ledger_posted": False, "paid_from": "attendance"}
+    from backend.services.payroll import CommissionEngine
+    eng = CommissionEngine(db, current.org_id)
+    batch = hashlib.sha256(",".join(sorted(e.id for e in rows)).encode()).hexdigest()[:16]
+    straight_h = ot_h = 0.0
+    total = Decimal("0")
     posted = False
-    if wage > 0:
-        from backend.services.payroll import CommissionEngine
-        eng = CommissionEngine(db, current.org_id)
+    for day in days:
+        before = [e for e in already if e.started_at.date() == day]
+        after = before + [e for e in rows if e.started_at.date() == day]
+        s_before, o_before = _overtime_split(before)
+        s_after, o_after = _overtime_split(after)
+        straight_h += s_after - s_before
+        ot_h += o_after - o_before
+        wage = _day_wage(after) - _day_wage(before)
+        if wage <= 0:
+            continue
+        total += wage
         posted = await eng._post(
             employee_id=data.employee_id, entry_type="hourly_wage", amount=wage, event=None,
-            rule_id=None, ref_type="timesheet", ref_id=f"{data.employee_id}:{data.date_from}:{data.date_to}",
-            idempotency_key=f"hourly:{data.employee_id}:{data.date_from}:{data.date_to}",
-            note=f"Hourly wages {data.date_from}–{data.date_to} ({straight_h}h + {ot_h}h OT)")
+            rule_id=None, ref_type="timesheet", ref_id=f"{data.employee_id}:{day}:{day}",
+            idempotency_key=f"hourly:{data.employee_id}:{day}:{batch}",
+            note=f"Hourly wages {day} ({q4(s_after - s_before)}h + {q4(o_after - o_before)}h OT)") or posted
+    straight_h, ot_h, wage = q4(straight_h), q4(ot_h), total
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="payroll.timesheet_approve",
+                       entity_type="employee", entity_id=data.employee_id,
+                       diff={"window": [data.date_from, data.date_to], "entries": len(rows),
+                             "amount": float(wage), "paid_from": "labour"})
     await db.commit()
     return {"ok": True, "approved": len(rows), "straight_hours": straight_h,
             "overtime_hours": ot_h, "wage_posted": float(wage), "ledger_posted": posted}
@@ -974,9 +1082,11 @@ async def order_time(
         TimeEntry.org_id == current.org_id, TimeEntry.order_id == order_id,
         TimeEntry.state != "void").order_by(TimeEntry.started_at))).scalars().all()
     names = await _emp_map(db, current.org_id)
+    sees = await _pay_visible(db, current)
     tracked = sum(_elapsed_sec(e) for e in rows)
     billable = sum(_elapsed_sec(e) for e in rows if e.billable)
     cost = sum(_elapsed_sec(e) / 3600 * (e.cost_rate or 0) for e in rows)
+    all_visible = all(sees(e.employee_id) for e in rows)
     bill = sum(_elapsed_sec(e) / 3600 * (e.billable_rate or 0) for e in rows if e.billable)
     return {
         "order_id": order_id, "order_number": o.order_number,
@@ -984,8 +1094,9 @@ async def order_time(
         "tracked_sec": tracked, "tracked_min": round(tracked / 60, 1),
         "billable_sec": billable, "billable_min": round(billable / 60, 1),
         "billed_labour_total": o.labour_total or 0,
-        "labor_cost": q2(cost), "labor_billable": q2(bill),
-        "entries": [_ser(e, o.order_number, names.get(e.employee_id)) for e in rows],
+        # the total reveals pay rates, so it shows only when every entry's rate is visible
+        "labor_cost": q2(cost) if all_visible else None, "labor_billable": q2(bill),
+        "entries": [_ser(e, o.order_number, names.get(e.employee_id), show_pay=sees(e.employee_id)) for e in rows],
     }
 
 

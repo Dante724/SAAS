@@ -11,11 +11,11 @@ CRUD, plus the two things a shop actually does with a supplier:
     that's waiting on the part, so when the goods land they're already spoken for
     rather than being sold to whoever walks in first.
 """
-from datetime import date, datetime
+from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,11 +27,11 @@ from backend.models import (
     Part,
     POLine,
     PurchaseOrder,
-    StockReservation,
     Supplier,
 )
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.money import q2, q4
+from backend.services.money import q2
+from backend.core.spreadsheet import MAX_IMPORT_ROWS
 
 router = APIRouter(prefix="/api/suppliers", tags=["inventory"])
 
@@ -63,7 +63,7 @@ async def list_suppliers(
 async def supplier_ledger(
     supplier_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_finance")),
 ):
     """Build 124 — the supplier's Balance tab: the unified contact ledger for the
     contact this supplier mirrors (``Supplier.client_id``). Postings we owe show as
@@ -120,7 +120,7 @@ async def pay_supplier(
     owe (single source in services/ledger). A payment therefore subtracts from
     Supplier.balance and posts a positive contact row that moves the contact toward zero.
     """
-    from backend.models import Account, Client
+    from backend.models import Account
     s = await _load(db, current, supplier_id)
     amount = q2(float(data.amount or 0))
     if amount <= 0:
@@ -285,7 +285,7 @@ async def delete_supplier(
 
 # ── price-list import ────────────────────────────────────────────────────────
 class PriceListIn(BaseModel):
-    rows: list[dict]
+    rows: list[dict] = Field(max_length=MAX_IMPORT_ROWS)
     mapping: dict[str, str]        # {source_column: field}  field ∈ IMPORTABLE
     match_on: str = "sku"          # sku|barcode
     create_missing: bool = False   # add products the price list has and we don't
@@ -340,9 +340,14 @@ async def import_price_list(
                     errors.append({"row": i + 1, "error": f"{money} isn't a number"})
                     rec.pop(money)
 
-        col = Part.sku if data.match_on == "sku" else Part.barcode
-        part = (await db.execute(select(Part).where(
-            Part.org_id == current.org_id, col == str(key)))).scalars().first()
+        if data.match_on == "sku":
+            part = (await db.execute(select(Part).where(
+                Part.org_id == current.org_id, Part.sku == str(key)))).scalars().first()
+        else:       # ii144b: any form of the barcode (UPC-A / EAN-13 / extra barcodes)
+            from backend.services import product_codes
+            part = (await db.execute(select(Part).where(Part.org_id == current.org_id, or_(
+                Part.barcode == str(key), Part.id.in_(product_codes.barcode_part_ids(current.org_id, str(key)))))
+            )).scalars().first()
 
         if not part:
             if not data.create_missing:

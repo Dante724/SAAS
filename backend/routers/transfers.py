@@ -15,8 +15,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import or_, select
-from sqlalchemy import update as sa_update
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
@@ -24,14 +23,14 @@ from backend.models import (
     Employee,
     Location,
     Part,
-    StockLevel,
     StockMovement,
     StockTransfer,
     StockTransferLine,
 )
 from backend.services.auth import get_current_employee, require_perm
+from backend.services import stock_rows
 from backend.services.numbering import next_number
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 router = APIRouter(prefix="/api/transfers", tags=["transfers"])
 
@@ -43,15 +42,6 @@ async def _lines(db, tid):
         StockTransferLine.transfer_id == tid))).scalars().all()
 
 
-async def _level(db, part_id, location_id):
-    sl = (await db.execute(select(StockLevel).where(
-        StockLevel.part_id == part_id, StockLevel.location_id == location_id))).scalars().first()
-    if not sl:
-        sl = StockLevel(part_id=part_id, location_id=location_id,
-                        qty_available=0, qty_reserved=0)
-        db.add(sl)
-        await db.flush()
-    return sl
 
 
 def _ser(t, loc_names, line_data, by=None):
@@ -180,23 +170,31 @@ async def change_status(
     if t.status in ("completed", "canceled"):
         raise HTTPException(409, f"Transfer is {t.status} — no further changes")
     new = data.status
+    if new != "canceled" and (new not in ORDERED or ORDERED.index(new) != ORDERED.index(t.status) + 1):
+        raise HTTPException(400, f"Invalid move {t.status} -> {new}")
+    # Claim the move before any stock moves: the same click sent twice (or two people) must not
+    # credit the destination or debit the source twice. Only the request whose status still
+    # matches wins; the other gets a 409.
+    won = await db.execute(update(StockTransfer).where(
+        StockTransfer.id == t.id, StockTransfer.status == t.status)
+        .values(status=new).execution_options(synchronize_session=False))
+    if won.rowcount != 1:
+        raise HTTPException(409, "This transfer was changed by someone else. Refresh and try again.")
     lines = await _lines(db, tid)
 
     if new == "canceled":
         if t.status == "ready":
             # un-reserve back to availability at source
             for l in lines:
-                sl = await _level(db, l.part_id, t.from_location_id)
-                sl.qty_reserved = max((sl.qty_reserved or 0) - l.qty, 0)
-                sl.qty_available = (sl.qty_available or 0) + l.qty
+                await stock_rows.reserve(db, l.part_id, t.from_location_id, -l.qty)
+                await stock_rows.add(db, l.part_id, t.from_location_id, l.qty)
         elif t.status in ("in_transit", "received"):
             # goods already left the source — caller names the receiving warehouse
             back = data.return_location_id
             if not back:
                 raise HTTPException(400, "Goods already shipped: pass return_location_id to choose the warehouse taking them back")
             for l in lines:
-                sl = await _level(db, l.part_id, back)
-                sl.qty_available = (sl.qty_available or 0) + l.qty
+                await stock_rows.add(db, l.part_id, back, l.qty)
                 db.add(StockMovement(part_id=l.part_id, location_id=back,
                                      movement_type="receive", qty=l.qty,
                                      ref_type="transfer_cancel", ref_id=t.id))
@@ -214,24 +212,19 @@ async def change_status(
     if new == "ready":
         # reserve at source: guarded decrement so two transfers can't grab the same units
         for l in lines:
-            sl = (await db.execute(select(StockLevel).where(
-                StockLevel.part_id == l.part_id,
-                StockLevel.location_id == t.from_location_id))).scalars().first()
-            avail = sl.qty_available if sl else 0
-            if not sl or avail < l.qty:
+            avail, _held = await stock_rows.totals(db, l.part_id, t.from_location_id)
+            if avail < l.qty:
                 part = (await db.execute(select(Part).where(Part.id == l.part_id))).scalar_one_or_none()
                 raise HTTPException(409, f"Only {avail:g} of '{part.name if part else l.part_id}' at the source warehouse")
-            res = await db.execute(sa_update(StockLevel)
-                .where(StockLevel.id == sl.id, StockLevel.qty_available >= l.qty)
-                .values(qty_available=StockLevel.qty_available - l.qty,
-                        qty_reserved=StockLevel.qty_reserved + l.qty))
-            if res.rowcount == 0:
+            try:      # ii144a: guarded per-bin decrements, then held on the location
+                await stock_rows.draw(db, l.part_id, t.from_location_id, l.qty)
+            except stock_rows.NotEnoughStock:
                 raise HTTPException(409, "Stock changed while reserving — retry")
+            await stock_rows.reserve(db, l.part_id, t.from_location_id, l.qty)
     elif new == "in_transit":
         # leave the source: reservation lifts; goods now ride on the transfer itself
         for l in lines:
-            sl = await _level(db, l.part_id, t.from_location_id)
-            sl.qty_reserved = max((sl.qty_reserved or 0) - l.qty, 0)
+            await stock_rows.reserve(db, l.part_id, t.from_location_id, -l.qty)
             db.add(StockMovement(part_id=l.part_id, location_id=t.from_location_id,
                                  movement_type="transfer_out", qty=-l.qty,
                                  ref_type="transfer", ref_id=t.id))
@@ -245,8 +238,7 @@ async def change_status(
             qty_in = l.qty_received if l.qty_received is not None else l.qty
             if not qty_in:
                 continue
-            sl = await _level(db, l.part_id, t.to_location_id)
-            sl.qty_available = (sl.qty_available or 0) + qty_in
+            await stock_rows.add(db, l.part_id, t.to_location_id, qty_in)
             db.add(StockMovement(part_id=l.part_id, location_id=t.to_location_id,
                                  warehouse_id=t.to_warehouse_id,
                                  movement_type="transfer_in", qty=qty_in,
@@ -343,9 +335,9 @@ async def scan_transfer_line(
         raise HTTPException(409, "Lines can only be added while the transfer is a draft")
 
     code = data.code.strip()
+    from backend.services import product_codes
     part = (await db.execute(select(Part).where(
-        Part.org_id == current.org_id,
-        or_(Part.barcode == code, Part.sku == code)))).scalars().first()
+        Part.org_id == current.org_id, product_codes.matches_code(current.org_id, code)))).scalars().first()
     if not part:
         raise HTTPException(404, f"Nothing matches “{code}”")
 
@@ -360,3 +352,8 @@ async def scan_transfer_line(
     await db.commit()
     await db.refresh(ln)
     return {"ok": True, "part_id": part.id, "part_name": part.name, "qty": ln.qty}
+
+
+async def _atomic_add(db, obj, attr, delta, *, round_to=None):
+    from backend.services.money import add_to_column
+    return await add_to_column(db, obj, attr, delta, round_to=round_to)

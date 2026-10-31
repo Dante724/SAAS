@@ -23,6 +23,7 @@ Entry types used across the app:
     advance         manual: client pays money in                             (-)
     payout          manual: we return money to the client                    (+)
     adjustment      manual: signed correction                                (±)
+    write_off       unpaid balance of a dropped job written off (reversed on reopen) (±)
     posting         goods received from a supplier on credit                 (-)
     purchase_return goods returned to a supplier on credit                   (+)
 """
@@ -34,7 +35,7 @@ from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import Client, ClientLedgerEntry
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 
 async def post_contact_ledger(
@@ -65,9 +66,11 @@ async def post_contact_ledger(
         note=note, ref_type=ref_type, ref_id=ref_id, created_by_id=created_by_id,
     )
     db.add(entry)
-    c = (await db.execute(select(Client).where(Client.id == client_id))).scalar_one_or_none()
+    c = (await db.execute(select(Client).where(
+        Client.id == client_id, Client.org_id == org_id))).scalar_one_or_none()
     if c is not None:
-        c.balance = q2(float(c.balance or 0) + amt)
+        from backend.services.money import add_to_column
+        await add_to_column(db, c, "balance", amt)
     return entry
 
 
@@ -96,7 +99,8 @@ async def adjust_supplier_ap(
     not commit — the caller owns the transaction.
     """
     d = q2(delta)
-    supplier.balance = q2(float(supplier.balance or 0) + d)
+    from backend.services.money import add_to_column
+    await add_to_column(db, supplier, "balance", d)
     await post_contact_ledger(db, org_id, getattr(supplier, "client_id", None), entry_type, -d,
                               note=note, ref_type=ref_type, ref_id=ref_id, created_by_id=created_by_id)
     return supplier.balance
@@ -120,6 +124,28 @@ async def order_charge_net(db: AsyncSession, client_id: Optional[str], order_id:
         )
     )).scalar() or 0
     return q2(float(total))
+
+
+async def available_credit(db: AsyncSession, org_id: str, client_id: Optional[str],
+                           order_id: Optional[str] = None) -> float:
+    """Client money the shop already holds that can pay for something (B3).
+
+    The ledger balance already nets this job's charge and the money taken for it, so credit used
+    on a job is the balance *without* that job. A "pay from balance" moves no money and posts no
+    ledger row: it only marks the job paid out of credit the ledger already shows."""
+    if not client_id:
+        return 0.0
+    bal = (await db.execute(select(Client.balance).where(
+        Client.id == client_id, Client.org_id == org_id))).scalar() or 0
+    job = 0.0
+    if order_id:
+        from backend.models import Payment
+        pay_ids = select(Payment.id).where(Payment.order_id == order_id)
+        job = (await db.execute(select(func.coalesce(func.sum(ClientLedgerEntry.amount), 0)).where(
+            ClientLedgerEntry.client_id == client_id,
+            ((ClientLedgerEntry.ref_type == "order") & (ClientLedgerEntry.ref_id == order_id))
+            | ((ClientLedgerEntry.ref_type == "payment") & ClientLedgerEntry.ref_id.in_(pay_ids))))).scalar() or 0
+    return q2(max(0.0, -(float(bal) - float(job))))
 
 
 async def _has_ref(db: AsyncSession, client_id: str, ref_type: str, ref_id: str) -> bool:
@@ -172,8 +198,8 @@ async def rebuild_org_ledger(db: AsyncSession, org_id: str, created_by_id: str |
         pays = (await db.execute(select(Payment).where(
             Payment.client_id.in_(client_ids)))).scalars().all()
         for p in pays:
-            if not p.client_id or await _has_ref(db, p.client_id, "payment", p.id):
-                continue
+            if not p.client_id or p.method == "balance" or await _has_ref(db, p.client_id, "payment", p.id):
+                continue   # paid from credit the ledger already holds: no movement of its own
             if p.kind == "refund":
                 et, amt = "refund", abs(float(p.amount or 0))
             elif p.kind == "prepayment":

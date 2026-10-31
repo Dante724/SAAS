@@ -1,5 +1,211 @@
 # Changelog
 
+## Merge: API hardening + WS-C (claude/ws-c-inquiries onto api/harden-and-docs, 25 Oct 2026)
+
+- **One migration chain:** `… opd1 → ojj1 → apih1 → whh1 → wsc1`. `wsc1` now widens
+  `organisations.public_employee_name` (added by `ojj1`) to 16 characters instead of adding it again.
+- **Scopes are the union:** broad `read` / `write` (`*` stored as `read,write`), `costs:read`, and the
+  WS-C `<resource>:read|write`. Write implies read, broad and per resource. `webhooks` is explicit-only.
+  New keys default to read only; expiry, rotation, the 25-key cap and the costs:read permission check
+  apply to every key. Settings → Integrations → API keys gains **Only some things** and
+  **Requests a minute** in the existing create drawer.
+- **Rate limits:** the per-key `rate_limit_per_min` (default 120, max 6000) runs with the key check on
+  v1 and v2; the shop-wide middleware still applies. `X-RateLimit-*` report whichever limit is closer
+  to running out.
+- **API v2 has every v1 protection:** bounded paging, length limits and unknown fields refused,
+  other-shop ids → 404 (bundle components too), constraint errors → 422, cost fields only with
+  `costs:read`, `Idempotency-Key` on every POST (v1 semantics), writes audited with `via_api_key`,
+  no CORS and HTTPS only, and a public `/api/v2/openapi.json`. v2 webhook management goes through the
+  same create/delete code as the settings screen (10-endpoint cap, catalogue events, SSRF/https rule,
+  `whsec_` secret shown once, soft delete).
+- **Webhook events:** `EVENT_CATALOGUE` is the one list, with the WS-C inquiry, tag, bundle and product
+  events added. `lead.created` became an alias of `inquiry.created`, which now comes from the ORM hook
+  for every source (sent once). Duplicate `estimate.accepted` emission removed.
+- **Overlapping Orderry fixes deduplicated:** one public-name helper (full / first / first_initial /
+  custom), one comment/file visibility default, and the documents auto-print endpoint drives the
+  new-job print (the WS-C `/api/auto-print/order-created/{id}` endpoint stays available).
+- Docs: `docs/developers/10-api-v2.md`, plus scopes, rate limits and events updated across
+  `docs/developers/`.
+
+## WS-C — Inquiries everywhere (Orderry June–July sprint, gaps #8–#12, #17, #18, #20)
+
+Council note: `docs/council-ws-c-inquiries.md`. Migration `wsc1` (after `whh1` since the merge onto
+api/harden-and-docs; additive only).
+
+- **Missed call → inquiry (Twilio now, Aircall and the generic call webhook too).** A missed inbound
+  call opens an inquiry linked to the contact (matched by phone), creates one "Call back" task and
+  alerts whoever is clocked in (else the contact's manager, a chosen person, or the admins). Repeat
+  calls from the same number within 24 h are added to the open inquiry ("3 missed calls"); a burst
+  alerts once. Settings → Calls & telephony → "Missed calls become inquiries". **On by default**:
+  shops that had the older "task on missed call" automation off now get a call-back task through the
+  inquiry. When the older automation is on, its priority and assignee still apply, and it never
+  creates a second task.
+- **Richer inquiries.** Types with their own respond-by time, device (brand/model, serial or IMEI),
+  custom fields (Settings → Forms → Inquiry), an activity timeline (`/api/feed/lead/{id}`), paged list
+  (`GET /api/leads`), idempotent create (`Idempotency-Key` header or `idempotency_key`). Convert
+  attaches the device (only the same customer's existing device is reused), closes the call-back task,
+  and needs `can_create_tickets` / `can_create_estimates`.
+  - API changes for clients of `/api/leads`: a bad status is now **422** (was 400); `won` without
+    converting is 422; changing the status of a converted inquiry is 409.
+- **API v2** (`/api/v2`): inquiries, inquiry types, tags, services, bundles, writable products,
+  contacts with address parts, webhook subscriptions. Keys can be narrowed to `<resource>:read|write`
+  and have a per-key requests-a-minute limit (default 120; 429 + Retry-After). Reference:
+  `docs/developers/10-api-v2.md`.
+  - **Integrators:** webhooks are never implied by `read,write` or `*`; a key needs `webhooks:read` /
+    `webhooks:write`. v1 reads now need the `read`, `write` or `*` scope (keys with other free-text
+    scopes get 403).
+- **Webhooks match the docs.** `order.closed` and `estimate.accepted` now fire; the docs say
+  `appointment.created` (an endpoint subscribed to the old `booking.created` still receives it); new
+  events for inquiries, tags, bundles and products (`lead.created` is now an alias of
+  `inquiry.created`). Unknown event names are refused when subscribing.
+- **Settings switched on.** Default visibility for new comments and files (used when a client doesn't
+  send one; Settings → General → Comments and files); how staff names show on public pages
+  (Settings → Public pages: full / first / first + initial / custom, where custom uses each person's
+  "Name on documents"); templates can print automatically when a job is created (the web app calls
+  `POST /api/documents/auto-print/{order_id}?event=create`).
+- **Structured addresses** on contacts (street, city, region, postcode, country), postcode checked for
+  countries with a fixed format; the single address line is rebuilt from them, and a typed line still
+  works (it clears the parts).
+- **Aircall adapter** behind `AIRCALL_ENABLED` (off): per-shop webhook token compared in constant time,
+  idempotent per Aircall call id, failed token attempts rate-limited.
+
+## Tekly Go — PIN before money, and auto-lock (shared / unattended phones)
+
+- **Payment PIN** (4–6 digits, per person). After 5 minutes with no taps, or 5 minutes in the
+  background, Tekly Go asks for it before **Finish & take payment**, **Take a payment**, the
+  payment confirm, and **Pay link**. The first tap after a gap doesn't reset the clock.
+- **On by default** for anyone with `can_take_payments` or `can_create_payment_links`: the first
+  money action asks them to set a PIN (needs their Tekly password). Set or change it in More.
+- **Auto-lock** after 10 idle minutes (or **Lock now** in More): a lock screen with the signed-in
+  name, a PIN pad (works with an iPad keyboard), and "Not Sam? Sign out". Only for people with a
+  PIN. The idle clock survives an app restart, tied to that sign-in.
+- **Face ID / Touch ID** (optional, per phone, needs the PIN to turn on): a local check by the
+  phone's own authenticator; only the credential id is stored on the phone. The PIN stays the
+  fallback.
+- Server: the PIN is stored only as a hash (bcrypt of an HMAC with the server secret) in the
+  existing `employees.pin_hash` column, so no migration. Setting it needs the password and is
+  rate-limited. **Five wrong PINs in 15 minutes signs the person out everywhere**
+  (`token_version` bump).
+- API: `GET /api/auth/pin` (set / required), `POST /api/auth/pin {pin, password}`,
+  `POST /api/auth/pin/verify {pin}`. `/api/auth/me` adds `pin_set`.
+- The check runs on the phone; the payment endpoints don't require a PIN token. It guards a
+  phone left unlocked, not a stolen session token.
+
+## Tekly Go — message the customer (phase 1b)
+
+- **Message** on every job, with a red badge when the customer has written.
+  - **Chat:** the job's conversation (customer messages from their tracking page plus shop replies).
+    A reply here shows on the customer's tracking page.
+  - **Text / WhatsApp:** pick a saved template, filled in on the server with the same
+    {Placeholders} as documents (links made absolute). Edit it, then "Open in Messages" or
+    "Open in WhatsApp" opens the phone's own app with number and text ready, and you tap Send there.
+    Back in Tekly, "Did the text go?" records it. Only "Sent" goes into the job history and the
+    portal thread, so the customer never sees a message that may not have gone.
+- **Consent:**
+  - No texts to customers who opted out.
+  - WhatsApp has its own consent (`clients.consent_whatsapp`, null = not asked). Staff record the
+    customer's yes or no in two taps; it's kept in the consent history as `mobile_verbal`.
+- `message_handoffs` records each phone message (opened → sent / cancelled, or unknown after 24h).
+  GDPR erasure scrubs them.
+- `services/phones.to_e164`: international numbers for wa.me links (no phone library in the stack).
+- API, all needing `can_send_sms`:
+  - `GET /api/mobile/orders/{id}/compose`
+  - `POST /api/mobile/messages`
+  - `PATCH /api/mobile/messages/{id}`
+  - `POST /api/mobile/clients/{id}/whatsapp-consent`
+
+## Tekly Go — create jobs, estimates and tasks; photos, items, signature, finish and pay
+
+Designed with a three-reviewer council (one-handed UX, data integrity, permissions).
+
+- **Navigation:** five tabs, Today · Tasks · Scan · Clock · More, with a badge on Tasks for anything
+  due today or overdue. A thumb-reach "+" on Today and Tasks opens New job · New estimate · New task.
+- **New job / estimate:** one screen, no wizard, and every field is optional.
+  - Customer search, with "Add 'Maria 0412…'" inline when nothing matches; it splits name and phone.
+  - That customer's devices as chips, or a new device.
+  - Problem text with quick chips.
+  - Photos, shrunk on the phone to 1600px with EXIF stripped, uploaded after the job exists.
+  - Who's on it.
+- **Job screen:**
+  - Action row: Call · Photo · Add item · Timer.
+  - Photo strip.
+  - Items, with an add sheet that stays open for several, and tap a line to change qty or remove it.
+  - Customer signature pad.
+  - A main button that does the next step: Mark Ready, then Finish & take payment (or Finish job).
+  - The ··· menu adds a task for the job, takes a payment, or opens the full job.
+- **Payment:** amount due in big type, part payments allowed, never above what's owed.
+  - Cash shows quick "handed you" amounts and the change due.
+  - Card records a terminal charge. A pay link shows a QR and watches for the balance to reach zero.
+  - Two-step confirm naming the customer and the staff member. Pay first, then close.
+- **Tasks:** mine (assigned, shared or created by me), grouped Overdue / Today / Coming up / No date / Done.
+  Ticking one off goes through the offline queue.
+- **Never queued offline:** payments, finishing, creating jobs, adding items.
+- **Server rules:**
+  - New permissions `can_close_tickets` and `can_take_payments` (replacing `can_view_finance` on
+    job payments). `can_create_estimates` and `can_create_payment_links` are now enforced.
+  - Migration `gc144g1` keeps everyone's access exactly as it was.
+  - Payments are capped at the balance due.
+  - Tasks: assigning other people needs `can_assign_staff`; only the creator, assignees or a manager
+    can change or delete a task.
+- **Idempotency-Key** on create job, create customer, create task and pay (`idempotency_records`,
+  swept after 48h), so a retried tap runs once.
+- `POST /orders/{id}/intake-photos/add` appends photos under a row lock; the PATCH replaced the whole
+  list and two phones could wipe each other's.
+- Known follow-ups: PIN/Face ID re-check before payment after idle; a "Start a job for this device"
+  shortcut when a scan finds an unknown serial.
+
+## Tekly Go phase 1a — the phone app at /go
+
+- **New page of the React build, served at `/go/`** (`frontend-react/go/index.html` → `src/go/`). It
+  reuses the web app's theme tokens, Tailwind config, Geist, API client and Me context. Its own
+  `manifest.webmanifest` (shortcuts: Scan, Today, Clock; midnight-sapphire icon) and a service worker
+  scoped to `/go/` (`public/go/sw.js`), served by FastAPI with `Service-Worker-Allowed: /go/`.
+- **Bottom tab bar** Today · Scan (raised) · Clock · More; safe-area insets, ≥44pt targets, dark mode
+  (follows the phone, or pick in More), lucide icons only.
+- **Today is role-aware:** technicians see `/api/tech/dashboard`; front desk and owner see the board
+  (ready for pickup first; owner gets stage counts). The role is inferred and can be overridden in More.
+- **Scan:** camera with native `BarcodeDetector`, else a lazy-loaded pure-JS zxing decoder for iOS
+  (WASM is ruled out by the CSP), plus typed/keyboard-wedge entry → `/api/scan/resolve` → job, part
+  or device screen.
+- **Job screen + status sheet:** the change shows at once and rolls back if refused; 409 gates are
+  explained in plain words. Offline it is queued.
+- **Encrypted offline queue ported to TypeScript** (`src/go/lib/offlineQueue.ts`, same rules as
+  `pwa.js`), except a 403 `network_not_allowed` is **kept** and retried on the next network change,
+  never dropped. Sign-out clears the queue so the next person can't replay it.
+- **iPad:** list on the left, job on the right.
+- **Backend:** the technician dashboard's "today" and "overdue" use the shop's timezone (branch zone,
+  else company zone), not UTC, and an open job scheduled on an earlier day now carries over into Today
+  instead of vanishing. `/api/scan/resolve` also accepts a ticket's tracking-link QR (`…/track/<token>`).
+- **Sign-in** honours a same-site `?next=` (open redirects refused) so Go returns to itself.
+- **/tech fix:** its scan called only the catalogue search, so a work-order label never opened the
+  job. It now uses `/api/scan/resolve` (catalogue search stays as the no-exact-match fallback),
+  escapes scanned text before rendering it, and the worker cache version is bumped so phones get it.
+
+## phase 4 — Customer status messages: the notification rules are the one source of truth
+
+- **Problem:** two settings disagreed. The status editor's "Text the customer" switch
+  (`OrderStatus.triggers_notification`) drove a legacy template send that ran only when **no**
+  notification rule matched; every new shop is seeded with an "email on every status change" rule,
+  so the switch was nearly always ignored and owners couldn't tell which setting was real.
+- **Decision:** rules win, everywhere. The legacy fallback in `_apply_status_change` is **removed**
+  (not merely unreachable). `triggers_notification` stays as a column so old clients don't break, but
+  nothing reads it: a `true` from the API is converted into a rule and the flag cleared.
+- **No behaviour change for existing shops** (`services/legacy_status_notifs.py`, shared by
+  migration `nt144p4` and the dev startup self-heal): each flagged status becomes one active
+  per-status rule per status-change template the fallback would have sent (that template's channel,
+  event `closed` for a finishing status), **only** when no rule already fires for it (the fallback
+  never ran then) and only when such a template exists (it sent nothing otherwise). A
+  location-scoped rule counts as covering (can't double-send). Statuses not in the status table
+  (hard-coded `done/closed/delivered`) no longer get the template fallback.
+- **Status editor:** the switch is replaced by a live read-out from the rules ("Email · via Every
+  status change", "Text"), Text/Email(/WhatsApp) quick switches that create or turn off this
+  status's own rule (the same `toggleCell` the Notifications table uses, `src/lib/notifRules.ts`), and
+  "Edit message" → Settings › Notifications. The summary sentence and the list badge read the rules.
+- Changing a status between open and finishing stages moves its own rules between `status_changed`
+  and `closed`, so they keep firing. New shops no longer seed the flag.
+- Known gap (unchanged, follow-up): rule-engine email doesn't use the shop's connected Gmail/Outlook
+  the way the old template path did (`try_oauth_email`); it goes through SMTP / simulated.
+
 ## build 144ep — Enforce the last 11 foreign keys; fix checklist orphans; repair dev DB
 
 - **Root cause, checklist orphans:** `_write_structure` (template save) deleted steps and relied on the

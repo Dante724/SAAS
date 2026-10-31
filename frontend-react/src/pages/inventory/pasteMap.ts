@@ -2,21 +2,26 @@
 // header auto-detect → content heuristics → caller shows a correctable mapping bar.
 // No UI, no network — just text in, {grid, map, rows} out, so it can be unit-tested.
 
-export type PasteField = "code" | "name" | "qty" | "cost" | "markup" | "ignore";
-export type PostRow = { code: string; name: string; qty: number; purchase_price: number; markup_pct: number };
+export type PasteField = "code" | "mpn" | "name" | "qty" | "cost" | "markup" | "type" | "ignore";
+// product_type (16a): the sheet's "Type" cell — serialized / expiry-tracked; only shapes new products.
+export type PostRow = { code: string; mpn: string; name: string; qty: number; purchase_price: number; markup_pct: number; product_type?: string };
 
 export const FIELD_LABELS: Record<PasteField, string> = {
-  code: "Code / SKU", name: "Name", qty: "Qty", cost: "Cost", markup: "Markup %", ignore: "Ignore",
+  code: "Code / SKU", mpn: "MPN", name: "Name", qty: "Qty", cost: "Cost", markup: "Markup %", type: "Product type", ignore: "Ignore",
 };
-export const FIELD_ORDER: PasteField[] = ["code", "name", "qty", "cost", "markup", "ignore"];
+export const FIELD_ORDER: PasteField[] = ["code", "mpn", "name", "qty", "cost", "markup", "type", "ignore"];
 
 // Header synonyms per field (normalised: lowercase, punctuation stripped).
 const SYN: Record<Exclude<PasteField, "ignore">, string[]> = {
-  code: ["code", "sku", "part", "part#", "partno", "partnumber", "part number", "item", "item#", "itemno", "mpn", "barcode", "upc", "ref"],
+  code: ["code", "sku", "part", "part#", "partno", "partnumber", "part number", "item", "item#", "itemno", "barcode", "upc", "ref"],
+  // opa: the manufacturer's part number has its own product field now, not an alias of code
+  mpn: ["mpn", "mfrpn", "mfr pn", "mfrpart", "mfr part", "mfr part#", "mfgpn", "mfg part", "mfg part#",
+    "manufacturer part", "manufacturer part number", "manufacturerpartnumber", "manufacturer pn", "oem part", "oem part#", "oempn"],
   name: ["name", "description", "desc", "product", "productname", "item name", "title", "details"],
   qty: ["qty", "quantity", "count", "units", "unit", "onhand", "on hand", "received", "qtyreceived", "qty received", "pcs", "stock"],
   cost: ["cost", "unitcost", "unit cost", "price", "unitprice", "unit price", "buy", "buyprice", "purchase", "purchaseprice", "purchase price", "wholesale", "net", "rate"],
   markup: ["markup", "margin", "markup%", "margin%", "mkup", "uplift"],
+  type: ["type", "product type", "producttype", "item type", "tracking", "tracked by", "serialized", "serialised"],
 };
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9%# ]/g, "").trim();
@@ -48,7 +53,7 @@ export function parseGrid(text: string): string[][] {
 
 export function headerFieldFor(cell: string): PasteField | null {
   const n = norm(cell); if (!n) return null;
-  for (const f of ["code", "name", "qty", "cost", "markup"] as const) {
+  for (const f of ["code", "mpn", "name", "qty", "cost", "markup", "type"] as const) {
     if (SYN[f].some((s) => n === s || n.replace(/ /g, "") === s.replace(/ /g, ""))) return f;
   }
   return null;
@@ -105,17 +110,19 @@ export function heuristicMap(grid: string[][]): PasteField[] {
 
 export function gridToRows(grid: string[][], map: PasteField[]): PostRow[] {
   return grid.map((cells) => {
-    const row: PostRow = { code: "", name: "", qty: 1, purchase_price: 0, markup_pct: 0 };
+    const row: PostRow = { code: "", mpn: "", name: "", qty: 1, purchase_price: 0, markup_pct: 0 };
     map.forEach((f, c) => {
       const v = (cells[c] ?? "").trim(); if (f === "ignore" || !v) return;
       if (f === "code") row.code = v;
+      else if (f === "mpn") row.mpn = v;
       else if (f === "name") row.name = v;
       else if (f === "qty") { const n = toNum(v); if (n !== null) row.qty = n; }
       else if (f === "cost") { const n = toNum(v); if (n !== null) row.purchase_price = n; }
       else if (f === "markup") { const n = toNum(v); if (n !== null) row.markup_pct = n; }
+      else if (f === "type") row.product_type = v;
     });
     return row;
-  }).filter((r) => r.code || r.name);
+  }).filter((r) => r.code || r.mpn || r.name);
 }
 
 // Re-derive rows for a new column mapping while keeping any field the user hand-edited.
@@ -125,7 +132,7 @@ export function gridToRows(grid: string[][], map: PasteField[]): PostRow[] {
 export function mergeRemap(grid: string[][], oldMap: PasteField[], newMap: PasteField[], currentRows: PostRow[]): PostRow[] {
   const oldBase = gridToRows(grid, oldMap);
   const newBase = gridToRows(grid, newMap);
-  const keys: (keyof PostRow)[] = ["code", "name", "qty", "purchase_price", "markup_pct"];
+  const keys: (keyof PostRow)[] = ["code", "mpn", "name", "qty", "purchase_price", "markup_pct", "product_type"];
   return newBase.map((r, i) => {
     const old = oldBase[i], cur = currentRows[i];
     if (!old || !cur) return r;

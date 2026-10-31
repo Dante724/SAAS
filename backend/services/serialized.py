@@ -74,7 +74,8 @@ async def allocate_serialized_item(db: AsyncSession, *, org_id: str, part_id: st
     if bin_id:
         conds.append(SerializedItem.bin_id == bin_id)
     if serial_number:
-        conds.append(SerializedItem.serial_number == serial_number)
+        from backend.services.serial_intake import matches as _sn_matches
+        conds.append(_sn_matches(SerializedItem.serial_number, serial_number))
 
     stmt = (select(SerializedItem).where(*conds)
             .order_by(SerializedItem.created_at.asc())

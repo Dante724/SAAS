@@ -33,16 +33,17 @@ async def test_asset_image_roundtrips_to_order_and_board(client, tenant):
     detail = (await client.get(f"/api/orders/{order['id']}", headers=tenant)).json()
     assert detail["device"]["image_data"] == IMG
 
-    # work-order list carries it
+    # work-order list and board carry it by URL (batch 2: never inline base64 per row)
     lst = (await client.get("/api/orders?is_estimate=false", headers=tenant)).json()
     row = next(r for r in lst["items"] if r["id"] == order["id"])
-    assert row["device"]["image_data"] == IMG
-
-    # board card exposes it as device_image
+    url = f"/api/assets/{device_id}/image"
+    assert row["device"]["image_url"] == url
     board = (await client.get("/api/orders/board?is_estimate=false", headers=tenant)).json()
     cards = [c for col in board["columns"] for c in col["cards"]]
     card = next(c for c in cards if c["id"] == order["id"])
-    assert card["device_image"] == IMG
+    assert card["device_image_url"] == url
+    img = await client.get(url, headers=tenant)
+    assert img.status_code == 200 and img.content.startswith(b"GIF89a")
 
 
 @pytest.mark.asyncio

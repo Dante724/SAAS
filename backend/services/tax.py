@@ -14,7 +14,7 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import Tax, TaxException, TaxRule
-from backend.services.money import q2, q4
+from backend.services.money import q2
 
 
 def _in_scope(tax: Tax, location_id: str | None) -> bool:
@@ -76,3 +76,37 @@ async def resolve_taxes(db: AsyncSession, org_id: str, *, doc_family: str,
                         "rate": tax.rate, "mode": tax.mode, "amount": amount})
         total += amount
     return {"taxes": applied, "tax_total": q2(total), "exempt": False}
+
+
+def line_tax(*, qty, unit_price, discount=0.0, discount_type=None, tax_rate=0.0, tax_mode=None) -> float:
+    """The tax portion of one line after its discount (same maths as orders._line_tax_amount, but
+    null-safe for stored rows). Imposed tax is added on top of the line; included tax is the VAT
+    already inside the price."""
+    base = float(qty or 0) * float(unit_price or 0)
+    disc = float(discount or 0)
+    after = max(base - disc, 0.0) if discount_type == "fixed" else base * (1 - disc / 100)
+    rate = float(tax_rate or 0) / 100
+    if not rate:
+        return 0.0
+    if (tax_mode or "imposed") == "included":
+        return q2(after - after / (1 + rate))
+    return q2(after * rate)
+
+
+async def pos_line_tax(db: AsyncSession, org_id: str, *, kind: str, ref_id: str | None,
+                       net_amount: float, location_id: str | None = None) -> dict:
+    """Tax for one POS (counter sale) line: the org's sales stack with product/service exceptions,
+    the same rules a work order line uses. Returns {"rate", "mode", "tax_id", "amount"}; for an
+    imposed tax `amount` is added on top of net_amount, for an included tax it is the VAT inside it.
+
+    Kept public for the POS screen's quote dry-run (stream C): call it per cart line."""
+    item_type = "product" if kind == "product" else ("service" if kind == "service" else None)
+    res = await resolve_taxes(db, org_id, doc_family="tickets_sales", net_amount=float(net_amount or 0),
+                              item_type=item_type, item_id=ref_id, location_id=location_id)
+    taxes = res.get("taxes") or []
+    if res.get("exempt") or not taxes:
+        return {"rate": 0.0, "mode": "imposed", "tax_id": None, "amount": 0.0}
+    rate = round(sum(float(t["rate"] or 0) for t in taxes), 4)
+    mode = taxes[0]["mode"] or "imposed"
+    amount = line_tax(qty=1, unit_price=net_amount, tax_rate=rate, tax_mode=mode)
+    return {"rate": rate, "mode": mode, "tax_id": taxes[0]["tax_id"], "amount": amount}

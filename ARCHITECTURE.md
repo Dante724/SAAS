@@ -1,4 +1,4 @@
-# RepairOS — Architecture
+# Tekly — Architecture
 
 A repair-shop management SaaS: FastAPI + SQLAlchemy 2.0 (async) backend with a
 dependency-free vanilla-JS SPA, plus an installable technician PWA.

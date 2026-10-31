@@ -123,3 +123,49 @@ async def test_auth_refresh_returns_usable_token(client, tenant):
     assert new_tok
     headers = {"Authorization": f"Bearer {new_tok}"}
     assert (await client.get("/api/tech/dashboard", headers=headers)).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_dashboard_today_uses_shop_timezone(client, tenant, db):
+    """'Today' is the shop's local day. Kiritimati is UTC+14, so for most of the UTC day its
+    date differs from UTC's — a job at local noon today must still land in Today."""
+    from zoneinfo import ZoneInfo
+
+    from backend.models import Employee, Order, Organisation
+
+    me = await _me(client, tenant)
+    emp = (await db.execute(select(Employee).where(Employee.id == me["id"]))).scalar_one()
+    org = (await db.execute(select(Organisation).where(Organisation.id == emp.org_id))).scalar_one()
+    org.timezone = "Pacific/Kiritimati"
+    emp.location_id = None   # no branch zone, so the company zone applies
+    await db.commit()
+
+    loc = await _loc(client, tenant)
+    r = await client.post("/api/orders", json={
+        "location_id": loc, "complaint": "tz job", "assigned_to_id": me["id"]}, headers=tenant)
+    oid = r.json()["id"]
+    local = datetime.now(ZoneInfo("Pacific/Kiritimati")).replace(tzinfo=None)
+    o = (await db.execute(select(Order).where(Order.id == oid))).scalar_one()
+    o.scheduled_for = datetime(local.year, local.month, local.day, 12)
+    await db.commit()
+
+    d = (await client.get("/api/tech/dashboard", headers=tenant)).json()
+    assert d["timezone"] == "Pacific/Kiritimati"
+    assert d["shop_today"] == local.date().isoformat()
+    assert oid in [c["id"] for c in d["today"]]
+
+
+@pytest.mark.asyncio
+async def test_dashboard_carries_over_open_jobs_from_earlier_days(client, tenant, db):
+    """An open job scheduled yesterday is still today's work — it used to drop out of every list."""
+    from backend.models import Order
+
+    me = await _me(client, tenant)
+    loc = await _loc(client, tenant)
+    oid = (await client.post("/api/orders", json={
+        "location_id": loc, "complaint": "missed", "assigned_to_id": me["id"]}, headers=tenant)).json()["id"]
+    o = (await db.execute(select(Order).where(Order.id == oid))).scalar_one()
+    o.scheduled_for = datetime.utcnow() - timedelta(days=3)
+    await db.commit()
+    d = (await client.get("/api/tech/dashboard", headers=tenant)).json()
+    assert oid in [c["id"] for c in d["today"]]
