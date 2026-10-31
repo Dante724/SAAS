@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { M } from "./Shell";
 import { api } from "../api/client";
 import ScanButton from "./ScanButton";
+import { loadFailed } from "../lib/notice";
 
 /**
  * Phase 2 — hands-free stock posting. Pick a location + movement type once, then
@@ -24,7 +25,7 @@ export default function ScanStockPanel({ onClose, onPosted }: { onClose: () => v
     api.get<any>("/staff/locations").then((r) => {
       const items = r.items || r || [];
       setLocs(items); if (items[0]) setLoc(items[0].id);
-    }).catch(() => {});
+    }).catch(loadFailed("locations"));
     ref.current?.focus();
   }, []);
 
@@ -44,7 +45,7 @@ export default function ScanStockPanel({ onClose, onPosted }: { onClose: () => v
   const verb = { receive: "Receive", writeoff: "Write off", adjust: "Count / adjust" }[mode];
 
   return (
-    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-ink-primary/45 backdrop-blur-[2px]" onClick={onClose}>
+    <div className="fixed inset-0 z-[70] flex items-center justify-center bg-ink-primary/45 backdrop-blur-[2px]" role="presentation" onClick={onClose}>
       <div className="w-[380px] bg-raised rounded-2xl shadow-clay-card border border-slate-200/80 overflow-hidden" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
           <span className="text-sm font-bold text-ink-primary flex items-center gap-2"><M n="qr_code_scanner" c="text-base text-primary" />Scan to stock</span>

@@ -232,26 +232,6 @@ async def test_concurrent_return_delete_restores_once(client, tenant, db, monkey
 
 
 @pytest.mark.asyncio
-async def test_concurrent_posting_delete_removes_once(client, tenant, db, monkeypatch):
-    from backend.routers import stock_docs
-    p, loc = await _part(client, tenant, qty=10, name="Chip")
-    w = await _default_wh(client, tenant)
-    d = (await client.post("/api/stock-docs/postings", json={
-        "warehouse_id": w["id"], "lines": [{"part_id": p["id"], "qty": 4, "unit_cost": 5}]},
-        headers=tenant))
-    assert d.status_code == 201, d.text
-    assert await _on_hand(db, p["id"], loc) == 14
-
-    _slow(monkeypatch, stock_docs.wh, "resolve")
-    a, b = await asyncio.gather(
-        client.delete(f"/api/stock-docs/postings/{d.json()['id']}", headers=tenant),
-        client.delete(f"/api/stock-docs/postings/{d.json()['id']}", headers=tenant))
-    _one_wins(a, b)
-    assert await _on_hand(db, p["id"], loc) == 10
-
-
-
-@pytest.mark.asyncio
 async def test_return_paid_after_the_check_is_not_deleted(client, tenant, db, monkeypatch):
     """A payment that commits between the paid check and the delete must win."""
     from backend.models import PurchaseReturn

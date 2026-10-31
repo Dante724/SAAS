@@ -17,6 +17,7 @@ import MoveStockDialog from "../../components/MoveStockDialog";
 import LabelPrintDialog from "../../components/LabelPrintDialog";
 import SerialPassport from "../../components/SerialPassport";
 import { rowLabel } from "../../lib/stockBins";
+import { loadFailed } from "../../lib/notice";
 
 export type DrawerKind = "product" | "service" | "asset" | "bundle";
 type Props = { kind: DrawerKind; id?: string | null; initial?: any; onClose: () => void; onSaved?: () => void };
@@ -54,7 +55,7 @@ function CodeSvg({ data, type }: { data: string; type: CodeType }) {
 // reminder shows before a shop picks one of the one-line options.
 function KitPrintChoice({ value, onChange }: { value: string; onChange: (v: string) => void }) {
   const [warning, setWarning] = useState<string | null>(null);
-  useEffect(() => { api.get<{ warning: string | null }>("/bundles/print-warning").then((r) => setWarning(r.warning)).catch(() => {}); }, []);
+  useEffect(() => { api.get<{ warning: string | null }>("/bundles/print-warning").then((r) => setWarning(r.warning)).catch(() => { /* silent: optional print hint */ }); }, []);
   return (
     <fieldset className="p-3 rounded-xl bg-slate-50/90 border border-slate-200/80 space-y-1.5">
       <legend className="px-1 text-[11px] font-bold text-ink-primary">On the customer's invoice</legend>
@@ -142,14 +143,14 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
 
   useEffect(() => {
     setPtab("details"); setMoves(null); setPos(null); setResv(null); setStock(null); setBatches(null); setUnits(null); setUnitSel(new Set()); setMvFilter("all"); setAdjOpen(false);
-    if (kind === "product" && id) api.get<{ product: Product }>(`/catalog/products/${id}`).then((r) => setP(r.product)).catch(() => {});
+    if (kind === "product" && id) api.get<{ product: Product }>(`/catalog/products/${id}`).then((r) => setP(r.product)).catch(loadFailed("the product"));
     else if (initial) setP(initial);
   }, [kind, id]);
 
   // Locations for the adjust form (id + name) — loaded once when editing a product.
   useEffect(() => {
     if (kind === "product" && id && locs.length === 0)
-      api.get<{ items: LocLite[] }>(`/staff/locations`).then((r) => { const it = r.items || []; setLocs(it); if (it[0]) setAdjLoc((c) => c || it[0].id); }).catch(() => {});
+      api.get<{ items: LocLite[] }>(`/staff/locations`).then((r) => { const it = r.items || []; setLocs(it); if (it[0]) setAdjLoc((c) => c || it[0].id); }).catch(loadFailed("locations"));
   }, [kind, id]);
 
   useEffect(() => {
@@ -218,7 +219,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative h-full w-full max-w-[540px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">

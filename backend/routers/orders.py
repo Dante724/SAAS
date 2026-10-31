@@ -26,6 +26,7 @@ from backend.models import (
 )
 from backend.services import industry as _ind
 from backend.services.auth import assert_perm, get_current_employee, has_perm, require_perm, record_scope
+from backend.services.batching import names_by_id, rows_by
 from backend.services.numbering import next_number
 
 router = APIRouter(prefix="/api/orders", tags=["orders"],
@@ -2247,11 +2248,13 @@ async def order_incoming_po(
         .distinct())
     pos = (await db.execute(select(PurchaseOrder).where(PurchaseOrder.id.in_(po_ids))
                             .order_by(PurchaseOrder.po_number))).scalars().all()
-    part_names = {p.id: p.name for p in (await db.execute(
-        select(Part).where(Part.org_id == current.org_id))).scalars().all()}
+    lines_by = await rows_by(db, POLine, POLine.po_id, [po.id for po in pos])
+    part_names = await names_by_id(db, Part.id, Part.name,
+                                   [l.part_id for ls in lines_by.values() for l in ls],
+                                   org_col=Part.org_id, org_id=current.org_id)
     out = []
     for po in pos:
-        lines = (await db.execute(select(POLine).where(POLine.po_id == po.id))).scalars().all()
+        lines = lines_by.get(po.id, [])
         rel = [l for l in lines if l.reserved_order_id == order_id] or lines
         out.append({"po_id": po.id, "po_number": po.po_number, "status": po.status,
                     "expected_at": po.expected_at.isoformat() if po.expected_at else None,
@@ -2278,12 +2281,14 @@ async def order_purchase_orders(
     pos = await pos_for_order(db, current.org_id, order_id)
     sup_names = {s.id: s.name for s in (await db.execute(select(Supplier).where(
         Supplier.id.in_({p.supplier_id for p in pos})))).scalars().all()} if pos else {}
+    lines_by = await rows_by(db, POLine, POLine.po_id, [po.id for po in pos])
+    names = await names_by_id(db, Part.id, Part.name,
+                              [l.part_id for ls in lines_by.values() for l in ls],
+                              org_col=Part.org_id, org_id=current.org_id)
     out = []
     for po in pos:
-        lines = (await db.execute(select(POLine).where(POLine.po_id == po.id))).scalars().all()
+        lines = lines_by.get(po.id, [])
         rel = [l for l in lines if l.reserved_order_id == order_id] or lines
-        names = {p.id: p.name for p in (await db.execute(select(Part).where(
-            Part.id.in_({l.part_id for l in rel})))).scalars().all()} if rel else {}
         out.append({
             "po_id": po.id, "po_number": po.po_number, "status": po.status,
             "workflow_status": po.workflow_status, "supplier": sup_names.get(po.supplier_id),
@@ -2889,8 +2894,8 @@ async def reserve_stock_for_order(
         need[l.ref_id] = need.get(l.ref_id, 0) + (l.qty or 0)
 
     reserved, short = [], []
-    part_names = {p.id: p.name for p in (await db.execute(
-        select(Part).where(Part.org_id == current.org_id))).scalars().all()}
+    part_names = await names_by_id(db, Part.id, Part.name, list(need),
+                                   org_col=Part.org_id, org_id=current.org_id)
     for part_id, qty_needed in need.items():
         want = qty_needed - held.get(part_id, 0)      # still to hold for this job
         if want <= 0:
@@ -2934,8 +2939,8 @@ async def order_reservations(
     rows = (await db.execute(select(StockReservation).where(
         StockReservation.org_id == current.org_id, StockReservation.order_id == order_id,
         StockReservation.released == False))).scalars().all()  # noqa: E712
-    part_names = {p.id: p.name for p in (await db.execute(
-        select(Part).where(Part.org_id == current.org_id))).scalars().all()}
+    part_names = await names_by_id(db, Part.id, Part.name, [r.part_id for r in rows],
+                                   org_col=Part.org_id, org_id=current.org_id)
     out = []
     for r in rows:
         if r.expires_at and r.expires_at < now:
@@ -3335,8 +3340,8 @@ async def scheduler_day(
         _Bk.status.in_(["booked", "done"]))
     appointments = (await db.execute(bq)).scalars().all()
     if appointments:
-        cnames = {c.id: c.name for c in (await db.execute(select(_Cl).where(
-            _Cl.org_id == current.org_id))).scalars().all()}
+        cnames = await names_by_id(db, _Cl.id, _Cl.name, [b.client_id for b in appointments],
+                                   org_col=_Cl.org_id, org_id=current.org_id)
         enames = {e.id: e.name for e in (await db.execute(select(_Emp).where(
             _Emp.org_id == current.org_id))).scalars().all()}
         for b in appointments:

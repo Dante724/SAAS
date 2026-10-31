@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api/client";
 import { btnPrimary, inputCls, labelCls } from "../invoices/billing";
+import { loadFailed } from "../../lib/notice";
 
 export type MissedSettings = { enabled: boolean; config: { merge_hours: number; sla_minutes: number; notify: boolean; fallback_employee_id: string | null } };
 type Emp = { id: string; name: string };
@@ -20,7 +21,7 @@ export default function MissedCallSettings() {
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     api.get<MissedSettings>("/leads/missed-call-settings").then((r) => setS(tidy(r))).catch((e) => setMsg({ ok: false, text: e.message }));
-    api.get<any>("/staff/employees").then((r) => setStaff((Array.isArray(r) ? r : r.items || []).map((e: any) => ({ id: e.id, name: e.name })))).catch(() => {});
+    api.get<any>("/staff/employees").then((r) => setStaff((Array.isArray(r) ? r : r.items || []).map((e: any) => ({ id: e.id, name: e.name })))).catch(loadFailed("the staff list"));
   }, []);
   if (!s) return msg ? <div className="p-4"><p role="alert" className="text-xs text-rose-600">{msg.text}</p></div> : null;
   const c = s.config;

@@ -1,33 +1,44 @@
-import { useEffect, useRef, useState } from "react";
+import { lazy, Suspense, useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import { api } from "../../api/client";
-import TemplateEditorDrawer from "./TemplateEditorDrawer";
-import DirectoriesManager from "./DirectoriesManager";
-import FormCustomizer, { type FormKey } from "../../components/FormCustomizer";
+import type { FormKey } from "../../components/FormCustomizer";
 import { resetTerminology } from "../../lib/useTerminology";
 import { confirmDialog, alertDialog, promptDialog } from "../../lib/dialog";
 import { useMe } from "../../context/Me";
 import { NAV, CATS, SEC_CAT, searchSections, type SectionId } from "./settingsRegistry";
 import { SetupChecklist } from "./SetupChecklist";
-import { StatusList, StatusEditor } from "./StatusesSettings";
-import GeneralSettings from "./GeneralSettings";
-import CustomerMessages from "./NotificationsPage";
-import PublicPagesSettings from "./PublicPagesSettings";
-import { PricingPage, InventoryPage } from "./PricingInventory";
-import FinanceNumbering from "./FinanceNumbering";
-import InvoiceSettings from "./InvoiceSettings";
-import DocumentTemplatesPage from "./DocumentTemplatesPage";
-import LocationsPage from "./LocationsPage";
-import { TeamPage, RoleEditor, Avatar } from "./TeamSettings";
-import { ChecklistList, ChecklistEditor } from "./ChecklistSettings";
-import CardReadersCard from "./CardReadersCard";
+import { Avatar } from "../orders/look";
 import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
-import TelephonySettings from "./TelephonySettings";
-import ApiKeysCard from "./ApiKeysCard";
 import RetentionCard from "./RetentionCard";
+import { loadFailed } from "../../lib/notice";
+import { clickable, clickableRow } from "../../lib/clickable";
+
+// Each settings page is its own chunk, fetched when its section opens (the hub was one ~470 kB file).
+const TemplateEditorDrawer = lazy(() => import("./TemplateEditorDrawer"));
+const DirectoriesManager = lazy(() => import("./DirectoriesManager"));
+const FormCustomizer = lazy(() => import("../../components/FormCustomizer"));
+const StatusList = lazy(() => import("./StatusesSettings").then((m) => ({ default: m.StatusList })));
+const StatusEditor = lazy(() => import("./StatusesSettings").then((m) => ({ default: m.StatusEditor })));
+const GeneralSettings = lazy(() => import("./GeneralSettings"));
+const CustomerMessages = lazy(() => import("./NotificationsPage"));
+const PublicPagesSettings = lazy(() => import("./PublicPagesSettings"));
+const PricingPage = lazy(() => import("./PricingInventory").then((m) => ({ default: m.PricingPage })));
+const InventoryPage = lazy(() => import("./PricingInventory").then((m) => ({ default: m.InventoryPage })));
+const FinanceNumbering = lazy(() => import("./FinanceNumbering"));
+const InvoiceSettings = lazy(() => import("./InvoiceSettings"));
+const DocumentTemplatesPage = lazy(() => import("./DocumentTemplatesPage"));
+const LocationsPage = lazy(() => import("./LocationsPage"));
+const TeamPage = lazy(() => import("./TeamSettings").then((m) => ({ default: m.TeamPage })));
+const RoleEditor = lazy(() => import("./TeamSettings").then((m) => ({ default: m.RoleEditor })));
+const ChecklistList = lazy(() => import("./ChecklistSettings").then((m) => ({ default: m.ChecklistList })));
+const ChecklistEditor = lazy(() => import("./ChecklistSettings").then((m) => ({ default: m.ChecklistEditor })));
+const CardReadersCard = lazy(() => import("./CardReadersCard"));
+const TelephonySettings = lazy(() => import("./TelephonySettings"));
+const ApiKeysCard = lazy(() => import("./ApiKeysCard"));
+const sectionLoading = <div className="text-xs text-ink-tertiary py-6">Loading…</div>;
 
 
 // Full section set = the registry sections + a few that have no nav entry of their own.
@@ -131,7 +142,7 @@ export default function SettingsHub() {
   useEffect(() => {
     if (sec === "statuses" || sec === "team") {
       const rt = sec === "statuses" ? statusRT : "work_order";
-      api.get<any>(`/statuses?record_type=${rt}`).then((r) => setStatuses(r.items || r || [])).catch(() => {});
+      api.get<any>(`/statuses?record_type=${rt}`).then((r) => setStatuses(r.items || r || [])).catch(loadFailed("statuses"));
     }
   }, [sec, statusRT]);
 
@@ -153,8 +164,8 @@ export default function SettingsHub() {
   const [empEdit, setEmpEdit] = useState<any | "new" | null>(null);
   const [payrollEdit, setPayrollEdit] = useState<any | "new" | null>(null);
   const [statusEdit, setStatusEdit] = useState<any | "new" | null>(null);
-  const reloadTeam = () => api.get<any>("/staff/employees").then((r) => { const d = r?.items ?? r; setLists((s) => ({ ...s, team: Array.isArray(d) ? d : [] })); }).catch(() => {});
-  const reloadPayrollRules = () => api.get<any>("/payroll/rules").then((r) => { const d = r?.items ?? r; setLists((s) => ({ ...s, "payroll-rules": Array.isArray(d) ? d : [] })); }).catch(() => {});
+  const reloadTeam = () => api.get<any>("/staff/employees").then((r) => { const d = r?.items ?? r; setLists((s) => ({ ...s, team: Array.isArray(d) ? d : [] })); }).catch(loadFailed("the staff list"));
+  const reloadPayrollRules = () => api.get<any>("/payroll/rules").then((r) => { const d = r?.items ?? r; setLists((s) => ({ ...s, "payroll-rules": Array.isArray(d) ? d : [] })); }).catch(loadFailed("payroll rules"));
   const [formFieldsFor, setFormFieldsFor] = useState<any | null>(null);
   const [checklistEdit, setChecklistEdit] = useState<any | null | undefined>(undefined);  // undefined=closed, null=new, obj=edit
   const reloadRbac = () => api.get<any>("/settings/rbac/roles").then((r) => setRbacRoles(r.items || r || [])).catch(() => setRbacRoles([]));
@@ -323,6 +334,7 @@ export default function SettingsHub() {
         {/* pb-80: scroll room below the last card so dropdowns near the bottom
             (e.g. the Public-pages status pickers) have space to open downward. */}
         <div className="flex-1 min-w-0 overflow-y-auto p-6 pb-80">
+          <Suspense fallback={sectionLoading}>
           {/* Narrow screens hide the section list; the Overview's category cards are the menu. */}
           {sec !== "overview" && (
             <button onClick={() => setSec("overview")} className="md:hidden mb-3 -ml-1 flex items-center gap-1.5 px-1 py-2 text-xs font-semibold text-primary"><M n="arrow_back" c="text-sm" />All settings</button>
@@ -460,8 +472,10 @@ export default function SettingsHub() {
               <WebhooksCard />
             </div>
           )}
+          </Suspense>
         </div>
       </div>
+      <Suspense fallback={null}>
       {editing && editing.sec === "templates" ? (
         <TemplateEditorDrawer
           initial={editing.row}
@@ -503,6 +517,7 @@ export default function SettingsHub() {
       {checklistEdit !== undefined && (
         <ChecklistEditor tpl={checklistEdit} onClose={() => setChecklistEdit(undefined)} onSaved={() => { setChecklistEdit(undefined); reloadSec("checklists"); }} />
       )}
+      </Suspense>
       {toast && <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-clay-drawer z-[70]">{toast}</div>}
     </Shell>
   );
@@ -760,7 +775,7 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[440px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <div>
@@ -863,7 +878,7 @@ function RichTextEditor({ value, onChange, registerInsert }: {
   const savedRange = useRef<Range | null>(null);
   const [logo, setLogo] = useState<string>("");
   const [code, setCode] = useState<string | null>(null);  // HTML source view (null = off)
-  useEffect(() => { api.get<any>("/staff/company").then((c) => setLogo(c.logo_data || "")).catch(() => {}); }, []);
+  useEffect(() => { api.get<any>("/staff/company").then((c) => setLogo(c.logo_data || "")).catch(loadFailed("company details")); }, []);
   useEffect(() => { if (ref.current) ref.current.innerHTML = notifHydrate(value || ""); }, []);  // init once
   const emit = () => onChange(ref.current ? notifSerialize(ref.current) : "");
   const focus = () => ref.current?.focus();
@@ -910,7 +925,7 @@ function RichTextEditor({ value, onChange, registerInsert }: {
         <TB cmd="insertHorizontalRule" icon="horizontal_rule" title="Divider" />
         <span className="w-px h-5 bg-slate-200 mx-1" />
         <button aria-label="Insert link" type="button" className={btn} title="Insert link" onMouseDown={async (e) => { e.preventDefault(); saveSel(); const u = await promptDialog("Link URL"); if (u) exec("createLink", u); }}><M n="link" c="text-[18px]" /></button>
-        <button aria-label="Insert image" type="button" className={btn} title="Insert image" onMouseDown={async (e) => { e.preventDefault(); saveSel(); const u = await promptDialog("Image URL"); if (u) insertHtml(`<img src="${u}" style="max-width:100%" />`); }}><M n="image" c="text-[18px]" /></button>
+        <button aria-label="Insert image" type="button" className={btn} title="Insert image" onMouseDown={async (e) => { e.preventDefault(); saveSel(); const u = await promptDialog("Image URL"); if (u) insertHtml(`<img src="${escapeHtml(u)}" alt="" style="max-width:100%" />`); }}><M n="image" c="text-[18px]" /></button>
         <button aria-label="Insert table" type="button" className={btn} title="Insert table" onMouseDown={(e) => { e.preventDefault(); saveSel(); insertHtml(notifTableHTML()); }}><M n="table" c="text-[18px]" /></button>
         {logo && <button type="button" className="h-8 px-2 rounded hover:bg-slate-200/70 text-xs font-semibold text-primary flex items-center gap-1" title="Insert company logo" onMouseDown={(e) => { e.preventDefault(); saveSel(); insertHtml(`<img src="${logo}" alt="logo" style="max-height:64px" />`); }}><M n="image" c="text-[16px]" /> Logo</button>}
         <button aria-label="Edit HTML source" type="button" title="Edit HTML source" onClick={toggleCode} className={"w-8 h-8 rounded flex items-center justify-center ml-auto " + (code !== null ? "bg-primary/10 text-primary" : "hover:bg-slate-200/70 text-ink-secondary")}><M n="code" c="text-[18px]" /></button>
@@ -977,7 +992,7 @@ function NotifTemplateDrawer({ tpl, module, onClose, onSaved }: {
   }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[720px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h2 className="font-bold text-ink-primary">{tpl?.id ? "Edit template" : "New template"}</h2>
@@ -1332,7 +1347,7 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
   const fld = "w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-ink-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/10";
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[540px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="px-5 pt-5 pb-3">
@@ -1464,7 +1479,7 @@ function PayrollRuleDrawer({ rule, employees, statuses, onClose, onSaved }: { ru
   const isPct = f.calc_type === "percent";
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[520px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
@@ -1547,7 +1562,7 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
   const [busy, setBusy] = useState(false);
   const [statuses, setStatuses] = useState<any[]>([]);
   const load = () => api.get<{ items: any[] }>(`/forms/types/${type.id}/fields`).then((r) => setFields(r.items || [])).catch(() => setFields([]));
-  useEffect(() => { load(); api.get<any>("/statuses").then((r) => setStatuses(r.items || [])).catch(() => {}); }, []);
+  useEffect(() => { load(); api.get<any>("/statuses").then((r) => setStatuses(r.items || [])).catch(loadFailed("statuses")); }, []);
   async function add() {
     if (!nf.field_label.trim()) return; setBusy(true);
     try {
@@ -1564,7 +1579,7 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
   async function del(id: string) { try { await api.del(`/forms/fields/${id}`); load(); onChanged(); } catch { /* ignore */ } }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[480px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <div><h2 className="font-bold text-ink-primary">Custom fields</h2><p className="text-[11px] text-ink-tertiary">{type.name || type.label}</p></div>
@@ -1654,7 +1669,7 @@ function SecTable({ rows, cols, onRowClick, onDelete }: { rows: any[] | null | u
       </tr></thead>
       <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
         {rows.map((r, i) => (
-          <tr key={r?.id || i} className={`hover:bg-blue-50/30 ${onRowClick ? "cursor-pointer" : ""}`} onClick={onRowClick ? () => onRowClick(r) : undefined}>
+          <tr key={r?.id || i} className={`hover:bg-blue-50/30 ${onRowClick ? "cursor-pointer" : ""}`} {...clickableRow(onRowClick ? () => onRowClick(r) : undefined)}>
             {cols.map(([h, fn], j) => <td key={h} className={`py-2.5 px-4 ${j === 0 ? "font-bold text-ink-primary" : ""}`}>{fn(r)}</td>)}
             {(onRowClick || onDelete) && (
               <td className="py-2.5 px-4 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
@@ -1775,7 +1790,7 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
   }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className={`relative ${hasVars ? "w-[720px]" : "w-[440px]"} max-w-full bg-white h-full shadow-drawer flex flex-col`}>
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h2 className="font-bold text-ink-primary">{title}</h2>
@@ -1906,7 +1921,7 @@ function StatusMultiSelect({ value, list, onChange, single, placeholder }: {
               style={{ background: smsTintBg(s?.color), border: `0.5px solid ${smsTintBorder(s?.color)}`, color: s?.color || SMS_DEFAULT_COLOR }}>
               <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: s?.color || SMS_DEFAULT_COLOR }} />
               {s?.name || key}
-              <span onClick={(e) => { e.stopPropagation(); pick(key); }} className="w-4 h-4 grid place-items-center rounded-full hover:bg-black/5 cursor-pointer"><M n="close" c="text-[12px]" /></span>
+              <span {...clickable((e) => { e.stopPropagation(); pick(key); })} aria-label={`Remove ${s?.name || key}`} className="w-4 h-4 grid place-items-center rounded-full hover:bg-black/5 cursor-pointer"><M n="close" c="text-[12px]" /></span>
             </span>
           );
         })}
@@ -2104,7 +2119,7 @@ function AssetCatalog() {
     api.get<any>(`/settings/industry-template`).then((r) => {
       const t = r?.current || "general"; setTk(t);
       loadGroups(t); loadBrands(t); loadModels(t); loadRules(t);
-    }).catch(() => {});
+    }).catch(loadFailed("the industry template"));
   }, []);
 
   const gName = (id?: string | null) => groups.find((g) => g.id === id)?.label || "—";

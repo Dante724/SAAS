@@ -55,7 +55,7 @@ export default function ScanButton({
       </button>
 
       {open && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-ink-primary/50 backdrop-blur-[2px]" onClick={close}>
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-ink-primary/50 backdrop-blur-[2px]" role="presentation" onClick={close}>
           <div className="relative w-[320px] bg-raised rounded-2xl shadow-clay-card border border-slate-200/80 overflow-hidden" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
               <span className="text-sm font-bold text-ink-primary">{title}</span>

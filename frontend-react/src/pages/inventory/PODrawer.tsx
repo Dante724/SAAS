@@ -9,6 +9,7 @@ import SerialEntry from "../../components/SerialEntry";
 import PasteImport, { ImportedLine } from "./PasteImport";
 import { useMe } from "../../context/Me";
 import BinScanField, { ScannedBin } from "../../components/BinScanField";
+import { loadFailed } from "../../lib/notice";
 
 /** PO detail + the missing Receive action. Receiving posts to the ONE real path
  * (`/inventory/po/{id}/receive`) that lands stock, moving-average cost, FIFO layers,
@@ -63,11 +64,11 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
       setRecv(Object.fromEntries(p.lines.map((l) => [l.id, l.serialized ? 0 : Math.max((l.qty_ordered || 0) - (l.qty_received || 0), 0)])));
       setSerials({}); setSerState({});
     }).catch(() => setToast("Could not load PO"));
-    api.get<any>(`/inventory/po/${poId}/receipts`).then((r) => setReceipts(r.items || [])).catch(() => {});
+    api.get<any>(`/inventory/po/${poId}/receipts`).then((r) => setReceipts(r.items || [])).catch(loadFailed("purchase order receipts"));
   }
   useEffect(load, [poId]);
-  useEffect(() => { api.get<any>("/catalog/products").then((r) => setPool(r.items || [])).catch(() => {}); }, []);
-  useEffect(() => { api.get<any>("/statuses?record_type=purchase_order").then((r) => setPipeline(r.items || [])).catch(() => {}); }, []);
+  useEffect(() => { api.get<any>("/catalog/products").then((r) => setPool(r.items || [])).catch(loadFailed("products")); }, []);
+  useEffect(() => { api.get<any>("/statuses?record_type=purchase_order").then((r) => setPipeline(r.items || [])).catch(loadFailed("statuses")); }, []);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2200); };
 
   function startEdit() {
@@ -269,7 +270,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative h-full w-full max-w-[720px] bg-raised shadow-clay-card flex flex-col border-l border-slate-200/90">
         {/* header */}
         <div className="px-6 pt-5 pb-3 border-b border-slate-100 flex items-start justify-between">

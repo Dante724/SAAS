@@ -426,14 +426,15 @@ async def list_order_checklists(
     cls = (await db.execute(select(OrderChecklist).where(
         OrderChecklist.order_id == order_id, OrderChecklist.org_id == current.org_id)
         .order_by(OrderChecklist.created_at))).scalars().all()
-    names = {}
+    from backend.services.batching import names_by_id, rows_by
+    items_by = await rows_by(db, OrderChecklistItem, OrderChecklistItem.checklist_id,
+                             [cl.id for cl in cls], OrderChecklistItem.sort_order)
+    names = await names_by_id(db, Employee.id, Employee.name, [cl.author_id for cl in cls],
+                              org_col=Employee.org_id, org_id=current.org_id)
     out = []
     for cl in cls:
-        items = await _cl_items(db, cl.id)
+        items = items_by.get(cl.id, [])
         aid = cl.author_id
-        if aid and aid not in names:
-            e = (await db.execute(select(Employee).where(Employee.id == aid))).scalar_one_or_none()
-            names[aid] = e.name if e else None
         out.append({"id": cl.id, "title": cl.title, "author": names.get(aid),
                     "created_at": cl.created_at.isoformat() if cl.created_at else None,
                     "completed_at": cl.completed_at.isoformat() if cl.completed_at else None,

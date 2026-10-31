@@ -750,7 +750,7 @@ class Appointment(Base):
     duration_min: Mapped[int] = mapped_column(Integer, default=60)
     status: Mapped[str] = mapped_column(String(20), default="booked")  # booked|done|canceled|no_show
     note: Mapped[Optional[str]] = mapped_column(Text)
-    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"))  # Build 85: appointment → work order
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)  # Build 85: appointment → work order
     client_phone: Mapped[Optional[str]] = mapped_column(String(40))                   # Build 85: public appointments
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     # Build 144bz: DB-level guard against the concurrent-create race — two clients
@@ -774,7 +774,7 @@ class ChatThread(Base):
     contact_name: Mapped[Optional[str]] = mapped_column(String(200))
     client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"))
     lead_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("leads.id"))
-    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"))  # Build 81: chat → work order
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)  # Build 81: chat → work order
     last_message_at: Mapped[Optional[datetime]] = mapped_column(DateTime, index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     # C3: inbox status (new|reply_needed|replied|completed), set by message direction; replied
@@ -1165,7 +1165,7 @@ class POLine(Base):
     __tablename__ = "po_lines"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     po_id: Mapped[str] = mapped_column(String, ForeignKey("purchase_orders.id"), index=True)
-    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
+    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
     qty_ordered: Mapped[float] = mapped_column(Float, default=1.0)
     qty_received: Mapped[float] = mapped_column(Float, default=0.0)
     unit_cost: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
@@ -1487,7 +1487,7 @@ class Task(Base):
     assigned_to_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     assignee_ids: Mapped[Optional[list]] = mapped_column(JSON, default=list)  # 144ex: multiple technicians (primary owner stays assigned_to_id)
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
-    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"))
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"), index=True)   # Build 86
     lead_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("leads.id"), index=True)       # Build 86
     location_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("locations.id"))           # Build 86
@@ -1771,7 +1771,7 @@ class AssetMovement(Base):
     asset_id: Mapped[str] = mapped_column(String, ForeignKey("devices.id"))
     from_zone: Mapped[Optional[str]] = mapped_column(String(60))
     to_zone: Mapped[Optional[str]] = mapped_column(String(60))
-    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"))
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     status_key: Mapped[Optional[str]] = mapped_column(String(50))
     # Build 120 lifecycle-log fields
     event_type: Mapped[Optional[str]] = mapped_column(String(24))  # zone|transfer|writeoff|owner|create
@@ -1785,10 +1785,10 @@ class StockReservation(Base):
     __tablename__ = "stock_reservations"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
-    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
+    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
     warehouse_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("warehouses.id"), index=True)  # Build 84
-    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"))
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     qty: Mapped[float] = mapped_column(Float, default=0.0)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     released: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -2017,7 +2017,7 @@ class StockItemBatch(Base):
     part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
     warehouse_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("warehouses.id"), index=True)  # Build 84
-    bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id"))
+    bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id"), index=True)
     po_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("purchase_orders.id"))
     unit_cost: Mapped[Numeric] = mapped_column(Numeric(12, 4), default=0)  # this layer's cost
     qty_received: Mapped[Numeric] = mapped_column(Numeric(14, 3), default=0)
@@ -2330,7 +2330,7 @@ class Stocktake(Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
     warehouse_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("warehouses.id"), index=True)  # Build 84
-    bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id"))
+    bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id"), index=True)
     status: Mapped[str] = mapped_column(String(20), default="in_progress")  # in_progress|posted
     note: Mapped[Optional[str]] = mapped_column(Text)
     kind: Mapped[str] = mapped_column(String(12), default="full")  # Build 91: full|partial
@@ -2347,12 +2347,12 @@ class StocktakeLine(Base):
     __tablename__ = "stocktake_lines"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     stocktake_id: Mapped[str] = mapped_column(String, ForeignKey("stocktakes.id"), index=True)
-    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
+    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
     system_qty: Mapped[float] = mapped_column(Float, default=0.0)
     counted_qty: Mapped[Optional[float]] = mapped_column(Float)
     variance: Mapped[float] = mapped_column(Float, default=0.0)
     # ── Build 91 ─────────────────────────────────────────────────────────────
-    bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id"))
+    bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id"), index=True)
     serialized_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("serialized_items.id"))
     is_unknown: Mapped[bool] = mapped_column(Boolean, default=False)   # found on the shelf, not in the system
     serial_mismatch: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -2374,6 +2374,8 @@ class StocktakeSerial(Base):
 class ClientReturn(Base):
     """Goods coming back from a client (separate from the money refund)."""
     __tablename__ = "client_returns"
+    # Lists page newest-first inside one shop (audit 29 Oct 2026).
+    __table_args__ = (Index("ix_client_returns_org_id_created_at", "org_id", "created_at"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
@@ -2388,7 +2390,7 @@ class ClientReturnLine(Base):
     __tablename__ = "client_return_lines"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     return_id: Mapped[str] = mapped_column(String, ForeignKey("client_returns.id"), index=True)
-    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
+    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
     qty: Mapped[float] = mapped_column(Float, default=1.0)
     restock: Mapped[bool] = mapped_column(Boolean, default=True)
 
@@ -2396,9 +2398,11 @@ class ClientReturnLine(Base):
 class Refund(Base):
     """Money going back to a client (separate from the goods return)."""
     __tablename__ = "refunds"
+    # Lists page newest-first inside one shop (audit 29 Oct 2026).
+    __table_args__ = (Index("ix_refunds_org_id_created_at", "org_id", "created_at"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
-    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"))
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     return_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("client_returns.id"))
     account_id: Mapped[str] = mapped_column(String, ForeignKey("accounts.id"))
     amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
@@ -2437,7 +2441,7 @@ class StockTransferLine(Base):
     __tablename__ = "stock_transfer_lines"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     transfer_id: Mapped[str] = mapped_column(String, ForeignKey("stock_transfers.id"), index=True)
-    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
+    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
     qty: Mapped[float] = mapped_column(Float, default=1.0)
 
 
@@ -2510,7 +2514,7 @@ class GeneratedDocument(Base):
     __tablename__ = "generated_documents"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
-    order_id: Mapped[str] = mapped_column(String, ForeignKey("orders.id"))
+    order_id: Mapped[str] = mapped_column(String, ForeignKey("orders.id"), index=True)
     template_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("document_templates.id"))
     name: Mapped[str] = mapped_column(String(200), default="Document")
     rendered_html: Mapped[str] = mapped_column(Text, default="")
@@ -3259,7 +3263,7 @@ class PurchaseReturnLine(Base):
     __tablename__ = "purchase_return_lines"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     return_id: Mapped[str] = mapped_column(String, ForeignKey("purchase_returns.id"), index=True)
-    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
+    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
     serialized_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("serialized_items.id"))
     qty: Mapped[float] = mapped_column(Float, default=1)
     unit_cost: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
@@ -3274,6 +3278,8 @@ class WriteOff(Base):
     stock**, with per-line comments that can be private (internal) or public.
     """
     __tablename__ = "write_offs"
+    # Lists page newest-first inside one shop (audit 29 Oct 2026).
+    __table_args__ = (Index("ix_write_offs_org_id_created_at", "org_id", "created_at"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     number: Mapped[Optional[str]] = mapped_column(String(40))
@@ -3291,9 +3297,9 @@ class WriteOffLine(Base):
     __tablename__ = "write_off_lines"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     write_off_id: Mapped[str] = mapped_column(String, ForeignKey("write_offs.id"), index=True)
-    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
+    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
     serialized_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("serialized_items.id"))
-    bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id"))
+    bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id"), index=True)
     qty: Mapped[float] = mapped_column(Float, default=1)
     unit_cost: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
     comment: Mapped[Optional[str]] = mapped_column(Text)          # internal by default
@@ -3309,6 +3315,8 @@ class Posting(Base):
     and the settlement (supplier balance vs cash) is recorded rather than implied.
     """
     __tablename__ = "postings"
+    # Lists page newest-first inside one shop (audit 29 Oct 2026).
+    __table_args__ = (Index("ix_postings_org_id_created_at", "org_id", "created_at"),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     number: Mapped[Optional[str]] = mapped_column(String(40))
@@ -3329,7 +3337,7 @@ class PostingLine(Base):
     __tablename__ = "posting_lines"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     posting_id: Mapped[str] = mapped_column(String, ForeignKey("postings.id"), index=True)
-    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
+    part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
     qty: Mapped[float] = mapped_column(Float, default=1)
     unit_cost: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
     markup_pct: Mapped[Optional[float]] = mapped_column(Float)
@@ -3395,7 +3403,7 @@ class InboxThread(Base):
     status: Mapped[str] = mapped_column(String(12), default="open")  # open|snoozed|closed
     unread: Mapped[bool] = mapped_column(Boolean, default=True)
     last_message_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
-    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"))  # if converted
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)  # if converted
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
@@ -3458,7 +3466,7 @@ class EcommerceOrderMap(Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     integration_id: Mapped[str] = mapped_column(String, ForeignKey("ecommerce_integrations.id"), index=True)
     external_order_id: Mapped[str] = mapped_column(String(160), index=True)
-    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"))
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     external_status: Mapped[Optional[str]] = mapped_column(String(40))
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 

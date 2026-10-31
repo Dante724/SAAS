@@ -11,6 +11,7 @@ import { identifierFields } from "../../lib/assetIdentifiers";
 import ScanButton from "../../components/ScanButton";
 import { assetStatusTone } from "../inventory/statusTone";
 import { useFormLayout, LayoutFields, reqStar, missingRequired, has } from "../../lib/formLayout";
+import { loadFailed } from "../../lib/notice";
 
 const TABS = ["General", "Work orders", "History"];
 
@@ -34,7 +35,7 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
   const [tab, setTab] = useState(0);
   const [a, setA] = useState<Asset>(creating ? { owner_type: "client" } : {});
   const [moves, setMoves] = useState<Movement[] | null>(null);
-  useEffect(() => { if (!assetId) return; setMoves(null); api.get<Asset>(`/assets/${assetId}`).then(setA).catch(() => {}); }, [assetId]);
+  useEffect(() => { if (!assetId) return; setMoves(null); api.get<Asset>(`/assets/${assetId}`).then(setA).catch(loadFailed("the asset")); }, [assetId]);
   useEffect(() => {
     if (assetId && tab === 2 && moves === null)
       api.get<{ items: Movement[] }>(`/assets/${assetId}/movements`).then((r) => setMoves(r.items || [])).catch(() => setMoves([]));
@@ -82,7 +83,7 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 60 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative h-full w-full max-w-[680px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <header className="px-6 pt-4 border-b border-slate-200/90 bg-white/95 backdrop-blur">

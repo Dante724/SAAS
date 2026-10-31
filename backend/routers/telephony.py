@@ -452,13 +452,12 @@ async def incoming_calls(since_seconds: int = 120, mine_only: bool = False,
     rows = (await db.execute(q)).scalars().all()
     if mine_only and current.extension:
         rows = [c for c in rows if (c.to_number or "").endswith(current.extension)]
+    from backend.services.batching import names_by_id
+    client_names = await names_by_id(db, Client.id, Client.name, [c.client_id for c in rows],
+                                     org_col=Client.org_id, org_id=current.org_id)
     out = []
     for c in rows:
-        name = None
-        if c.client_id:
-            cl = (await db.execute(select(Client).where(Client.id == c.client_id))).scalar_one_or_none()
-            name = cl.name if cl else None
         out.append({"id": c.id, "from": c.from_number, "to": c.to_number,
-                    "client_id": c.client_id, "client_name": name,
+                    "client_id": c.client_id, "client_name": client_names.get(c.client_id),
                     "created_at": c.created_at.isoformat() if c.created_at else None})
     return {"items": out, "total": len(out)}

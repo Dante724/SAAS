@@ -1,7 +1,7 @@
 """Build 95 — printing.
 
-The stock documents the shop hands over — posting, write-off, transfer, and the stocktake
-settlement act. (ii144c: labels and price tags print from label templates as HTML —
+The stock documents the shop hands over — write-off, transfer, return, purchase order and
+the stocktake settlement act. (ii144c: labels and price tags print from label templates as HTML —
 routers/documents.py.)
 
 Barcodes are generated with reportlab's own Code128/QR, so there's no extra dependency
@@ -25,6 +25,7 @@ from reportlab.platypus import (
     TableStyle,
 )
 
+# Fields a label template may show (validated by routers/printing.py templates).
 FIELDS = ["name", "sku", "mpn", "price", "barcode", "category", "brand"]
 
 

@@ -1,4 +1,4 @@
-"""Builds 91-95 — stocktake depth, scheduler/appointments, posting documents,
+"""Builds 91-95 — stocktake depth, scheduler/appointments, postings,
 transfer receive, suppliers & PO reservations, and printing."""
 from datetime import datetime, timedelta
 
@@ -8,7 +8,6 @@ from sqlalchemy import select
 from backend.models import (
     Part,
     POLine,
-    Posting,
     PurchaseOrder,
     StockLevel,
     StockReservation,
@@ -195,18 +194,18 @@ async def test_free_slots_treats_appointments_as_busy(client, tenant):
     assert "10:00" not in starts
 
 
-# ══ Build 93: postings as documents ══════════════════════════════════════════
+# ══ Build 93: postings (now through the one engine, /api/inventory/postings) ══
 @pytest.mark.asyncio
 async def test_posting_sets_stock_avg_cost_and_markup_price(client, tenant, db):
-    w = await _wh(client, tenant)
+    loc = await _loc(client, tenant)
     p = await _part(client, tenant, cost=0, sell=0)
 
-    r = await client.post("/api/stock-docs/postings", json={
-        "warehouse_id": w["id"], "reference": "INV-77",
-        "lines": [{"part_id": p["id"], "qty": 10, "unit_cost": 4, "markup_pct": 50}]},
+    r = await client.post("/api/inventory/postings", json={
+        "location_id": loc, "note": "INV-77",
+        "lines": [{"part_id": p["id"], "qty": 10, "purchase_price": 4, "markup_pct": 50}]},
         headers=tenant)
     assert r.status_code == 201, r.text
-    assert r.json()["total"] == pytest.approx(40.0)
+    assert r.json()["total_cost"] == pytest.approx(40.0)
 
     row = (await db.execute(select(Part).where(Part.id == p["id"]))).scalar_one()
     await db.refresh(row)
@@ -218,42 +217,12 @@ async def test_posting_sets_stock_avg_cost_and_markup_price(client, tenant, db):
 
 
 @pytest.mark.asyncio
-async def test_posting_delete_removes_stock_and_supplier_debt(client, tenant, db):
-    me = await _me(client, tenant)
-    w = await _wh(client, tenant)
-    p = await _part(client, tenant)
-    sup = Supplier(org_id=me["org_id"], name="Acme", balance=0)
-    db.add(sup)
-    await db.commit()
-    await db.refresh(sup)
-
-    d = (await client.post("/api/stock-docs/postings", json={
-        "warehouse_id": w["id"], "supplier_id": sup.id, "settlement": "balance",
-        "lines": [{"part_id": p["id"], "qty": 5, "unit_cost": 3}]}, headers=tenant)).json()
-    await db.refresh(sup)
-    assert sup.balance == pytest.approx(15.0)       # we owe them for the goods
-
-    r = await client.delete(f"/api/stock-docs/postings/{d['id']}", headers=tenant)
-    assert r.status_code == 200
-    sl = (await db.execute(select(StockLevel).where(
-        StockLevel.part_id == p["id"]))).scalar_one()
-    await db.refresh(sl)
-    await db.refresh(sup)
-    assert sl.qty_available == 0 and sup.balance == pytest.approx(0.0)
-
-
-@pytest.mark.asyncio
-async def test_paid_posting_cannot_be_deleted(client, tenant, db):
-    w = await _wh(client, tenant)
-    p = await _part(client, tenant)
-    d = (await client.post("/api/stock-docs/postings", json={
-        "warehouse_id": w["id"],
-        "lines": [{"part_id": p["id"], "qty": 2, "unit_cost": 1}]}, headers=tenant)).json()
-    doc = (await db.execute(select(Posting).where(Posting.id == d["id"]))).scalar_one()
-    doc.paid = True
-    await db.commit()
-    r = await client.delete(f"/api/stock-docs/postings/{d['id']}", headers=tenant)
-    assert r.status_code == 409
+async def test_removed_duplicate_posting_and_label_pdf_routes_are_gone(client, tenant):
+    """Audit 29 Oct 2026: the second posting engine and the unused PDF label sheet were deleted."""
+    assert (await client.get("/api/stock-docs/postings", headers=tenant)).status_code in (404, 405)
+    assert (await client.post("/api/stock-docs/postings", json={}, headers=tenant)).status_code in (404, 405)
+    assert (await client.post("/api/print/labels", json={"part_ids": []},
+                              headers=tenant)).status_code in (404, 405)
 
 
 # ══ Build 93: transfer receive ═══════════════════════════════════════════════
@@ -477,9 +446,6 @@ async def test_print_documents_render(client, tenant):
     p = await _part(client, tenant)
     await _stock(client, tenant, p["id"], 10)
 
-    post = (await client.post("/api/stock-docs/postings", json={
-        "warehouse_id": w["id"],
-        "lines": [{"part_id": p["id"], "qty": 2, "unit_cost": 3}]}, headers=tenant)).json()
     wo = (await client.post("/api/stock-docs/write-offs", json={
         "warehouse_id": w["id"], "reason": "damaged",
         "lines": [{"part_id": p["id"], "qty": 1, "comment": "internal only"}]},
@@ -487,8 +453,7 @@ async def test_print_documents_render(client, tenant):
     st = (await client.post("/api/stocktake", json={
         "warehouse_id": w["id"], "kind": "full"}, headers=tenant)).json()
 
-    for url in (f"/api/print/postings/{post['id']}",
-                f"/api/print/write-offs/{wo['id']}",
+    for url in (f"/api/print/write-offs/{wo['id']}",
                 f"/api/print/stocktakes/{st['id']}"):
         r = await client.get(url, headers=tenant)
         assert r.status_code == 200, f"{url} → {r.status_code}"

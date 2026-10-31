@@ -7,6 +7,7 @@ import AssetDrawer from "../orders/AssetDrawer";
 import { useTerminology, assetNoun } from "../../lib/useTerminology";
 import Pager from "../../components/Pager";
 import AssetStateTabs, { AssetCounts, useAssetState } from "../../components/AssetStateTabs";
+import { clickableRow } from "../../lib/clickable";
 
 type Asset = { id: string; asset_status?: string; asset_type?: string; asset_label?: string; template_key?: string; brand?: string; model?: string; serial?: string; imei?: string; owner_type?: string; owner_name?: string; condition?: string; order_count?: number };
 
@@ -56,7 +57,7 @@ export default function AssetsHub() {
               {!rows && !err && <SkeletonRows cols={7} />}
               {rows && rows.length === 0 && !err && <tr><td colSpan={7} className="py-6 px-4 text-ink-tertiary">{dq ? `Nothing matches “${dq}”.` : state === "written_off" ? `No written-off ${term.assets.toLowerCase()}.` : `No ${term.assets.toLowerCase()} yet.`}</td></tr>}
               {pageRows.map((a) => (
-                <tr key={a.id} className="hover:bg-blue-50/40 cursor-pointer transition-colors group" onClick={() => setOpen(a.id)}>
+                <tr key={a.id} className="hover:bg-blue-50/40 cursor-pointer transition-colors group" {...clickableRow(() => setOpen(a.id))}>
                   <td className="py-3 px-4 text-ink-tertiary">{a.asset_type && a.asset_type !== "Device" ? a.asset_type : assetNoun(a, term)}</td>
                   <td className="py-3 px-4 font-bold text-ink-primary">{[a.brand, a.model].filter(Boolean).join(" ") || "—"}{a.asset_status === "written_off" && <span className="ml-2 px-1.5 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-ink-tertiary border border-slate-200">Written off</span>}</td>
                   <td className="py-3 px-4 font-mono text-[11px]">{a.imei || a.serial || "—"}</td>

@@ -5,6 +5,7 @@ import DateField from "../../components/DateField";
 import { Product, Supplier, money } from "./types";
 import PasteImport, { ImportedLine } from "./PasteImport";
 import { useMe } from "../../context/Me";
+import { loadFailed } from "../../lib/notice";
 
 /** Create a purchase order: supplier + location + line items → POST /inventory/po.
  * This is the entry point that was missing — the toolbar button used to open the
@@ -32,10 +33,10 @@ export default function NewPODrawer({ products, onClose, onCreated }:
   const [newProd, setNewProd] = useState(false); const [prodName, setProdName] = useState(""); const [prodCost, setProdCost] = useState(""); const [prodBusy, setProdBusy] = useState(false);
 
   useEffect(() => {
-    api.get<any>("/suppliers").then((r) => setSuppliers(r.items || r || [])).catch(() => {}).finally(() => setLoaded(true));
-    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocs(it); if (it[0]) setLocId(it[0].id); }).catch(() => {});
+    api.get<any>("/suppliers").then((r) => setSuppliers(r.items || r || [])).catch(loadFailed("suppliers")).finally(() => setLoaded(true));
+    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocs(it); if (it[0]) setLocId(it[0].id); }).catch(loadFailed("locations"));
     // self-fetch products if the parent hasn't loaded any yet
-    if (!products || products.length === 0) api.get<any>("/catalog/products").then((r) => setPool(r.items || [])).catch(() => {});
+    if (!products || products.length === 0) api.get<any>("/catalog/products").then((r) => setPool(r.items || [])).catch(loadFailed("products"));
   }, []);
 
   // 13b: imported lines fill the empty first row, then append; new products join the picker.
@@ -99,7 +100,7 @@ export default function NewPODrawer({ products, onClose, onCreated }:
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative h-full w-full max-w-[640px] bg-raised shadow-clay-card flex flex-col border-l border-slate-200/90">
         <div className="px-6 pt-5 pb-3 border-b border-slate-100 flex items-center justify-between">
           <div className="flex items-center gap-2.5">

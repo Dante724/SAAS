@@ -183,8 +183,9 @@ async def supplier_performance(
         by_part: dict = {}
         for l in lines:
             by_part.setdefault(l.part_id, []).append((po_time.get(l.po_id), l.unit_cost or 0))
-        part_names = {p.id: p.name for p in (await db.execute(
-            select(Part).where(Part.org_id == current.org_id))).scalars().all()}
+        from backend.services.batching import names_by_id
+        part_names = await names_by_id(db, Part.id, Part.name, by_part,
+                                       org_col=Part.org_id, org_id=current.org_id)
         for pid, seq in by_part.items():
             seq = [x for x in seq if x[0] is not None]
             if len(seq) < 2:
@@ -462,27 +463,27 @@ async def incoming_stock(
     pos = (await db.execute(q)).scalars().all()
     today = date.today()
 
+    from backend.services.batching import names_by_id, rows_by
+    lines_by = await rows_by(db, POLine, POLine.po_id, [po.id for po in pos])
+    order_no = await names_by_id(db, Order.id, Order.order_number,
+                                 [ln.reserved_order_id for ls in lines_by.values() for ln in ls],
+                                 org_col=Order.org_id, org_id=current.org_id)
     items = []
     for po in pos:
-        lines = (await db.execute(select(POLine).where(POLine.po_id == po.id))).scalars().all()
-        for ln in lines:
+        for ln in lines_by.get(po.id, []):
             if part_id and ln.part_id != part_id:
                 continue
             outstanding = (ln.qty_ordered or 0) - (ln.qty_received or 0)
             if outstanding <= 0:
                 continue
             expected = po.expected_at.date() if po.expected_at else None
-            order_no = None
-            if ln.reserved_order_id:
-                order_no = (await db.execute(select(Order.order_number).where(
-                    Order.id == ln.reserved_order_id))).scalar_one_or_none()
             items.append({
                 "po_id": po.id, "po_number": po.po_number, "line_id": ln.id,
                 "part_id": ln.part_id, "qty_incoming": outstanding,
                 "expected_at": expected.isoformat() if expected else None,
                 "delayed": bool(expected and expected < today),
                 "reserved_order_id": ln.reserved_order_id,
-                "reserved_for": order_no,
+                "reserved_for": order_no.get(ln.reserved_order_id),
             })
     return {"items": items}
 

@@ -35,6 +35,8 @@ import JobTasks from "./JobTasks";
 import { sendInvoice } from "../invoices/billing";
 import { groupKitLines } from "../../lib/kitGroups";
 import { binChoices, byLocation, needsBinChoice } from "../../lib/stockBins";
+import { loadFailed, saveFailed } from "../../lib/notice";
+import { clickable } from "../../lib/clickable";
 
 type Emp = { id: string; name: string; in_managers?: boolean; in_assignees?: boolean };
 type Line = { id: string; kind?: string; line_type?: string; description?: string; qty?: number; unit_price?: number; discount?: number; discount_type?: string; technician_id?: string | null; work_share?: number; booked_hours?: number; co_technicians?: { employee_id: string; share: number }[]; total?: number; in_stock?: boolean; order_item_id?: string | null;
@@ -92,21 +94,21 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
     toastTimer.current = setTimeout(() => setToast(null), tone ? 6000 : 2200);
   };
 
-  const reload = () => api.get<Detail>(`/orders/${order.id}`).then(setD).catch(() => {});
+  const reload = () => api.get<Detail>(`/orders/${order.id}`).then(setD).catch(loadFailed("the job"));
   useEffect(() => { reload(); }, [order.id]);
   // 144bl Comeback Shield: flag a device that's back soon after a prior visit (gated by role).
   const [comeback, setComeback] = useState<{ is_comeback?: boolean; count?: number; days_since?: number | null; prior_order_number?: string } | null>(null);
   useEffect(() => { if (can("can_view_comeback_alerts")) api.get<any>(`/orders/${order.id}/comeback`).then(setComeback).catch(() => setComeback(null)); /* eslint-disable-next-line */ }, [order.id]);
   const [incomingPo, setIncomingPo] = useState<{ po_number?: string; status?: string; expected_at?: string | null; parts: { part: string; outstanding: number }[] }[]>([]);
-  const loadIncomingPo = () => api.get<any>(`/orders/${order.id}/incoming-po`).then((r) => setIncomingPo(r.items || [])).catch(() => {});
+  const loadIncomingPo = () => api.get<any>(`/orders/${order.id}/incoming-po`).then((r) => setIncomingPo(r.items || [])).catch(loadFailed("incoming parts orders"));
   useEffect(() => { loadIncomingPo(); /* eslint-disable-next-line */ }, [order.id]);
   const isEst = !!d.is_estimate;
   useEffect(() => {
     const rt = isEst ? "estimate" : "work_order";
-    api.get<any>(`/statuses?record_type=${rt}`).then((r) => setStatuses(r.items || r || [])).catch(() => {});
+    api.get<any>(`/statuses?record_type=${rt}`).then((r) => setStatuses(r.items || r || [])).catch(loadFailed("statuses"));
   }, [order.id, isEst]);
   useEffect(() => { api.get<Timing>(`/orders/${order.id}/timing`).then(setTiming).catch(() => setTiming(null)); }, [order.id, d.status]);
-  useEffect(() => { api.get<any>("/staff/employees").then((r) => setEmps(r.items || r || [])).catch(() => {}); }, []);
+  useEffect(() => { api.get<any>("/staff/employees").then((r) => setEmps(r.items || r || [])).catch(loadFailed("the staff list")); }, []);
 
   async function changeStatus(key: string) {
     let reason: string | null = null;
@@ -299,7 +301,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 40 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative h-full w-full max-w-[840px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
 
@@ -340,7 +342,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
               <button aria-label="More actions" aria-haspopup="menu" aria-expanded={menuOpen} onClick={() => setMenuOpen((v) => !v)}
                 className="p-1.5 rounded-lg text-ink-secondary hover:text-ink-primary hover:bg-slate-100 border border-slate-200/80 transition-colors" title="More actions"><M n="more_horiz" c="text-base" /></button>
               {menuOpen && (<>
-                <div className="fixed inset-0 z-30" onClick={() => setMenuOpen(false)} />
+                <div className="fixed inset-0 z-30" aria-hidden="true" onClick={() => setMenuOpen(false)} />
                 <div role="menu" className="absolute right-0 top-full mt-1 z-40 w-64 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5">
                   <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); setPartsOpen(true); }}
                     className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-slate-50">
@@ -350,7 +352,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                       <span className="block text-[11px] text-ink-tertiary">{incomingPo.length ? `${incomingPo.length} on order` : "Order or hold parts for this job"}</span>
                     </span>
                   </button>
-                  <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); navigator.clipboard?.writeText(`${window.location.origin}/orders?open=${order.id}`).then(() => flash("Link copied")).catch(() => {}); }}
+                  <button role="menuitem" type="button" onClick={() => { setMenuOpen(false); navigator.clipboard?.writeText(`${window.location.origin}/orders?open=${order.id}`).then(() => flash("Link copied")).catch(saveFailed("copy the link")); }}
                     className="w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-slate-50">
                     <M n="link" c="text-base text-ink-tertiary" /><span className="text-sm text-ink-primary">Copy link to this job</span>
                   </button>
@@ -453,7 +455,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
 
               {/* Client + Device cards */}
               <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
-                <div onClick={() => c.id && setSub("client")} className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-clay-sm hover:border-primary/40 hover:shadow-clay-card transition-all cursor-pointer group">
+                <div {...clickable(() => c.id && setSub("client"))} className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-clay-sm hover:border-primary/40 hover:shadow-clay-card transition-all cursor-pointer group">
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-2.5">
                       <Avatar name={c.name} size={40} />
@@ -471,7 +473,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                   </div>
                 </div>
                 {hasDevice ? (
-                <div onClick={() => setSub("asset")} className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-clay-sm hover:border-primary/40 hover:shadow-clay-card transition-all cursor-pointer group">
+                <div {...clickable(() => setSub("asset"))} className="bg-white rounded-2xl border border-slate-200/90 p-4 shadow-clay-sm hover:border-primary/40 hover:shadow-clay-card transition-all cursor-pointer group">
                   <div className="flex items-start justify-between">
                     <div className="flex items-center gap-2.5">
                       <div className="w-10 h-10 rounded-xl bg-slate-100 text-ink-secondary flex items-center justify-center"><M n={deviceIcon(d.device)} c="text-xl" /></div>
@@ -1178,7 +1180,7 @@ function ServicesTab({ orderId, locationId, deviceId, lines, total, onFlash, onC
   const [jobItems, setJobItems] = useState<JobItem[]>([]);
   const [itemsOn, setItemsOn] = useState(false);
   const [forItem, setForItem] = useState("");
-  useEffect(() => { api.get<any>(`/orders/${orderId}/items`).then((r) => { setItemsOn(!!r.enabled); setJobItems(r.items || []); }).catch(() => {}); }, [orderId, lines]);
+  useEffect(() => { api.get<any>(`/orders/${orderId}/items`).then((r) => { setItemsOn(!!r.enabled); setJobItems(r.items || []); }).catch(loadFailed("job items")); }, [orderId, lines]);
   const tagging = itemsOn && jobItems.length > 1;
   const [filter, setFilter] = useState("All");
   const [pick, setPick] = useState<CatalogItem | null>(null);
@@ -1194,7 +1196,7 @@ function ServicesTab({ orderId, locationId, deviceId, lines, total, onFlash, onC
   useEffect(() => {
     setStock(null); setTakeBin("");
     if (pick && pick.kind === "product" && pick.ref_id)
-      api.get<any>(`/inventory/parts/${pick.ref_id}/stock`).then(setStock).catch(() => {});
+      api.get<any>(`/inventory/parts/${pick.ref_id}/stock`).then(setStock).catch(loadFailed("stock levels"));
   }, [pick]);
   async function addLine() {
     if (!pick) return;
@@ -1630,7 +1632,7 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
       onFlash(regen ? "New link minted (old one revoked)" : "Payment link ready");
     } catch (e: any) { onFlash(`Cannot create link: ${e.message}`); }
   };
-  const copyLink = () => { if (link) { navigator.clipboard?.writeText(link.url).catch(() => {}); onFlash("Link copied"); } };
+  const copyLink = () => { if (link) { navigator.clipboard?.writeText(link.url).then(() => onFlash("Link copied")).catch(saveFailed("copy the link")); } };
   const revokeLink = async () => {
     if (!link) return;
     try { await api.post(`/payments/intents/${link.intent_id}/revoke`, {}); setLink(null); onFlash("Link revoked"); }
@@ -1776,7 +1778,7 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
       {/* Portaled to <body>: inside the drawer the header (z-20) painted over the scrim as a white strip. */}
       {modal && ctx && createPortal(
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-ink-primary/40" onClick={() => setModal(null)} />
+          <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={() => setModal(null)} />
           <div className="relative bg-white rounded-2xl shadow-clay-drawer border border-slate-200 w-full max-w-md p-5 space-y-4">
             <div className="flex items-center justify-between"><h4 className="text-sm font-bold text-ink-primary">{modal === "prepay" ? "Take prepayment" : "Take payment"}</h4><button aria-label="Close" onClick={() => setModal(null)} className="text-ink-tertiary hover:text-ink-primary"><M n="close" c="text-lg" /></button></div>
             <div className="text-xs text-ink-secondary">Remaining balance: <b className="tabular-nums">{money(ctx.remaining)}</b></div>

@@ -506,6 +506,12 @@ async def test_scan_matches_mpn_any_case(client):
     assert scan["product"]["id"] == p["id"] and scan["matched_on"] == "mpn"
 
 
+async def test_print_template_without_field_keeps_sku_fallback(client):
+    H, _, _ = await _register(client)
+    tpl = (await client.post("/api/print/templates", json={"name": "Legacy"}, headers=H)).json()
+    assert tpl["barcode_field"] is None
+
+
 async def test_label_preview_uses_chosen_barcode_source(client):
     H, _, _ = await _register(client)
     await _product(client, H, name="Prev", mpn="590123412345")

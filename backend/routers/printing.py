@@ -21,8 +21,6 @@ from backend.models import (
     Organisation,
     POLine,
     Part,
-    Posting,
-    PostingLine,
     PurchaseOrder,
     PurchaseReturn,
     PurchaseReturnLine,
@@ -163,36 +161,6 @@ async def delete_template(
 
 
 # ── print stock documents ────────────────────────────────────────────────────
-@router.get("/postings/{doc_id}")
-async def print_posting(
-    doc_id: str,
-    db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
-):
-    d = (await db.execute(select(Posting).where(
-        Posting.id == doc_id, Posting.org_id == current.org_id))).scalar_one_or_none()
-    if not d:
-        raise HTTPException(404, "Posting not found")
-    lines = (await db.execute(select(PostingLine, Part.name, Part.sku)
-        .join(Part, PostingLine.part_id == Part.id)
-        .where(PostingLine.posting_id == doc_id))).all()
-
-    rows = [[name, sku or "", f"{ln.qty:g}", f"{float(ln.unit_cost or 0):.2f}",
-             f"{float(ln.total or 0):.2f}"] for ln, name, sku in lines]
-    pdf = await asyncio.to_thread(
-        printing.render_document,
-        title="Goods received", org_name=await _org_name(db, current.org_id), lang=await _org_lang(db, current.org_id),
-        number=d.number,
-        meta=[("Date", d.created_at.strftime("%Y-%m-%d") if d.created_at else None),
-              ("Reference", d.reference), ("Settlement", d.settlement),
-              ("Status", d.status)],
-        headers=["Product", "SKU", "Qty", "Unit cost", "Total"],
-        rows=rows,
-        totals=["", "", "", "Total", f"{float(d.total or 0):.2f}"],
-        footer=d.note)
-    return _pdf(pdf, f"posting-{d.number or doc_id[:8]}.pdf")
-
-
 @router.get("/purchase-order/{po_id}")
 async def print_purchase_order(
     po_id: str,

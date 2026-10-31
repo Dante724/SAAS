@@ -32,6 +32,8 @@ import { printHtmlInFrame } from "../../lib/safeHtml";
 import { inputCls } from "../invoices/billing";
 import { productGlyph } from "../sales/SalesPOS";
 import { RowMenu } from "../company/CompanyHub";
+import { loadFailed } from "../../lib/notice";
+import { clickableRow } from "../../lib/clickable";
 
 type Tab = "stock" | "devices" | "services" | "bundles" | "purchase-orders"
   | "postings" | "reservations" | "conversions" | "transfers" | "stock-takes" | "write-offs" | "returns" | "bins";
@@ -220,7 +222,7 @@ export default function InventoryHub() {
     setSecPage(1);   // leaving a tab resets the shared (PO/audit) pager to page 1
     if (tab === "services" && !services) loadServices();
     if (tab === "bundles" && !bundles) api.get<{ items: Bundle[] }>("/bundles").then((r) => setBundles(r.items || [])).catch(() => setBundles([]));
-    if (tab === "purchase-orders" && !pos) { api.get<{ items: PO[] }>("/inventory/po").then((r) => setPos(r.items || [])).catch(() => setPos([])); api.get<{ items: Supplier[] }>("/suppliers").then((r) => setSuppliers(r.items || [])).catch(() => {}); }
+    if (tab === "purchase-orders" && !pos) { api.get<{ items: PO[] }>("/inventory/po").then((r) => setPos(r.items || [])).catch(() => setPos([])); api.get<{ items: Supplier[] }>("/suppliers").then((r) => setSuppliers(r.items || [])).catch(loadFailed("suppliers")); }
     if (AUDIT[tab] && auditRows[tab] === undefined) {
       const url = AUDIT_URL[tab];
       if (url) api.get<any>(url).then((r) => setAuditRows((s) => ({ ...s, [tab]: r.items || r || [] }))).catch(() => setAuditRows((s) => ({ ...s, [tab]: [] })));
@@ -380,7 +382,7 @@ export default function InventoryHub() {
                     {inOverflow ? tabLabel(overflowTabs.find((t) => t.id === tab)!) : "More"}<M n="expand_more" c="text-sm" />
                   </button>
                   {navMore && (<>
-                    <div className="fixed inset-0 z-30" onClick={() => setNavMore(false)} />
+                    <div className="fixed inset-0 z-30" aria-hidden="true" onClick={() => setNavMore(false)} />
                     <div className="absolute left-0 mt-1 w-52 bg-white rounded-xl border border-slate-200 shadow-drawer z-40 py-1.5 text-xs">
                       {overflowTabs.map((t) => (
                         <button key={t.id} onClick={() => { setTab(t.id); setNavMore(false); }} className={`w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-slate-50 ${tab === t.id ? "text-primary font-bold" : "text-ink-secondary"}`}>
@@ -423,7 +425,7 @@ export default function InventoryHub() {
               <button onClick={() => setStockMenu((o) => !o)} aria-expanded={stockMenu} className={ghostBtn}><span>Actions</span><M n="expand_more" c="text-sm" /></button>
               {stockMenu && (
                 <>
-                  <div className="fixed inset-0 z-30" onClick={() => setStockMenu(false)} />
+                  <div className="fixed inset-0 z-30" aria-hidden="true" onClick={() => setStockMenu(false)} />
                   <div className="absolute right-0 mt-1 w-56 bg-white rounded-xl border border-slate-200 shadow-drawer z-40 py-1.5 text-xs">
                     <button onClick={() => { setStockMenu(false); setToOrderOpen(true); }} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 text-ink-secondary"><M n="assignment_late" c="text-sm" />Parts to order (jobs)</button>
                     <button onClick={() => { setStockMenu(false); setReorderOpen(true); }} className="w-full flex items-center gap-2 px-3 py-2 hover:bg-slate-50 text-ink-secondary"><M n="sync_alt" c="text-sm" />Reorder list</button>
@@ -521,7 +523,7 @@ export default function InventoryHub() {
                 {pageProducts.map((p) => {
                   const pill = stockPill(p); const m = marginOf(p);
                   return (
-                    <tr key={p.id} onClick={() => setDrawer({ kind: "product", id: p.id })} className={`hover:bg-slate-50 transition-colors cursor-pointer group ${psel.has(p.id) ? "bg-primary/5" : ""}`}>
+                    <tr key={p.id} {...clickableRow(() => setDrawer({ kind: "product", id: p.id }))} className={`hover:bg-slate-50 transition-colors cursor-pointer group ${psel.has(p.id) ? "bg-primary/5" : ""}`}>
                       <td className="py-3.5 pl-5 pr-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label="Select row" checked={psel.has(p.id)} onChange={() => pToggle(p.id)} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></td>
                       <td className="py-3.5 px-3"><div className="flex items-center gap-3">
                         {p.image_data ? <img src={p.image_data} alt="" className="w-8 h-8 rounded-lg object-cover border border-slate-200 flex-shrink-0" /> : <span data-testid="product-glyph" className="w-8 h-8 rounded-lg bg-slate-100 text-ink-tertiary flex items-center justify-center flex-shrink-0"><M n={productGlyph(p.name, p.brand)} c="text-sm" /></span>}
@@ -578,7 +580,7 @@ export default function InventoryHub() {
                 {!assets && <SkeletonRows cols={6} />}
                 {assets?.length === 0 && <tr><td colSpan={6} className="py-6 px-5 text-ink-tertiary">{daq ? `Nothing matches “${daq}”.` : aState === "written_off" ? `No written-off ${term.assets.toLowerCase()}.` : `No ${term.assets.toLowerCase()} registered.`}</td></tr>}
                 {pageAssets.map((a) => (
-                  <tr key={a.id} className="hover:bg-blue-50/30 transition-colors cursor-pointer" onClick={() => setAssetOpen(a.id)}>
+                  <tr key={a.id} className="hover:bg-blue-50/30 transition-colors cursor-pointer" {...clickableRow(() => setAssetOpen(a.id))}>
                     <td className="py-3.5 pl-5 pr-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label="Select row" checked={asel.has(a.id)} onChange={() => aToggle(a.id)} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></td>
                     <td className="py-3.5 px-3"><div className="font-bold text-ink-primary">{[a.brand, a.model].filter(Boolean).join(" ") || a.asset_type || assetNoun(a, term)}</div><span className="text-[11px] text-ink-tertiary font-normal block">{a.asset_type && a.asset_type !== "Device" ? a.asset_type : assetNoun(a, term)}</span></td>
                     <td className="py-3.5 px-3 font-mono text-[11px] text-ink-secondary">{a.imei || a.serial || "—"}</td>
@@ -648,7 +650,7 @@ export default function InventoryHub() {
                   {auditRows[tab] == null && <SkeletonRows cols={8} />}
                   {auditRows[tab]?.length === 0 && <tr><td colSpan={8} className="py-12 px-4"><AuditEmpty tab={tab} title={AUDIT[tab].title} sub={AUDIT[tab].sub} onStart={AUDIT_START[tab]} /></td></tr>}
                   {pageAudit.map((row: any, i: number) => (
-                    <tr key={row?.id || i} onClick={tab === "stock-takes" && row?.id ? () => setStk({ id: row.id }) : undefined} className={`hover:bg-blue-50/30 ${tab === "stock-takes" ? "cursor-pointer" : ""}`}>
+                    <tr key={row?.id || i} {...clickableRow(tab === "stock-takes" && row?.id ? () => setStk({ id: row.id }) : undefined)} className={`hover:bg-blue-50/30 ${tab === "stock-takes" ? "cursor-pointer" : ""}`}>
                       {(AUDIT_COLS[tab] || []).map(([h, fn], j) => <td key={h} className={`py-2.5 px-4 ${j === 0 ? "font-bold text-ink-primary" : ""}`}>{fn(row)}</td>)}
                     </tr>
                   ))}
@@ -663,7 +665,7 @@ export default function InventoryHub() {
       </div>
 
       {labelDlg && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-primary/40 backdrop-blur-[2px]" onClick={() => setLabelDlg(false)}>
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-primary/40 backdrop-blur-[2px]" role="presentation" onClick={() => setLabelDlg(false)}>
           <div className="bg-white rounded-2xl shadow-drawer w-[380px] max-w-full p-5" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between mb-3"><h3 className="font-bold text-ink-primary">Print labels</h3><button aria-label="Close" onClick={() => setLabelDlg(false)} className="w-7 h-7 rounded-lg hover:bg-slate-100 grid place-items-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
             <p className="text-xs text-ink-tertiary mb-3">{labelSelCount} {labelMode === "asset" ? "asset" : "product"}{labelSelCount === 1 ? "" : "s"} selected. Each prints at the template's exact label size.</p>
@@ -682,8 +684,8 @@ export default function InventoryHub() {
           </div>
         </div>
       )}
-      {newPo && <NewPODrawer products={products || []} onClose={() => setNewPo(false)} onCreated={() => { setNewPo(false); api.get<{ items: PO[] }>("/inventory/po").then((r) => setPos(r.items || [])).catch(() => {}); }} />}
-      {poOpen && <PODrawer poId={poOpen} onClose={() => setPoOpen(null)} onChanged={() => { api.get<{ items: PO[] }>("/inventory/po").then((r) => setPos(r.items || [])).catch(() => {}); loadProducts(); }} />}
+      {newPo && <NewPODrawer products={products || []} onClose={() => setNewPo(false)} onCreated={() => { setNewPo(false); api.get<{ items: PO[] }>("/inventory/po").then((r) => setPos(r.items || [])).catch(loadFailed("purchase orders")); }} />}
+      {poOpen && <PODrawer poId={poOpen} onClose={() => setPoOpen(null)} onChanged={() => { api.get<{ items: PO[] }>("/inventory/po").then((r) => setPos(r.items || [])).catch(loadFailed("purchase orders")); loadProducts(); }} />}
       {drawer && <InventoryDrawer kind={drawer.kind} id={drawer.id} initial={drawer.initial} onClose={() => setDrawer(null)} onSaved={() => { if (drawer.kind === "product") loadProducts(); if (drawer.kind === "service") loadServices(); }} />}
       {assetOpen && <AssetDrawer assetId={assetOpen} onClose={() => { setAssetOpen(null); ap.reload(); }} />}
       {assetCreate && <AssetDrawer onClose={() => setAssetCreate(false)} onSaved={() => ap.reload()} />}
@@ -745,7 +747,7 @@ function ActionModal({ kind, products, preselected, onClose, onDone }:
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[520px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h2 className="font-bold text-ink-primary">{title}</h2>
@@ -811,7 +813,7 @@ function ConversionModal({ onClose, onDone }: { onClose: () => void; onDone: () 
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
     api.get<any>("/assets?limit=200").then((r) => setAssets(r.items || [])).catch(() => setAssets([]));
-    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(() => {});
+    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(loadFailed("locations"));
   }, []);
   // prefill name from the picked asset (never the serial → sku, per backend note)
   useEffect(() => {
@@ -834,7 +836,7 @@ function ConversionModal({ onClose, onDone }: { onClose: () => void; onDone: () 
   const lbl = "block text-[11px] font-semibold text-ink-tertiary   mb-1";
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[520px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200"><h2 className="font-bold text-ink-primary">Convert asset → product</h2><button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
@@ -890,7 +892,7 @@ function ReorderModal({ onClose, onCreated }: { onClose: () => void; onCreated?:
   }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[560px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200"><h2 className="font-bold text-ink-primary">Reorder</h2><button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
         <div className="px-5 pt-3 flex gap-1.5">
@@ -981,8 +983,8 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
   const [mapCols, setMapCols] = useState<PasteField[] | null>(null); const [dataGrid, setDataGrid] = useState<string[][] | null>(null);
   const fileRef = useRef<HTMLInputElement>(null);
   useEffect(() => {
-    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(() => {});
-    api.get<any>("/suppliers").then((r) => setSuppliers(r.items || [])).catch(() => {});
+    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(loadFailed("locations"));
+    api.get<any>("/suppliers").then((r) => setSuppliers(r.items || [])).catch(loadFailed("suppliers"));
   }, []);
   const fld = "bg-white border border-slate-200 rounded-lg text-sm px-2.5 py-2";
   const lbl2 = "block text-[11px] font-bold text-ink-tertiary  mb-1";
@@ -1060,7 +1062,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[680px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h2 className="font-bold text-ink-primary">{review ? "Review & confirm posting" : "New posting — bulk stock inflow"}</h2>
@@ -1202,7 +1204,7 @@ function BulkAdjustModal({ items, onClose, onDone }: { items: Product[]; onClose
   const [vals, setVals] = useState<Record<string, number>>({});
   const [note, setNote] = useState("");
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
-  useEffect(() => { api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(() => {}); }, []);
+  useEffect(() => { api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(loadFailed("locations")); }, []);
   const fld = "bg-white border border-slate-200 rounded-lg text-sm px-2.5 py-2";
   const lbl2 = "block text-[11px] font-bold text-ink-tertiary  mb-1";
   async function save() {
@@ -1215,7 +1217,7 @@ function BulkAdjustModal({ items, onClose, onDone }: { items: Product[]; onClose
   }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[520px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200"><h2 className="font-bold text-ink-primary">Adjust quantity — {items.length} item{items.length === 1 ? "" : "s"}</h2><button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
@@ -1256,7 +1258,7 @@ function PartsToOrderModal({ onClose, onCreated }: { onClose: () => void; onCrea
   const [busy, setBusy] = useState(""); const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
     api.get<any>("/inventory/to-order").then((r) => { setRows(r.items || []); setSummary(r.summary || null); }).catch(() => setRows([]));
-    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(() => {});
+    api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setLocId(it[0].id); }).catch(loadFailed("locations"));
   }, []);
   // group by supplier
   const groups: Record<string, { name: string; sid: string | null; rows: ToOrderRow[] }> = {};
@@ -1273,7 +1275,7 @@ function PartsToOrderModal({ onClose, onCreated }: { onClose: () => void; onCrea
   }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[620px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <div><h2 className="font-bold text-ink-primary">Parts to order</h2><p className="text-[11px] text-ink-tertiary">What open jobs need, minus stock on hand and already on order.</p></div>

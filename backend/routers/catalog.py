@@ -358,19 +358,24 @@ async def catalog_search(
         bq = select(Bundle).where(Bundle.org_id == current.org_id, Bundle.active == True)  # noqa: E712
         if q:
             bq = bq.where(_contains(Bundle.name, q))
-        for b in (await db.execute(bq.order_by(Bundle.name).limit(5))).scalars().all():
-            comps = (await db.execute(select(BundleComponent).where(
-                BundleComponent.bundle_id == b.id))).scalars().all()
+        from backend.services.batching import names_by_id, rows_by
+        bundles = (await db.execute(bq.order_by(Bundle.name).limit(5))).scalars().all()
+        comps_by = await rows_by(db, BundleComponent, BundleComponent.bundle_id, [b.id for b in bundles])
+        all_comps = [c for cs in comps_by.values() for c in cs]
+        part_price = await names_by_id(db, Part.id, Part.sell_price,
+                                       [c.ref_id for c in all_comps if c.ref_type == "product"],
+                                       org_col=Part.org_id, org_id=current.org_id)
+        svc_price = await names_by_id(db, Service.id, Service.price,
+                                      [c.ref_id for c in all_comps if c.ref_type != "product"],
+                                      org_col=Service.org_id, org_id=current.org_id)
+        for b in bundles:
+            comps = comps_by.get(b.id, [])
             price = b.price
             if b.price_mode == "sum":
                 total = 0.0
                 for c in comps:
-                    if c.ref_type == "product":
-                        it = (await db.execute(select(Part).where(Part.id == c.ref_id))).scalar_one_or_none()
-                        total += (it.sell_price if it else 0) * c.qty
-                    else:
-                        it = (await db.execute(select(Service).where(Service.id == c.ref_id))).scalar_one_or_none()
-                        total += (it.price if it else 0) * c.qty
+                    prices = part_price if c.ref_type == "product" else svc_price
+                    total += (prices.get(c.ref_id) or 0) * c.qty
                 price = q2(total)
             out.append({"kind": "bundle", "ref_id": b.id, "name": b.name,
                         "category": "Job Kit", "price": price, "cost_price": 0,

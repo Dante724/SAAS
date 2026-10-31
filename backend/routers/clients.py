@@ -216,11 +216,15 @@ async def duplicate_phones(
         select(Client.phone, func.count(Client.id)).where(
             Client.org_id == current.org_id, Client.phone.isnot(None), Client.phone != "")
         .group_by(Client.phone).having(func.count(Client.id) > 1))).all()
+    by_phone: dict = {}
+    if rows:
+        for c in (await db.execute(select(Client).where(
+                Client.org_id == current.org_id, Client.phone.in_([phone for phone, _ in rows]))
+                .order_by(Client.created_at))).scalars().all():
+            by_phone.setdefault(c.phone, []).append(c)
     clusters = []
     for phone, n in rows:
-        members = (await db.execute(select(Client).where(
-            Client.org_id == current.org_id, Client.phone == phone)
-            .order_by(Client.created_at))).scalars().all()
+        members = by_phone.get(phone, [])
         clusters.append({
             "phone": phone, "count": n,
             "keep_hint_id": members[-1].id if members else None,  # latest-created wins
@@ -1031,11 +1035,9 @@ async def client_payments(
         raise HTTPException(404, "Contact not found")
     rows = (await db.execute(select(Payment).where(Payment.client_id == client_id)
             .order_by(Payment.paid_at.desc()).limit(200))).scalars().all()
-    oids = {p.order_id for p in rows if p.order_id}
-    onum = {}
-    if oids:
-        for o in (await db.execute(select(Order).where(Order.id.in_(oids)))).scalars().all():
-            onum[o.id] = o.order_number
+    from backend.services.batching import names_by_id
+    onum = await names_by_id(db, Order.id, Order.order_number, [p.order_id for p in rows],
+                             org_col=Order.org_id, org_id=current.org_id)
     return {"items": [{
         "id": p.id, "kind": p.kind, "method": p.method, "amount": float(p.amount or 0),
         "order_id": p.order_id, "order_number": onum.get(p.order_id),
@@ -1066,11 +1068,9 @@ async def client_communication(
         msgs = (await db.execute(select(InboxMessage).where(
             InboxMessage.thread_id.in_(list(tmap.keys())))
             .order_by(InboxMessage.created_at.desc()).limit(200))).scalars().all()
-    author_ids = {m.author_id for m in msgs if m.author_id}
-    names = {}
-    if author_ids:
-        for e in (await db.execute(select(Emp).where(Emp.id.in_(author_ids)))).scalars().all():
-            names[e.id] = e.name
+    from backend.services.batching import names_by_id
+    names = await names_by_id(db, Emp.id, Emp.name, [m.author_id for m in msgs],
+                              org_col=Emp.org_id, org_id=current.org_id)
     items = [{
         "id": m.id, "channel": tmap[m.thread_id].channel if m.thread_id in tmap else None,
         "direction": m.direction, "body": m.body,
@@ -1085,9 +1085,9 @@ async def client_communication(
         cmsgs = (await db.execute(select(ChatMessage).where(
             ChatMessage.thread_id.in_(list(chats)), ChatMessage.status != "system")
             .order_by(ChatMessage.created_at.desc()).limit(200))).scalars().all()
-        for e in (await db.execute(select(Emp).where(Emp.id.in_(
-                {m.author_id for m in cmsgs if m.author_id} - set(names))))).scalars().all():
-            names[e.id] = e.name
+        names.update(await names_by_id(db, Emp.id, Emp.name,
+                                       {m.author_id for m in cmsgs if m.author_id} - set(names),
+                                       org_col=Emp.org_id, org_id=current.org_id))
         items += [{"id": m.id, "channel": chats.get(m.thread_id),
                    "direction": "inbound" if m.direction == "in" else "outbound", "body": m.body,
                    "author": names.get(m.author_id), "delivered": m.status != "failed",

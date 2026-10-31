@@ -26,7 +26,7 @@ export default function ShiftHistoryModal({ sym, onClose }: { sym?: string; onCl
   }, []);
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30 p-4" role="presentation" onClick={onClose}>
       <div className="relative bg-white rounded-2xl shadow-clay-drawer border border-slate-200 w-full max-w-2xl p-5" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-bold text-ink-primary flex items-center gap-2"><M n="history" c="text-base text-primary" />Drawer history &amp; reconciliation</h3>
