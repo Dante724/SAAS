@@ -401,3 +401,19 @@ async def test_approved_recommendations_update_the_draft_invoice(client):
                           json={"how": "phone"}, headers=H)
     assert r.status_code == 200, r.text
     assert await total() == 255
+
+
+async def test_invoice_from_a_whole_job_shows_the_jobs_tax(client, db):
+    """The job's total already includes its tax; the invoice shows that tax as its own line."""
+    from backend.models import Invoice, Order
+    H, _, loc, cid = await _shop(client)
+    o = (await client.post("/api/orders", json={"client_id": cid, "location_id": loc, "complaint": "x"}, headers=H)).json()
+    await client.post(f"/api/orders/{o['id']}/lines", json={"kind": "custom", "line_type": "labour",
+                                                            "description": "w", "qty": 1, "unit_price": 105}, headers=H)
+    job = (await db.execute(select(Order).where(Order.id == o["id"]))).scalar_one()
+    job.tax = 5.0
+    await db.commit()
+    r = await client.post("/api/orders/bulk", json={"order_ids": [o["id"]], "action": "create_invoice"}, headers=H)
+    assert r.status_code == 200, r.text
+    inv = (await db.execute(select(Invoice).where(Invoice.order_id == o["id"]))).scalar_one()
+    assert (float(inv.subtotal), float(inv.tax), float(inv.total)) == (100.0, 5.0, 105.0)
