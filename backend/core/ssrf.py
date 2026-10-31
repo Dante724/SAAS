@@ -32,8 +32,15 @@ def _ip_is_public(ip: str) -> bool:
             return _ip_is_public(str(addr.ipv4_mapped))
         if addr in _NAT64:
             return _ip_is_public(str(ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)))
-    return not (addr.is_private or addr.is_loopback or addr.is_link_local
-                or addr.is_multicast or addr.is_reserved or addr.is_unspecified)
+        # 6to4 (2002::/16) and Teredo carry an IPv4 address too.
+        if addr.sixtofour:
+            return _ip_is_public(str(addr.sixtofour))
+        if addr.teredo:
+            return all(_ip_is_public(str(a)) for a in addr.teredo)
+    # is_global, not "not private": 100.64.0.0/10 (carrier-grade NAT, which holds the
+    # 100.100.100.200 cloud metadata address), 198.18.0.0/15, 192.0.0.0/24 and similar ranges are
+    # neither private nor global. Multicast can be global, but is never a webhook receiver.
+    return addr.is_global and not addr.is_multicast
 
 
 def _resolve_public(url: str):
@@ -46,11 +53,14 @@ def _resolve_public(url: str):
     host = parsed.hostname
     if not host:
         raise UnsafeURLError("missing host")
-    # Resolve every address the host maps to; all must be public.
+    return parsed, _public_ips(host, parsed.port or (443 if parsed.scheme == "https" else 80))
+
+
+def _public_ips(host: str, port: int) -> list:
+    """Every address `host` resolves to, sorted; all must be public."""
     try:
-        infos = socket.getaddrinfo(host, parsed.port or (443 if parsed.scheme == "https" else 80),
-                                   proto=socket.IPPROTO_TCP)
-    except (socket.gaierror, UnicodeError, ValueError) as e:
+        infos = socket.getaddrinfo(host, port, proto=socket.IPPROTO_TCP)
+    except (socket.gaierror, UnicodeError, ValueError, OSError) as e:
         raise UnsafeURLError(f"cannot resolve host: {e}") from e
     ips = {info[4][0] for info in infos}
     if not ips:
@@ -58,7 +68,15 @@ def _resolve_public(url: str):
     for ip in ips:
         if not _ip_is_public(ip):
             raise UnsafeURLError(f"host resolves to a non-public address ({ip})")
-    return parsed, sorted(ips)
+    return sorted(ips)
+
+
+def public_ip_for(host: str, port: int) -> str:
+    """For non-HTTP connections to a tenant-supplied host (their SMTP server): the checked public
+    address to connect to, so a DNS answer that changes afterwards can't point inside."""
+    if not host or not isinstance(host, str):
+        raise UnsafeURLError("missing host")
+    return _public_ips(host.strip().strip("[]"), port)[0]
 
 
 def assert_safe_url(url: str) -> str:

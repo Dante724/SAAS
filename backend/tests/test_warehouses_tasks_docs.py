@@ -15,6 +15,7 @@ from backend.models import (
     Warehouse,
 )
 from backend.services.auth import hash_password
+from backend.services.dates import now_utc
 
 
 async def _me(client, H):
@@ -356,7 +357,7 @@ async def test_appointment_reminder_queues(client, tenant, db):
         "module": "appointment", "event": "reminder", "channel": "email",
         "reminder_offset_min": 120}, headers=tenant)
     me = await _me(client, tenant)
-    soon = datetime.utcnow() + timedelta(minutes=60)
+    soon = now_utc() + timedelta(minutes=60)
     b = await client.post("/api/appointments", json={
         "client_id": cid, "employee_id": me["id"],
         "scheduled_for": soon.strftime("%Y-%m-%dT%H:%M:%S"),
@@ -406,14 +407,14 @@ async def test_task_links_and_feed(client, tenant, db):
 @pytest.mark.asyncio
 async def test_task_on_time_completion_flag(client, tenant):
     me = await _me(client, tenant)
-    future = (datetime.utcnow() + timedelta(days=1)).isoformat()
+    future = (now_utc() + timedelta(days=1)).isoformat()
     t = (await client.post("/api/tasks", json={
         "title": "Early", "assigned_to_id": me["id"], "due_at": future},
         headers=tenant)).json()
     done = await client.patch(f"/api/tasks/{t['id']}", json={"status": "done"}, headers=tenant)
     assert done.json()["completed_on_time"] is True
 
-    past = (datetime.utcnow() - timedelta(days=1)).isoformat()
+    past = (now_utc() - timedelta(days=1)).isoformat()
     late = (await client.post("/api/tasks", json={
         "title": "Late", "assigned_to_id": me["id"], "due_at": past},
         headers=tenant)).json()
@@ -431,14 +432,14 @@ async def test_task_commission_only_when_on_time(client, tenant, db):
                           calc_type="flat", amount=5, term_condition="on_time"))
     await db.commit()
 
-    past = (datetime.utcnow() - timedelta(days=1)).isoformat()
+    past = (now_utc() - timedelta(days=1)).isoformat()
     late = (await client.post("/api/tasks", json={
         "title": "Late", "assigned_to_id": me["id"], "due_at": past}, headers=tenant)).json()
     await client.patch(f"/api/tasks/{late['id']}", json={"status": "done"}, headers=tenant)
     bal = (await client.get(f"/api/payroll/balance/{me['id']}", headers=tenant)).json()
     assert bal["balance"] == pytest.approx(0.0)      # late → no commission
 
-    future = (datetime.utcnow() + timedelta(days=1)).isoformat()
+    future = (now_utc() + timedelta(days=1)).isoformat()
     ok = (await client.post("/api/tasks", json={
         "title": "Prompt", "assigned_to_id": me["id"], "due_at": future},
         headers=tenant)).json()

@@ -34,7 +34,7 @@ async def test_key_rejected_once_org_is_suspended(client, tenant, db):
     org.sub_status = "suspended"
     await db.commit()
     r = await client.get("/api/v1/contacts", headers=auth)
-    assert r.status_code == 403 and "suspended" in r.text
+    assert r.status_code == 403 and "can't sign in" in r.text
 
 
 @pytest.mark.asyncio

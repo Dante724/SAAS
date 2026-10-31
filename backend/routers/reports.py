@@ -8,6 +8,7 @@ from sqlalchemy.orm import selectinload
 from backend.db.database import get_db
 from backend.models import Order, Client, Invoice, Part, StockLevel, Task, Employee
 from backend.services.auth import get_current_employee, require_perm
+from backend.services.dates import day_start_utc, now_utc, shop_today, shop_tzname, today_in
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -134,18 +135,17 @@ async def low_stock_report(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
-    parts = (await db.execute(select(Part).where(Part.org_id == current.org_id))).scalars().all()
-    stocks = (await db.execute(
-        select(StockLevel).where(StockLevel.part_id.in_([p.id for p in parts]))
-    )).scalars().all()
-    stock_map = {}
-    for s in stocks:
-        stock_map.setdefault(s.part_id, 0)
-        stock_map[s.part_id] += s.qty_available
-    low = [
-        {"id": p.id, "name": p.name, "qty": stock_map.get(p.id, 0), "min_stock": p.min_stock}
-        for p in parts if stock_map.get(p.id, 0) <= p.min_stock
-    ]
+    # One aggregate query: on-hand per part summed in SQL, only the four columns the report shows
+    # (was: every Part row loaded, then every StockLevel row for them).
+    on_hand = func.coalesce(func.sum(StockLevel.qty_available), 0)
+    rows = (await db.execute(
+        select(Part.id, Part.name, Part.min_stock, on_hand)
+        .outerjoin(StockLevel, StockLevel.part_id == Part.id)
+        .where(Part.org_id == current.org_id)
+        .group_by(Part.id, Part.name, Part.min_stock)
+        .having(on_hand <= func.coalesce(Part.min_stock, 0)))).all()
+    low = [{"id": pid, "name": name, "qty": qty, "min_stock": min_stock}
+           for pid, name, min_stock, qty in rows]
     return {"count": len(low), "items": low}
 
 
@@ -169,7 +169,7 @@ from backend.core.spreadsheet import safe_row
 
 
 def _parse_range(date_from, date_to):
-    df = datetime.fromisoformat(date_from) if date_from else datetime.utcnow() - timedelta(days=30)
+    df = datetime.fromisoformat(date_from) if date_from else now_utc() - timedelta(days=30)
     if date_to:
         dt = datetime.fromisoformat(date_to)
         # A date-only "To" (YYYY-MM-DD) parses to 00:00:00 — that would silently drop
@@ -178,7 +178,7 @@ def _parse_range(date_from, date_to):
         if dt.time() == datetime.min.time():
             dt = dt + timedelta(days=1) - timedelta(seconds=1)
     else:
-        dt = datetime.utcnow() + timedelta(days=1)
+        dt = now_utc() + timedelta(days=1)
     return df, dt
 
 
@@ -627,7 +627,6 @@ async def _rep_expiration(db, org, df, dt, **kw):
     """Batches by how close they are to expiring. Anything already past its date is
     reported as a negative day count rather than hidden — expired stock sitting on a
     shelf is exactly the thing this report exists to surface."""
-    from datetime import date as _date
 
     from backend.models import StockItemBatch, Warehouse
     whs = {w.id: w.name for w in (await db.execute(select(Warehouse).where(
@@ -638,7 +637,7 @@ async def _rep_expiration(db, org, df, dt, **kw):
                StockItemBatch.expiry_date.isnot(None),
                StockItemBatch.qty_remaining > 0))).all()
 
-    today = _date.today()
+    today = await shop_today(db, org)
     cols = ["Product", "SKU", "Warehouse", "Qty left", "Expires", "Days left", "Status",
             "Value at risk"]
     data = []
@@ -748,7 +747,7 @@ async def _rep_dead_stock(db, org, df, dt, **kw):
         .group_by(StockMovement.part_id))).all()
     for pid, ts in mv_rows:
         last[pid] = ts
-    now = datetime.utcnow()
+    now = now_utc()
     cols = ["Product", "SKU", "On hand", "Unit cost", "Tied-up cash", "Last sold", "Days idle"]
     data = []
     for p in parts:
@@ -773,7 +772,7 @@ async def _rep_reorder_forecast(db, org, df, dt, **kw):
     Unlike the min-stock purchase list, this reacts to how fast things actually move."""
     from backend.models import POLine, PurchaseOrder
     WINDOW, COVER = 28, 14
-    since = datetime.utcnow() - timedelta(days=WINDOW)
+    since = now_utc() - timedelta(days=WINDOW)
     vel = {pid: float(q or 0) for pid, q in (await db.execute(
         select(StockMovement.part_id, func.sum(func.abs(StockMovement.qty)))
         .join(Part, StockMovement.part_id == Part.id)
@@ -811,7 +810,7 @@ async def _rep_reorder_forecast(db, org, df, dt, **kw):
         if suggest <= 0:
             continue
         cost = p.avg_cost or p.cost_price or 0
-        stockout = (datetime.utcnow() + timedelta(days=days_left)).strftime("%Y-%m-%d")
+        stockout = (now_utc() + timedelta(days=days_left)).strftime("%Y-%m-%d")
         data.append([p.name, p.sku or "—", q2(free), q2(daily), round(days_left, 1), stockout, ld, q2(incoming.get(p.id, 0)),
                      round(suggest, 1), q2(suggest * cost)])
     data.sort(key=lambda r: r[4])
@@ -1030,13 +1029,14 @@ async def company_dashboard(
     """Rich 'My company' dashboard matching Orderry: today metrics, status mix,
     orders-by-assignee, account balances, and monthly KPIs. Optionally scoped to a
     single location via ?location_id=."""
-    from datetime import datetime
     from backend.models import Account, OrderStatus
     oid = current.org_id
     location_id = await _scoped_location(db, current, location_id)
-    now = datetime.utcnow()
-    today0 = now.replace(hour=0, minute=0, second=0, microsecond=0)
-    month0 = now.replace(day=1, hour=0, minute=0, second=0, microsecond=0)
+    now = now_utc()
+    tz = await shop_tzname(db, oid)   # today/this month start on the shop's clock, not UTC's
+    today = today_in(tz)
+    today0 = day_start_utc(today, tz)
+    month0 = day_start_utc(today.replace(day=1), tz)
 
     _oq = select(Order).where(Order.org_id == oid, Order.is_estimate == False)  # noqa: E712
     if location_id:
@@ -1195,7 +1195,7 @@ async def job_profitability(
     oid = current.org_id
 
     # date window (default: trailing 30 days), on closed_at
-    end = datetime.fromisoformat(to) if to else datetime.utcnow()
+    end = datetime.fromisoformat(to) if to else now_utc()
     start = datetime.fromisoformat(from_) if from_ else (end - timedelta(days=30))
 
     # honour a location-scoped role
@@ -1306,10 +1306,9 @@ async def home_feed(
     Each item is a group with a count and a deep link to the filtered list behind it.
     Deterministic (no AI); the order is roughly by urgency. Returns ok=True when the
     shop is all caught up."""
-    from datetime import datetime
     from backend.models import Lead, Role
     oid = current.org_id
-    now = datetime.utcnow()
+    now = now_utc()
 
     # Role shapes the feed: order_scope="own" limits order/task signals to what's
     # assigned to this person; home_feed_sources (owner-set, in the roles section)

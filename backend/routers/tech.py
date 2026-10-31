@@ -27,6 +27,7 @@ from backend.models import (
     TimeEntry,
 )
 from backend.services.auth import get_current_employee, record_scope
+from backend.services.dates import now_utc, shop_today
 
 router = APIRouter(prefix="/api/tech", tags=["technician"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -54,8 +55,10 @@ async def dashboard(
 ):
     """Today / upcoming / completed / overdue jobs for the signed-in technician,
     plus quick stats, clock status and the unread notification count."""
-    now = datetime.utcnow()
-    today_start = datetime(now.year, now.month, now.day)
+    now = now_utc()
+    # scheduled_for is shop wall-clock time, so "today" is the shop's day on that clock.
+    today = await shop_today(db, current.org_id)
+    today_start = datetime(today.year, today.month, today.day)
     today_end = today_start + timedelta(days=1)
 
     # Terminal status keys for this org (a job is "completed" once terminal/closed).
@@ -156,7 +159,7 @@ async def mark_read(
         StaffNotification.id == nid, StaffNotification.employee_id == current.id))).scalar_one_or_none()
     if not n:
         raise HTTPException(404, "Notification not found")
-    n.read_at = n.read_at or datetime.utcnow()
+    n.read_at = n.read_at or now_utc()
     await db.commit()
     return {"ok": True}
 
@@ -169,7 +172,7 @@ async def mark_all_read(
     rows = (await db.execute(select(StaffNotification).where(
         StaffNotification.employee_id == current.id,
         StaffNotification.read_at.is_(None)))).scalars().all()
-    now = datetime.utcnow()
+    now = now_utc()
     for n in rows:
         n.read_at = now
     await db.commit()
@@ -188,7 +191,7 @@ async def dismiss_notification(
         StaffNotification.id == nid, StaffNotification.employee_id == current.id))).scalar_one_or_none()
     if not n:
         raise HTTPException(404, "Notification not found")
-    now = datetime.utcnow()
+    now = now_utc()
     n.dismissed_at = n.dismissed_at or now
     n.read_at = n.read_at or now
     await db.commit()
@@ -204,7 +207,7 @@ async def dismiss_all_notifications(
     rows = (await db.execute(select(StaffNotification).where(
         StaffNotification.employee_id == current.id,
         StaffNotification.dismissed_at.is_(None)))).scalars().all()
-    now = datetime.utcnow()
+    now = now_utc()
     for n in rows:
         n.dismissed_at = now
         n.read_at = n.read_at or now

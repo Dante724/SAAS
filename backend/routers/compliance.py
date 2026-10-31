@@ -1,5 +1,4 @@
 """B2 — audit trail read API + GDPR data export & erasure."""
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -19,6 +18,7 @@ from backend.models import (
 )
 from backend.services.audit import record as audit_record
 from backend.services.auth import require_perm, record_scope
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/compliance", tags=["compliance"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -106,7 +106,7 @@ async def gdpr_export(
                        action="gdpr.export", entity_type="client", entity_id=client_id)
     await db.commit()
     return {
-        "exported_at": datetime.utcnow().isoformat(),
+        "exported_at": now_utc().isoformat(),
         "client": {"id": cl.id, "name": cl.name,
                    "phone": getattr(cl, "phone", None), "email": getattr(cl, "email", None),
                    "address": getattr(cl, "address", None), "client_type": cl.client_type},
@@ -166,7 +166,8 @@ async def gdpr_erase(
         if hasattr(cl, f):
             setattr(cl, f, None)
     cl.custom_data = {}
-    cl.portal_token = None      # the old portal link must stop showing their history
+    from backend.services import portal_links
+    await portal_links.revoke_all(db, cl.id)   # old portal links must stop showing their history
     await _erase_related(db, current.org_id, client_id)
     scrubbed = 0
     for d in (await db.execute(select(Device).where(Device.client_id == client_id))).scalars().all():
@@ -327,7 +328,7 @@ async def export_org(
                        action="gdpr.export_org", entity_type="organisation", entity_id=current.org_id)
     await db.commit()
     return {
-        "exported_at": datetime.utcnow().isoformat(),
+        "exported_at": now_utc().isoformat(),
         "organisation": {"id": current.org_id, "name": getattr(org, "name", None),
                          "country": getattr(org, "country", None)},
         "counts": {"clients": len(clients), "assets": len(devices), "orders": len(orders)},
@@ -337,3 +338,42 @@ async def export_org(
         "orders": [{"id": o.id, "order_number": o.order_number, "client_id": o.client_id,
                     "status": o.status, "total": o.total} for o in orders],
     }
+
+
+# ── Data retention ───────────────────────────────────────────────────────────
+class RetentionIn(BaseModel):
+    days: dict[str, Optional[int]] = {}     # {kind: days}; null or missing = keep for good
+
+
+def _retention_out(org) -> dict:
+    from backend.services import retention
+    kept = retention.clean(org.retention_days)
+    return {"kinds": [{"key": k, "label": label, "days": kept.get(k)} for k, label in retention.KINDS.items()],
+            "min_days": retention.MIN_DAYS, "max_days": retention.MAX_DAYS}
+
+
+@router.get("/retention")
+async def get_retention(
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_manage_settings")),
+):
+    """How long this shop keeps old records of each kind (none set = keep for good)."""
+    org = await db.get(Organisation, current.org_id)
+    return _retention_out(org)
+
+
+@router.put("/retention")
+async def set_retention(
+    data: RetentionIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_manage_settings")),
+):
+    from backend.services import retention
+    org = await db.get(Organisation, current.org_id)
+    before = retention.clean(org.retention_days)
+    org.retention_days = retention.clean(data.days) or None
+    await audit_record(db, org_id=current.org_id, actor_id=current.id, action="settings.retention",
+                       entity_type="organisation", entity_id=org.id,
+                       diff={"before": before, "after": org.retention_days or {}})
+    await db.commit()
+    return _retention_out(org)

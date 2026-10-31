@@ -9,6 +9,7 @@ import { money } from "../orders/types";
 import { confirmDialog } from "../../lib/dialog";
 import { isoDate, isoDateTimeLocal } from "../../lib/localDate";
 import { EmployeeHours } from "../company/CompanyHub";
+import { loadFailed } from "../../lib/notice";
 
 // Timesheets — React port of legacy timesheets.js. Per-employee grid + approve,
 // manual entry add/void/reopen, and a live "who's on the clock" roster.
@@ -35,7 +36,7 @@ export default function TimesheetsHub() {
   const [addSched, setAddSched] = useState(false);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 1800); };
 
-  useEffect(() => { api.get<any>("/staff/employees").then((r) => { const it = r.items || r || []; setEmps(it); if (it[0] && !empId) setEmpId(it[0].id); }).catch(() => {}); }, []);
+  useEffect(() => { api.get<any>("/staff/employees").then((r) => { const it = r.items || r || []; setEmps(it); if (it[0] && !empId) setEmpId(it[0].id); }).catch(loadFailed("the staff list")); }, []);
   const load = () => { if (empId) api.get<Sheet>(`/timeclock/timesheet?employee_id=${empId}&date_from=${from}&date_to=${to}`).then(setSheet).catch(() => setSheet(null)); };
   const loadRoster = () => api.get<any>("/timeclock/roster").then((r) => setRoster(r.on_shift || [])).catch(() => setRoster([]));
   useEffect(() => { load(); }, [empId, from, to]);
@@ -173,7 +174,7 @@ function ManualEntryDrawer({ employees, defaultEmp, onClose, onDone }: { employe
   const lbl = "block text-[11px] font-bold text-ink-tertiary  mb-1";
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[460px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200"><h2 className="font-bold text-ink-primary">Add time entry</h2><button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
@@ -212,7 +213,7 @@ function ScheduleDrawer({ employees, defaultEmp, onClose, onDone }: { employees:
   const lbl = "block text-[11px] font-bold text-ink-tertiary  mb-1";
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[460px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200"><h2 className="font-bold text-ink-primary">Add planned shift</h2><button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
         <div className="flex-1 overflow-y-auto p-5 space-y-4">

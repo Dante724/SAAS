@@ -13,9 +13,10 @@ from datetime import date
 import pytest
 from sqlalchemy import select
 
-from backend.models import CommissionRule, EmployeeBalanceLedger, Role
+from backend.models import CommissionRule, EmployeeBalanceLedger, Organisation, Role
+from backend.services.dates import today_in
 
-MONTH = date.today().strftime("%Y-%m")
+MONTH = today_in(Organisation.__table__.c.timezone.default.arg).strftime("%Y-%m")   # the shop's month
 PAST = "2026-06"
 
 

@@ -8,12 +8,12 @@ Orderry's bare drawn scribble does not.
 """
 import base64
 import io
-from datetime import datetime
 
 from reportlab.lib.pagesizes import A4
 from reportlab.lib.units import mm
 from reportlab.lib.utils import ImageReader
 from reportlab.pdfgen import canvas
+from backend.services.dates import now_utc
 
 
 def build_certificate(sig, order, org) -> bytes:
@@ -29,7 +29,7 @@ def build_certificate(sig, order, org) -> bytes:
     y -= 8 * mm
     c.setFont("Helvetica", 10)
     c.setFillColorRGB(0.4, 0.4, 0.4)
-    c.drawString(x, y, f"{shop} · issued {datetime.utcnow():%Y-%m-%d %H:%M} UTC")
+    c.drawString(x, y, f"{shop} · issued {now_utc():%Y-%m-%d %H:%M} UTC")
     c.setFillColorRGB(0, 0, 0)
     y -= 6 * mm
     c.line(x, y, W - 20 * mm, y)

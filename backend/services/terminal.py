@@ -14,7 +14,6 @@ Every call refuses live credentials unless live payments are switched on (paymen
 """
 import logging
 import uuid
-from datetime import datetime
 from typing import Optional
 
 import httpx
@@ -27,16 +26,15 @@ from backend.config import settings
 from backend.models import (
     Account,
     CashFlowItem,
-    Invoice,
     Order,
     Organisation,
-    Payment,
     PaymentTerminal,
     Sale,
     TerminalCharge,
 )
 from backend.services import payment_guard
 from backend.services.money import THREE_DECIMAL, ZERO_DECIMAL, minor_units, q2
+from backend.services.dates import now_utc
 
 log = logging.getLogger("tekly.terminal")
 
@@ -466,7 +464,7 @@ async def _checked_capture(db: AsyncSession, ch: TerminalCharge, minor, currency
 async def settle_failed(db: AsyncSession, ch: TerminalCharge, status: str, error: str) -> TerminalCharge:
     res = await db.execute(sa_update(TerminalCharge)
                            .where(TerminalCharge.id == ch.id, TerminalCharge.status.in_(OPEN))
-                           .values(status=status, error=error[:500], updated_at=datetime.utcnow())
+                           .values(status=status, error=error[:500], updated_at=now_utc())
                            .execution_options(synchronize_session=False))
     await db.commit()
     await db.refresh(ch)
@@ -548,7 +546,7 @@ async def settle_succeeded(db: AsyncSession, ch: TerminalCharge, *, provider_pay
     ch.status = "succeeded"
     ch.error = None
     ch.provider_payment_id = provider_payment_id or ch.provider_payment_id
-    ch.updated_at = datetime.utcnow()
+    ch.updated_at = now_utc()
     await db.commit()
     await db.refresh(ch)
     if ch.order_id:
@@ -685,17 +683,13 @@ async def _post_refund(db: AsyncSession, ch: TerminalCharge, amount: float, ref:
             await post_transaction(db, ch.org_id, acc_id, "expense", -abs(amount),
                                    comment=f"Card refund {o.order_number}", ref_type="order",
                                    ref_id=o.id, employee_id=actor_id)
-        rp = Payment(order_id=o.id, client_id=o.client_id, method="card", kind="refund", account_id=acc_id,
-                     amount=amount, received_by_id=actor_id, reference="Card reader refund", provider_ref=ref)
-        db.add(rp)
-        await db.flush()
-        if ch.payment_id:
-            inv_id = (await db.execute(select(Payment.invoice_id).where(Payment.id == ch.payment_id))).scalar()
-            inv = (await db.execute(select(Invoice).where(Invoice.id == inv_id))).scalar_one_or_none() if inv_id else None
-            if inv:
-                inv.amount_paid = q2(max((inv.amount_paid or 0) - amount, 0))
-                from backend.services.invoicing import settle_status
-                settle_status(inv)
+        # The charge may have been split across invoices and money held on the job; the refund comes
+        # off those same rows (services/invoice_money). ch.refunded_amount still holds the earlier
+        # refunds here (the claim above updated the row, not this object).
+        from backend.services.invoice_money import reverse_charge
+        rp = (await reverse_charge(db, o, ch.provider_ref, ch.payment_id, amount, float(ch.refunded_amount or 0),
+                                   method="card", account_id=acc_id, received_by_id=actor_id,
+                                   reference="Card reader refund", provider_ref=ref))[0]
         if o.client_id:
             from backend.services.ledger import post_contact_ledger
             await post_contact_ledger(db, ch.org_id, o.client_id, "refund", abs(amount),
@@ -751,7 +745,7 @@ async def claim_event(db: AsyncSession, provider: str, event_id: str, org_id: st
     from backend.models import PaymentWebhookEvent
     try:
         inserted = await insert_ignore(db, PaymentWebhookEvent, id=str(uuid.uuid4()), provider=provider,
-                                       event_id=event_id[:255], org_id=org_id, created_at=datetime.utcnow())
+                                       event_id=event_id[:255], org_id=org_id, created_at=now_utc())
     except IntegrityError:
         await db.rollback()
         return False

@@ -34,7 +34,9 @@ class Settings(BaseSettings):
 
     # -- Core --
     APP_NAME: str = "Tekly"
-    ENVIRONMENT: str = "development"          # development|staging|production|test
+    # development|staging|production|test. Unset means production: only an explicit development
+    # or test relaxes the fail-closed checks (default SECRET_KEY, CORS '*', simulated payments).
+    ENVIRONMENT: str = "production"
     SECRET_KEY: str = "dev-secret-key-change-in-production"
     ALGORITHM: str = "HS256"
     ACCESS_TOKEN_EXPIRE_MINUTES: int = 1440
@@ -226,87 +228,102 @@ class Settings(BaseSettings):
     def _fail_closed_in_prod(self) -> "Settings":
         """Refuse to run production or staging with placeholder secrets, wildcard CORS, or
         secrets-at-rest left unencrypted."""
-        if self.is_deployed:
-            if self.SECRET_KEY in _PLACEHOLDER_SECRETS or len(self.SECRET_KEY) < 32:
-                raise ValueError(
-                    "SECRET_KEY must be a strong (>=32 char) value in production. "
-                    "Generate: python -c \"import secrets; print(secrets.token_urlsafe(48))\""
-                )
-            if "*" in self.cors_origin_list:
-                raise ValueError("CORS_ORIGINS must be an explicit allowlist in production (no '*').")
-            # The default DATABASE_URL is a local SQLite file: a deploy that forgot to set it booted
-            # on an empty database (runtime DDL is off when deployed) and /api/health still said ok.
-            if self.is_sqlite:
-                raise ValueError("DATABASE_URL must point at Postgres in production/staging, not SQLite.")
-            # Emailed links (verify, reset, invites, portals, pay links) and provider callbacks are
-            # built from PUBLIC_BASE_URL; empty made them relative and broken in every inbox.
-            from urllib.parse import urlparse
-            _base = urlparse(self.PUBLIC_BASE_URL or "")
-            if not (_base.scheme == "https" or (_base.scheme == "http" and _base.hostname in ("localhost", "127.0.0.1"))) \
-                    or not _base.hostname:
-                raise ValueError("PUBLIC_BASE_URL must be the app's public https:// address in production/staging.")
-            # Password reset, verification and invites go out through the platform SMTP account;
-            # without it they were only printed to the log and reported as sent.
-            if not (self.SMTP_HOST and self.SMTP_FROM):
-                raise ValueError("SMTP_HOST and SMTP_FROM must be set in production/staging "
-                                 "(password reset and verification emails).")
-            _stale = [k for k in ("STRIPE_SUCCESS_URL", "STRIPE_CANCEL_URL", "QBO_REDIRECT_URI",
-                                  "EMAIL_OAUTH_REDIRECT", "PUBLIC_BASE_URL")
-                      if "repairos.dev" in (getattr(self, k) or "")]
-            if _stale:
-                raise ValueError(f"{', '.join(_stale)} still point at the old repairos.dev domain.")
-            # OAuth tokens and shop integration credentials are encrypted with this key. Without
-            # it, OAuth tokens were stored in plaintext and shop credentials fell back to a key
-            # derived from SECRET_KEY (the JWT signing key).
-            if not _valid_fernet_keys(self.TOKEN_ENCRYPTION_KEY):
-                raise ValueError(
-                    "TOKEN_ENCRYPTION_KEY must be set in production/staging (comma-separated Fernet "
-                    "keys, newest first). Generate: python -c \"from cryptography.fernet import "
-                    "Fernet; print(Fernet.generate_key().decode())\""
-                )
-            # Webhook signing secrets must be set for any payment provider actually in
-            # use, so inbound provider callbacks can't be forged. Gate each only on its
-            # provider being configured — don't break shops that don't use it.
-            if self.STRIPE_SECRET_KEY and not self.STRIPE_WEBHOOK_SECRET:
-                raise ValueError(
-                    "STRIPE_WEBHOOK_SECRET must be set in production when Stripe is "
-                    "configured (STRIPE_SECRET_KEY present), to verify webhook signatures."
-                )
-            if self.SQUARE_ACCESS_TOKEN and not self.SQUARE_WEBHOOK_SIGNATURE_KEY:
-                raise ValueError(
-                    "SQUARE_WEBHOOK_SIGNATURE_KEY must be set in production when Square is "
-                    "configured (SQUARE_ACCESS_TOKEN present), to verify webhook signatures."
-                )
-            # Meta has no single "enabled" flag and plenty of shops don't use it, so a
-            # missing app secret is a warning rather than a hard boot failure. When any
-            # Meta channel is configured, the unsigned inbound webhook is a real risk.
-            _meta_configured = any([
-                self.META_VERIFY_TOKEN, self.META_PAGE_TOKEN,
-                self.META_IG_TOKEN, self.WHATSAPP_TOKEN,
-            ])
+        if not self.is_deployed:
+            return self
+        try:
+            self._check_deployed_config()
+        except ValueError as e:
+            if "ENVIRONMENT" not in self.model_fields_set:
+                raise ValueError(f"{e} (ENVIRONMENT is not set, so production checks apply. "
+                                 "Set ENVIRONMENT=development for local work.)") from None
+            raise
+        return self
+
+    def _check_deployed_config(self) -> None:
+        if self.SECRET_KEY in _PLACEHOLDER_SECRETS or len(self.SECRET_KEY) < 32:
+            raise ValueError(
+                "SECRET_KEY must be a strong (>=32 char) value in production. "
+                "Generate: python -c \"import secrets; print(secrets.token_urlsafe(48))\""
+            )
+        if "*" in self.cors_origin_list:
+            raise ValueError("CORS_ORIGINS must be an explicit allowlist in production (no '*').")
+        # The default DATABASE_URL is a local SQLite file: a deploy that forgot to set it booted
+        # on an empty database (runtime DDL is off when deployed) and /api/health still said ok.
+        if self.is_sqlite:
+            raise ValueError("DATABASE_URL must point at Postgres in production/staging, not SQLite.")
+        # Emailed links (verify, reset, invites, portals, pay links) and provider callbacks are
+        # built from PUBLIC_BASE_URL; empty made them relative and broken in every inbox.
+        from urllib.parse import urlparse
+        _base = urlparse(self.PUBLIC_BASE_URL or "")
+        if not (_base.scheme == "https" or (_base.scheme == "http" and _base.hostname in ("localhost", "127.0.0.1"))) \
+                or not _base.hostname:
+            raise ValueError("PUBLIC_BASE_URL must be the app's public https:// address in production/staging.")
+        # Password reset, verification and invites go out through the platform SMTP account;
+        # without it they were only printed to the log and reported as sent.
+        if not (self.SMTP_HOST and self.SMTP_FROM):
+            raise ValueError("SMTP_HOST and SMTP_FROM must be set in production/staging "
+                             "(password reset and verification emails).")
+        _stale = [k for k in ("STRIPE_SUCCESS_URL", "STRIPE_CANCEL_URL", "QBO_REDIRECT_URI",
+                              "EMAIL_OAUTH_REDIRECT", "PUBLIC_BASE_URL")
+                  if "repairos.dev" in (getattr(self, k) or "")]
+        if _stale:
+            raise ValueError(f"{', '.join(_stale)} still point at the old repairos.dev domain.")
+        # OAuth tokens and shop integration credentials are encrypted with this key. Without
+        # it, OAuth tokens were stored in plaintext and shop credentials fell back to a key
+        # derived from SECRET_KEY (the JWT signing key).
+        if not _valid_fernet_keys(self.TOKEN_ENCRYPTION_KEY):
+            raise ValueError(
+                "TOKEN_ENCRYPTION_KEY must be set in production/staging (comma-separated Fernet "
+                "keys, newest first). Generate: python -c \"from cryptography.fernet import "
+                "Fernet; print(Fernet.generate_key().decode())\""
+            )
+        # Webhook signing secrets must be set for any payment provider actually in
+        # use, so inbound provider callbacks can't be forged. Gate each only on its
+        # provider being configured — don't break shops that don't use it.
+        if self.STRIPE_SECRET_KEY and not self.STRIPE_WEBHOOK_SECRET:
+            raise ValueError(
+                "STRIPE_WEBHOOK_SECRET must be set in production when Stripe is "
+                "configured (STRIPE_SECRET_KEY present), to verify webhook signatures."
+            )
+        if self.SQUARE_ACCESS_TOKEN and not self.SQUARE_WEBHOOK_SIGNATURE_KEY:
+            raise ValueError(
+                "SQUARE_WEBHOOK_SIGNATURE_KEY must be set in production when Square is "
+                "configured (SQUARE_ACCESS_TOKEN present), to verify webhook signatures."
+            )
+        # Meta has no single "enabled" flag and plenty of shops don't use it, so a
+        # missing app secret is a warning rather than a hard boot failure. When any
+        # Meta channel is configured, the unsigned inbound webhook is a real risk.
+        _meta_configured = any([
+            self.META_VERIFY_TOKEN, self.META_PAGE_TOKEN,
+            self.META_IG_TOKEN, self.WHATSAPP_TOKEN,
+        ])
+        import logging
+        import os
+        _log = logging.getLogger(__name__)
+        if self.MEDIA_BACKEND == "local" and self.MEDIA_LOCAL_DIR.startswith("/tmp"):
+            _log.warning("MEDIA_BACKEND=local with MEDIA_LOCAL_DIR under /tmp: uploaded photos and "
+                         "files are lost when the container restarts. Use MEDIA_BACKEND=s3 or a volume.")
+        # Behind a load balancer with neither setting changed, every anonymous request looks
+        # like it comes from the balancer, so they all share one rate-limit bucket.
+        if self.TRUSTED_PROXY_HOPS == 0 and os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1") == "127.0.0.1":
+            _log.warning("TRUSTED_PROXY_HOPS=0 and FORWARDED_ALLOW_IPS=127.0.0.1: if a load balancer "
+                         "sits in front, set one of them so rate limits see real client IPs.")
+        if _meta_configured and not self.META_APP_SECRET:
             import logging
-            import os
-            _log = logging.getLogger(__name__)
-            # Rate limits (login lockouts included) count in-process without Redis, so N workers
-            # or instances allow N times the limit.
-            if not self.REDIS_URL and int(os.environ.get("WEB_CONCURRENCY", "1") or 1) > 1:
-                _log.warning("REDIS_URL is not set but WEB_CONCURRENCY > 1: every worker keeps its own "
-                             "rate-limit counters. Set REDIS_URL so limits are shared.")
-            if self.MEDIA_BACKEND == "local" and self.MEDIA_LOCAL_DIR.startswith("/tmp"):
-                _log.warning("MEDIA_BACKEND=local with MEDIA_LOCAL_DIR under /tmp: uploaded photos and "
-                             "files are lost when the container restarts. Use MEDIA_BACKEND=s3 or a volume.")
-            # Behind a load balancer with neither setting changed, every anonymous request looks
-            # like it comes from the balancer, so they all share one rate-limit bucket.
-            if self.TRUSTED_PROXY_HOPS == 0 and os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1") == "127.0.0.1":
-                _log.warning("TRUSTED_PROXY_HOPS=0 and FORWARDED_ALLOW_IPS=127.0.0.1: if a load balancer "
-                             "sits in front, set one of them so rate limits see real client IPs.")
-            if _meta_configured and not self.META_APP_SECRET:
-                import logging
-                logging.getLogger(__name__).warning(
-                    "META_APP_SECRET is not set in production but a Meta channel appears "
-                    "configured; /api/chats/webhook/meta will refuse every post (signatures fail "
-                    "closed). Set META_APP_SECRET to receive Meta messages."
-                )
+            logging.getLogger(__name__).warning(
+                "META_APP_SECRET is not set in production but a Meta channel appears "
+                "configured; /api/chats/webhook/meta will refuse every post (signatures fail "
+                "closed). Set META_APP_SECRET to receive Meta messages."
+            )
+
+    @model_validator(mode="after")
+    def _shared_rate_limits(self) -> "Settings":
+        """Deployed with several workers, limits (sign-in lockouts included) must be counted in
+        Redis: in-process counters let N workers allow N times every limit."""
+        import os
+        if self.is_deployed and not self.REDIS_URL and int(os.environ.get("WEB_CONCURRENCY", "1") or 1) > 1:
+            raise ValueError("REDIS_URL must be set when WEB_CONCURRENCY > 1 in production/staging, so "
+                             "rate limits are shared by every worker. Set REDIS_URL or run one worker.")
         return self
 
 

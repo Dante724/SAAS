@@ -3,6 +3,7 @@
 // URL back; the caller uploads it and swaps the photo id, so the marks show everywhere the photo does.
 import { useEffect, useRef, useState } from "react";
 import { M } from "../../components/Shell";
+import { loadFailed } from "../../lib/notice";
 
 type Tool = "circle" | "spot" | "pen";
 type Pt = { x: number; y: number };
@@ -44,7 +45,7 @@ export default function PhotoAnnotator({ src, onSave, onClose }: {
           setReady(true);
         };
         img.src = obj;
-      }).catch(() => {});
+      }).catch(loadFailed("the photo"));
     return () => { dead = true; if (obj) URL.revokeObjectURL(obj); };
   }, [src]);
 
@@ -125,7 +126,7 @@ export default function PhotoAnnotator({ src, onSave, onClose }: {
   );
 
   return (
-    <div className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4" role="presentation" onClick={onClose}>
       <div className="bg-white rounded-2xl shadow-clay-drawer max-w-3xl w-full max-h-[92vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
         <div className="px-4 py-2.5 border-b border-slate-100 flex items-center gap-2">
           <M n="edit" c="text-primary" /><h3 className="text-sm font-bold text-ink-primary">Mark up photo</h3>

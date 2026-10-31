@@ -35,7 +35,7 @@ export default function CatalogPicker({ type = "all", placeholder = "Search serv
         className="glass-input w-full px-3 py-2 rounded-lg text-sm font-semibold text-ink-primary" />
       {open && (items.length > 0 || (loaded && q.trim())) && (
         <>
-          <div className="fixed inset-0 z-30" onClick={() => setOpen(false)} />
+          <div className="fixed inset-0 z-30" aria-hidden="true" onClick={() => setOpen(false)} />
           <div className="absolute z-40 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5 max-h-64 overflow-y-auto">
             {items.length === 0 && <div className="px-2.5 py-2 text-xs text-ink-tertiary">Nothing matches "{q.trim()}"</div>}
             {items.map((i) => (

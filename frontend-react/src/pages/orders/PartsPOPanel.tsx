@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
+import { loadFailed } from "../../lib/notice";
 
 // ADR-144po — everything about this job's parts in one place, opened from the work order's
 // ⋯ menu (or the "Waiting on parts" chip): what the job still owes from stock, the purchase
@@ -82,8 +83,8 @@ export default function PartsPOPanel({ orderId, lines, canBuy, isEstimate, onClo
     if (canBuy) api.get<any>(`/orders/${orderId}/reservations`).then((r) => setHolds(r.items || [])).catch(() => setHolds([]));
   };
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [orderId, canBuy]);
-  useEffect(() => { api.get<any>("/staff/inventory-settings").then((r) => setAuto((r?.po_to_job || "auto") !== "manual")).catch(() => {}); }, []);
-  useEffect(() => { if (canBuy && !isEstimate) api.get<any>("/suppliers").then((r) => setSuppliers(r.items || r || [])).catch(() => {}); }, [canBuy, isEstimate]);
+  useEffect(() => { api.get<any>("/staff/inventory-settings").then((r) => setAuto((r?.po_to_job || "auto") !== "manual")).catch(() => { /* silent: defaults to auto */ }); }, []);
+  useEffect(() => { if (canBuy && !isEstimate) api.get<any>("/suppliers").then((r) => setSuppliers(r.items || r || [])).catch(loadFailed("suppliers")); }, [canBuy, isEstimate]);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
     window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
@@ -171,7 +172,7 @@ export default function PartsPOPanel({ orderId, lines, canBuy, isEstimate, onClo
 
   return (
     <div className="absolute inset-0 z-30 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/20 backdrop-blur-[1px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/20 backdrop-blur-[1px]" aria-hidden="true" onClick={onClose} />
       <div role="dialog" aria-label="Parts and purchase orders" className="relative w-[480px] max-w-full h-full bg-slate-50 border-l border-slate-200/90 shadow-clay-drawer flex flex-col animate-[panelIn_.24s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes panelIn{from{transform:translateX(24px);opacity:0}to{transform:none;opacity:1}}`}</style>
         <div className="px-5 pt-4 pb-3 bg-white border-b border-slate-200/90">

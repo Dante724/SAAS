@@ -1,14 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import { M } from "./Shell";
+import { startCameraScan } from "../lib/cameraScan";
 
 /**
  * 144s — camera barcode / IMEI scanner. A small glass button that opens a live
- * camera view, decodes a barcode with the browser-native BarcodeDetector, and
- * calls onScan(code). Zero dependencies. Falls back to a clear message where
- * BarcodeDetector isn't available (the field's manual typing still works).
+ * camera view and calls onScan(code) with the first code read.
  *
- * ponytail: native BarcodeDetector over a decoder lib. Upgrade path: bundle
- * @zxing/browser only if we must support Safari/Firefox scanning.
+ * ii144b: every type the shop prints or receives (EAN/UPC, ITF, Code 39/128, GS1-128, QR,
+ * Data Matrix, PDF417) — the browser's BarcodeDetector where it has one, otherwise
+ * @zxing/browser loaded on demand (Safari, Firefox). See lib/cameraScan.ts. A USB or
+ * Bluetooth scanner typing into the field keeps working everywhere.
  */
 export default function ScanButton({
   onScan,
@@ -22,50 +23,19 @@ export default function ScanButton({
   const [open, setOpen] = useState(false);
   const [err, setErr] = useState<string | null>(null);
   const videoRef = useRef<HTMLVideoElement | null>(null);
-  const streamRef = useRef<MediaStream | null>(null);
-  const rafRef = useRef<number | null>(null);
+  const stopRef = useRef<(() => void) | null>(null);
 
-  const supported = typeof (window as any).BarcodeDetector !== "undefined";
-
-  const stop = () => {
-    if (rafRef.current) cancelAnimationFrame(rafRef.current);
-    rafRef.current = null;
-    streamRef.current?.getTracks().forEach((t) => t.stop());
-    streamRef.current = null;
-  };
+  const stop = () => { stopRef.current?.(); stopRef.current = null; };
 
   useEffect(() => {
     if (!open) return;
-    if (!supported) { setErr("This browser can't scan — type the code instead."); return; }
     let cancelled = false;
-    const detector = new (window as any).BarcodeDetector({
-      formats: ["code_128", "code_39", "qr_code", "ean_13", "ean_8", "codabar", "itf", "upc_a", "upc_e"],
-    });
-    (async () => {
-      try {
-        const stream = await navigator.mediaDevices.getUserMedia({ video: { facingMode: "environment" } });
-        if (cancelled) { stream.getTracks().forEach((t) => t.stop()); return; }
-        streamRef.current = stream;
-        const v = videoRef.current;
-        if (!v) return;
-        v.srcObject = stream;
-        await v.play();
-        const tick = async () => {
-          if (cancelled || !videoRef.current) return;
-          try {
-            const codes = await detector.detect(videoRef.current);
-            if (codes && codes.length) {
-              const raw = String(codes[0].rawValue || "").trim();
-              if (raw) { onScan(raw); close(); return; }
-            }
-          } catch { /* transient decode frame error — keep looping */ }
-          rafRef.current = requestAnimationFrame(tick);
-        };
-        rafRef.current = requestAnimationFrame(tick);
-      } catch {
-        setErr("Camera unavailable — check permissions, or type the code.");
-      }
-    })();
+    const v = videoRef.current;
+    if (!v) return;
+    if (!navigator.mediaDevices?.getUserMedia) { setErr("This browser can't use the camera — type the code instead."); return; }
+    startCameraScan(v, (code) => { if (!cancelled) { onScan(code.trim()); close(); } })
+      .then((s) => { if (cancelled) s(); else stopRef.current = s; })
+      .catch(() => { if (!cancelled) setErr("Camera unavailable — check permissions, or type the code."); });
     return () => { cancelled = true; stop(); };
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [open]);
@@ -85,7 +55,7 @@ export default function ScanButton({
       </button>
 
       {open && (
-        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-ink-primary/50 backdrop-blur-[2px]" onClick={close}>
+        <div className="fixed inset-0 z-[70] flex items-center justify-center bg-ink-primary/50 backdrop-blur-[2px]" role="presentation" onClick={close}>
           <div className="relative w-[320px] bg-raised rounded-2xl shadow-clay-card border border-slate-200/80 overflow-hidden" onClick={(e) => e.stopPropagation()}>
             <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
               <span className="text-sm font-bold text-ink-primary">{title}</span>
@@ -104,7 +74,7 @@ export default function ScanButton({
                 </>
               )}
             </div>
-            <div className="px-4 py-2.5 text-[11px] text-ink-tertiary text-center">Point the camera at the barcode or QR code.</div>
+            <div className="px-4 py-2.5 text-[11px] text-ink-tertiary text-center">Point the camera at any barcode, QR or Data Matrix code.</div>
           </div>
         </div>
       )}

@@ -9,10 +9,12 @@ import logging
 from sqlalchemy import select
 
 from backend.core.jobs import job_runner
+from backend.services.dates import now_utc
 
 log = logging.getLogger("tekly.jobs")
 
 _MAX_ATTEMPTS = 5
+_STALE_SEND_MIN = 10     # a send times out after seconds; "sending" this long means the worker died
 
 
 @job_runner.every(600, "status-sla-sweep")
@@ -58,8 +60,12 @@ async def sweep_notifications() -> None:
                 queued += await nr.queue_appointment_reminders(db, org_id=oid)
                 res = await nr.run_due(db, org_id=oid)
                 sent += res.get("sent", 0)
+                await db.commit()
             except Exception:  # noqa: BLE001 — one bad org never stalls the sweep
                 log.exception("notification-sweep failed for org %s", oid)
+                # R2: a failed statement leaves the shared session needing a rollback; without
+                # it every later shop in this tick failed too.
+                await db.rollback()
         if queued or sent:
             log.info("notification-sweep: queued %d, sent %d", queued, sent)
 
@@ -83,8 +89,10 @@ async def sweep_contact_lifecycle() -> None:
         for oid in org_ids:
             try:
                 sent += await nr.notify_contact_birthdays(db, org_id=oid)
+                await db.commit()
             except Exception:  # noqa: BLE001
                 log.exception("contact-lifecycle-sweep failed for org %s", oid)
+                await db.rollback()   # R2: same as the notification sweep
         if sent:
             log.info("contact-lifecycle-sweep: sent %d birthday message(s)", sent)
 
@@ -96,15 +104,36 @@ async def retry_failed_webhooks() -> None:
     Moves transient webhook failures off the request path: the original POST is
     best-effort during the request; this sweep gives it durable retries.
     """
+    from datetime import datetime, timedelta
+
+    from sqlalchemy import and_, or_, update
+
     from backend.db.database import AsyncSessionLocal
     from backend.models import WebhookDelivery, WebhookEndpoint
     from backend.services.webhooks import _attempt, claim_delivery
 
     async with AsyncSessionLocal() as db:
+        now = datetime.utcnow()
+        # R3: a worker that died mid-send left the row at "sending" forever. After the send
+        # timeout has long passed, count that try as a failed attempt and let it be retried.
+        stale = now - timedelta(minutes=_STALE_SEND_MIN)
+        await db.execute(update(WebhookDelivery).where(
+            WebhookDelivery.status == "sending",
+            or_(WebhookDelivery.claimed_at < stale,
+                and_(WebhookDelivery.claimed_at.is_(None), WebhookDelivery.created_at < stale)),
+        ).values(status="failed", attempts=WebhookDelivery.attempts + 1, next_attempt_at=None,
+                 error="Interrupted while sending").execution_options(synchronize_session=False))
+        # Out of attempts: say so, instead of sitting at "failed" forever.
+        await db.execute(update(WebhookDelivery).where(
+            WebhookDelivery.status == "failed", WebhookDelivery.attempts >= _MAX_ATTEMPTS,
+        ).values(status="abandoned").execution_options(synchronize_session=False))
+        await db.commit()
         rows = (await db.execute(
             select(WebhookDelivery).where(
                 WebhookDelivery.status.in_(("failed", "pending")),
                 WebhookDelivery.attempts < _MAX_ATTEMPTS,
+                # R3 backoff: a failed delivery waits longer after each try
+                or_(WebhookDelivery.next_attempt_at.is_(None), WebhookDelivery.next_attempt_at <= now),
             ).limit(100)
         )).scalars().all()
         if not rows:
@@ -129,7 +158,6 @@ async def retry_failed_webhooks() -> None:
 @job_runner.every(3600, "revoked-session-sweep")
 async def sweep_revoked_sessions() -> None:
     """Drop logout records whose sign-in has expired anyway: those tokens fail on exp alone."""
-    from datetime import datetime
 
     from sqlalchemy import delete
 
@@ -137,7 +165,7 @@ async def sweep_revoked_sessions() -> None:
     from backend.models import RevokedSession
 
     async with AsyncSessionLocal() as db:
-        res = await db.execute(delete(RevokedSession).where(RevokedSession.expires_at < datetime.utcnow()))
+        res = await db.execute(delete(RevokedSession).where(RevokedSession.expires_at < now_utc()))
         await db.commit()
         if res.rowcount:
             log.info("revoked-session-sweep: removed %d expired record(s)", res.rowcount)
@@ -154,3 +182,31 @@ async def autocomplete_replied_chats() -> None:
         done = await autocomplete_replied(db)
         if done:
             log.info("chat-autocomplete-sweep: completed %d replied chat(s)", done)
+
+
+@job_runner.every(24 * 3600, "retention-purge")
+async def purge_old_records() -> None:
+    """Delete notifications, call records, messages and audit entries older than each shop's
+    retention setting (none by default), and expired customer-portal links."""
+    from backend.db.database import AsyncSessionLocal
+    from backend.services.retention import purge_all
+
+    async with AsyncSessionLocal() as db:
+        done = {k: n for k, n in (await purge_all(db)).items() if n}
+        if done:
+            log.info("retention-purge: deleted %s", done)
+
+
+@job_runner.every(24 * 3600, "passcode-encrypt-sweep")
+async def encrypt_plain_passcodes() -> None:
+    """Passcode-like custom fields saved before TOKEN_ENCRYPTION_KEY was set are encrypted
+    here rather than waiting for someone to edit the record. Without a key it does nothing."""
+    from backend.db.database import AsyncSessionLocal
+    from backend.db.secret_json import encrypt_plain_rows
+
+    async with AsyncSessionLocal() as db:
+        conn = await db.connection()
+        done = await conn.run_sync(encrypt_plain_rows)
+        await db.commit()
+        if done:
+            log.info("passcode-encrypt-sweep: encrypted %d record(s)", done)

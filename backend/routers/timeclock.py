@@ -18,13 +18,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import Employee, Order, TimeEntry, TimeEntryAudit
-from backend.services.dates import parse_dt
+from backend.services.dates import day_start_utc, parse_dt, shop_tzname, today_in
+from backend.services.dates import now_utc
 
 
 def _udt(value, field: str):
     """Parse a user-supplied ISO datetime (400 on bad input) and normalize any
     timezone-aware value to naive UTC, so comparisons against naive
-    datetime.utcnow()/stored values don't raise TypeError (500)."""
+    now_utc()/stored values don't raise TypeError (500)."""
     dt = parse_dt(value, field)
     if dt.tzinfo is not None:
         dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
@@ -61,7 +62,7 @@ async def _clock_enabled(db: AsyncSession, org_id: str, which: str) -> bool:
 # track daily hours against the employee's expected weekly_hours.
 
 def _shift_elapsed(s) -> int:
-    end = s.ended_at or datetime.utcnow()
+    end = s.ended_at or now_utc()
     return max(int((end - s.started_at).total_seconds()), 0)
 
 
@@ -102,7 +103,7 @@ async def shift_clock_in(db: AsyncSession = Depends(get_db),
             .order_by(Location.id))).scalars().first()
     if not loc_id:
         raise HTTPException(400, "No location available to clock in to")
-    s = Shift(employee_id=current.id, location_id=loc_id, started_at=datetime.utcnow())
+    s = Shift(employee_id=current.id, location_id=loc_id, started_at=now_utc())
     db.add(s)
     await db.commit()
     await db.refresh(s)
@@ -115,7 +116,7 @@ async def shift_clock_out(db: AsyncSession = Depends(get_db),
     s = await _open_shift(db, current.id)
     if not s:
         raise HTTPException(409, "You are not clocked in")
-    s.ended_at = datetime.utcnow()
+    s.ended_at = now_utc()
     s.hours_worked = q2(_shift_elapsed(s) / 3600.0)
     await db.commit()
     await db.refresh(s)
@@ -157,11 +158,12 @@ async def roster(db: AsyncSession = Depends(get_db),
     running = (await db.execute(select(TimeEntry).where(
         TimeEntry.org_id == current.org_id, TimeEntry.state == "running",
         TimeEntry.ended_at.is_(None)).order_by(TimeEntry.started_at))).scalars().all()
+    order_nos = await _order_nos(db, current.org_id, [e.order_id for e in running])
     timers = []
     for e in running:
         timers.append({
             "employee_id": e.employee_id, "employee_name": names.get(e.employee_id, "—"),
-            "order_number": await _order_no(db, e.order_id),
+            "order_number": order_nos.get(e.order_id),
             "category": e.category, "location_name": locs.get(e.location_id, "—"),
             "started_at": e.started_at.isoformat() if e.started_at else None,
             "elapsed_sec": _elapsed_sec(e),
@@ -186,7 +188,7 @@ def _rates(emp: Employee) -> tuple[float, float]:
 def _elapsed_sec(e: TimeEntry, now: Optional[datetime] = None) -> int:
     if e.ended_at:
         return int(e.duration_sec or 0)
-    now = now or datetime.utcnow()
+    now = now or now_utc()
     return max(0, int((now - e.started_at).total_seconds()))
 
 
@@ -223,6 +225,13 @@ async def _order_no(db: AsyncSession, order_id: Optional[str]) -> Optional[str]:
     return o.order_number if o else None
 
 
+async def _order_nos(db: AsyncSession, org_id: str, order_ids) -> dict:
+    """{order_id: order_number} for a whole list in one query (lists used _order_no per row)."""
+    from backend.services.batching import names_by_id
+    return await names_by_id(db, Order.id, Order.order_number, order_ids,
+                             org_col=Order.org_id, org_id=org_id)
+
+
 async def _task_title(db: AsyncSession, task_id: Optional[str]) -> Optional[str]:
     if not task_id:
         return None
@@ -238,7 +247,7 @@ async def _running_for(db: AsyncSession, org_id: str, employee_id: str) -> Optio
 
 
 def _stop(e: TimeEntry, when: Optional[datetime] = None, needs_review: bool = False) -> None:
-    when = when or datetime.utcnow()
+    when = when or now_utc()
     # guard against a timer left running for days
     cap = e.started_at + timedelta(hours=AUTO_STOP_HOURS)
     if when > cap:
@@ -325,7 +334,7 @@ async def start_timer(
         task_id=task_id,
         location_id=(order.location_id if order else (task.location_id if task else current.location_id)),
         category=resolved_category,
-        started_at=datetime.utcnow(), billable=is_labour,
+        started_at=now_utc(), billable=is_labour,
         cost_rate=cost, billable_rate=billable, note=data.note, source="timer", state="running",
         gps_lat=getattr(data, "gps_lat", None), gps_lng=getattr(data, "gps_lng", None))
     db.add(e)
@@ -396,7 +405,7 @@ async def switch_timer(
     e = TimeEntry(
         org_id=current.org_id, employee_id=current.id, order_id=data.order_id,
         location_id=(order.location_id if order else current.location_id),
-        category="job", started_at=datetime.utcnow(), billable=True,
+        category="job", started_at=now_utc(), billable=True,
         cost_rate=cost, billable_rate=billable, note=data.note, source="timer", state="running",
         gps_lat=getattr(data, "gps_lat", None), gps_lng=getattr(data, "gps_lng", None))
     db.add(e)
@@ -434,42 +443,49 @@ async def _apply_labour_billing(db: AsyncSession, e: TimeEntry, *, remove: bool 
     Best-effort: never breaks the timer action if anything goes wrong.
     """
     try:
-        if not e.order_id:
-            return
-        from backend.models import Order, OrderLine
-        line = (await db.execute(select(OrderLine).where(
-            OrderLine.order_id == e.order_id, OrderLine.line_type == "labour",
-            OrderLine.ref_id == e.id))).scalar_one_or_none()
+        async with db.begin_nested():     # a refused invoice change undoes the line change too
+            if not e.order_id:
+                return
+            from backend.models import Order, OrderLine
+            line = (await db.execute(select(OrderLine).where(
+                OrderLine.order_id == e.order_id, OrderLine.line_type == "labour",
+                OrderLine.ref_id == e.id))).scalar_one_or_none()
 
-        hours = q2((e.duration_sec or 0) / 3600.0)
-        enabled = await _clock_labour_billing_on(db, e.org_id)
-        # remove the line when: caller asked, entry is void, billing is off, or no time
-        if remove or e.state == "void" or not enabled or hours <= 0 or not e.billable:
             if line:
-                await db.delete(line)
-                order = (await db.execute(select(Order).where(Order.id == e.order_id))).scalar_one_or_none()
-                if order:
-                    from backend.routers.orders import _recalc_order
-                    await _recalc_order(db, order)
-            return
+                from backend.services.invoice_money import locking_invoice
+                if await locking_invoice(db, line.id):
+                    return       # billed on a sent or paid invoice: the line stays as it was invoiced
+            hours = q2((e.duration_sec or 0) / 3600.0)
+            enabled = await _clock_labour_billing_on(db, e.org_id)
+            # remove the line when: caller asked, entry is void, billing is off, or no time
+            if remove or e.state == "void" or not enabled or hours <= 0 or not e.billable:
+                if line:
+                    from backend.services.invoice_money import release_line
+                    await release_line(db, line.id)   # off any draft invoice that lists it
+                    await db.delete(line)
+                    order = (await db.execute(select(Order).where(Order.id == e.order_id))).scalar_one_or_none()
+                    if order:
+                        from backend.routers.orders import _recalc_order
+                        await _recalc_order(db, order)
+                return
 
-        rate = float(e.billable_rate or 0)
-        total = q2(hours * rate)
-        desc = (e.note or "Labour (tracked time)")
-        if line:
-            line.qty = hours
-            line.unit_price = rate
-            line.total = total
-            line.description = desc
-        else:
-            db.add(OrderLine(
-                order_id=e.order_id, line_type="labour", kind="service", ref_id=e.id,
-                description=desc, qty=hours, unit_price=rate,
-                cost_price=float(e.cost_rate or 0), technician_id=e.employee_id, total=total))
-        order = (await db.execute(select(Order).where(Order.id == e.order_id))).scalar_one_or_none()
-        if order:
-            from backend.routers.orders import _recalc_order
-            await _recalc_order(db, order)
+            rate = float(e.billable_rate or 0)
+            total = q2(hours * rate)
+            desc = (e.note or "Labour (tracked time)")
+            if line:
+                line.qty = hours
+                line.unit_price = rate
+                line.total = total
+                line.description = desc
+            else:
+                db.add(OrderLine(
+                    order_id=e.order_id, line_type="labour", kind="service", ref_id=e.id,
+                    description=desc, qty=hours, unit_price=rate,
+                    cost_price=float(e.cost_rate or 0), technician_id=e.employee_id, total=total))
+            order = (await db.execute(select(Order).where(Order.id == e.order_id))).scalar_one_or_none()
+            if order:
+                from backend.routers.orders import _recalc_order
+                await _recalc_order(db, order)
     except Exception:
         pass
 
@@ -597,7 +613,7 @@ async def create_manual(
         TimeEntry.org_id == current.org_id, TimeEntry.employee_id == emp_id,
         TimeEntry.state != "void"))).scalars().all()
     for o in others:
-        o_end = o.ended_at or datetime.utcnow()
+        o_end = o.ended_at or now_utc()
         if start < o_end and o.started_at < end:
             raise HTTPException(409, "That overlaps an existing time entry")
     # 144cw — scope to the caller's org: a manager must not log time for a foreign-org
@@ -811,9 +827,10 @@ async def my_work(
     job hours, and the open service lines assigned to them with booked-vs-actual."""
     from backend.models import OrderLine
     from backend.services.labour import entry_seconds, is_job_actual
-    now = datetime.utcnow()
-    week_start = (now - timedelta(days=now.weekday())).replace(hour=0, minute=0, second=0, microsecond=0)
-    day_start = now.replace(hour=0, minute=0, second=0, microsecond=0)
+    tz = await shop_tzname(db, current.org_id)   # "today"/"this week" on the shop's clock
+    today = today_in(tz)
+    week_start = day_start_utc(today - timedelta(days=today.weekday()), tz)
+    day_start = day_start_utc(today, tz)
     mine = (await db.execute(select(TimeEntry).where(
         TimeEntry.org_id == current.org_id, TimeEntry.employee_id == current.id,
         TimeEntry.started_at >= week_start))).scalars().all()
@@ -871,10 +888,13 @@ async def my_work(
                 OrderChecklistItem.order_id.in_(my_order_ids)))).scalars().all():
             d, t = prog.get(it.order_id, (0, 0))
             prog[it.order_id] = (d + (1 if it.done else 0), t + 1)
-        clients = {c.id: c.name for c in (await db.execute(select(Client).where(
-            Client.org_id == current.org_id))).scalars().all()}
+        from backend.services.batching import names_by_id
+        mine = [order_by_id[oid] for oid in my_order_ids if oid in order_by_id]
+        clients = await names_by_id(db, Client.id, Client.name, [o.client_id for o in mine],
+                                    org_col=Client.org_id, org_id=current.org_id)
+        dev_ids = {o.device_id for o in mine if o.device_id}
         devices = {d.id: d for d in (await db.execute(select(Device).where(
-            Device.org_id == current.org_id))).scalars().all()}
+            Device.org_id == current.org_id, Device.id.in_(dev_ids)))).scalars().all()} if dev_ids else {}
         for oid in my_order_ids:
             o = order_by_id.get(oid)
             if not o:
@@ -959,10 +979,7 @@ async def timesheet(
     bill = sum(e.duration_sec / 3600 * (e.billable_rate or 0) for e in rows if e.billable)
     straight_h, ot_h = _overtime_split(rows)
     approved = [e for e in rows if e.state == "approved"]
-    nos = {}
-    for e in rows:
-        if e.order_id and e.order_id not in nos:
-            nos[e.order_id] = await _order_no(db, e.order_id)
+    nos = await _order_nos(db, current.org_id, [e.order_id for e in rows])
     return {
         "employee_id": emp_id, "date_from": date_from, "date_to": date_to,
         "total_sec": total, "total_hours": q2(total / 3600),

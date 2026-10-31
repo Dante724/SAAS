@@ -11,7 +11,6 @@ otherwise the SimulatedGateway returns a local confirm URL so the whole flow is
 testable end-to-end without keys. Real charges go live the moment the key is set.
 """
 import logging
-from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import select
@@ -20,8 +19,8 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.config import settings
 from backend.models import Account, Invoice, Order, Payment, PaymentIntent
 from backend.services.money import minor_units, q2
-from backend.services.numbering import next_number
 from backend.services.payment_guard import LivePaymentsRefused
+from backend.services.dates import now_utc
 
 log = logging.getLogger("tekly.payments")
 
@@ -247,11 +246,16 @@ async def create_intent(db: AsyncSession, *, org_id: str, order_id: Optional[str
                         currency: Optional[str] = None) -> PaymentIntent:
     # Stored money is always in the org's base currency, so that's what a checkout must charge.
     # Hard-coding "usd" turned an INR 5,000 balance into a $5,000 checkout.
-    if not currency:
-        from backend.models import Organisation
-        org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
-        currency = ((org.currency_code if org else None) or "usd")
-    currency = currency.lower()
+    from backend.models import Organisation
+    org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
+    base_code = ((org.currency_code if org else None) or "usd").lower()
+    currency = (currency or base_code).lower()
+    if order_id and currency != base_code:
+        # The order (and its invoice) is priced in the base currency: charging the same number
+        # in another currency would take the wrong amount.
+        from fastapi import HTTPException
+        raise HTTPException(422, f"Payment links for a job or invoice are in {base_code.upper()}, "
+                                 "the shop's own currency.")
     invoice_id = None
     description = "Tekly payment"
     if order_id:
@@ -319,20 +323,8 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
     inv = None
     if intent.invoice_id:
         inv = (await db.execute(select(Invoice).where(Invoice.id == intent.invoice_id))).scalar_one_or_none()
-    if not inv and intent.order_id:
-        from backend.services.order_money import primary_invoice
-        inv = await primary_invoice(db, intent.order_id)
-        if not inv:
-            o = (await db.execute(select(Order).where(Order.id == intent.order_id))).scalar_one_or_none()
-            inv = Invoice(invoice_number=await next_number(db, intent.org_id, "invoice"), org_id=intent.org_id,
-                          order_id=intent.order_id, client_id=o.client_id if o else None,
-                          status="draft", subtotal=(o.total if o else intent.amount) or 0,
-                          total=(o.total if o else intent.amount) or 0, issued_at=datetime.utcnow())
-            db.add(inv)
-            await db.flush()
-            from backend.models import InvoiceOrder
-            db.add(InvoiceOrder(invoice_id=inv.id, order_id=intent.order_id, sort_order=0))
-            intent.invoice_id = inv.id
+    order = (await db.execute(select(Order).where(Order.id == intent.order_id))).scalar_one_or_none() \
+        if intent.order_id else None
 
     # post income to the cashbox (reuse the canonical transaction poster)
     if account:
@@ -352,33 +344,52 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
                                comment=f"Online payment ({intent.provider})",
                                ref_type="order", ref_id=intent.order_id, native_amount=True)
 
-    pay = Payment(invoice_id=inv.id if inv else None, order_id=intent.order_id,
-                  client_id=inv.client_id if inv else None, method="online",
-                  kind="payment", account_id=account.id if account else None,
-                  amount=intent.amount, reference=f"{intent.provider}:{intent.provider_ref}")
-    db.add(pay)
-    await db.flush()
+    # Where the money lands (services/invoice_money): a link for an invoice pays that invoice up to
+    # its balance (split across the jobs it bills); a link for a job goes to the job's invoices by
+    # their balances. The provider already captured it, so anything over is held on the job (or
+    # on the invoice when there's no job) rather than refused.
+    from backend.services import invoice_money as im
+    from backend.services.invoicing import balance_due as invoice_balance
+    fields = dict(method="online", account_id=account.id if account else None,
+                  reference=f"{intent.provider}:{intent.provider_ref}")
+    amount = q2(intent.amount)
     if inv:
-        inv.amount_paid = q2((inv.amount_paid or 0) + intent.amount)   # quantize before comparing
-        from backend.services.invoicing import settle_status
-        settle_status(inv)
+        take = q2(min(amount, invoice_balance(inv)))
+        pays = await im.apply_payment_to_invoice(db, inv, take, **fields) if take > 0 else []
+        if amount > take:
+            held_on = order.id if order else inv.order_id
+            rest = Payment(invoice_id=None if held_on else inv.id, order_id=held_on, client_id=inv.client_id,
+                           kind="payment", amount=q2(amount - take), **fields)
+            db.add(rest)
+            if not held_on:     # no job to hold it on: it's an overpayment on the invoice itself
+                inv.amount_paid = q2(float(inv.amount_paid or 0) + float(rest.amount))
+            pays.append(rest)
+    elif order:
+        pays = await im.apply_order_payment(db, order, amount, **fields)
+    else:
+        pays = [Payment(kind="payment", amount=amount, **fields)]
+        db.add(pays[0])
+    await db.flush()
+    pay = pays[0]
+    if not inv and pay.invoice_id:
+        inv = (await db.execute(select(Invoice).where(Invoice.id == pay.invoice_id))).scalar_one()
+        intent.invoice_id = inv.id
     intent.payment_id = pay.id
     intent.status = "succeeded"
-    intent.updated_at = datetime.utcnow()
+    intent.updated_at = now_utc()
     # The client paid online: reflect it on their balance like every in-store payment path does
     # (it was never posted, so the client kept showing the full amount owed).
-    _client_id = inv.client_id if inv else None
+    _client_id = (inv.client_id if inv else None) or (order.client_id if order else None)
     if _client_id:
         from backend.services.ledger import post_contact_ledger
         await post_contact_ledger(db, intent.org_id, _client_id, "income", -abs(intent.amount),
                                   note=f"Online payment ({intent.provider})", ref_type="payment",
                                   ref_id=pay.id)
-    if intent.order_id:
-        _ord = (await db.execute(select(Order).where(Order.id == intent.order_id))).scalar_one_or_none()
-        if _ord:
-            from backend.services.order_money import cancel_open_pay_links
-            await db.flush()
-            await cancel_open_pay_links(db, _ord)
+    job_ids = list(dict.fromkeys(p.order_id for p in pays if p.order_id))
+    from backend.services.order_money import cancel_open_pay_links
+    for _ord in (await db.execute(select(Order).where(Order.id.in_(job_ids)))).scalars().all() if job_ids else []:
+        await db.flush()
+        await cancel_open_pay_links(db, _ord)
 
     # The provider took money on a link we had already revoked (the customer paid an old link,
     # possibly on top of a newer one). It's recorded, since it was captured, but staff must look.
@@ -459,6 +470,7 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
 
     await db.commit()
     await db.refresh(intent)
+    await im.notify_payment_received(db, intent.org_id, job_ids)
     return intent
 
 

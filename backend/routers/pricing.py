@@ -15,6 +15,7 @@ from backend.db.database import get_db
 from backend.models import Employee, Location, Organisation, Part, PriceType, PriceTypeItem, Service
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.money import q2
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/pricing", tags=["pricing"])
 
@@ -24,7 +25,7 @@ from datetime import datetime
 
 def _in_window(p: PriceType, now: Optional[datetime] = None) -> bool:
     """True when a price type's promo window is open (null bounds = open-ended)."""
-    now = now or datetime.utcnow()
+    now = now or now_utc()
     if getattr(p, "starts_at", None) and now < p.starts_at:
         return False
     if getattr(p, "ends_at", None) and now > p.ends_at:
@@ -190,10 +191,10 @@ async def resolve_price_for(db: AsyncSession, org_id: str, *, kind: str,
     if override:
         return override.price
     if kind == "product":
-        item = (await db.execute(select(Part).where(Part.id == ref_id))).scalar_one_or_none()
+        item = (await db.execute(select(Part).where(Part.id == ref_id, Part.org_id == org_id))).scalar_one_or_none()
         basis = (item.avg_cost or item.cost_price or 0) if item else 0
     else:
-        item = (await db.execute(select(Service).where(Service.id == ref_id))).scalar_one_or_none()
+        item = (await db.execute(select(Service).where(Service.id == ref_id, Service.org_id == org_id))).scalar_one_or_none()
         basis = (item.cost_price or 0) if item else 0
     price = computed_price(basis, await _effective_markup(db, pt, qty))
     return price if price > 0 else None

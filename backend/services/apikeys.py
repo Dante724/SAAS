@@ -8,7 +8,6 @@ in routers/apikeys.py under the normal employee session.
 import hashlib
 import secrets
 from dataclasses import dataclass
-from datetime import datetime
 from typing import Optional
 
 from fastapi import Depends, Header, HTTPException
@@ -17,6 +16,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import ApiKey
+from backend.services.dates import now_utc
 
 
 def generate_key() -> tuple[str, str, str]:
@@ -97,6 +97,14 @@ async def get_api_principal(
         ApiKey.key_hash == hash_key(token), ApiKey.active == True))).scalar_one_or_none()  # noqa: E712
     if not row:
         raise HTTPException(401, "Invalid or revoked API key")
+    # A key stops with the person who made it: deactivating a teammate also cuts off the
+    # integrations they set up (a new key can be made by someone still on the team). A key with no
+    # recorded creator has nobody to check, so it is refused too (aul3 gave old ones to the owner).
+    from backend.models import Employee
+    creator_active = row.created_by_id and (await db.execute(select(Employee.active).where(
+        Employee.id == row.created_by_id))).scalar_one_or_none()
+    if not creator_active:
+        raise HTTPException(401, "This API key's creator no longer has access. Create a new key.")
     # A suspended or lapsed shop's integrations stop with it (keys used to keep working).
     from backend.models import Organisation
     from backend.services.auth import assert_org_active
@@ -105,9 +113,12 @@ async def get_api_principal(
     from backend.services.ratelimit import aenforce
     limit = min(max(row.rate_limit_per_min or DEFAULT_RATE_PER_MIN, 1), MAX_RATE_PER_MIN)
     await aenforce("api-key-min", row.id, limit, 60)
-    row.last_used_at = datetime.utcnow()
+    row.last_used_at = now_utc()
     await db.commit()
     scopes = {s.strip() for s in (row.scopes or "").split(",") if s.strip()}
+    # Same flush-time shop guard as signed-in staff (db/tenancy.py): an API write can't touch
+    # or point at another shop's rows.
+    db.sync_session.info["tenant_org"] = row.org_id
     return ApiPrincipal(org_id=row.org_id, key_id=row.id, scopes=scopes)
 
 

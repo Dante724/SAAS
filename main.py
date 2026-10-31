@@ -44,6 +44,7 @@ from backend.routers import (
     feedback,
     finance,
     forms,
+    imports,
     inbox,
     industry,
     insights,
@@ -76,6 +77,7 @@ from backend.routers import (
     sales,
     scan,
     schedules,
+    serials,
     settings_finance,
     sso,
     staff,
@@ -106,8 +108,8 @@ ROUTERS = [
     notifications, public, catalog, assets, cash, statuses, feedback, documents,
     bins, payroll, leads, pricing, sales, returns, transfers, bundles, appointments,
     chats, resources, timeclock, webhooks, payments, apikeys, v1,
-    integrations_qbo, ai, catalog_products, tech, push, checklists, lookups, engage, settings_finance, rbac, directories, analytics, media, compliance, platform, mfa, sso, comms, integrations_xero, integrations_email, integrations_credentials, industry, schedules, conversions, warehouses, tasks, stock_docs, suppliers, printing, inbox, comms_ai, automations, insights, recommendations, order_items, prefs, admin, currencies, tags, telephony, custom_reports, regions, scan,
-    terminals, auto_print, v2,
+    integrations_qbo, ai, catalog_products, tech, push, checklists, lookups, engage, settings_finance, rbac, directories, analytics, media, compliance, platform, mfa, sso, comms, integrations_xero, integrations_email, integrations_credentials, industry, schedules, conversions, warehouses, tasks, stock_docs, suppliers, printing, inbox, comms_ai, automations, insights, recommendations, order_items, prefs, admin, currencies, tags, telephony, custom_reports, regions, scan, serials,
+    terminals, auto_print, v2, imports,
 ]
 
 
@@ -154,6 +156,15 @@ app = FastAPI(
 
 # Innermost: cost/margin fields leave the server only for roles allowed to see them.
 from backend.core.cost_redaction import CostRedactionMiddleware  # noqa: E402
+from backend.services.org_creds import CredentialsUnreadable  # noqa: E402
+
+
+@app.exception_handler(CredentialsUnreadable)
+async def _unreadable_creds(_request, exc: CredentialsUnreadable):
+    # Audit M10: a shop's saved keys that can't be decrypted are refused everywhere (never swapped
+    # for the operator's); paths that don't handle it say what to do instead of a 500.
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
 
 app.add_middleware(CostRedactionMiddleware)
 app.add_middleware(RequestContextMiddleware)
@@ -175,6 +186,12 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+
+from sqlalchemy.exc import IntegrityError  # noqa: E402
+
+from backend.core.db_errors import integrity_error_handler  # noqa: E402
+
+app.add_exception_handler(IntegrityError, integrity_error_handler)   # ii144a: unique clash → plain 409
 
 for r in ROUTERS:
     app.include_router(r.router)
@@ -204,7 +221,7 @@ async def health():
         log.exception("health check: database unreachable")
     status = "ok" if db_ok else "degraded"
     return JSONResponse(
-        {"status": status, "environment": settings.ENVIRONMENT, "database": "up" if db_ok else "down"},
+        {"status": status, "database": "up" if db_ok else "down"},   # no environment name: it helps an attacker
         status_code=200 if db_ok else 503,
     )
 

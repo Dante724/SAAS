@@ -5,6 +5,9 @@ import Shell, { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import { api } from "../../api/client";
 import Pager from "../../components/Pager";
+import JobPicker from "../../components/JobPicker";
+import { loadFailed } from "../../lib/notice";
+import { clickableRow } from "../../lib/clickable";
 
 type Task = { id: string; title?: string; description?: string; status?: string; priority?: number; assigned_to_id?: string | null; assignee_name?: string; assignee_ids?: string[]; assignee_names?: string[]; due_at?: string | null; completed_at?: string | null; overdue?: boolean; order_id?: string | null; order_number?: string | null; client_name?: string };
 type Emp = { id: string; name: string };
@@ -27,7 +30,7 @@ export default function TasksHub() {
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2400); };
 
   function load() { api.get<{ items: Task[]; statuses: string[] }>("/tasks").then((r) => { setTasks(r.items || []); setStatuses(r.statuses || []); }).catch(() => setTasks([])); }
-  useEffect(() => { load(); api.get<any>("/staff/employees").then((r) => setEmps(r.items || r || [])).catch(() => {}); }, []);
+  useEffect(() => { load(); api.get<any>("/staff/employees").then((r) => setEmps(r.items || r || [])).catch(loadFailed("the staff list")); }, []);
 
   function openTask(t: Task) {
     api.get<Task>(`/tasks/${t.id}`).then((d) => { setSel(d); }).catch(() => setSel(t));
@@ -87,7 +90,7 @@ export default function TasksHub() {
               {!tasks && <SkeletonRows cols={6} />}
               {shown.length === 0 && tasks && <tr><td colSpan={6} className="py-10 px-4 text-center text-ink-tertiary">No tasks here.</td></tr>}
               {pageTasks.map((t) => (
-                <tr key={t.id} className="hover:bg-blue-50/30 cursor-pointer" onClick={() => openTask(t)}>
+                <tr key={t.id} className="hover:bg-blue-50/30 cursor-pointer" {...clickableRow(() => openTask(t))}>
                   <td className="py-3 pl-5 pr-2" onClick={(e) => e.stopPropagation()}><button onClick={() => toggleDone(t)} aria-label={t.completed_at ? `Mark "${t.title}" not done` : `Mark "${t.title}" done`} aria-pressed={!!t.completed_at} className={`w-6 h-6 rounded-md border-2 flex items-center justify-center ${t.completed_at ? "bg-emerald-500 border-emerald-500 text-white" : "border-slate-300 hover:border-primary"}`}>{t.completed_at && <M n="check" c="text-xs" />}</button></td>
                   <td className="py-3 px-3"><span className={`font-bold ${t.completed_at ? "text-ink-tertiary line-through" : "text-ink-primary"}`}>{t.title}</span></td>
                   <td className="py-3 px-3"><span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${t.completed_at ? "bg-emerald-100 text-emerald-800" : t.status === "in_progress" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"}`}>{t.completed_at ? "Done" : STATUS_LABEL[t.status || "todo"]}</span></td>
@@ -105,7 +108,7 @@ export default function TasksHub() {
       {/* task detail drawer */}
       {sel && (
         <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={() => setSel(null)} />
+          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={() => setSel(null)} />
           <div className="relative h-full w-full max-w-[480px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
             <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
             <header className="px-6 py-4 border-b border-slate-100 flex items-start justify-between bg-slate-50/70">
@@ -137,10 +140,8 @@ export default function TasksHub() {
                 </div>
               </div>
               <div><label className="block font-semibold text-ink-tertiary mb-1">Linked work order</label>
-                <div className="flex items-center gap-2">
-                  <input defaultValue={sel.order_id || ""} onBlur={(e) => { if (e.target.value !== (sel.order_id || "")) patch(sel.id, { order_id: e.target.value || null }, "Work order linked"); }} className={`${inp} font-mono`} placeholder="Work order id" />
-                  {sel.order_number && <span className="px-2 py-1 rounded-lg bg-blue-100 text-blue-800 text-[11px] font-bold whitespace-nowrap">{sel.order_number}</span>}
-                </div>
+                <JobPicker value={sel.order_id ? { id: sel.order_id, order_number: sel.order_number } : null}
+                  onChange={(j) => patch(sel.id, { order_id: j ? j.id : "" }, j ? "Work order linked" : "Work order unlinked")} />
               </div>
               {sel.client_name && <div className="text-[11px] text-ink-tertiary"><b className="text-ink-secondary">Client:</b> {sel.client_name}</div>}
 
@@ -169,7 +170,7 @@ export default function TasksHub() {
       {/* new task drawer */}
       {create && (
         <div className="fixed inset-0 flex justify-end" style={{ zIndex: 55 }}>
-          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={() => setCreate(false)} />
+          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={() => setCreate(false)} />
           <div className="relative h-full w-full max-w-[440px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
             <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70"><h3 className="text-base font-bold text-ink-primary">New task</h3><button aria-label="Close" onClick={() => setCreate(false)} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
             <div className="flex-1 overflow-y-auto p-6 space-y-4 text-xs">
@@ -190,10 +191,10 @@ export default function TasksHub() {
                 </div>
               </div>
               <div><label className="block font-semibold text-ink-secondary mb-1">Priority</label><select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} className={inp}><option value={0}>Normal</option><option value={1}>High</option><option value={2}>Urgent</option></select></div>
-              <div><label className="block font-semibold text-ink-secondary mb-1">Link to work order <span className="text-ink-tertiary font-normal">(optional)</span></label><input value={form.order_id} onChange={(e) => setForm({ ...form, order_id: e.target.value })} className={`${inp} font-mono`} placeholder="Work order id" /></div>
+              <div><label className="block font-semibold text-ink-secondary mb-1">Link to work order <span className="text-ink-tertiary font-normal">(optional)</span></label><JobPicker value={form.order_id ? { id: form.order_id, order_number: form.order_number } : null} onChange={(j) => setForm({ ...form, order_id: j?.id || "", order_number: j?.order_number || "" })} /></div>
               <div><label className="block font-semibold text-ink-secondary mb-1">Due</label><DateField mode="datetime" value={form.due_at} onChange={(v) => setForm({ ...form, due_at: v })} /></div>
             </div>
-            <div className="p-4 border-t border-slate-100 bg-slate-50/70 flex items-center justify-end gap-2"><button onClick={() => setCreate(false)} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button><button onClick={createTask} className="px-5 py-2 rounded-lg bg-primary text-white font-bold text-xs shadow-clay-sm">Create task</button></div>
+            <div className="p-4 border-t border-slate-100 bg-slate-50/70 flex items-center gap-2"><button onClick={createTask} className="px-5 py-2 rounded-lg bg-primary text-white font-bold text-xs shadow-clay-sm">Create task</button><button onClick={() => setCreate(false)} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button></div>
           </div>
         </div>
       )}

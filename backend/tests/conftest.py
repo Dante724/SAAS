@@ -29,6 +29,7 @@ from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from backend.db.database import Base, get_db
 from backend.models import all_models  # noqa: F401 — registers tables
+from backend.services.money import json_dumps  # same JSON-column serializer as the app engine
 from main import app
 
 # Overridable so the same suite can run against Postgres for dialect-compat checks:
@@ -37,7 +38,8 @@ from main import app
 # app's DB so the test engine and app engine share one schema when TEST_DATABASE_URL is unset.
 TEST_DB_URL = os.environ.get("TEST_DATABASE_URL") or os.environ["DATABASE_URL"]
 if TEST_DB_URL.startswith("sqlite"):
-    test_engine = create_async_engine(TEST_DB_URL, connect_args={"check_same_thread": False})
+    test_engine = create_async_engine(TEST_DB_URL, connect_args={"check_same_thread": False},
+                                      json_serializer=json_dumps)
     # Enforce foreign keys so tests catch the integrity violations Postgres would raise in prod
     # (SQLite ignores FKs unless this pragma is set per-connection).
     from sqlalchemy import event as _event
@@ -52,7 +54,7 @@ else:
     # gives every test a fresh loop — so pooled connections would leak across loops and die
     # with "attached to a different loop". NullPool opens/closes per checkout instead.
     from sqlalchemy.pool import NullPool
-    test_engine = create_async_engine(TEST_DB_URL, poolclass=NullPool)
+    test_engine = create_async_engine(TEST_DB_URL, poolclass=NullPool, json_serializer=json_dumps)
 TestSession = async_sessionmaker(test_engine, expire_on_commit=False)
 
 

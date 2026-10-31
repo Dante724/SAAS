@@ -30,12 +30,14 @@ import {
   CircleDollarSign, Percent, ShieldAlert, Globe, Gift, RotateCcw, SearchCheck, VideoOff,
   ShieldCheck, Target, EyeOff, Car, Sailboat, Bike, Laptop, Cog, Upload,
   ShoppingBag, Split, Nfc, Phone, PhoneIncoming, PhoneOutgoing, PhoneMissed, Network, HelpCircle,
-  LogOut, Menu as MenuIcon,
+  LogOut, Menu as MenuIcon, PackageOpen, Info,
 } from "lucide-react";
+import { loadFailed } from "../lib/notice";
 
 // Map the old Material-Symbols ligature names to bundled Lucide icons (no web font,
 // works under the app's Content-Security-Policy, and needs no server restart).
 const ICONS: Record<string, any> = {
+  package_2: PackageOpen, info: Info,
   build: Wrench, handyman: Wrench, engineering: HardHat, hammer: Hammer,
   task_alt: CheckCircle2, mail: Mail, chat: MessageSquare, chat_bubble: MessageCircle,
   calendar_month: Calendar, calendar_view_week: CalendarRange, schedule: Clock, timer: Timer,
@@ -177,7 +179,7 @@ export default function Shell({ title, children }: { title: string; children: Re
   useEffect(() => { liveRef.current = true; return () => { liveRef.current = false; }; }, []);
   useVisibleInterval(() => {
     api.get<{ items: any[] }>("/tech/notifications?only_unread=true")
-      .then((r) => { if (liveRef.current) setUnread((r.items || []).length); }).catch(() => {});
+      .then((r) => { if (liveRef.current) setUnread((r.items || []).length); }).catch(() => { /* silent: background unread-count poll; the next tick retries */ });
   }, 60000);
 
   // Below 900px the sidebar becomes a slide-in drawer opened from the top bar's menu button.
@@ -260,7 +262,7 @@ export default function Shell({ title, children }: { title: string; children: Re
         {/* NAV DRAWER (below 900px). Kept mounted so it can slide; `invisible` takes it out of
             the tab order and the accessibility tree while closed. */}
         <div className={`min-[900px]:hidden fixed inset-0 z-[75] ${navOpen ? "" : "invisible pointer-events-none"}`} aria-hidden={!navOpen}>
-          <div className={`absolute inset-0 bg-ink-primary/40 transition-opacity duration-200 ${navOpen ? "opacity-100" : "opacity-0"}`} onClick={() => setNavOpen(false)} />
+          <div className={`absolute inset-0 bg-ink-primary/40 transition-opacity duration-200 ${navOpen ? "opacity-100" : "opacity-0"}`} aria-hidden="true" onClick={() => setNavOpen(false)} />
           <aside id="nav-drawer" role="dialog" aria-modal="true" aria-label={t("Main menu")}
             className={`absolute inset-y-0 start-0 w-[272px] max-w-[85vw] bg-sidebar border-e border-slate-200/80 shadow-clay-drawer flex flex-col transition-transform duration-200 ${navOpen ? "translate-x-0" : "-translate-x-full rtl:translate-x-full"}`}>
             <div className="flex items-start justify-between p-3 pb-0">
@@ -294,7 +296,7 @@ export default function Shell({ title, children }: { title: string; children: Re
                 <button onClick={() => setAvatarOpen((o) => !o)} aria-label={t("Account menu")} className="w-8 h-8 rounded-full bg-primary text-white font-semibold text-xs flex items-center justify-center shadow-xs hover:brightness-110 relative">{initials}{me?.mfa_required && !me?.mfa_enabled && <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-amber-400 border-2 border-white" />}</button>
                 {avatarOpen && (
                   <>
-                    <div className="fixed inset-0 z-40" onClick={() => setAvatarOpen(false)} />
+                    <div className="fixed inset-0 z-40" aria-hidden="true" onClick={() => setAvatarOpen(false)} />
                     <div className="absolute right-0 mt-2 w-56 bg-white rounded-xl border border-slate-200 shadow-drawer z-50 p-1.5 text-sm">
                       <div className="px-2.5 py-2 border-b border-slate-100 mb-1">
                         <p className="font-bold text-ink-primary truncate">{me?.name || "—"}</p>
@@ -374,7 +376,7 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
   const [pw, setPw] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState("");
-  useEffect(() => { api.get<any>("/mfa/status").then((r) => setEnabled(!!r.enabled)).catch(() => {}); }, []);
+  useEffect(() => { api.get<any>("/mfa/status").then((r) => setEnabled(!!r.enabled)).catch(loadFailed("2-step sign-in status")); }, []);
   async function startEnroll() {
     setBusy(true); setErr("");
     try { const r = await api.post<any>("/mfa/enroll", {}); setEnroll(r); setStep("enroll"); }
@@ -393,7 +395,7 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
   const inp = "glass-input w-full px-3 py-2 rounded-lg text-sm font-semibold text-ink-primary";
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={forced ? undefined : onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={forced ? undefined : onClose} />
       <div className="relative w-full max-w-lg max-h-[90vh] flex flex-col bg-white rounded-2xl shadow-clay-drawer border border-slate-200/90 overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
           <h3 className="text-sm font-bold text-ink-primary flex items-center gap-2"><M n="lock" c="text-base" />Security</h3>
@@ -500,7 +502,7 @@ function CommandPalette({ onClose }: { onClose: () => void }) {
   const go = (to: string) => { onClose(); nav(to); };
 
   return (
-    <div className="fixed inset-0 z-[80] flex items-start justify-center pt-[12vh]" onClick={onClose}>
+    <div className="fixed inset-0 z-[80] flex items-start justify-center pt-[12vh]" role="presentation" onClick={onClose}>
       <div className="absolute inset-0 bg-ink-primary/30 backdrop-blur-[2px]" />
       <div className="relative w-[560px] max-w-[92vw] bg-white rounded-2xl shadow-drawer border border-slate-200 overflow-hidden" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-100">
@@ -572,7 +574,7 @@ function NotificationsPanel({ onClose, onChanged }: { onClose: () => void; onCha
     } catch (e: any) { await alertDialog(e.message || "Could not enable push"); }
   }
   return (
-    <div className="fixed inset-0 z-[80]" onClick={onClose}>
+    <div className="fixed inset-0 z-[80]" role="presentation" onClick={onClose}>
       <div className="absolute right-2 sm:right-5 top-[54px] w-[360px] max-w-[92vw] bg-white rounded-2xl shadow-drawer border border-slate-200 overflow-hidden" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between px-4 py-3 border-b border-slate-100">
           <h3 className="text-sm font-bold text-ink-primary">{t("Notifications")}</h3>
@@ -659,8 +661,8 @@ function TimeClockChip({ me }: { me: any }) {
   const attendance = me?.clock_attendance_enabled;
   const woClock = me?.clock_wo_enabled;
   const load = () => {
-    if (attendance) api.get<any>("/timeclock/shift/active").then((r) => setShift(r.shift || null)).catch(() => {});
-    if (woClock) api.get<any>("/timeclock/active").then((r) => setJob(r.active || null)).catch(() => {});
+    if (attendance) api.get<any>("/timeclock/shift/active").then((r) => setShift(r.shift || null)).catch(() => { /* silent: background clock poll; the next tick retries */ });
+    if (woClock) api.get<any>("/timeclock/active").then((r) => setJob(r.active || null)).catch(() => { /* silent: background clock poll; the next tick retries */ });
   };
   useVisibleInterval(load, 30000);
   useEffect(() => { const id = setInterval(() => setTick((t) => t + 1), 1000); return () => clearInterval(id); }, []);
@@ -693,7 +695,7 @@ function TimeClockChip({ me }: { me: any }) {
       </button>
       {open && (
         <>
-          <div className="fixed inset-0 z-40" onClick={() => setOpen(false)} />
+          <div className="fixed inset-0 z-40" aria-hidden="true" onClick={() => setOpen(false)} />
           <div className="absolute right-0 mt-2 w-64 bg-white rounded-xl border border-slate-200 shadow-drawer z-50 p-3 space-y-3">
             {woClock && (
               <div className="rounded-lg bg-slate-50 border border-slate-200 p-2.5">
@@ -745,7 +747,7 @@ function LocationSwitcher({ block = false }: { block?: boolean }) {
       // switcher read "All locations" — and single-branch shops have no switcher to undo it.
       const cur = getLocationScope();
       if (cur && !active.some((l: any) => l.id === cur)) { setLocationScope(""); window.location.reload(); }
-    }).catch(() => {});
+    }).catch(() => { /* silent: branch switcher just stays hidden */ });
   }, []);
   if (locs.length < 2) return null; // single branch: no switcher needed
   return (

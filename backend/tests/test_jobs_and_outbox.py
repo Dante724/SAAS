@@ -19,6 +19,7 @@ from backend.core import jobs
 from backend.models import NotificationLog, Order, Organisation, WebhookEndpoint
 from backend.services import notification_rules as nr
 from backend.services import webhooks as wh
+from backend.services.dates import now_utc
 from backend.tests.test_money_hardening import _order_with_total
 
 
@@ -35,14 +36,14 @@ async def test_run_exclusive_runs_on_sqlite_and_lock_keys_are_stable():
 @pytest.mark.asyncio
 async def test_notification_sweep_commits_each_send_and_never_resends(client, tenant, db, monkeypatch):
     org_id = (await db.execute(select(Organisation))).scalars().first().id
-    due = datetime.utcnow() - timedelta(minutes=1)
+    due = now_utc() - timedelta(minutes=1)
     for to in ("+15550001", "+15550002"):
         db.add(NotificationLog(org_id=org_id, channel="sms", recipient=to, body="hi",
                                status="scheduled", send_at=due))
     await db.commit()
     calls = []
 
-    async def flaky_send(_db, _org, _channel, *, recipient, subject, body):
+    async def flaky_send(_db, _org, _channel, *, recipient, subject, body, log=None):
         calls.append(recipient)
         if len(calls) == 2:
             raise RuntimeError("worker crashed mid-sweep")

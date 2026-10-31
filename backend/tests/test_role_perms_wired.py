@@ -9,6 +9,8 @@ from datetime import date, datetime, timedelta
 import pytest
 from sqlalchemy import select
 
+from backend.services.dates import now_utc
+
 
 async def _register(client):
     email = f"rp-{uuid.uuid4().hex[:8]}@t.dev"
@@ -206,7 +208,7 @@ async def test_can_view_item_prices(client):
     assert r.status_code == 201, r.text
     lines = (await client.get(f"/api/orders/{oid}", headers=H)).json()["lines"]
     assert [ln["unit_price"] for ln in lines if ln["ref_id"] == sid] == [80]
-    assert lines[0]["unit_price"] == 100
+    assert [ln["unit_price"] for ln in lines if ln["ref_id"] != sid] == [100]   # row order isn't fixed on Postgres
 
 
 @pytest.mark.asyncio
@@ -380,7 +382,7 @@ async def test_can_retroactive_cash(client):
     H, T, *_ = await _shop(client, "can_retroactive_cash")
     acc = await _till(client, H)
     back = {"account_id": acc, "txn_type": "income", "amount": 20,
-            "actual_date": (datetime.utcnow() - timedelta(days=3)).isoformat()}
+            "actual_date": (now_utc() - timedelta(days=3)).isoformat()}
     assert (await client.post("/api/cash/transactions", json=back, headers=T)).status_code == 403
     assert (await client.post("/api/cash/transactions", json={**back, "actual_date": None}, headers=T)).status_code == 201
     assert (await client.post("/api/cash/transactions", json=back, headers=H)).status_code == 201
@@ -390,7 +392,7 @@ async def test_can_retroactive_cash(client):
 async def test_can_view_cashflow_any_period(client):
     H, T, *_ = await _shop(client, "can_view_cashflow_any_period")
     acc = await _till(client, H)
-    old = (datetime.utcnow() - timedelta(days=3)).isoformat()
+    old = (now_utc() - timedelta(days=3)).isoformat()
     await client.post("/api/cash/transactions", json={"account_id": acc, "txn_type": "income", "amount": 7,
                                                       "actual_date": old}, headers=H)
     await client.post("/api/cash/transactions", json={"account_id": acc, "txn_type": "income", "amount": 9}, headers=H)

@@ -2,6 +2,8 @@ import { useEffect, useRef, useState, type ReactNode } from "react";
 import { M } from "../../components/Shell";
 import { hueText, tint } from "../../lib/tint";
 import { money } from "../orders/types";
+import { api } from "../../api/client";
+import { deliveryText, deliveryTone, type Delivery, type Tone } from "../../lib/delivery";
 
 /* Shared bits for the billing drawers (invoice view, record payment, credit notes). */
 
@@ -24,6 +26,15 @@ export const DISPLAY_MODES: { key: string; label: string; hint: string }[] = [
   { key: "simplified", label: "Simplified", hint: "One line per work order" },
   { key: "one_line", label: "One line", hint: "A single line for the whole invoice" },
 ];
+
+/** I6 — email or text an invoice to the customer. Returns the sentence to show: the server's
+ *  delivery message, so the screen never says "sent" when it wasn't. Throws on an API error. */
+export async function sendInvoice(id: string, channel?: "auto" | "email" | "sms"): Promise<{ text: string; tone?: Tone }> {
+  const r = await api.post<{ ok: boolean; status?: string; error?: string | null; recipient?: string | null; delivery?: Delivery }>(
+    `/finance/invoices/${id}/send`, channel && channel !== "auto" ? { channel } : {});
+  const fallback = r?.ok === false ? (r.error || "The invoice wasn't sent.") : "Invoice sent to the customer.";
+  return { text: deliveryText(r?.delivery, fallback), tone: deliveryTone(r?.delivery) ?? (r?.ok === false ? "warn" : undefined) };
+}
 
 export const isVoid = (s?: string) => ["cancelled", "canceled", "void", "voided"].includes(s || "");
 
@@ -124,7 +135,7 @@ export function Drawer({ title, sub, onClose, children, footer, z = 50, width = 
 }) {
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: z }} role="dialog" aria-modal="true" aria-label={label}>
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative max-w-full bg-white h-full shadow-drawer flex flex-col" style={{ width }}>
         <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-slate-200">
           <div className="min-w-0"><h2 className="text-base font-semibold text-ink-primary truncate">{title}</h2>{sub && <div className="text-xs text-ink-tertiary mt-0.5">{sub}</div>}</div>

@@ -3,7 +3,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, field_validator, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -13,6 +13,7 @@ from backend.services import audit
 from backend.services import multi_asset as _ma
 from backend.services.auth import (get_current_employee, hash_password, is_old_default_password, norm_email,
                                    require_perm, verify_password)
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/staff", tags=["staff"])
 
@@ -171,7 +172,14 @@ async def _denied_for_role(db: AsyncSession, org_id: str, role_id: Optional[str]
 
 
 async def _assert_can_assign_role(db: AsyncSession, current: Employee, role_id: Optional[str]) -> None:
-    mine = set() if await _is_owner(db, current) else await _denied_for_role(db, current.org_id, current.role_id)
+    owner = await _is_owner(db, current)
+    # "No role" means no limits at all: every permission and no location, record or payroll scope.
+    # Only the owner can hand that out — a manager whose role has every permission but is scoped
+    # to some locations or their own records used to pass the permission comparison below and
+    # widen themselves (audit 2026-10-29, H4).
+    if not role_id and not owner:
+        raise HTTPException(403, "Only the shop owner can give someone unlimited access. Pick a role instead.")
+    mine = set() if owner else await _denied_for_role(db, current.org_id, current.role_id)
     theirs = await _denied_for_role(db, current.org_id, role_id)
     if not mine <= theirs:
         raise HTTPException(403, "You can't assign a role with more access than your own")
@@ -324,6 +332,8 @@ async def update_employee(
         for k in PAY_FIELDS:
             payload.pop(k, None)
     if "role_id" in payload and payload["role_id"] != emp.role_id:
+        if emp.id == current.id and not await _is_owner(db, current):
+            raise HTTPException(403, "You can't change your own role. Ask the owner.")
         await _assert_can_assign_role(db, current, payload["role_id"])
     current_password = payload.pop("current_password", None)
     if "email" in payload:
@@ -438,6 +448,11 @@ class InviteIn(BaseModel):
     email: str
     name: Optional[str] = None
     role_id: Optional[str] = None
+
+    @field_validator("role_id")
+    @classmethod
+    def _blank_is_none(cls, v):
+        return v or None   # the invite form sends "" for "no role"
     location_id: Optional[str] = None
 
 
@@ -449,7 +464,7 @@ async def list_invites(db: AsyncSession = Depends(get_db),
     rows = (await db.execute(select(Invite).where(
         Invite.org_id == current.org_id, Invite.accepted_at.is_(None)
     ).order_by(Invite.created_at.desc()))).scalars().all()
-    now = datetime.utcnow()
+    now = now_utc()
     return {"items": [{
         "id": i.id, "email": i.email, "name": i.name, "role_id": i.role_id,
         "location_id": i.location_id, "expired": i.expires_at < now,
@@ -484,7 +499,7 @@ async def create_invite(data: InviteIn, db: AsyncSession = Depends(get_db),
     raw = secrets.token_urlsafe(32)
     if open_inv:
         open_inv.token_hash = hashlib.sha256(raw.encode()).hexdigest()
-        open_inv.expires_at = datetime.utcnow() + timedelta(days=7)
+        open_inv.expires_at = now_utc() + timedelta(days=7)
         open_inv.name, open_inv.role_id, open_inv.location_id = data.name, data.role_id, data.location_id
         inv = open_inv
     else:
@@ -492,7 +507,7 @@ async def create_invite(data: InviteIn, db: AsyncSession = Depends(get_db),
             org_id=current.org_id, email=email, name=data.name, role_id=data.role_id,
             location_id=data.location_id, invited_by=current.id,
             token_hash=hashlib.sha256(raw.encode()).hexdigest(),
-            expires_at=datetime.utcnow() + timedelta(days=7))
+            expires_at=now_utc() + timedelta(days=7))
         db.add(inv)
     await db.flush()
     await audit.record(db, org_id=current.org_id, actor_id=current.id, action="invite.create",
@@ -661,7 +676,7 @@ async def update_task(
         raise HTTPException(404, "Task not found")
     task.status = data.status
     if data.status == "done":
-        task.completed_at = datetime.utcnow()
+        task.completed_at = now_utc()
     await db.commit()
     return {"ok": True}
 
@@ -910,6 +925,9 @@ async def get_inventory_settings(
         "reservation_max_days": org.inv_reservation_max_days if org.inv_reservation_max_days is not None else 14,
         "product_serial_template": org.inv_product_serial_template or "",
         "asset_serial_template": org.inv_asset_serial_template or "",
+        "sku_template": org.inv_sku_template or "",
+        "bin_template": org.inv_bin_template or "",
+        "barcode_prefix": org.inv_barcode_prefix or "20",
         "default_product_type": org.inv_default_product_type or "default",
         "default_vehicle_type": org.inv_default_vehicle_type or "Car",
         "po_approval_threshold": org.po_approval_threshold or 0,
@@ -924,6 +942,9 @@ class InventorySettingsIn(BaseModel):
     reservation_max_days: Optional[int] = None
     product_serial_template: Optional[str] = None
     asset_serial_template: Optional[str] = None
+    sku_template: Optional[str] = None       # ii144a: empty = SKUs stay as typed
+    bin_template: Optional[str] = None
+    barcode_prefix: Optional[str] = None     # GS1 in-store 20–29
     default_product_type: Optional[str] = None
     default_vehicle_type: Optional[str] = None
     po_approval_threshold: Optional[float] = None
@@ -945,11 +966,24 @@ async def update_inventory_settings(
         raise HTTPException(422, "unique_identifier must be name|sku|barcode|code")
     if "po_to_job" in p and p["po_to_job"] not in ("auto", "manual"):
         raise HTTPException(422, "po_to_job must be auto or manual")
+    from backend.services import numbering
+    for k in ("product_serial_template", "asset_serial_template", "sku_template", "bin_template"):
+        if k in p:
+            p[k] = (p[k] or "").strip() or None
+            why = numbering.template_problem(p[k]) if p[k] else None
+            if why:
+                raise HTTPException(422, why)
+    if "barcode_prefix" in p:
+        p["barcode_prefix"] = (p["barcode_prefix"] or "").strip() or None
+        if p["barcode_prefix"] and p["barcode_prefix"] not in numbering.IN_STORE_PREFIXES:
+            raise HTTPException(422, "Generated barcodes start with 20 to 29 — the range set aside for "
+                                     "a shop's own codes, so they never clash with a manufacturer's.")
     mapping = {
         "po_to_job": "inv_po_to_job",
         "enable_bins": "inv_enable_bins", "unique_identifier": "inv_unique_identifier",
         "enable_reservations": "inv_enable_reservations", "reservation_max_days": "inv_reservation_max_days",
         "product_serial_template": "inv_product_serial_template", "asset_serial_template": "inv_asset_serial_template",
+        "sku_template": "inv_sku_template", "bin_template": "inv_bin_template", "barcode_prefix": "inv_barcode_prefix",
         "default_product_type": "inv_default_product_type", "default_vehicle_type": "inv_default_vehicle_type",
         "po_approval_threshold": "po_approval_threshold",
     }
@@ -1000,6 +1034,7 @@ async def get_public_pages(
         "oe_show_zero_price_products": org.oe_show_zero_price_products,
         "oe_show_zero_price_services": org.oe_show_zero_price_services,
         "oe_allow_approval": getattr(org, "oe_allow_approval", True),
+        "oe_estimate_line_choice": getattr(org, "oe_estimate_line_choice", True),
         "oe_allow_messages": getattr(org, "oe_allow_messages", True),
         "oe_msg_days_after_close": getattr(org, "oe_msg_days_after_close", None) if getattr(org, "oe_msg_days_after_close", None) is not None else 14,
         "oe_allow_recommend": getattr(org, "oe_allow_recommend", True),
@@ -1037,6 +1072,7 @@ class PublicPagesIn(BaseModel):
     oe_show_zero_price_products: Optional[bool] = None
     oe_show_zero_price_services: Optional[bool] = None
     oe_allow_approval: Optional[bool] = None
+    oe_estimate_line_choice: Optional[bool] = None      # E5: customers may untick estimate lines
     oe_allow_messages: Optional[bool] = None
     oe_msg_days_after_close: Optional[int] = Field(default=None, ge=0, le=365)
     oe_allow_recommend: Optional[bool] = None

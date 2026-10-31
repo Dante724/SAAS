@@ -61,7 +61,7 @@ export default function BulkPrintDialog({ open, onClose, ids, noun, endpoint, id
   if (!open) return null;
   const total = copies ? ids.length * nCopies : ids.length;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-primary/40 backdrop-blur-[2px]" role="presentation" onClick={onClose}>
       <div className="bg-white rounded-2xl shadow-drawer w-[380px] max-w-full p-5" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-bold text-ink-primary">Print {noun}s</h3>

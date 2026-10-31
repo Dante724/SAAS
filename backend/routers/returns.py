@@ -1,7 +1,6 @@
 """Client Returns (goods back to stock) and Refunds (money back) — separate
 documents, per Orderry's Feb-2026 split. A refund claws back the refunded share of
 the order's commissions via the payroll engine."""
-from datetime import datetime
 from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
@@ -10,10 +9,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from backend.db.database import get_db
 from backend.models import (
-    ClientReturn, ClientReturnLine, Refund, Order, StockLevel, StockMovement,
+    ClientReturn, ClientReturnLine, Refund, Order, StockMovement,
     Account, Employee, Payment,
 )
 from backend.services.auth import assert_perm, get_current_employee, require_perm
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/returns", tags=["returns"])
 
@@ -49,14 +49,8 @@ async def create_return(
         db.add(ClientReturnLine(return_id=ret.id, part_id=li.part_id,
                                 qty=li.qty, restock=li.restock))
         if li.restock and li.qty > 0:
-            sl = (await db.execute(select(StockLevel).where(
-                StockLevel.part_id == li.part_id,
-                StockLevel.location_id == current.location_id))).scalars().first()
-            if sl:
-                await _atomic_add(db, sl, "qty_available", li.qty, round_to=None)   # atomic
-            else:
-                db.add(StockLevel(part_id=li.part_id, location_id=current.location_id,
-                                  qty_available=li.qty, qty_reserved=0))
+            from backend.services import stock_rows
+            await stock_rows.add(db, li.part_id, current.location_id, li.qty)
             db.add(StockMovement(part_id=li.part_id, location_id=current.location_id,
                                  movement_type="return", qty=li.qty,
                                  ref_type="client_return", ref_id=ret.id))
@@ -155,24 +149,26 @@ async def list_returns(
     current: Employee = Depends(get_current_employee),
 ):
     from backend.models import Order, Client, Part
+    from backend.services.batching import names_by_id
     rows = (await db.execute(select(ClientReturn).where(ClientReturn.org_id == current.org_id)
         .order_by(ClientReturn.created_at.desc()).limit(200))).scalars().all()
+    by_return: dict = {}
+    if rows:
+        for ln, name in (await db.execute(select(ClientReturnLine, Part.name)
+                .join(Part, ClientReturnLine.part_id == Part.id)
+                .where(ClientReturnLine.return_id.in_([r.id for r in rows])))).all():
+            by_return.setdefault(ln.return_id, []).append((ln, name))
+    order_no = await names_by_id(db, Order.id, Order.order_number, [r.order_id for r in rows],
+                                 org_col=Order.org_id, org_id=current.org_id)
+    client_name = await names_by_id(db, Client.id, Client.name, [r.client_id for r in rows],
+                                    org_col=Client.org_id, org_id=current.org_id)
     out = []
     for r in rows:
-        lines = (await db.execute(select(ClientReturnLine, Part.name)
-            .join(Part, ClientReturnLine.part_id == Part.id)
-            .where(ClientReturnLine.return_id == r.id))).all()
-        order_no = None
-        if r.order_id:
-            o = (await db.execute(select(Order.order_number).where(Order.id == r.order_id))).scalar_one_or_none()
-            order_no = o
-        client_name = None
-        if r.client_id:
-            client_name = (await db.execute(select(Client.name).where(Client.id == r.client_id))).scalar_one_or_none()
-        out.append({"id": r.id, "order_id": r.order_id, "order_number": order_no,
-                    "client_name": client_name, "reason": r.reason,
+        out.append({"id": r.id, "order_id": r.order_id, "order_number": order_no.get(r.order_id),
+                    "client_name": client_name.get(r.client_id), "reason": r.reason,
                     "created_at": r.created_at.isoformat() if r.created_at else None,
-                    "lines": [{"part_name": name, "qty": l.qty, "restock": l.restock} for l, name in lines]})
+                    "lines": [{"part_name": name, "qty": l.qty, "restock": l.restock}
+                              for l, name in by_return.get(r.id, [])]})
     return {"items": out}
 
 
@@ -184,14 +180,16 @@ async def list_refunds(
     from backend.models import Order, Account as Acct
     rows = (await db.execute(select(Refund).where(Refund.org_id == current.org_id)
         .order_by(Refund.created_at.desc()).limit(200))).scalars().all()
+    from backend.services.batching import names_by_id
+    order_no = await names_by_id(db, Order.id, Order.order_number, [r.order_id for r in rows],
+                                 org_col=Order.org_id, org_id=current.org_id)
+    acct_name = await names_by_id(db, Acct.id, Acct.name, [r.account_id for r in rows],
+                                  org_col=Acct.org_id, org_id=current.org_id)
     out = []
     for r in rows:
-        order_no = None
-        if r.order_id:
-            order_no = (await db.execute(select(Order.order_number).where(Order.id == r.order_id))).scalar_one_or_none()
-        acct_name = (await db.execute(select(Acct.name).where(Acct.id == r.account_id))).scalar_one_or_none()
         out.append({"id": r.id, "amount": r.amount, "reason": r.reason,
-                    "order_id": r.order_id, "order_number": order_no, "account_name": acct_name,
+                    "order_id": r.order_id, "order_number": order_no.get(r.order_id),
+                    "account_name": acct_name.get(r.account_id),
                     "return_id": r.return_id,
                     "created_at": r.created_at.isoformat() if r.created_at else None,
                     "voided_at": r.voided_at.isoformat() if r.voided_at else None,
@@ -208,7 +206,7 @@ async def _refund_payment(db, refund):
         Payment.account_id == refund.account_id))).scalars().all()
     if not cands:
         return None
-    at = refund.created_at or datetime.utcnow()
+    at = refund.created_at or now_utc()
     return min(cands, key=lambda p: abs(((p.paid_at or at) - at).total_seconds()))
 
 
@@ -257,7 +255,7 @@ async def delete_refund(
         await post_contact_ledger(db, current.org_id, e.client_id, "refund_void", -float(e.amount or 0),
                                   note=f"Refund deleted: {reason}", ref_type="refund_void", ref_id=refund.id,
                                   created_by_id=current.id)
-    refund.voided_at = datetime.utcnow()
+    refund.voided_at = now_utc()
     refund.voided_by_id = current.id
     refund.void_reason = reason
     await db.flush()

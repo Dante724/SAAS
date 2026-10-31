@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import ApiKey, Employee
 from backend.services import audit
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import require_perm
 from backend.services.apikeys import MAX_RATE_PER_MIN, generate_key, parse_scopes
 
 router = APIRouter(prefix="/api/api-keys", tags=["api-keys"])
@@ -26,7 +26,7 @@ def _ser(k: ApiKey) -> dict:
 @router.get("")
 async def list_keys(
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     rows = (await db.execute(select(ApiKey).where(
         ApiKey.org_id == current.org_id).order_by(desc(ApiKey.created_at)))).scalars().all()

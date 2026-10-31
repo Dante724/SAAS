@@ -25,6 +25,27 @@ def _scrub(event, _hint):
     req.pop("data", None)          # request bodies carry passwords, card tokens and customer PII
     if "query_string" in req:
         req["query_string"] = "[Filtered]"   # reset/verify/pay tokens travel in query strings
+    # Exception and log text can quote the row a statement failed on (emails, phones, hashes).
+    from backend.core.logging import RedactionFilter
+    red = RedactionFilter.redact
+    if isinstance(req.get("url"), str):
+        req["url"] = red(req["url"])       # /pay/<token>, /api/portal/<token>
+    if isinstance(event.get("message"), str):
+        event["message"] = red(event["message"])
+    for exc in (event.get("exception") or {}).get("values") or []:
+        if isinstance(exc.get("value"), str):
+            exc["value"] = red(exc["value"])
+    entry = event.get("logentry") or {}
+    for k in ("message", "formatted"):
+        if isinstance(entry.get(k), str):
+            entry[k] = red(entry[k])
+    if "params" in entry:
+        entry["params"] = []
+    crumbs = event.get("breadcrumbs") or {}
+    for c in (crumbs.get("values") if isinstance(crumbs, dict) else crumbs) or []:
+        if isinstance(c.get("message"), str):
+            c["message"] = red(c["message"])
+        c.pop("data", None)
     return event
 
 
@@ -43,6 +64,7 @@ def init_error_tracking() -> bool:
         release=getattr(settings, "RELEASE", "") or None,
         traces_sample_rate=float(getattr(settings, "SENTRY_TRACES_SAMPLE_RATE", 0.0) or 0.0),
         send_default_pii=False,
+        include_local_variables=False,   # frame locals hold request bodies, emails and secrets
         before_send=_scrub,
     )
     return True

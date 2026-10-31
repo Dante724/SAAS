@@ -7,6 +7,7 @@ from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from backend.routers.assets import public_custom
 from backend.db.database import get_db
 from backend.models import Client, Device, Employee
 from backend.services.auth import get_current_employee, require_perm, record_scope
@@ -15,6 +16,7 @@ from backend.services.money import q2
 from backend.core.spreadsheet import MAX_IMPORT_ROWS, safe_row
 
 from backend.services import addresses as _addr
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/clients", tags=["clients"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -91,7 +93,7 @@ def _ser_client(c: Client, supplier=None, order_count=None) -> dict:
         "custom_data": c.custom_data or {},
         "devices": [{"id": d.id, "brand": d.brand, "model": d.model, "serial": d.serial,
                      "imei": d.imei, "vin": d.vin, "hin": d.hin, "condition": d.condition,
-                     "custom_data": d.custom_data or {}} for d in c.devices],
+                     "custom_data": public_custom(d.custom_data)} for d in c.devices],
         "order_count": len(c.orders) if order_count is None else order_count,
     }
 
@@ -215,11 +217,15 @@ async def duplicate_phones(
         select(Client.phone, func.count(Client.id)).where(
             Client.org_id == current.org_id, Client.phone.isnot(None), Client.phone != "")
         .group_by(Client.phone).having(func.count(Client.id) > 1))).all()
+    by_phone: dict = {}
+    if rows:
+        for c in (await db.execute(select(Client).where(
+                Client.org_id == current.org_id, Client.phone.in_([phone for phone, _ in rows]))
+                .order_by(Client.created_at))).scalars().all():
+            by_phone.setdefault(c.phone, []).append(c)
     clusters = []
     for phone, n in rows:
-        members = (await db.execute(select(Client).where(
-            Client.org_id == current.org_id, Client.phone == phone)
-            .order_by(Client.created_at))).scalars().all()
+        members = by_phone.get(phone, [])
         clusters.append({
             "phone": phone, "count": n,
             "keep_hint_id": members[-1].id if members else None,  # latest-created wins
@@ -255,22 +261,23 @@ async def get_client(
 async def issue_portal_link(
     client_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_client_info")),
 ):
     """Issue (or rotate) a customer-portal magic link for this client.
 
-    Returns a durable token; the relative URL `/portal/{token}` lets the customer
-    see all their work orders/estimates/invoices and approve estimates without a login.
+    The relative URL `/portal/{token}` lets the customer see all their work orders, estimates
+    and invoices and approve estimates without a login. The link expires (services/portal_links)
+    and replaces every earlier one; the token is shown once and only its hash is kept.
     """
-    import secrets
+    from backend.services import portal_links
     client = (await db.execute(
         select(Client).where(Client.id == client_id, Client.org_id == current.org_id)
     )).scalar_one_or_none()
     if not client:
         raise HTTPException(404, "Client not found")
-    client.portal_token = secrets.token_urlsafe(24)
+    raw = await portal_links.issue(db, client, replace=True)
     await db.commit()
-    return {"portal_token": client.portal_token, "portal_url": f"/portal/{client.portal_token}"}
+    return {"portal_token": raw, "portal_url": f"/portal/{raw}", "expires_in_days": portal_links.LINK_DAYS}
 
 
 @router.put("/{client_id}")
@@ -416,6 +423,8 @@ async def delete_client(
             raise HTTPException(409, "This contact has history (orders, invoices, payments or "
                                      "devices) and can't be deleted. Merge it into another contact "
                                      "instead to preserve the records.")
+    from backend.services import portal_links
+    await portal_links.revoke_all(db, client.id)
     await db.delete(client)
     await db.commit()
     return {"ok": True}
@@ -668,14 +677,17 @@ def _client_fk_targets():
     the mapper so the merge can never silently miss a table as new ones are added. This is the
     COMPLETE set a merge must re-point before deleting a source (orphaning any of these would
     lose history on SQLite and raise an IntegrityError on Postgres). Includes the second FK on
-    Invoice (payer_client_id) and the Client self-reference (payer_id)."""
+    Invoice (payer_client_id) and the Client self-reference (payer_id).
+
+    Portal links are left out: they are access, not history. Delete and merge revoke them, so a
+    merged-away contact's old link never opens the other contact's jobs."""
     from sqlalchemy import inspect as _inspect
 
     import backend.models as _m
     out = []
     for name in dir(_m):
         cls = getattr(_m, name)
-        if not isinstance(cls, type) or not hasattr(cls, "__tablename__"):
+        if not isinstance(cls, type) or not hasattr(cls, "__tablename__") or cls is _m.ClientPortalLink:
             continue
         try:
             mapper = _inspect(cls)
@@ -785,6 +797,8 @@ async def merge_clients(
                 setattr(r, attr, target.id)
                 moved_map.setdefault(key, {})[r.id] = s.id
                 moved_counts[key] = moved_counts.get(key, 0) + 1
+        from backend.services import portal_links
+        await portal_links.revoke_all(db, s.id)
         await db.delete(s)
 
     # Guard the self-reference edge: if the target's own payer was one of the merged sources,
@@ -857,7 +871,7 @@ async def undo_merge(
             if merged_val != orig and getattr(target, f, None) == merged_val:
                 setattr(target, f, orig)
 
-    log.undone_at = datetime.utcnow()
+    log.undone_at = now_utc()
     await db.commit()
     return {"ok": True, "restored": len(log.source_snapshots or [])}
 
@@ -1022,11 +1036,9 @@ async def client_payments(
         raise HTTPException(404, "Contact not found")
     rows = (await db.execute(select(Payment).where(Payment.client_id == client_id)
             .order_by(Payment.paid_at.desc()).limit(200))).scalars().all()
-    oids = {p.order_id for p in rows if p.order_id}
-    onum = {}
-    if oids:
-        for o in (await db.execute(select(Order).where(Order.id.in_(oids)))).scalars().all():
-            onum[o.id] = o.order_number
+    from backend.services.batching import names_by_id
+    onum = await names_by_id(db, Order.id, Order.order_number, [p.order_id for p in rows],
+                             org_col=Order.org_id, org_id=current.org_id)
     return {"items": [{
         "id": p.id, "kind": p.kind, "method": p.method, "amount": float(p.amount or 0),
         "order_id": p.order_id, "order_number": onum.get(p.order_id),
@@ -1057,11 +1069,9 @@ async def client_communication(
         msgs = (await db.execute(select(InboxMessage).where(
             InboxMessage.thread_id.in_(list(tmap.keys())))
             .order_by(InboxMessage.created_at.desc()).limit(200))).scalars().all()
-    author_ids = {m.author_id for m in msgs if m.author_id}
-    names = {}
-    if author_ids:
-        for e in (await db.execute(select(Emp).where(Emp.id.in_(author_ids)))).scalars().all():
-            names[e.id] = e.name
+    from backend.services.batching import names_by_id
+    names = await names_by_id(db, Emp.id, Emp.name, [m.author_id for m in msgs],
+                              org_col=Emp.org_id, org_id=current.org_id)
     items = [{
         "id": m.id, "channel": tmap[m.thread_id].channel if m.thread_id in tmap else None,
         "direction": m.direction, "body": m.body,
@@ -1076,9 +1086,9 @@ async def client_communication(
         cmsgs = (await db.execute(select(ChatMessage).where(
             ChatMessage.thread_id.in_(list(chats)), ChatMessage.status != "system")
             .order_by(ChatMessage.created_at.desc()).limit(200))).scalars().all()
-        for e in (await db.execute(select(Emp).where(Emp.id.in_(
-                {m.author_id for m in cmsgs if m.author_id} - set(names))))).scalars().all():
-            names[e.id] = e.name
+        names.update(await names_by_id(db, Emp.id, Emp.name,
+                                       {m.author_id for m in cmsgs if m.author_id} - set(names),
+                                       org_col=Emp.org_id, org_id=current.org_id))
         items += [{"id": m.id, "channel": chats.get(m.thread_id),
                    "direction": "inbound" if m.direction == "in" else "outbound", "body": m.body,
                    "author": names.get(m.author_id), "delivered": m.status != "failed",
@@ -1117,13 +1127,13 @@ async def send_client_message(
     if not thread:
         thread = InboxThread(org_id=current.org_id, channel=data.channel, client_id=client_id,
                              handle=(c.email if data.channel == "email" else c.phone),
-                             status="open", unread=False, last_message_at=datetime.utcnow())
+                             status="open", unread=False, last_message_at=now_utc())
         db.add(thread)
         await db.flush()
     msg = InboxMessage(org_id=current.org_id, thread_id=thread.id, direction="outbound",
                        body=data.body.strip(), author_id=current.id, delivered=True)
     db.add(msg)
-    thread.last_message_at = datetime.utcnow()
+    thread.last_message_at = now_utc()
     await db.commit()
     return {"id": msg.id, "thread_id": thread.id, "channel": data.channel}
 

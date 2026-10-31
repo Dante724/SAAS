@@ -3,6 +3,7 @@ import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { selectDialog } from "../../lib/dialog";
 import { cellRules, inView, isCustomerRule, toggleCell } from "../../lib/notifRules";
+import { clickable } from "../../lib/clickable";
 
 /* Settings › Notifications › Customers — "what your customer gets": a journey strip (comes in,
    in the shop, ready and done, updates and payment), then one card per moment. Each message
@@ -163,7 +164,7 @@ export default function CustomerMessages({ rules, templates, statusesFor, shopNa
     const base = row.id === "any" ? `One message whenever the ${noun} moves to a new status` : row.sub;
     const note = row.allStatuses && ownStatusCount(row.event) ? `${base}. Statuses with their own message send that instead` : base;
     return (
-      <div className="group flex items-start gap-3 px-4 py-3.5 hover:bg-slate-50/70 cursor-pointer" onClick={() => { setAdding(false); setEditing(row); }}>
+      <div className="group flex items-start gap-3 px-4 py-3.5 hover:bg-slate-50/70 cursor-pointer" {...clickable(() => { setAdding(false); setEditing(row); })}>
         {row.color ? <span className="mt-1.5 w-2.5 h-2.5 rounded-full flex-shrink-0" style={{ background: row.color, boxShadow: `0 0 0 3px ${row.color}22` }} />
           : <span className="mt-0.5 w-6 h-6 rounded-lg bg-slate-100 text-ink-secondary grid place-items-center flex-shrink-0"><M n={row.allStatuses ? "all_inclusive" : row.event === "payment_received" ? "payments" : row.event === "comment_added" ? "chat_bubble" : "login"} c="text-[13px]" /></span>}
         <div className="flex-1 min-w-0">
@@ -403,7 +404,7 @@ function MessageEditor({ row, rt, channels, rules, templates, shopName, flash, s
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/30 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/30 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div role="dialog" aria-label={`Message for ${row.label}`} className="relative w-[640px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.28s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="px-5 pt-5 pb-3">

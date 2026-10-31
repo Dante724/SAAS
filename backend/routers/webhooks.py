@@ -6,6 +6,7 @@ from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Employee, WebhookEndpoint, WebhookDelivery
+from backend.services.audit import record as audit_record
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.webhooks import EVENTS, valid_events
 
@@ -62,6 +63,9 @@ async def create_endpoint(
     e = WebhookEndpoint(org_id=current.org_id, url=data.url.strip(), events=_events(data.events),
                         active=data.active)
     db.add(e)
+    await db.flush()
+    await audit_record(db, org_id=current.org_id, actor_id=current.id, action="webhook.create",
+                       entity_type="webhook_endpoint", entity_id=e.id, diff={"fields": ["active", "events", "url"]})
     await db.commit()
     await db.refresh(e)
     return _ser(e)
@@ -91,6 +95,8 @@ async def update_endpoint(
         changes["url"] = changes["url"].strip()
     for k, v in changes.items():
         setattr(e, k, v)
+    await audit_record(db, org_id=current.org_id, actor_id=current.id, action="webhook.update",
+                       entity_type="webhook_endpoint", entity_id=e.id, diff={"fields": sorted(changes)})
     await db.commit()
     return {"ok": True}
 
@@ -106,6 +112,8 @@ async def delete_endpoint(
     if not e:
         raise HTTPException(404, "Endpoint not found")
     await db.delete(e)
+    await audit_record(db, org_id=current.org_id, actor_id=current.id, action="webhook.delete",
+                       entity_type="webhook_endpoint", entity_id=eid)
     await db.commit()
     return {"ok": True}
 

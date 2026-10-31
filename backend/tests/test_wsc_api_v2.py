@@ -179,6 +179,13 @@ async def test_services_and_bundles(client, tenant, db):
     assert r.json()["data"]["effective_price"] == 79 and len(r.json()["data"]["components"]) == 2
     assert (await client.put(f"/api/v2/bundles/{bid}", json={"name": "x", "price_mode": "weird"},
                              headers=k)).status_code == 422
+    # The kit checks from the staff screen apply here too: no negative price, no unknown print mode.
+    assert (await client.put(f"/api/v2/bundles/{bid}", json={"name": "x", "price": -5},
+                             headers=k)).status_code == 400
+    assert (await client.post("/api/v2/bundles", json={"name": "Odd", "print_mode": "sideways", "components": [
+        {"ref_type": "service", "ref_id": s["id"]}]}, headers=k)).status_code == 400
+    r = await client.put(f"/api/v2/bundles/{bid}", json={"name": "Battery swap+", "print_mode": "one_line"}, headers=k)
+    assert r.status_code == 200, r.text
     assert (await client.delete(f"/api/v2/bundles/{bid}", headers=k)).status_code == 200
     assert (await client.get("/api/v2/bundles", headers=k)).json()["total"] == 0
     evs = await events_for(db, o)

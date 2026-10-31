@@ -45,23 +45,43 @@ _GAP = "\x00"
 
 
 _TOKEN = re.compile(r"\{[^{}\n]+\}")
+_TAG = re.compile(r"<[a-zA-Z/][^>]*>")
 
 
-def apply(text: str | None, values: dict[str, str], doc_vars: dict | None = None) -> str:
+def is_html(template: str | None) -> bool:
+    """Whether a message template is HTML (the rich email editor) rather than plain text.
+    Decided from the template alone, never from the filled-in message: a customer named
+    "<b>Bo</b>" mustn't turn a plain-text email into HTML."""
+    return bool(_TAG.search(template or ""))
+
+
+def apply(text: str | None, values: dict[str, str], doc_vars: dict | None = None,
+          html: bool | None = None) -> str:
     """Fill `{key}` short tokens from `values` and `{Orderry Name}` tokens from `doc_vars` (the
     document catalog) in ONE pass, so a substituted value is never scanned again: a customer
-    named "{portal_link}" stays literal. Empty short values vanish without stray spaces."""
+    named "{portal_link}" stays literal. Empty short values vanish without stray spaces.
+
+    In an HTML template (html=None: detected from `text`) every value is HTML-escaped, except
+    document values that are deliberate markup (documents._Html: tables, logo, buttons)."""
     if not text:
         return text or ""
+    if html is None:
+        html = is_html(text)
+
+    def safe(v) -> str:
+        if not html or _is_markup(v):
+            return str(v)
+        import html as _h
+        return _h.escape(str(v), quote=True)
 
     def sub(m: re.Match) -> str:
         tok = m.group(0)
         key = tok[1:-1]
         if key in values:
             v = values[key]
-            return str(v) if v not in (None, "") else _GAP
+            return safe(v) if v not in (None, "") else _GAP
         if doc_vars and tok in doc_vars:
-            return str(doc_vars[tok])
+            return safe(doc_vars[tok])
         return tok
     out = _TOKEN.sub(sub, text)
     if _GAP not in out:
@@ -75,6 +95,11 @@ def apply(text: str | None, values: dict[str, str], doc_vars: dict | None = None
     out = re.sub(_GAP + r"(?=[ \t]*([,.!?;:)\]]|\n|$))", "", out)
     out = re.sub(_GAP + r"(?=[ \t])", "", out)   # the following space now separates the words
     return out.replace(_GAP, " ").strip()   # a dropped first/last line leaves no blank edge
+
+
+def _is_markup(v) -> bool:
+    from backend.routers.documents import _Html
+    return isinstance(v, _Html)
 
 
 def _first_last(name: str | None) -> tuple[str, str]:
@@ -99,7 +124,8 @@ def _birthday(raw: str | None, today: date | None = None) -> tuple[str, str]:
     except ValueError:
         year = 0
     if year > 1900:
-        t = today or date.today()
+        from backend.services.dates import today_in
+        t = today or today_in("UTC")
         n = t.year - year - ((t.month, t.day) < (month, day))
         age = str(n) if 0 <= n < 130 else ""
     return label, age
@@ -111,18 +137,13 @@ def _fmt_when(dt: datetime | None) -> str:
 
 
 async def _portal_link(db: AsyncSession, client, issue: bool = True) -> str:
-    """The customer's portal magic link; issued on first real send so the message always works.
-    A preview (`issue=False`) never mints one: it shows the existing link or nothing."""
-    if client is None:
+    """A fresh portal magic link for this message (only hashes are stored, so an earlier link
+    can't be reused). A preview (`issue=False`) never mints one and shows no link."""
+    if client is None or not issue:
         return ""
-    if not client.portal_token:
-        if not issue:
-            return ""
-        import secrets
-        client.portal_token = secrets.token_urlsafe(24)
-        await db.flush()
     base = (settings.PUBLIC_BASE_URL or "").rstrip("/")
-    return f"{base}/portal/{client.portal_token}"
+    from backend.services import portal_links
+    return f"{base}/portal/{await portal_links.issue(db, client)}"
 
 
 def _wanted(texts) -> set[str]:
@@ -138,7 +159,9 @@ async def client_values(db: AsyncSession, org_id: str, client, *texts: str | Non
     if not want:
         return {}
     first, last = _first_last(getattr(client, "name", None))
-    bday, age = _birthday(getattr(client, "birthday", None))
+    from backend.services.dates import shop_today
+    today = await shop_today(db, org_id) if "client_age" in want else None
+    bday, age = _birthday(getattr(client, "birthday", None), today)
     vals = {"client_name": getattr(client, "name", None) or "", "client_first_name": first,
             "client_last_name": last, "client_phone": getattr(client, "phone", None) or "",
             "client_birthday": bday, "client_age": age}

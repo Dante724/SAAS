@@ -9,6 +9,8 @@ from datetime import datetime
 import pytest
 from sqlalchemy import select
 
+from backend.services.dates import now_utc
+
 
 async def _seed(client, tenant, db):
     from backend.models import Appointment, ChatMessage, ChatThread, NotificationLog
@@ -23,7 +25,7 @@ async def _seed(client, tenant, db):
     await db.flush()
     db.add(ChatMessage(thread_id=t.id, direction="in", body="my address is 1 Main St"))
     db.add(Appointment(org_id=org, client_id=cid, client_name="Jane Doe", client_phone="+15550001",
-                       scheduled_for=datetime.utcnow()))
+                       scheduled_for=now_utc()))
     await db.commit()
     return cid, t.id
 
@@ -43,11 +45,15 @@ async def test_export_includes_messages_and_conversations(client, tenant, db):
 async def test_erase_clears_related_personal_data(client, tenant, db):
     from backend.models import Appointment, ChatMessage, ChatThread, Client, NotificationLog
     cid, tid = await _seed(client, tenant, db)
+    ptoken = (await client.post(f"/api/clients/{cid}/portal-link", headers=tenant)).json()["portal_token"]
     r = await client.post(f"/api/compliance/gdpr/client/{cid}/erase", headers=tenant)
     assert r.status_code == 200, r.text
+    assert (await client.get(f"/api/public/portal/{ptoken}")).status_code == 404
     db.expire_all()
     cl = (await db.execute(select(Client).where(Client.id == cid))).scalar_one()
-    assert cl.portal_token is None and cl.phone is None and "Jane" not in cl.name
+    from backend.models import ClientPortalLink
+    assert cl.phone is None and "Jane" not in cl.name
+    assert (await db.execute(select(ClientPortalLink).where(ClientPortalLink.client_id == cid))).first() is None
     log = (await db.execute(select(NotificationLog).where(NotificationLog.client_id == cid))).scalar_one()
     assert log.recipient is None and "Jane" not in log.body
     msg = (await db.execute(select(ChatMessage).where(ChatMessage.thread_id == tid))).scalar_one()

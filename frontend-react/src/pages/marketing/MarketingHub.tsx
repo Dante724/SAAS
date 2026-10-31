@@ -8,6 +8,7 @@ import { confirmDialog, alertDialog } from "../../lib/dialog";
 import { Link } from "react-router-dom";
 import { Avatar } from "../orders/look";
 import { PhoneIncoming, PhoneOutgoing } from "lucide-react";
+import { safeHttpHref } from "../../lib/safeFileHref";
 
 // Marketing: campaigns (SMS/email blasts by segment) + call log — legacy /comms surface.
 const CHANNEL: Record<string, string> = { sms: "SMS", email: "Email" };
@@ -125,7 +126,7 @@ export default function MarketingHub() {
                       </td>
                       <td className={`py-2.5 px-4 ${missed ? "text-rose-600 font-medium" : ""}`}>{humanize(c.status)}</td>
                       <td className="py-2.5 px-4 text-right tabular-nums">{c.duration_s != null ? `${Math.floor(c.duration_s / 60)}:${String(c.duration_s % 60).padStart(2, "0")}` : "—"}</td>
-                      <td className="py-2.5 px-4">{c.recording_url ? <a href={c.recording_url} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary font-semibold hover:underline"><M n="play_arrow" c="text-sm" />Play</a> : "—"}</td>
+                      <td className="py-2.5 px-4">{safeHttpHref(c.recording_url) ? <a href={safeHttpHref(c.recording_url)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary font-semibold hover:underline"><M n="play_arrow" c="text-sm" />Play</a> : "—"}</td>
                     </tr>
                   );
                 })}
@@ -139,7 +140,7 @@ export default function MarketingHub() {
 
       {draft && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-ink-primary/40" onClick={() => setDraft(null)} />
+          <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={() => setDraft(null)} />
           <div className="relative w-full max-w-md bg-white rounded-2xl shadow-menu border border-slate-200/90">
             <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between"><h3 className="text-sm font-semibold text-ink-primary">New campaign</h3><button aria-label="Close" onClick={() => setDraft(null)} className="w-7 h-7 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
             <div className="p-5 space-y-3">

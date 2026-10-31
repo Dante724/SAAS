@@ -56,7 +56,7 @@ export default function NewAccountDrawer({ edit, onClose, onSaved }: Props) {
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 60 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative h-full w-full max-w-[540px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <header className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">

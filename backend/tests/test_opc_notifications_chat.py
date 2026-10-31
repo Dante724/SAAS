@@ -17,6 +17,7 @@ from backend.models import (
 )
 from backend.services import chat_status, message_vars
 from backend.services.currency import format_money
+from backend.services.dates import now_utc
 
 
 async def _me(client, H):
@@ -138,13 +139,13 @@ async def test_new_variables_render_in_a_rule_send(client, tenant, db):
     await nr.evaluate(db, org_id=org_id, order_id=oid, event="created")
     log = (await db.execute(select(NotificationLog).where(NotificationLog.order_id == oid,
                                                           NotificationLog.template_id == tpl.id))).scalars().first()
-    c = (await db.execute(select(Client).where(Client.id == cid))).scalar_one()
-    await db.refresh(c)
-    assert c.portal_token, "the portal link is issued on first use"
     assert log.body.startswith("Hi Sam Rivera (+15550100). Born 14 March, age ")
     assert "Due $150.00 of $150.00." in log.body
     assert "Booked Fri 30 Oct, 10:00." in log.body
-    assert f"/portal/{c.portal_token}" in log.body
+    # a link went out (one link row, only its hash kept); the history copy hides the live token
+    from backend.models import ClientPortalLink
+    assert "/portal/…" in log.body
+    assert len((await db.execute(select(ClientPortalLink).where(ClientPortalLink.client_id == cid))).all()) == 1
     assert "{" not in log.body
 
 
@@ -169,7 +170,8 @@ async def test_missing_client_fields_leave_no_gaps_in_a_real_send(client, tenant
 async def test_birthday_greeting_renders_short_client_variables(client, tenant, db):
     me = await _me(client, tenant)
     org_id = me["org_id"]
-    today = datetime.utcnow()
+    from backend.services.dates import shop_today
+    today = await shop_today(db, org_id)   # birthdays follow the shop's calendar
     cid = (await client.post("/api/clients", json={
         "name": "Ana Lopez", "phone": "+1777", "birthday": f"1990-{today.month:02d}-{today.day:02d}"},
         headers=tenant)).json()["id"]
@@ -269,8 +271,8 @@ async def test_replied_threads_auto_complete_after_24h(client, tenant, db):
         await client.post(f"/api/chats/threads/{tid}/send", json={"body": "done"}, headers=tenant)
     rows = {t.id: t for t in (await db.execute(select(ChatThread).where(
         ChatThread.id.in_([old, fresh, waiting])))).scalars().all()}
-    rows[old].last_outbound_at = datetime.utcnow() - timedelta(hours=25)
-    rows[fresh].last_outbound_at = datetime.utcnow() - timedelta(hours=23)
+    rows[old].last_outbound_at = now_utc() - timedelta(hours=25)
+    rows[fresh].last_outbound_at = now_utc() - timedelta(hours=23)
     await db.commit()
     assert await chat_status.autocomplete_replied(db) >= 1
     assert (await _status(client, tenant, old))["status"] == "completed"
@@ -424,8 +426,8 @@ async def test_sample_preview_does_not_mint_a_portal_link(client, tenant, db):
         "channel": "email", "subject": "x", "body": "Hi. Portal: {portal_link}. Bye", "sample": True},
         headers=tenant)).json()
     assert r["body"] == "Hi. Bye"
-    c = (await db.execute(select(Client).where(Client.id == cid))).scalar_one()
-    assert c.portal_token is None
+    from backend.models import ClientPortalLink
+    assert (await db.execute(select(ClientPortalLink).where(ClientPortalLink.client_id == cid))).first() is None
 
 
 async def test_legacy_fire_notifications_uses_the_real_shop_name(client, tenant, db):

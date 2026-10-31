@@ -19,6 +19,7 @@ import { identifierFields } from "../../lib/assetIdentifiers";
 import { useMe } from "../../context/Me";
 import IdentifyHint, { type IdMatch } from "../../components/IdentifyHint";
 import NameSuggestInput from "../../components/NameSuggestInput";
+import { loadFailed } from "../../lib/notice";
 
 type ClientLite = { id: string; name?: string; phone?: string; email?: string };
 type Emp = { id: string; name: string; in_managers?: boolean; in_assignees?: boolean };
@@ -60,6 +61,8 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
   const [imei, setImei] = useState(""); const [vin, setVin] = useState(""); const [hin, setHin] = useState("");
   const [color, setColor] = useState(""); const [condition, setCondition] = useState("");
   const [moreOpen, setMoreOpen] = useState(false);
+  // J3: the device's unlock code, so the bench can test it. Stored locked on the device.
+  const [passcode, setPasscode] = useState(""); const [showPass, setShowPass] = useState(false);
   // An existing device picked from the "Seen before" card — the order attaches to it instead of
   // creating a duplicate asset.
   const [deviceId, setDeviceId] = useState<string | null>(null);
@@ -110,8 +113,8 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
   }
   const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => { api.get<any>("/staff/employees").then((r) => setEmps(r.items || r || [])).catch(() => {}); }, []);
-  useEffect(() => { api.get<any>("/forms/types").then((r) => { const it: WOType[] = r.items || []; setWoTypes(it); if (it.length) setType((cur) => it.some((t) => t.name === cur) ? cur : it[0].name); }).catch(() => {}); }, []);
+  useEffect(() => { api.get<any>("/staff/employees").then((r) => setEmps(r.items || r || [])).catch(loadFailed("the staff list")); }, []);
+  useEffect(() => { api.get<any>("/forms/types").then((r) => { const it: WOType[] = r.items || []; setWoTypes(it); if (it.length) setType((cur) => it.some((t) => t.name === cur) ? cur : it[0].name); }).catch(loadFailed("job types")); }, []);
   const results = useClientSearch<ClientLite>(q, cOpen && !client);
 
   const subtotal = lines.reduce((s, l) => s + (l.price || 0), 0);
@@ -156,6 +159,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
         asset_imei: imei || null, asset_vin: vin || null, asset_hin: hin || null,
         asset_color: color || null, asset_condition: condition || null,
         asset_custom_data: assetCustom,
+        ...(passcode.trim() ? { device_passcode: passcode.trim() } : {}),
         intake_photos: intakePhotos.map((p) => p.id),
         is_estimate: estimate,
         currency_code: curCode || null,
@@ -166,7 +170,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
       if (!estimate && created?.id) void autoPrintAfterCreate(created.id);   // WS-C #20: device label, if the shop set one up
       onCreated();
       if (!reopen) onClose();
-      else { setClient(null); setQ(""); setComplaint(""); setBrand(""); setModel(""); setSerial(""); setImei(""); setVin(""); setHin(""); setColor(""); setCondition(""); setMoreOpen(false); setDeviceId(null); setLines([]); setWoCustom({}); setAssetCustom({}); setStep(1); }
+      else { setClient(null); setQ(""); setComplaint(""); setBrand(""); setModel(""); setSerial(""); setImei(""); setVin(""); setHin(""); setColor(""); setCondition(""); setPasscode(""); setShowPass(false); setMoreOpen(false); setDeviceId(null); setLines([]); setWoCustom({}); setAssetCustom({}); setStep(1); }
       return created;
     } catch (e: any) { setErr(e.message || "Failed to create"); } finally { setBusy(false); }
   }
@@ -219,7 +223,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                         onKeyDown={(e) => { if (e.key === "Escape") setCOpen(false); }} role="combobox" aria-expanded={cOpen} autoComplete="off"
                         className="glass-input block w-full pl-10 pr-4 py-2.5 rounded-xl text-sm font-semibold text-ink-primary" placeholder="Search client by name, phone or email… (blank = walk-in)" />
                       {cOpen && (<>
-                        <div className="fixed inset-0 z-[9]" onClick={() => setCOpen(false)} />
+                        <div className="fixed inset-0 z-[9]" aria-hidden="true" onClick={() => setCOpen(false)} />
                         <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5 max-h-72 overflow-y-auto">
                           {!q.trim() && results.length > 0 && <div className="px-2.5 pt-1 pb-0.5 text-[11px] text-ink-tertiary">Recent clients</div>}
                           {q.trim() && results.length === 0 && <div className="px-2.5 py-2 text-xs text-ink-tertiary">No client matches "{q.trim()}"</div>}
@@ -298,6 +302,16 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                     </div>
                     <IdentifyHint value={idState[primaryId.kind][0]} kind={primaryId.kind} clientId={client?.id} usingId={deviceId}
                       onUse={pickExisting} onUndo={() => setDeviceId(null)} />
+                    <div className="space-y-1">
+                      <label htmlFor="intake-passcode" className="block text-[11px] font-bold text-ink-tertiary">Device passcode <span className="font-normal">(optional)</span></label>
+                      <div className="flex items-center space-x-1.5">
+                        <input id="intake-passcode" type={showPass ? "text" : "password"} autoComplete="off" value={passcode} onChange={(e) => setPasscode(e.target.value)}
+                          className="glass-input font-mono block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder="So the technician can test it" />
+                        <button type="button" onClick={() => setShowPass((v) => !v)} aria-label={showPass ? "Hide passcode" : "Show passcode"} title={showPass ? "Hide" : "Show"}
+                          className="shrink-0 w-8 h-8 rounded-lg border border-slate-200 text-ink-tertiary hover:text-ink-primary hover:bg-slate-50 grid place-items-center"><M n={showPass ? "visibility_off" : "visibility"} c="text-sm" /></button>
+                      </div>
+                      <p className="text-[11px] text-ink-tertiary">Kept locked on the {term.asset.toLowerCase()}. Only staff who are allowed can see it.</p>
+                    </div>
                   </div>
                 </div>
 
@@ -354,7 +368,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 45 }}>
-      <div className="absolute inset-0 bg-ink-primary/30 backdrop-blur-[2.5px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/30 backdrop-blur-[2.5px]" aria-hidden="true" onClick={onClose} />
       <div className="relative h-full w-full max-w-[780px] bg-white/95 backdrop-blur-2xl shadow-clay-drawer flex flex-col border-l border-white/80 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
 

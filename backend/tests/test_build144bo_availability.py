@@ -4,6 +4,8 @@ lead time and appointment window, and respects single- vs. double-appointment ca
 import uuid
 from datetime import datetime, timedelta
 
+from backend.services.dates import now_utc
+
 WK = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
 
@@ -26,7 +28,7 @@ async def _loc(client, H):
 
 def _future_date(weekday_delta=7):
     """A date `weekday_delta` days from now (deterministic, inside a 30d window)."""
-    return (datetime.utcnow().date() + timedelta(days=weekday_delta))
+    return (now_utc().date() + timedelta(days=weekday_delta))
 
 
 async def test_slots_follow_location_working_hours(client):
@@ -63,7 +65,7 @@ async def test_beyond_window_is_rejected(client):
     H = await _tenant(client)
     slug = await _slug(client, H)
     await client.put("/api/staff/public-pages", json={"appointment_window_days": 7}, headers=H)
-    far = (datetime.utcnow().date() + timedelta(days=40)).isoformat()
+    far = (now_utc().date() + timedelta(days=40)).isoformat()
     r = await client.get(f"/api/public/appointment/{slug}/slots", params={"date": far})
     assert r.status_code == 200
     assert r.json()["slots"] == []

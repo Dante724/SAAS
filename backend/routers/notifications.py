@@ -16,6 +16,7 @@ from backend.db.database import get_db
 from backend.models import NotificationTemplate, Employee, Order
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.message_vars import SHORT_VARS, TOKENS
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/notifications", tags=["notifications"])
 
@@ -405,6 +406,8 @@ async def send_test(
         what = "email address" if data.channel == "email" else "mobile number"
         raise HTTPException(400, f"Add a {what} to your profile to get a sample")
     subject, body = data.subject, data.body
+    from backend.services.message_vars import is_html
+    html = is_html(data.body)          # decided by what was typed, before any values go in
     if data.sample:
         # "Send me a sample": render against the newest job so the owner sees a real message.
         from sqlalchemy.orm import selectinload
@@ -428,7 +431,7 @@ async def send_test(
             subject = f"[Sample] {subject}"
     _creds = await notif_creds(db, current.org_id, data.channel)
     res = await _adapter_for(data.channel, _creds).send(
-        recipient=recipient, subject=subject, body=body)
+        recipient=recipient, subject=subject, body=body, html=html)
     return {"status": res.get("status"), "recipient": recipient, "error": res.get("error"), "body": body}
 
 
@@ -439,12 +442,12 @@ async def rule_stats(
 ):
     """Per customer rule: how many went out in the last 7 days, failures, and when the last
     one was sent. Plus how many customers can be texted (have a phone and haven't opted out)."""
-    from datetime import datetime, timedelta
+    from datetime import timedelta
 
     from sqlalchemy import func
 
     from backend.models import Client, NotificationLog
-    since = datetime.utcnow() - timedelta(days=7)
+    since = now_utc() - timedelta(days=7)
     rows = (await db.execute(select(
         NotificationLog.rule_id, NotificationLog.status, func.count(), func.max(NotificationLog.created_at))
         .where(NotificationLog.org_id == current.org_id, NotificationLog.rule_id.isnot(None),

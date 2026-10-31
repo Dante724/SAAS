@@ -3,12 +3,21 @@ import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { useMe } from "../../context/Me";
 import { api } from "../../api/client";
+import { BARCODE_TYPES, barcodeTypeLabel, sortBarcodes } from "../../lib/barcodes";
+import type { BarcodeType } from "../../lib/barcodes";
+import ScanButton from "../../components/ScanButton";
 import { Product, currencySymbol, money } from "./types";
 import CustomFields from "../../components/CustomFields";
 import CategoryPicker from "../../components/CategoryPicker";
 import CatalogPicker, { CatalogItem } from "../../components/CatalogPicker";
 import { useFormLayout, LayoutFields, reqStar, missingRequired, has } from "../../lib/formLayout";
 import ServiceForm, { serviceBody } from "./ServiceForm";
+import { KIT_PRINT_LABELS } from "../../lib/kitGroups";
+import MoveStockDialog from "../../components/MoveStockDialog";
+import LabelPrintDialog from "../../components/LabelPrintDialog";
+import SerialPassport from "../../components/SerialPassport";
+import { rowLabel } from "../../lib/stockBins";
+import { loadFailed } from "../../lib/notice";
 
 export type DrawerKind = "product" | "service" | "asset" | "bundle";
 type Props = { kind: DrawerKind; id?: string | null; initial?: any; onClose: () => void; onSaved?: () => void };
@@ -17,25 +26,49 @@ const BREADCRUMB: Record<DrawerKind, string> = { product: "Inventory › Stock",
 const lbl = "block font-semibold text-ink-secondary mb-1";
 const field = "glass-input w-full px-3 py-2 rounded-lg text-ink-primary text-xs";
 
-type ProdTab = "details" | "stock" | "movements" | "purchasing" | "batches";
+type ProdTab = "details" | "stock" | "units" | "movements" | "purchasing" | "batches";
 type Movement = { type: string; qty: number; at?: string; ref_type?: string; ref_id?: string; location?: string; unit_cost?: number };
 type POItem = { id: string; po_number?: string; status?: string; qty_ordered?: number; qty_received?: number; expected_at?: string };
 type Reservation = { id: string; part_id?: string; qty: number; order_id?: string; expires_at?: string };
-type StockRow = { location: string; available: number; reserved: number; value: number };
-type StockResp = { total_available: number; total_reserved: number; total_value: number; unit_cost: number; items: StockRow[] };
+type StockRow = { location: string; location_id?: string; bin_id?: string | null; bin?: string | null; available: number; reserved: number; value: number | null };
+type Unit = { id: string; serial_number: string; status: string; status_label: string; bin?: string | null; supplier_warranty_until?: string | null; received_at?: string | null };
+type StockResp = { total_available: number; total_reserved: number; total_value: number | null; unit_cost: number | null; items: StockRow[] };
 type Batch = { id: string; document?: string | null; supplier?: string | null; location?: string | null; warehouse?: string | null; unit_cost?: number; qty_received?: number; qty_remaining?: number; amount?: number; expiry_date?: string | null; received_at?: string | null; in_stock?: boolean };
 type LocLite = { id: string; name: string };
 const fmtDate = (s?: string) => (s ? new Date(s).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "—");
 
 // Inlines the authed barcode/QR SVG (/catalog/code.svg needs the bearer, so <img src> can't be used).
-function CodeSvg({ data, type }: { data: string; type: "code128" | "qr" }) {
+type CodeType = BarcodeType;
+const svgType = (t?: string | null): CodeType => (BARCODE_TYPES.some((x) => x.key === t) ? t as CodeType : "code128");
+
+function CodeSvg({ data, type }: { data: string; type: CodeType }) {
   const [svg, setSvg] = useState("");
   useEffect(() => {
     let tok = ""; try { tok = localStorage.getItem("ros_tok") || ""; } catch { /* ignore */ }
     fetch(`/api/catalog/code.svg?type=${type}&data=${encodeURIComponent(data)}`, { headers: tok ? { Authorization: `Bearer ${tok}` } : {} })
       .then((r) => (r.ok ? r.text() : "")).then(setSvg).catch(() => setSvg(""));
   }, [data, type]);
-  return <div className={`${type === "qr" ? "w-16 h-16" : "h-12 w-40"} bg-white flex items-center justify-center [&>svg]:max-w-full [&>svg]:max-h-full`} dangerouslySetInnerHTML={{ __html: svg || "" }} />;
+  return <div className={`${type === "qr" || type === "datamatrix" ? "w-16 h-16" : "h-12 w-40"} bg-white flex items-center justify-center [&>svg]:max-w-full [&>svg]:max-h-full`} dangerouslySetInnerHTML={{ __html: svg || "" }} />;
+}
+
+// How a kit prints on the customer's invoice and job printout. Plain words; the itemising-law
+// reminder shows before a shop picks one of the one-line options.
+function KitPrintChoice({ value, onChange }: { value: string; onChange: (v: string) => void }) {
+  const [warning, setWarning] = useState<string | null>(null);
+  useEffect(() => { api.get<{ warning: string | null }>("/bundles/print-warning").then((r) => setWarning(r.warning)).catch(() => { /* silent: optional print hint */ }); }, []);
+  return (
+    <fieldset className="p-3 rounded-xl bg-slate-50/90 border border-slate-200/80 space-y-1.5">
+      <legend className="px-1 text-[11px] font-bold text-ink-primary">On the customer's invoice</legend>
+      {KIT_PRINT_LABELS.map((o) => (
+        <label key={o.value} className={`flex items-start gap-2 p-2 rounded-lg border cursor-pointer bg-white ${value === o.value ? "border-primary/40 shadow-clay-sm" : "border-slate-200 hover:border-slate-300"}`}>
+          <input type="radio" name="kit-print" value={o.value} checked={value === o.value} onChange={() => onChange(o.value)} className="mt-0.5" />
+          <span><span className="block text-xs font-semibold text-ink-primary">{o.label}</span><span className="block text-[11px] text-ink-tertiary">{o.hint}</span></span>
+        </label>
+      ))}
+      <p className="text-[11px] text-ink-tertiary">Stock, cost and profit still count every part. Staff always see each item, and you can print an itemised copy for the customer any time.</p>
+      {warning && value !== "itemized" && <p role="note" className="text-[11px] text-amber-800 bg-amber-50 border border-amber-100 rounded-lg px-2 py-1.5">{warning}</p>}
+    </fieldset>
+  );
 }
 
 export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }: Props) {
@@ -50,6 +83,11 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
   const [resv, setResv] = useState<Reservation[] | null>(null);
   const [stock, setStock] = useState<StockResp | null>(null);
   const [batches, setBatches] = useState<Batch[] | null>(null);
+  const [units, setUnits] = useState<Unit[] | null>(null);           // ii144c: serialized units + passport
+  const [unitSel, setUnitSel] = useState<Set<string>>(new Set());
+  const [passport, setPassport] = useState<string | null>(null);
+  const [unitLabels, setUnitLabels] = useState(false);
+  const [moveRow, setMoveRow] = useState<StockRow | null>(null);
   // Manual stock adjust (receive / write-off / correction) — backend: POST /inventory/parts/:id/adjust
   const [locs, setLocs] = useState<LocLite[]>([]);
   const [adjOpen, setAdjOpen] = useState(false);
@@ -58,29 +96,61 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
   const editing = !!id;
   const [codeBusy, setCodeBusy] = useState(false);
   const [showCode, setShowCode] = useState(false);
-  // Assign + persist a Code128 or QR value to this product, then preview it. Needs a saved
-  // product (the endpoint writes to the row). Uses the same generator the label engine uses.
-  async function genCode(type: "code128" | "qr") {
+  // ii144a — a product can answer to several barcodes (a supplier's EAN, a repack's UPC).
+  const [codes, setCodes] = useState<{ id: string; barcode: string; barcode_type?: string | null; is_main: boolean }[] | null>(null);
+  const [newCode, setNewCode] = useState("");
+  const [newType, setNewType] = useState<string>("");
+  useEffect(() => {
+    if (kind === "product" && id && codes === null)
+      api.get<{ items: { id: string; barcode: string; is_main: boolean }[] }>(`/catalog/products/${id}/barcodes`)
+        .then((r) => setCodes(sortBarcodes(r.items || []))).catch(() => setCodes([]));
+  }, [kind, id, codes]);
+  async function addCode(scanned?: string) {
+    const v = (scanned ?? newCode).trim();
+    if (!v || !id) return;
+    setCodeBusy(true);
+    try {
+      const r = await api.post<{ barcode: string; is_main: boolean }>(`/catalog/products/${id}/barcodes`,
+        { barcode: v, barcode_type: newType || null });
+      if (r.is_main) set("barcode", r.barcode);
+      setNewCode(""); setCodes(null); flash("Barcode added");
+    } catch (e: any) { flash(e.message || "Couldn't add the barcode"); }
+    finally { setCodeBusy(false); }
+  }
+  async function removeCode(c: { id: string; barcode: string; is_main: boolean }) {
+    if (!id) return;
+    setCodeBusy(true);
+    try {
+      await api.del(`/catalog/products/${id}/barcodes/${c.id}`);
+      if (c.is_main) set("barcode", null);
+      setCodes(null); flash("Barcode removed");
+    } catch (e: any) { flash(e.message || "Couldn't remove the barcode"); }
+    finally { setCodeBusy(false); }
+  }
+  // Assign + persist a barcode or QR value to this product, then preview it. Needs a saved
+  // product (the endpoint writes to the row). ii144a: a barcode is a shop-made EAN-13 (20–29),
+  // valid at any till and never a manufacturer's number.
+  async function genCode(type: "ean13" | "qr") {
     if (!id) { flash("Save the product first, then generate a code"); return; }
     setCodeBusy(true);
     try {
       const r = await api.post<{ barcode: string; barcode_type: string }>(`/catalog/products/${id}/barcode/generate?type=${type}`, {});
-      set("barcode", r.barcode); set("barcode_type", r.barcode_type); setShowCode(true);
+      set("barcode", r.barcode); set("barcode_type", r.barcode_type); setShowCode(true); setCodes(null);
       flash(type === "qr" ? "QR generated" : "Barcode generated");
     } catch (e: any) { flash(e.message || "Could not generate code"); }
     finally { setCodeBusy(false); }
   }
 
   useEffect(() => {
-    setPtab("details"); setMoves(null); setPos(null); setResv(null); setStock(null); setBatches(null); setMvFilter("all"); setAdjOpen(false);
-    if (kind === "product" && id) api.get<{ product: Product }>(`/catalog/products/${id}`).then((r) => setP(r.product)).catch(() => {});
+    setPtab("details"); setMoves(null); setPos(null); setResv(null); setStock(null); setBatches(null); setUnits(null); setUnitSel(new Set()); setMvFilter("all"); setAdjOpen(false);
+    if (kind === "product" && id) api.get<{ product: Product }>(`/catalog/products/${id}`).then((r) => setP(r.product)).catch(loadFailed("the product"));
     else if (initial) setP(initial);
   }, [kind, id]);
 
   // Locations for the adjust form (id + name) — loaded once when editing a product.
   useEffect(() => {
     if (kind === "product" && id && locs.length === 0)
-      api.get<{ items: LocLite[] }>(`/staff/locations`).then((r) => { const it = r.items || []; setLocs(it); if (it[0]) setAdjLoc((c) => c || it[0].id); }).catch(() => {});
+      api.get<{ items: LocLite[] }>(`/staff/locations`).then((r) => { const it = r.items || []; setLocs(it); if (it[0]) setAdjLoc((c) => c || it[0].id); }).catch(loadFailed("locations"));
   }, [kind, id]);
 
   useEffect(() => {
@@ -89,13 +159,15 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
       api.get<StockResp>(`/inventory/parts/${id}/stock`).then(setStock).catch(() => setStock({ total_available: 0, total_reserved: 0, total_value: 0, unit_cost: 0, items: [] }));
     if (ptab === "movements" && moves === null)
       api.get<Movement[]>(`/inventory/parts/${id}/movements`).then((r) => setMoves(Array.isArray(r) ? r : [])).catch(() => setMoves([]));
+    if (ptab === "units" && units === null)
+      api.get<{ items: Unit[] }>(`/serials?part_id=${id}&limit=500`).then((r) => setUnits(r.items || [])).catch(() => setUnits([]));
     if (ptab === "batches" && batches === null)
       api.get<{ items: Batch[] }>(`/inventory/parts/${id}/batches`).then((r) => setBatches(r.items || [])).catch(() => setBatches([]));
     if (ptab === "purchasing" && pos === null) {
       api.get<{ items: POItem[] }>(`/inventory/parts/${id}/purchase-orders`).then((r) => setPos(r.items || [])).catch(() => setPos([]));
       api.get<{ items: Reservation[] }>(`/inventory/reservations`).then((r) => setResv((r.items || []).filter((x) => x.part_id === id))).catch(() => setResv([]));
     }
-  }, [ptab, kind, id, moves, pos, stock, batches]);
+  }, [ptab, kind, id, moves, pos, stock, batches, units]);
 
   async function submitAdjust() {
     if (!adjLoc || !adjQty) { flash("Pick a location and quantity"); return; }
@@ -133,7 +205,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
         if (!can("can_manage_bundles")) { flash("Your role can't change job kits"); return; }
         const components = (p.components || []).map((c: any) => ({ ref_type: c.ref_type, ref_id: c.ref_id, qty: Number(c.qty) || 1, device_variant: !!c.device_variant }));
         if (components.length === 0) { flash("Add at least one service or product"); return; }
-        const body = { name: p.name, price_mode: p.price_mode || "sum", price: Number(p.price) || 0, category_id: p.category_id || null, components };
+        const body = { name: p.name, price_mode: p.price_mode || "sum", price: Number(p.price) || 0, category_id: p.category_id || null, print_mode: p.print_mode || "itemized", components };
         if (editing) await api.put(`/bundles/${id}`, body); else await api.post("/bundles", body);
       } else { flash("Saved (view only for this type)"); onSaved?.(); return; }
       flash(editing ? "Saved" : "Created"); onSaved?.(); onClose();
@@ -147,7 +219,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative h-full w-full max-w-[540px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
@@ -171,7 +243,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
 
         {kind === "product" && editing && (
           <nav className="px-6 border-b border-slate-200 flex gap-6 text-xs font-semibold bg-slate-50/70">
-            {([["details", "Details"], ["stock", "Stock"], ["batches", "Batches"], ["movements", "Movements"], ["purchasing", "Purchasing"]] as [ProdTab, string][]).map(([t, label]) => (
+            {([["details", "Details"], ["stock", "Stock"], ...(p.serialized ? [["units", "Units"]] : []), ["batches", "Batches"], ["movements", "Movements"], ["purchasing", "Purchasing"]] as [ProdTab, string][]).map(([t, label]) => (
               <button key={t} onClick={() => setPtab(t)} className={`py-3 border-b-2 transition-colors ${ptab === t ? "text-primary border-primary font-bold" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{label}</button>
             ))}
           </nav>
@@ -210,15 +282,47 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                 <button type="button" onClick={() => setShowCode((v) => !v)} disabled={!p.barcode}
                   className="px-2.5 py-1 rounded-lg bg-slate-100 hover:bg-slate-200 text-ink-secondary text-xs font-semibold flex items-center gap-1.5 disabled:opacity-50">
                   <M n="barcode" c="text-xs" />{showCode ? "Hide code" : "Show code"}</button>
-                <button type="button" onClick={() => genCode("code128")} disabled={codeBusy || !editing} title={editing ? "" : "Save first"}
+                <button type="button" onClick={() => genCode("ean13")} disabled={codeBusy || !editing || !!p.barcode} title={!editing ? "Save first" : p.barcode ? "This product already has a barcode" : ""}
                   className="px-2.5 py-1 rounded-lg border border-slate-200 hover:bg-slate-50 text-ink-secondary text-xs font-medium disabled:opacity-50">Generate barcode</button>
                 <button type="button" onClick={() => genCode("qr")} disabled={codeBusy || !editing} title={editing ? "" : "Save first"}
                   className="px-2.5 py-1 rounded-lg border border-slate-200 hover:bg-slate-50 text-ink-secondary text-xs font-medium disabled:opacity-50">Generate QR</button>
               </div>
               {showCode && p.barcode && (
                 <div className="flex items-center gap-3 p-2.5 rounded-lg bg-white border border-slate-200">
-                  <CodeSvg data={p.barcode} type={p.barcode_type === "qr" ? "qr" : "code128"} />
+                  <CodeSvg data={p.barcode} type={svgType(p.barcode_type)} />
                   <span className="font-mono text-xs text-ink-secondary break-all">{p.barcode}</span>
+                </div>
+              )}
+              {editing && (
+                <div className="pt-1">
+                  <div className={lbl}>Barcodes <span className="font-normal text-ink-tertiary">(scanning any of them finds this product)</span></div>
+                  {codes === null ? <div className="text-[11px] text-ink-tertiary">Loading…</div> : (
+                    <ul className="space-y-1">
+                      {codes.map((c) => (
+                        <li key={c.id} className="flex items-center gap-2 text-xs">
+                          <span className="font-mono text-ink-primary break-all">{c.barcode}</span>
+                          {c.barcode_type && <span className="text-[11px] text-ink-tertiary">{barcodeTypeLabel(c.barcode_type)}</span>}
+                          {c.is_main && <span className="px-1.5 py-0.5 rounded bg-slate-100 text-[11px] text-ink-secondary">Main</span>}
+                          <button type="button" onClick={() => removeCode(c)} disabled={codeBusy} aria-label={`Remove barcode ${c.barcode}`}
+                            className="ml-auto w-6 h-6 rounded-md grid place-items-center text-ink-tertiary hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"><M n="close" c="text-sm" /></button>
+                        </li>
+                      ))}
+                      {codes.length === 0 && <li className="text-[11px] text-ink-tertiary">No barcode yet.</li>}
+                    </ul>
+                  )}
+                  <div className="mt-1.5 flex items-center gap-2">
+                    <input value={newCode} onChange={(e) => setNewCode(e.target.value)} maxLength={100} aria-label="Add a barcode"
+                      onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCode(); } }}
+                      placeholder="Scan or type another barcode" className={`${field} font-mono`} />
+                    <select value={newType} onChange={(e) => setNewType(e.target.value)} aria-label="Barcode type"
+                      className={`${field} w-auto appearance-none`}>
+                      <option value="">Any type</option>
+                      {BARCODE_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
+                    </select>
+                    <ScanButton title="Scan a barcode" onScan={(c) => addCode(c)} />
+                    <button type="button" onClick={() => addCode()} disabled={codeBusy || !newCode.trim()}
+                      className="px-2.5 py-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-ink-secondary text-xs font-medium disabled:opacity-50 whitespace-nowrap">Add</button>
+                  </div>
                 </div>
               )}
             </div>
@@ -276,7 +380,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
 
           {kind === "product" && ptab === "stock" && (<>
             <div className="flex items-center justify-between mb-3">
-              <span className="text-[11px] font-bold text-ink-tertiary">Stock by location</span>
+              <span className="text-[11px] font-bold text-ink-tertiary">Stock by location and bin</span>
               <button type="button" onClick={() => setAdjOpen((o) => !o)} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-blue-50 text-primary border border-blue-100 text-[11px] font-bold hover:bg-blue-100 transition-colors"><M n={adjOpen ? "close" : "tune"} c="text-sm" />{adjOpen ? "Cancel" : "Adjust stock"}</button>
             </div>
             {adjOpen && (
@@ -299,22 +403,51 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
               : stock.items.length === 0
                 ? <p className="text-ink-tertiary">No stock at any location yet.</p>
                 : <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
-                    <div className="grid grid-cols-[1fr_auto_auto_auto] gap-3 px-4 py-2.5 border-b border-slate-100 text-[11px] font-bold text-ink-tertiary"><span>Location</span><span className="text-right">Reserved</span><span className="text-right">In stock</span><span className="text-right">Value</span></div>
+                    <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-3 px-4 py-2.5 border-b border-slate-100 text-[11px] font-bold text-ink-tertiary"><span>Location · bin</span><span className="text-right">Reserved</span><span className="text-right">In stock</span><span className="text-right">Value</span><span className="w-12" /></div>
                     <div className="divide-y divide-slate-100">
                       {stock.items.map((s, i) => (
-                        <div key={i} className="grid grid-cols-[1fr_auto_auto_auto] gap-3 px-4 py-2.5 items-center">
-                          <span className="font-semibold text-ink-primary truncate">{s.location}</span>
+                        <div key={i} className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-3 px-4 py-2.5 items-center">
+                          <span className="font-semibold text-ink-primary truncate">{s.bin ? <>{s.location} · <span className="text-primary">{s.bin}</span></> : <>{s.location}<span className="ml-1.5 text-[11px] font-normal text-ink-tertiary">no bin</span></>}</span>
                           <span className="text-right tabular-nums text-ink-secondary">{s.reserved}</span>
                           <span className="text-right tabular-nums font-bold text-ink-primary">{s.available}</span>
-                          <span className="text-right tabular-nums text-ink-secondary">{money(s.value ?? 0)}</span>
+                          <span className="text-right tabular-nums text-ink-secondary">{s.value == null ? "—" : money(s.value)}</span>
+                          <span className="w-12 text-right">{s.available > 0 && s.location_id && can("can_manage_inventory") && <button type="button" onClick={() => setMoveRow(s)} className="text-[11px] font-bold text-primary hover:underline">Move</button>}</span>
                         </div>
                       ))}
                     </div>
-                    <div className="grid grid-cols-[1fr_auto_auto_auto] gap-3 px-4 py-2.5 bg-slate-50 border-t border-slate-200 text-xs font-bold">
+                    <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-3 px-4 py-2.5 bg-slate-50 border-t border-slate-200 text-xs font-bold">
                       <span className="text-ink-tertiary text-[11px] self-center">Total</span>
                       <span className="text-right tabular-nums">{stock.total_reserved ?? 0}</span>
                       <span className="text-right tabular-nums">{stock.total_available}</span>
-                      <span className="text-right tabular-nums text-emerald-600">{money(stock.total_value ?? 0)}</span>
+                      <span className="text-right tabular-nums text-emerald-600">{stock.total_value == null ? "—" : money(stock.total_value)}</span>
+                      <span className="w-12" />
+                    </div>
+                  </div>}
+          </>)}
+
+          {kind === "product" && ptab === "units" && (<>
+            <div className="flex items-center gap-2 mb-3">
+              <button type="button" onClick={() => setUnitLabels(true)} disabled={unitSel.size === 0} className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg bg-blue-50 text-primary border border-blue-100 text-[11px] font-bold hover:bg-blue-100 disabled:opacity-50"><M n="print" c="text-sm" />Print serial labels{unitSel.size ? ` (${unitSel.size})` : ""}</button>
+              <span className="flex-1" />
+              <span className="text-[11px] text-ink-tertiary">{(units || []).filter((u) => u.status === "in_stock").length} in stock · {(units || []).length} in all</span>
+            </div>
+            {units === null
+              ? <p className="text-ink-tertiary">Loading units…</p>
+              : units.length === 0
+                ? <p className="text-ink-tertiary">No units yet. Each unit appears here with its serial or IMEI when it's received.</p>
+                : <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
+                    <div className="grid grid-cols-[auto_1fr_auto_auto] gap-3 px-4 py-2.5 border-b border-slate-100 text-[11px] font-bold text-ink-tertiary">
+                      <input type="checkbox" aria-label="Select all units" checked={units.every((u) => unitSel.has(u.id))} onChange={(e) => setUnitSel(e.target.checked ? new Set(units.map((u) => u.id)) : new Set())} />
+                      <span>Serial / IMEI</span><span>Status</span><span className="text-right">Bin</span></div>
+                    <div className="divide-y divide-slate-100">
+                      {units.map((u) => (
+                        <div key={u.id} className="grid grid-cols-[auto_1fr_auto_auto] gap-3 px-4 py-2.5 items-center text-xs">
+                          <input type="checkbox" aria-label={`Select ${u.serial_number}`} checked={unitSel.has(u.id)} onChange={() => { const n = new Set(unitSel); n.has(u.id) ? n.delete(u.id) : n.add(u.id); setUnitSel(n); }} />
+                          <button type="button" onClick={() => setPassport(u.id)} className="text-left font-mono font-semibold text-primary hover:underline truncate">{u.serial_number}</button>
+                          <span className={u.status === "in_stock" ? "text-emerald-700 font-semibold" : "text-ink-secondary"}>{u.status_label}</span>
+                          <span className="text-right text-ink-tertiary">{u.bin || "—"}</span>
+                        </div>
+                      ))}
                     </div>
                   </div>}
           </>)}
@@ -477,6 +610,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                   <input type="number" value={(p.price_mode || "sum") === "fixed" ? (p.price ?? 0) : stdTotal} disabled={(p.price_mode || "sum") !== "fixed"} onChange={(e) => set("price", e.target.value)} className={`${field} font-mono font-bold disabled:opacity-60`} />
                 </div>
               </div>
+              <KitPrintChoice value={p.print_mode || "itemized"} onChange={(v) => set("print_mode", v)} />
             </div>
             );
           })()}
@@ -488,6 +622,13 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
         </div>
         {toast && <div className="absolute bottom-20 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2 rounded-xl shadow-clay-drawer z-20">{toast}</div>}
       </div>
+      {moveRow && id && moveRow.location_id && <MoveStockDialog partId={id} partName={p.name || "product"} locationId={moveRow.location_id} fromBinId={moveRow.bin_id || null}
+        fromLabel={moveRow.bin ? rowLabel(moveRow) : `${moveRow.location} (no bin)`} max={moveRow.available}
+        onClose={() => setMoveRow(null)} onMoved={() => { setMoveRow(null); setStock(null); setMoves(null); setUnits(null); flash("Stock moved"); }} />}
+      {unitLabels && <LabelPrintDialog title="Print serial labels" count={unitSel.size} noun={["unit", "units"]} prefer="Serial label" typeChoice="required"
+        render={(tid, copies, kind) => api.post<any>("/documents/render-serial-labels", { template_id: tid, serial_ids: [...unitSel], copies, barcode_type: kind || "code128" })}
+        onClose={() => setUnitLabels(false)} />}
+      {passport && <SerialPassport unitId={passport} onClose={() => { setPassport(null); setUnits(null); }} />}
     </div>
   );
 }

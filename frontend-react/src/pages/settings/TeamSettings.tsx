@@ -3,6 +3,7 @@ import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
 import { Avatar } from "../orders/look";
+import { clickable } from "../../lib/clickable";
 
 /* Settings › Team & roles — people (with pending invites), roles (who has each one and what it
    can see), and commission rules. Same endpoints as before; the drawers for people and
@@ -115,7 +116,7 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
           {team == null && <div className="p-4 text-xs text-ink-tertiary">Loading your team…</div>}
           {team && shown.length === 0 && <div className="p-6 text-center text-xs text-ink-tertiary">{ql ? `No one matches "${q}".` : "No one here yet. Invite your first teammate."}</div>}
           {shown.map((p) => (
-            <div key={p.id} onClick={() => onEditPerson(p)} className={`flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer hover:bg-slate-50 ${p.active === false ? "opacity-60" : ""}`}>
+            <div key={p.id} {...clickable(() => onEditPerson(p))} className={`flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer hover:bg-slate-50 ${p.active === false ? "opacity-60" : ""}`}>
               <Avatar name={p.name} />
               <span className="min-w-0">
                 <span className="block text-sm font-medium text-ink-primary truncate">{p.name}</span>
@@ -183,7 +184,7 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
             const who = people.find((p) => p.id === r.employee_id);
             const l = payLabel(r);
             return (
-              <div key={r.id} onClick={() => onEditRule(r)} className="flex items-center gap-3 px-3 py-3 rounded-xl cursor-pointer hover:bg-slate-50">
+              <div key={r.id} {...clickable(() => onEditRule(r))} className="flex items-center gap-3 px-3 py-3 rounded-xl cursor-pointer hover:bg-slate-50">
                 <span className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-700 grid place-items-center flex-shrink-0"><M n="payments" c="text-lg" /></span>
                 <span className="min-w-0">
                   <span className="block text-sm font-medium text-ink-primary truncate">{r.name}</span>
@@ -303,7 +304,7 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/30" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/30" aria-hidden="true" onClick={onClose} />
       <div role="dialog" aria-label={isNew ? "New role" : `Edit ${name}`} className="relative w-[560px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.28s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="px-5 pt-5 pb-3">

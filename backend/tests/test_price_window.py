@@ -3,6 +3,7 @@ from datetime import datetime, timedelta
 from types import SimpleNamespace
 
 from backend.routers.pricing import _in_window
+from backend.services.dates import now_utc
 
 
 def test_in_window_bounds():
@@ -18,7 +19,7 @@ def test_in_window_bounds():
 
 
 async def test_price_type_carries_window(client, tenant):
-    ends = (datetime.utcnow() + timedelta(days=7)).date().isoformat()
+    ends = (now_utc() + timedelta(days=7)).date().isoformat()
     r = await client.post("/api/pricing/types",
                           json={"name": "Summer promo", "markup_pct": 20, "ends_at": ends}, headers=tenant)
     assert r.status_code == 201, r.text

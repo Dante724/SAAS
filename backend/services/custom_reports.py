@@ -16,6 +16,7 @@ from typing import Optional
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.core.likes import contains
 from backend.models import Order, Invoice, Payment, Client, Part
 from backend.services.money import q2
 
@@ -124,7 +125,7 @@ def _clause(col, op: str, value):
     return {
         "eq": col == value, "ne": col != value,
         "gt": col > value, "lt": col < value, "gte": col >= value, "lte": col <= value,
-        "contains": col.ilike(f"%{value}%"),
+        "contains": contains(col, str(value)),
     }[op]
 
 

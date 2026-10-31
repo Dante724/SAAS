@@ -28,7 +28,6 @@ from backend.models import (
     OrderStatus,
     Part,
     SerializedItem,
-    StockLevel,
 )
 
 OPEN_UNIT_STATUSES = ("allocated_to_order",)
@@ -130,13 +129,17 @@ async def product_to_asset(db: AsyncSession, org_id: str, employee_id: str, *,
     # ── inventory effect: a company unit leaves available stock ───────────────
     owner_before = "company"
     if unit.location_id:
-        sl = (await db.execute(select(StockLevel).where(
-            StockLevel.part_id == part.id,
-            StockLevel.location_id == unit.location_id))).scalar_one_or_none()
-        if sl and sl.qty_available > 0:
-            await _atomic_add(db, sl, "qty_available", -(1), round_to=None)   # atomic
+        from backend.services import stock_rows
+        have, _held = await stock_rows.totals(db, part.id, unit.location_id)
+        if have > 0:      # out of the unit's own bin first
+            try:
+                await stock_rows.draw(db, part.id, unit.location_id, min(1, have), bin_id=unit.bin_id)
+            except stock_rows.NotEnoughStock:
+                pass      # taken concurrently — never below zero, as before
     unit.status = "converted_to_asset"
     unit.converted_asset_id = device.id
+    from backend.services import serial_log
+    serial_log.record(db, unit, "converted", ref_type="asset", ref_id=device.id, label="Turned into an asset")
 
     conv = AssetProductConversion(
         org_id=org_id, direction="product_to_asset", part_id=part.id,
@@ -287,14 +290,12 @@ async def asset_to_product(db: AsyncSession, org_id: str, employee_id: str, *,
             status="in_stock")
         db.add(unit)
         await db.flush()
+        from backend.services import serial_log
+        serial_log.record(db, unit, "received", ref_type="asset", ref_id=device.id, label="From an asset")
         loc = unit.location_id
         if loc:
-            sl = (await db.execute(select(StockLevel).where(
-                StockLevel.part_id == part.id, StockLevel.location_id == loc))).scalar_one_or_none()
-            if sl:
-                await _atomic_add(db, sl, "qty_available", 1, round_to=None)   # atomic
-            else:
-                db.add(StockLevel(part_id=part.id, location_id=loc, qty_available=1, qty_reserved=0))
+            from backend.services import stock_rows
+            await stock_rows.add(db, part.id, loc, 1, bin_id=unit.bin_id)
 
     device.converted_to_part_id = part.id
     device.asset_status = "for_sale" if create_stock_unit else device.asset_status

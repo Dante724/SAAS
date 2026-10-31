@@ -83,15 +83,19 @@ def session_expired(auth_time: Optional[int]) -> bool:
 MFA_ENROLLMENT_PATHS = ("/api/mfa/", "/api/auth/me", "/api/auth/refresh", "/api/auth/logout")
 
 
+# One reply for a disabled person and a suspended shop, so it says nothing about which it is.
+ACCOUNT_OFF = "This account can't sign in right now. Please contact your shop owner or Tekly support."
+
+
 def assert_org_active(org, today=None) -> None:
     """Suspended or lapsed orgs are locked out of every credential they hold — staff tokens
     and public-API keys alike."""
-    from datetime import date as _date
+    from backend.services.dates import platform_today
     if org is None:
         return
-    today = today or _date.today()
+    today = today or platform_today()
     if org.sub_status == "suspended":
-        raise HTTPException(status_code=403, detail="This account is suspended. Please contact support.")
+        raise HTTPException(status_code=403, detail=ACCOUNT_OFF)
     if getattr(org, "sub_end", None) and org.sub_end < today:
         raise HTTPException(status_code=403, detail="Your subscription has ended. Please contact support to renew.")
 
@@ -125,6 +129,8 @@ async def get_current_employee(
     employee, role = (row[0], row[1]) if row else (None, None)
     if employee is None or not employee.active:
         raise credentials_exception
+    # The flush-time tenant guard (db/tenancy.py) refuses writes to another shop's rows.
+    db.sync_session.info["tenant_org"] = employee.org_id
     # Remembered for response-level rules (cost redaction in main.py) without re-reading the token.
     request.state.employee_id = employee.id
     request.state.employee_role_id = employee.role_id
@@ -159,11 +165,11 @@ async def get_current_employee(
     # suspension" wasn't instant). Fail-closed: block suspended/expired orgs and
     # out-of-window employees. Platform admins use a separate identity and are
     # unaffected.
-    from datetime import date as _date
     from backend.models import Organisation
-    today = _date.today()
+    from backend.services.dates import platform_today
     org = (await db.execute(select(Organisation).where(
         Organisation.id == employee.org_id))).scalar_one_or_none()
+    today = platform_today()   # platform-set dates: UTC, not the tenant-controlled timezone
     assert_org_active(org, today)
     if (employee.access_start and employee.access_start > today) or \
        (employee.access_end and employee.access_end < today):

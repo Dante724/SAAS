@@ -11,8 +11,9 @@ from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
-from pydantic import BaseModel
-from typing import Optional
+from pydantic import BaseModel, Field
+from typing import Annotated, Optional
+from datetime import date as _date
 from datetime import datetime as _dt
 from backend.db.database import get_db
 from backend.services.public_names import display_name as _public_name
@@ -21,6 +22,7 @@ from backend.models import (
     OrderStatusLog, EventFeedItem, DocumentSignature,
     Feedback, FeedbackSettings,
 )
+from backend.services.dates import now_utc, shop_today
 
 router = APIRouter(prefix="/api/public", tags=["public"])
 
@@ -40,6 +42,8 @@ class AcceptIn(BaseModel):
     decision: str          # accept | decline
     signature: Optional[str] = None   # data URL
     name: Optional[str] = None
+    reason: Optional[str] = Field(default=None, max_length=1000)   # E5: why they declined
+    skip_line_ids: list[Annotated[str, Field(max_length=64)]] = Field(default_factory=list, max_length=200)   # E5: lines left out on accept
 
 
 async def _load(db: AsyncSession, token: str) -> Order:
@@ -97,6 +101,7 @@ async def _record_signature(db, order, decision, signature, who, request):
     doc_hash = hashlib.sha256(snapshot.encode("utf-8")).hexdigest()
     sig = DocumentSignature(
         org_id=order.org_id, order_id=order.id, doc_type=doc_type, decision=decision,
+        revision=_revision(order),
         signer_name=who, signature_png=signature, doc_hash=doc_hash, doc_total=total,
         currency_code=ccy, signer_ip=ip, user_agent=(ua[:300] if ua else None))
     db.add(sig)
@@ -122,18 +127,53 @@ async def _signature_required(db: AsyncSession, order: "Order") -> bool:
     return bool(getattr(org, "oe_estimate_require_signature" if order.is_estimate else "oe_wo_require_signature", False))
 
 
+def _revision(order: "Order") -> int:
+    return int(getattr(order, "estimate_revision", None) or 1)
+
+
+async def _expired(db: AsyncSession, order: "Order") -> bool:
+    """E5 — an estimate past its "valid until" date can't be approved online any more. The date
+    is the shop's: it lasts to the end of that day in the shop's time zone."""
+    vu = getattr(order, "estimate_valid_until", None)
+    if not (order.is_estimate and vu):
+        return False
+    from backend.services.dates import shop_tzname
+    try:
+        from zoneinfo import ZoneInfo
+        today = _dt.now(ZoneInfo(await shop_tzname(db, order.org_id, order.location_id))).date()
+    except Exception:  # noqa: BLE001 — an unknown zone name falls back to UTC
+        today = _date.today()
+    return vu < today
+
+
+async def _already_decided(db: AsyncSession, order: "Order") -> bool:
+    """E2 — the customer has already approved or declined this document (estimate, or work
+    order when work-order approval is on). One decision each; after that, staff take over.
+    E5 — one decision per version: a new estimate revision can be decided again."""
+    doc_type = "estimate" if order.is_estimate else "work_order"
+    return (await db.execute(select(DocumentSignature.id).where(
+        DocumentSignature.order_id == order.id, DocumentSignature.doc_type == doc_type,
+        DocumentSignature.revision == _revision(order)).limit(1))).first() is not None
+
+
 async def _decide_estimate(db: AsyncSession, order: "Order", decision: str,
                            signature: Optional[str], who: str,
-                           request: Optional[Request] = None) -> Optional[str]:
-    """Apply a customer's accept/decline to an estimate. Shared by the public
-    track page and the customer portal. Returns the converted work-order id (or None).
-    Records a client-visible feed event (+ optional signature) and moves the
-    estimate to the appropriate status, auto-converting on accept when configured.
+                           request: Optional[Request] = None, reason: Optional[str] = None) -> Optional[str]:
+    """Apply a customer's accept/decline to an estimate (or a work order, when the shop lets
+    customers approve those). Shared by the public track page and the customer portal. Returns
+    the converted work-order id (or None).
+
+    Records a client-visible feed event (+ optional signature) and a signed certificate, tells
+    the shop (G1), then moves the document through the normal status change (E3) so status
+    rules, notifications, webhooks and auto-conversion with the new-job steps all run.
     """
     verb = "accepted" if decision == "accept" else "declined"
+    doc = "estimate" if order.is_estimate else "work order"
+    reason = ((reason or "").strip()[:1000] or None) if decision == "decline" else None
+    order.estimate_decline_reason = reason      # E5: shown to staff on the job
     db.add(EventFeedItem(
         org_id=order.org_id, entity_type="order", entity_id=order.id,
-        item_type="comment", body=f"Customer {verb} the estimate",
+        item_type="comment", body=f"Customer {verb} the {doc}" + (f": {reason}" if reason else ""),
         visibility="client", author_name=who,
     ))
     if signature:
@@ -142,93 +182,93 @@ async def _decide_estimate(db: AsyncSession, order: "Order", decision: str,
             org_id=order.org_id, entity_type="order", entity_id=order.id,
             item_type="signature", media_data=signature, media_name="customer_signature.png",
             media_mime="image/png", visibility="client", author_name=who,
-            body=f"Signature on {verb} {'estimate' if order.is_estimate else 'work order'}",
+            body=f"Signature on {verb} {doc}",
         ))
 
     # 144ig — always record a tamper-evident signed-approval certificate (estimate OR work order)
     await _record_signature(db, order, decision, signature, who, request)
-    if decision == "accept" and order.is_estimate:   # WS-C: was registered but never fired
-        from backend.services.webhooks import emit_event
-        await emit_event(db, order.org_id, "estimate.accepted", {"id": order.id, "number": order.order_number})
-
-    from backend.models import OrderStatus, OrderStatusLog
-    converted_id = None
-
-    # 144ii — if the shop configured an explicit "move to status" for this doc type + decision,
-    # honour it (and convert an estimate when that target converts_to_order). Otherwise fall back
-    # to the built-in defaults (estimates only).
-    cfg_key = await _configured_target_key(db, order, decision)
-    if cfg_key:
-        st = (await db.execute(select(OrderStatus).where(
-            OrderStatus.org_id == order.org_id, OrderStatus.key == cfg_key,
-            OrderStatus.active == True))).scalars().first()  # noqa: E712
-        if st:
-            if decision == "accept" and order.is_estimate:
-                order.estimate_approved_at = _dt.utcnow()
-            prev = order.status
-            order.status = st.key
-            db.add(OrderStatusLog(order_id=order.id, from_status=prev, to_status=st.key,
-                                  note=f"{verb.capitalize()} by customer"))
-            await db.flush()
-            if getattr(st, "converts_to_order", False) and order.is_estimate and not order.converted_order_id:
-                from backend.routers.orders import _convert_estimate
-
-                class _Sys:
-                    id = None
-                    org_id = order.org_id
-                converted_id = await _convert_estimate(db, _Sys(), order)
-        return converted_id
-
-    if not order.is_estimate:
-        return converted_id
-    if decision == "accept":
+    if decision == "accept" and order.is_estimate:
         # Build 75: record WHEN the customer approved, so the approval is auditable
         # independently of the status the estimate happens to land in.
-        order.estimate_approved_at = _dt.utcnow()
-        # notify the assigned technician of the customer's approval
-        try:
-            if order.assigned_to_id:
-                from backend.services.push import notify
-                await notify(db, org_id=order.org_id, employee_id=order.assigned_to_id,
-                             kind="estimate.approved", title=f"Estimate approved · {order.order_number}",
-                             body="Customer accepted the estimate", deep_link=f"/tech#/order/{order.id}",
-                             commit=False)
-        except Exception:
-            pass
-        # Build 144w: workflow automations for estimate_approved (best-effort).
-        try:
+        order.estimate_approved_at = now_utc()
+        from backend.services.webhooks import emit_event   # WS-C: was registered but never fired
+        await emit_event(db, order.org_id, "estimate.accepted", {"id": order.id, "number": order.order_number})
+
+    # G1 — the shop hears about it: owner, the job's manager and its assignee.
+    from backend.services.customer_messages import notify_staff_about_customer
+    approved = decision == "accept"
+    await notify_staff_about_customer(
+        db, order, kind="estimate.approved" if approved else "estimate.declined",
+        title=f"{doc.capitalize()} {'approved' if approved else 'declined'} · {order.order_number}",
+        body=f"{who or 'The customer'} {'approved' if approved else 'declined'} the {doc} online."
+             + (f" Reason: {reason}" if reason else "")
+             + (f" Left out: {', '.join(order._skipped_lines)}." if getattr(order, "_skipped_lines", None) else ""))
+
+    if approved and order.is_estimate:
+        try:   # Build 144w: workflow automations for estimate_approved (best-effort).
             from backend.services import automation as _auto
             await _auto.run(db, order.org_id, "estimate_approved", order=order)
-        except Exception:
+        except Exception:  # noqa: BLE001
             pass
-        target = (await db.execute(select(OrderStatus).where(
-            OrderStatus.org_id == order.org_id, OrderStatus.is_estimate == True,  # noqa: E712
-            OrderStatus.converts_to_order == True, OrderStatus.active == True))).scalars().first()  # noqa: E712
-        if not target:
-            target = (await db.execute(select(OrderStatus).where(
-                OrderStatus.org_id == order.org_id, OrderStatus.is_estimate == True,  # noqa: E712
-                OrderStatus.status_group == "closed", OrderStatus.active == True))).scalars().first()  # noqa: E712
-        if target:
-            prev = order.status
-            order.status = target.key
-            db.add(OrderStatusLog(order_id=order.id, from_status=prev, to_status=target.key, note="Accepted by customer"))
-            await db.flush()
-            if getattr(target, "converts_to_order", False) and not order.converted_order_id:
-                from backend.routers.orders import _convert_estimate
 
-                class _Sys:
-                    id = None
-                    org_id = order.org_id
-                converted_id = await _convert_estimate(db, _Sys(), order)
-    else:  # decline
-        target = (await db.execute(select(OrderStatus).where(
-            OrderStatus.org_id == order.org_id, OrderStatus.is_estimate == True,  # noqa: E712
-            OrderStatus.status_group == "dropped", OrderStatus.active == True))).scalars().first()  # noqa: E712
-        if target:
-            prev = order.status
-            order.status = target.key
-            db.add(OrderStatusLog(order_id=order.id, from_status=prev, to_status=target.key, note="Declined by customer"))
-    return converted_id
+    target = await _decision_target(db, order, decision)
+    if not target or target.key == order.status:
+        return None
+    return await _move_for_customer(db, order, target, f"{verb.capitalize()} by customer", who)
+
+
+async def _decision_target(db: AsyncSession, order: "Order", decision: str):
+    """Where the document goes: the status the shop configured for this decision (144ii), else
+    the built-in default for estimates (accept → the "converts to order" status, or a closed
+    one; decline → a dropped one). Work orders without a configured status stay put."""
+    from backend.models import OrderStatus
+    cfg_key = await _configured_target_key(db, order, decision)
+    if cfg_key:
+        return (await db.execute(select(OrderStatus).where(
+            OrderStatus.org_id == order.org_id, OrderStatus.key == cfg_key,
+            OrderStatus.record_type == ("estimate" if order.is_estimate else "work_order"),
+            OrderStatus.active == True))).scalars().first()  # noqa: E712
+    if not order.is_estimate:
+        return None
+    est = (OrderStatus.org_id == order.org_id, OrderStatus.is_estimate == True,  # noqa: E712
+           OrderStatus.active == True)  # noqa: E712
+    if decision == "accept":
+        return ((await db.execute(select(OrderStatus).where(
+            *est, OrderStatus.converts_to_order == True))).scalars().first()  # noqa: E712
+            or (await db.execute(select(OrderStatus).where(
+                *est, OrderStatus.status_group == "closed"))).scalars().first())
+    return (await db.execute(select(OrderStatus).where(
+        *est, OrderStatus.status_group == "dropped"))).scalars().first()
+
+
+async def _move_for_customer(db: AsyncSession, order: "Order", target, note: str, who: str) -> Optional[str]:
+    """E3 — run the customer's decision through the same status change staff use. A shop gate
+    meant for staff (e.g. "needs a comment first") must not undo what the customer decided, so
+    when one refuses, the status is set directly and the job says why."""
+    from backend.models import OrderStatusLog
+    from backend.routers.feed import log_system_event
+    from backend.routers.orders import SystemActor, _apply_status_change, _convert_estimate
+    actor = SystemActor(order.org_id, name=who or "Customer")
+    await db.refresh(order, ["lines"])
+    try:
+        res = await _apply_status_change(db, actor, order, target.key, note=note)
+        return res.get("converted_order_id")
+    except HTTPException as exc:
+        if not order.is_estimate:
+            # A work order's gates (payment, checklist, stock, signature) hold even for the customer.
+            await log_system_event(db, order.org_id, "order", order.id,
+                                   f"Customer {note.split(' ')[0].lower()}; status not changed: {exc.detail}")
+            return None
+        prev = order.status
+        order.status = target.key
+        order.status_entered_at = _dt.utcnow()
+        db.add(OrderStatusLog(order_id=order.id, from_status=prev, to_status=target.key, note=note))
+        await log_system_event(db, order.org_id, "order", order.id,
+                               f"Moved to '{target.name}' for the customer without the usual check: {exc.detail}")
+        await db.flush()
+        if getattr(target, "converts_to_order", False) and order.is_estimate and not order.converted_order_id:
+            return await _convert_estimate(db, actor, order)
+        return None
 
 
 @router.get("/track/{token}")
@@ -306,10 +346,22 @@ async def _track_payload(db: AsyncSession, order: "Order") -> dict:
     _inames = await _ma.item_names(db, order.org_id, [l.order_item_id for l in _lines])
     if _inames:
         _lines = _ma.sort_by_item(_lines, _inames, key=lambda l: l.order_item_id)
-    lines_pub = [{"label": l.description or (l.kind or l.line_type or "Item").title(),
+    # A kit set to print as one line is one row here too (kit_print is the only way customer
+    # pages get lines); its amount is the sum of its real lines.
+    from backend.services import kit_print as _kp
+    def _amt(l):
+        return q2(sum(_line_amt(m) for m in l.members)) if getattr(l, "is_kit", False) else _line_amt(l)
+    lines_pub = [{"id": _row_id(l),
+                  # E5 — what leaving this row out takes off the total (tax included), and its kit:
+                  # a kit is approved or left out as a whole
+                  "total": q2(sum(float(m.total or 0) for m in _row_members(l)) * (_fx or 1)),
+                  "group": getattr(_row_members(l)[0], "bundle_group_id", None),
+                  "label": l.description or (l.kind or l.line_type or "Item").title(),
                   "qty": l.qty or 1, "kind": l.kind or l.line_type,
-                  "amount": _line_amt(l),
-                  **({"item": (_inames.get(l.order_item_id) or (None,))[0]} if _inames else {})} for l in _lines]
+                  "amount": _amt(l),
+                  **({"includes": list(l.includes)} if getattr(l, "includes", None) else {}),
+                  **({"item": (_inames.get(l.order_item_id) or (None,))[0]} if _inames else {})}
+                 for l in _kp.customer_lines(_lines)]
 
     # 144ix — customer review capture: expose active feedback settings + whether this
     # order already has a submitted rating. Actual submit is token-gated below.
@@ -377,7 +429,14 @@ async def _track_payload(db: AsyncSession, order: "Order") -> dict:
         # 144dr — only expose the scheduled date when the org opted in.
         "scheduled_for": (order.scheduled_for.isoformat() if order.scheduled_for else None) if getattr(org, "oe_show_scheduled", False) else None,
         "scheduled_to": (order.scheduled_to.isoformat() if getattr(order, "scheduled_to", None) else None) if getattr(org, "oe_show_scheduled", False) else None,
-        "awaiting_approval": await _can_sign(db, order),
+        "awaiting_approval": (awaiting := await _can_sign(db, order)),
+        # E5 — estimate terms: valid until, which version, picking lines, the deposit at approval
+        "valid_until": order.estimate_valid_until.isoformat() if (order.is_estimate and order.estimate_valid_until) else None,
+        "expired": await _expired(db, order),
+        "revision": _revision(order) if order.is_estimate else None,
+        "can_choose_lines": bool(awaiting and order.is_estimate and len(lines_pub) > 1
+                                 and getattr(org, "oe_estimate_line_choice", True)),
+        "deposit": await _deposit_block(db, order, _fx),
         # Per-status messaging rule (services/messaging_rule): box hidden client-side, enforced
         # server-side. When it's closed for this order, the page offers "Start a new request".
         **(await _message_fields(db, order, org)),
@@ -414,20 +473,203 @@ async def _track_payload(db: AsyncSession, order: "Order") -> dict:
 @router.post("/track/{token}/respond")
 async def respond(token: str, data: AcceptIn, request: Request, db: AsyncSession = Depends(get_db)):
     order = await _load(db, token)
-    if not await _can_sign(db, order):
-        raise HTTPException(403, "Online approval is not available for this document right now")
-    if data.decision not in ("accept", "decline"):
-        raise HTTPException(400, "Invalid decision")
-    if data.decision == "accept" and not data.signature and await _signature_required(db, order):
-        raise HTTPException(422, "A signature is required to accept this document")
-
+    # E2 — lock the row so two clicks (or two tabs) can't both decide
+    order = (await db.execute(select(Order).where(Order.id == order.id).with_for_update())).scalar_one()
     who = data.name or (
         (await db.execute(select(Client).where(Client.id == order.client_id))).scalar_one_or_none().name
         if order.client_id else "Customer"
     )
-    converted_id = await _decide_estimate(db, order, data.decision, data.signature, who, request)
+    converted_id = await _respond(db, order, data, who, request)
     await db.commit()
     return {"ok": True, "decision": data.decision, "converted_order_id": converted_id}
+
+
+async def _respond(db: AsyncSession, order: "Order", data: AcceptIn, who: str, request: Request) -> Optional[str]:
+    """The checks and the decision shared by the track page and the customer portal."""
+    if await _already_decided(db, order):
+        raise HTTPException(409, "You've already responded to this. Contact the shop to change your answer.")
+    if data.decision not in ("accept", "decline"):
+        raise HTTPException(400, "Invalid decision")
+    if await _expired(db, order):
+        raise HTTPException(410, f"This estimate expired on {order.estimate_valid_until:%d %b %Y}. "
+                                 "Contact the shop for an up-to-date one.")
+    if not await _can_sign(db, order):
+        raise HTTPException(403, "Online approval is not available for this document right now")
+    if data.decision == "accept" and not data.signature and await _signature_required(db, order):
+        raise HTTPException(422, "A signature is required to accept this document")
+    if data.decision == "accept" and data.skip_line_ids:
+        if not await _line_choice(db, order):
+            raise HTTPException(403, "This shop asks you to approve the whole estimate. Contact them to change it.")
+        await _skip_lines(db, order, data.skip_line_ids, who)
+    return await _decide_estimate(db, order, data.decision, data.signature, who, request, reason=data.reason)
+
+
+async def _line_choice(db: AsyncSession, order: "Order") -> bool:
+    """E5 — the shop lets customers untick estimate lines (Settings → Customer pages)."""
+    org = (await db.execute(select(Organisation).where(Organisation.id == order.org_id))).scalar_one_or_none()
+    return bool(org and getattr(org, "oe_estimate_line_choice", True))
+
+
+async def _public_rows(db: AsyncSession, order: "Order") -> list:
+    """The estimate's lines as the customer sees them (a kit printed as one line is one row)."""
+    from backend.models import OrderLine as _OL
+    from backend.services import kit_print as _kp
+    from backend.services import multi_asset as _ma
+    lines = (await db.execute(select(_OL).where(_OL.order_id == order.id))).scalars().all()
+    names = await _ma.item_names(db, order.org_id, [ln.order_item_id for ln in lines])
+    if names:
+        lines = _ma.sort_by_item(lines, names, key=lambda ln: ln.order_item_id)
+    return _kp.customer_lines(lines)
+
+
+def _row_id(row) -> str:
+    """A customer row's id is its first real line's id; the row stands for all of its lines."""
+    return row.members[0].id if getattr(row, "is_kit", False) else row.id
+
+
+def _row_members(row) -> list:
+    return list(row.members) if getattr(row, "is_kit", False) else [row]
+
+
+async def _skip_lines(db: AsyncSession, order: "Order", skip_ids: list[str], who: str) -> None:
+    """E5 — line-by-line approval: the customer accepts the estimate without some of its lines.
+    What was offered is kept as a revision (with what they left out); the lines they skipped come
+    off the estimate before it becomes the job. Lines of one kit go together."""
+    if not order.is_estimate:
+        raise HTTPException(400, "Lines can only be left out of an estimate")
+    from backend.models import OrderLine as _OL
+    from backend.models import TimeEntry as _TE
+    from backend.routers.orders import _recalc_order
+    rows = await _public_rows(db, order)
+    by_id = {_row_id(r): r for r in rows}
+    skip = list(dict.fromkeys(skip_ids))
+    if any(i not in by_id for i in skip):
+        raise HTTPException(400, "That line isn't on this estimate. Reload the page and try again.")
+    drop = {m.id for i in skip for m in _row_members(by_id[i])}
+    kits = {m.bundle_group_id for r in rows for m in _row_members(r) if m.id in drop and m.bundle_group_id}
+    if kits:     # a kit is all-or-nothing, even when it prints item by item
+        drop |= {m.id for r in rows for m in _row_members(r) if m.bundle_group_id in kits}
+    if all(m.id in drop for r in rows for m in _row_members(r)):
+        raise HTTPException(400, "Keep at least one line, or decline the estimate instead.")
+    skipped = [r.description for r in rows if any(m.id in drop for m in _row_members(r))]
+    await snapshot_revision(db, order, decision="approved", skipped=skipped)   # what was offered
+    from backend.services.invoice_money import release_line
+    for lid in drop:
+        await release_line(db, lid)
+    await db.execute(_TE.__table__.update().where(_TE.order_line_id.in_(drop)).values(order_line_id=None))
+    from backend.models import Recommendation as _R      # an approved extra whose line is left out
+    await db.execute(_R.__table__.update().where(_R.order_id == order.id, _R.order_line_id.in_(drop)).values(
+        order_line_id=None, status="declined", decline_reason="not_needed", decided_at=_dt.utcnow()))
+    await db.execute(_OL.__table__.delete().where(_OL.order_id == order.id, _OL.id.in_(drop)))
+    await db.flush()
+    db.expire(order, ["lines"])
+    await _recalc_order(db, order)
+    if float(order.deposit_amount or 0) > float(order.total or 0):
+        order.deposit_amount = q2(float(order.total or 0))   # a deposit never asks for more than the job
+    db.add(EventFeedItem(org_id=order.org_id, entity_type="order", entity_id=order.id, item_type="status",
+                         visibility="internal", body=f"{who or 'The customer'} left out: {', '.join(skipped)}"))
+    order._skipped_lines = skipped     # read by the staff alert in _decide_estimate
+
+
+async def snapshot_revision(db: AsyncSession, order: "Order", *, decision: Optional[str] = None,
+                            skipped: Optional[list] = None, note: Optional[str] = None, actor=None):
+    """E5 — keep the estimate as it stands now (lines, total, terms, the customer's answer) as history."""
+    from backend.models import EstimateRevision
+    from backend.models import OrderLine as _OL
+    lines = (await db.execute(select(_OL).where(_OL.order_id == order.id))).scalars().all()
+    if decision is None:
+        last = (await db.execute(select(DocumentSignature.decision).where(
+            DocumentSignature.order_id == order.id, DocumentSignature.doc_type == "estimate",
+            DocumentSignature.revision == _revision(order)).order_by(DocumentSignature.signed_at.desc())
+        )).scalars().first()
+        decision = {"accept": "approved", "decline": "declined"}.get(last or "")
+    rev = EstimateRevision(
+        org_id=order.org_id, order_id=order.id, revision=_revision(order),
+        lines=[{"description": ln.description, "qty": float(ln.qty or 0), "unit_price": float(ln.unit_price or 0),
+                "total": float(ln.total or 0), "kind": ln.kind or ln.line_type} for ln in lines],
+        total=float(order.total or 0), valid_until=order.estimate_valid_until,
+        deposit_amount=float(order.deposit_amount or 0), decision=decision,
+        decline_reason=order.estimate_decline_reason if decision == "declined" else None,
+        skipped=list(skipped or []), note=(note or "")[:500] or None,
+        created_by_id=getattr(actor, "id", None), created_by_name=getattr(actor, "name", None))
+    db.add(rev)
+    await db.flush()
+    return rev
+
+
+async def _paid_toward_deposit(db: AsyncSession, order: "Order") -> float:
+    """Money that counts toward the deposit: for a deposit asked at an estimate's approval, what
+    was paid since the approval (an earlier diagnostic fee doesn't count); otherwise all of it."""
+    from sqlalchemy import func
+
+    from backend.models import Payment
+    from backend.services.order_money import net_paid
+    since = getattr(order, "estimate_approved_at", None)
+    if not since:
+        return await net_paid(db, order.id)
+    rows = dict((await db.execute(select(Payment.kind, func.coalesce(func.sum(Payment.amount), 0)).where(
+        Payment.order_id == order.id, Payment.paid_at >= since).group_by(Payment.kind))).all())
+    return q2(float(rows.get("payment", 0) or 0) + float(rows.get("prepayment", 0) or 0)
+              - abs(float(rows.get("refund", 0) or 0)))
+
+
+async def _deposit_block(db: AsyncSession, order: "Order", fx) -> Optional[dict]:
+    """E5 — the deposit the shop asks for at approval: how much, what's paid, and whether the
+    customer can pay it online now (once they've approved, while the job is open and before it's
+    invoiced; after that the invoice is what they pay)."""
+    amount = q2(float(order.deposit_amount or 0))
+    if amount <= 0:
+        return None
+    from backend.models import OrderStatus as _OS
+    st = (await db.execute(select(_OS).where(
+        _OS.org_id == order.org_id, _OS.key == order.status,
+        _OS.record_type == ("estimate" if order.is_estimate else "work_order")))).scalars().first()
+    stopped = bool(order.closed_at or (st and (st.is_terminal or st.status_group in ("closed", "dropped"))))
+    if not stopped:
+        from backend.services.invoice_money import invoices_for_order
+        stopped = bool(await invoices_for_order(db, order.id))
+    paid = q2(min(max(0.0, await _paid_toward_deposit(db, order)), amount))
+    due = q2(amount - paid)
+    approved = (not order.is_estimate) or bool(order.estimate_approved_at)
+    rate = fx or 1
+    return {"amount": q2(amount * rate), "paid": q2(paid * rate), "due": q2(due * rate),
+            "can_pay": bool(due > 0 and approved and not stopped)}
+
+
+@router.post("/track/{token}/deposit", status_code=201)
+async def track_deposit_link(token: str, request: Request, db: AsyncSession = Depends(get_db)):
+    """E5 — the customer pays the deposit the shop asked for: a pay link for what's still due on it
+    (the same link again while it still asks for that amount)."""
+    from backend.services.ratelimit import aenforce as _rate, client_ip as _ip
+    await _rate("track_deposit", f"{_ip(request)}:{token}", limit=10, window_sec=600)
+    order = await _load(db, token)
+    order = (await db.execute(select(Order).where(Order.id == order.id).with_for_update())).scalar_one()
+    block = await _deposit_block(db, order, 1)
+    if not block or not block["can_pay"]:
+        raise HTTPException(409, "There's no deposit to pay on this right now.")
+    from backend.config import settings
+    from backend.models import PaymentIntent
+    from backend.services import payments as pay
+    existing = (await db.execute(select(PaymentIntent).where(
+        PaymentIntent.org_id == order.org_id, PaymentIntent.order_id == order.id,
+        PaymentIntent.status.in_(("created", "viewed", "pending"))
+    ).order_by(PaymentIntent.created_at.desc()))).scalars().first()
+    if existing and abs(float(existing.amount or 0) - block["due"]) < 0.005:
+        intent = existing
+    else:
+        if existing:      # one live link per job: a stale one is closed at the provider first
+            from backend.services.order_money import revoke_pay_link
+            await revoke_pay_link(db, existing)
+        try:
+            intent = await pay.create_intent(db, org_id=order.org_id, order_id=order.id,
+                                             amount=block["due"], account_id=None)
+        except RuntimeError:
+            raise HTTPException(502, "Online payment isn't available right now. Please contact the shop.")
+        await db.commit()
+    base = (settings.PUBLIC_BASE_URL or "").rstrip("/")
+    rel = intent.checkout_url if (intent.provider != "simulated" and intent.checkout_url) else f"/pay/{intent.id}"
+    url = (base + rel) if (base and rel.startswith("/")) else rel
+    return {"intent_id": intent.id, "amount": float(intent.amount), "currency": intent.currency, "url": url}
 
 
 @router.get("/track/{token}/certificate.pdf")
@@ -485,7 +727,8 @@ async def _paid_fields(db: AsyncSession, order: "Order", fx) -> dict:
 async def _client_by_portal(db: AsyncSession, token: str) -> Client:
     if not token:
         raise HTTPException(404, "Not found")
-    client = (await db.execute(select(Client).where(Client.portal_token == token))).scalar_one_or_none()
+    from backend.services import portal_links
+    client = await portal_links.client_for(db, token)
     if not client:
         raise HTTPException(404, "Portal not found")
     return client
@@ -597,15 +840,11 @@ async def portal_respond(token: str, order_id: str, data: AcceptIn, request: Req
     if data.decision not in ("accept", "decline"):
         raise HTTPException(400, "Invalid decision")
     order = (await db.execute(
-        select(Order).where(Order.id == order_id, Order.client_id == client.id)
+        select(Order).where(Order.id == order_id, Order.client_id == client.id).with_for_update()
     )).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
-    if not await _can_sign(db, order):
-        raise HTTPException(403, "Online approval is not available for this document right now")
-    if data.decision == "accept" and not data.signature and await _signature_required(db, order):
-        raise HTTPException(422, "A signature is required to accept this document")
-    converted_id = await _decide_estimate(db, order, data.decision, data.signature, data.name or client.name, request)
+    converted_id = await _respond(db, order, data, data.name or client.name, request)
     await db.commit()
     return {"ok": True, "decision": data.decision, "converted_order_id": converted_id}
 
@@ -621,7 +860,7 @@ async def _can_sign(db: AsyncSession, order: "Order") -> bool:
     oe_allow_approval; work orders are opt-in (oe_wo_allow_approval). Each has an
     optional comma-separated status allow-list; empty = any status (Orderry parity)."""
     org = (await db.execute(select(Organisation).where(Organisation.id == order.org_id))).scalar_one_or_none()
-    if not org:
+    if not org or await _expired(db, order) or await _already_decided(db, order):
         return False
     if order.is_estimate:
         if not getattr(org, "oe_allow_approval", True):
@@ -632,7 +871,14 @@ async def _can_sign(db: AsyncSession, order: "Order") -> bool:
             return False
         raw = getattr(org, "oe_wo_approval_statuses", "") or ""
     allowed = [s.strip() for s in raw.split(",") if s.strip()]
-    return (not allowed) or (order.status in allowed)
+    if not allowed:
+        # "any status" still means an open one: a closed or dropped job can't be approved again
+        from backend.models import OrderStatus as _OS
+        st = (await db.execute(select(_OS).where(
+            _OS.org_id == order.org_id, _OS.key == order.status,
+            _OS.record_type == ("estimate" if order.is_estimate else "work_order")))).scalars().first()
+        return not (st and (st.is_terminal or st.status_group in ("closed", "dropped")))
+    return order.status in allowed
 
 
 async def _recommend_enabled(db: AsyncSession, org_id: str) -> bool:
@@ -704,8 +950,6 @@ async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDe
     seam; the rows are locked so a double tap can't add the same work twice."""
     if not await _recommend_enabled(db, order.org_id):
         raise HTTPException(403, "Recommendations are turned off for this shop")
-    from datetime import date as _date
-    from datetime import datetime as _dt
     from datetime import timedelta as _td
 
     from backend.models import Recommendation as _R
@@ -736,6 +980,7 @@ async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDe
         r.decided_by_name = name
         added += float(line.total or 0)
         approved += 1
+    remind_on = await shop_today(db, order.org_id) + _td(days=REMIND_AFTER_DAYS) if later else None
     for rid in later:
         r = rows.get(rid)
         if not r or r.status != "sent":
@@ -743,8 +988,8 @@ async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDe
             continue
         r.status = "declined"
         r.decline_reason = "not_now"
-        r.decided_at = _dt.utcnow()
-        r.remind_after = _date.today() + _td(days=REMIND_AFTER_DAYS)
+        r.decided_at = now_utc()
+        r.remind_after = remind_on
         r.decided_by_name = name
         later_n += 1
     decided = approved + later_n
@@ -752,7 +997,12 @@ async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDe
         order.rec_unread = (order.rec_unread or 0) + decided
         # Add the chosen work to the job's total (a job priced at check-in may have no lines
         # yet, so recomputing from lines would wipe its quoted price).
-        order.total = q2(float(order.total or 0) + added)
+        prev_total = float(order.total or 0)
+        order.total = q2(prev_total + added)
+        if added:
+            # A draft invoice for the job follows the new total; a sent one keeps its own.
+            from backend.services.invoice_money import sync_order_invoices
+            await sync_order_invoices(db, order, prev_total)
         parts = []
         if approved:
             parts.append(f"added {approved} recommended item{'s' if approved != 1 else ''}")
@@ -761,10 +1011,30 @@ async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDe
         db.add(EventFeedItem(org_id=order.org_id, entity_type="order", entity_id=order.id,
                              item_type="status", visibility="internal",
                              body=f"{name or 'The customer'} {' and '.join(parts)}."))
+        if approved:
+            await customer_approved_work(db, order, name or "Customer")
         # Who confirmed and when is kept on each item (decided_by_name / decided_at); the signed
         # estimate/work-order record is left alone, so adding an extra never reads as "signed".
     return {"approved": approved, "saved_for_later": later_n, "declined": later_n, "skipped": skipped,
             "total": q2(float(order.total or 0))}
+
+
+async def customer_approved_work(db: AsyncSession, order: "Order", who: str) -> None:
+    """The customer said yes to recommended work (online, or by phone through staff). When the shop
+    set a status for "customer accepts" on work orders, the job moves there through the normal
+    status change, so status rules, notifications, webhooks and the job's own gates all apply."""
+    if order.is_estimate:
+        return
+    from backend.models import OrderStatus as _OS
+    cur = (await db.execute(select(_OS).where(
+        _OS.org_id == order.org_id, _OS.key == order.status, _OS.record_type == "work_order"))).scalars().first()
+    if cur and (cur.is_terminal or cur.status_group in ("closed", "dropped")):
+        return      # a finished job stays where it is
+    target = await _decision_target(db, order, "accept")
+    if cur and target and (target.sort_order or 0) < (cur.sort_order or 0):
+        return      # never backwards: a job already past that status stays where it is
+    if target and target.key != order.status:
+        await _move_for_customer(db, order, target, "Approved by customer", who)
 
 
 async def _org(db: AsyncSession, org_id: str):
@@ -795,10 +1065,27 @@ async def _post_client_message(db: AsyncSession, order: "Order", body: str, who:
         org_id=order.org_id, entity_type="order", entity_id=order.id,
         item_type="client_message", body=body, author_name=who or "Customer", visibility="client"))
     order.client_msg_unread = (order.client_msg_unread or 0) + 1
+    # G1 — tell the shop, once per burst: no new alert while the last one for this job is unread
+    # and under 10 minutes old, so a chatty (or hostile) page can't flood staff phones.
+    from datetime import timedelta as _td
+
+    from backend.models import StaffNotification
+    from backend.services.customer_messages import notify_staff_about_customer
+    recent = (await db.execute(select(StaffNotification.id).where(
+        StaffNotification.org_id == order.org_id, StaffNotification.kind == "client.message",
+        StaffNotification.deep_link == f"/tech#/order/{order.id}", StaffNotification.read_at.is_(None),
+        StaffNotification.created_at >= _dt.utcnow() - _td(minutes=10)).limit(1))).first()
+    if not recent:
+        name = "".join(ch for ch in (who or "the customer") if ch.isprintable())[:60] or "the customer"
+        await notify_staff_about_customer(db, order, kind="client.message",
+                                          title=f"Message from {name} · {order.order_number}",
+                                          body=body[:300])
 
 
 @router.post("/track/{token}/message")
-async def track_message(token: str, data: MessageIn, db: AsyncSession = Depends(get_db)):
+async def track_message(token: str, data: MessageIn, request: Request, db: AsyncSession = Depends(get_db)):
+    from backend.services.ratelimit import aenforce as _rate, client_ip as _ip
+    await _rate("track_msg", f"{_ip(request)}:{token}", limit=10, window_sec=600)
     order = await _load(db, token)
     who = data.name or (
         (await db.execute(select(Client).where(Client.id == order.client_id))).scalar_one_or_none().name
@@ -840,7 +1127,7 @@ async def track_new_request(token: str, data: NewRequestIn, request: Request, db
                 name=(client.name if client else "Customer")[:200],
                 phone=(client.phone if client else None), email=(client.email if client else None),
                 client_id=client.id if client else None, source="web",
-                inquiry=f"{ref}: {body}"[:2000], sla_due_at=_dt.utcnow() + _td(minutes=60))
+                inquiry=f"{ref}: {body}"[:2000], sla_due_at=now_utc() + _td(minutes=60))
     db.add(lead)
     await db.flush()
     await log_system_event(db, order.org_id, "lead", lead.id, f"New request from the track page — {ref}")
@@ -876,7 +1163,7 @@ async def track_submit_feedback(token: str, data: TrackFeedbackIn, db: AsyncSess
     fb.system = fset.system
     fb.rating = data.rating
     fb.comment = (data.comment or None)
-    fb.submitted_at = _dt.utcnow()
+    fb.submitted_at = now_utc()
     from backend.routers.feed import log_system_event
     await log_system_event(db, order.org_id, "order", order.id,
                            f"Customer left feedback: {data.rating}{' — ' + data.comment if data.comment else ''}")
@@ -888,7 +1175,10 @@ async def track_submit_feedback(token: str, data: TrackFeedbackIn, db: AsyncSess
 
 
 @router.post("/portal/{token}/order/{order_id}/message")
-async def portal_message(token: str, order_id: str, data: MessageIn, db: AsyncSession = Depends(get_db)):
+async def portal_message(token: str, order_id: str, data: MessageIn, request: Request,
+                         db: AsyncSession = Depends(get_db)):
+    from backend.services.ratelimit import aenforce as _rate, client_ip as _ip
+    await _rate("track_msg", f"{_ip(request)}:{token}", limit=10, window_sec=600)
     client = await _client_by_portal(db, token)
     order = (await db.execute(select(Order).where(Order.id == order_id, Order.client_id == client.id))).scalar_one_or_none()
     if not order:
@@ -901,6 +1191,8 @@ async def portal_message(token: str, order_id: str, data: MessageIn, db: AsyncSe
 @router.post("/track/{token}/recommendations/decide")
 async def track_decide_recs(token: str, data: RecDecideIn, request: Request, db: AsyncSession = Depends(get_db)):
     order = await _load(db, token)
+    # lock the job: the decision may move its status, which must not race a second tap
+    order = (await db.execute(select(Order).where(Order.id == order.id).with_for_update())).scalar_one()
     result = await _decide_recommendations(db, order, data, request)
     await db.commit()
     return {"ok": True, **result}
@@ -911,7 +1203,7 @@ async def portal_decide_recs(token: str, order_id: str, data: RecDecideIn, reque
                              db: AsyncSession = Depends(get_db)):
     client = await _client_by_portal(db, token)
     order = (await db.execute(select(Order).where(
-        Order.id == order_id, Order.client_id == client.id))).scalar_one_or_none()
+        Order.id == order_id, Order.client_id == client.id).with_for_update())).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
     result = await _decide_recommendations(db, order, data, request)
@@ -1375,7 +1667,7 @@ async def appointment_request(slug: str, data: AppointmentRequestIn, request: Re
     lead = Lead(org_id=org.id, name=data.name.strip()[:200],
                 phone=(data.phone or "")[:40] or None, email=(data.email or "")[:200] or None,
                 source="web", inquiry=inquiry[:2000],
-                sla_due_at=_dt.utcnow() + _td(minutes=60))
+                sla_due_at=now_utc() + _td(minutes=60))
     db.add(lead)
     await db.flush()
     from backend.routers.feed import log_system_event
