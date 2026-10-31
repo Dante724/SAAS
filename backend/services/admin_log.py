@@ -48,7 +48,27 @@ async def write(db, *, admin: PlatformAdmin | None, action: str, org_id=None, ta
     row.row_hash = _digest(prev, row)
     db.add(row)
     await db.flush()
+    if outcome == "allowed" and org_id and (before or after):   # declines/cancels change nothing
+        await _shop_trail(db, org_id=org_id, action=action, target=target, before=before, after=after)
     return row
+
+
+def _changed_fields(before, after) -> list:
+    b = before if isinstance(before, dict) else {}
+    a = after if isinstance(after, dict) else {}
+    keys = set(a) | set(b)
+    return sorted(k for k in keys if b.get(k) != a.get(k)) if b else sorted(a)
+
+
+async def _shop_trail(db, *, org_id, action, target, before, after) -> None:
+    """Audit M9: a platform-admin change to a shop also lands in that shop's own audit trail,
+    which the shop's owners read. So it names "Tekly support" (never the admin's email) and
+    lists field names only, never values, reasons or note text."""
+    from backend.services.audit import record
+    await record(db, org_id=org_id, actor_id=None, action=f"platform.{action}",
+                 entity_type="employee" if action == "staff_access" else "organisation",
+                 entity_id=str(target) if action == "staff_access" and target else org_id,
+                 diff={"platform_admin": "Tekly support", "fields": _changed_fields(before, after)})
 
 
 async def refuse(db, *, admin, action, detail="You don't have permission to do that", status=403, **kw):

@@ -257,7 +257,7 @@ async def test_rule_email_goes_out_from_connected_mailbox(client, tenant, db, mo
 
     oauth_sent, smtp_sent = [], []
 
-    async def _fake_oauth(conn, *, recipient, subject, body):
+    async def _fake_oauth(conn, *, recipient, subject, body, html=False):   # html: parity audit-Low
         oauth_sent.append((conn.email_address, recipient))
         return {"status": "sent", "error": None}
     monkeypatch.setattr("backend.services.email_oauth.send_via_connection", _fake_oauth)

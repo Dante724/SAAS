@@ -8,14 +8,16 @@
 import csv
 import io
 import uuid
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 
 import pytest
 from sqlalchemy import select
 
 from backend.models import CommissionRule, EmployeeBalanceLedger, Role
 
-MONTH = date.today().strftime("%Y-%m")
+# Payroll months are UTC days (EmployeeBalanceLedger.created_at); the machine's local date can be
+# a different day near midnight UTC.
+MONTH = datetime.now(timezone.utc).strftime("%Y-%m")
 PAST = "2026-06"
 
 
@@ -77,6 +79,14 @@ async def _rule(db, org_id, **kw):
     return r
 
 
+def _month_q(month: str = MONTH) -> str:
+    """The period as explicit dates: /me defaults to the shop's month, which near midnight UTC
+    can differ from the UTC month the ledger dates entries in."""
+    y, m = (int(x) for x in month.split("-"))
+    end = (date(y + (m == 12), m % 12 + 1, 1) - timedelta(days=1))
+    return f"from={date(y, m, 1).isoformat()}&to={end.isoformat()}"
+
+
 async def _closed(client, H, key):
     r = await client.post("/api/statuses", json={
         "name": key, "key": key, "status_group": "closed", "is_terminal": True}, headers=H)
@@ -113,7 +123,7 @@ async def test_my_earnings_breaks_commissions_down_by_rule_order_and_line(client
     await _bonus(client, H, tech, 30)
     await _bonus(client, H, tech, 10, kind="penalty")
 
-    r = await client.get("/api/payroll/me", headers=T)
+    r = await client.get(f"/api/payroll/me?{_month_q()}", headers=T)
     assert r.status_code == 200, r.text
     me = r.json()
     assert me["employee_id"] == tech
@@ -138,7 +148,7 @@ async def test_my_earnings_breaks_commissions_down_by_rule_order_and_line(client
 
     # Reopening claws it back; the reversal sits on the same line item, netting to zero.
     assert (await client.patch(f"/api/orders/{o['id']}/status", json={"status": "new"}, headers=H)).status_code == 200
-    me = (await client.get("/api/payroll/me", headers=T)).json()
+    me = (await client.get(f"/api/payroll/me?{_month_q()}", headers=T)).json()
     assert me["commissions_total"] == pytest.approx(0)
     lab = next(g for g in me["commissions"] if g["rule_id"] == labour.id)
     screen = next(i for i in lab["documents"][0]["items"] if i["name"] == "Screen swap")

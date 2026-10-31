@@ -353,8 +353,11 @@ class Products(Kind):
             ctx.claim("part", row.target.id, row, f"{label[row.matched_on]} {rec[row.matched_on]}")
         elif ident and ident[0] == "name":
             ctx.claim("u-name", self._norm(*ident), row, f"Name {ident[1]}")
-        # codes that identify a product must not land on a second one, in the shop or in this file
-        for k in [k for k in ctx.data["keys"] if k != "name"] + ["mpn"]:
+        # codes that identify a product must not land on a second one, in the shop or in this file.
+        # The SKU always does (ii144a: one active product per SKU, enforced by the database), whatever
+        # the shop's matching key; so does the MPN.
+        ident_keys = [k for k in ctx.data["keys"] if k != "name"]
+        for k in ident_keys + [k for k in ("sku", "mpn") if k not in ident_keys]:
             v = rec.get(k)
             if not v:
                 continue
@@ -406,7 +409,7 @@ class Products(Kind):
             if row.changes and not ctx.perms["can_edit_products"]:
                 row.errors.append("Your role can't edit products")
             is_serial = t.serialized or bool(values.get("serialized"))
-        for k in ("sku", "barcode"):
+        for k in ("barcode",):          # a shared barcode is allowed, but worth a look
             if rec.get(k) and k not in ctx.data["keys"]:
                 other = [p for p in maps[k].get(self._norm(k, rec[k]), []) if p is not row.target]
                 if other:

@@ -93,7 +93,7 @@ async def _resolve(db: AsyncSession, current: Employee, code: str):
 
     def _bin_hit(b):
         return {"matched": True, "type": "bin", "id": b.id, "route": "/inventory?tab=bins", "label": b.name,
-                "location_id": b.location_id, "warehouse_id": b.warehouse_id, "barcode": b.barcode}
+                "location_id": b.location_id, "warehouse_id": b.warehouse_id, "barcode": b.barcode}, "bin"
     b = await find_by_code(db, org, code, names=False)
     if b:
         return _bin_hit(b)

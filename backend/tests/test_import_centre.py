@@ -252,7 +252,9 @@ async def _seed_part(db, org_id, **kw):
     ("sku", ["Renamed", "SKU-1", "999", "50"], True),           # matched on SKU though renamed
     ("sku", ["Original", "SKU-X", "999", "50"], False),          # name alone doesn't match under SKU
     ("barcode", ["Renamed", "SKU-X", "4006381333931", "50"], True),
-    ("barcode", ["Renamed", "SKU-1", "999", "50"], False),
+    # matched on barcode only, so the SKU doesn't match — and since ii144a a second active product
+    # can't take an SKU already in use, so the row is refused rather than created
+    ("barcode", ["Renamed", "SKU-1", "999", "50"], "error"),
     ("name", ["original", "SKU-X", "999", "50"], True),          # case-insensitive name
     ("code", ["Renamed", "SKU-X", "999", "50"], False),
 ])
@@ -261,6 +263,10 @@ async def test_upsert_follows_the_unique_identifier_setting(client, tenant, db, 
     await _seed_part(db, me["org_id"], name="Original", sku="SKU-1", barcode="4006381333931", code="C-1")
     await _set_key(db, me["org_id"], key)
     out = await _import(client, tenant, "products", [["Name", "SKU", "Barcode", "Sell price"], row])
+    if expect_update == "error":
+        assert out["created"] == out["updated"] == 0, out
+        assert any("SKU-1 is already used by Original" in e for r in out["rows"] for e in r["errors"]), out
+        return
     assert out["updated" if expect_update else "created"] == 1, out
 
 

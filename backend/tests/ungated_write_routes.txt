@@ -208,7 +208,6 @@ POST /api/orders/{order_id}/signature [staff]
 PATCH /api/orders/{order_id}/priority [staff]
 PATCH /api/orders/{order_id}/status [staff]
 POST /api/orders/{order_id}/status/check [staff]
-POST /api/orders/{order_id}/thread [staff]
 PATCH /api/orders/{order_id}/type [staff]
 # prefs
 PUT /api/prefs/{pref_key} [staff]

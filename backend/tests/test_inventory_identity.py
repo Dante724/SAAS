@@ -203,9 +203,11 @@ async def test_stock_document_write_off_from_a_bin_next_to_a_warehouse_row(clien
     H = await _register(client)
     w = (await client.get("/api/settings/warehouses?kind=product", headers=H)).json()["items"][0]
     p = await _product(client, H)
-    r = await client.post("/api/stock-docs/postings", json={"warehouse_id": w["id"],
-        "lines": [{"part_id": p["id"], "qty": 1, "unit_cost": 1}]}, headers=H)
-    assert r.status_code == 201, r.text
+    # the first receipt makes the location's main row, tagged with the warehouse it came through
+    # (the /api/stock-docs/postings engine this used was removed in the audit, PR #61)
+    r = await client.post(f"/api/inventory/parts/{p['id']}/adjust", json={
+        "location_id": w["location_id"], "qty": 1, "movement_type": "receive"}, headers=H)
+    assert r.status_code == 200, r.text
     b = await _bin(client, H, w["location_id"], "Z1")
     await _receive(client, H, w["location_id"], p["id"], 4, bin_id=b["id"])
     r = await client.post("/api/stock-docs/write-offs", json={"warehouse_id": w["id"],

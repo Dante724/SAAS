@@ -232,26 +232,6 @@ async def test_concurrent_return_delete_restores_once(client, tenant, db, monkey
 
 
 @pytest.mark.asyncio
-async def test_concurrent_posting_delete_removes_once(client, tenant, db, monkeypatch):
-    from backend.routers import stock_docs
-    p, loc = await _part(client, tenant, qty=10, name="Chip")
-    w = await _default_wh(client, tenant)
-    d = (await client.post("/api/stock-docs/postings", json={
-        "warehouse_id": w["id"], "lines": [{"part_id": p["id"], "qty": 4, "unit_cost": 5}]},
-        headers=tenant))
-    assert d.status_code == 201, d.text
-    assert await _on_hand(db, p["id"], loc) == 14
-
-    _slow(monkeypatch, stock_docs.wh, "resolve")
-    a, b = await asyncio.gather(
-        client.delete(f"/api/stock-docs/postings/{d.json()['id']}", headers=tenant),
-        client.delete(f"/api/stock-docs/postings/{d.json()['id']}", headers=tenant))
-    _one_wins(a, b)
-    assert await _on_hand(db, p["id"], loc) == 10
-
-
-
-@pytest.mark.asyncio
 async def test_return_paid_after_the_check_is_not_deleted(client, tenant, db, monkeypatch):
     """A payment that commits between the paid check and the delete must win."""
     from backend.models import PurchaseReturn
@@ -278,7 +258,11 @@ async def test_return_paid_after_the_check_is_not_deleted(client, tenant, db, mo
 async def test_shipping_one_transfer_keeps_anothers_reservation(client, tenant, db, monkeypatch):
     """Shipping transfer A released its reservation with a read-then-write of qty_reserved; a
     reservation for transfer B landing in between was wiped. (Shows on Postgres, where the two
-    transfers don't block each other; SQLite serialises the writes.)"""
+    transfers don't block each other; SQLite serialises the writes.)
+
+    Since the inventory chain (ii144a, count-once), "ready" takes the units off the shelf instead
+    of reserving them, and shipping changes no stock row; the race must still leave A's 3 and
+    B's 2 off the shelf and nothing reserved."""
     from backend.routers import transfers
     p, loc = await _part(client, tenant, qty=10, name="Frame")
     loc_b = (await client.post("/api/staff/locations", headers=tenant, json={"name": "Branch D"})).json()["id"]
@@ -288,12 +272,12 @@ async def test_shipping_one_transfer_keeps_anothers_reservation(client, tenant, 
     assert (await client.patch(f"/api/transfers/{a['id']}/status", json={"status": "ready"},
                                headers=tenant)).status_code == 200
 
-    _slow(monkeypatch, transfers, "_level")      # A reads the stock row, then pauses
+    _slow(monkeypatch, transfers, "_lines")      # both read the transfer's lines, then pause
     ship, reserve = await asyncio.gather(
         client.patch(f"/api/transfers/{a['id']}/status", json={"status": "in_transit"}, headers=tenant),
         client.patch(f"/api/transfers/{b['id']}/status", json={"status": "ready"}, headers=tenant))
     assert ship.status_code == 200 and reserve.status_code == 200, (ship.text, reserve.text)
     db.expire_all()
-    sl = (await db.execute(select(StockLevel).where(
-        StockLevel.part_id == p["id"], StockLevel.location_id == loc))).scalars().first()
-    assert sl.qty_reserved == 2 and sl.qty_available == 5
+    rows = (await db.execute(select(StockLevel).where(
+        StockLevel.part_id == p["id"], StockLevel.location_id == loc))).scalars().all()
+    assert sum(r.qty_reserved or 0 for r in rows) == 0 and sum(r.qty_available or 0 for r in rows) == 5

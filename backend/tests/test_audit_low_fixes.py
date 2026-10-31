@@ -267,6 +267,9 @@ async def test_smtp_sends_plain_template_as_plain_text_and_strips_subject_newlin
         def __exit__(self, *a):
             return False
 
+        def connect(self, host, port):
+            sent["connect"] = (host, port)
+
         def starttls(self):
             pass
 
@@ -276,7 +279,11 @@ async def test_smtp_sends_plain_template_as_plain_text_and_strips_subject_newlin
         def send_message(self, msg):
             sent["msg"] = msg
     import smtplib
+
+    from backend.core import ssrf
     monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
+    # A shop's own SMTP host must resolve to a public address (release B-fix); fake that answer.
+    monkeypatch.setattr(ssrf, "public_ip_for", lambda host, port: "93.184.216.34")
     ad = n.SmtpEmailAdapter({"host": "smtp.test", "from": "shop@test.dev"})
     r = await ad.send(recipient="c@test.dev", subject="Ready\r\nBcc: victim@evil.test",
                       body="Hi <b>Bo</b>", html=False)
@@ -558,11 +565,13 @@ async def test_retention_only_touches_its_own_shop_and_covers_messages(client, t
     await retention.purge_all(db)
 
     async def n(model, oid):
+        # only rows past the 30-day window: signing in writes a fresh auth.session_created entry
+        cutoff = datetime.utcnow() - timedelta(days=30)
         if model is ChatMessage:
             q = select(func.count()).select_from(ChatMessage).join(ChatThread).where(ChatThread.org_id == oid)
         else:
             q = select(func.count()).select_from(model).where(model.org_id == oid)
-        return (await db.execute(q)).scalar()
+        return (await db.execute(q.where(model.created_at < cutoff))).scalar()
     for model in (ChatMessage, InboxMessage, AuditLog):
         assert await n(model, me["org_id"]) == 0, model
         assert await n(model, other_org) == 1, model

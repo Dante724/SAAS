@@ -566,8 +566,6 @@ async def create_sale(
                 except HTTPException:
                     pass
             cost = q4(unit_cost * li.qty)
-            # serialized units leave as sold (recorded on the line so a void / return puts them back)
-            draws["serials"] = await _sell_serials(db, current.org_id, li.ref_id, loc_id, int(li.qty))
             db.add(StockMovement(part_id=li.ref_id, location_id=loc_id,
                                  movement_type="use", qty=-li.qty, unit_cost=unit_cost,
                                  ref_type="sale", ref_id=sale.id))
@@ -644,24 +642,6 @@ async def _load_sale(db, current, sale_id, lock=False) -> Sale:
     if not sale:
         raise HTTPException(404, "Sale not found")
     return sale
-
-
-async def _sell_serials(db, org_id: str, part_id: str, location_id: str, n: int) -> list[str]:
-    """Mark up to `n` in-stock serialized units of the product (at this location, or unplaced) as
-    sold. Locked so two tills can't sell the same unit. Returns their ids."""
-    if n <= 0:
-        return []
-    from sqlalchemy import or_
-
-    from backend.models import SerializedItem
-    items = (await db.execute(select(SerializedItem).where(
-        SerializedItem.org_id == org_id, SerializedItem.part_id == part_id,
-        SerializedItem.status == "in_stock",
-        or_(SerializedItem.location_id == location_id, SerializedItem.location_id.is_(None)))
-        .order_by(SerializedItem.created_at.asc()).limit(n).with_for_update(skip_locked=True))).scalars().all()
-    for it in items:
-        it.status = "sold"
-    return [it.id for it in items]
 
 
 async def _unsell_serials(db, org_id: str, ids: list, *, ref_type: Optional[str] = None,
@@ -836,11 +816,14 @@ async def _sell_units(db, current, sale, part, loc_id, li) -> list:
     from backend.models import SerializedItem
     from backend.services import serial_log
     from backend.services.serial_intake import matches as _sn_matches
-    if not part.serialized and not li.serials:
-        return []
     base = select(SerializedItem).where(
         SerializedItem.org_id == current.org_id, SerializedItem.part_id == part.id,
         SerializedItem.status == "in_stock", SerializedItem.location_id == loc_id)
+    if not part.serialized and not li.serials:
+        # units recorded for a product without the serial flag still leave as sold (release B-line
+        # behaviour); with none in stock this is a plain product
+        if (await db.execute(base.with_only_columns(SerializedItem.id).limit(1))).scalar_one_or_none() is None:
+            return []
     n = int(li.qty)
     units = []
     for sn in dict.fromkeys(x.strip() for x in (li.serials or []) if x and x.strip()):

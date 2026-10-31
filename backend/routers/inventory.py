@@ -544,8 +544,13 @@ class PostingCommitIn(BaseModel):
 
 
 async def _check_posting_serials(db, current, rows: list, parts: dict, generate: bool) -> None:
-    """Serials on a posting: one per unit of a serialized product, none already in stock, none
-    twice in the file; missing ones generated on request. Fills each row's `serials` in place."""
+    """Missing serials on a posting generated on request (the import centre's "generate serials").
+    Fills each row's `serials` in place. The rules themselves (one per unit, none already in stock,
+    none twice, whole units) are serial_intake.validate_intake's, applied to every line by
+    _do_posting — so without `generate` there is nothing to do here, and the messages are the same
+    ones the scan box and PO receiving give."""
+    if not generate:
+        return
     from backend.models import Organisation
     from backend.services import importer
     org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one()
@@ -564,23 +569,18 @@ async def _check_posting_serials(db, current, rows: list, parts: dict, generate:
             if sns:
                 raise HTTPException(422, f"Line {i}: {part.name} isn't serialized — remove the serial numbers")
             continue
-        if not sns and not generate:
-            continue                  # serials are optional on a posting unless asked for
         qty = float(ln["qty"] or 0)
         if not qty.is_integer():
             raise HTTPException(422, f"Line {i}: serialized stock must be a whole number of units")
         for sn in sns:
             if sn in seen:
-                raise HTTPException(422, f"Serial {sn} is listed twice")
+                raise HTTPException(409, f"{sn} is entered twice. Each unit needs its own serial.")
             if sn in ctx.data["serials_in_stock"]:
                 raise HTTPException(409, f"Serial {sn} is already in stock")
             seen.add(sn)
             ctx.seen[("serial", sn)] = i
         if len(sns) > qty:
             raise HTTPException(422, f"Line {i}: more serial numbers ({len(sns)}) than units ({int(qty)})")
-        if len(sns) < qty and not generate:
-            raise HTTPException(422, f"Line {i}: {int(qty)} units of {part.name} need {int(qty)} serial numbers "
-                                     f"({len(sns)} given)")
         todo.append((i, ln, sns, int(qty) - len(sns)))
     # every typed serial is claimed first, so a generated one can never repeat a later line's
     for i, ln, sns, missing in todo:

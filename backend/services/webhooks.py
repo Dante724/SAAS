@@ -751,7 +751,7 @@ async def deliver_pending(delivery_ids: list) -> int:
 
 async def retry_sweep(now: Optional[datetime] = None, limit: int = 100) -> int:
     """B5: reclaim rows stuck in "sending", then attempt every due pending/failed row."""
-    from sqlalchemy import and_, or_, update
+    from sqlalchemy import and_, case, func, or_, update
 
     from backend.db.database import AsyncSessionLocal
     from backend.models import WebhookDelivery
@@ -762,7 +762,12 @@ async def retry_sweep(now: Optional[datetime] = None, limit: int = 100) -> int:
             WebhookDelivery.status == "sending",
             or_(WebhookDelivery.claimed_at < stale,
                 and_(WebhookDelivery.claimed_at.is_(None), WebhookDelivery.created_at < stale)))
-            .values(status="failed", error="Interrupted; will retry", next_attempt_at=now)
+            # The interrupted send counts as an attempt (audit R3), so a delivery that crashes
+            # the worker every time still runs out of retries instead of looping forever.
+            .values(status="failed", error="Interrupted; will retry",
+                    attempts=func.coalesce(WebhookDelivery.attempts, 0) + 1,
+                    next_attempt_at=case((func.coalesce(WebhookDelivery.attempts, 0) + 1 >= MAX_ATTEMPTS, None),
+                                         else_=now))
             .execution_options(synchronize_session=False))
         await db.commit()
         ids = (await db.execute(select(WebhookDelivery.id).where(

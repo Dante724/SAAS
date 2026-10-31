@@ -385,8 +385,7 @@ async def run_due(db: AsyncSession, *, org_id: str, now: Optional[datetime] = No
         if (log.trigger_event or "").startswith("agent."):
             from backend.services.sense_agents import email_headers
             h = email_headers(log)
-            if h:
-                extra = {"headers": h}
+            extra = {"headers": h} if h else {}   # no template: plain text, nothing to look up
         result = await _send(db, org_id, log.channel,
             recipient=log.recipient, subject=log.subject, body=log.body, **extra)
         log.status = result["status"]
