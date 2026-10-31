@@ -798,6 +798,7 @@ async def get_company(
         "clock_attendance_enabled": org.clock_attendance_enabled if org.clock_attendance_enabled is not None else True,
         "clock_labour_billing": bool(getattr(org, "clock_labour_billing", False)),
         "require_mfa": bool(getattr(org, "require_mfa", False)),
+        "max_sessions_per_login": getattr(org, "max_sessions_per_login", None),
     }
 
 
@@ -837,6 +838,7 @@ class CompanyIn(BaseModel):
     clock_attendance_enabled: Optional[bool] = None    # build 144x: shop attendance master switch
     clock_labour_billing: Optional[bool] = None        # build 144y: bill labour from tracked time
     require_mfa: Optional[bool] = None                  # build 144cd: org-wide mandatory 2FA
+    max_sessions_per_login: Optional[int] = None        # devices one login may use at once (null = no limit)
     oe_show_scheduled: Optional[bool] = None            # 144dr: show scheduled date on the track page
     book_show_employee_step: Optional[bool] = None      # 144dr: online appointment employee-pick step
     auto_draft_invoice_on_close: Optional[bool] = None  # 144dr: auto-draft an invoice when a WO closes
@@ -859,6 +861,10 @@ async def update_company(
         valid = set(_ind.TEMPLATE_KEYS) | set(_ind.LEGACY_ALIASES)
         if payload["industry_template"] not in valid:
             raise HTTPException(422, f"Unknown industry_template. Valid: {sorted(valid)}")
+    if payload.get("max_sessions_per_login") is not None:
+        from backend.services.sessions import LIMIT_CHOICES
+        if payload["max_sessions_per_login"] not in LIMIT_CHOICES:
+            raise HTTPException(422, f"Devices per person must be one of {list(LIMIT_CHOICES)}, or no limit")
     for k in ("default_comment_visibility", "default_file_visibility"):
         if k in payload and payload[k] not in ("private", "public"):
             raise HTTPException(422, "Visibility must be private or public")
