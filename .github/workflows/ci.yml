@@ -18,9 +18,6 @@ concurrency:
 env:
   SHARDS: 4   # number of backend test shards; keep in sync with the `test` job's matrix
 
-env:
-  SHARDS: 4   # number of backend test shards; keep in sync with the `test` job's matrix
-
 # Least privilege: the token can read the repo and nothing else.
 permissions:
   contents: read
