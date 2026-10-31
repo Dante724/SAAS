@@ -16,7 +16,7 @@ from backend.models import Employee, Organisation, Warehouse, WarehouseAccess
 from backend.services import warehouses as wh
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.dates import now_utc
-from backend.services.owned import require_location
+from backend.services.owned import require_location, require_unique_name
 
 router = APIRouter(prefix="/api/settings/warehouses", tags=["settings"])
 
@@ -81,6 +81,8 @@ async def create_warehouse(
         raise HTTPException(422, "A location warehouse needs a location_id")
     if data.scope == "location":
         await require_location(db, current.org_id, data.location_id)
+    await require_unique_name(db, Warehouse, current.org_id, data.name, "warehouse",
+                              extra=(Warehouse.deleted_at.is_(None),))
     bad = set(data.allowed_actions or []) - set(wh.ACTIONS)
     if bad:
         raise HTTPException(422, f"Unknown actions: {sorted(bad)}")
@@ -107,6 +109,8 @@ async def update_warehouse(
         Warehouse.id == warehouse_id, Warehouse.org_id == current.org_id))).scalar_one_or_none()
     if not w:
         raise HTTPException(404, "Warehouse not found")
+    await require_unique_name(db, Warehouse, current.org_id, data.name, "warehouse", exclude_id=w.id,
+                              extra=(Warehouse.deleted_at.is_(None),))
     bad = set(data.allowed_actions or []) - set(wh.ACTIONS)
     if bad:
         raise HTTPException(422, f"Unknown actions: {sorted(bad)}")

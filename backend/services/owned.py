@@ -54,3 +54,18 @@ async def require_location(db: AsyncSession, org_id: str, location_id: Optional[
                     else " — this is a company-wide warehouse; send a location id")
             raise HTTPException(422, f"location_id is a warehouse id ('{w.name}'){hint}")
     raise HTTPException(404, "Location not found")
+
+
+async def require_unique_name(db: AsyncSession, model, org_id: str, name: Optional[str], label: str,
+                              *, exclude_id: Optional[str] = None, extra=()) -> None:
+    """409 when another `model` row in this org already has this name (case and surrounding
+    spaces ignored). `extra` narrows the set that must be unique — siblings, a record type, live rows."""
+    from sqlalchemy import func
+    n = (name or "").strip().lower()
+    if not n:
+        return
+    q = select(model.id).where(model.org_id == org_id, func.lower(func.trim(model.name)) == n, *extra)
+    if exclude_id:
+        q = q.where(model.id != exclude_id)
+    if (await db.execute(q.limit(1))).scalar_one_or_none() is not None:
+        raise HTTPException(409, f"A {label} named '{name.strip()}' already exists")

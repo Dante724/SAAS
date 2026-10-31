@@ -15,6 +15,7 @@ from backend.db.database import get_db
 from backend.models import Employee, Role
 from backend.services import audit
 from backend.services.auth import get_current_employee, require_perm
+from backend.services.owned import require_unique_name
 from backend.services.permissions import (
     ALL_CODES,
     CATALOG,
@@ -184,6 +185,7 @@ async def create_role(data: RoleIn, db: AsyncSession = Depends(get_db),
     _validate(data.permissions)
     if data.template and data.template not in TEMPLATES:
         raise HTTPException(422, f"Unknown template. Valid: {list(TEMPLATES)}")
+    await require_unique_name(db, Role, current.org_id, data.name, "role")
     perms = new_role_permissions(data.template, data.permissions)
     perms = await guard_role_change(db, current, None, perms, data)
     r = Role(org_id=current.org_id, name=data.name, permissions=perms, perms_explicit=True,
@@ -207,6 +209,7 @@ async def update_role(role_id: str, data: RoleIn, db: AsyncSession = Depends(get
     if not r:
         raise HTTPException(404, "Role not found")
     _validate(data.permissions)
+    await require_unique_name(db, Role, current.org_id, data.name, "role", exclude_id=r.id)
     # A field the client didn't send keeps its current value. Defaulting it to "all" would quietly
     # widen a restricted role (the old role editor never sent location or account limits).
     current_vals = _ser_role(r)
