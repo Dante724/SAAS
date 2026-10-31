@@ -258,13 +258,25 @@ async def source(db: AsyncSession, org_id: str, provider: str) -> str:
 async def set_creds(db: AsyncSession, org_id: str, provider: str, data: dict) -> None:
     if not _fields(provider):
         raise ValueError(f"Unknown provider '{provider}'")
-    # keep only known fields; drop blanks so a cleared field falls back to env
-    clean = {f["key"]: str(data[f["key"]]).strip() for f in _fields(provider)
-             if f["key"] in data and str(data.get(f["key"]) or "").strip() != ""}
+    row = await _row(db, org_id, provider)
+    # Merge onto what is saved: the form sends only the fields that were typed ("leave blank to
+    # keep"), so a blank keeps the stored value and only an explicit null clears a field (it then
+    # falls back to env). Keys that can no longer be read are replaced, not merged.
+    try:
+        clean = _decrypt(row.data_enc, provider) if row else {}
+    except CredentialsUnreadable:
+        clean = {}
+    for f in _fields(provider):
+        k = f["key"]
+        if k not in data:
+            continue
+        if data[k] is None:
+            clean.pop(k, None)
+        elif str(data[k]).strip() != "":
+            clean[k] = str(data[k]).strip()
     # F4: live payment credentials are refused unless live payments are switched on in production.
     from backend.services.payment_guard import assert_allowed
     assert_allowed(provider, clean)
-    row = await _row(db, org_id, provider)
     if not row:
         row = OrgIntegrationCredential(org_id=org_id, provider=provider)
         db.add(row)
