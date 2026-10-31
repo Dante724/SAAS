@@ -98,13 +98,13 @@ async def get_api_principal(
     if not row:
         raise HTTPException(401, "Invalid or revoked API key")
     # A key stops with the person who made it: deactivating a teammate also cuts off the
-    # integrations they set up (a new key can be made by someone still on the team).
-    if row.created_by_id:
-        from backend.models import Employee
-        creator_active = (await db.execute(select(Employee.active).where(
-            Employee.id == row.created_by_id))).scalar_one_or_none()
-        if not creator_active:
-            raise HTTPException(401, "This API key's creator no longer has access. Create a new key.")
+    # integrations they set up (a new key can be made by someone still on the team). A key with no
+    # recorded creator has nobody to check, so it is refused too (aul3 gave old ones to the owner).
+    from backend.models import Employee
+    creator_active = row.created_by_id and (await db.execute(select(Employee.active).where(
+        Employee.id == row.created_by_id))).scalar_one_or_none()
+    if not creator_active:
+        raise HTTPException(401, "This API key's creator no longer has access. Create a new key.")
     # A suspended or lapsed shop's integrations stop with it (keys used to keep working).
     from backend.models import Organisation
     from backend.services.auth import assert_org_active

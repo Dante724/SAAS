@@ -633,13 +633,126 @@ async def test_one_shops_failed_purge_does_not_undo_the_others(client, tenant, d
 
 
 @pytest.mark.asyncio
-async def test_api_key_without_a_recorded_creator_still_works(client, tenant, db):
+async def test_api_key_without_a_recorded_creator_is_refused(client, tenant, db):
     from backend.models import ApiKey
     key = (await client.post("/api/api-keys", json={"name": "old", "scopes": "read"}, headers=tenant)).json()
     row = await db.get(ApiKey, key["id"])
-    row.created_by_id = None            # keys made before creators were recorded
+    row.created_by_id = None            # nobody to check is still on the team
     await db.commit()
-    assert (await client.get("/api/v1/contacts", headers={"Authorization": f"Bearer {key['key']}"})).status_code == 200
+    assert (await client.get("/api/v1/contacts", headers={"Authorization": f"Bearer {key['key']}"})).status_code == 401
+
+
+def test_migration_gives_creatorless_keys_to_the_shop_owner(tmp_path):
+    """aul3: old keys with no creator go to the shop's owner (so they keep working while the owner
+    does); a shop with no active owner keeps none, and the key is refused."""
+    import importlib.util
+
+    import sqlalchemy as sa
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    spec = importlib.util.spec_from_file_location(
+        "aul3", "backend/migrations/versions/aul3_api_key_owner_backfill.py")
+    mig = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mig)
+    eng = sa.create_engine(f"sqlite:///{tmp_path}/k.db")
+    with eng.begin() as conn:
+        conn.execute(sa.text("CREATE TABLE employees (id TEXT PRIMARY KEY, org_id TEXT, role_id TEXT, "
+                             "active BOOLEAN, created_at TIMESTAMP)"))
+        conn.execute(sa.text("CREATE TABLE api_keys (id TEXT PRIMARY KEY, org_id TEXT, created_by_id TEXT)"))
+        conn.execute(sa.text("INSERT INTO employees VALUES "
+                             "('tech', 'o1', 'r1', 1, '2026-01-01'), ('gone', 'o1', NULL, 0, '2026-01-02'), "
+                             "('own', 'o1', NULL, 1, '2026-01-03'), ('own2', 'o2', NULL, 0, '2026-01-01')"))
+        conn.execute(sa.text("INSERT INTO api_keys VALUES ('k1', 'o1', NULL), ('k2', 'o1', 'tech'), "
+                             "('k3', 'o2', NULL)"))
+        with Operations.context(MigrationContext.configure(conn)):
+            mig.upgrade()
+        got = dict(conn.execute(sa.text("SELECT id, created_by_id FROM api_keys")).fetchall())
+    assert got == {"k1": "own", "k2": "tech", "k3": None}
+
+
+@pytest.mark.asyncio
+async def test_passcodes_saved_before_the_key_was_set_get_encrypted(client, tenant, db, monkeypatch):
+    """Turning on TOKEN_ENCRYPTION_KEY after the aul2 migration ran: the daily sweep encrypts the
+    rows that were stored plain, instead of waiting for someone to edit them."""
+    from cryptography.fernet import Fernet
+    from sqlalchemy import text
+
+    from backend.config import settings
+    from backend.db.secret_json import encrypt_plain_rows
+    from backend.models import Order
+    me = await _me(client, tenant)
+    loc = (await client.get("/api/staff/locations", headers=tenant)).json()["items"][0]["id"]
+    o = Order(org_id=me["org_id"], location_id=loc, order_number="T-2",
+              custom_data={"passcode": "2468", "accessories": "Case"})
+    db.add(o)
+    await db.commit()                    # no key yet: stored plain
+    oid = o.id
+    monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    conn = await db.connection()
+    assert await conn.run_sync(encrypt_plain_rows) >= 1
+    await db.commit()
+    raw = (await db.execute(text("SELECT custom_data FROM orders WHERE id = :i"), {"i": oid})).scalar()
+    raw = raw if isinstance(raw, str) else __import__("json").dumps(raw)
+    assert "2468" not in raw and "Case" in raw
+    conn = await db.connection()
+    assert await conn.run_sync(encrypt_plain_rows) == 0         # nothing left to do
+    db.expire_all()
+    assert (await db.get(Order, oid)).custom_data["passcode"] == "2468"
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("provider", ["gmail", "outlook"])
+@pytest.mark.parametrize("html", [True, False])
+async def test_connected_mailbox_sends_html_templates_as_html(monkeypatch, provider, html):
+    import base64
+    import email
+
+    from backend.models import EmailConnection
+    from backend.services import email_oauth
+    sent = {}
+
+    class _Resp:
+        status_code, text = 202, ""
+
+    class _Client:
+        def __init__(self, *a, **k): ...
+        async def __aenter__(self): return self
+        async def __aexit__(self, *a): ...
+        async def post(self, url, json=None, headers=None):
+            sent.update(json)
+            return _Resp()
+    monkeypatch.setattr(email_oauth.httpx, "AsyncClient", _Client)
+    monkeypatch.setattr(email_oauth, "_dec", lambda v: v)
+    conn = EmailConnection(org_id="o", provider=provider, connected=True, access_token="t",
+                           email_address="shop@test.dev")
+    res = await email_oauth.send_via_connection(conn, recipient="c@test.dev", subject="Hi",
+                                                body="<p>Ready</p>", html=html)
+    assert res["status"] == "sent"
+    if provider == "gmail":
+        msg = email.message_from_bytes(base64.urlsafe_b64decode(sent["raw"]))
+        assert msg.get_content_type() == ("text/html" if html else "text/plain")
+    else:
+        assert sent["message"]["body"]["contentType"] == ("HTML" if html else "Text")
+
+
+@pytest.mark.asyncio
+async def test_template_dispatch_tells_the_mailbox_it_is_html(client, tenant, db, monkeypatch):
+    from backend.models import EmailConnection
+    from backend.services import notifications
+    me = await _me(client, tenant)
+    db.add(EmailConnection(org_id=me["org_id"], provider="gmail", connected=True, access_token="t"))
+    await db.commit()
+    seen = []
+
+    async def fake_send(conn, *, recipient, subject, body, html=False, attachment=None):
+        seen.append(html)
+        return {"status": "sent", "error": None}
+    monkeypatch.setattr("backend.services.email_oauth.send_via_connection", fake_send)
+    assert (await notifications.try_oauth_email(db, me["org_id"], recipient="c@test.dev", subject="s",
+                                                body="<p>x</p>", html=True))["status"] == "sent"
+    assert (await notifications.try_oauth_email(db, me["org_id"], recipient="c@test.dev", subject="s",
+                                                body="plain"))["status"] == "sent"
+    assert seen == [True, False]
 
 
 def test_backfill_migration_encrypts_existing_passcodes(monkeypatch, tmp_path):

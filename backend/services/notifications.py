@@ -316,7 +316,8 @@ async def dispatch_order_notifications(db: AsyncSession, *, org_id: str, order_i
             # simulated only when no account is connected.
             result = None
             if t.channel == "email":
-                result = await try_oauth_email(db, org_id, recipient=recipient, subject=subject, body=body)
+                result = await try_oauth_email(db, org_id, recipient=recipient, subject=subject, body=body,
+                                               html=message_vars.is_html(t.body_template))
             if result is None:
                 _creds = await notif_creds(db, org_id, t.channel)
                 result = await _adapter_for(t.channel, _creds).send(
@@ -336,7 +337,7 @@ async def dispatch_order_notifications(db: AsyncSession, *, org_id: str, order_i
     await db.commit()
     return sent
 
-async def try_oauth_email(db, org_id, *, recipient, subject, body):
+async def try_oauth_email(db, org_id, *, recipient, subject, body, html: bool = False):
     """A6 seam: if the org has a connected Gmail/Outlook account, send through it
     and return the result; otherwise return None so the caller falls back to SMTP
     or the simulated adapter."""
@@ -353,6 +354,6 @@ async def try_oauth_email(db, org_id, *, recipient, subject, body):
         conns = (await db.execute(select(EmailConnection).where(
             EmailConnection.org_id == org_id, EmailConnection.connected == True))).scalars().all()  # noqa: E712
         conn = next((c for c in conns if c.is_default), conn)
-        return await send_via_connection(conn, recipient=recipient, subject=subject, body=body)
+        return await send_via_connection(conn, recipient=recipient, subject=subject, body=body, html=html)
     except Exception:
         return None
