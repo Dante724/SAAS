@@ -874,6 +874,22 @@ async def update_company(
         valid = set(_ind.TEMPLATE_KEYS) | set(_ind.LEGACY_ALIASES)
         if payload["industry_template"] not in valid:
             raise HTTPException(422, f"Unknown industry_template. Valid: {sorted(valid)}")
+    # QA E3: a made-up currency or timezone breaks every amount and date that follows.
+    from backend.services.currency import is_currency_code
+    if payload.get("currency_code"):
+        payload["currency_code"] = payload["currency_code"].strip().upper()
+        if not is_currency_code(payload["currency_code"]):
+            raise HTTPException(422, f"Unknown currency code '{payload['currency_code']}' — use an ISO 4217 code like USD, EUR or AUD")
+    for cur in payload.get("currencies") or []:
+        code = cur.get("code") if isinstance(cur, dict) else None
+        if code and not is_currency_code(code):
+            raise HTTPException(422, f"Unknown currency code '{code}' — use an ISO 4217 code like USD, EUR or AUD")
+    if payload.get("timezone"):
+        from zoneinfo import ZoneInfo
+        try:
+            ZoneInfo(payload["timezone"])
+        except (KeyError, ValueError):
+            raise HTTPException(422, f"Unknown timezone '{payload['timezone']}' — use an IANA name like Europe/London")
     for k in ("default_comment_visibility", "default_file_visibility"):
         if k in payload and payload[k] not in ("private", "public"):
             raise HTTPException(422, "Visibility must be private or public")
