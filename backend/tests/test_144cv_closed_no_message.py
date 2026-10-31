@@ -9,6 +9,8 @@ from datetime import datetime, timedelta
 import pytest
 from sqlalchemy import select
 
+from backend.services.dates import now_utc
+
 
 async def _loc(client, h):
     return (await client.get("/api/staff/locations", headers=h)).json()["items"][0]["id"]
@@ -82,7 +84,7 @@ async def test_window_expires(client, tenant, db):
     o, token = await _order_with_token(client, tenant)
     await client.patch(f"/api/orders/{o['id']}/status", json={"status": "done"}, headers=tenant)
     row = (await db.execute(select(Order).where(Order.id == o["id"]))).scalar_one()
-    row.closed_at = datetime.utcnow() - timedelta(days=15)
+    row.closed_at = now_utc() - timedelta(days=15)
     await db.commit()
     assert (await _msg(client, token)).status_code == 403
     assert (await client.get(f"/api/public/track/{token}")).json()["can_new_request"] is True

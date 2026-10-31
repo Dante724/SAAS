@@ -8,7 +8,7 @@ through Twilio's REST Calls API, and Twilio's signed webhooks land on
 automation is configured here too. Aircall/Zadarma are accepted as config
 values for older setups. WS-C adds an Aircall adapter behind the AIRCALL_ENABLED server switch
 (services/aircall.py): a per-shop webhook token, and the signed webhook below."""
-from datetime import datetime, timedelta
+from datetime import timedelta
 from typing import Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -20,6 +20,7 @@ from backend.db.database import get_db
 from backend.models import AutomationSetting, Call, Client, Employee, Organisation, Tag, TelephonyConfig
 from backend.services import aircall, call_contacts, org_creds, ratelimit, twilio_voice
 from backend.services.auth import get_current_employee, has_perm, require_perm
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/telephony", tags=["telephony"])
 
@@ -444,7 +445,7 @@ async def incoming_calls(since_seconds: int = 120, mine_only: bool = False,
                          current: Employee = Depends(get_current_employee)):
     """Recent inbound calls still ringing — powers the incoming-call card. With
     mine_only, restricts to calls dialed to the current employee's extension."""
-    since = datetime.utcnow() - timedelta(seconds=max(since_seconds, 1))
+    since = now_utc() - timedelta(seconds=max(since_seconds, 1))
     q = select(Call).where(
         Call.org_id == current.org_id, Call.direction == "inbound",
         Call.status.in_(("ringing", "in_progress")),

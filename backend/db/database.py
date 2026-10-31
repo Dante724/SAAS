@@ -54,8 +54,11 @@ def engine_kwargs(cfg) -> dict:
         connect_args.update(pg_connect_args(cfg))
     return kw
 
+# JSON columns (audit details, snapshots, webhook payloads) may now hold Decimal money read from
+# Numeric columns: write it as a number, the way floats always were.
+from backend.services.money import json_dumps as _json_dumps  # noqa: E402
 
-engine = create_async_engine(settings.DATABASE_URL, **engine_kwargs(settings))
+engine = create_async_engine(settings.DATABASE_URL, json_serializer=_json_dumps, **engine_kwargs(settings))
 
 # Enforce foreign keys on SQLite (dev) so it matches Postgres (prod), which always enforces them —
 # otherwise a bad delete/orphan passes silently in dev and only fails in production.

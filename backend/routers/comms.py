@@ -5,7 +5,6 @@ the webhook; we record + client-match. Campaigns send over the existing
 notification channels (SMS/email adapters), so a real gateway is required to
 actually deliver — under the simulated adapter they're recorded, not sent.
 """
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -19,6 +18,7 @@ from backend.db.database import get_db
 from backend.models import Call, Campaign, Client, Employee
 from backend.services import call_contacts
 from backend.services.auth import get_current_employee, require_perm
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/comms", tags=["comms"])
 
@@ -460,6 +460,6 @@ async def send_campaign(
 
     c.status = "sent"
     c.recipients = sent
-    c.sent_at = datetime.utcnow()
+    c.sent_at = now_utc()
     await db.commit()
     return {"ok": True, "recipients": sent, "channel": c.channel, "segment": c.segment}

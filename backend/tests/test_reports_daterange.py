@@ -8,6 +8,8 @@ from datetime import datetime
 
 import pytest
 
+from backend.services.dates import now_utc
+
 
 @pytest.mark.asyncio
 async def test_activity_log_includes_todays_events_with_date_to_today(client, tenant):
@@ -18,7 +20,7 @@ async def test_activity_log_includes_todays_events_with_date_to_today(client, te
     st = (await client.get("/api/statuses?is_estimate=false", headers=tenant)).json()["items"][-1]["key"]
     await client.patch(f"/api/orders/{oid}/status", json={"status": st, "reason": "Test"}, headers=tenant)
 
-    today = datetime.utcnow().date().isoformat()
+    today = now_utc().date().isoformat()
     # Exactly what the UI sends: a date-only From/To spanning "today".
     r = (await client.get(
         f"/api/reports/run/activity_log?date_from={today}&date_to={today}", headers=tenant)).json()
@@ -32,6 +34,6 @@ async def test_activity_log_includes_todays_events_with_date_to_today(client, te
 async def test_other_dated_reports_also_inclusive(client, tenant):
     # a money-moving report should likewise see same-day rows (sanity that the fix
     # is in the shared range parser, not just the activity log)
-    today = datetime.utcnow().date().isoformat()
+    today = now_utc().date().isoformat()
     r = await client.get(f"/api/reports/run/wo_created?date_from={today}&date_to={today}", headers=tenant)
     assert r.status_code == 200

@@ -10,7 +10,6 @@ Orderry models each as a **document**:
   * **Write-off** — deleting the document **restores the stock**. Lines carry comments
     that are internal by default but can be made visible to the client.
 """
-from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
@@ -36,6 +35,7 @@ from backend.services import warehouses as wh
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.batching import names_by_id, rows_by
 from backend.services.money import claim_status, q2
+from backend.services.dates import now_utc, shop_today
 
 router = APIRouter(prefix="/api/stock-docs", tags=["inventory"])
 
@@ -489,7 +489,7 @@ async def delete_write_off(
         raise HTTPException(404, "Write-off not found")
     if doc.status == "reverted":
         return {"ok": True, "already_reverted": True}
-    if not await claim_status(db, doc, doc.status, "reverted", reverted_at=datetime.utcnow()):
+    if not await claim_status(db, doc, doc.status, "reverted", reverted_at=now_utc()):
         return {"ok": True, "already_reverted": True}   # a concurrent request got there first
 
     w = await wh.resolve(db, current.org_id, warehouse_id=doc.warehouse_id)
@@ -529,11 +529,11 @@ async def write_off_suggestions(
     report: instead of just telling you what's going off, it hands you the exact lines,
     earliest-expiry first, to clear in one write-off document.
     """
-    from datetime import date, timedelta
+    from datetime import timedelta
 
     from backend.models import StockItemBatch, Warehouse
 
-    cutoff = date.today() + timedelta(days=max(0, within_days))
+    cutoff = await shop_today(db, current.org_id) + timedelta(days=max(0, within_days))
     q = (select(StockItemBatch, Part)
          .join(Part, StockItemBatch.part_id == Part.id)
          .where(StockItemBatch.org_id == current.org_id,
@@ -546,7 +546,7 @@ async def write_off_suggestions(
 
     wh_names = {w.id: w.name for w in (await db.execute(select(Warehouse).where(
         Warehouse.org_id == current.org_id))).scalars().all()}
-    today = date.today()
+    today = await shop_today(db, current.org_id)
     items = []
     for b, p in rows:
         exp = b.expiry_date.date() if hasattr(b.expiry_date, "date") else b.expiry_date

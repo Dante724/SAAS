@@ -1,5 +1,4 @@
 """Sales (over-the-counter POS) + Stocktake (count → variance → adjust)."""
-from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
@@ -23,8 +22,9 @@ from backend.models import (
 )
 from backend.services.auth import assert_perm, get_current_employee, require_perm
 from backend.services.numbering import next_number
-from backend.services.money import add_to_column, q2, q4
+from backend.services.money import add_to_column, d2, dec, q2, q4
 from backend.core.spreadsheet import MAX_IMPORT_ROWS, safe_row
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/sales", tags=["sales"])
 st_router = APIRouter(prefix="/api/stocktake", tags=["stocktake"])
@@ -97,7 +97,7 @@ async def _pos_redemptions(db, org_id, sale, client_id, gross, data):
     if data.coupon_code:
         c = (await db.execute(select(Coupon).where(
             Coupon.org_id == org_id, Coupon.code == data.coupon_code.strip().upper()))).scalar_one_or_none()
-        now = datetime.utcnow()
+        now = now_utc()
         if not c or not c.active:
             raise HTTPException(404, "Coupon not found or inactive")
         if c.client_id and c.client_id != client_id:
@@ -125,20 +125,21 @@ async def _pos_redemptions(db, org_id, sale, client_id, gross, data):
             GiftCard.org_id == org_id, GiftCard.code == data.gift_card_code.strip().upper()))).scalar_one_or_none()
         if not g or not g.active:
             raise HTTPException(404, "Gift card not found or inactive")
-        if g.expires_at and g.expires_at < datetime.utcnow():
+        if g.expires_at and g.expires_at < now_utc():
             raise HTTPException(400, "Gift card has expired")
-        amt = q2(min(g.balance, max(remaining, 0)))
+        amt = d2(min(g.balance, max(dec(remaining), 0)))   # Decimal: compared/written against the balance
         if amt > 0:
             # 144bc — guarded atomic decrement: refuse to drive the balance negative if a
             # concurrent redemption drained the card between the read above and this write.
             res = await db.execute(sa_update(GiftCard)
                 .where(GiftCard.id == g.id, GiftCard.balance >= amt)
-                .values(balance=GiftCard.balance - amt))
+                .values(balance=GiftCard.balance - amt)
+                .execution_options(synchronize_session=False))
             if res.rowcount == 0:
                 raise HTTPException(409, "Gift card balance changed — please retry")
             db.add(GiftCardLedger(org_id=org_id, gift_card_id=g.id, amount=-amt,
                                   ref_type="sale", ref_id=sale.id, note=f"Redeemed on {sale.sale_number}"))
-            extra += amt; remaining -= amt; detail["gift_card"] = amt
+            extra += float(amt); remaining -= float(amt); detail["gift_card"] = float(amt)
     if data.redeem_points and data.redeem_points > 0:
         if not client_id:
             raise HTTPException(400, "Select a customer to redeem points")
@@ -294,7 +295,8 @@ async def delete_sale(
         back = q2(-(g.amount or 0))
         if back > 0:
             await db.execute(sa_update(GiftCard).where(GiftCard.id == g.gift_card_id)
-                             .values(balance=GiftCard.balance + back))
+                             .values(balance=GiftCard.balance + d2(back))
+                             .execution_options(synchronize_session=False))
             db.add(GiftCardLedger(org_id=current.org_id, gift_card_id=g.gift_card_id, amount=back,
                                   ref_type="sale_void", ref_id=sale.id, note=f"Sale {sale.sale_number} deleted"))
     for pts in (await db.execute(select(LoyaltyLedger).where(
@@ -306,7 +308,7 @@ async def delete_sale(
 
     from backend.routers.cash import void_document_legs
     await void_document_legs(db, current.org_id, "sale", sale.id, reason, current.id)
-    sale.voided_at = datetime.utcnow()
+    sale.voided_at = now_utc()
     sale.voided_by_id = current.id
     sale.void_reason = reason
     from backend.services import audit
@@ -665,7 +667,7 @@ async def post_stocktake(
                              ref_type="stocktake", ref_id=st.id))
         adjusted += 1
     st.status = "posted"
-    st.posted_at = datetime.utcnow()
+    st.posted_at = now_utc()
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "stocktake", st.id,
                            f"Stocktake posted: {adjusted} adjustment(s)")

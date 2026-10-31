@@ -4,7 +4,6 @@ The stock documents the shop hands over — write-off, transfer, return, purchas
 the stocktake settlement act. (Product labels print as HTML from routers/documents.py.)
 """
 import io
-from datetime import datetime
 from xml.sax.saxutils import escape as _x
 from typing import Optional
 
@@ -19,6 +18,7 @@ from reportlab.platypus import (
     Table,
     TableStyle,
 )
+from backend.services.dates import now_utc
 
 # Fields a label template may show (validated by routers/printing.py templates).
 FIELDS = ["name", "sku", "mpn", "price", "barcode", "category", "brand"]
@@ -126,7 +126,7 @@ def render_document(*, title: str, org_name: str, number: Optional[str],
     story.append(sig)
     story.append(Spacer(1, 6))
     story.append(Paragraph(
-        f"Generated {datetime.utcnow():%Y-%m-%d %H:%M} UTC", ss["Small"]))
+        f"Generated {now_utc():%Y-%m-%d %H:%M} UTC", ss["Small"]))
 
     doc.build(story)
     return buf.getvalue()

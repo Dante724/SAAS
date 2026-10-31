@@ -10,7 +10,6 @@ The engine is best-effort: an action that raises is logged and skipped, never
 breaking the request that triggered it. Callers pass an already-loaded Order.
 """
 import json
-from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import select
@@ -18,6 +17,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm.attributes import flag_modified
 
 from backend.models import AutomationRule, Task
+from backend.services.dates import now_utc
 
 VALID_EVENTS = {
     "order_created", "status_changed", "estimate_approved",
@@ -159,7 +159,7 @@ async def run(db: AsyncSession, org_id: str, event: str, *, order=None, part=Non
             continue
         summary = await _do_action(db, org_id, rule, order, part)
         rule.fire_count = (rule.fire_count or 0) + 1
-        rule.last_fired_at = datetime.utcnow()
+        rule.last_fired_at = now_utc()
         fired += 1
         if summary:
             summaries.append(summary)

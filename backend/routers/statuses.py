@@ -13,6 +13,7 @@ from typing import Optional
 from backend.db.database import get_db
 from backend.models import OrderStatus, Employee, NotificationRule
 from backend.services.auth import get_current_employee, require_perm, record_scope
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/statuses", tags=["statuses"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -207,12 +208,12 @@ async def list_statuses(
 
 
 async def _job_counts(db: AsyncSession, org_id: str, rt: str) -> tuple[dict, dict]:
-    from datetime import datetime, timedelta
+    from datetime import timedelta
 
     from backend.models import Order
     base = (Order.org_id == org_id, Order.archived == False, Order.is_estimate == (rt == "estimate"))  # noqa: E712
     cur = dict((await db.execute(select(Order.status, func.count()).where(*base).group_by(Order.status))).all())
-    since = datetime.utcnow() - timedelta(days=30)
+    since = now_utc() - timedelta(days=30)
     recent = dict((await db.execute(select(Order.status, func.count()).where(
         *base, Order.closed_at >= since).group_by(Order.status))).all())
     return cur, recent
@@ -384,10 +385,9 @@ async def delete_status(
             OrderStatus.record_type == s.record_type, OrderStatus.id != s.id))).scalars().first()
         if not target:
             raise HTTPException(400, "Pick another active status to move the jobs to")
-        from datetime import datetime
 
         from backend.models import Order, OrderStatusLog
-        now = datetime.utcnow()
+        now = now_utc()
         orders = (await db.execute(select(Order).where(
             Order.org_id == current.org_id, Order.status == s.key,
             Order.is_estimate == (s.record_type == "estimate")))).scalars().all()

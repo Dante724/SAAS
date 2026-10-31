@@ -6,13 +6,14 @@ after every job, Tekly can auto-draft one the moment a work order closes
 display mode. Combined with the existing order payment-link + gateway webhook,
 a shop can go from "close job" to "client paid" with no document-building step.
 """
-from datetime import datetime, timedelta
+from datetime import timedelta
 
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import Invoice, Order, Organisation
 from backend.services.money import d2
+from backend.services.dates import now_utc
 
 VOID_STATUSES = ("cancelled", "canceled", "void", "voided")
 DISPLAY_MODES = ("detailed", "simplified", "one_line")
@@ -203,7 +204,7 @@ async def auto_draft_on_close(db: AsyncSession, order: Order) -> Invoice | None:
     due_days = getattr(org, "default_due_days", None) or 30
     return await new_invoice(db, org_id=order.org_id, orders=[order],
                              display_mode=getattr(org, "default_invoice_display", "detailed"),
-                             auto_drafted=True, due_at=datetime.utcnow() + timedelta(days=due_days))
+                             auto_drafted=True, due_at=now_utc() + timedelta(days=due_days))
 
 
 async def _draft_remainder(db: AsyncSession, org, order: Order):

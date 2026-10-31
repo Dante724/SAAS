@@ -13,6 +13,7 @@ from backend.services import audit
 from backend.services import multi_asset as _ma
 from backend.services.auth import (get_current_employee, hash_password, is_old_default_password, norm_email,
                                    require_perm, verify_password)
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/staff", tags=["staff"])
 
@@ -463,7 +464,7 @@ async def list_invites(db: AsyncSession = Depends(get_db),
     rows = (await db.execute(select(Invite).where(
         Invite.org_id == current.org_id, Invite.accepted_at.is_(None)
     ).order_by(Invite.created_at.desc()))).scalars().all()
-    now = datetime.utcnow()
+    now = now_utc()
     return {"items": [{
         "id": i.id, "email": i.email, "name": i.name, "role_id": i.role_id,
         "location_id": i.location_id, "expired": i.expires_at < now,
@@ -498,7 +499,7 @@ async def create_invite(data: InviteIn, db: AsyncSession = Depends(get_db),
     raw = secrets.token_urlsafe(32)
     if open_inv:
         open_inv.token_hash = hashlib.sha256(raw.encode()).hexdigest()
-        open_inv.expires_at = datetime.utcnow() + timedelta(days=7)
+        open_inv.expires_at = now_utc() + timedelta(days=7)
         open_inv.name, open_inv.role_id, open_inv.location_id = data.name, data.role_id, data.location_id
         inv = open_inv
     else:
@@ -506,7 +507,7 @@ async def create_invite(data: InviteIn, db: AsyncSession = Depends(get_db),
             org_id=current.org_id, email=email, name=data.name, role_id=data.role_id,
             location_id=data.location_id, invited_by=current.id,
             token_hash=hashlib.sha256(raw.encode()).hexdigest(),
-            expires_at=datetime.utcnow() + timedelta(days=7))
+            expires_at=now_utc() + timedelta(days=7))
         db.add(inv)
     await db.flush()
     await audit.record(db, org_id=current.org_id, actor_id=current.id, action="invite.create",
@@ -675,7 +676,7 @@ async def update_task(
         raise HTTPException(404, "Task not found")
     task.status = data.status
     if data.status == "done":
-        task.completed_at = datetime.utcnow()
+        task.completed_at = now_utc()
     await db.commit()
     return {"ok": True}
 

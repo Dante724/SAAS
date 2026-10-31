@@ -5,7 +5,6 @@ that a scheduled task can hit, and a dry-run tester so users can see which
 orders a rule would fire on before enabling it.
 """
 import json
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -18,6 +17,7 @@ from backend.db.database import get_db
 from backend.models import AutomationRule, Employee, Order, Part, StockLevel
 from backend.services.auth import get_current_employee, require_perm
 from backend.services import automation as auto
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/automations", tags=["automations"])
 
@@ -161,7 +161,7 @@ async def sweep(db: AsyncSession = Depends(get_db),
                 current: Employee = Depends(require_perm("can_manage_settings"))):
     """Fire time-based automations: overdue work orders and low-stock products.
     Intended to be called on a schedule (e.g. hourly)."""
-    now = datetime.utcnow()
+    now = now_utc()
     fired = 0
 
     # overdue orders: past their promised time (due_at or scheduled_to) and still open

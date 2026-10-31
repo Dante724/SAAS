@@ -10,7 +10,6 @@ State machine and stock semantics:
               after shipping: caller names the warehouse that takes goods back.
 Every hop writes StockMovements and a feed event. Mutations require
 can_manage_inventory."""
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -33,6 +32,7 @@ from backend.services.auth import get_current_employee, require_perm
 from backend.services.batching import names_by_id, rows_by
 from backend.services.numbering import next_number
 from backend.services.money import claim_status, q2
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/transfers", tags=["transfers"])
 
@@ -241,7 +241,7 @@ async def change_status(
                                  movement_type="transfer_out", qty=-l.qty,
                                  ref_type="transfer", ref_id=t.id))
     elif new == "received":
-        t.received_at = datetime.utcnow()   # arrived, held for verification
+        t.received_at = now_utc()   # arrived, held for verification
     elif new == "completed":
         # Build 93: credit the destination with what *actually arrived*, not what was
         # shipped. If nobody verified the lines, the shipped quantity stands — but a
@@ -263,7 +263,7 @@ async def change_status(
                                      warehouse_id=t.from_warehouse_id,
                                      movement_type="transfer_shortage", qty=-missing,
                                      ref_type="transfer", ref_id=t.id))
-        t.completed_at = datetime.utcnow()
+        t.completed_at = now_utc()
 
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "transfer", t.id,
@@ -321,7 +321,7 @@ async def receive_lines(
 
     if t.status == "in_transit":
         t.status = "received"
-        t.received_at = datetime.utcnow()
+        t.received_at = now_utc()
     await db.commit()
     return {"ok": True, "status": t.status, "discrepancies": discrepancies}
 

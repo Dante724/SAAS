@@ -7,7 +7,6 @@ the messages (services/chat_status.py), plus a Spam folder that notifies nobody.
 C4: provider webhooks (Twilio, Meta, and the generic normalised hook) all land here; the old
 /api/inbox/webhook URLs forward to these handlers.
 """
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
@@ -19,6 +18,7 @@ from backend.db.database import get_db
 from backend.models import ChatMessage, ChatThread, Employee, Lead
 from backend.services import chat_status as cs
 from backend.services.auth import get_current_employee, require_perm
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/chats", tags=["chats"])
 
@@ -129,7 +129,7 @@ async def update_thread(
         t.status = data.status
     if data.is_spam is not None and bool(t.is_spam) != data.is_spam:
         t.is_spam = data.is_spam
-        t.spam_at = datetime.utcnow() if data.is_spam else None
+        t.spam_at = now_utc() if data.is_spam else None
     await db.commit()
     return _ser_thread(t)
 
@@ -152,7 +152,7 @@ async def create_thread(
                    contact_phone=data.contact_phone,
                    contact_name=data.contact_name or (client.name if client else None),
                    client_id=client.id if client else None, status="new", is_spam=False,
-                   last_message_at=datetime.utcnow())
+                   last_message_at=now_utc())
     db.add(t)
     await db.flush()
     if data.first_message:
@@ -196,7 +196,7 @@ async def send_message(
                     author_id=current.id, status=result.get("status") or "sent")
     db.add(m)
     if m.status == "failed":           # nothing reached the customer: not a reply
-        t.last_message_at = datetime.utcnow()
+        t.last_message_at = now_utc()
     else:
         cs.mark_outbound(t)
     await db.commit()
@@ -394,7 +394,7 @@ async def thread_to_lead(
                 phone=t.contact_phone, source=t.channel,
                 inquiry=(first_in.body if first_in else None),
                 client_id=t.client_id, manager_id=current.id,
-                sla_due_at=datetime.utcnow() + timedelta(minutes=60))
+                sla_due_at=now_utc() + timedelta(minutes=60))
     db.add(lead)
     await db.flush()
     t.lead_id = lead.id

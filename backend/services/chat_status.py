@@ -18,6 +18,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import ChatMessage, ChatThread, Client
+from backend.services.dates import now_utc
 
 STATUSES = ("new", "reply_needed", "replied", "completed")
 AUTO_COMPLETE_AFTER = timedelta(hours=24)
@@ -27,7 +28,7 @@ CHANNELS = ("whatsapp", "sms", "email", "facebook", "instagram", "call")
 
 
 def mark_inbound(t: ChatThread, now: datetime | None = None) -> None:
-    now = now or datetime.utcnow()
+    now = now or now_utc()
     t.last_inbound_at = now
     t.last_message_at = now
     if t.status in ("replied", "completed"):
@@ -37,7 +38,7 @@ def mark_inbound(t: ChatThread, now: datetime | None = None) -> None:
 
 
 def mark_outbound(t: ChatThread, now: datetime | None = None) -> None:
-    now = now or datetime.utcnow()
+    now = now or now_utc()
     t.last_outbound_at = now
     t.last_message_at = now
     t.status = "replied"
@@ -120,7 +121,7 @@ async def notify_inbound(db: AsyncSession, org_id: str, thread: ChatThread, body
 
 async def autocomplete_replied(db: AsyncSession, now: datetime | None = None) -> int:
     """Complete every replied thread that has been quiet for 24h (all orgs). Returns the count."""
-    cutoff = (now or datetime.utcnow()) - AUTO_COMPLETE_AFTER
+    cutoff = (now or now_utc()) - AUTO_COMPLETE_AFTER
     res = await db.execute(update(ChatThread).where(
         ChatThread.status == "replied", ChatThread.last_outbound_at.isnot(None),
         ChatThread.last_outbound_at <= cutoff).values(status="completed")

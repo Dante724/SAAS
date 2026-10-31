@@ -101,12 +101,13 @@ def may_use_account(role: Optional[Role], account_id: Optional[str]) -> bool:
     return account_id in allowed
 
 
-def payroll_cutoff(role: Optional[Role]):
-    """Earliest date an employee may see their own compensation, or None for no limit."""
+def payroll_cutoff(role: Optional[Role], today):
+    """Earliest date an employee may see their own compensation, or None for no limit.
+    `today` is the shop's calendar day (services.dates.shop_today)."""
     if not role or not role.payroll_visibility_days:
         return None
-    from datetime import date, timedelta
-    return date.today() - timedelta(days=int(role.payroll_visibility_days))
+    from datetime import timedelta
+    return today - timedelta(days=int(role.payroll_visibility_days))
 
 
 async def can_view_client(db, current: Employee, client: Client) -> bool:

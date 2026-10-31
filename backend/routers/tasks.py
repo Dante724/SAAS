@@ -18,6 +18,7 @@ from backend.db.database import get_db
 from backend.services.dates import parse_dt
 from backend.models import Client, Employee, Order, Task
 from backend.services.auth import get_current_employee
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
@@ -26,7 +27,7 @@ STATUSES = ["todo", "in_progress", "done"]
 
 def _ser(t: Task, names: dict | None = None) -> dict:
     names = names or {}
-    overdue = bool(t.due_at and not t.completed_at and t.due_at < datetime.utcnow())
+    overdue = bool(t.due_at and not t.completed_at and t.due_at < now_utc())
     return {
         "id": t.id, "title": t.title, "description": t.description,
         "status": t.status,
@@ -75,7 +76,7 @@ async def list_tasks(
     if mine:
         q = q.where(or_(Task.assigned_to_id == current.id, Task.created_by_id == current.id))
     if overdue:
-        q = q.where(Task.completed_at.is_(None), Task.due_at < datetime.utcnow())
+        q = q.where(Task.completed_at.is_(None), Task.due_at < now_utc())
     rows = (await db.execute(q)).scalars().all()
 
     far = datetime.max
@@ -206,7 +207,7 @@ async def update_task(
             raise HTTPException(422, f"status must be one of {STATUSES}")
         t.status = data.status
         if data.status == "done" and not t.completed_at:
-            t.completed_at = datetime.utcnow()
+            t.completed_at = now_utc()
             # on-time analysis: no due date means it can't be late
             t.completed_on_time = (t.due_at is None) or (t.completed_at <= t.due_at)
             await _feed(db, current, t, "Task completed"
