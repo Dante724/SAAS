@@ -12,6 +12,7 @@ from backend.db.database import get_db
 from backend.models import Employee, Part, SerializedItem, StockLevel, StockMovement
 from backend.services import stock_posting
 from backend.services.auth import get_current_employee, require_perm
+from backend.services.batching import names_by_id
 from backend.services.numbering import next_number
 from backend.services.redact import can_see_costs, drop_cost_fields
 
@@ -928,7 +929,8 @@ async def list_reservations(
     rows = (await db.execute(select(StockReservation).where(
         StockReservation.org_id == current.org_id, StockReservation.released == False  # noqa: E712
     ))).scalars().all()
-    parts = {p.id: p.name for p in (await db.execute(select(Part).where(Part.org_id == current.org_id))).scalars().all()}
+    parts = await names_by_id(db, Part.id, Part.name, [r.part_id for r in rows],
+                              org_col=Part.org_id, org_id=current.org_id)
     return {"items": [{"id": r.id, "part_id": r.part_id, "part": parts.get(r.part_id), "qty": r.qty,
                        "order_id": r.order_id, "expires_at": r.expires_at.isoformat() if r.expires_at else None}
                       for r in rows]}
@@ -1181,8 +1183,8 @@ async def get_po(
         raise HTTPException(404, "Purchase order not found")
     lines = (await db.execute(select(POLine).where(POLine.po_id == po.id))).scalars().all()
     supplier = (await db.execute(select(Supplier).where(Supplier.id == po.supplier_id))).scalar_one_or_none()
-    part_names = {p.id: p.name for p in (await db.execute(
-        select(Part).where(Part.org_id == current.org_id))).scalars().all()}
+    part_names = await names_by_id(db, Part.id, Part.name, [l.part_id for l in lines],
+                                   org_col=Part.org_id, org_id=current.org_id)
     return _ser_po(po, lines, part_names, supplier=supplier)
 
 
@@ -1200,8 +1202,8 @@ async def po_receipts(
     rows = (await db.execute(select(StockMovement).where(
         StockMovement.ref_type == "po", StockMovement.ref_id == po_id)
         .order_by(StockMovement.created_at.desc()))).scalars().all()
-    part_names = {p.id: p.name for p in (await db.execute(
-        select(Part).where(Part.org_id == current.org_id))).scalars().all()}
+    part_names = await names_by_id(db, Part.id, Part.name, [m.part_id for m in rows],
+                                   org_col=Part.org_id, org_id=current.org_id)
     emp_names = {e.id: e.name for e in (await db.execute(
         select(Employee).where(Employee.org_id == current.org_id))).scalars().all()}
     return {"items": [{"id": m.id, "part": part_names.get(m.part_id, m.part_id), "qty": m.qty,
@@ -1312,9 +1314,9 @@ async def edit_po(
     await db.commit()
 
     supplier = (await db.execute(select(Supplier).where(Supplier.id == po.supplier_id))).scalar_one_or_none()
-    part_names = {p.id: p.name for p in (await db.execute(
-        select(Part).where(Part.org_id == current.org_id))).scalars().all()}
     lines = (await db.execute(select(POLine).where(POLine.po_id == po.id))).scalars().all()
+    part_names = await names_by_id(db, Part.id, Part.name, [l.part_id for l in lines],
+                                   org_col=Part.org_id, org_id=current.org_id)
     return _ser_po(po, lines, part_names, supplier=supplier)
 
 
@@ -2149,8 +2151,8 @@ async def list_movements(
         .join(Part, StockMovement.part_id == Part.id)
         .where(Part.org_id == current.org_id, StockMovement.movement_type.in_(types))
         .order_by(StockMovement.created_at.desc()).limit(300))).scalars().all()
-    parts = {p.id: p.name for p in (await db.execute(
-        select(Part).where(Part.org_id == current.org_id))).scalars().all()}
+    parts = await names_by_id(db, Part.id, Part.name, [m.part_id for m in rows],
+                              org_col=Part.org_id, org_id=current.org_id)
     locs = {l.id: l.name for l in (await db.execute(
         select(Location).where(Location.org_id == current.org_id))).scalars().all()}
     return {"items": [{

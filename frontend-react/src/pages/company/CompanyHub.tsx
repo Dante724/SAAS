@@ -12,6 +12,7 @@ import Pager from "../../components/Pager";
 import { useServerPage } from "../../hooks/useServerPage";
 import { inputCls } from "../invoices/billing";
 import ImportDrawer from "../../components/ImportDrawer";
+import { clickable, clickableRow } from "../../lib/clickable";
 
 const CO_PAGE = 50;
 
@@ -47,7 +48,7 @@ export function RowMenu({ items, label = "More actions" }: { items: RowMenuItem[
       </button>
       {at && createPortal(
         <div onClick={(e) => e.stopPropagation()}>
-          <div className="fixed inset-0 z-40" onClick={() => setAt(null)} />
+          <div className="fixed inset-0 z-40" aria-hidden="true" onClick={() => setAt(null)} />
           <div role="menu" style={{ top: at.top, bottom: at.bottom, right: at.right }} className="fixed z-50 w-48 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5 text-left">
             {items.map((it) => (
               <button key={it.label} role="menuitem" type="button" onClick={() => { setAt(null); it.onClick(); }}
@@ -388,7 +389,7 @@ export function Services({ onOpen, refresh }: { onOpen: (s?: Service) => void; r
                     <button onClick={() => onOpen()} className={`${primaryBtn} mx-auto mt-3`}><M n="add" c="text-sm" />New service</button></>}
             </td></tr>}
             {pageRows.map((s) => (
-              <tr key={s.id} className="hover:bg-slate-50 cursor-pointer" onClick={() => onOpen(s)}>
+              <tr key={s.id} className="hover:bg-slate-50 cursor-pointer" {...clickableRow(() => onOpen(s))}>
                 <td className="py-3 px-5">
                   <span className="font-semibold text-ink-primary">{s.name}</span>
                   {s.bookable === false && <span title="Clients can't pick this service when they book online" className="block text-[11px] text-ink-tertiary mt-0.5">Not bookable online</span>}
@@ -470,7 +471,7 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
                     <button onClick={() => onOpen()} className={`${primaryBtn} mx-auto mt-3`}><M n="add" c="text-sm" />New product</button></>}
             </td></tr>}
             {pageRows.map((p) => (
-              <tr key={p.id} className="hover:bg-slate-50 cursor-pointer" onClick={() => onOpen(p)}>
+              <tr key={p.id} className="hover:bg-slate-50 cursor-pointer" {...clickableRow(() => onOpen(p))}>
                 <td className="py-3 px-5 font-semibold text-ink-primary">{p.name}</td>
                 <td className="py-3 px-3 text-ink-secondary">{p.category_id ? (catName[p.category_id] || "—") : <span className="text-ink-tertiary">Uncategorized</span>}</td>
                 <td className="py-3 px-3 text-ink-secondary font-mono">{p.sku || p.code || "—"}</td>
@@ -516,7 +517,7 @@ export function Bundles({ onOpen, refresh }: { onOpen: (b?: Bundle) => void; ref
           </div>
         )}
         {items?.map((bd) => (
-          <div key={bd.id} onClick={() => onOpen(bd)} className="border border-slate-200/80 rounded-xl p-4 bg-white flex items-center justify-between shadow-clay-sm hover:border-primary/40 cursor-pointer transition-all">
+          <div key={bd.id} {...clickable(() => onOpen(bd))} className="border border-slate-200/80 rounded-xl p-4 bg-white flex items-center justify-between shadow-clay-sm hover:border-primary/40 cursor-pointer transition-all">
             <div><div className="font-bold text-ink-primary text-sm flex items-center gap-1.5">{bd.name}{bd.broken && <span className="text-[11px] font-bold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">Needs fixing</span>}</div><div className="text-[11px] text-ink-tertiary">{(bd.components || []).length} components{bd.broken ? " · an item no longer exists" : ""}</div></div>
             <div className="text-right">
               <span className="tabular-nums font-bold text-ink-primary text-sm">{money(bd.price)}</span>

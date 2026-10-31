@@ -29,7 +29,7 @@ export function confirmDialog(message: string, opts: ConfirmOpts = {}): Promise<
       const done = (v: boolean) => { close(); resolve(v); };
       return (
         <div className={overlay}>
-          <div className={scrim} onClick={() => done(false)} />
+          <div className={scrim} aria-hidden="true" onClick={() => done(false)} />
           <div className={card}>
             {opts.title && <h3 className="text-sm font-bold text-ink-primary">{opts.title}</h3>}
             <p className="text-xs text-ink-secondary whitespace-pre-line">{message}</p>
@@ -52,7 +52,7 @@ export function alertDialog(message: string, title?: string): Promise<void> {
       const done = () => { close(); resolve(); };
       return (
         <div className={overlay}>
-          <div className={scrim} onClick={done} />
+          <div className={scrim} aria-hidden="true" onClick={done} />
           <div className={card}>
             {title && <h3 className="text-sm font-bold text-ink-primary">{title}</h3>}
             <p className="text-xs text-ink-secondary whitespace-pre-line">{message}</p>
@@ -71,7 +71,7 @@ export function promptDialog(message: string, opts: PromptOpts = {}): Promise<st
       let val = opts.defaultValue || "";
       return (
         <div className={overlay}>
-          <div className={scrim} onClick={() => done(null)} />
+          <div className={scrim} aria-hidden="true" onClick={() => done(null)} />
           <div className={card}>
             {opts.title && <h3 className="text-sm font-bold text-ink-primary">{opts.title}</h3>}
             <p className="text-xs text-ink-secondary whitespace-pre-line">{message}</p>
@@ -104,7 +104,7 @@ export function selectDialog(message: string, options: string[], opts: SelectOpt
       let other = "";
       return (
         <div className={overlay}>
-          <div className={scrim} onClick={() => done(null)} />
+          <div className={scrim} aria-hidden="true" onClick={() => done(null)} />
           <div className={card} data-sel-dialog>
             {opts.title && <h3 className="text-sm font-bold text-ink-primary">{opts.title}</h3>}
             <p className="text-xs text-ink-secondary whitespace-pre-line">{message}</p>

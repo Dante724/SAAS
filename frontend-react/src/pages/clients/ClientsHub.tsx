@@ -20,6 +20,7 @@ import { Avatar } from "../orders/look";
 import { MoreMenu, btnDanger, btnGhost, btnPrimary } from "../invoices/billing";
 import { hueText, tint } from "../../lib/tint";
 import ImportDrawer from "../../components/ImportDrawer";
+import { clickableRow } from "../../lib/clickable";
 
 type Client = { id: string; name?: string; phone?: string; email?: string; loyalty_tier?: string; balance?: number; devices?: any[]; order_count?: number };
 type Tab = "clients" | "suppliers";
@@ -201,7 +202,7 @@ export default function ClientsHub() {
                     </td></tr>
                   )}
                   {pageC.map((c) => (
-                    <tr key={c.id} className={`hover:bg-slate-50 cursor-pointer ${sel.has(c.id) ? "bg-primary/5" : ""}`} onClick={() => setOpenClient(c.id)}>
+                    <tr key={c.id} className={`hover:bg-slate-50 cursor-pointer ${sel.has(c.id) ? "bg-primary/5" : ""}`} {...clickableRow(() => setOpenClient(c.id))}>
                       <td className="py-3 pl-4 pr-1" onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label="Select row" checked={sel.has(c.id)} onChange={() => toggle(c.id)} className="accent-primary cursor-pointer" /></td>
                       <td className="py-2.5 px-4"><span className="flex items-center gap-2.5 min-w-0"><Avatar name={/\p{L}/u.test(c.name || "") ? c.name : null} size={26} /><span className="font-semibold text-ink-primary truncate">{c.name || "—"}</span></span></td>
                       <td className="py-3 px-4 tabular-nums whitespace-nowrap">{c.phone || "—"}</td>
@@ -245,7 +246,7 @@ export default function ClientsHub() {
                     )}
                   </td></tr>}
                   {pageS.map((s) => (
-                    <tr key={s.id} onClick={() => s.client_id ? setOpenClient(s.client_id) : setOpenSupplier(s)} className="hover:bg-slate-50 cursor-pointer">
+                    <tr key={s.id} {...clickableRow(() => s.client_id ? setOpenClient(s.client_id) : setOpenSupplier(s))} className="hover:bg-slate-50 cursor-pointer">
                       <td className="py-3 px-4 font-semibold text-ink-primary">{s.name || "—"}</td>
                       <td className="py-3 px-4">{s.contact_name || "—"}</td>
                       <td className="py-3 px-4 tabular-nums">{s.phone || "—"}</td>
@@ -284,7 +285,7 @@ function MergePreviewDialog({ preview, busy, onCancel, onConfirm }: { preview: a
   const FLD: Record<string, string> = { phone: "Phone", email: "Email", address: "Address", notes: "Notes", discount_card: "Discount card", source: "Lead source", manager_id: "Manager" };
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={busy ? undefined : onCancel} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={busy ? undefined : onCancel} />
       <div className="relative bg-white rounded-2xl shadow-clay-drawer border border-slate-200 w-full max-w-md max-h-[85vh] overflow-y-auto">
         <div className="p-5 border-b border-slate-200 flex items-center gap-2">
           <span className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 grid place-items-center border border-amber-100"><M n="merge" c="text-base" /></span>
@@ -341,7 +342,7 @@ function NewSupplierDrawer({ onClose, onCreated }: { onClose: () => void; onCrea
   }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[440px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h2 className="font-bold text-ink-primary">New supplier</h2>

@@ -19,6 +19,7 @@ import { identifierFields } from "../../lib/assetIdentifiers";
 import { useMe } from "../../context/Me";
 import IdentifyHint, { type IdMatch } from "../../components/IdentifyHint";
 import NameSuggestInput from "../../components/NameSuggestInput";
+import { loadFailed } from "../../lib/notice";
 
 type ClientLite = { id: string; name?: string; phone?: string; email?: string };
 type Emp = { id: string; name: string; in_managers?: boolean; in_assignees?: boolean };
@@ -113,8 +114,8 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
   }
   const [err, setErr] = useState<string | null>(null);
 
-  useEffect(() => { api.get<any>("/staff/employees").then((r) => setEmps(r.items || r || [])).catch(() => {}); }, []);
-  useEffect(() => { api.get<any>("/forms/types").then((r) => { const it: WOType[] = r.items || []; setWoTypes(it); if (it.length) setType((cur) => it.some((t) => t.name === cur) ? cur : it[0].name); }).catch(() => {}); }, []);
+  useEffect(() => { api.get<any>("/staff/employees").then((r) => setEmps(r.items || r || [])).catch(loadFailed("the staff list")); }, []);
+  useEffect(() => { api.get<any>("/forms/types").then((r) => { const it: WOType[] = r.items || []; setWoTypes(it); if (it.length) setType((cur) => it.some((t) => t.name === cur) ? cur : it[0].name); }).catch(loadFailed("job types")); }, []);
   const results = useClientSearch<ClientLite>(q, cOpen && !client);
 
   const subtotal = lines.reduce((s, l) => s + (l.price || 0), 0);
@@ -224,7 +225,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                         onKeyDown={(e) => { if (e.key === "Escape") setCOpen(false); }} role="combobox" aria-expanded={cOpen} autoComplete="off"
                         className="glass-input block w-full pl-10 pr-4 py-2.5 rounded-xl text-sm font-semibold text-ink-primary" placeholder="Search client by name, phone or email… (blank = walk-in)" />
                       {cOpen && (<>
-                        <div className="fixed inset-0 z-[9]" onClick={() => setCOpen(false)} />
+                        <div className="fixed inset-0 z-[9]" aria-hidden="true" onClick={() => setCOpen(false)} />
                         <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5 max-h-72 overflow-y-auto">
                           {!q.trim() && results.length > 0 && <div className="px-2.5 pt-1 pb-0.5 text-[11px] text-ink-tertiary">Recent clients</div>}
                           {q.trim() && results.length === 0 && <div className="px-2.5 py-2 text-xs text-ink-tertiary">No client matches "{q.trim()}"</div>}
@@ -369,7 +370,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 45 }}>
-      <div className="absolute inset-0 bg-ink-primary/30 backdrop-blur-[2.5px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/30 backdrop-blur-[2.5px]" aria-hidden="true" onClick={onClose} />
       <div className="relative h-full w-full max-w-[780px] bg-white/95 backdrop-blur-2xl shadow-clay-drawer flex flex-col border-l border-white/80 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
 

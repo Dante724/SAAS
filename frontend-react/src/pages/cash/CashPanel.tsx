@@ -13,6 +13,8 @@ import { isoDate } from "../../lib/localDate";
 import { useServerPage } from "../../hooks/useServerPage";
 import { fmtServerTime } from "../../lib/serverTime";
 import { btnGhost, btnPrimary } from "../invoices/billing";
+import { loadFailed } from "../../lib/notice";
+import { clickable } from "../../lib/clickable";
 
 type TxnSummary = { count: number; income: number; expense: number; today_in?: number; today_out?: number; today_net?: number };
 type Txn = { id: string; txn_type?: string; amount?: number; account?: string; account_id?: string; cash_flow_item?: string; comment?: string; actual_date?: string; status?: string; balance_after?: number; reverses_txn_id?: string; void_reason?: string };
@@ -43,7 +45,7 @@ export default function CashPanel() {
       return items;
     }).catch(() => setAccounts([]));
   }
-  useEffect(() => { loadAccounts(false); api.get<{ items: FlowItem[] }>("/cash/flow-items").then((r) => setFlow(r.items || [])).catch(() => {}); }, []);
+  useEffect(() => { loadAccounts(false); api.get<{ items: FlowItem[] }>("/cash/flow-items").then((r) => setFlow(r.items || [])).catch(loadFailed("cash flow items")); }, []);
   // The ledger pages on the server; its totals come from the same request (SQL over every row),
   // so they stay full-set however many pages there are.
   const tp = useServerPage<Txn, { summary?: TxnSummary }>("/cash/transactions",
@@ -107,7 +109,7 @@ export default function CashPanel() {
           {accounts.map((a) => {
             const active = sel?.id === a.id;
             return (
-              <div key={a.id} onClick={() => setSel(a)} className={`relative flex items-center gap-2.5 bg-white rounded-2xl border p-2.5 cursor-pointer transition-all shadow-clay-sm ${active ? "border-primary ring-2 ring-primary/15" : "border-slate-200/90 hover:border-primary/40"}`}>
+              <div key={a.id} {...clickable(() => setSel(a))} className={`relative flex items-center gap-2.5 bg-white rounded-2xl border p-2.5 cursor-pointer transition-all shadow-clay-sm ${active ? "border-primary ring-2 ring-primary/15" : "border-slate-200/90 hover:border-primary/40"}`}>
                 <div className="w-9 h-9 rounded-full bg-primary text-white flex items-center justify-center shadow-clay-sm shrink-0"><M n={iconFor(a)} c="text-base" /></div>
                 <div className="min-w-0 flex-1">
                   <div className="text-xs font-bold text-ink-primary truncate">{a.name}</div>
@@ -225,7 +227,7 @@ export default function CashPanel() {
       {/* income/expense/transfer modal */}
       {modal && sel && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-ink-primary/40" onClick={() => setModal(null)} />
+          <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={() => setModal(null)} />
           <div className="relative bg-white rounded-2xl shadow-clay-drawer border border-slate-200 w-full max-w-md p-5 space-y-4">
             <div className="flex items-center justify-between"><h4 className="text-sm font-bold text-ink-primary">{modal === "transfer" ? "Transfer money" : `Record ${modal}`} · {sel.name}</h4><button aria-label="Close" onClick={() => setModal(null)} className="text-ink-tertiary hover:text-ink-primary"><M n="close" c="text-lg" /></button></div>
             {modal === "transfer" && (

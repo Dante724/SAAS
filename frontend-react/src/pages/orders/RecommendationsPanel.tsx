@@ -58,7 +58,7 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
 
   const load = () => api.get<any>(`/orders/${orderId}/recommendations`).then((r) => setRecs(r.items || [])).catch(() => setRecs([]));
   useEffect(() => { load(); }, [orderId]);  // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => { api.get<any>("/staff/public-pages").then((c) => setEnabled(c?.oe_allow_recommend !== false)).catch(() => {}); }, []);
+  useEffect(() => { api.get<any>("/staff/public-pages").then((c) => setEnabled(c?.oe_allow_recommend !== false)).catch(() => { /* silent: defaults to enabled */ }); }, []);
 
   // ok: a fixed sentence, or (for sends) read the server's delivery result, so the screen never
   // says "sent" when email/text isn't set up or the customer has no contact.

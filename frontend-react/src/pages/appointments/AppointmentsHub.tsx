@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import { api } from "../../api/client";
+import { loadFailed } from "../../lib/notice";
+import { clickable } from "../../lib/clickable";
 
 type Appointment = { id: string; client_name?: string; service_name?: string; employee_name?: string; scheduled_for?: string; ends_at?: string; duration_min?: number; status?: string; note?: string; order_id?: string | null };
 type Emp = { id: string; name: string };
@@ -76,7 +78,7 @@ export default function AppointmentsHub() {
   }
 
   function load() { api.get<{ items: Appointment[] }>("/appointments").then((r) => setRows(r.items || [])).catch(() => setRows([])); }
-  useEffect(() => { load(); api.get<any>("/staff/employees").then((r) => setEmps(r.items || r || [])).catch(() => {}); api.get<{ items: Service[] }>("/catalog/services").then((r) => setServices(r.items || [])).catch(() => {}); }, []);
+  useEffect(() => { load(); api.get<any>("/staff/employees").then((r) => setEmps(r.items || r || [])).catch(loadFailed("the staff list")); api.get<{ items: Service[] }>("/catalog/services").then((r) => setServices(r.items || [])).catch(loadFailed("services")); }, []);
 
   async function create() {
     if (!f.scheduled_for) { flash("Pick a date & time"); return; }
@@ -118,7 +120,7 @@ export default function AppointmentsHub() {
                       <div className="flex-1 flex flex-wrap gap-2">
                         {cards.length === 0 && <div className="text-[11px] text-ink-placeholder pt-1.5">—</div>}
                         {cards.map((b) => (
-                          <div key={b.id} draggable onDragStart={() => setDrag(b.id)} onDragEnd={() => setDrag(null)} onClick={() => { setSel(b); setReDate(""); setReTime(""); }} className={`bg-white rounded-xl border border-slate-200/80 shadow-clay-sm px-3 py-1.5 cursor-pointer hover:border-primary/40 ${drag === b.id ? "opacity-50" : ""}`}>
+                          <div key={b.id} draggable onDragStart={() => setDrag(b.id)} onDragEnd={() => setDrag(null)} {...clickable(() => { setSel(b); setReDate(""); setReTime(""); })} className={`bg-white rounded-xl border border-slate-200/80 shadow-clay-sm px-3 py-1.5 cursor-pointer hover:border-primary/40 ${drag === b.id ? "opacity-50" : ""}`}>
                             <div className="text-xs font-bold text-ink-primary">{b.service_name || "Appointment"} · {time(b.scheduled_for)}</div>
                             <div className="text-[11px] text-ink-tertiary">{b.client_name || "Walk-in"}{b.employee_name ? ` · ${b.employee_name}` : ""}</div>
                           </div>
@@ -139,7 +141,7 @@ export default function AppointmentsHub() {
               {list.map((b) => {
                 const st = (b.status || "booked").toLowerCase();
                 return (
-                  <div key={b.id} onClick={() => { setSel(b); setReDate(""); setReTime(""); }} className="px-5 py-3.5 flex items-center gap-4 hover:bg-blue-50/30 transition-colors cursor-pointer">
+                  <div key={b.id} {...clickable(() => { setSel(b); setReDate(""); setReTime(""); })} className="px-5 py-3.5 flex items-center gap-4 hover:bg-blue-50/30 transition-colors cursor-pointer">
                     <div className="text-center flex-shrink-0 w-16"><div className="text-sm font-bold tabular-nums text-ink-primary">{time(b.scheduled_for)}</div>{b.duration_min && <div className="text-[11px] text-ink-tertiary">{b.duration_min}m</div>}</div>
                     <div className="w-px h-9 bg-slate-200" />
                     <div className="flex-1 min-w-0"><div className="text-sm font-bold text-ink-primary truncate">{b.service_name || "Appointment"}</div><div className="text-[11px] text-ink-tertiary">{b.client_name || "Walk-in"}{b.employee_name ? ` · ${b.employee_name}` : ""}</div></div>
@@ -155,7 +157,7 @@ export default function AppointmentsHub() {
 
       {drawer && (
         <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={() => setDrawer(false)} />
+          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={() => setDrawer(false)} />
           <div className="relative h-full w-full max-w-[460px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
             <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
             <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70"><h3 className="text-base font-bold text-ink-primary">New appointment</h3><button aria-label="Close" onClick={() => setDrawer(false)} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
@@ -192,7 +194,7 @@ export default function AppointmentsHub() {
       )}
       {sel && (
         <div className="fixed inset-0 flex justify-end" style={{ zIndex: 55 }}>
-          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={() => setSel(null)} />
+          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={() => setSel(null)} />
           <div className="relative h-full w-full max-w-[460px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
             <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
               <div><h3 className="text-base font-bold text-ink-primary">{sel.service_name || "Appointment"}</h3><div className="text-[11px] text-ink-tertiary">{dayKey(sel.scheduled_for)} · {time(sel.scheduled_for)}</div></div>

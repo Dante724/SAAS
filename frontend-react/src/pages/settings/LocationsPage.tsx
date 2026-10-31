@@ -4,6 +4,7 @@ import { M } from "../../components/Shell";
 import Switch from "../../components/Switch";
 import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
+import { loadFailed } from "../../lib/notice";
 
 /* Settings › Locations — shops listed on the left, the chosen one edited in place on the right
    (no side panel). Opening hours are a week timeline: click a day to change it, or use a preset.
@@ -122,7 +123,7 @@ export default function LocationsPage({ companyTz }: { companyTz?: string }) {
           </nav>
           {(cur || sel === "new") && (
             <LocationDetail key={sel || ""} loc={cur} companyTz={companyTz} resources={res.filter((r) => cur && r.location_id === cur.id)}
-              onSaved={(m, id) => { flash(m); load(id); }} onResChanged={() => api.get<any>("/resources").then((r) => setRes(r.items || [])).catch(() => {})}
+              onSaved={(m, id) => { flash(m); load(id); }} onResChanged={() => api.get<any>("/resources").then((r) => setRes(r.items || [])).catch(loadFailed("resources"))}
               onCancelNew={() => setSel(active[0]?.id || null)} />
           )}
         </div>
@@ -150,8 +151,8 @@ function LocationDetail({ loc, companyTz, resources, onSaved, onResChanged, onCa
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
   const zones = useMemo(() => allZones([f.timezone, companyTz || ""]), []);  // eslint-disable-line
   useEffect(() => {
-    api.get<any>("/settings/legal-entities").then((r) => setLegals(r.items || r || [])).catch(() => {});
-    api.get<any>("/pricing/types").then((r) => setPriceTypes(r.items || r || [])).catch(() => {});
+    api.get<any>("/settings/legal-entities").then((r) => setLegals(r.items || r || [])).catch(loadFailed("legal entities"));
+    api.get<any>("/pricing/types").then((r) => setPriceTypes(r.items || r || [])).catch(loadFailed("price types"));
   }, []);
   const isNew = !loc;
   const dirty = isNew || JSON.stringify([f, wh]) !== orig.current;

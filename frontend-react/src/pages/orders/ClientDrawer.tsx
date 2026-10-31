@@ -19,6 +19,8 @@ import SupplierPanel from "../clients/SupplierPanel";
 import { useTerminology } from "../../lib/useTerminology";
 import { useFormLayout, LayoutFields, reqStar, missingRequired, has } from "../../lib/formLayout";
 import { ClientCreditNotes } from "../invoices/CreditNotesList";
+import { loadFailed } from "../../lib/notice";
+import { clickable } from "../../lib/clickable";
 
 const BASE_TABS = ["General info", "Devices & assets", "Work orders", "Purchases", "Loyalty & payout", "Communications"];
 const GHOST = "h-9 px-3.5 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50 disabled:opacity-50 inline-flex items-center gap-1.5";
@@ -42,7 +44,6 @@ function F({ l, v }: { l: string; v: string }) {
 }
 
 export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: { woNum?: string; clientId: string; onClose: () => void; onOpenAsset?: () => void }) {
-  const term = useTerminology();
   const { can } = useMe();
   const [tab, setTab] = useState(0);
   const [assetOpen, setAssetOpen] = useState<string | null>(null);
@@ -59,7 +60,7 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
   const [addr0, setAddr0] = useState<Address>({});
   const [busy, setBusy] = useState(false); const [toast, setToast] = useState<string | null>(null);
   const [isSupplier, setIsSupplier] = useState(false);   // Build 144am — Supplier role toggle
-  const reload = () => api.get<Client>(`/clients/${clientId}`).then((r) => { setC(r); setIsSupplier(!!r.is_supplier); }).catch(() => {});
+  const reload = () => api.get<Client>(`/clients/${clientId}`).then((r) => { setC(r); setIsSupplier(!!r.is_supplier); }).catch(loadFailed("the client"));
   useEffect(() => { api.get<Client>(`/clients/${clientId}`).then((r) => {
     setC(r); setCd(r.custom_data || {}); setSource((r as any).source || ""); setIsSupplier(!!r.is_supplier);
     setBiz({ tax_id: (r as any).tax_id || "", reg_no: (r as any).reg_no || "", billing_address: (r as any).billing_address || "", birthday: (r as any).birthday || "" });
@@ -69,7 +70,7 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
       disc_services_mode: r.disc_services_mode || "none", disc_services_value: r.disc_services_value || 0, disc_services_price_type_id: r.disc_services_price_type_id || "",
       disc_materials_mode: r.disc_materials_mode || "none", disc_materials_value: r.disc_materials_value || 0, disc_materials_price_type_id: r.disc_materials_price_type_id || "",
     });
-  }).catch(() => {}); }, [clientId]);
+  }).catch(loadFailed("the client")); }, [clientId]);
   const initials = (c.name || "C").trim().split(/\s+/).slice(0, 2).map((w) => w[0] || "").join("").toUpperCase() || "C";
   const bal = c.balance || 0;
   const [creditOpen, setCreditOpen] = useState(false);
@@ -122,7 +123,7 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative h-full w-full max-w-[680px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <header className="px-6 pt-4 border-b border-slate-200/90 bg-white/95 backdrop-blur">
@@ -247,7 +248,7 @@ function DevicesTab({ devices, onOpen }: { devices?: any[]; onOpen: (id?: string
   return (
     <div className="space-y-2">
       {devices.map((dv) => (
-        <div key={dv.id} onClick={() => onOpen(dv.id)} className="bg-white rounded-xl border border-slate-200/90 p-3.5 shadow-sm flex items-center gap-3 cursor-pointer hover:border-primary/50 transition-all">
+        <div key={dv.id} {...clickable(() => onOpen(dv.id))} className="bg-white rounded-xl border border-slate-200/90 p-3.5 shadow-sm flex items-center gap-3 cursor-pointer hover:border-primary/50 transition-all">
           <span className="w-9 h-9 rounded-lg bg-purple-50 text-purple-600 grid place-items-center border border-purple-100"><M n="smartphone" c="text-base" /></span>
           <div className="flex-1"><div className="text-xs font-bold text-ink-primary">{[dv.brand, dv.model].filter(Boolean).join(" ") || term.asset}</div><div className="text-[11px] text-ink-tertiary font-mono">SN: {dv.serial || "—"}{dv.imei ? ` · IMEI: ${dv.imei}` : ""}</div></div>
           <M n="chevron_right" c="text-ink-tertiary text-base" />
@@ -378,7 +379,7 @@ function CommsTab({ clientId }: { clientId: string }) {
   const [body, setBody] = useState("");
   const [busy, setBusy] = useState(false);
   function reload() { api.get<any>(`/clients/${clientId}/communication`).then((r) => setMsgs(r.items || [])).catch(() => setMsgs([])); }
-  useEffect(() => { reload(); api.get<any>(`/clients/message-templates/all`).then((r) => setTemplates(r.items || [])).catch(() => {}); }, [clientId]);
+  useEffect(() => { reload(); api.get<any>(`/clients/message-templates/all`).then((r) => setTemplates(r.items || [])).catch(loadFailed("message templates")); }, [clientId]);
   async function send() {
     if (!body.trim()) return; setBusy(true);
     try { await api.post(`/clients/${clientId}/communication`, { channel, body }); setBody(""); reload(); }
@@ -426,7 +427,7 @@ function GdprCard({ clientId, onErased }: { clientId: string; onErased: () => vo
       const latest: Record<string, boolean> = {};
       (r.items || []).forEach((it: any) => { if (!(it.channel in latest)) latest[it.channel] = it.granted; }); // items newest-first
       setConsent(latest);
-    }).catch(() => {});
+    }).catch(loadFailed("consent records"));
   }, [clientId]);
   if (!can("can_manage_settings")) return null;
   async function setC(channel: string, granted: boolean) {

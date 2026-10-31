@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { Supplier, money } from "../inventory/types";
+import { loadFailed } from "../../lib/notice";
 
 /** Build 144am — the supplier facet of a Contact, reused inside the unified contact form
  * (ClientDrawer's "Supplier" tab) and by the standalone SupplierDrawer. It owns the
@@ -41,13 +42,13 @@ export default function SupplierPanel({ supplierId, onSaved }: { supplierId: str
   const [payAcct, setPayAcct] = useState("");
 
   function reloadBalance() {
-    api.get<{ items: Supplier[] }>("/suppliers").then((r) => setF((r.items || []).find((s) => s.id === supplierId) || null)).catch(() => {});
+    api.get<{ items: Supplier[] }>("/suppliers").then((r) => setF((r.items || []).find((s) => s.id === supplierId) || null)).catch(loadFailed("suppliers"));
     api.get<Ledger>(`/suppliers/${supplierId}/ledger`).then(setLed).catch(() => setLed({ supplier_balance: 0, entries: [] }));
   }
   useEffect(() => {
     reloadBalance();
-    api.get<any>(`/suppliers/${supplierId}/performance`).then(setPerf).catch(() => {});
-    api.get<{ items: { id: string; name?: string }[] }>("/cash/accounts").then((r) => { setAccounts(r.items || []); if (r.items?.[0]) setPayAcct(r.items[0].id); }).catch(() => {});
+    api.get<any>(`/suppliers/${supplierId}/performance`).then(setPerf).catch(loadFailed("supplier details"));
+    api.get<{ items: { id: string; name?: string }[] }>("/cash/accounts").then((r) => { setAccounts(r.items || []); if (r.items?.[0]) setPayAcct(r.items[0].id); }).catch(loadFailed("cash accounts"));
   }, [supplierId]);
 
   async function paySupplier() {

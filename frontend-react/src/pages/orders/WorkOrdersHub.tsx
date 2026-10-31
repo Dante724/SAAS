@@ -12,6 +12,8 @@ import WODrawer from "./WODrawer";
 import CreateOrderDrawer from "./CreateOrderDrawer";
 import Pager from "../../components/Pager";
 import { Gate } from "../../context/Me";
+import { loadFailed, showNotice } from "../../lib/notice";
+import { clickable, clickableRow } from "../../lib/clickable";
 
 type Kpis = { new?: number; urgent?: number; overdue?: number; receivables?: number };
 type Status = { id: string; name?: string; key?: string; status_group?: string; color?: string };
@@ -206,8 +208,8 @@ export default function WorkOrdersHub() {
     api.get<{ kpis?: Kpis }>("/reports/company-dashboard").then((r) => setKpis(r.kpis || {})).catch(() => setKpis(null));
   }
   useEffect(() => {
-    refetch(); api.get<any>("/statuses").then((r) => setStatuses(r.items || r || [])).catch(() => {});
-    api.get<any>("/statuses?record_type=estimate").then((r) => setEstStatuses(r.items || r || [])).catch(() => {});
+    refetch(); api.get<any>("/statuses").then((r) => setStatuses(r.items || r || [])).catch(loadFailed("statuses"));
+    api.get<any>("/statuses?record_type=estimate").then((r) => setEstStatuses(r.items || r || [])).catch(loadFailed("statuses"));
   }, []);
   const stOf = (o: Order) => (o.is_estimate ? estStatuses : statuses).find((x) => norm(x.key || x.name) === norm(o.status))
     || [...statuses, ...estStatuses].find((x) => norm(x.key || x.name) === norm(o.status));
@@ -272,7 +274,7 @@ export default function WorkOrdersHub() {
     setBusy(true);
     // Single atomic call (was N per-row PATCHes). action=set_status.
     try { await api.post("/orders/bulk", { order_ids: [...sel], action: "set_status", value: key, reason: reason || undefined }); setSel(new Set()); refetch(); }
-    catch { for (const id of sel) { await api.patch(`/orders/${id}/status`, { status: key, reason: reason || undefined }).catch(() => {}); } setSel(new Set()); refetch(); }
+    catch { let failed = 0; for (const id of sel) { await api.patch(`/orders/${id}/status`, { status: key, reason: reason || undefined }).catch(() => { failed++; }); } if (failed) showNotice(`Couldn't change the status of ${failed} job${failed === 1 ? "" : "s"}.`); setSel(new Set()); refetch(); }
     finally { setBusy(false); }
   }
   // 144-G: bulk archive (soft-delete, reversible). Orders carrying unrefunded payments are
@@ -425,7 +427,7 @@ export default function WorkOrdersHub() {
               {!orders && !err && <tr><td colSpan={colSpan} className="py-6 px-4 text-ink-tertiary">Loading orders…</td></tr>}
               {orders && rows.length === 0 && <tr><td colSpan={colSpan} className="py-10 px-4">{emptyState}</td></tr>}
               {pageRows.map((o) => (
-                <tr key={o.id} onClick={() => setOpen(o)} className={`hover:bg-slate-50/80 cursor-pointer transition-colors group ${sel.has(o.id) ? "bg-primary/5" : ""}`}>
+                <tr key={o.id} {...clickableRow(() => setOpen(o))} className={`hover:bg-slate-50/80 cursor-pointer transition-colors group ${sel.has(o.id) ? "bg-primary/5" : ""}`}>
                   <td className="py-3.5 px-4" onClick={(e) => e.stopPropagation()}><input className="rounded text-primary border-slate-300" type="checkbox" aria-label={`Select ${o.order_number || o.id}`} checked={sel.has(o.id)} onChange={() => toggle(o.id)} /></td>
                   {showCol("order_id") && <td className="py-3.5 px-4 font-mono font-bold text-primary whitespace-nowrap"><span className="inline-flex items-center gap-1.5">{o.order_number || o.id}{!!(o.client_msg_unread && o.client_msg_unread > 0) && <span title={`${o.client_msg_unread} unread customer message(s)`} className="inline-flex items-center gap-0.5 text-[11px] font-bold bg-primary text-white px-1.5 py-0.5 rounded-full"><M n="forum" c="text-[11px]" />{o.client_msg_unread}</span>}{(o as any).checklists_pending && <span role="img" aria-label="Checklist incomplete" title="Checklist incomplete" className="w-2 h-2 rounded-full bg-amber-500" />}</span></td>}
                   {showCol("client") && <td className="py-3.5 px-4"><span className="font-semibold text-[13px] text-ink-primary">{o.client?.name || "Walk-in"}</span><span className="text-[11px] font-normal text-ink-tertiary block">{o.client?.phone || ""}</span></td>}
@@ -463,7 +465,7 @@ export default function WorkOrdersHub() {
                   <div className="p-2 space-y-2 overflow-y-auto">
                     {cards.length === 0 && <div className="text-[11px] text-ink-tertiary px-2 py-4 text-center">Drop here</div>}
                     {cards.map((o) => (
-                      <div key={o.id} draggable onDragStart={() => setDrag(o.id)} onDragEnd={() => setDrag(null)} onClick={() => setOpen(o)}
+                      <div key={o.id} draggable onDragStart={() => setDrag(o.id)} onDragEnd={() => setDrag(null)} {...clickable(() => setOpen(o))}
                         className={`bg-white rounded-xl border border-slate-200/80 shadow-clay-sm p-3 cursor-grab active:cursor-grabbing hover:border-primary/40 transition-colors ${drag === o.id ? "opacity-50" : ""}`}>
                         <div className="flex items-center justify-between mb-1">
                           <span className="font-mono font-bold text-primary text-xs">{o.order_number || o.id}</span>
@@ -625,7 +627,7 @@ export default function WorkOrdersHub() {
       {create && <CreateOrderDrawer isEstimate={create === "estimate"} onClose={() => setCreate(null)} onCreated={refetch} />}
       {archived !== null && (
         <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={() => setArchived(null)} />
+          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={() => setArchived(null)} />
           <div className="relative h-full w-full max-w-[560px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
             <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
             <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">

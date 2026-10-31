@@ -2,6 +2,8 @@ import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { alertDialog, confirmDialog } from "../../lib/dialog";
+import { loadFailed } from "../../lib/notice";
+import { clickable } from "../../lib/clickable";
 
 /* Settings › Checklists — template list (with starters when empty) and the template editor.
    Same API as before (/checklist-templates). The editor works on steps → checks; a template's
@@ -89,7 +91,7 @@ export function ChecklistList({ templates, onOpen, onNew, onChanged, onFlash }: 
 }) {
   const [types, setTypes] = useState<any[]>([]);
   const [menu, setMenu] = useState<string | null>(null);
-  useEffect(() => { api.get<any>("/forms/types").then((r) => setTypes(r.items || [])).catch(() => {}); }, []);
+  useEffect(() => { api.get<any>("/forms/types").then((r) => setTypes(r.items || [])).catch(loadFailed("job types")); }, []);
   useEffect(() => {
     if (!menu) return;
     const close = () => setMenu(null);
@@ -147,7 +149,7 @@ export function ChecklistList({ templates, onOpen, onNew, onChanged, onFlash }: 
           {templates.map((t) => {
             const c = counts(t);
             return (
-              <div key={t.id} onClick={() => onOpen(t)} className="group relative flex items-center gap-3 px-3 py-3 rounded-xl cursor-pointer hover:bg-slate-50 transition-colors">
+              <div key={t.id} {...clickable(() => onOpen(t))} className="group relative flex items-center gap-3 px-3 py-3 rounded-xl cursor-pointer hover:bg-slate-50 transition-colors">
                 <span className="w-10 h-10 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n="fact_check" c="text-lg" /></span>
                 <span className="min-w-0 flex-1">
                   <span className="block text-sm font-medium text-ink-primary truncate">{t.name}</span>
@@ -190,7 +192,7 @@ export function ChecklistEditor({ tpl, onClose, onSaved }: { tpl: any | null; on
   const [open, setOpen] = useState<string | null>(null);   // "si:ii" of the check showing its details
   const [autoKeys, setAutoKeys] = useState<AutoKey[]>(tpl?.auto_status_keys || []);
   const [statuses, setStatuses] = useState<{ work_order: any[]; estimate: any[] } | null>(null);
-  useEffect(() => { api.get<any>("/forms/types").then((r) => setTypes(r.items || [])).catch(() => {}); }, []);
+  useEffect(() => { api.get<any>("/forms/types").then((r) => setTypes(r.items || [])).catch(loadFailed("job types")); }, []);
   useEffect(() => {
     Promise.all((["work_order", "estimate"] as const).map((rt) => api.get<any>(`/statuses?record_type=${rt}`).then((r) => (r.items || r || []).filter((s: any) => s.active !== false)).catch(() => [])))
       .then(([wo, est]) => setStatuses({ work_order: wo, estimate: est }));
@@ -235,7 +237,7 @@ export function ChecklistEditor({ tpl, onClose, onSaved }: { tpl: any | null; on
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/30" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/30" aria-hidden="true" onClick={onClose} />
       <div role="dialog" aria-label={isEdit ? `Edit ${name}` : "New checklist"} className="relative w-[600px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.28s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="flex items-center gap-3 px-5 pt-5 pb-3">

@@ -4,6 +4,7 @@ import Switch from "../../components/Switch";
 import { api } from "../../api/client";
 import { confirmDialog, selectDialog } from "../../lib/dialog";
 import { CHANNEL_LABEL, cellRules, channelPhrase, firesOnStatus, firingLabel, statusEvent, toggleCell, withOverrides, type NotifRule } from "../../lib/notifRules";
+import { clickable } from "../../lib/clickable";
 
 /* Settings › Statuses — the list (grouped by stage, live job counts, icon badges) and the edit panel
    (plain-English summary, example text, everyday switches up front, the rest under Advanced).
@@ -145,7 +146,7 @@ export function StatusList({ statuses, recordType, onRecordType, onOpen, onAdd, 
               <div draggable onDragStart={() => { drag.current = idx; }} onDragEnd={() => { drag.current = null; setOver(null); }}
                 onDragOver={(e) => { e.preventDefault(); setOver(idx); }} onDragLeave={() => setOver((d) => (d === idx ? null : d))}
                 onDrop={(e) => { e.preventDefault(); const f = drag.current; setOver(null); if (f !== null) onMove(f, idx); }}
-                onClick={() => onOpen(s)}
+                {...clickable(() => onOpen(s))}
                 className={`group relative flex items-center gap-3 pl-1.5 pr-2 py-2.5 rounded-xl cursor-pointer hover:bg-slate-50 transition-colors ${over === idx ? "ring-2 ring-primary/30" : ""}`}>
                 <div className="flex items-center opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity" onClick={(e) => e.stopPropagation()}>
                   <M n="drag_indicator" c="text-ink-tertiary cursor-grab text-base" />
@@ -375,7 +376,7 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/30 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/30 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div role="dialog" aria-label={isNew ? "New status" : `Edit ${f.name}`} className="relative w-[460px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.28s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="flex items-center gap-3 px-5 pt-5 pb-3">

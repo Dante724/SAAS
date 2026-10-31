@@ -40,7 +40,7 @@ export default function DenomCountModal({
   }
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30 p-4" onClick={onCancel}>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30 p-4" role="presentation" onClick={onCancel}>
       <div className="relative bg-white rounded-2xl shadow-clay-drawer border border-slate-200 w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-bold text-ink-primary flex items-center gap-2"><M n="payments" c="text-base text-primary" />{title}</h3>

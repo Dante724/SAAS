@@ -2,6 +2,7 @@ import { useEffect, useMemo, useState } from "react";
 import { M } from "../../components/Shell";
 import { api, openAuthedDoc } from "../../api/client";
 import { alertDialog, confirmDialog, promptDialog, selectDialog } from "../../lib/dialog";
+import { loadFailed, saveFailed } from "../../lib/notice";
 
 // Settings → Directories: the pick-lists behind dropdowns (lead sources, cancellation reasons,
 // and any list a custom field is bound to). Lists as cards on the left; the open list shows how
@@ -40,7 +41,7 @@ export default function DirectoriesManager() {
   }
   async function delList(d: Dir) {
     if (!(await confirmDialog(`Delete “${d.name}” and its ${d.item_count} option(s)? Custom fields using it will show no options.`, { danger: true, confirmLabel: "Delete list" }))) return;
-    await api.del(`/directories/${d.id}`).catch(() => {});
+    await api.del(`/directories/${d.id}`).catch(saveFailed("delete the list"));
     setSelId(null); loadDirs();
   }
 
@@ -102,7 +103,7 @@ function ListEditor({ dir, onChanged, onDelete }: { dir: Dir; onChanged: () => v
 
   const load = () => api.get<{ items: Item[]; counts_usage?: boolean }>(`/directories/${dir.id}/items?include_archived=true`)
     .then((r) => { setItems(r.items || []); setCounts(!!r.counts_usage); }).catch(() => setItems([]));
-  useEffect(() => { load(); api.get<any>("/staff/locations").then((r) => setLocs(r.items || r || [])).catch(() => {}); /* eslint-disable-next-line */ }, [dir.id]);
+  useEffect(() => { load(); api.get<any>("/staff/locations").then((r) => setLocs(r.items || r || [])).catch(loadFailed("locations")); /* eslint-disable-next-line */ }, [dir.id]);
 
   const active = useMemo(() => (items || []).filter((i) => i.active), [items]);
   const archived = useMemo(() => (items || []).filter((i) => !i.active), [items]);

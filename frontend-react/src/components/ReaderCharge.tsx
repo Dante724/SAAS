@@ -105,7 +105,7 @@ export default function ReaderCharge({ orderId, saleId, amount, accountId, title
 
   return createPortal(
     <div className="fixed inset-0 z-[80] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Charge on reader">
-      <div className="absolute inset-0 bg-ink-primary/40" onClick={() => { if (!locked) onClose(charge); }} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={() => { if (!locked) onClose(charge); }} />
       <div className="relative w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-5 shadow-clay-drawer space-y-4">
         <div className="flex items-start justify-between gap-3">
           <div>

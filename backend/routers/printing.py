@@ -8,7 +8,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from fastapi.responses import Response
-from pydantic import BaseModel, Field
+from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -21,9 +21,6 @@ from backend.models import (
     Organisation,
     POLine,
     Part,
-    Posting,
-    PostingLine,
-    PriceTypeItem,
     PurchaseOrder,
     PurchaseReturn,
     PurchaseReturnLine,
@@ -37,7 +34,7 @@ from backend.models import (
 )
 from backend.services import printing
 from backend.services.codes import (
-    label_barcode, normalize_gtin, unprintable_message, validate_barcode_options,
+    validate_barcode_options,
 )
 from backend.services.auth import assert_perm, get_current_employee, require_perm
 from backend.services.money import q2
@@ -157,123 +154,12 @@ async def delete_template(
     return {"ok": True}
 
 
-# ── print labels ─────────────────────────────────────────────────────────────
-MAX_LABELS = 2000      # one sheet render; ~a few seconds of reportlab CPU
-
-
-class PrintLabelsIn(BaseModel):
-    part_ids: list[str] = Field(max_length=500)
-    template_id: Optional[str] = None
-    copies: int = 1
-
-
-@router.post("/labels")
-async def print_labels(
-    data: PrintLabelsIn,
-    db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
-):
-    """A PDF sheet of labels for the given products, using a saved template (or a
-    sensible default if none is set up yet)."""
-    if not data.part_ids:
-        raise HTTPException(400, "Pick at least one product")
-    if data.copies < 1 or data.copies > 100:
-        raise HTTPException(422, "copies must be between 1 and 100")
-    if len(data.part_ids) * data.copies > MAX_LABELS:
-        raise HTTPException(422, f"At most {MAX_LABELS} labels per sheet — print in batches")
-
-    tpl = None
-    if data.template_id:
-        tpl = (await db.execute(select(LabelTemplate).where(
-            LabelTemplate.id == data.template_id,
-            LabelTemplate.org_id == current.org_id))).scalar_one_or_none()
-        if not tpl:
-            raise HTTPException(404, "Template not found")
-    else:
-        tpl = (await db.execute(select(LabelTemplate).where(
-            LabelTemplate.org_id == current.org_id,
-            LabelTemplate.is_default == True))).scalars().first()  # noqa: E712
-
-    fields = (tpl.fields if tpl and isinstance(tpl.fields, list)
-              else ["name", "sku", "price", "barcode"])
-    parts = (await db.execute(select(Part).where(
-        Part.id.in_(data.part_ids), Part.org_id == current.org_id))).scalars().all()
-    if not parts:
-        raise HTTPException(404, "No matching products")
-
-    # a price-tag template can price from a specific price list, not just the base price
-    overrides: dict = {}
-    if tpl and tpl.price_type_id:
-        rows = (await db.execute(select(PriceTypeItem).where(
-            PriceTypeItem.org_id == current.org_id,
-            PriceTypeItem.price_type_id == tpl.price_type_id,
-            PriceTypeItem.item_type == "product",
-            PriceTypeItem.item_id.in_([p.id for p in parts])))).scalars().all()
-        overrides = {r.item_id: r.price for r in rows}
-
-    default_type = tpl.barcode_type if tpl else "code128"
-    items, bad = [], []
-    for p in parts:
-        value, kind = label_barcode(p, tpl.barcode_field if tpl else "barcode",
-                                    tpl.barcode_types if tpl else None, default_type)
-        if not tpl and not value:
-            value = p.sku           # no template: keep the old barcode-then-SKU fallback
-        if value and kind in ("ean13", "upca"):
-            try:
-                value = normalize_gtin(value, kind)
-            except ValueError as e:
-                bad.append(f"{p.name} ({e})")
-        items.append({
-            "name": p.name, "sku": p.sku, "mpn": p.mpn, "barcode": value, "barcode_kind": kind,
-            "brand": getattr(p, "brand", None), "category": getattr(p, "category", None),
-            "price": overrides.get(p.id, p.sell_price),
-        })
-    if bad:
-        raise HTTPException(422, unprintable_message(bad))
-
-    pdf = await asyncio.to_thread(
-        printing.render_labels,
-        items,
-        width_mm=tpl.width_mm if tpl else 50,
-        height_mm=tpl.height_mm if tpl else 30,
-        fields=fields,
-        barcode_type=default_type,
-        copies=data.copies,
-        org_name=await _org_name(db, current.org_id))
-    return _pdf(pdf, "labels.pdf")
+# Product labels print as HTML from /api/documents/labels (documents.render_labels). The old
+# reportlab PDF sheet here, and the print view of the removed stock-docs postings, had no
+# caller and were deleted (audit 29 Oct 2026).
 
 
 # ── print stock documents ────────────────────────────────────────────────────
-@router.get("/postings/{doc_id}")
-async def print_posting(
-    doc_id: str,
-    db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
-):
-    d = (await db.execute(select(Posting).where(
-        Posting.id == doc_id, Posting.org_id == current.org_id))).scalar_one_or_none()
-    if not d:
-        raise HTTPException(404, "Posting not found")
-    lines = (await db.execute(select(PostingLine, Part.name, Part.sku)
-        .join(Part, PostingLine.part_id == Part.id)
-        .where(PostingLine.posting_id == doc_id))).all()
-
-    rows = [[name, sku or "", f"{ln.qty:g}", f"{float(ln.unit_cost or 0):.2f}",
-             f"{float(ln.total or 0):.2f}"] for ln, name, sku in lines]
-    pdf = await asyncio.to_thread(
-        printing.render_document,
-        title="Goods received", org_name=await _org_name(db, current.org_id), lang=await _org_lang(db, current.org_id),
-        number=d.number,
-        meta=[("Date", d.created_at.strftime("%Y-%m-%d") if d.created_at else None),
-              ("Reference", d.reference), ("Settlement", d.settlement),
-              ("Status", d.status)],
-        headers=["Product", "SKU", "Qty", "Unit cost", "Total"],
-        rows=rows,
-        totals=["", "", "", "Total", f"{float(d.total or 0):.2f}"],
-        footer=d.note)
-    return _pdf(pdf, f"posting-{d.number or doc_id[:8]}.pdf")
-
-
 @router.get("/purchase-order/{po_id}")
 async def print_purchase_order(
     po_id: str,

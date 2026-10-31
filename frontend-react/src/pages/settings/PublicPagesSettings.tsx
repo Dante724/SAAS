@@ -3,6 +3,7 @@ import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import Switch from "../../components/Switch";
 import { SettingRow, NumField } from "../../components/SettingRow";
+import { loadFailed } from "../../lib/notice";
 
 /* Settings › Public pages — the three pages customers see (booking, job tracking, estimate
    approval), one brand colour for all of them, and a live phone preview. Same
@@ -46,8 +47,8 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
   const load = () => api.get<any>("/staff/public-pages").then((c) => { setCfg(c); setSlug(c.slug || ""); }).catch(() => setCfg({}));
   useEffect(() => {
     load();
-    api.get<any>("/statuses?record_type=estimate").then((r) => setEst(r.items || [])).catch(() => {});
-    api.get<any>("/statuses?record_type=work_order").then((r) => setWo(r.items || [])).catch(() => {});
+    api.get<any>("/statuses?record_type=estimate").then((r) => setEst(r.items || [])).catch(loadFailed("statuses"));
+    api.get<any>("/statuses?record_type=work_order").then((r) => setWo(r.items || [])).catch(loadFailed("statuses"));
   }, []);
   if (!cfg) return <div className="max-w-3xl text-xs text-ink-tertiary">Loading…</div>;
 

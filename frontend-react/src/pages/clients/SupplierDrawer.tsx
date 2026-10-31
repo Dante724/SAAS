@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { Supplier, money } from "../inventory/types";
+import { loadFailed } from "../../lib/notice";
 
 /** Phase 1 E — supplier detail: an editable header, a Balance ledger (bills we owe /
  * returns as a running statement), and a price-list import that reuses the backend's
@@ -34,7 +35,7 @@ export default function SupplierDrawer({ supplier, onClose, onSaved }: { supplie
   const [perf, setPerf] = useState<any>(null);
   useEffect(() => {
     api.get<Ledger>(`/suppliers/${supplier.id}/ledger`).then(setLed).catch(() => setLed({ supplier_balance: supplier.balance ?? 0, entries: [] }));
-    api.get<any>(`/suppliers/${supplier.id}/performance`).then(setPerf).catch(() => {});
+    api.get<any>(`/suppliers/${supplier.id}/performance`).then(setPerf).catch(loadFailed("supplier details"));
   }, [supplier.id]);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 1800); };
 
@@ -52,7 +53,7 @@ export default function SupplierDrawer({ supplier, onClose, onSaved }: { supplie
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
       <div className="relative h-full w-full max-w-[680px] bg-raised shadow-clay-card flex flex-col border-l border-slate-200/90">
         {/* header */}
         <div className="px-6 pt-5 border-b border-slate-100">

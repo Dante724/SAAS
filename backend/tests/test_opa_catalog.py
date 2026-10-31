@@ -424,29 +424,17 @@ async def test_document_template_barcode_options_validated_and_gated(client):
 
 async def test_print_label_template_barcode_field(client):
     H, _, _ = await _register(client)
-    good = await _product(client, H, name="Good", mpn="400638133393", sku="S1")
-    bad = await _product(client, H, name="Bad", mpn="xx", sku="S2")
     r = await client.post("/api/print/templates", json={
         "name": "MPN", "barcode_field": "mpn", "barcode_types": {"mpn": "ean13"},
         "fields": ["name", "mpn", "barcode"]}, headers=H)
     assert r.status_code == 201, r.text
     tpl = r.json()
     assert tpl["barcode_field"] == "mpn" and tpl["barcode_types"] == {"mpn": "ean13"}
-    r = await client.post("/api/print/labels", json={"part_ids": [good["id"]], "template_id": tpl["id"]},
-                          headers=H)
-    assert r.status_code == 200 and r.content[:4] == b"%PDF"
-    r = await client.post("/api/print/labels", json={"part_ids": [good["id"], bad["id"]],
-                                                     "template_id": tpl["id"]}, headers=H)
-    assert r.status_code == 422 and "Bad" in r.json()["detail"]
-    # UPC-A and QR still render
-    for kind in ("upca", "qr", "code128"):
-        await client.put(f"/api/print/templates/{tpl['id']}", json={
-            "name": "MPN", "barcode_types": {"mpn": kind}}, headers=H)
-        mpn = "03600029145" if kind == "upca" else "400638133393"
-        p = await _product(client, H, name=f"P-{kind}", mpn=mpn + ("" if kind == "upca" else kind))
-        r = await client.post("/api/print/labels", json={"part_ids": [p["id"]], "template_id": tpl["id"]},
-                              headers=H)
-        assert r.status_code == 200, (kind, r.text)
+    # Rendering (incl. the bad-GTIN 422) is the HTML path now: /api/documents/render-labels, covered by
+    # test_document_label_template_encodes_chosen_field and test_document_orderry_vars. The PDF sheet
+    # (/api/print/labels) was removed in the 29 Oct 2026 audit clean-up.
+    await client.put(f"/api/print/templates/{tpl['id']}", json={
+        "name": "MPN", "barcode_types": {"mpn": "upca"}}, headers=H)
     # a partial PUT kept the field
     t2 = [t for t in (await client.get("/api/print/templates", headers=H)).json()["items"] if t["id"] == tpl["id"]][0]
     assert t2["barcode_field"] == "mpn"
@@ -522,9 +510,6 @@ async def test_print_template_without_field_keeps_sku_fallback(client):
     H, _, _ = await _register(client)
     tpl = (await client.post("/api/print/templates", json={"name": "Legacy"}, headers=H)).json()
     assert tpl["barcode_field"] is None
-    p = await _product(client, H, sku="ONLY-SKU")
-    r = await client.post("/api/print/labels", json={"part_ids": [p["id"]], "template_id": tpl["id"]}, headers=H)
-    assert r.status_code == 200 and r.content[:4] == b"%PDF"
 
 
 async def test_label_preview_uses_chosen_barcode_source(client):

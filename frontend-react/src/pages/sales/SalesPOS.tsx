@@ -13,6 +13,7 @@ import CardPaymentsList from "../../components/CardPaymentsList";
 import { scanBeep, useWedgeScanner } from "../../lib/scanner";
 import { inputCls } from "../invoices/billing";
 import { Avatar, deviceIcon } from "../orders/look";
+import { loadFailed } from "../../lib/notice";
 
 type Product = { id: string; name?: string; sku?: string; sell_price?: number; qty_available?: number; image_data?: string | null; low_stock?: boolean };
 type Service = { id: string; name?: string; price?: number; duration_min?: number };
@@ -77,9 +78,9 @@ export default function SalesPOS() {
   const [recent, setRecent] = useState(false);
   const [recentKey, setRecentKey] = useState(0);   // bumped after a charge so the list re-reads
 
-  useEffect(() => { api.get<{ items: Product[] }>("/catalog/products").then((r) => setProducts(r.items || [])).catch(() => {}); }, []);
-  useEffect(() => { api.get<{ items: Service[] }>("/catalog/services").then((r) => setServices(r.items || [])).catch(() => {}); }, []);
-  useEffect(() => { api.get<{ items: Account[] }>("/cash/accounts").then((r) => { setAccounts(r.items || []); setAccountId(defaultAccount(r.items || [])); }).catch(() => {}); }, []);
+  useEffect(() => { api.get<{ items: Product[] }>("/catalog/products").then((r) => setProducts(r.items || [])).catch(loadFailed("products")); }, []);
+  useEffect(() => { api.get<{ items: Service[] }>("/catalog/services").then((r) => setServices(r.items || [])).catch(loadFailed("services")); }, []);
+  useEffect(() => { api.get<{ items: Account[] }>("/cash/accounts").then((r) => { setAccounts(r.items || []); setAccountId(defaultAccount(r.items || [])); }).catch(loadFailed("cash accounts")); }, []);
   const [receiptFor, setReceiptFor] = useState<string | null>(null);   // sale id → the after-sale receipt choices
   const [cOpen, setCOpen] = useState(false);
   const clientResults = useClientSearch<ClientLite>(clientQ, cOpen && !client, 6);
@@ -158,7 +159,7 @@ export default function SalesPOS() {
       else { flash(`Sale ${r.sale_number} · ${money(r.total)}${red}`); setReceiptFor(r.id); }
       setRecentKey((k) => k + 1);
       setCart([]); setCartOpen(false); setDiscount(0); setCoupon(""); setGiftCard(""); setRedeemPts(0); setShowRewards(false); setClient(null); setClientQ("");
-      api.get<{ items: Product[] }>("/catalog/products").then((res) => setProducts(res.items || [])).catch(() => {});
+      api.get<{ items: Product[] }>("/catalog/products").then((res) => setProducts(res.items || [])).catch(loadFailed("products"));
     } catch (e: any) { flash(`Failed: ${e.message}`); } finally { setBusy(false); }
   }
 
@@ -241,7 +242,7 @@ export default function SalesPOS() {
                 <div className="relative flex-1"><M n="search" c="absolute left-3 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" /><input value={clientQ} onChange={(e) => { setClientQ(e.target.value); setCOpen(true); }} onFocus={() => setCOpen(true)} onClick={() => setCOpen(true)}
                     onKeyDown={(e) => { if (e.key === "Escape") setCOpen(false); }} autoComplete="off" className={`${inputCls} pl-9`} placeholder="Attach client (optional)…" />
                   {cOpen && (<>
-                    <div className="fixed inset-0 z-[9]" onClick={() => setCOpen(false)} />
+                    <div className="fixed inset-0 z-[9]" aria-hidden="true" onClick={() => setCOpen(false)} />
                     <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5 max-h-72 overflow-y-auto">
                       {!clientQ.trim() && clientResults.length > 0 && <div className="px-2.5 pt-1 pb-0.5 text-[11px] text-ink-tertiary">Recent clients</div>}
                       {clientQ.trim() && clientResults.length === 0 && <div className="px-2.5 py-2 text-xs text-ink-tertiary">No client matches "{clientQ.trim()}"</div>}
@@ -333,7 +334,7 @@ function MatchPicker({ code, items, onPick, onClose }: { code: string; items: Ma
   }, [onClose]);
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Choose a product">
-      <div className="absolute inset-0 bg-ink-primary/40" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className="relative w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-5 shadow-clay-drawer">
         <div className="flex items-start justify-between gap-3">
           <div><div className="text-sm font-semibold text-ink-primary">Which product?</div>
@@ -392,7 +393,7 @@ function ReceiptSheet({ saleId, onClose, onFlash }: { saleId: string; onClose: (
 
   return (
     <div className="fixed inset-0 z-[70] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Receipt">
-      <div className="absolute inset-0 bg-ink-primary/40" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className="relative w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-5 shadow-clay-drawer">
         <div className="flex items-start justify-between gap-3">
           <div>

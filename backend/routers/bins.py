@@ -32,13 +32,14 @@ async def list_bins(
     if location_id:
         q = q.where(StorageBin.location_id == location_id)
     rows = (await db.execute(q.order_by(StorageBin.name))).scalars().all()
-    # on-hand per bin
+    # on-hand per bin, one grouped query for the whole list
+    on_hand = dict((await db.execute(select(StockLevel.bin_id, func.sum(StockLevel.qty_available))
+        .where(StockLevel.bin_id.in_([b.id for b in rows]))
+        .group_by(StockLevel.bin_id))).all()) if rows else {}
     out = []
     for b in rows:
-        qty = (await db.execute(select(func.coalesce(func.sum(StockLevel.qty_available), 0))
-            .where(StockLevel.bin_id == b.id))).scalar() or 0
         d = _ser(b)
-        d["qty_on_hand"] = qty
+        d["qty_on_hand"] = on_hand.get(b.id) or 0
         out.append(d)
     return {"items": out}
 

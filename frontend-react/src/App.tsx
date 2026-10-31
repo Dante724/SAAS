@@ -1,5 +1,6 @@
 import { lazy, Suspense } from "react";
 import { Routes, Route } from "react-router-dom";
+import RouteErrorBoundary from "./components/RouteErrorBoundary";
 
 // Each hub is its own chunk: the first page load no longer downloads every screen (the single
 // bundle was ~1.3 MB of JS before any route rendered).
@@ -45,6 +46,7 @@ export const ROUTE_OWNERS: Record<string, "legacy" | "react"> = {
 export default function App() {
   return (
     <div className="min-h-screen">
+      <RouteErrorBoundary>
       <Suspense fallback={<div className="p-10 text-ink-tertiary text-sm">Loading…</div>}>
       <Routes>
         <Route path="/" element={<CompanyHub />} />
@@ -70,6 +72,7 @@ export default function App() {
         <Route path="*" element={<NotFound />} />
       </Routes>
       </Suspense>
+      </RouteErrorBoundary>
     </div>
   );
 }

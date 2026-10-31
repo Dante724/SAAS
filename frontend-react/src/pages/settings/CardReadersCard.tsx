@@ -6,6 +6,7 @@ import { useMe } from "../../context/Me";
 import { confirmDialog } from "../../lib/dialog";
 import { Drawer, MoreMenu, btnGhost, btnPrimary, inputCls, labelCls } from "../invoices/billing";
 import ModePill from "./ModePill";
+import { loadFailed } from "../../lib/notice";
 
 // F2/F3/F4 — Settings › Integrations › Card readers. Register Stripe Terminal or Square Terminal
 // readers (or a simulated one while testing locally), rename / move them, remove them, and see
@@ -42,7 +43,7 @@ export default function CardReadersCard() {
   const allowed = can("can_take_card_payments") || canManage;
   useEffect(() => {
     if (!allowed) return;
-    load(); api.get<{ items: Loc[] }>("/staff/locations").then((r) => setLocs(r.items || [])).catch(() => {});
+    load(); api.get<{ items: Loc[] }>("/staff/locations").then((r) => setLocs(r.items || [])).catch(loadFailed("locations"));
   }, [allowed]);
 
   if (!allowed) return null;

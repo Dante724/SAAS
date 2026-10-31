@@ -126,7 +126,7 @@ function RateHistory({ currency, onClose }: { currency: Cur; onClose: () => void
   const [rows, setRows] = useState<{ rate: number; changed_by?: string; changed_at?: string | null }[] | null>(null);
   useEffect(() => { api.get<{ items: any[] }>(`/finance/currencies/${currency.id}/history`).then((r) => setRows(r.items || [])).catch(() => setRows([])); }, [currency.id]);
   return (
-    <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 bg-black/30 flex items-center justify-center p-4" role="presentation" onClick={onClose}>
       <div className="bg-white rounded-2xl shadow-clay-card w-full max-w-sm p-5" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-semibold text-ink-primary">{currency.code} rate history</h3>

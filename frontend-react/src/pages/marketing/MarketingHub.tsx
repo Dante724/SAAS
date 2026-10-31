@@ -140,7 +140,7 @@ export default function MarketingHub() {
 
       {draft && (
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-          <div className="absolute inset-0 bg-ink-primary/40" onClick={() => setDraft(null)} />
+          <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={() => setDraft(null)} />
           <div className="relative w-full max-w-md bg-white rounded-2xl shadow-menu border border-slate-200/90">
             <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between"><h3 className="text-sm font-semibold text-ink-primary">New campaign</h3><button aria-label="Close" onClick={() => setDraft(null)} className="w-7 h-7 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
             <div className="p-5 space-y-3">

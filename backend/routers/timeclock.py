@@ -157,11 +157,12 @@ async def roster(db: AsyncSession = Depends(get_db),
     running = (await db.execute(select(TimeEntry).where(
         TimeEntry.org_id == current.org_id, TimeEntry.state == "running",
         TimeEntry.ended_at.is_(None)).order_by(TimeEntry.started_at))).scalars().all()
+    order_nos = await _order_nos(db, current.org_id, [e.order_id for e in running])
     timers = []
     for e in running:
         timers.append({
             "employee_id": e.employee_id, "employee_name": names.get(e.employee_id, "—"),
-            "order_number": await _order_no(db, e.order_id),
+            "order_number": order_nos.get(e.order_id),
             "category": e.category, "location_name": locs.get(e.location_id, "—"),
             "started_at": e.started_at.isoformat() if e.started_at else None,
             "elapsed_sec": _elapsed_sec(e),
@@ -221,6 +222,13 @@ async def _order_no(db: AsyncSession, order_id: Optional[str]) -> Optional[str]:
         return None
     o = (await db.execute(select(Order).where(Order.id == order_id))).scalar_one_or_none()
     return o.order_number if o else None
+
+
+async def _order_nos(db: AsyncSession, org_id: str, order_ids) -> dict:
+    """{order_id: order_number} for a whole list in one query (lists used _order_no per row)."""
+    from backend.services.batching import names_by_id
+    return await names_by_id(db, Order.id, Order.order_number, order_ids,
+                             org_col=Order.org_id, org_id=org_id)
 
 
 async def _task_title(db: AsyncSession, task_id: Optional[str]) -> Optional[str]:
@@ -878,10 +886,13 @@ async def my_work(
                 OrderChecklistItem.order_id.in_(my_order_ids)))).scalars().all():
             d, t = prog.get(it.order_id, (0, 0))
             prog[it.order_id] = (d + (1 if it.done else 0), t + 1)
-        clients = {c.id: c.name for c in (await db.execute(select(Client).where(
-            Client.org_id == current.org_id))).scalars().all()}
+        from backend.services.batching import names_by_id
+        mine = [order_by_id[oid] for oid in my_order_ids if oid in order_by_id]
+        clients = await names_by_id(db, Client.id, Client.name, [o.client_id for o in mine],
+                                    org_col=Client.org_id, org_id=current.org_id)
+        dev_ids = {o.device_id for o in mine if o.device_id}
         devices = {d.id: d for d in (await db.execute(select(Device).where(
-            Device.org_id == current.org_id))).scalars().all()}
+            Device.org_id == current.org_id, Device.id.in_(dev_ids)))).scalars().all()} if dev_ids else {}
         for oid in my_order_ids:
             o = order_by_id.get(oid)
             if not o:
@@ -966,10 +977,7 @@ async def timesheet(
     bill = sum(e.duration_sec / 3600 * (e.billable_rate or 0) for e in rows if e.billable)
     straight_h, ot_h = _overtime_split(rows)
     approved = [e for e in rows if e.state == "approved"]
-    nos = {}
-    for e in rows:
-        if e.order_id and e.order_id not in nos:
-            nos[e.order_id] = await _order_no(db, e.order_id)
+    nos = await _order_nos(db, current.org_id, [e.order_id for e in rows])
     return {
         "employee_id": emp_id, "date_from": date_from, "date_to": date_to,
         "total_sec": total, "total_hours": q2(total / 3600),

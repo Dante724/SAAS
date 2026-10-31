@@ -134,18 +134,17 @@ async def low_stock_report(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
-    parts = (await db.execute(select(Part).where(Part.org_id == current.org_id))).scalars().all()
-    stocks = (await db.execute(
-        select(StockLevel).where(StockLevel.part_id.in_([p.id for p in parts]))
-    )).scalars().all()
-    stock_map = {}
-    for s in stocks:
-        stock_map.setdefault(s.part_id, 0)
-        stock_map[s.part_id] += s.qty_available
-    low = [
-        {"id": p.id, "name": p.name, "qty": stock_map.get(p.id, 0), "min_stock": p.min_stock}
-        for p in parts if stock_map.get(p.id, 0) <= p.min_stock
-    ]
+    # One aggregate query: on-hand per part summed in SQL, only the four columns the report shows
+    # (was: every Part row loaded, then every StockLevel row for them).
+    on_hand = func.coalesce(func.sum(StockLevel.qty_available), 0)
+    rows = (await db.execute(
+        select(Part.id, Part.name, Part.min_stock, on_hand)
+        .outerjoin(StockLevel, StockLevel.part_id == Part.id)
+        .where(Part.org_id == current.org_id)
+        .group_by(Part.id, Part.name, Part.min_stock)
+        .having(on_hand <= func.coalesce(Part.min_stock, 0)))).all()
+    low = [{"id": pid, "name": name, "qty": qty, "min_stock": min_stock}
+           for pid, name, min_stock, qty in rows]
     return {"count": len(low), "items": low}
 
 

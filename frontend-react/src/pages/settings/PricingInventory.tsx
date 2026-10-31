@@ -3,6 +3,7 @@ import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import Switch from "../../components/Switch";
 import { SettingRow, NumField } from "../../components/SettingRow";
+import { clickable } from "../../lib/clickable";
 
 /* Settings › Pricing and Settings › Inventory & warehouses. Same endpoints as before
    (/pricing/types, /pricing/defaults, /staff/inventory-settings, /settings/warehouses);
@@ -117,7 +118,7 @@ export function PricingPage({ types, currency, onAdd, onEdit, onDelete, tiers }:
             {list.map((t) => {
               const mk = Number(t.markup_pct ?? t.percent ?? t.value) || 0;
               return (
-                <div key={t.id} onClick={() => onEdit(t)} className="group relative rounded-xl border border-slate-200 p-3.5 cursor-pointer hover:border-slate-300 hover:bg-slate-50/60">
+                <div key={t.id} {...clickable(() => onEdit(t))} className="group relative rounded-xl border border-slate-200 p-3.5 cursor-pointer hover:border-slate-300 hover:bg-slate-50/60">
                   <div className="flex items-center gap-2">
                     <span className="text-sm font-medium text-ink-primary truncate">{t.name}</span>
                     {t.is_default && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-md bg-primary/10 text-primary">Default</span>}
@@ -240,7 +241,7 @@ export function InventoryPage({ warehouses, currency, onAdd, onEdit, onDelete }:
   const list = warehouses || [];
   const parts = list.filter((w) => w.kind !== "asset"); const items = list.filter((w) => w.kind === "asset");
   const place = (w: any) => (
-    <div key={w.id} onClick={() => onEdit(w)} className={`group flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer hover:bg-slate-50 ${w.active === false ? "opacity-50" : ""}`}>
+    <div key={w.id} {...clickable(() => onEdit(w))} className={`group flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer hover:bg-slate-50 ${w.active === false ? "opacity-50" : ""}`}>
       <span className={`w-9 h-9 rounded-xl grid place-items-center flex-shrink-0 ${w.kind === "asset" ? "bg-violet-50 text-violet-700" : "bg-amber-50 text-amber-700"}`}><M n={w.kind === "asset" ? "devices" : "inventory_2"} c="text-lg" /></span>
       <span className="min-w-0"><span className="block text-sm text-ink-primary truncate">{w.name}</span>
         <span className="block text-[11px] text-ink-tertiary">{w.scope === "company" ? "Shared by all locations" : "One location"}{w.active === false ? " · Not in use" : ""}</span></span>

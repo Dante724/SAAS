@@ -3,6 +3,7 @@ import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
 import Switch from "../../components/Switch";
+import { loadFailed } from "../../lib/notice";
 
 /* Settings › Finance & numbering — document numbers, sales tax, and the business details printed
    on invoices. Same endpoints as before (/settings/numbering, /catalog/taxes, /settings/tax-rules,
@@ -73,7 +74,7 @@ export default function FinanceNumbering({ currency, shop }: { currency: string;
     api.get<any>("/settings/tax-rules").then((r) => setStacks(r.stacks || {})).catch(() => setStacks({}));
     api.get<any>("/settings/tax-exceptions").then((r) => setExc(r.items || [])).catch(() => setExc([]));
   }
-  useEffect(() => { reload(); api.get<any>("/staff/locations").then((r) => setLocations(r.items || r || [])).catch(() => {}); }, []);
+  useEffect(() => { reload(); api.get<any>("/staff/locations").then((r) => setLocations(r.items || r || [])).catch(loadFailed("locations")); }, []);
 
   const cur = currency || "$";
   const inv = (num || []).find((r) => r.doc_type === "invoice" && r.scope_key === "org");

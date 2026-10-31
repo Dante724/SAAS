@@ -622,19 +622,31 @@ async def payroll_calculation(
     # a voided run doesn't hide the live one for the same month
     run_by_emp = {r.employee_id: r for r in sorted(runs, key=lambda r: r.status != "void")}
     roles = await _role_names(db, current.org_id)
+    # One grouped query for every employee's month sums (was four queries per employee).
+    sums: dict = {}
+    if emps:
+        for emp_id, kind, ref_type, amount in (await db.execute(
+                select(EmployeeBalanceLedger.employee_id, EmployeeBalanceLedger.entry_type,
+                       EmployeeBalanceLedger.ref_type, func.sum(EmployeeBalanceLedger.amount))
+                .where(EmployeeBalanceLedger.org_id == current.org_id,
+                       EmployeeBalanceLedger.employee_id.in_([e.id for e in emps]),
+                       EmployeeBalanceLedger.entry_type.in_(
+                           ["commission", "clawback", "hourly_wage", "bonus", "penalty"]),
+                       func.date(EmployeeBalanceLedger.created_at) >= ps,
+                       func.date(EmployeeBalanceLedger.created_at) <= pe)
+                .group_by(EmployeeBalanceLedger.employee_id, EmployeeBalanceLedger.entry_type,
+                          EmployeeBalanceLedger.ref_type))).all():
+            if kind in ("bonus", "penalty") and ref_type != "manual":
+                continue        # only the ad-hoc ones entered on this page (_manual_adjust_totals)
+            key = "commission" if kind == "clawback" else kind
+            per = sums.setdefault(emp_id, {})
+            per[key] = per.get(key, 0) + (amount or 0)
     items = []
     for e in emps:
-        commissions = (await db.execute(select(func.coalesce(func.sum(EmployeeBalanceLedger.amount), 0)).where(
-            EmployeeBalanceLedger.org_id == current.org_id, EmployeeBalanceLedger.employee_id == e.id,
-            EmployeeBalanceLedger.entry_type.in_(["commission", "clawback"]),
-            func.date(EmployeeBalanceLedger.created_at) >= ps,
-            func.date(EmployeeBalanceLedger.created_at) <= pe))).scalar() or 0
-        hourly = (await db.execute(select(func.coalesce(func.sum(EmployeeBalanceLedger.amount), 0)).where(
-            EmployeeBalanceLedger.org_id == current.org_id, EmployeeBalanceLedger.employee_id == e.id,
-            EmployeeBalanceLedger.entry_type == "hourly_wage",
-            func.date(EmployeeBalanceLedger.created_at) >= ps,
-            func.date(EmployeeBalanceLedger.created_at) <= pe))).scalar() or 0
-        bonuses, penalties = await _manual_adjust_totals(db, current.org_id, e.id, ps, pe)
+        per = sums.get(e.id, {})
+        commissions = per.get("commission", 0)
+        hourly = per.get("hourly_wage", 0)
+        bonuses, penalties = _money(per.get("bonus", 0)), _money(abs(per.get("penalty", 0)))
         base = _money(e.wage_value) if e.wage_type == "fixed" else _money(0)
         run = run_by_emp.get(e.id)
         total = base + _money(commissions) + _money(hourly) + bonuses - penalties
