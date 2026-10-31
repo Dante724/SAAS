@@ -281,7 +281,9 @@ async def issue_portal_link(
         raise HTTPException(404, "Client not found")
     raw = await portal_links.issue(db, client, replace=True)
     await db.commit()
-    return {"portal_token": raw, "portal_url": f"/portal/{raw}", "expires_in_days": portal_links.LINK_DAYS}
+    # `token` mirrors the track link's field name; `portal_token` stays for existing callers.
+    return {"portal_token": raw, "token": raw, "portal_url": f"/portal/{raw}",
+            "expires_in_days": portal_links.LINK_DAYS}
 
 
 @router.put("/{client_id}")

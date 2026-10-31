@@ -90,9 +90,11 @@ async def list_parts(
     device_id: Optional[str] = None,          # 144jt: flag/limit parts that fit this device
     compatible_only: bool = False,
     low_stock: bool = False, skip: int = 0, limit: int = Query(100, ge=1, le=500),
+    q_: Optional[str] = Query(None, alias="q"),   # QA E6: `q` accepted as another name for `search`
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
+    search = search or q_
     q = select(Part).where(Part.org_id == current.org_id, Part.active == True)
     if search:
         # Build 144an — POS findability: match name, SKU, barcode, or internal code.
@@ -189,7 +191,9 @@ async def create_part(
     db.add(part)
     await db.commit()
     await db.refresh(part)
-    return {"id": part.id, "name": part.name, "sku": part.sku}
+    from backend.services.scan_codes import gtin_warning
+    _bw = gtin_warning(part.barcode)
+    return {"id": part.id, "name": part.name, "sku": part.sku, **({"warnings": [_bw]} if _bw else {})}
 
 @router.get("/parts/{part_id}")
 async def get_part(
@@ -1287,7 +1291,13 @@ async def create_po(
     sup = (await db.execute(select(Supplier).where(
         Supplier.id == data.supplier_id, Supplier.org_id == current.org_id))).scalar_one_or_none()
     if not sup:
-        raise HTTPException(404, "Supplier not found")
+        # A contact ticked "is supplier" has its own supplier record — name it instead of a bare 404.
+        mirror = (await db.execute(select(Supplier).where(
+            Supplier.org_id == current.org_id, Supplier.client_id == data.supplier_id))).scalars().first()
+        if mirror:
+            raise HTTPException(404, f"Supplier not found: {data.supplier_id} is a contact. Use its supplier "
+                                     f"id {mirror.id} (listed at /api/suppliers)")
+        raise HTTPException(404, "Supplier not found — pick one from /api/suppliers")
     await require_location(db, current.org_id, data.location_id)
     total = sum(l.qty_ordered * l.unit_cost for l in data.lines)
     po = PurchaseOrder(supplier_id=data.supplier_id, location_id=data.location_id,
@@ -1303,7 +1313,7 @@ async def create_po(
         db.add(POLine(po_id=po.id, part_id=l.part_id, qty_ordered=l.qty_ordered, unit_cost=l.unit_cost))
     await db.commit()
     await db.refresh(po)
-    return {"ok": True, "po_id": po.id, "po_number": po.po_number}
+    return {"ok": True, "po_id": po.id, "id": po.id, "po_number": po.po_number}
 
 
 async def _load_po_scoped(db, org_id, po_id):
