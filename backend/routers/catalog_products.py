@@ -424,6 +424,10 @@ async def bulk_products(data: BulkProductsIn, db: AsyncSession = Depends(get_db)
             if await catalog_usage(db, current.org_id, "product", p.id):
                 blocked.append(p.name)
                 continue
+            from backend.services.stock_archive import archive_blocker
+            if await archive_blocker(db, current.org_id, p):      # still in stock: same rule as inventory
+                blocked.append(p.name)
+                continue
             p.active = False
         else:
             raise HTTPException(400, "Unknown action")

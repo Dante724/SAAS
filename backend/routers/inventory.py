@@ -37,6 +37,7 @@ class PartIn(BaseModel):
     min_order_qty: float = 0
     weight: Optional[float] = None       # kg — used for weight-basis freight allocation (144ar)
     dimensions: Optional[str] = None     # "LxWxH" cm
+    active: Optional[bool] = None        # false archives (refused while the product still has stock)
 
 class StockAdjust(BaseModel):
     location_id: str
@@ -185,6 +186,8 @@ async def create_part(
     current: Employee = Depends(require_perm("can_create_products")),
 ):
     payload = data.model_dump()
+    if payload.get("active") is None:
+        payload.pop("active", None)
     if not await can_see_costs(db, current):
         drop_cost_fields(payload)
     part = Part(org_id=current.org_id, **payload)
@@ -227,9 +230,20 @@ async def update_part(
     payload = data.model_dump(exclude_unset=True)
     if not await can_see_costs(db, current):
         drop_cost_fields(payload)
+    if "active" in payload:
+        if payload["active"] is None:
+            payload.pop("active")
+        elif payload["active"] is False and part.active:
+            from backend.services.stock_archive import archive_blocker
+            why = await archive_blocker(db, current.org_id, part)
+            if why:
+                raise HTTPException(409, f"Can't archive “{part.name}”: {why}")
+    checks = set(payload)
+    if payload.get("active") and not part.active:
+        checks |= {"name", "sku", "barcode", "code"}     # coming back: its identity must be free again
     await product_codes.ensure_identity_free(
-        db, current.org_id, exclude_part_id=part.id, fields=set(payload), **{
-            k: payload.get(k) for k in ("name", "sku", "barcode", "code")})
+        db, current.org_id, exclude_part_id=part.id, fields=checks, **{
+            k: payload.get(k, getattr(part, k)) for k in ("name", "sku", "barcode", "code")})
     for k, v in payload.items():
         setattr(part, k, v)
     await db.commit()
@@ -2589,6 +2603,7 @@ async def bulk_update_parts(
         raise HTTPException(404, "No matching products")
 
     changed = 0
+    blocked: list[dict] = []      # products the action was refused for, and why
     if data.action == "set_category":
         if data.value:
             from backend.models import Category
@@ -2615,7 +2630,21 @@ async def bulk_update_parts(
     elif data.action == "set_active":
         if data.number not in (0, 1):
             raise HTTPException(422, "set_active expects 0 or 1")
+        from backend.services.stock_archive import archive_blocker
         for p in parts:
+            if not data.number and p.active:
+                why = await archive_blocker(db, current.org_id, p)     # still stocked → not archived
+                if why:
+                    blocked.append({"id": p.id, "name": p.name, "reason": why})
+                    continue
+            elif data.number and not p.active:
+                try:
+                    await product_codes.ensure_identity_free(
+                        db, current.org_id, exclude_part_id=p.id, name=p.name, sku=p.sku,
+                        barcode=p.barcode, code=p.code)
+                except HTTPException as e:
+                    blocked.append({"id": p.id, "name": p.name, "reason": e.detail})
+                    continue
             p.active = bool(data.number)
             changed += 1
     elif data.action == "set_supplier":
@@ -2628,7 +2657,7 @@ async def bulk_update_parts(
         raise HTTPException(422, f"Unknown action “{data.action}”")
 
     await db.commit()
-    return {"ok": True, "changed": changed, "action": data.action}
+    return {"ok": True, "changed": changed, "action": data.action, "blocked": blocked}
 
 
 async def _atomic_add(db, obj, attr, delta, *, round_to=None):
