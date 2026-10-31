@@ -48,6 +48,20 @@ def same_number(a: Optional[str], b: Optional[str]) -> bool:
     return len(da) >= 10 and len(db_) >= 10 and da[-10:] == db_[-10:]
 
 
+def phone_key(number: Optional[str], country: Optional[str] = None) -> str:
+    """One comparable form of a phone number for grouping duplicates: international numbers as
+    their full digits, national ones with the trunk 0 dropped and the shop country's calling
+    code put in front ("(647) 555-0199" and "+1 647 555 0199" both give 16475550199)."""
+    d = digits(number)
+    if not d or _intl(number):
+        return d
+    code = CALLING_CODES.get((country or "").upper())
+    if code == "1" and len(d) == 11 and d.startswith("1"):
+        return d                   # NANP numbers are often typed with the 1 but no +
+    nat = d[1:] if d.startswith("0") else d
+    return f"{code}{nat}" if code else nat
+
+
 def format_phone(number: str) -> str:
     """Readable form used as the new contact's name: NANP numbers as +1 (555) 010-0123,
     anything else as +<digits> (or as typed when it has no digits at all)."""

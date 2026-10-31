@@ -168,9 +168,10 @@ async def create_client(
         Organisation.id == current.org_id))).scalar_one()
     # Duplicate guards (Orderry: prohibit creating a contact with an existing phone/email)
     if org.prohibit_dup_phone and data.phone:
-        dup = (await db.execute(select(Client).where(
-            Client.org_id == current.org_id, Client.phone == data.phone))).scalar_one_or_none()
-        if dup:
+        # Compare numbers, not strings ("(647) 555-0199" is "+1 647 555 0199"), and tolerate
+        # the duplicates that existed before the switch was turned on.
+        from backend.services.call_contacts import find_client
+        if await find_client(db, current.org_id, data.phone):
             raise HTTPException(409, "A contact with this phone number already exists")
     if org.prohibit_dup_email and data.email:
         dup = (await db.execute(select(Client).where(
@@ -213,21 +214,24 @@ async def duplicate_phones(
     """C: surface clients sharing a phone so staff can merge them. Phone is the
     universal match key; duplicates silently break notifications and call history.
     Defined before /{client_id} so the literal path wins over the wildcard."""
-    rows = (await db.execute(
-        select(Client.phone, func.count(Client.id)).where(
+    from backend.models import Organisation
+    from backend.services.call_contacts import phone_key
+    country = (await db.execute(select(Organisation.country).where(
+        Organisation.id == current.org_id))).scalar_one_or_none()
+    # Group on the normalised number so formatting variants of one phone land together.
+    by_key: dict = {}
+    for c in (await db.execute(select(Client.id, Client.name, Client.phone, Client.created_at).where(
             Client.org_id == current.org_id, Client.phone.isnot(None), Client.phone != "")
-        .group_by(Client.phone).having(func.count(Client.id) > 1))).all()
-    by_phone: dict = {}
-    if rows:
-        for c in (await db.execute(select(Client).where(
-                Client.org_id == current.org_id, Client.phone.in_([phone for phone, _ in rows]))
-                .order_by(Client.created_at))).scalars().all():
-            by_phone.setdefault(c.phone, []).append(c)
+            .order_by(Client.created_at, Client.id))).all():
+        key = phone_key(c.phone, country)
+        if len(key) >= 4:
+            by_key.setdefault(key, []).append(c)
     clusters = []
-    for phone, n in rows:
-        members = by_phone.get(phone, [])
+    for members in by_key.values():
+        if len(members) < 2:
+            continue
         clusters.append({
-            "phone": phone, "count": n,
+            "phone": members[0].phone, "count": len(members),
             "keep_hint_id": members[-1].id if members else None,  # latest-created wins
             "clients": [{"id": c.id, "name": c.name,
                          "created_at": c.created_at.isoformat() if c.created_at else None}
