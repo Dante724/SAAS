@@ -18,6 +18,33 @@ VOID_STATUSES = ("cancelled", "canceled", "void", "voided")
 DISPLAY_MODES = ("detailed", "simplified", "one_line")
 
 
+async def billed_on(db: AsyncSession, order_id: str, *, exclude_invoice_id=None) -> tuple:
+    """What live (not cancelled) invoices already bill on this order: (number of an invoice for the
+    whole job or None, {order_line_id: invoice number} of lines on partial invoices). Call it after
+    lock_order so two clicks can't both see "nothing billed yet"."""
+    from backend.models import InvoiceLine, InvoiceOrder
+    linked = select(InvoiceOrder.invoice_id).where(InvoiceOrder.order_id == order_id)
+    invs = (await db.execute(select(Invoice).where(
+        (Invoice.order_id == order_id) | Invoice.id.in_(linked),
+        Invoice.status.notin_(VOID_STATUSES)))).scalars().all()
+    invs = [i for i in invs if i.id != exclude_invoice_id]
+    if not invs:
+        return None, {}
+    rows = (await db.execute(select(InvoiceLine.invoice_id, InvoiceLine.order_line_id).where(
+        InvoiceLine.invoice_id.in_([i.id for i in invs]), InvoiceLine.order_line_id.isnot(None)))).all()
+    number = {i.id: i.invoice_number for i in invs}
+    partial_ids = {iid for iid, _ in rows}
+    full = next((number[i.id] for i in invs if i.id not in partial_ids), None)
+    return full, {lid: number[iid] for iid, lid in rows}
+
+
+async def lock_order(db: AsyncSession, order_id: str) -> None:
+    """Row lock on the order (Postgres) / write lock (SQLite) via a no-op UPDATE, held to commit."""
+    from sqlalchemy import update
+    await db.execute(update(Order).where(Order.id == order_id).values(total=Order.total)
+                     .execution_options(synchronize_session=False))
+
+
 def balance_due(inv: "Invoice") -> float:
     """What the client still owes on an invoice: total − paid − issued credit notes, never below 0."""
     owed = d2(inv.total or 0) - d2(inv.amount_paid or 0) - d2(getattr(inv, "credited", 0) or 0)

@@ -856,9 +856,18 @@ async def create_sub_invoice(
     if not o:
         raise HTTPException(404, "Order not found")
     lines = (await db.execute(select(OrderLine).where(OrderLine.order_id == order_id))).scalars().all()
-    chosen = [l for l in lines if not data.line_ids or l.id in data.line_ids]
+    from backend.services.invoicing import billed_on, lock_order
+    await lock_order(db, order_id)
+    full, billed = await billed_on(db, order_id)
+    # No lines picked = bill the rest: every line not already on an invoice.
+    chosen = [l for l in lines if (l.id in data.line_ids if data.line_ids else l.id not in billed)]
     if not chosen:
-        raise HTTPException(400, "No lines selected")
+        raise HTTPException(400, "No lines selected" if data.line_ids or not billed else "Every line is already billed")
+    if full:
+        raise HTTPException(409, f"This job is already billed in full on invoice {full}.")
+    again = [l for l in chosen if l.id in billed]
+    if again:
+        raise HTTPException(409, f"'{again[0].description}' is already on invoice {billed[again[0].id]}.")
     subtotal = sum(l.total for l in chosen)
     await _check_backdating(db, current.org_id)
     inv = Invoice(invoice_number=await next_number(db, current.org_id, "invoice"), org_id=current.org_id, order_id=order_id,

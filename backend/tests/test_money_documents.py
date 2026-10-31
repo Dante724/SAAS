@@ -46,9 +46,13 @@ async def test_archive_restore_archive_returns_parts_once(client, tenant, db):
 async def test_order_with_two_invoices_can_still_be_paid(client, tenant, db):
     _cid, oid = await _order_with_total(client, tenant, 100)
     aid = await _account(client, tenant)
-    for _ in range(2):
-        r = await client.post("/api/finance/invoices", headers=tenant, json={"order_id": oid})
-        assert r.status_code in (200, 201), r.text
+    r = await client.post("/api/finance/invoices", headers=tenant, json={"order_id": oid})
+    assert r.status_code in (200, 201), r.text
+    # A second full invoice is refused now (one job, one bill), but older data can hold two.
+    org_id = (await db.execute(select(Invoice.org_id).where(Invoice.order_id == oid))).scalar_one()
+    db.add(Invoice(invoice_number="INV-LEGACY", org_id=org_id, order_id=oid, status="draft",
+                   subtotal=100, total=100, amount_paid=0))
+    await db.commit()
     assert (await db.execute(select(func.count()).select_from(Invoice).where(Invoice.order_id == oid))).scalar() >= 2
     r = await client.post(f"/api/cash/orders/{oid}/pay", headers=tenant,
                           json={"method": "cash", "account_id": aid, "amount": 100})

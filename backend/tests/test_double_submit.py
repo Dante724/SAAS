@@ -382,3 +382,45 @@ async def test_same_product_merged_at_once_counts_both(client, tenant, db):
     ln = next(x for x in await K.lines(client, tenant, oid) if x["id"] == lid)
     assert ln["qty"] == 4
     assert await K.stock(client, tenant, pid) == 6 and stale is not None
+
+
+# ── 9. one job, one bill ───────────────────────────────────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_second_full_invoice_for_a_job_is_refused(client, tenant):
+    cid, oid = await _priced_job(client, tenant)
+    await K.invoice(client, tenant, oid, cid)
+    r = await client.post("/api/finance/invoices", headers=tenant, json={"order_id": oid, "client_id": cid})
+    assert r.status_code == 409, r.text
+
+
+@pytest.mark.asyncio
+async def test_invoice_after_a_payment_made_one_is_refused(client, tenant):
+    cid, oid = await _priced_job(client, tenant)
+    till = await _till(client, tenant)
+    r = await client.post(f"/api/cash/orders/{oid}/pay", headers=tenant, json={"method": "cash", "account_id": till, "amount": 30})
+    assert r.status_code in (200, 201), r.text
+    r = await client.post("/api/finance/invoices", headers=tenant, json={"order_id": oid, "client_id": cid})
+    assert r.status_code == 409, r.text
+
+
+@pytest.mark.asyncio
+async def test_sub_invoice_cannot_bill_a_line_twice(client, tenant):
+    cid, oid = await _priced_job(client, tenant)
+    lid = (await K.lines(client, tenant, oid))[0]["id"]
+    assert (await client.post(f"/api/cash/orders/{oid}/invoices", headers=tenant, json={"line_ids": [lid]})).status_code == 201
+    r = await client.post(f"/api/cash/orders/{oid}/invoices", headers=tenant, json={"line_ids": [lid]})
+    assert r.status_code == 409, r.text
+    r = await client.post("/api/finance/invoices", headers=tenant, json={"order_id": oid, "client_id": cid})
+    assert r.status_code == 409, r.text
+
+
+@pytest.mark.asyncio
+async def test_cancelled_invoice_does_not_block_a_new_one(client, tenant, db):
+    from backend.models import Invoice
+    cid, oid = await _priced_job(client, tenant)
+    iid = await K.invoice(client, tenant, oid, cid)
+    inv = (await db.execute(select(Invoice).where(Invoice.id == iid))).scalar_one()
+    inv.status = "cancelled"
+    await db.commit()
+    r = await client.post("/api/finance/invoices", headers=tenant, json={"order_id": oid, "client_id": cid})
+    assert r.status_code == 201, r.text

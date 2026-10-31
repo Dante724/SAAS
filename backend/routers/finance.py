@@ -407,6 +407,16 @@ async def create_invoice(
         valid = set((await db.execute(select(Order.id).where(
             Order.id.in_(order_ids), Order.org_id == current.org_id))).scalars().all())
         order_ids = [o for o in order_ids if o in valid]
+    # One job is billed once: a second full invoice (double click, or after a prepayment made one)
+    # would double what the customer owes in every receivable figure.
+    from backend.services.invoicing import billed_on, lock_order
+    for oid in order_ids:
+        await lock_order(db, oid)
+        full, lines = await billed_on(db, oid)
+        if full or lines:
+            num = (await db.execute(select(Order.order_number).where(Order.id == oid))).scalar_one()
+            raise HTTPException(409, f"{num} is already billed on invoice {full or next(iter(lines.values()))}. "
+                                     "Open that invoice, or cancel it first.")
 
     # 144ed — free-form line amounts + the orders' own totals feed the subtotal
     # when the caller didn't pass one explicitly.
@@ -495,6 +505,12 @@ async def attach_order(
     exists = (await db.execute(select(InvoiceOrder).where(
         InvoiceOrder.invoice_id == invoice_id, InvoiceOrder.order_id == order_id))).scalar_one_or_none()
     if not exists:
+        from backend.services.invoicing import billed_on, lock_order
+        await lock_order(db, order_id)
+        full, lines = await billed_on(db, order_id, exclude_invoice_id=invoice_id)
+        if full or lines:
+            raise HTTPException(409, f"{order.order_number} is already billed on invoice "
+                                     f"{full or next(iter(lines.values()))}.")
         n = (await db.execute(select(func.count()).select_from(InvoiceOrder)
              .where(InvoiceOrder.invoice_id == invoice_id))).scalar() or 0
         db.add(InvoiceOrder(invoice_id=invoice_id, order_id=order_id, sort_order=n))
