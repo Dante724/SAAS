@@ -279,6 +279,7 @@ async def test_smtp_sends_plain_template_as_plain_text_and_strips_subject_newlin
         def send_message(self, msg):
             sent["msg"] = msg
     import smtplib
+
     from backend.core import ssrf
     monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
     monkeypatch.setattr(ssrf, "public_ip_for", lambda host, port: "93.184.216.34")   # a shop's host must resolve public

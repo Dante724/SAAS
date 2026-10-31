@@ -614,7 +614,9 @@ async def commit_posting(
         Part.id.in_(ids), Part.org_id == current.org_id))).scalars()}
     if len(parts) != len(ids):
         raise HTTPException(404, "Product not found")
-    await _check_posting_serials(db, current, lines, parts, data.generate_serials)
+    if data.generate_serials:
+        # fill the missing serials; serial_intake.validate_intake (in _do_posting) still checks every one
+        await _check_posting_serials(db, current, lines, parts, True)
     posted, total_cost = await _do_posting(
         db, current.org_id, current.id, data.location_id, data.supplier_id, lines)
     from backend.routers.catalog_products import commit_mpn_safe
