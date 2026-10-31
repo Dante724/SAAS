@@ -177,9 +177,10 @@ async def test_generic_call_webhook_needs_token_and_dedupes_replays(client, tena
     o.webhook_secret = tok = "whsec-test-0123456789"
     await db.commit()
     assert (await client.post(f"/api/comms/calls/webhook?org_id={org}", json=ev)).status_code == 401
-    for _ in range(3):
+    for i in range(3):
         r = await client.post(f"/api/comms/calls/webhook?org_id={org}", json=ev, headers={"X-Webhook-Token": tok})
-        assert r.status_code == 201, r.text
+        # Merged with B9: the first event creates the call (201); a replay updates it (200).
+        assert r.status_code == (201 if i == 0 else 200), r.text
     assert len((await db.execute(select(Call).where(Call.org_id == org))).scalars().all()) == 1
     assert (await db.execute(select(Lead).where(Lead.org_id == org))).scalar_one().call_count == 1
 
@@ -462,7 +463,10 @@ def test_public_name_modes():
     assert display_name(e, "full") == "Jane Marie Doe"
     assert display_name(e, "first") == "Jane"
     assert display_name(e, "first_initial") == "Jane D."
-    assert display_name(N(name="Jane Doe", public_name="Tech J"), "first") == "Tech J"
+    # Merged with the Orderry fix-now "custom" mode: the employee's own public name is used when
+    # the shop picks "custom" (it used to override every mode).
+    assert display_name(N(name="Jane Doe", public_name="Tech J"), "first") == "Jane"
+    assert display_name(N(name="Jane Doe", public_name="Tech J"), "custom") == "Tech J"
     assert display_name(N(name="", public_name=None), "first") == "Staff"
 
 

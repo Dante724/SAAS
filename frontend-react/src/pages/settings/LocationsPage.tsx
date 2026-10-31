@@ -1,5 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import DateField from "../../components/DateField";
 import { M } from "../../components/Shell";
+import Switch from "../../components/Switch";
 import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
 
@@ -44,7 +46,7 @@ const to12 = (hm?: string) => {
   return `${((h + 11) % 12) + 1}${m ? `:${String(m).padStart(2, "0")}` : ""}${h < 12 ? "am" : "pm"}`;
 };
 
-const inp = "w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-ink-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/10";
+const inp = "glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary";
 const toMin = (hm?: string) => { const [h, m] = (hm || "0:0").split(":").map(Number); return (h || 0) * 60 + (m || 0); };
 // Timeline scale: 6am–10pm, widened if a shop opens earlier or closes later.
 function scaleFor(wh: Hours): [number, number] {
@@ -203,7 +205,7 @@ function LocationDetail({ loc, companyTz, resources, onSaved, onResChanged, onCa
           <label className="flex-shrink-0">
             <span className="sr-only">Time zone</span>
             <span className={`inline-flex items-center gap-1 rounded-lg pl-2 text-[11px] ${companyTz && f.timezone !== companyTz ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-ink-secondary"}`}>
-              <M n="schedule" c="text-[12px]" />
+              <M n="public" c="text-[12px]" />
               <select value={f.timezone} onChange={(e) => set("timezone", e.target.value)} aria-label="Time zone" className="bg-transparent py-1 pr-1 outline-none text-[11px] max-w-[150px]">
                 <optgroup label="United States and Canada">{COMMON_TZ.map((z) => <option key={z} value={z}>{tzLabel(z)}</option>)}</optgroup>
                 <optgroup label="All time zones">{zones.map((z) => <option key={z} value={z}>{z.replace(/_/g, " ")}</option>)}</optgroup>
@@ -249,13 +251,12 @@ function LocationDetail({ loc, companyTz, resources, onSaved, onResChanged, onCa
                 </button>
                 {editing && (
                   <div className="flex flex-wrap items-center gap-2 mt-1.5 mb-1 px-1">
-                    <button type="button" role="switch" aria-checked={open} aria-label={`Open on ${l}`} onClick={() => patchDay(k, { closed: open })}
-                      className={`w-9 h-5 rounded-full relative transition-colors ${open ? "bg-primary" : "bg-slate-300"}`}><span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${open ? "left-[18px]" : "left-0.5"}`} /></button>
+                    <Switch size="sm" label={`Open on ${l}`} on={open} onChange={(v) => patchDay(k, { closed: !v })} />
                     <span className="text-xs text-ink-secondary w-12">{open ? "Open" : "Closed"}</span>
                     {open && (<>
-                      <input type="time" value={d.open || "09:00"} onChange={(e) => patchDay(k, { open: e.target.value })} aria-label={`${l} opens`} className="bg-white border border-slate-200 rounded-lg px-2 py-1 text-sm outline-none focus:border-primary" />
+                      <DateField mode="time" className="w-36" value={d.open || "09:00"} onChange={(v) => patchDay(k, { open: v })} label={`${l} opens`} />
                       <span className="text-xs text-ink-tertiary">to</span>
-                      <input type="time" value={d.close || "18:00"} onChange={(e) => patchDay(k, { close: e.target.value })} aria-label={`${l} closes`} className="bg-white border border-slate-200 rounded-lg px-2 py-1 text-sm outline-none focus:border-primary" />
+                      <DateField mode="time" className="w-36" value={d.close || "18:00"} onChange={(v) => patchDay(k, { close: v })} label={`${l} closes`} />
                     </>)}
                     <button type="button" onClick={() => setWh((s) => Object.fromEntries(DAYS.map(([kk], i) => [kk, i < 5 ? { ...d } : (s[kk] || DEFAULT_DAY)])))}
                       className="ml-auto text-[11px] font-semibold text-ink-tertiary hover:text-ink-secondary">Same for Mon–Fri</button>
@@ -292,10 +293,10 @@ function LocationDetail({ loc, companyTz, resources, onSaved, onResChanged, onCa
               </div>
               <div className="flex items-center gap-2">
                 <input value={nr.name} onChange={(e) => setNr({ ...nr, name: e.target.value })} onKeyDown={(e) => e.key === "Enter" && addRes()} placeholder="Lift 1, Bench 2, Room A" aria-label="Bay or room name" className={inp} />
-                <select value={nr.kind} onChange={(e) => setNr({ ...nr, kind: e.target.value })} aria-label="Kind" className="bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm">
+                <select value={nr.kind} onChange={(e) => setNr({ ...nr, kind: e.target.value })} aria-label="Kind" className="glass-input rounded-xl px-3 py-2 text-sm">
                   {[["bay", "Bay / lift"], ["room", "Room"], ["equipment", "Equipment"], ["other", "Other"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                 </select>
-                <button onClick={addRes} disabled={!nr.name.trim()} className="px-3.5 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-ink-primary hover:bg-slate-50 disabled:opacity-50">Add</button>
+                <button onClick={addRes} disabled={!nr.name.trim()} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90 disabled:opacity-50">Add</button>
               </div>
             </>)}
           </div>
@@ -303,12 +304,12 @@ function LocationDetail({ loc, companyTz, resources, onSaved, onResChanged, onCa
         {panel === "billing" && (
           <div className="sm:col-span-2 rounded-xl border border-slate-200 p-4 space-y-3">
             <div className="grid sm:grid-cols-2 gap-3">
-              <label className="block"><span className="block text-xs font-medium text-ink-secondary mb-1.5">Invoices are from</span>
+              <label className="block"><span className="block text-sm font-medium text-ink-primary mb-1.5">Invoices are from</span>
                 <select value={f.legal_entity_id || ""} onChange={(e) => set("legal_entity_id", e.target.value)} className={inp}><option value="">Company default</option>{legals.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></label>
-              <label className="block"><span className="block text-xs font-medium text-ink-secondary mb-1.5">Price level</span>
+              <label className="block"><span className="block text-sm font-medium text-ink-primary mb-1.5">Price level</span>
                 <select value={f.price_type_id || ""} onChange={(e) => set("price_type_id", e.target.value)} className={inp}><option value="">Company default</option>{priceTypes.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></label>
             </div>
-            <label className="block"><span className="block text-xs font-medium text-ink-secondary mb-1.5">Line at the top of receipts</span>
+            <label className="block"><span className="block text-sm font-medium text-ink-primary mb-1.5">Line at the top of receipts</span>
               <input value={f.receipt_header} onChange={(e) => set("receipt_header", e.target.value)} placeholder="Thanks for visiting our Downtown shop!" className={inp} /></label>
           </div>
         )}

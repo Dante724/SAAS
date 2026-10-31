@@ -1,20 +1,26 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
+import Switch from "../../components/Switch";
+import { SettingRow, NumField } from "../../components/SettingRow";
 
 /* Settings › Pricing and Settings › Inventory & warehouses. Same endpoints as before
    (/pricing/types, /pricing/defaults, /staff/inventory-settings, /settings/warehouses);
    adding or editing a price level / warehouse still opens the hub's editor drawer. */
 
-const inp = "w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-ink-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/10";
+const inp = "glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary";
+const addBtn = "inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90";
 
-function Card({ icon, title, hint, right, children }: { icon: string; title: string; hint?: string; right?: ReactNode; children?: ReactNode }) {
+// `actions` sit under the title on the left, main action first.
+function Card({ icon, title, hint, actions, children }: { icon: string; title: string; hint?: string; actions?: ReactNode; children?: ReactNode }) {
   return (
     <section className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card">
       <div className="flex items-start gap-3 px-5 pt-4 pb-3">
         <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n={icon} c="text-lg" /></span>
-        <div className="min-w-0"><h3 className="text-sm font-semibold text-ink-primary">{title}</h3>{hint && <p className="text-[11px] text-ink-tertiary">{hint}</p>}</div>
-        {right && <div className="ml-auto flex-shrink-0">{right}</div>}
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-ink-primary">{title}</h3>{hint && <p className="text-xs text-ink-tertiary">{hint}</p>}
+          {actions && <div className="mt-3 flex flex-wrap items-center gap-2">{actions}</div>}
+        </div>
       </div>
       {children && <div className="px-5 pb-5">{children}</div>}
     </section>
@@ -23,9 +29,9 @@ function Card({ icon, title, hint, right, children }: { icon: string; title: str
 function Field({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) {
   return (
     <label className="block">
-      <span className="block text-xs font-medium text-ink-secondary mb-1.5">{label}</span>
+      <span className="block text-sm font-medium text-ink-primary mb-1.5">{label}</span>
       {children}
-      {hint && <span className="block text-[11px] text-ink-tertiary mt-1">{hint}</span>}
+      {hint && <span className="block text-xs text-ink-tertiary mt-1">{hint}</span>}
     </label>
   );
 }
@@ -86,8 +92,8 @@ export function PricingPage({ types, currency, onAdd, onEdit, onDelete, tiers }:
     } catch (e: any) { setMsg(e?.message || "Couldn't save"); } finally { setBusy(false); }
   }
 
-  const DocPick = ({ k, label }: { k: string; label: string }) => (
-    <Field label={label}>
+  const docPick = (k: string, label: string) => (
+    <Field key={k} label={label}>
       <select value={d?.[k] || ""} onChange={(e) => set(k, e.target.value)} className={inp}>
         <option value="">Standard price</option>{list.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
       </select>
@@ -103,7 +109,7 @@ export function PricingPage({ types, currency, onAdd, onEdit, onDelete, tiers }:
       {msg && <div className={`text-xs ${msg === "Saved" ? "text-emerald-700" : "text-rose-600"}`}>{msg}</div>}
 
       <Card icon="sell" title="Price levels" hint="Each level adds a markup on cost. Use them for retail, trade, insurance customers…"
-        right={<button onClick={onAdd} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-ink-primary hover:bg-slate-50"><M n="add" c="text-sm" />Add level</button>}>
+        actions={<button onClick={onAdd} className={addBtn}><M n="add" c="text-sm" />Add level</button>}>
         {types == null ? <div className="text-xs text-ink-tertiary">Loading…</div> : list.length === 0 ? (
           <div className="rounded-xl border border-dashed border-slate-300 p-5 text-center text-xs text-ink-tertiary">No price levels yet. Parts sell at the price you set on each one.</div>
         ) : (
@@ -138,7 +144,7 @@ export function PricingPage({ types, currency, onAdd, onEdit, onDelete, tiers }:
           <div className="flex items-center gap-2 mb-3">
             <span className="text-xs text-ink-secondary">Part costs</span>
             <span className="relative"><span className="absolute left-3 top-2 text-sm text-ink-tertiary">{cur}</span>
-              <input type="number" min={0} value={cost} onChange={(e) => setCost(e.target.value)} aria-label="Part cost" className="w-28 bg-white border border-slate-200 rounded-xl pl-7 pr-3 py-2 text-sm outline-none focus:border-primary" /></span>
+              <input type="number" min={0} value={cost} onChange={(e) => setCost(e.target.value)} aria-label="Part cost" className="glass-input w-28 rounded-xl pl-7 pr-3 py-2 text-sm" /></span>
           </div>
           <div className="rounded-xl border border-slate-100 divide-y divide-slate-100">
             {list.map((t) => {
@@ -159,16 +165,16 @@ export function PricingPage({ types, currency, onAdd, onEdit, onDelete, tiers }:
       {d && (<>
         <Card icon="description" title="Which price each document uses" hint="Picked automatically when you add a part. Staff can still change it on the line.">
           <div className="grid sm:grid-cols-3 gap-3">
-            <DocPick k="price_type_tickets_id" label="Work orders" />
-            <DocPick k="price_type_sales_id" label="Counter sales" />
-            <DocPick k="price_type_invoices_id" label="Invoices" />
+            {docPick("price_type_tickets_id", "Work orders")}
+            {docPick("price_type_sales_id", "Counter sales")}
+            {docPick("price_type_invoices_id", "Invoices")}
           </div>
         </Card>
 
         <Card icon="verified_user" title="Protect your margin" hint="Stop discounts and low prices from turning a job into a loss.">
           <div className="space-y-4">
             <div>
-              <div className="text-xs font-medium text-ink-secondary mb-1.5">When a line's margin is below the floor</div>
+              <div className="text-sm font-medium text-ink-primary mb-1.5">When a line's margin is below the floor</div>
               <Seg value={guard} set={(v) => set("margin_guard", v)} opts={[["off", "Do nothing"], ["warn", "Warn"], ["block", "Don't allow it"]]} />
             </div>
             <div className="grid sm:grid-cols-3 gap-3">
@@ -192,7 +198,7 @@ export function PricingPage({ types, currency, onAdd, onEdit, onDelete, tiers }:
         <div className="rounded-2xl border border-slate-200/90 bg-white">
           <button onClick={() => setShowTiers((v) => !v)} aria-expanded={showTiers} className="w-full flex items-center gap-3 px-5 py-4 text-left">
             <span className="w-9 h-9 rounded-xl bg-slate-100 text-ink-secondary grid place-items-center"><M n="trending_down" c="text-lg" /></span>
-            <span><span className="block text-sm text-ink-primary">Quantity breaks</span><span className="block text-[11px] text-ink-tertiary">Lower the markup when someone buys more. Optional.</span></span>
+            <span><span className="block text-sm text-ink-primary">Quantity breaks</span><span className="block text-xs text-ink-tertiary">Lower the markup when someone buys more. Optional.</span></span>
             <M n={showTiers ? "expand_less" : "expand_more"} c="ml-auto text-base text-ink-tertiary" />
           </button>
           {showTiers && <div className="px-5 pb-5">{tiers}</div>}
@@ -211,30 +217,32 @@ export function InventoryPage({ warehouses, currency, onAdd, onEdit, onDelete }:
   const [orig, setOrig] = useState("");
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<string | null>(null);
+  const [patterns, setPatterns] = useState(false);
   useEffect(() => { api.get<any>("/staff/inventory-settings").then((r) => { setC(r || {}); setOrig(JSON.stringify(r || {})); }).catch(() => { setC({}); setOrig("{}"); }); }, []);
   const set = (k: string, v: any) => setC((s: any) => ({ ...s, [k]: v }));
   const dirty = !!c && JSON.stringify(c) !== orig;
   async function save() {
     setBusy(true); setMsg(null);
     const body = { enable_bins: !!c.enable_bins, enable_reservations: !!c.enable_reservations, reservation_max_days: Number(c.reservation_max_days) || 0,
-      unique_identifier: c.unique_identifier || "sku", default_product_type: c.default_product_type || "default",
+      unique_identifier: c.unique_identifier || "name", default_product_type: c.default_product_type || "default",
       product_serial_template: c.product_serial_template || null, default_vehicle_type: c.default_vehicle_type || "Car",
       asset_serial_template: c.asset_serial_template || null, po_approval_threshold: Number(c.po_approval_threshold) || 0,
+      sku_template: c.sku_template || null, bin_template: c.bin_template || null, barcode_prefix: c.barcode_prefix || "20",
       po_to_job: c.po_to_job === "manual" ? "manual" : "auto" };
     try { await api.put("/staff/inventory-settings", body); setOrig(JSON.stringify(c)); setMsg("Saved"); setTimeout(() => setMsg(null), 1800); }
     catch (e: any) { setMsg(e?.message || "Couldn't save"); } finally { setBusy(false); }
   }
-  const Sw = ({ k, label, hint }: { k: string; label: string; hint?: string }) => (
-    <label className="flex items-center gap-3 py-3 border-t border-slate-100 first:border-0 cursor-pointer">
-      <span className="min-w-0"><span className="block text-sm text-ink-primary">{label}</span>{hint && <span className="block text-[11px] text-ink-tertiary">{hint}</span>}</span>
-      <button type="button" role="switch" aria-checked={!!c?.[k]} aria-label={label} onClick={() => set(k, !c?.[k])}
-        className={`ml-auto w-10 h-6 rounded-full flex-shrink-0 relative transition-colors ${c?.[k] ? "bg-primary" : "bg-slate-300"}`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${c?.[k] ? "left-[18px]" : "left-0.5"}`} /></button>
-    </label>
+  // Plain functions (not components), so rows aren't remounted on every render.
+  const sw = (k: string, label: string, hint?: string) => (
+    <div className="flex items-center gap-3 py-3 border-t border-slate-100 first:border-0">
+      <span className="min-w-0"><span className="block text-sm text-ink-primary">{label}</span>{hint && <span className="block text-xs text-ink-tertiary">{hint}</span>}</span>
+      <span className="ml-auto"><Switch label={label} on={!!c?.[k]} onChange={(v) => set(k, v)} /></span>
+    </div>
   );
   const list = warehouses || [];
   const parts = list.filter((w) => w.kind !== "asset"); const items = list.filter((w) => w.kind === "asset");
-  const Place = ({ w }: { w: any }) => (
-    <div onClick={() => onEdit(w)} className={`group flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer hover:bg-slate-50 ${w.active === false ? "opacity-50" : ""}`}>
+  const place = (w: any) => (
+    <div key={w.id} onClick={() => onEdit(w)} className={`group flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer hover:bg-slate-50 ${w.active === false ? "opacity-50" : ""}`}>
       <span className={`w-9 h-9 rounded-xl grid place-items-center flex-shrink-0 ${w.kind === "asset" ? "bg-violet-50 text-violet-700" : "bg-amber-50 text-amber-700"}`}><M n={w.kind === "asset" ? "devices" : "inventory_2"} c="text-lg" /></span>
       <span className="min-w-0"><span className="block text-sm text-ink-primary truncate">{w.name}</span>
         <span className="block text-[11px] text-ink-tertiary">{w.scope === "company" ? "Shared by all locations" : "One location"}{w.active === false ? " · Not in use" : ""}</span></span>
@@ -253,16 +261,16 @@ export function InventoryPage({ warehouses, currency, onAdd, onEdit, onDelete }:
       {msg && <div className={`text-xs ${msg === "Saved" ? "text-emerald-700" : "text-rose-600"}`}>{msg}</div>}
 
       <Card icon="warehouse" title="Where things are kept" hint="Parts you sell, and the customers' items you're repairing, each have their own places."
-        right={<button onClick={onAdd} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-ink-primary hover:bg-slate-50"><M n="add" c="text-sm" />Add place</button>}>
+        actions={<button onClick={onAdd} className={addBtn}><M n="add" c="text-sm" />Add place</button>}>
         {warehouses == null ? <div className="text-xs text-ink-tertiary">Loading…</div> : (
           <div className="grid md:grid-cols-2 gap-4">
             <div>
               <div className="text-[11px] font-semibold text-ink-tertiary mb-1 px-1">Parts and stock</div>
-              {parts.length ? parts.map((w) => <Place key={w.id} w={w} />) : <div className="px-3 py-2 text-xs text-ink-tertiary">None yet</div>}
+              {parts.length ? parts.map((w) => place(w)) : <div className="px-3 py-2 text-xs text-ink-tertiary">None yet</div>}
             </div>
             <div>
               <div className="text-[11px] font-semibold text-ink-tertiary mb-1 px-1">Customers' items</div>
-              {items.length ? items.map((w) => <Place key={w.id} w={w} />) : <div className="px-3 py-2 text-xs text-ink-tertiary">None yet</div>}
+              {items.length ? items.map((w) => place(w)) : <div className="px-3 py-2 text-xs text-ink-tertiary">None yet</div>}
             </div>
           </div>
         )}
@@ -270,19 +278,18 @@ export function InventoryPage({ warehouses, currency, onAdd, onEdit, onDelete }:
 
       {c && (<>
         <Card icon="inventory_2" title="Tracking stock">
-          <Sw k="enable_bins" label="Shelf and bin locations" hint="Record exactly where each part sits." />
-          <Sw k="enable_reservations" label="Hold parts for a job" hint="A part added to a job is set aside so it isn't sold." />
+          {sw("enable_bins", "Shelf and bin locations", "Record exactly where each part sits.")}
+          {sw("enable_reservations", "Hold parts for a job", "A part added to a job is set aside so it isn't sold.")}
           {c.enable_reservations && (
-            <div className="flex items-center gap-3 pb-1 pl-4">
-              <span className="text-xs text-ink-secondary">Release held parts after</span>
-              <input type="number" min={0} value={c.reservation_max_days ?? 14} onChange={(e) => set("reservation_max_days", Number(e.target.value))} aria-label="Days to hold"
-                className="w-16 bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5 text-right" />
-              <span className="text-xs text-ink-secondary">days</span>
+            <div className="py-3 border-t border-slate-100">
+              <SettingRow htmlFor="inv-hold-days" label="Release held parts after" help="A held part goes back on sale if the job hasn't used it by then.">
+                <NumField id="inv-hold-days" value={c.reservation_max_days ?? 14} onChange={(v) => set("reservation_max_days", v)} unit="days" />
+              </SettingRow>
             </div>
           )}
           <div className="py-3 border-t border-slate-100">
             <div className="text-sm text-ink-primary">Parts that arrive for a job</div>
-            <div className="text-[11px] text-ink-tertiary mb-2">When a purchase order raised from a job is received.</div>
+            <div className="text-xs text-ink-tertiary mb-2">When a purchase order raised from a job is received.</div>
             <div className="grid sm:grid-cols-2 gap-2">
               {([["auto", "Write off automatically", "bolt", "Stock goes straight to the job the moment it's received."],
                  ["manual", "Staff write it off", "back_hand", "Parts land in stock; someone writes them off on the job."]] as const).map(([v, l, icon, hint]) => {
@@ -299,15 +306,35 @@ export function InventoryPage({ warehouses, currency, onAdd, onEdit, onDelete }:
           </div>
         </Card>
 
-        <Card icon="qr_code_2" title="Product codes" hint="How products are identified and how new serial numbers are made.">
+        <Card icon="qr_code_2" title="Product codes" hint="How products are identified and how new codes are made. Codes you already have are never changed.">
           <div className="space-y-4">
             <div>
-              <div className="text-xs font-medium text-ink-secondary mb-1.5">Each product is unique by</div>
-              <Seg value={c.unique_identifier || "sku"} set={(v) => set("unique_identifier", v)} opts={[["name", "Name"], ["sku", "SKU"], ["barcode", "Barcode"], ["code", "Code"]]} />
+              <div className="text-sm font-medium text-ink-primary mb-1.5">Each product is unique by</div>
+              <Seg value={c.unique_identifier || "name"} set={(v) => set("unique_identifier", v)} opts={[["name", "Name"], ["sku", "SKU"], ["barcode", "Barcode"], ["code", "Code"]]} />
+              <p className="text-xs text-ink-tertiary mt-1.5">Two products can't share it, and imports use it to find the product to update. SKUs and barcodes are always unique.</p>
             </div>
             <div className="grid sm:grid-cols-2 gap-3">
               <Field label="New products start as"><input value={c.default_product_type || "default"} onChange={(e) => set("default_product_type", e.target.value)} className={inp} /></Field>
-              <Field label="Serial number pattern" hint="{C:5} = a 5-digit counter"><input value={c.product_serial_template || ""} onChange={(e) => set("product_serial_template", e.target.value)} placeholder="0-{C:19}" className={`${inp} font-mono`} /></Field>
+              <Field label="New barcodes start with" hint="20–29 is set aside for a shop's own barcodes, so they never match a manufacturer's.">
+                <select value={c.barcode_prefix || "20"} onChange={(e) => set("barcode_prefix", e.target.value)} aria-label="Barcode prefix" className={inp}>
+                  {Array.from({ length: 10 }, (_, i) => String(20 + i)).map((v) => <option key={v} value={v}>{v}</option>)}
+                </select></Field>
+            </div>
+            <div>
+              <button type="button" onClick={() => setPatterns((v) => !v)} aria-expanded={patterns} className="inline-flex items-center gap-1 text-xs font-semibold text-primary">
+                <M n={patterns ? "expand_less" : "expand_more"} c="text-sm" />Custom patterns for new codes
+              </button>
+              {!patterns && <p className="text-xs text-ink-tertiary mt-1">{[c.sku_template, c.product_serial_template, c.bin_template].some(Boolean) ? "Your own patterns are in use for new SKUs, serials or bin codes." : "New SKUs, serials and bin codes use the standard format."}</p>}
+              {patterns && (
+                <div className="grid sm:grid-cols-2 gap-3 mt-3">
+                  <Field label="SKU pattern" hint="Fills the SKU of new products left blank. {CAT} = first letters of the category. Empty = off.">
+                    <input value={c.sku_template || ""} onChange={(e) => set("sku_template", e.target.value)} placeholder="{CAT}-{C:5}" maxLength={40} className={`${inp} font-mono`} /></Field>
+                  <Field label="Serial number pattern" hint="For units that arrive without a serial. {C:6} = a 6-digit counter.">
+                    <input value={c.product_serial_template || ""} onChange={(e) => set("product_serial_template", e.target.value)} placeholder="SN{C:6}" maxLength={40} className={`${inp} font-mono`} /></Field>
+                  <Field label="Bin code pattern" hint="The code printed on a new shelf or bin label.">
+                    <input value={c.bin_template || ""} onChange={(e) => set("bin_template", e.target.value)} placeholder="BIN-{C:4}" maxLength={40} className={`${inp} font-mono`} /></Field>
+                </div>
+              )}
             </div>
           </div>
         </Card>
@@ -315,7 +342,8 @@ export function InventoryPage({ warehouses, currency, onAdd, onEdit, onDelete }:
         <Card icon="devices" title="Customers' items" hint="Defaults when an item is checked in without these details.">
           <div className="grid sm:grid-cols-2 gap-3">
             <Field label="Default item type"><input value={c.default_vehicle_type || "Car"} onChange={(e) => set("default_vehicle_type", e.target.value)} className={inp} /></Field>
-            <Field label="Serial number pattern"><input value={c.asset_serial_template || ""} onChange={(e) => set("asset_serial_template", e.target.value)} placeholder="9-{C:4}" className={`${inp} font-mono`} /></Field>
+            <Field label="Serial number pattern" hint="For items checked in without a serial. {T} = first letters of the item type.">
+              <input value={c.asset_serial_template || ""} onChange={(e) => set("asset_serial_template", e.target.value)} placeholder="{T}-{C:6}" maxLength={40} className={`${inp} font-mono`} /></Field>
           </div>
         </Card>
 

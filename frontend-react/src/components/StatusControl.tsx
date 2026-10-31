@@ -1,6 +1,7 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useId, useMemo, useState } from "react";
 import { tint } from "../lib/tint";
 import { M } from "./Shell";
+import FloatingMenu from "./FloatingMenu";
 
 // 144ik/il — status UI, split into two pieces so neither is cramped:
 //   <StatusStepper>  — full-width lifecycle band that sits on its own row
@@ -102,14 +103,9 @@ export default function StatusControl({
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
-  const wrap = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const h = (e: MouseEvent) => { if (wrap.current && !wrap.current.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
-  }, [open]);
+  // The picker is a FloatingMenu (portal + fixed), so the drawer header can't clip it.
+  const anchorId = useId();
+  const close = () => { setOpen(false); setQ(""); };
 
   const ordered = useMemo(
     () => [...statuses].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)),
@@ -131,7 +127,7 @@ export default function StatusControl({
     const h = hint(s, isEstimate);
     return (
       <button
-        onClick={() => { onChange(s.key); setOpen(false); setQ(""); }}
+        type="button" onClick={() => { onChange(s.key); close(); }}
         className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-left transition-colors ${recommended ? "" : "hover:bg-slate-50"}`}
         style={recommended ? { background: tintBg(s.color), border: `0.5px solid ${tintBorder(s.color)}` } : undefined}
       >
@@ -146,9 +142,10 @@ export default function StatusControl({
   };
 
   return (
-    <div className="relative flex items-center gap-2" ref={wrap}>
+    <div className="relative flex items-center gap-2">
       <button
-        onClick={() => setOpen((o) => !o)}
+        type="button" data-status-anchor={anchorId} aria-haspopup="menu" aria-expanded={open}
+        onClick={() => (open ? close() : setOpen(true))}
         className="inline-flex items-center gap-1.5 text-xs font-semibold py-1 pl-2.5 pr-2 rounded-full border shadow-2xs cursor-pointer focus:outline-none"
         style={{ background: tintBg(cur?.color), borderColor: tintBorder(cur?.color), color: cur?.color || DEFAULT_COLOR }}
       >
@@ -159,16 +156,15 @@ export default function StatusControl({
 
       {cur?.time_limit_min ? (
         <span className={`inline-flex items-center gap-1 text-[11px] font-semibold ${overdue ? "text-rose-700" : nearing ? "text-amber-700" : "text-ink-tertiary"}`}>
-          <M n="schedule" c="text-xs" />{fmtDur(elapsedMin)} · SLA {fmtDur(cur.time_limit_min)}
+          <M n="timer" c="text-xs" />{fmtDur(elapsedMin)} · SLA {fmtDur(cur.time_limit_min)}
         </span>
       ) : null}
 
       {open && (
-        <div className="absolute z-30 top-8 left-0 w-72 bg-white rounded-xl border border-slate-200 shadow-clay-drawer p-2 animate-[fadeIn_.12s_ease]">
-          <style>{`@keyframes fadeIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}`}</style>
+        <FloatingMenu anchorSel={`[data-status-anchor="${anchorId}"]`} onClose={close} width={288}>
           <div className="relative mb-1.5">
             <M n="search" c="absolute left-2 top-1.5 text-sm text-ink-tertiary" />
-            <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter statuses"
+            <input value={q} aria-label="Filter statuses" onChange={(e) => setQ(e.target.value)} placeholder="Filter statuses"
               className="w-full text-xs pl-7 pr-2 py-1.5 rounded-lg border border-slate-200 focus:outline-none focus:border-primary/50" />
           </div>
           <div className="max-h-72 overflow-y-auto space-y-0.5">
@@ -181,7 +177,7 @@ export default function StatusControl({
             ))}
             {!filtered.length && <p className="text-xs text-ink-tertiary px-2.5 py-3 text-center">No match</p>}
           </div>
-        </div>
+        </FloatingMenu>
       )}
     </div>
   );

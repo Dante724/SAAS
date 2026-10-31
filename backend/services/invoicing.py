@@ -110,7 +110,7 @@ async def display_lines(db: AsyncSession, inv: "Invoice", *, itemised: bool = Fa
         for o in orders:
             amt = round(sums.get(o.id, 0.0), 2) if billed else _order_amount(o)
             desc = f"{o.order_number}" + (f" — {o.complaint}" if getattr(o, "complaint", None) else "")
-            out.append({"description": desc, "qty": 1, "unit_price": amt, "total": amt})
+            out.append({"description": desc, "qty": 1, "unit_price": amt, "total": amt, "order_id": o.id})
         return out + free
 
     # detailed (default): every order line across all orders, then free lines
@@ -135,6 +135,7 @@ async def display_lines(db: AsyncSession, inv: "Invoice", *, itemised: bool = Fa
         from backend.services import kit_print
         for l in kit_print.customer_lines(lines, itemised=itemised):
             row = kit_print.row(l)
+            row["order_id"] = getattr(l, "order_id", None)   # the PDF nets tax per source order
             if names:
                 n = names.get(getattr(l, "order_item_id", None))
                 row["item_id"] = l.order_item_id if n else None
@@ -143,42 +144,176 @@ async def display_lines(db: AsyncSession, inv: "Invoice", *, itemised: bool = Fa
     return out + free
 
 
+def _pdf_money(org):
+    """Money for the PDF with the shop's currency. The built-in PDF fonts have no glyph for some
+    symbols (₹, ₺, ₦, …), so those print as the ISO code instead: "INR 1,200.00"."""
+    from backend.services.currency import _base, format_money
+    base = _base(org)
+    sym, code = base["symbol"] or "", base["code"] or ""
+    try:
+        sym.encode("cp1252")
+    except UnicodeEncodeError:
+        sym = code
+    return lambda v: format_money(float(v or 0), sym, code)
+
+
+async def _seller(db: AsyncSession, org, inv) -> tuple[list[str], list[tuple]]:
+    """Who issues the invoice: the invoice's legal entity, else the location's, else the shop's
+    default one, else the company details from Settings. Returns (header lines, meta rows)."""
+    from backend.models import LegalEntity, Location
+    le_id = getattr(inv, "legal_entity_id", None)
+    if not le_id and inv.order_id:
+        le_id = (await db.execute(select(Location.legal_entity_id).join(Order, Order.location_id == Location.id)
+                                  .where(Order.id == inv.order_id))).scalar()
+    q = select(LegalEntity).where(LegalEntity.org_id == inv.org_id, LegalEntity.active == True)  # noqa: E712
+    le = None
+    if le_id:
+        le = (await db.execute(q.where(LegalEntity.id == le_id))).scalar_one_or_none()
+    if le is None:
+        le = (await db.execute(q.where(LegalEntity.is_default == True))).scalars().first()  # noqa: E712
+    if le is not None:
+        lines = [le.name, le.address, le.phone, le.email]
+        meta = [("VAT no.", le.vat_no), ("Tax ID", le.tax_id if le.tax_id != le.vat_no else None),
+                ("Company no.", le.registration_no)]
+    else:
+        lines = [org.company_address if org else None, org.company_phone if org else None,
+                 org.company_email if org else None, org.company_details if org else None]
+        meta = []
+    return [str(x) for x in lines if x], [m for m in meta if m[1]]
+
+
+async def tax_summary(db: AsyncSession, inv: "Invoice") -> dict:
+    """The invoice's tax, from the lines it bills: one row per tax (name, rate, mode, amount),
+    the imposed tax per source order, and the total. Invoices with no taxed lines fall back to
+    the stored Invoice.tax as one "Tax" row."""
+    from backend.models import InvoiceLine, OrderLine, Tax
+    from backend.services.tax import line_tax
+    orders = await invoice_orders(db, inv)
+    rows: dict = {}
+    imposed_by_order: dict = {}
+    if orders:
+        billed = set((await db.execute(select(InvoiceLine.order_line_id).where(
+            InvoiceLine.invoice_id == inv.id, InvoiceLine.order_line_id.isnot(None)))).scalars().all())
+        q = select(OrderLine).where(OrderLine.order_id.in_([o.id for o in orders]))
+        if billed:
+            q = q.where(OrderLine.id.in_(billed))
+        lines = (await db.execute(q)).scalars().all()
+        names = {}
+        tids = {l.tax_id for l in lines if l.tax_id}
+        if tids:
+            names = {t.id: (t.name_for_document or t.name) for t in (await db.execute(
+                select(Tax).where(Tax.id.in_(tids)))).scalars().all()}
+        for l in lines:
+            amt = line_tax(qty=l.qty, unit_price=l.unit_price, discount=l.discount,
+                           discount_type=l.discount_type, tax_rate=l.tax_rate, tax_mode=l.tax_mode)
+            if not amt:
+                continue
+            mode = l.tax_mode or "imposed"
+            key = (names.get(l.tax_id) or "Tax", float(l.tax_rate or 0), mode)
+            rows[key] = rows.get(key, 0.0) + amt
+            if mode != "included":
+                imposed_by_order[l.order_id] = imposed_by_order.get(l.order_id, 0.0) + amt
+    out = [{"name": k[0], "rate": k[1], "mode": k[2], "amount": round(v, 2)} for k, v in rows.items()]
+    if not out and float(inv.tax or 0):
+        out = [{"name": "Tax", "rate": None, "mode": "imposed", "amount": float(inv.tax)}]
+        imposed_by_order = {None: float(inv.tax)}
+    total = round(sum(r["amount"] for r in out), 2)
+    imposed = round(sum(r["amount"] for r in out if r["mode"] != "included"), 2)
+    return {"rows": out, "total": total, "imposed": imposed, "imposed_by_order": imposed_by_order}
+
+
 async def build_invoice_pdf(db: AsyncSession, inv: "Invoice", *, org_name: str, lang: str = "en",
                             itemised: bool = False) -> bytes:
     """Build 144dw — render an invoice to PDF with its lines resolved through the
     Order-display mode across every linked order. Shared by the print endpoint and
-    the send-by-email action so both produce an identical document."""
-    from backend.models import Client
+    the send-by-email action so both produce an identical document.
+
+    Launch B4: a usable tax invoice — the shop's currency, who issues it (address and VAT number),
+    amounts before tax, one line per tax, and dates on the shop's clock."""
+    from backend.models import Client, OrderLine
     from backend.services import printing
+    from backend.services.dates import shop_tzname, utc_to_wall
+    from backend.services.tax import line_tax
+    org = (await db.execute(select(Organisation).where(Organisation.id == inv.org_id))).scalar_one_or_none()
+    money = _pdf_money(org)
+    tz = await shop_tzname(db, inv.org_id)
     lines = await display_lines(db, inv, itemised=itemised)
     orders = await invoice_orders(db, inv)
+    taxes = await tax_summary(db, inv)
+
+    # Line amounts are shown before imposed tax (the tax is listed once, under the subtotal).
+    # VAT-inclusive prices stay as they are: the VAT is inside them.
+    ol_tax: dict = {}
+    if orders and (inv.display_mode or "detailed") == "detailed":
+        for l in (await db.execute(select(OrderLine).where(
+                OrderLine.order_id.in_([o.id for o in orders])))).scalars().all():
+            if (l.tax_mode or "imposed") != "included":
+                ol_tax[(l.order_id, l.description, float(l.total or 0))] = line_tax(
+                    qty=l.qty, unit_price=l.unit_price, discount=l.discount, discount_type=l.discount_type,
+                    tax_rate=l.tax_rate, tax_mode=l.tax_mode)
+
+    def _net(r) -> float:
+        total = float(r.get("total") or 0)
+        mode = inv.display_mode or "detailed"
+        if mode == "detailed":
+            return total - ol_tax.get((r.get("order_id"), r.get("description"), total), 0.0)
+        if mode == "simplified" and r.get("order_id"):
+            return total - taxes["imposed_by_order"].get(r["order_id"], 0.0)
+        if mode == "one_line":
+            return total - taxes["imposed"]
+        return total
+
     from backend.services.multi_asset import group_rows
     rows = []
     for r in group_rows(lines):
         if r["row"] == "group":
             rows.append([r["item"], "", "", ""])
         elif r["row"] == "subtotal":
-            rows.append(["", "", f"{r['item']} subtotal", f"{float(r['total'] or 0):.2f}"])
+            rows.append(["", "", f"{r['item']} subtotal", money(r["total"])])
         else:
+            net = _net(r)
+            qty = float(r["qty"] or 0)
+            unit = (net / qty) if qty else float(r["unit_price"] or 0)
             rows.append([("   " if "item" in r else "") + (r["description"] or ""),
-                         f"{float(r['qty'] or 0):g}", f"{float(r['unit_price'] or 0):.2f}", f"{float(r['total'] or 0):.2f}"])
+                         f"{qty:g}", money(unit), money(net)])
     payer_id = getattr(inv, "payer_client_id", None) or inv.client_id
     payer = None
     if payer_id:
         payer = (await db.execute(select(Client).where(Client.id == payer_id))).scalar_one_or_none()
+    seller_lines, seller_meta = await _seller(db, org, inv)
     mode_label = "Itemised copy" if itemised else {"detailed": "Detailed", "simplified": "Simplified (per order)",
                   "one_line": "Single line"}.get(inv.display_mode or "detailed", "Detailed")
-    meta = [("Bill to", payer.name if payer else None),
+
+    def _day(dt):
+        return utc_to_wall(dt, tz).strftime("%Y-%m-%d") if dt else None
+    meta = seller_meta + [
+            ("Bill to", payer.name if payer else None),
+            ("Address", (getattr(payer, "billing_address", None) or getattr(payer, "address", None)) if payer else None),
+            ("Customer tax ID", getattr(payer, "tax_id", None) if payer else None),
             ("Work orders", ", ".join(o.order_number for o in orders) or None),
             ("Display", mode_label),
-            ("Issued", inv.issued_at.strftime("%Y-%m-%d") if inv.issued_at else None),
-            ("Due", inv.due_at.strftime("%Y-%m-%d") if inv.due_at else None),
+            ("Issued", _day(inv.issued_at)),
+            ("Due", _day(inv.due_at)),
             ("Status", (inv.status or "draft").title())]
+    total = float(inv.total or 0)
+    totals = [["", "", "Subtotal", money(total - taxes["imposed"])]]
+    for t in taxes["rows"]:
+        label = t["name"] + (f" {t['rate']:g}%" if t["rate"] is not None else "")
+        if t["mode"] == "included":
+            label += " (included)"
+        totals.append(["", "", label, money(t["amount"])])
+    if float(inv.discount or 0):
+        totals.append(["", "", "Discount", money(inv.discount)])
+    totals.append(["", "", "Total", money(total)])
+    paid = float(inv.amount_paid or 0) + float(getattr(inv, "credited", 0) or 0)
+    if paid:
+        totals.append(["", "", "Paid", money(paid)])
+        totals.append(["", "", "Balance due", money(balance_due(inv))])
     return printing.render_document(
         title="Invoice", org_name=org_name, lang=lang, number=inv.invoice_number,
-        meta=[m for m in meta if m[1]],
+        meta=[m for m in meta if m[1]], header_lines=seller_lines,
         headers=["Description", "Qty", "Unit", "Total"], rows=rows,
-        totals=["", "", "Total", f"{float(inv.total or 0):.2f}"])
+        totals=totals, tz=tz)
 
 
 async def auto_draft_on_close(db: AsyncSession, order: Order) -> Invoice | None:
@@ -219,6 +354,8 @@ async def auto_draft_on_close(db: AsyncSession, order: Order) -> Invoice | None:
     from backend.models import InvoiceOrder
     db.add(InvoiceOrder(invoice_id=inv.id, order_id=order.id, sort_order=0))
     await db.flush()
+    from backend.services.order_money import apply_deposits
+    await apply_deposits(db, inv, order)   # deposits taken before the invoice count on it
     return inv
 
 

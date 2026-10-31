@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { DISPLAY_MODES } from "../invoices/billing";
+import Switch from "../../components/Switch";
 
 /* Settings › Finance › Invoices: the default "Display on the invoice" for new invoices, and
    whether closing a work order drafts its invoice automatically. Both live on the company
@@ -31,7 +32,7 @@ export default function InvoiceSettings() {
         <p className="text-xs text-ink-tertiary mt-0.5">How new invoices show their lines. Each invoice can still be switched on its own.</p>
       </div>
       <div className="px-5 pb-5 space-y-4">
-        {err && <div role="alert" className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
+        {err && <div role="alert" className="rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
         {mode === null && !err ? <div className="text-xs text-ink-tertiary">Loading…</div> : mode !== null && (
           <>
             <div role="radiogroup" aria-label="Default display on the invoice" className="grid grid-cols-1 sm:grid-cols-3 gap-2">
@@ -45,13 +46,10 @@ export default function InvoiceSettings() {
               ))}
             </div>
             <div className="flex items-center gap-3 pt-4 border-t border-slate-100">
-              <span className="min-w-0"><span id="inv-auto-draft" className="block text-sm font-semibold text-ink-primary">Draft an invoice when a work order closes</span>
+              <span className="min-w-0"><span className="block text-sm font-medium text-ink-primary">Draft an invoice when a work order closes</span>
                 <span className="block text-xs text-ink-tertiary">The draft uses the default display above, ready to send or take payment on.</span></span>
-              <button type="button" role="switch" aria-checked={autoDraft} aria-labelledby="inv-auto-draft"
-                onClick={() => { const v = !autoDraft; setAutoDraft(v); save({ auto_draft_invoice_on_close: v }, "Saved"); }}
-                className={`ml-auto w-10 h-6 rounded-full flex-shrink-0 relative transition-colors ${autoDraft ? "bg-primary" : "bg-slate-300"}`}>
-                <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${autoDraft ? "left-[18px]" : "left-0.5"}`} />
-              </button>
+              <span className="ml-auto"><Switch label="Draft an invoice when a work order closes" on={autoDraft}
+                onChange={(v) => { setAutoDraft(v); save({ auto_draft_invoice_on_close: v }, "Saved"); }} /></span>
             </div>
           </>
         )}

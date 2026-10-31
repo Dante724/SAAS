@@ -48,7 +48,7 @@
     { id: "price", w: ["price", "prices", "pricing", "cost", "costs", "much", "expensive", "cheap", "plan", "plans", "pay", "fee", "monthly", "subscription", "per"], a: () => ({ text: `There are three plans:
 • ${solo.name} — ${cur}${solo.monthly}/month: 2 team members, 150 new jobs a month.
 • ${shop.name} — ${cur}${shop.monthly}/month for the first location and ${cur}${shop.extraLocation} for each extra: 8 team members shared across locations (${cur}${shop.extraSeat} a month per extra person), unlimited jobs, plus inventory, scanning, time clock and reports.
-• ${pro.name} — ${cur}${pro.monthly}/month for the first location and ${cur}${pro.extraLocation} for each extra, no limits, plus purchase orders, payroll, AI estimates and accounting sync.
+• ${pro.name} — ${cur}${pro.monthly}/month for the first location and ${cur}${pro.extraLocation} for each extra, no limits, plus purchase orders, payroll, AI estimates and QuickBooks Online export.
 Yearly billing gets ${12 - ymo} months free. Every trial includes all Pro features for ${trial} days.`, chips: ["Which plan fits me?", "Book a demo"] }) },
     { id: "recommend", w: ["which", "recommend", "fit", "right", "best", "choose", "suit", "should"], a: () => ({ action: "recommend" }) },
     { id: "trial", w: ["trial", "free", "try", "test", "card", "credit"], a: () => ({ text: `Yes — every plan starts with a ${trial}-day free trial of all Pro features, no credit card needed. You can explore with sample jobs and clear them in one click.`, chips: ["Start free trial", "Book a demo"] }) },
@@ -57,16 +57,16 @@ Yearly billing gets ${12 - ymo} months free. Every trial includes all Pro featur
     { id: "approve", w: ["approve", "approval", "approvals", "sign", "signature", "estimate", "estimates", "quote", "quotes", "authorize", "consent"], a: () => ({ text: "Customers get a link by SMS, WhatsApp or email, approve each line of the estimate and sign on their phone. If you find more work mid-repair, they choose what to add — nothing is added unless they approve it.", chips: ["How do parts work?", "Book a demo"] }) },
     { id: "parts", w: ["parts", "part", "inventory", "stock", "purchase", "order", "orders", "po", "supplier", "warehouse", "barcode", "serial", "reorder"], a: () => ({ text: "Order parts from the work order. When they arrive and you scan them, they're written off to the right job and costed into its margin, and the customer's ready time updates. Inventory comes with Shop; purchase orders and multi-location transfers with Pro.", chips: ["Payroll", "Book a demo"] }) },
     { id: "payroll", w: ["payroll", "commission", "commissions", "wages", "staff", "technician", "technicians", "employees", "timeclock", "clock", "hours"], a: () => ({ text: "On Pro, technician commission and hours post automatically when a job closes, so the pay run is ready when you sit down. Pay runs can't pay twice, and there's a full audit log.", chips: ["Pricing", "Book a demo"] }) },
-    { id: "pos", w: ["pos", "checkout", "sell", "sales", "retail", "payment", "payments", "stripe", "square", "invoice", "invoices", "receipt", "cash"], a: () => ({ text: "Tekly has a quick POS with cash drawers, invoices and payment links. Card payments go through Stripe or Square, and customers can pay online from their tracking page.", chips: ["Accounting sync", "Book a demo"] }) },
-    { id: "accounting", w: ["quickbooks", "xero", "accounting", "accountant", "books", "bookkeeping", "ledger", "tax"], a: () => ({ text: "QuickBooks and Xero sync comes with Pro. Revenue, margin and payroll post to one ledger, so profit per job, technician and location is always current.", chips: ["Pricing", "Book a demo"] }) },
+    { id: "pos", w: ["pos", "checkout", "sell", "sales", "retail", "payment", "payments", "stripe", "square", "invoice", "invoices", "receipt", "cash"], a: () => ({ text: "Tekly has a quick POS with cash drawers, invoices and payment links. Card payments go through Stripe or Square, and customers can pay online from their tracking page.", chips: ["QuickBooks", "Book a demo"] }) },
+    { id: "accounting", w: ["quickbooks", "xero", "accounting", "accountant", "books", "bookkeeping", "ledger", "tax"], a: () => ({ text: "On Pro, Tekly sends invoices and payments to QuickBooks Online (it doesn't sync changes back yet, and Xero isn't available yet). Revenue, margin and payroll post to one ledger, so profit per job, technician and location is always current.", chips: ["Pricing", "Book a demo"] }) },
     { id: "messages", w: ["sms", "text", "texts", "whatsapp", "email", "gmail", "outlook", "notify", "notifications", "message", "messages", "inbox", "remind", "reminders"], a: () => ({ text: "Customer updates go out by SMS, WhatsApp or email (Gmail or Outlook), and replies land in one shared inbox. Customers also get a tracking link with live status, photos and the ready time.", chips: ["Approvals", "Book a demo"] }) },
-    { id: "switch", w: ["switch", "switching", "migrate", "migration", "import", "move", "moving", "transfer", "repairdesk", "shopmonkey", "orderry", "jobber", "spreadsheet", "excel", "current"], a: () => ({ text: "Switching is free on every plan. Send us an export from your current system or spreadsheets and we bring your customers, devices and stock across. Most single-location shops can be set up in a day.", chips: ["Book a demo", "Start free trial"] }) },
+    { id: "switch", w: ["switch", "switching", "migrate", "migration", "import", "move", "moving", "transfer", "repairdesk", "shopmonkey", "orderry", "jobber", "spreadsheet", "excel", "current"], a: () => ({ text: "Switching is free on every plan. Send us an export from your current system or spreadsheets and we bring your customers, devices and stock across. You can take your first job the day you sign up.", chips: ["Book a demo", "Start free trial"] }) },
     { id: "data", w: ["data", "export", "security", "secure", "safe", "privacy", "encrypt", "encryption", "gdpr", "leave", "cancel", "contract", "lock"], a: () => ({ text: "Your data is yours: export customers, jobs, stock and finances to CSV or Excel any time, even after you cancel. Passcodes and keys are encrypted, there's two-factor sign-in, role permissions and an audit log. Plans are month to month with no contract.", chips: ["Pricing", "Book a demo"] }) },
     { id: "mobile", w: ["mobile", "phone app", "app", "technician", "tech", "offline", "android", "iphone", "home", "install", "field"], a: () => ({ text: "Technicians get the Tekly Technician app: install it to the home screen from the browser, no app store. It shows today's jobs, runs the labour timer and checklists, scans parts with the camera, has a time clock, and keeps working offline.", chips: ["Book a demo", "Pricing"], link: { href: "/#mobile", label: "See the app" } }) },
     { id: "sense", w: ["sense", "learn", "learns", "suggest", "suggestion", "suggestions", "brief", "morning", "watchdog", "scorecard", "pattern", "upsell", "margin", "due"], a: () => ({ text: "Tekly Sense learns from your own closed jobs — no AI service, nothing shared between shops. It suggests lines from similar jobs, work usually added together, and services that are due, flags a job priced under your usual margin, and sends a Morning Brief. The owner also gets the Watchdog for unusual discounts, refunds and short drawers, plus a team scorecard.", chips: ["Pricing", "Book a demo"], link: { href: "/#sense", label: "See Tekly Sense" } }) },
     { id: "hardware", w: ["hardware", "printer", "scanner", "ipad", "tablet", "device", "install", "download", "app", "offline", "browser", "windows"], a: () => ({ text: "No special hardware — Tekly runs in any modern browser on a computer, tablet or phone, and works with standard barcode scanners, label printers and receipt printers.", chips: ["Book a demo"] }) },
     { id: "locations", w: ["locations", "location", "multi", "multiple", "branches", "stores", "franchise", "shops"], a: () => ({ text: `Solo covers one location. Shop adds locations at $49 a month each; Pro at $79 each, and adds stock transfers between them.`, chips: ["Which plan fits me?", "Book a demo"] }) },
-    { id: "setup", w: ["setup", "onboarding", "start", "started", "long", "quick", "training", "learn"], a: () => ({ text: "Most single-location shops are set up in a day, and onboarding is free on every plan. Pick your trade and the intake fields and services are pre-filled.", chips: ["Start free trial", "Book a demo"] }) },
+    { id: "setup", w: ["setup", "onboarding", "start", "started", "long", "quick", "training", "learn"], a: () => ({ text: "You can take your first job the day you sign up, and onboarding is free on every plan. Pick your trade and the intake fields and services are pre-filled.", chips: ["Start free trial", "Book a demo"] }) },
     { id: "hello", w: ["hi", "hello", "hey", "hiya", "morning", "afternoon", "evening", "yo"], a: () => ({ text: "Hi! I can answer questions about Tekly, help you pick a plan, or book a 30-minute demo. What do you repair?", chips: ["Book a demo", "Which plan fits me?", "Pricing"] }) },
     { id: "thanks", w: ["thanks", "thank", "cheers", "great", "perfect", "awesome", "ok", "okay", "cool"], a: () => ({ text: "You're welcome! Anything else I can help with?", chips: ["Book a demo", "Pricing"] }) },
   ];
@@ -145,7 +145,7 @@ Yearly billing gets ${12 - ymo} months free. Every trial includes all Pro featur
     text = text.trim(); if (!text) return;
     me(text); chipsBox.innerHTML = "";
     if (flow && flow.onText) return flow.onText(text);
-    const quick = { "Pick a time": () => startBooking(true), "Book a demo": () => startBooking(), "Book a time": () => startBooking(true), "Start free trial": () => goTrial(), "Pricing": () => answer(KB.find(k => k.id === "price").a()), "Which plan fits me?": () => startRecommend(), "Payroll": () => answer(KB.find(k => k.id === "payroll").a()), "Approvals": () => answer(KB.find(k => k.id === "approve").a()), "Accounting sync": () => answer(KB.find(k => k.id === "accounting").a()), "How do parts work?": () => answer(KB.find(k => k.id === "parts").a()),
+    const quick = { "Pick a time": () => startBooking(true), "Book a demo": () => startBooking(), "Book a time": () => startBooking(true), "Start free trial": () => goTrial(), "Pricing": () => answer(KB.find(k => k.id === "price").a()), "Which plan fits me?": () => startRecommend(), "Payroll": () => answer(KB.find(k => k.id === "payroll").a()), "Approvals": () => answer(KB.find(k => k.id === "approve").a()), "QuickBooks": () => answer(KB.find(k => k.id === "accounting").a()), "How do parts work?": () => answer(KB.find(k => k.id === "parts").a()),
       "Phones & computers": () => tradeAnswer("electronics"), "Cars & trucks": () => tradeAnswer("vehicles"), "Small engines": () => tradeAnswer("tools"), "Boats": () => tradeAnswer("marine") };
     if (quick[text]) return quick[text]();
     const { intent, trade, toks } = classify(text);
@@ -183,7 +183,7 @@ Yearly billing gets ${12 - ymo} months free. Every trial includes all Pro featur
       chips(["1–2", "3–8", "More than 8"], async d => {
         me(d);
         flow.data.big = d === "More than 8";
-        await say("Do you need purchase orders, payroll and commissions, or QuickBooks/Xero sync?");
+        await say("Do you need purchase orders, payroll and commissions, or a QuickBooks export?");
         chips(["Yes", "No"], async e => {
           me(e);
           if (e === "Yes") return recommend("pro", "Those come with Pro.");
@@ -280,16 +280,17 @@ Yearly billing gets ${12 - ymo} months free. Every trial includes all Pro featur
       if (LIVE) {
         const r = await api(`/appointment/${encodeURIComponent(B.slug)}`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: d.name, email: d.email, date: d.date, time: d.time, note }) });
         await say(`You're booked for ${r.when || d.when}. It's in our calendar, and we'll email ${d.email} with the details. Looking forward to it!`);
-      } else if (C.demoEndpoint) {
-        const r = await fetch(C.demoEndpoint, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ name: d.name, email: d.email, shop: d.shop, industry: tradeName, preferred: d.when, source: "assistant", ...attr }) });
-        if (!r.ok) throw new Error(r.status);
-        await say(`Thanks, ${d.name.split(" ")[0]} — request sent. We'll email ${d.email} to confirm a time on ${d.when}.`);
       } else {
-        const body = `Name: ${d.name}\nEmail: ${d.email}\nShop: ${d.shop}\nTrade: ${tradeName}\nPreferred: ${d.when}`;
-        await say("I'll open an email with your request filled in — just press send.");
-        setTimeout(() => { location.href = `mailto:${C.demoEmail}?subject=${encodeURIComponent("Tekly demo request — " + d.shop)}&body=${encodeURIComponent(body)}`; }, 600);
+        const lead = { name: d.name, email: d.email, shop: d.shop, industry: tradeName, preferred: d.when, locations: mem.locations };
+        if (!C.demoEndpoint && !B.slug) {
+          await say("I'll open an email with your request filled in — just press send.");
+          await new Promise(r => setTimeout(r, 600));
+        }
+        const how = await window.TeklyLead.send(lead, "assistant");
+        if (how === "sent") await say(`Thanks, ${d.name.split(" ")[0]} — request sent. We'll email ${d.email} to confirm a time on ${d.when}.`);
+        else if (C.demoEndpoint || B.slug) await say("That didn't go through, so your email app opened with the request filled in — press send and we'll reply to find a time.");
       }
-      push("generate_lead", { form: "assistant", live: LIVE, industry: tradeName, ...attr });
+      if (LIVE) push("generate_lead", { form: "assistant", live: true, delivery: "booked", industry: tradeName, ...attr });
       flow = null; chips(["Start free trial", "Pricing"]);
     } catch (e) {
       if (e.status === 409) { await say("Someone just took that time — let's pick another."); return liveDays(); }

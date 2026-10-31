@@ -3,6 +3,7 @@ import LabelBarcodePicker, { LABEL_DOC_TYPES } from "./LabelBarcodePicker";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
+import Switch from "../../components/Switch";
 import { escapeHtml, printHtmlInFrame, sanitizeHtml } from "../../lib/safeHtml";
 
 /* 144hr — Full-screen visual document editor: Edit⇄Preview, rich text (font family /
@@ -14,6 +15,22 @@ const MOST_USED = ["{Company Name}", "{Company Logo}", "{Company Phone}", "{Clie
   "{Order Created Date}", "{Asset Brand}", "{Asset Model}", "{Asset Serial Number}", "{Order Complaint}", "{Items Table}",
   "{All Items Table}", "{Order Total}", "{Order Balance Due}", "{Barcode}"];
 const DOC_TYPES = ["estimate", "invoice", "credit_note", "receipt", "work_order", "label", "other"];
+// When a document of this type can print by itself (the server checks the same rule).
+const AUTO_EVENTS: [string, string][] = [["create", "A job is created"], ["close", "A job is closed"], ["sale", "A sale is made"]];
+export function autoPrintChoices(docType: string): [string, string][] {
+  if (docType === "credit_note" || docType === "component") return [];
+  if (docType === "receipt" || docType === "other") return AUTO_EVENTS;
+  return AUTO_EVENTS.filter(([ev]) => ev !== "sale");
+}
+function keepAllowed(current: string | null | undefined, docType: string): string {
+  const ok = autoPrintChoices(docType).map(([e]) => e);
+  return (current || "").split(",").filter((e) => ok.includes(e)).join(",");
+}
+export function toggleEvent(current: string | null | undefined, ev: string): string {
+  const on = new Set((current || "").split(",").filter(Boolean));
+  if (on.has(ev)) on.delete(ev); else on.add(ev);
+  return AUTO_EVENTS.map(([e]) => e).filter((e) => on.has(e)).join(",");
+}
 // small identifying icon per variable group (Material Symbols names)
 const GROUP_ICON: Record<string, string> = {
   "Most used": "auto_awesome", Company: "storefront", "Legal entity": "gavel", Interactive: "bolt", Client: "person",
@@ -67,12 +84,12 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
     name: initial?.name || "", doc_type: initial?.doc_type || "estimate",
     page_size: initial?.page_size || "a4", font_family: initial?.font_family || "Inter",
     is_default: !!initial?.is_default,
+    auto_print_on: (initial?.auto_print_on || "") as string,
     page_w_mm: initial?.page_w_mm ?? null as number | null,
     page_h_mm: initial?.page_h_mm ?? null as number | null,
     margin_mm: initial?.margin_mm ?? null as number | null,
     barcode_field: (initial?.barcode_field ?? null) as string | null,
     barcode_types: (initial?.barcode_types || {}) as Record<string, string>,
-    auto_print_on: (initial?.auto_print_on ?? null) as string | null,   // WS-C #20: "create" = print when a job is created
   });
   const [templates, setTemplates] = useState<any[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(initial?.id || null);
@@ -207,13 +224,13 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
   useEffect(() => { loadList(); /* eslint-disable-next-line */ }, []);
   function openTpl(t: any) {
     setActionsOpen(false); setCode(null); setMode("edit");
-    setMeta({ name: t.name || "", doc_type: t.doc_type || "estimate", page_size: t.page_size || "a4", font_family: t.font_family || "Inter", is_default: !!t.is_default, page_w_mm: t.page_w_mm ?? null, page_h_mm: t.page_h_mm ?? null, margin_mm: t.margin_mm ?? null, barcode_field: t.barcode_field ?? null, barcode_types: t.barcode_types || {}, auto_print_on: t.auto_print_on ?? null });
+    setMeta({ name: t.name || "", doc_type: t.doc_type || "estimate", page_size: t.page_size || "a4", font_family: t.font_family || "Inter", is_default: !!t.is_default, auto_print_on: t.auto_print_on || "", page_w_mm: t.page_w_mm ?? null, page_h_mm: t.page_h_mm ?? null, margin_mm: t.margin_mm ?? null, barcode_field: t.barcode_field ?? null, barcode_types: t.barcode_types || {} });
     setCurrentId(t.id || null);
     requestAnimationFrame(() => { if (edRef.current) { edRef.current.innerHTML = hydrate(t.body_html || ""); refreshBlocks(); } });
   }
   function newDoc() {
     setActionsOpen(false); setCode(null); setMode("edit");
-    setMeta({ name: "", doc_type: "estimate", page_size: "a4", font_family: "Inter", is_default: false, page_w_mm: null, page_h_mm: null, margin_mm: null, barcode_field: null, barcode_types: {}, auto_print_on: null });
+    setMeta({ name: "", doc_type: "estimate", page_size: "a4", font_family: "Inter", is_default: false, auto_print_on: "", page_w_mm: null, page_h_mm: null, margin_mm: null, barcode_field: null, barcode_types: {} });
     setCurrentId(null);
     requestAnimationFrame(() => { if (edRef.current) { edRef.current.innerHTML = ""; refreshBlocks(); } });
   }
@@ -234,9 +251,9 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
   async function duplicate() {
     if (!edRef.current) return; setActionsOpen(false); setErr(null);
     try {
-      const r = await api.post<any>("/documents/templates", { ...meta, name: (meta.name || "Template") + " (copy)", is_default: false, body_html: bodyNow() });
+      const r = await api.post<any>("/documents/templates", { ...meta, name: (meta.name || "Template") + " (copy)", is_default: false, auto_print_on: "", body_html: bodyNow() });   // a copy never double-prints
       say("Duplicated"); await loadList(); reload?.();
-      if (r?.id) { setCurrentId(r.id); setMeta((m) => ({ ...m, name: (m.name || "Template") + " (copy)", is_default: false })); }
+      if (r?.id) { setCurrentId(r.id); setMeta((m) => ({ ...m, name: (m.name || "Template") + " (copy)", is_default: false, auto_print_on: "" })); }
     } catch (e: any) { setErr(e?.message || "Could not duplicate"); }
   }
   async function setDefault() {
@@ -301,7 +318,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
         <button onClick={newDoc} className="h-9 px-3 rounded-lg border border-slate-200 text-ink-secondary font-semibold text-xs hover:bg-slate-100 hover:border-slate-300 flex items-center gap-1 shrink-0"><M n="add" c="text-[16px]" /> New</button>
         {templates.length > 0 && (
           <select value={currentId || ""} onChange={(e) => { const t = templates.find((x) => x.id === e.target.value); if (t) openTpl(t); }}
-            className="h-9 max-w-[180px] bg-white border border-slate-200 rounded-lg text-sm px-2 focus:outline-none focus:ring-1 focus:ring-primary">
+            className="glass-input h-9 max-w-[180px] rounded-xl px-3 text-sm">
             <option value="" disabled>Switch template…</option>
             {templates.map((t) => <option key={t.id} value={t.id}>{t.name}{t.is_default ? " (default)" : ""}</option>)}
           </select>
@@ -326,10 +343,10 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
           <button aria-label="Document settings" onClick={() => setSettings((s) => !s)} title="Document settings" className="w-9 h-9 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="tune" c="text-lg" /></button>
           {settings && (
             <div className="absolute right-0 top-11 z-20 w-64 bg-white border border-slate-200 rounded-xl shadow-drawer p-3 space-y-3">
-              <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Type</label>
-                <select value={meta.doc_type} onChange={(e) => setMeta({ ...meta, doc_type: e.target.value })} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5 capitalize">{DOC_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}</select></div>
-              <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Paper / label size</label>
-                <select value={meta.page_size} onChange={(e) => setMeta({ ...meta, page_size: e.target.value })} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5">
+              <div><label className="block text-sm font-medium text-ink-primary mb-1">Type</label>
+                <select value={meta.doc_type} onChange={(e) => setMeta({ ...meta, doc_type: e.target.value, auto_print_on: keepAllowed(meta.auto_print_on, e.target.value) })} className="glass-input w-full rounded-xl px-3 py-2 text-sm capitalize">{DOC_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}</select></div>
+              <div><label className="block text-sm font-medium text-ink-primary mb-1">Paper / label size</label>
+                <select value={meta.page_size} onChange={(e) => setMeta({ ...meta, page_size: e.target.value })} className="glass-input w-full rounded-xl px-3 py-2 text-sm">
                   <option value="a4">A4 (210×297mm)</option>
                   <option value="letter">Letter (8.5×11in)</option>
                   <option value="receipt80">Receipt 80mm</option>
@@ -338,22 +355,32 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
                 </select></div>
               {meta.page_size === "label" && (
                 <div className="grid grid-cols-2 gap-2">
-                  <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Width mm</label>
-                    <input type="number" value={meta.page_w_mm ?? ""} onChange={(e) => setMeta({ ...meta, page_w_mm: e.target.value ? +e.target.value : null })} placeholder="40" className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5" /></div>
-                  <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Height mm</label>
-                    <input type="number" value={meta.page_h_mm ?? ""} onChange={(e) => setMeta({ ...meta, page_h_mm: e.target.value ? +e.target.value : null })} placeholder="30" className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5" /></div>
+                  <div><label className="block text-sm font-medium text-ink-primary mb-1">Width mm</label>
+                    <input type="number" value={meta.page_w_mm ?? ""} onChange={(e) => setMeta({ ...meta, page_w_mm: e.target.value ? +e.target.value : null })} placeholder="40" className="glass-input w-full rounded-xl px-3 py-2 text-sm" /></div>
+                  <div><label className="block text-sm font-medium text-ink-primary mb-1">Height mm</label>
+                    <input type="number" value={meta.page_h_mm ?? ""} onChange={(e) => setMeta({ ...meta, page_h_mm: e.target.value ? +e.target.value : null })} placeholder="30" className="glass-input w-full rounded-xl px-3 py-2 text-sm" /></div>
                 </div>
               )}
-              <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Margin mm (blank = auto)</label>
-                <input type="number" value={meta.margin_mm ?? ""} onChange={(e) => setMeta({ ...meta, margin_mm: e.target.value ? +e.target.value : null })} placeholder={(meta.page_size === "a4" || meta.page_size === "letter") ? "10" : "0"} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5" /></div>
-              <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Default font</label>
-                <select value={meta.font_family} onChange={(e) => setMeta({ ...meta, font_family: e.target.value })} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5">{FONTS.map((f) => <option key={f} value={f}>{f}</option>)}</select></div>
-              <label className="flex items-center gap-2 text-sm text-ink-secondary"><input type="checkbox" checked={meta.is_default} onChange={(e) => setMeta({ ...meta, is_default: e.target.checked })} /> Default for this type</label>
-              {LABEL_DOC_TYPES.includes(meta.doc_type) && <LabelBarcodePicker value={meta} onChange={(v) => setMeta({ ...meta, ...v })} />}
-              {LABEL_DOC_TYPES.includes(meta.doc_type) && (
-                <label className="flex items-start gap-2 text-sm text-ink-secondary"><input type="checkbox" className="mt-1" checked={meta.auto_print_on === "create"} onChange={(e) => setMeta({ ...meta, auto_print_on: e.target.checked ? "create" : null })} />
-                  <span>Print when a job is created<span className="block text-[11px] text-ink-tertiary">For device labels: prints one for the job's device right after the job is saved.</span></span></label>
+              <div><label className="block text-sm font-medium text-ink-primary mb-1">Margin mm (blank = auto)</label>
+                <input type="number" value={meta.margin_mm ?? ""} onChange={(e) => setMeta({ ...meta, margin_mm: e.target.value ? +e.target.value : null })} placeholder={(meta.page_size === "a4" || meta.page_size === "letter") ? "10" : "0"} className="glass-input w-full rounded-xl px-3 py-2 text-sm" /></div>
+              <div><label className="block text-sm font-medium text-ink-primary mb-1">Default font</label>
+                <select value={meta.font_family} onChange={(e) => setMeta({ ...meta, font_family: e.target.value })} className="glass-input w-full rounded-xl px-3 py-2 text-sm">{FONTS.map((f) => <option key={f} value={f}>{f}</option>)}</select></div>
+              <div className="flex items-center gap-2 text-sm text-ink-secondary"><Switch size="sm" label="Default for this type" on={!!meta.is_default} onChange={(v) => setMeta({ ...meta, is_default: v })} /> Default for this type</div>
+              {autoPrintChoices(meta.doc_type).length > 0 && (
+                <fieldset><legend className="block text-sm font-medium text-ink-primary mb-1">Print automatically when</legend>
+                  {autoPrintChoices(meta.doc_type).map(([ev, label]) => {
+                    const on = (meta.auto_print_on || "").split(",").includes(ev);
+                    return (
+                      <label key={ev} className="flex items-center gap-2 text-sm text-ink-secondary">
+                        <input type="checkbox" checked={on} onChange={() => setMeta({ ...meta, auto_print_on: toggleEvent(meta.auto_print_on, ev) })} /> {label}</label>
+                    );
+                  })}
+                  <span className="block text-[11px] text-ink-tertiary mt-1">{meta.doc_type === "label"
+                    ? "One label per item on the job. Only labels that use {Asset …} variables can print by themselves."
+                    : "Nothing ticked: it only prints when someone presses Print."}</span>
+                </fieldset>
               )}
+              {LABEL_DOC_TYPES.includes(meta.doc_type) && <LabelBarcodePicker value={meta} onChange={(v) => setMeta({ ...meta, ...v })} />}
             </div>
           )}
         </div>
@@ -405,7 +432,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
           <span className="w-px h-5 bg-slate-200 mx-0.5" />
           <input value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") buildDoc(); }}
             placeholder="…or describe one — e.g. “estimate with logo, parts table, deposit line and signature”"
-            className="flex-1 min-w-[220px] bg-white border border-slate-200 rounded-lg text-xs px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary" />
+            className="glass-input flex-1 min-w-[220px] rounded-xl px-3 py-2 text-sm" />
           <button onClick={() => buildDoc()} disabled={aiBusy || !aiPrompt.trim()} className="h-8 px-3 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60 flex items-center gap-1 whitespace-nowrap">{aiBusy ? "Building…" : "Build"}</button>
         </div>
       )}

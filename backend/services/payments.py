@@ -176,14 +176,16 @@ def _configured(provider: str, creds: dict) -> bool:
 
 
 async def _all_creds(db: AsyncSession, org_id: str) -> dict:
-    """Effective (per-shop, else env) creds for every keyed gateway. A provider whose live keys
-    are refused here (F4) is left unconfigured, with the reason kept for resolve_gateway."""
+    """This shop's OWN creds for every keyed gateway — never the operator-wide env keys, or a shop
+    without keys took its customers' money into the operator's Stripe/Square/SumUp account (B7).
+    A provider whose live keys are refused here (F4) is left unconfigured, with the reason kept
+    for resolve_gateway."""
     from backend.services import org_creds
     from backend.services.payment_guard import LivePaymentsRefused
     out = {}
     for p in ("stripe", "square", "sumup"):
         try:
-            out[p] = await org_creds.effective(db, org_id, p)
+            out[p] = await org_creds.effective(db, org_id, p, own_only=True)
         except LivePaymentsRefused as e:
             out[p] = {"_refused": str(e)}
     return out
@@ -244,7 +246,8 @@ async def org_provider(db: AsyncSession, org_id: str) -> str:
 # ── Intent creation ──────────────────────────────────────────────────────────
 async def create_intent(db: AsyncSession, *, org_id: str, order_id: Optional[str],
                         amount: float, account_id: Optional[str],
-                        currency: Optional[str] = None) -> PaymentIntent:
+                        currency: Optional[str] = None,
+                        invoice_id: Optional[str] = None) -> PaymentIntent:
     # Stored money is always in the org's base currency, so that's what a checkout must charge.
     # Hard-coding "usd" turned an INR 5,000 balance into a $5,000 checkout.
     if not currency:
@@ -252,8 +255,16 @@ async def create_intent(db: AsyncSession, *, org_id: str, order_id: Optional[str
         org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
         currency = ((org.currency_code if org else None) or "usd")
     currency = currency.lower()
-    invoice_id = None
+    # A stand-alone invoice (a membership period) can be paid by link too; mark_succeeded already
+    # posts to intent.invoice_id when there's no order.
     description = "Tekly payment"
+    if invoice_id:
+        inv = (await db.execute(select(Invoice).where(
+            Invoice.id == invoice_id, Invoice.org_id == org_id))).scalar_one_or_none()
+        if not inv:
+            from fastapi import HTTPException
+            raise HTTPException(404, "Invoice not found")
+        description = f"Invoice {inv.invoice_number}"
     if order_id:
         o = (await db.execute(select(Order).where(
             Order.id == order_id, Order.org_id == org_id))).scalar_one_or_none()
@@ -333,6 +344,11 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
             from backend.models import InvoiceOrder
             db.add(InvoiceOrder(invoice_id=inv.id, order_id=intent.order_id, sort_order=0))
             intent.invoice_id = inv.id
+    if inv and intent.order_id:
+        from backend.services.order_money import apply_deposits
+        o = (await db.execute(select(Order).where(Order.id == intent.order_id))).scalar_one_or_none()
+        if o:
+            await apply_deposits(db, inv, o)   # deposits count on the invoice the link pays
 
     # post income to the cashbox (reuse the canonical transaction poster)
     if account:
@@ -487,7 +503,7 @@ async def _refresh_intent(db: AsyncSession, intent: PaymentIntent) -> PaymentInt
 
 async def _poll_provider(db: AsyncSession, intent: PaymentIntent, org_creds) -> PaymentIntent:
     if intent.provider == "sumup" and intent.provider_ref:
-        c = await org_creds.effective(db, intent.org_id, "sumup")
+        c = await org_creds.effective(db, intent.org_id, "sumup", own_only=True)
         if c.get("api_key"):
             import httpx
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -496,7 +512,7 @@ async def _poll_provider(db: AsyncSession, intent: PaymentIntent, org_creds) -> 
             if r.status_code == 200 and (r.json().get("status") or "").upper() == "PAID":
                 return await mark_succeeded(db, intent)
     if intent.provider == "square" and intent.provider_ref:
-        c = await org_creds.effective(db, intent.org_id, "square")
+        c = await org_creds.effective(db, intent.org_id, "square", own_only=True)
         if c.get("access_token"):
             import httpx
             async with httpx.AsyncClient(timeout=10.0) as client:
@@ -504,5 +520,24 @@ async def _poll_provider(db: AsyncSession, intent: PaymentIntent, org_creds) -> 
                                      headers={"Authorization": f"Bearer {c['access_token']}",
                                               "Square-Version": "2024-06-04"})
             if r.status_code == 200 and (r.json().get("order") or {}).get("state") == "COMPLETED":
+                return await mark_succeeded(db, intent)
+    if intent.provider == "stripe" and intent.provider_ref:
+        # B7: a shop that hasn't added the webhook in Stripe still sees its links flip to paid when
+        # the customer lands back on the pay page. Same checks as the webhook: amount and currency.
+        c = await org_creds.effective(db, intent.org_id, "stripe", own_only=True)
+        if c.get("secret_key"):
+            import httpx
+            async with httpx.AsyncClient(timeout=10.0) as client:
+                r = await client.get(f"https://api.stripe.com/v1/checkout/sessions/{intent.provider_ref}",
+                                     auth=(c["secret_key"], ""))
+            body = r.json() if r.status_code == 200 else {}
+            if body.get("payment_status") == "paid":
+                if body.get("amount_total") is not None and \
+                        int(body["amount_total"]) != minor_units(intent.amount, intent.currency):
+                    log.warning("Stripe session amount mismatch for intent %s", intent.id)
+                    return intent
+                if (body.get("currency") or intent.currency or "").lower() != (intent.currency or "").lower():
+                    log.warning("Stripe session currency mismatch for intent %s", intent.id)
+                    return intent
                 return await mark_succeeded(db, intent)
     return intent

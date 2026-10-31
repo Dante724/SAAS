@@ -2,6 +2,7 @@ import { useEffect, useState, type ReactNode } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
+import Switch from "../../components/Switch";
 
 /* Settings › Finance & numbering — document numbers, sales tax, and the business details printed
    on invoices. Same endpoints as before (/settings/numbering, /catalog/taxes, /settings/tax-rules,
@@ -33,22 +34,25 @@ export function parsePattern(t: string): Simple | null {
 export const buildPattern = (p: Simple) =>
   `${p.prefix}${p.year ? `{Y}${p.sep ?? "-"}` : ""}{C${p.digits ? `:${p.digits}` : ""}}`;
 
-const inp = "w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-ink-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/10";
+const inp = "glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary";
 
-function Card({ icon, title, hint, right, children }: { icon: string; title: string; hint?: string; right?: ReactNode; children?: ReactNode }) {
+// `actions` sit under the title on the left, main action first.
+function Card({ icon, title, hint, actions, children }: { icon: string; title: string; hint?: string; actions?: ReactNode; children?: ReactNode }) {
   return (
     <section className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card">
       <div className="flex items-start gap-3 px-5 pt-4 pb-3">
         <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n={icon} c="text-lg" /></span>
-        <div className="min-w-0"><h3 className="text-sm font-semibold text-ink-primary">{title}</h3>{hint && <p className="text-[11px] text-ink-tertiary">{hint}</p>}</div>
-        {right && <div className="ml-auto flex-shrink-0">{right}</div>}
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-ink-primary">{title}</h3>{hint && <p className="text-xs text-ink-tertiary">{hint}</p>}
+          {actions && <div className="mt-3 flex flex-wrap items-center gap-2">{actions}</div>}
+        </div>
       </div>
       {children && <div className="px-5 pb-5">{children}</div>}
     </section>
   );
 }
 const Field = ({ label, hint, children }: { label: string; hint?: string; children: ReactNode }) => (
-  <label className="block"><span className="block text-xs font-medium text-ink-secondary mb-1.5">{label}</span>{children}{hint && <span className="block text-[11px] text-ink-tertiary mt-1">{hint}</span>}</label>
+  <label className="block"><span className="block text-sm font-medium text-ink-primary mb-1.5">{label}</span>{children}{hint && <span className="block text-xs text-ink-tertiary mt-1">{hint}</span>}</label>
 );
 
 const DOC_ICON: Record<string, string> = { order: "build", invoice: "receipt_long", inquiry: "contact_support", sale: "point_of_sale", po: "shopping_cart", transfer: "swap_horiz", estimate: "request_quote", credit_note: "undo" };
@@ -260,7 +264,7 @@ function Taxes({ taxes, stacks, exc, locations, currency, onChanged }: {
 
   return (
     <Card icon="percent" title="Tax" hint="Add the rates you charge, then switch on the ones that apply."
-      right={<button onClick={() => setEdit({ name: "", rate: "", mode: "imposed", location_scope: "all", location_ids: [] })} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-ink-primary hover:bg-slate-50"><M n="add" c="text-sm" />Add a rate</button>}>
+      actions={<button onClick={() => setEdit({ name: "", rate: "", mode: "imposed", location_scope: "all", location_ids: [] })} className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90"><M n="add" c="text-sm" />Add a rate</button>}>
       {taxes == null ? <div className="text-xs text-ink-tertiary">Loading…</div> : (<>
         {list.length > 0 && (
           <div className="flex items-center gap-3 mb-3">
@@ -279,8 +283,8 @@ function Taxes({ taxes, stacks, exc, locations, currency, onChanged }: {
           <div className="rounded-2xl border border-dashed border-slate-300 p-6 text-center">
             <span className="w-10 h-10 rounded-xl bg-primary/10 text-primary grid place-items-center mx-auto mb-2"><M n="percent" c="text-lg" /></span>
             <div className="text-sm text-ink-primary">Add your sales tax</div>
-            <div className="text-[11px] text-ink-tertiary mt-0.5 mb-3">For example your state rate, or GST and PST in Canada.</div>
-            <button onClick={() => setEdit({ name: "Sales tax", rate: "", mode: "imposed", location_scope: "all", location_ids: [] })} className="px-4 py-2 rounded-xl bg-ink-primary text-white text-xs font-semibold">Add a rate</button>
+            <div className="text-xs text-ink-tertiary mt-0.5 mb-3">For example your state rate, or GST and PST in Canada.</div>
+            <button onClick={() => setEdit({ name: "Sales tax", rate: "", mode: "imposed", location_scope: "all", location_ids: [] })} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90">Add a rate</button>
           </div>
         )}
         <div className="rounded-xl border border-slate-200 divide-y divide-slate-100 overflow-hidden">
@@ -288,8 +292,7 @@ function Taxes({ taxes, stacks, exc, locations, currency, onChanged }: {
             const pos = on.indexOf(t.id); const sel = pos >= 0;
             return edit?.id === t.id ? <div key={t.id} className="p-1"><TaxEditor tax={edit} locations={locations} onClose={() => setEdit(null)} onSaved={(m) => { setEdit(null); onChanged(m); }} /></div> : (
               <div key={t.id} className={`flex items-center gap-3 px-3.5 py-3 ${sel ? "bg-primary/[0.03]" : ""}`}>
-                <button type="button" role="switch" aria-checked={sel} aria-label={`Charge ${t.name}`} disabled={busy} onClick={() => toggle(t.id)}
-                  className={`w-10 h-6 rounded-full flex-shrink-0 relative transition-colors disabled:opacity-60 ${sel ? "bg-primary" : "bg-slate-300"}`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${sel ? "left-[18px]" : "left-0.5"}`} /></button>
+                <Switch on={sel} label={`Charge ${t.name}`} disabled={busy} onChange={() => toggle(t.id)} />
                 <button onClick={() => setEdit({ ...t })} className="min-w-0 flex-1 text-left group">
                   <span className="block text-sm text-ink-primary truncate group-hover:text-primary">{t.name}</span>
                   <span className="block text-[11px] text-ink-tertiary">{t.mode === "included" ? "Already included in prices" : "Added on top of prices"}{t.location_scope === "selected" ? ` · ${(t.location_ids || []).length} location${(t.location_ids || []).length === 1 ? "" : "s"}` : ""}{sel && on.length > 1 ? ` · applied ${pos + 1}${["st", "nd", "rd"][pos] || "th"}` : ""}</span>
@@ -345,7 +348,7 @@ function TaxEditor({ tax, locations, onClose, onSaved }: { tax: any; locations: 
       </div>
       <div className="flex flex-wrap items-center gap-4">
         <div>
-          <div className="text-xs font-medium text-ink-secondary mb-1.5">On prices</div>
+          <div className="text-sm font-medium text-ink-primary mb-1.5">On prices</div>
           <div className="inline-flex rounded-xl bg-white border border-slate-200 p-1">
             {([["imposed", "Added on top"], ["included", "Already included"]] as [string, string][]).map(([v, l]) => (
               <button key={v} type="button" onClick={() => set("mode", v)} aria-pressed={t.mode === v} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${t.mode === v ? "bg-slate-100 text-ink-primary" : "text-ink-secondary"}`}>{l}</button>
@@ -354,7 +357,7 @@ function TaxEditor({ tax, locations, onClose, onSaved }: { tax: any; locations: 
         </div>
         {locations.length > 1 && (
           <div>
-            <div className="text-xs font-medium text-ink-secondary mb-1.5">Where</div>
+            <div className="text-sm font-medium text-ink-primary mb-1.5">Where</div>
             <div className="inline-flex rounded-xl bg-white border border-slate-200 p-1">
               {([["all", "Every location"], ["selected", "Some locations"]] as [string, string][]).map(([v, l]) => (
                 <button key={v} type="button" onClick={() => set("location_scope", v)} aria-pressed={(t.location_scope || "all") === v} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${(t.location_scope || "all") === v ? "bg-slate-100 text-ink-primary" : "text-ink-secondary"}`}>{l}</button>
@@ -453,7 +456,7 @@ function EntityEditor({ ent, onClose, onSaved }: { ent: any; onClose: () => void
       {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
       <div className="flex items-center gap-2">
         {e.id && <button onClick={remove} className="px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50">Remove</button>}
-        <label className="flex items-center gap-2 text-xs text-ink-secondary"><input type="checkbox" checked={!!e.is_default} onChange={(x) => set("is_default", x.target.checked)} className="accent-primary" />Use by default</label>
+        <span className="flex items-center gap-2 text-xs text-ink-secondary"><Switch size="sm" label="Use by default" on={!!e.is_default} onChange={(v) => set("is_default", v)} />Use by default</span>
         <button onClick={onClose} className="ml-auto px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50">Cancel</button>
         <button onClick={save} disabled={busy} className="px-4 py-2 rounded-xl bg-ink-primary text-white text-xs font-semibold hover:opacity-90 disabled:opacity-60">{busy ? "Saving…" : e.id ? "Save" : "Add business"}</button>
       </div>

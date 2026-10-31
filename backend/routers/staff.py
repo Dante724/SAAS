@@ -712,6 +712,10 @@ async def create_location(
                   receipt_header=data.receipt_header, working_hours=data.working_hours,
                   legal_entity_id=data.legal_entity_id, price_type_id=data.price_type_id)
     db.add(ln)
+    await db.flush()
+    # Launch B2/B6: the shop's timezone (unless one was picked) and a Cash drawer + Card account.
+    from backend.services.shop_setup import setup_location
+    await setup_location(db, ln)
     await db.commit()
     await db.refresh(ln)
     return _ser_location(ln)
@@ -769,7 +773,8 @@ async def get_company(
     if not org:
         raise HTTPException(404, "Company not found")
     return {
-        "name": org.name, "company_email": org.company_email, "company_phone": org.company_phone,
+        "name": org.name, "account_id": org.account_id,   # read-only; what Tekly support asks for
+        "company_email": org.company_email, "company_phone": org.company_phone,
         "company_address": org.company_address, "company_details": org.company_details,
         "company_note": org.company_note, "website": org.website, "logo_data": org.logo_data,
         "country": org.country,
@@ -798,6 +803,7 @@ async def get_company(
         "clock_attendance_enabled": org.clock_attendance_enabled if org.clock_attendance_enabled is not None else True,
         "clock_labour_billing": bool(getattr(org, "clock_labour_billing", False)),
         "require_mfa": bool(getattr(org, "require_mfa", False)),
+        "max_sessions_per_login": getattr(org, "max_sessions_per_login", None),
     }
 
 
@@ -826,7 +832,7 @@ class CompanyIn(BaseModel):
     default_due_days: Optional[int] = None
     default_comment_visibility: Optional[str] = None
     default_file_visibility: Optional[str] = None
-    public_employee_name: Optional[str] = None          # WS-C #18: full | first | first_initial
+    public_employee_name: Optional[str] = None          # full | first | first_initial | custom
     warranty_count_from: Optional[str] = None
     asset_one_open_ticket: Optional[bool] = None
     multi_asset_jobs: Optional[bool] = None            # several items per job (eligible industries only)
@@ -837,6 +843,7 @@ class CompanyIn(BaseModel):
     clock_attendance_enabled: Optional[bool] = None    # build 144x: shop attendance master switch
     clock_labour_billing: Optional[bool] = None        # build 144y: bill labour from tracked time
     require_mfa: Optional[bool] = None                  # build 144cd: org-wide mandatory 2FA
+    max_sessions_per_login: Optional[int] = None        # devices one login may use at once (null = no limit)
     oe_show_scheduled: Optional[bool] = None            # 144dr: show scheduled date on the track page
     book_show_employee_step: Optional[bool] = None      # 144dr: online appointment employee-pick step
     auto_draft_invoice_on_close: Optional[bool] = None  # 144dr: auto-draft an invoice when a WO closes
@@ -862,8 +869,14 @@ async def update_company(
     for k in ("default_comment_visibility", "default_file_visibility"):
         if k in payload and payload[k] not in ("private", "public"):
             raise HTTPException(422, "Visibility must be private or public")
-    if "public_employee_name" in payload and payload["public_employee_name"] not in ("full", "first", "first_initial"):
-        raise HTTPException(422, "Name display must be full, first or first_initial")
+    if "public_employee_name" in payload:
+        from backend.services.public_name import MODES as _name_modes
+        if payload["public_employee_name"] not in _name_modes:
+            raise HTTPException(422, f"public_employee_name must be one of {list(_name_modes)}")
+    if payload.get("max_sessions_per_login") is not None:
+        from backend.services.sessions import LIMIT_CHOICES
+        if payload["max_sessions_per_login"] not in LIMIT_CHOICES:
+            raise HTTPException(422, f"Devices per person must be one of {list(LIMIT_CHOICES)}, or no limit")
     if "payment_provider" in payload:
         valid = ("auto", "stripe", "square", "sumup", "simulated")
         if payload["payment_provider"] not in valid:
@@ -876,8 +889,20 @@ async def update_company(
     # Build 121: the API field is 'currencies' but the column is 'currencies_json'
     if "currencies" in payload:
         org.currencies_json = payload.pop("currencies")
+    old_tz = org.timezone
     for k, v in payload.items():
         setattr(org, k, v)
+    # Launch B6: locations that followed the company clock (or never had one) follow the change;
+    # a branch given its own zone keeps it.
+    if payload.get("timezone") and payload["timezone"] != old_tz:
+        from sqlalchemy import or_ as _or
+        from sqlalchemy import update as _update
+
+        from backend.models import Location
+        await db.execute(_update(Location).where(
+            Location.org_id == org.id,
+            _or(Location.timezone.is_(None), Location.timezone.in_(["UTC", old_tz or "UTC"])))
+            .values(timezone=payload["timezone"]).execution_options(synchronize_session=False))
     # Several items per job is strictly for tools / equipment / phone / computer shops:
     # moving to any other industry switches it off (moving back needs a fresh opt-in).
     if "industry_template" in payload and not _ma.available(org):
@@ -904,6 +929,9 @@ async def get_inventory_settings(
         "reservation_max_days": org.inv_reservation_max_days if org.inv_reservation_max_days is not None else 14,
         "product_serial_template": org.inv_product_serial_template or "",
         "asset_serial_template": org.inv_asset_serial_template or "",
+        "sku_template": org.inv_sku_template or "",
+        "bin_template": org.inv_bin_template or "",
+        "barcode_prefix": org.inv_barcode_prefix or "20",
         "default_product_type": org.inv_default_product_type or "default",
         "default_vehicle_type": org.inv_default_vehicle_type or "Car",
         "po_approval_threshold": org.po_approval_threshold or 0,
@@ -918,6 +946,9 @@ class InventorySettingsIn(BaseModel):
     reservation_max_days: Optional[int] = None
     product_serial_template: Optional[str] = None
     asset_serial_template: Optional[str] = None
+    sku_template: Optional[str] = None       # ii144a: empty = SKUs stay as typed
+    bin_template: Optional[str] = None
+    barcode_prefix: Optional[str] = None     # GS1 in-store 20–29
     default_product_type: Optional[str] = None
     default_vehicle_type: Optional[str] = None
     po_approval_threshold: Optional[float] = None
@@ -939,11 +970,24 @@ async def update_inventory_settings(
         raise HTTPException(422, "unique_identifier must be name|sku|barcode|code")
     if "po_to_job" in p and p["po_to_job"] not in ("auto", "manual"):
         raise HTTPException(422, "po_to_job must be auto or manual")
+    from backend.services import numbering
+    for k in ("product_serial_template", "asset_serial_template", "sku_template", "bin_template"):
+        if k in p:
+            p[k] = (p[k] or "").strip() or None
+            why = numbering.template_problem(p[k]) if p[k] else None
+            if why:
+                raise HTTPException(422, why)
+    if "barcode_prefix" in p:
+        p["barcode_prefix"] = (p["barcode_prefix"] or "").strip() or None
+        if p["barcode_prefix"] and p["barcode_prefix"] not in numbering.IN_STORE_PREFIXES:
+            raise HTTPException(422, "Generated barcodes start with 20 to 29 — the range set aside for "
+                                     "a shop's own codes, so they never clash with a manufacturer's.")
     mapping = {
         "po_to_job": "inv_po_to_job",
         "enable_bins": "inv_enable_bins", "unique_identifier": "inv_unique_identifier",
         "enable_reservations": "inv_enable_reservations", "reservation_max_days": "inv_reservation_max_days",
         "product_serial_template": "inv_product_serial_template", "asset_serial_template": "inv_asset_serial_template",
+        "sku_template": "inv_sku_template", "bin_template": "inv_bin_template", "barcode_prefix": "inv_barcode_prefix",
         "default_product_type": "inv_default_product_type", "default_vehicle_type": "inv_default_vehicle_type",
         "po_approval_threshold": "po_approval_threshold",
     }
@@ -999,6 +1043,7 @@ async def get_public_pages(
         "oe_allow_recommend": getattr(org, "oe_allow_recommend", True),
         "oe_show_scheduled": getattr(org, "oe_show_scheduled", False),
         "book_show_employee_step": getattr(org, "book_show_employee_step", True),
+        "public_employee_name": getattr(org, "public_employee_name", None) or "full",
         "auto_draft_invoice_on_close": getattr(org, "auto_draft_invoice_on_close", False),
         "default_invoice_display": getattr(org, "default_invoice_display", "detailed"),
         "oe_allow_staff_reply": getattr(org, "oe_allow_staff_reply", True),
@@ -1007,6 +1052,7 @@ async def get_public_pages(
         "oe_wo_approval_statuses": getattr(org, "oe_wo_approval_statuses", None) or "",
         "oe_estimate_require_signature": getattr(org, "oe_estimate_require_signature", False),
         "oe_wo_require_signature": getattr(org, "oe_wo_require_signature", False),
+        "dropoff_terms": getattr(org, "dropoff_terms", None) or "",
         "oe_estimate_accept_status": getattr(org, "oe_estimate_accept_status", None) or "",
         "oe_estimate_decline_status": getattr(org, "oe_estimate_decline_status", None) or "",
         "oe_wo_accept_status": getattr(org, "oe_wo_accept_status", None) or "",
@@ -1037,11 +1083,13 @@ class PublicPagesIn(BaseModel):
     oe_allow_staff_reply: Optional[bool] = None
     oe_show_scheduled: Optional[bool] = None            # 144dr
     book_show_employee_step: Optional[bool] = None      # 144dr
+    public_employee_name: Optional[str] = None          # full | first | first_initial | custom
     oe_wo_allow_approval: Optional[bool] = None         # 144ih
     oe_approval_statuses: Optional[str] = None          # 144ih comma-separated status keys
     oe_wo_approval_statuses: Optional[str] = None       # 144ih
     oe_estimate_require_signature: Optional[bool] = None  # 144ii
     oe_wo_require_signature: Optional[bool] = None
+    dropoff_terms: Optional[str] = Field(default=None, max_length=4000)   # gc144g3 — signed at drop-off
     oe_estimate_accept_status: Optional[str] = None
     oe_estimate_decline_status: Optional[str] = None
     oe_wo_accept_status: Optional[str] = None
@@ -1064,7 +1112,12 @@ async def update_public_pages(
     org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
     if not org:
         raise HTTPException(404, "Company not found")
-    for k, v in data.model_dump(exclude_unset=True).items():
+    payload = data.model_dump(exclude_unset=True)
+    if "public_employee_name" in payload:
+        from backend.services.public_name import MODES
+        if payload["public_employee_name"] not in MODES:
+            raise HTTPException(422, f"public_employee_name must be one of {list(MODES)}")
+    for k, v in payload.items():
         setattr(org, k, v)
     await db.commit()
     return {"ok": True}

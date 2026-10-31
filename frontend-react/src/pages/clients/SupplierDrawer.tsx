@@ -47,7 +47,7 @@ export default function SupplierDrawer({ supplier, onClose, onSaved }: { supplie
     } catch (e: any) { flash(e.message || "Couldn't save"); } finally { setBusy(false); }
   }
 
-  const fld = "glass-input rounded-lg px-3 py-2 text-sm w-full";
+  const fld = "glass-input rounded-xl px-3 py-2 text-sm w-full";
   const lbl = "block text-[11px] font-bold  text-ink-tertiary mb-1";
 
   return (
@@ -55,7 +55,7 @@ export default function SupplierDrawer({ supplier, onClose, onSaved }: { supplie
       <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" onClick={onClose} />
       <div className="relative h-full w-full max-w-[680px] bg-raised shadow-clay-card flex flex-col border-l border-slate-200/90">
         {/* header */}
-        <div className="px-6 pt-5 pb-3 border-b border-slate-100">
+        <div className="px-6 pt-5 border-b border-slate-100">
           <div className="flex items-start justify-between">
             <div className="flex items-center gap-2.5">
               <div className="w-10 h-10 rounded-xl bg-blue-50 text-primary grid place-items-center"><M n="local_shipping" c="text-xl" /></div>
@@ -64,9 +64,9 @@ export default function SupplierDrawer({ supplier, onClose, onSaved }: { supplie
             </div>
             <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-full grid place-items-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100"><M n="close" c="text-lg" /></button>
           </div>
-          <div className="flex gap-1 mt-4">
+          <div role="tablist" className="flex gap-1 mt-4">
             {(["ledger", "price"] as const).map((t) => (
-              <button key={t} onClick={() => setTab(t)} className={`px-3 py-1.5 rounded-lg text-xs font-bold ${tab === t ? "bg-primary text-white" : "text-ink-secondary hover:bg-slate-100"}`}>
+              <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)} className={`px-3 py-2 text-sm font-semibold -mb-px border-b-2 transition-colors ${tab === t ? "text-primary border-primary" : "text-ink-tertiary border-transparent hover:text-ink-primary"}`}>
                 {t === "ledger" ? "Balance & details" : "Price list"}</button>
             ))}
           </div>

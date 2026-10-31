@@ -150,7 +150,7 @@ describe("TelephonySettings", () => {
       return undefined;
     }));
     render(<TelephonySettings />);
-    const merge = await screen.findByLabelText("Add repeat calls within (hours)");
+    const merge = await screen.findByLabelText("Add repeat calls within");
     await u.clear(merge); await u.type(merge, "48");
     await u.selectOptions(screen.getByLabelText("When nobody is clocked in, alert"), "e1");
     await u.click(screen.getByRole("button", { name: "Save missed-call settings" }));

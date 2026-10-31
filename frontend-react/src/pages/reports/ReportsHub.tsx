@@ -13,6 +13,10 @@ import { getLocale } from "../../i18n";
 import { useMe } from "../../context/Me";
 import { useNavigate } from "react-router-dom";
 import { buildReportConfig, pickChartColumns } from "./reportConfig";
+import TotalProfit from "./TotalProfit";
+import { DEFAULT_FILTERS, REPORTS_PREF, REPORT_FILTERS, filterParams, readReportsPref, type ReportFilters } from "./profitView";
+import { cachedPref, loadPref, savePref } from "../../lib/userPref";
+import GoPilotReport from "./GoPilotReport";
 
 const REPORT_PAGE = 50;
 
@@ -227,7 +231,9 @@ export function CustomView() {
                     <select value={flt.op} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, op: e.target.value } : x))} className="glass-input px-2.5 py-1.5 rounded-lg text-xs min-w-[110px]">
                       {OPS_FOR(fType(flt.field)).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                     </select>
-                    <input value={flt.value} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} placeholder="value" className="glass-input px-2.5 py-1.5 rounded-lg text-xs w-32" />
+                    {fType(flt.field) === "date"
+                      ? <DateField className="w-40" value={flt.value} onChange={(d) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, value: d } : x))} label="Filter date" />
+                      : <input value={flt.value} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} placeholder="value" className="glass-input px-2.5 py-1.5 rounded-lg text-xs w-32" />}
                     <button aria-label="Remove filter" onClick={() => setFilters((fs) => fs.filter((_, j) => j !== i))} className="p-1 rounded-md text-ink-tertiary hover:text-rose-500 hover:bg-rose-50 shrink-0"><M n="close" c="text-sm" /></button>
                   </div>
                 ))}
@@ -340,12 +346,16 @@ export default function ReportsHub() {
   const [loading, setLoading] = useState(false);
   const [from, setFrom] = useState(iso(new Date(Date.now() - 30 * 864e5)));
   const [to, setTo] = useState(iso(new Date()));
-  const [view, setView] = useState<"reports" | "profitability" | "insights" | "feedback" | "custom" | "fleet">("reports");
+  const [view, setView] = useState<"reports" | "total_profit" | "profitability" | "insights" | "feedback" | "custom" | "fleet" | "gopilot">("reports");
   const [profit, setProfit] = useState<any[] | null>(null);
   const [insights, setInsights] = useState<any[] | null>(null);
   const [feedback, setFeedback] = useState<any | null>(null);
   const [locs, setLocs] = useState<{ id: string; name: string }[]>([]);
-  const [locId, setLocId] = useState("");
+  const [locId, setLocId] = useState(() => readReportsPref(cachedPref(REPORTS_PREF, {})).locId);
+  // Report filters (turnover movement, hide zero amounts, dropped-job status/type), remembered per user.
+  const [filters, setFilters] = useState<ReportFilters>(() => readReportsPref(cachedPref(REPORTS_PREF, {})).filters);
+  const [dropStatuses, setDropStatuses] = useState<{ key: string; name: string }[]>([]);
+  const [woTypes, setWoTypes] = useState<{ id: string; name: string }[]>([]);
   const [q, setQ] = useState("");
   const [sort, setSort] = useState<{ i: number; dir: 1 | -1 } | null>(null);
   const [exporting, setExporting] = useState(false);
@@ -357,7 +367,27 @@ export default function ReportsHub() {
 
   useEffect(() => { api.get<any>("/reports/dashboard").then((r) => setDash(r?.stats || r || {})).catch(() => setDash({})); }, []);
   useEffect(() => { api.get<any>("/staff/locations").then((r) => setLocs(r.items || r || [])).catch(() => setLocs([])); }, []);
-  useEffect(() => { api.get<Catalog>("/reports/catalog").then((c) => { setCat(c); const first = c.tabs?.[0]?.reports?.[0]?.key; if (first) run(first); }).catch(() => setCat({ tabs: [] })); }, []);
+  useEffect(() => {
+    // Open the report you had last time (with its location and filters), else the first one.
+    Promise.all([api.get<Catalog>("/reports/catalog"), loadPref(REPORTS_PREF, {})]).then(([c, raw]) => {
+      setCat(c);
+      const pref = readReportsPref(raw);
+      setLocId(pref.locId); setFilters(pref.filters);
+      const keys = (c.tabs || []).flatMap((t) => t.reports.map((r) => r.key));
+      const first = pref.report && keys.includes(pref.report) ? pref.report : keys[0];
+      if (first) runWith(first, from, to, pref.filters, pref.locId);
+    }).catch(() => setCat({ tabs: [] }));
+  }, []);   // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    api.get<any>("/statuses?record_type=work_order").then((r) => setDropStatuses((r.items || r || []).filter((x: any) => x.status_group === "dropped"))).catch(() => {});
+    api.get<any>("/forms/types").then((r) => setWoTypes(r.items || [])).catch(() => {});
+  }, []);
+  const remember = (report: string | null, f: ReportFilters, loc: string) => savePref(REPORTS_PREF, { report, locId: loc, filters: f });
+  function changeFilter(patch: Partial<ReportFilters>) {
+    const f = { ...filters, ...patch };
+    setFilters(f);
+    if (active) runWith(active, from, to, f);
+  }
 
   // ── date presets (Orderry-style quick ranges) ──
   const presets: [string, () => [Date, Date]][] = [
@@ -394,20 +424,21 @@ export default function ReportsHub() {
   }, [view]);
   const gv = (o: any, keys: string[], fb = "—") => { for (const k of keys) { const v = o?.[k]; if (v !== undefined && v !== null && v !== "") return String(v); } return fb; };
 
-  async function runWith(key: string, f: string, t: string) {
+  async function runWith(key: string, f: string, t: string, flt: ReportFilters = filters, loc: string = locId) {
     setActive(key); setLoading(true); setSort(null); setQ(""); setChartCol(null); setPrevTotals(null); setPage(1);
+    remember(key, flt, loc);
     try {
-      const qs = new URLSearchParams({ date_from: f, date_to: t });
-      if (locId) qs.set("location_id", locId);
+      const qs = new URLSearchParams({ date_from: f, date_to: t, ...filterParams(key, flt) });
+      if (loc) qs.set("location_id", loc);
       const r = await api.get<RunResult>(`/reports/run/${key}?${qs.toString()}`); setResult(r);
-      loadPrevPeriod(key, f, t, r);   // fire-and-forget; never blocks the table
+      loadPrevPeriod(key, f, t, r, flt, loc);   // fire-and-forget; never blocks the table
     } catch { setResult(null); } finally { setLoading(false); }
   }
   const run = (key: string) => runWith(key, from, to);
 
   // Period-over-period: fetch the immediately-preceding equal-length window and
   // total its numeric columns, so the totals row can show deltas.
-  async function loadPrevPeriod(key: string, f: string, t: string, cur: RunResult) {
+  async function loadPrevPeriod(key: string, f: string, t: string, cur: RunResult, flt: ReportFilters = filters, loc: string = locId) {
     try {
       const cols0 = cur.columns ?? [];
       const isNum = cols0.map((c, ci) => { const v = (cur.rows ?? []).map((r) => (Array.isArray(r) ? r[ci] : r[colKey(c, ci)])).filter((x) => x !== null && x !== undefined && x !== ""); return v.length > 0 && v.every((x) => typeof x === "number"); });
@@ -416,8 +447,8 @@ export default function ReportsHub() {
       const fD = new Date(f + "T00:00:00"), tD = new Date(t + "T00:00:00");
       const lenDays = Math.round((tD.getTime() - fD.getTime()) / dayMs) + 1;
       const prevTo = new Date(fD.getTime() - dayMs), prevFrom = new Date(fD.getTime() - lenDays * dayMs);
-      const qs = new URLSearchParams({ date_from: iso(prevFrom), date_to: iso(prevTo) });
-      if (locId) qs.set("location_id", locId);
+      const qs = new URLSearchParams({ date_from: iso(prevFrom), date_to: iso(prevTo), ...filterParams(key, flt) });
+      if (loc) qs.set("location_id", loc);
       const pr = await api.get<RunResult>(`/reports/run/${key}?${qs.toString()}`);
       const sums = cols0.map((c, ci) => isNum[ci] ? (pr.rows ?? []).reduce((s, r) => s + (Number(Array.isArray(r) ? r[ci] : r[colKey(c, ci)]) || 0), 0) : null);
       setPrevTotals(sums);
@@ -486,23 +517,25 @@ export default function ReportsHub() {
     <Shell title="Reports">
       <div className="px-6 pt-3 border-b border-slate-200/60 bg-white/40 flex-shrink-0">
         <nav className="flex space-x-1 -mb-px text-xs font-semibold overflow-x-auto">
-          {([["reports", "Reports", "summarize"], ["custom", "Custom report", "tune"], ["fleet", "Business & analytics", "insights"], ["profitability", "Job profitability", "payments"], ["insights", "Insights", "lightbulb"], ["feedback", "Feedback", "reviews"]] as [typeof view, string, string][]).map(([id, label, icon]) => (
+          {([["reports", "Reports", "summarize"], ...(can("can_see_profit") ? [["total_profit", "Total profit", "savings"]] : []), ["custom", "Custom report", "tune"], ["fleet", "Business & analytics", "insights"], ["profitability", "Job profitability", "payments"], ["insights", "Insights", "lightbulb"], ["feedback", "Feedback", "reviews"], ...(can("can_manage_settings") ? [["gopilot", "Go pilot", "qr_code_scanner"]] : [])] as [typeof view, string, string][]).map(([id, label, icon]) => (
             <button key={id} onClick={() => setView(id)} className={`flex items-center gap-1.5 px-3 pb-3 pt-1 border-b-2 whitespace-nowrap transition-colors ${view === id ? "text-primary font-bold border-primary" : "text-ink-secondary hover:text-ink-primary hover:bg-slate-100/60 rounded-t-lg border-transparent"}`}><M n={icon} c="text-sm" />{label}</button>
           ))}
         </nav>
       </div>
 
       {view === "custom" && <CustomView />}
+      {view === "total_profit" && <div className="flex-1 overflow-y-auto px-6 py-5"><TotalProfit locs={locs} /></div>}
       {view === "fleet" && <FleetAnalytics />}
+      {view === "gopilot" && <GoPilotReport />}
 
-      {view !== "reports" && view !== "custom" && view !== "fleet" && (
+      {view !== "reports" && view !== "custom" && view !== "fleet" && view !== "total_profit" && view !== "gopilot" && (
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
           {view === "profitability" && (
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
               <div className="p-3.5 border-b border-slate-100 text-xs font-bold text-ink-primary ">Job profitability</div>
               <table className="w-full text-left border-collapse text-xs">
                 <thead><tr className="bg-slate-50/60 border-b border-slate-100 text-ink-tertiary text-[11px] font-bold ">
-                  <th className="py-3 px-4">Order</th><th className="py-3 px-4">Client</th><th className="py-3 px-4 text-right">Revenue</th><th className="py-3 px-4 text-right">Cost</th><th className="py-3 px-4 text-right">Profit</th><th className="py-3 px-4 text-right">Margin</th>
+                  <th className="py-3 px-4">Order</th><th className="py-3 px-4">Client</th><th className="py-3 px-4 text-right">Takings after tax</th><th className="py-3 px-4 text-right">Costs</th><th className="py-3 px-4 text-right">Profit</th><th className="py-3 px-4 text-right">Margin</th>
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
                   {profit == null && <SkeletonRows cols={6} />}
@@ -513,8 +546,8 @@ export default function ReportsHub() {
                       <td className="py-2.5 px-4 font-bold text-primary font-mono">{gv(r, ["order_number", "order_id", "order"])}</td>
                       <td className="py-2.5 px-4">{gv(r, ["client_name", "client"])}</td>
                       <td className="py-2.5 px-4 text-right tabular-nums">{money(r?.revenue ?? r?.total_revenue)}</td>
-                      <td className="py-2.5 px-4 text-right tabular-nums">{money(r?.cost ?? r?.total_cost)}</td>
-                      <td className="py-2.5 px-4 text-right tabular-nums font-bold text-ink-primary">{money(r?.profit ?? r?.gross_profit)}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums">{r?.parts_cost === undefined ? "—" : money((r.parts_cost || 0) + (r.labour_cost || 0) + (r.commission || 0))}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums font-bold text-ink-primary">{r?.margin === undefined ? "—" : money(r.margin)}</td>
                       <td className="py-2.5 px-4 text-right tabular-nums">{gv(r, ["margin_pct", "margin"], "—")}{(r?.margin_pct != null || r?.margin != null) ? "%" : ""}</td>
                     </tr>
                   ))}
@@ -622,7 +655,7 @@ export default function ReportsHub() {
                 <h3 className="text-sm font-bold text-ink-primary">{result?.title || "Select a report"}</h3>
                 <div className="ml-auto flex items-center gap-2 flex-wrap text-xs">
                   {locs.length > 1 && (
-                    <select value={locId} onChange={(e) => setLocId(e.target.value)} className="glass-input px-2.5 py-1.5 rounded-lg">
+                    <select value={locId} onChange={(e) => { setLocId(e.target.value); remember(active, filters, e.target.value); }} className="glass-input px-2.5 py-1.5 rounded-lg">
                       <option value="">All locations</option>
                       {locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
                     </select>
@@ -633,6 +666,38 @@ export default function ReportsHub() {
                   <button onClick={() => active && run(active)} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110">Run</button>
                 </div>
               </div>
+              {active && (REPORT_FILTERS[active] || []).length > 0 && (
+                <div className="flex items-center gap-2 flex-wrap text-xs" aria-label="Report filters">
+                  {REPORT_FILTERS[active].includes("movement") && (
+                    <select aria-label="Stock movement" value={filters.movement} onChange={(e) => changeFilter({ movement: e.target.value as ReportFilters["movement"] })} className="glass-input px-2.5 py-1.5 rounded-lg">
+                      <option value="with">Products that moved</option>
+                      <option value="without">Products that didn't move</option>
+                      <option value="all">All products</option>
+                    </select>
+                  )}
+                  {REPORT_FILTERS[active].includes("hideZero") && (
+                    <label className="inline-flex items-center gap-1.5 text-ink-secondary cursor-pointer">
+                      <input type="checkbox" className="accent-primary" checked={filters.hideZero} onChange={(e) => changeFilter({ hideZero: e.target.checked })} />
+                      Hide jobs with a zero total
+                    </label>
+                  )}
+                  {REPORT_FILTERS[active].includes("status") && dropStatuses.length > 1 && (
+                    <select aria-label="Status" value={filters.status} onChange={(e) => changeFilter({ status: e.target.value })} className="glass-input px-2.5 py-1.5 rounded-lg">
+                      <option value="">Any dropped status</option>
+                      {dropStatuses.map((st) => <option key={st.key} value={st.key}>{st.name}</option>)}
+                    </select>
+                  )}
+                  {REPORT_FILTERS[active].includes("typeId") && woTypes.length > 0 && (
+                    <select aria-label="Job type" value={filters.typeId} onChange={(e) => changeFilter({ typeId: e.target.value })} className="glass-input px-2.5 py-1.5 rounded-lg">
+                      <option value="">Any job type</option>
+                      {woTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+                    </select>
+                  )}
+                  {JSON.stringify(filterParams(active, filters)) !== "{}" && (
+                    <button type="button" onClick={() => changeFilter(DEFAULT_FILTERS)} className="text-[11px] font-semibold text-ink-secondary hover:text-primary">Clear filters</button>
+                  )}
+                </div>
+              )}
               <div className="flex items-center gap-2 flex-wrap">
                 {presets.map(([label, fn]) => (
                   <button key={label} onClick={() => applyPreset(fn)} className="px-2.5 py-1 rounded-full text-[11px] font-semibold text-ink-secondary bg-slate-100 hover:bg-blue-50 hover:text-primary transition-colors">{label}</button>

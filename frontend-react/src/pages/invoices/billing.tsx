@@ -13,7 +13,7 @@ export type InvoiceDetail = {
   subtotal?: number; discount?: number; tax?: number; total?: number;
   amount_paid?: number; credited?: number; balance_due?: number;
   issued_at?: string | null; due_at?: string | null; comment?: string;
-  client_id?: string | null; customer?: { id: string; name?: string; email?: string } | null;
+  client_id?: string | null; location_id?: string | null; customer?: { id: string; name?: string; email?: string } | null;
   payer?: { id: string; name?: string; email?: string } | null;
   lines?: InvoiceLine[]; orders?: { id: string; order_number?: string }[];
   payments?: Payment[]; credit_notes?: CreditNoteRef[];
@@ -44,7 +44,7 @@ export const todayIso = () => {
 export const fmtDate = (iso?: string | null) =>
   iso ? new Date(iso).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }) : "—";
 
-export const inputCls = "w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 outline-none focus:border-primary focus:ring-2 focus:ring-primary/10";
+export const inputCls = "w-full bg-white border border-slate-200 rounded-xl text-sm px-3 py-2 outline-none focus:border-primary focus:ring-2 focus:ring-primary/10";
 export const labelCls = "block text-xs font-medium text-ink-secondary mb-1";
 
 /* Days an invoice is late: only once it has a due date in the past and still owes money.
@@ -137,9 +137,9 @@ export function Drawer({ title, sub, onClose, children, footer, z = 50, width = 
   );
 }
 
-export const btnGhost = "inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs disabled:opacity-50";
-export const btnPrimary = "inline-flex items-center gap-1.5 px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60";
-export const btnDanger = "inline-flex items-center gap-1.5 px-4 py-2 rounded-lg border border-rose-200 text-rose-700 hover:bg-rose-50 font-semibold text-xs disabled:opacity-50";
+export const btnGhost = "inline-flex items-center justify-center gap-1.5 h-9 px-3.5 rounded-xl bg-white border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs disabled:opacity-50";
+export const btnPrimary = "inline-flex items-center justify-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60";
+export const btnDanger = "inline-flex items-center justify-center gap-1.5 h-9 px-3.5 rounded-xl bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 font-semibold text-xs disabled:opacity-50";
 
 export function ErrorNote({ msg }: { msg: string | null }) {
   return msg ? <div role="alert" className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{msg}</div> : null;

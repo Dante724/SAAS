@@ -21,6 +21,7 @@ greenlet>=3.1.1                 # 3.13 wheels
 aiosqlite>=0.20.0               # development
 asyncpg>=0.30.0                 # production (PostgreSQL); has 3.13 wheels
 segno>=1.6.6                    # Barcode/QR rendering for print templates (pure-python)
+zxing-cpp==3.1.1                # every barcode type: create (EAN/UPC/ITF/Code39/128/GS1/DataMatrix/PDF417) + decode
 pywebpush>=2.0.0
 reportlab>=4.2                  # 3.13 wheels
 redis>=5.0                      # optional: shared rate-limit store (REDIS_URL); in-process fallback if unset

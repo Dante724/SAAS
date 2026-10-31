@@ -1,5 +1,6 @@
 import { useEffect, useMemo, useState } from "react";
 import { M } from "../../components/Shell";
+import Switch from "../../components/Switch";
 import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
 import { Avatar } from "../orders/look";
@@ -30,7 +31,7 @@ const PRESETS: [string, string, string][] = [
 // One avatar look app-wide: the tinted initials from the work order screens (re-exported for SettingsHub).
 export { Avatar };
 
-type Tab = "people" | "roles" | "pay";
+type Tab = "people" | "roles" | "pay" | "signin";
 
 export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEditPerson, onNewPerson, onInvite, onEditRole, onNewRole, onEditRule, onNewRule, onChanged, onFlash }: {
   team: any[] | null | undefined; roles: any[] | null; invites: any[] | null; rules: any[] | null | undefined; catalog: Record<string, any[]> | null;
@@ -56,21 +57,21 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
     try { await api.del(`/staff/invites/${i.id}`); onFlash("Invite cancelled"); onChanged(); } catch (e: any) { onFlash(e?.message || "Couldn't cancel"); }
   }
 
-  const tabs: [Tab, string, number | undefined][] = [["people", "People", people.length], ["roles", "Roles", roles?.length], ["pay", "Commissions", rules?.length]];
+  const tabs: [Tab, string, number | undefined][] = [["people", "People", people.length], ["roles", "Roles", roles?.length], ["pay", "Commissions", rules?.length], ["signin", "Sign-in", undefined]];
   const primary = tab === "people" ? { label: "Invite someone", icon: "person_add", on: onInvite }
     : tab === "roles" ? { label: "New role", icon: "add", on: onNewRole } : { label: "New rule", icon: "add", on: onNewRule };
 
   return (
     <div className="max-w-3xl space-y-4">
-      <div className="flex flex-wrap items-start gap-3">
-        <div className="min-w-[200px] flex-1">
-          <h2 className="text-base font-semibold text-ink-primary">Your team</h2>
-          <p className="text-xs text-ink-tertiary">Who works here, what they can do, and how commission is paid.</p>
-        </div>
-        <div className="ml-auto flex items-center gap-2 flex-shrink-0">
-          {tab === "people" && <button onClick={onNewPerson} className="px-3.5 py-2 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Add without invite</button>}
-          <button onClick={primary.on} className="inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl bg-ink-primary text-white text-xs font-semibold hover:opacity-90"><M n={primary.icon} c="text-sm" />{primary.label}</button>
-        </div>
+      <div>
+        <h2 className="text-base font-semibold text-ink-primary">Your team</h2>
+        <p className="text-xs text-ink-tertiary">Who works here, what they can do, and how commission is paid.</p>
+        {tab !== "signin" && (
+          <div className="mt-3 flex flex-wrap items-center gap-2">
+            <button onClick={primary.on} className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90"><M n={primary.icon} c="text-sm" />{primary.label}</button>
+            {tab === "people" && <button onClick={onNewPerson} className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50">Add without invite</button>}
+          </div>
+        )}
       </div>
 
       <div className="inline-flex rounded-xl bg-slate-100 p-1">
@@ -167,6 +168,8 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
           </button>
         </div>
       )}
+
+      {tab === "signin" && <DeviceLimitCard onFlash={onFlash} />}
 
       {tab === "pay" && (
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-2">
@@ -276,10 +279,6 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
     catch (e: any) { setErr(e?.message || "Couldn't delete the role"); setBusy(false); }
   }
 
-  const Sw = ({ on, onClick, label }: { on: boolean; onClick: () => void; label: string }) => (
-    <button type="button" role="switch" aria-checked={on} aria-label={label} onClick={onClick}
-      className={`w-9 h-5 rounded-full flex-shrink-0 relative transition-colors ${on ? "bg-primary" : "bg-slate-300"}`}><span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${on ? "left-[18px]" : "left-0.5"}`} /></button>
-  );
   const Choice = ({ value, set, options }: { value: string; set: (v: string) => void; options: [string, string][] }) => (
     <div className="inline-flex flex-wrap max-w-full gap-0.5 rounded-xl bg-slate-100 p-1">
       {options.map(([v, l]) => (
@@ -364,14 +363,14 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
                       <span className="text-sm text-ink-primary capitalize truncate">{group.replace(/_/g, " ")}</span>
                       {live.length > 0 && <span className={`text-[11px] px-1.5 py-0.5 rounded-md ${onCount === 0 ? "bg-slate-100 text-ink-tertiary" : allOn ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>{allOn ? "All" : onCount === 0 ? "None" : `${onCount} of ${live.length}`}</span>}
                     </button>
-                    {live.length > 0 && <Sw on={allOn} onClick={() => grantAll(live, !allOn)} label={`${allOn ? "Turn off" : "Turn on"} all ${group.replace(/_/g, " ")}`} />}
+                    {live.length > 0 && <Switch size="sm" on={allOn} onChange={() => grantAll(live, !allOn)} label={`${allOn ? "Turn off" : "Turn on"} all ${group.replace(/_/g, " ")}`} />}
                   </div>
                   {isOpen && (
                     <div className="border-t border-slate-100 bg-slate-50/50">
                       {codes.map((c) => (
                         <div key={c.code} className="flex items-center gap-3 pl-11 pr-4 py-2.5 border-t border-slate-100 first:border-0">
                           <span className="text-xs flex-1 text-ink-primary">{c.label}</span>
-                          <Sw on={allowed(c.code)} onClick={() => toggle(c.code)} label={c.label} />
+                          <Switch size="sm" on={allowed(c.code)} onChange={() => toggle(c.code)} label={c.label} />
                         </div>
                       ))}
                     </div>
@@ -468,6 +467,45 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
           <button onClick={save} disabled={busy} className="px-5 py-2 rounded-xl bg-ink-primary text-white font-semibold text-xs hover:opacity-90 disabled:opacity-60">{busy ? "Saving…" : isNew ? "Create role" : "Save"}</button>
         </div>
       </div>
+    </div>
+  );
+}
+
+
+// How many devices one login may use at once. At the limit, signing in somewhere new asks the
+// person to pick one of their devices to sign out; nobody is signed out without being asked.
+const LIMITS: [string, string][] = [["", "No limit"], ["2", "2 devices"], ["3", "3 devices"], ["5", "5 devices"], ["10", "10 devices"]];
+
+export function DeviceLimitCard({ onFlash }: { onFlash: (m: string) => void }) {
+  const [value, setValue] = useState<string | null>(null);
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    api.get<any>("/staff/company").then((c) => setValue(c?.max_sessions_per_login ? String(c.max_sessions_per_login) : "")).catch(() => setValue(""));
+  }, []);
+  async function save(v: string) {
+    const before = value;
+    setValue(v); setBusy(true);
+    try {
+      await api.put("/staff/company", { max_sessions_per_login: v ? Number(v) : null });
+      onFlash(v ? `Each person can be signed in on ${v} devices at once` : "No device limit");
+    } catch (e: any) { setValue(before); onFlash(e?.message || "Couldn't save"); }
+    finally { setBusy(false); }
+  }
+  return (
+    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-5">
+      <div className="flex flex-wrap items-start gap-4">
+        <div className="min-w-[220px] flex-1">
+          <label htmlFor="device-limit" className="block text-sm font-semibold text-ink-primary">Devices per person</label>
+          <p className="mt-1 text-xs text-ink-tertiary">How many devices one login can use at the same time. When someone hits the limit,
+            they pick a device to sign out before they can sign in somewhere new. The phone app counts as a device.</p>
+        </div>
+        <select id="device-limit" value={value ?? ""} disabled={value === null || busy} onChange={(e) => save(e.target.value)}
+          className="glass-input rounded-xl px-3 py-2 text-sm font-semibold text-ink-primary">
+          {LIMITS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </select>
+      </div>
+      <p className="mt-3 text-xs text-ink-tertiary">People already over a new limit stay signed in until they sign out.
+        Each person can see and sign out their devices under Security &amp; sign-in.</p>
     </div>
   );
 }

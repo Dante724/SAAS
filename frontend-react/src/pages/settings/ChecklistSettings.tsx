@@ -116,12 +116,10 @@ export function ChecklistList({ templates, onOpen, onNew, onChanged, onFlash }: 
 
   return (
     <div className="max-w-3xl space-y-4">
-      <div className="flex items-center gap-2">
-        <div>
-          <h2 className="text-base font-semibold text-ink-primary">Checklists</h2>
-          <p className="text-xs text-ink-tertiary">Steps your team works through on a job. Customers see the checks you choose on their tracking page.</p>
-        </div>
-        <button onClick={() => onNew()} className="ml-auto inline-flex items-center gap-1.5 px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-primary hover:border-slate-300 hover:bg-slate-50 flex-shrink-0"><M n="add" c="text-sm" />New checklist</button>
+      <div>
+        <h2 className="text-base font-semibold text-ink-primary">Checklists</h2>
+        <p className="text-xs text-ink-tertiary">Steps your team works through on a job. Customers see the checks you choose on their tracking page.</p>
+        <button onClick={() => onNew()} className="mt-3 inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90"><M n="add" c="text-sm" />New checklist</button>
       </div>
 
       {templates == null && <div className="bg-white rounded-2xl border border-slate-200/90 p-5 text-xs text-ink-tertiary">Loading checklists…</div>}
@@ -321,7 +319,7 @@ export function ChecklistEditor({ tpl, onClose, onSaved }: { tpl: any | null; on
                           </div>
                           {hasOptions(it.field_kind) && (
                             <input value={it.options} onChange={(e) => upItem(si, ii, { options: e.target.value })} placeholder="Choices, separated by commas: Perfect, Scratched, Cracked" aria-label="Choices"
-                              className="w-full bg-white border border-slate-200 rounded-lg text-xs px-3 py-2 text-ink-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/10" />
+                              className="glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary" />
                           )}
                           <div className="flex flex-wrap gap-1.5">
                             <Toggle on={it.required} onClick={() => upItem(si, ii, { required: !it.required })} icon="priority_high" label="Must be filled in" />

@@ -127,7 +127,9 @@ _EAN_PARITY = ["LLLLLL", "LLGLGG", "LLGGLG", "LLGGGL", "LGLLGG",
                "LGGLLG", "LGGGLL", "LGLGLG", "LGLGGL", "LGGLGL"]
 
 BARCODE_FIELDS = ("barcode", "sku", "code", "mpn")      # product fields a label may encode
-BARCODE_TYPES = ("code128", "ean13", "upca", "qr")
+# ii144b: every type in services/barcode_types.py (EAN/UPC/ITF/Code39/128/GS1-128/QR/Data Matrix/PDF417)
+BARCODE_TYPES = ("code128", "ean13", "ean8", "upca", "upce", "itf14", "itf", "code39", "gs1_128", "qr",
+                 "datamatrix", "pdf417")
 _GTIN_LEN = {"ean13": 13, "upca": 12}
 
 
@@ -186,12 +188,16 @@ def gtin_svg(value: str, kind: str = "ean13", height: int = 48, module: int = 2,
 
 
 def barcode_svg(value: str, kind: str = "code128", height: int = 48) -> str:
-    """One entry point for any supported symbology. EAN/UPC raise ValueError on bad input."""
-    if kind == "qr":
+    """One entry point for any supported symbology. Raises ValueError for a value the type can't
+    hold (a wrong check digit, letters in an EAN, …)."""
+    if kind == "qr" and not str(value or "").startswith("("):
         return qr_svg(value)
-    if kind in _GTIN_LEN:
+    if kind in ("ean13", "upca"):
         return gtin_svg(value, kind, height=height)
-    return code128_svg(value, height=height)
+    if kind == "code128":
+        return code128_svg(value, height=height)
+    from backend.services import barcode_types
+    return barcode_types.svg(kind, value, height=height)
 
 
 def validate_barcode_options(field, types, default_type="code128") -> None:

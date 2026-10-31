@@ -2,7 +2,9 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { selectDialog } from "../../lib/dialog";
+import Switch from "../../components/Switch";
 import { cellRules, inView, isCustomerRule, toggleCell } from "../../lib/notifRules";
+import { serverDate } from "../../lib/serverTime";
 
 /* Settings › Notifications › Customers — "what your customer gets": a journey strip (comes in,
    in the shop, ready and done, updates and payment), then one card per moment. Each message
@@ -62,7 +64,7 @@ const MOMENTS: { key: Moment; label: string; icon: string; hint: string }[] = [
 
 function ago(iso: string | null) {
   if (!iso) return "";
-  const min = Math.max(0, Math.round((Date.now() - new Date(iso.endsWith("Z") ? iso : iso + "Z").getTime()) / 60000));
+  const min = Math.max(0, Math.round((Date.now() - (serverDate(iso)?.getTime() ?? Date.now())) / 60000));
   if (min < 60) return min <= 1 ? "just now" : `${min} min ago`;
   if (min < 1440) return `${Math.round(min / 60)} h ago`;
   return `${Math.round(min / 1440)} d ago`;
@@ -226,7 +228,7 @@ export default function CustomerMessages({ rules, templates, statusesFor, shopNa
                 <button key={m.key} type="button" onMouseEnter={() => setPeek(m.key)} onMouseLeave={() => setPeek(null)} onFocus={() => setPeek(m.key)} onBlur={() => setPeek(null)}
                   onClick={() => document.getElementById(`moment-${m.key}`)?.scrollIntoView({ behavior: "smooth", block: "start" })}
                   className="relative flex flex-col items-center text-center gap-1.5 rounded-xl px-2 py-1 hover:bg-slate-50">
-                  <span className={`relative z-10 w-10 h-10 rounded-2xl grid place-items-center ring-4 ring-white ${on.length ? "bg-primary text-white shadow-[0_6px_16px_-6px] shadow-primary/60" : "bg-slate-100 text-ink-tertiary"}`}><M n={m.icon} c="text-lg" /></span>
+                  <span className={`relative z-10 w-10 h-10 rounded-2xl grid place-items-center ring-4 ring-white ${on.length ? "bg-primary text-white" : "bg-slate-100 text-ink-tertiary"}`}><M n={m.icon} c="text-lg" /></span>
                   <span className="text-xs font-semibold text-ink-primary">{m.label}</span>
                   <span className={`text-[11px] ${on.length ? "text-primary" : "text-ink-tertiary"}`}>{on.length ? `${on.length} message${on.length === 1 ? "" : "s"}` : "Nothing sent"}</span>
                   {peek === m.key && first && (
@@ -266,10 +268,9 @@ export default function CustomerMessages({ rules, templates, statusesFor, shopNa
             <span className="w-9 h-9 rounded-xl bg-indigo-50 text-indigo-600 grid place-items-center flex-shrink-0"><M n="bedtime" c="text-lg" /></span>
             <div className="flex-1 min-w-0">
               <div className="text-sm font-medium text-ink-primary">Quiet hours</div>
-              <div className="text-[11px] text-ink-tertiary">{quiet?.some ? "On for some messages. Switch to set it for all." : "Messages that would go out after hours wait until you open."}</div>
+              <div className="text-xs text-ink-tertiary">{quiet?.some ? "On for some messages. Switch to set it for all." : "Messages that would go out after hours wait until you open."}</div>
             </div>
-            <button type="button" role="switch" aria-checked={!!quiet?.on} aria-label="Quiet hours" disabled={!quiet} onClick={() => setQuietHours(!quiet?.on)}
-              className={`w-10 h-6 rounded-full relative transition-colors flex-shrink-0 ${quiet?.on ? "bg-primary" : "bg-slate-300"}`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${quiet?.on ? "left-[18px]" : "left-0.5"}`} /></button>
+            <Switch label="Quiet hours" on={!!quiet?.on} disabled={!quiet} onChange={(v) => setQuietHours(v)} />
           </div>
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4 flex items-start gap-3">
             <span className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-600 grid place-items-center flex-shrink-0"><M n="smartphone" c="text-lg" /></span>
@@ -281,15 +282,15 @@ export default function CustomerMessages({ rules, templates, statusesFor, shopNa
         </div>
 
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4">
-          <div className="flex items-center gap-3">
+          <div className="flex items-start gap-3">
             <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n="event_available" c="text-lg" /></span>
-            <div className="min-w-0">
+            <div className="min-w-0 flex-1">
               <div className="text-sm text-ink-primary">Appointment reminders</div>
-              <div className="text-[11px] text-ink-tertiary">{reminderRules.filter((r) => r.active).length
+              <div className="text-xs text-ink-tertiary">{reminderRules.filter((r) => r.active).length
                 ? reminderRules.filter((r) => r.active).map((r) => `${r.channel === "sms" ? "Text" : r.channel === "email" ? "Email" : r.channel} ${fmtOffset(r.reminder_offset_min)} before`).join(" · ")
                 : "Off. Remind customers before their drop-off or visit."}</div>
+              <ReminderQuickAdd rules={reminderRules} onChanged={reload} flash={flash} />
             </div>
-            <ReminderQuickAdd rules={reminderRules} onChanged={reload} flash={flash} />
           </div>
         </div>
       </>)}
@@ -313,7 +314,7 @@ function ReminderQuickAdd({ rules, onChanged, flash }: { rules: Rule[]; onChange
   }
   async function del(r: Rule) { try { await api.del(`/notifications/rules/${r.id}`); onChanged(); } catch (e: any) { flash(e?.message || "Couldn't remove it"); } }
   return (
-    <div className="ml-auto flex items-center gap-2 flex-wrap justify-end">
+    <div className="mt-3 flex items-center gap-2 flex-wrap">
       {rules.map((r) => (
         <span key={r.id} className="inline-flex items-center gap-1 pl-2.5 pr-1 py-1 rounded-full bg-slate-100 text-[11px] text-ink-secondary">
           {r.channel === "sms" ? "Text" : "Email"} · {fmtOffset(r.reminder_offset_min)}
@@ -322,13 +323,13 @@ function ReminderQuickAdd({ rules, onChanged, flash }: { rules: Rule[]; onChange
       ))}
       {open ? (
         <span className="flex items-center gap-1.5">
-          <select value={ch} onChange={(e) => setCh(e.target.value)} aria-label="Send by" className="bg-white border border-slate-200 rounded-lg text-xs px-2 py-1.5"><option value="sms">Text</option><option value="email">Email</option></select>
-          <select value={off} onChange={(e) => setOff(Number(e.target.value))} aria-label="How long before" className="bg-white border border-slate-200 rounded-lg text-xs px-2 py-1.5">
+          <select value={ch} onChange={(e) => setCh(e.target.value)} aria-label="Send by" className="glass-input rounded-xl px-3 py-2 text-sm"><option value="sms">Text</option><option value="email">Email</option></select>
+          <select value={off} onChange={(e) => setOff(Number(e.target.value))} aria-label="How long before" className="glass-input rounded-xl px-3 py-2 text-sm">
             {[[60, "1 hour"], [180, "3 hours"], [1440, "1 day"], [2880, "2 days"]].map(([v, l]) => <option key={v} value={v}>{l} before</option>)}
           </select>
-          <button onClick={add} className="px-3 py-1.5 rounded-lg bg-ink-primary text-white text-xs font-semibold">Add</button>
+          <button onClick={add} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90">Add</button>
         </span>
-      ) : <button onClick={() => setOpen(true)} className="px-3 py-1.5 rounded-xl border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">Add reminder</button>}
+      ) : <button onClick={() => setOpen(true)} className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90"><M n="add" c="text-sm" />Add reminder</button>}
     </div>
   );
 }
@@ -425,11 +426,10 @@ function MessageEditor({ row, rt, channels, rules, templates, shopName, flash, s
                 </button>
               ))}
             </div>
-            <label className="ml-auto flex items-center gap-2 text-xs text-ink-secondary cursor-pointer">
+            <span className="ml-auto flex items-center gap-2 text-xs text-ink-secondary">
               {on ? "On" : "Off"}
-              <button type="button" role="switch" aria-checked={on} aria-label="Send this message" onClick={() => setOn(!on)}
-                className={`w-10 h-6 rounded-full relative transition-colors ${on ? "bg-primary" : "bg-slate-300"}`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${on ? "left-[18px]" : "left-0.5"}`} /></button>
-            </label>
+              <Switch label="Send this message" on={on} onChange={setOn} />
+            </span>
           </div>
         </div>
 
@@ -438,16 +438,16 @@ function MessageEditor({ row, rt, channels, rules, templates, shopName, flash, s
             <div className="space-y-3 min-w-0">
               {ch === "email" && (
                 <label className="block">
-                  <span className="block text-xs font-medium text-ink-secondary mb-1.5">Subject</span>
-                  <input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Update on your repair" className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-primary" />
+                  <span className="block text-sm font-medium text-ink-primary mb-1.5">Subject</span>
+                  <input value={subject} onChange={(e) => setSubject(e.target.value)} placeholder="Update on your repair" className="glass-input w-full rounded-xl px-3 py-2 text-sm" />
                 </label>
               )}
               <label className="block">
-                <span className="flex items-center text-xs font-medium text-ink-secondary mb-1.5">Message
+                <span className="flex items-center text-sm font-medium text-ink-primary mb-1.5">Message
                   {!body.trim() && <span className="ml-2 text-[11px] font-normal text-ink-tertiary">Using the standard wording</span>}
                 </span>
                 <textarea ref={setRef} value={body} onChange={(e) => setBody(e.target.value)} rows={6} placeholder={defaultBody(row)}
-                  className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-primary resize-y leading-relaxed" />
+                  className="glass-input w-full rounded-xl px-3 py-2 text-sm resize-y leading-relaxed" />
               </label>
               <div className="flex flex-wrap gap-1.5">
                 {CHIPS.map(([t, l]) => (
@@ -458,7 +458,7 @@ function MessageEditor({ row, rt, channels, rules, templates, shopName, flash, s
               {ch === "sms" && <div className="text-[11px] text-ink-tertiary">{preview.length} characters · {segments} text{segments === 1 ? "" : "s"} per send{segments > 1 ? " (each costs as one message)" : ""}</div>}
 
               <div className="pt-3 border-t border-slate-100 space-y-2.5">
-                <div className="text-xs font-medium text-ink-secondary">When to send</div>
+                <div className="text-sm font-medium text-ink-primary">When to send</div>
                 <div className="inline-flex rounded-xl bg-slate-100 p-1">
                   {([[0, "Right away"], [15, "After 15 min"], [60, "After 1 hour"]] as [number, string][]).map(([v, l]) => (
                     <button key={v} type="button" onClick={() => setDelay(v)} aria-pressed={delay === v}
@@ -466,12 +466,11 @@ function MessageEditor({ row, rt, channels, rules, templates, shopName, flash, s
                   ))}
                   {![0, 15, 60].includes(delay) && <span className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-white text-ink-primary shadow-sm">After {delay} min</span>}
                 </div>
-                <label className="flex items-center gap-2.5 text-sm text-ink-primary cursor-pointer">
-                  <button type="button" role="switch" aria-checked={hours} aria-label="Only during opening hours" onClick={() => setHours(!hours)}
-                    className={`w-9 h-5 rounded-full relative transition-colors ${hours ? "bg-primary" : "bg-slate-300"}`}><span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${hours ? "left-[18px]" : "left-0.5"}`} /></button>
+                <div className="flex items-center gap-2.5 text-sm text-ink-primary">
+                  <Switch size="sm" label="Only during opening hours" on={hours} onChange={setHours} />
                   Only during opening hours
-                  <span className="text-[11px] text-ink-tertiary">Late changes wait until you open</span>
-                </label>
+                  <span className="text-xs text-ink-tertiary">Late changes wait until you open</span>
+                </div>
               </div>
             </div>
 

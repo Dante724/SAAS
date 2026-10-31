@@ -11,7 +11,7 @@ one of its lines is earmarked for it (`POLine.reserved_order_id`). Two things fo
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.models import Order, OrderLine, OrderStatus, POLine, PurchaseOrder, StockLevel, StockMovement
+from backend.models import Order, OrderLine, OrderStatus, POLine, PurchaseOrder
 
 KIND_PO_UPDATE = "inventory.po_update"
 _CLOSED = {"closed", "done", "delivered", "dropped", "cancelled", "completed", "picked_up"}
@@ -63,7 +63,6 @@ async def apply_receipt_to_orders(db: AsyncSession, org_id: str, po: PurchaseOrd
     closed = await _closed_keys(db, org_id)
     from backend.routers.feed import log_system_event
     from backend.services import inventory_alerts as _alerts
-    from backend.services.money import add_to_column
     left = received
     for oid in targets:
         order = await _live_order(db, org_id, oid, closed)
@@ -76,18 +75,15 @@ async def apply_receipt_to_orders(db: AsyncSession, org_id: str, po: PurchaseOrd
         for line in lines:
             if left <= 0:
                 break
-            sl = (await db.execute(select(StockLevel).where(
-                StockLevel.part_id == pl.part_id, StockLevel.location_id == po.location_id
-            ).with_for_update())).scalar_one_or_none()
-            if not sl:
-                break
-            take = min(line.pending_stock or 0, left, max(sl.qty_available or 0, 0))
+            # The same deduction every job path uses: row-locked draw, cost layers and serials.
+            from backend.services import stock_consume
+            want = min(line.pending_stock or 0, left)
+            take = await stock_consume.consume_for_line(
+                db, org_id=org_id, order_id=oid, line=line, location_id=po.location_id,
+                qty=want, part_id=pl.part_id, alert=False)
             if take <= 0:
                 break
-            await add_to_column(db, sl, "qty_available", -take, round_to=None)
             line.pending_stock = (line.pending_stock or 0) - take
-            db.add(StockMovement(part_id=pl.part_id, location_id=po.location_id, movement_type="use",
-                                 qty=-take, ref_type="order", ref_id=oid))
             left -= take
             used_here += take
         if used_here:

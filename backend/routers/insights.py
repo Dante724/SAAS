@@ -38,10 +38,13 @@ PERIODS_TREND = [("30d", "Last 30 days"), ("24w", "Last 24 weeks"), ("24m", "Las
 
 
 @router.get("/meta")
-async def meta(current: Employee = Depends(get_current_employee)):
+async def meta(db: AsyncSession = Depends(get_db), current: Employee = Depends(get_current_employee)):
+    from backend.services.auth import has_perm
+    profit = await has_perm(db, current, "can_see_profit")   # don't offer what /data will refuse
     return {
         "subjects": [{"key": k, "label": v["label"],
-                      "metrics": [{"key": m, "label": METRIC_LABEL[m]} for m in v["metrics"]],
+                      "metrics": [{"key": m, "label": METRIC_LABEL[m]} for m in v["metrics"]
+                                  if profit or m != "gross_profit"],
                       "groups": [{"key": g, "label": GROUP_LABEL[g]} for g in v["groups"]]}
                      for k, v in SUBJECTS.items()],
         "periods_diagram": [{"key": k, "label": l} for k, l in PERIODS_DIAGRAM],
@@ -158,6 +161,10 @@ async def data(kind: str = "diagram", subject: str = "closed_orders", metric: st
         raise HTTPException(400, "Unknown subject")
     if metric not in SUBJECTS[subject]["metrics"]:
         metric = SUBJECTS[subject]["metrics"][0]
+    if metric == "gross_profit":
+        from backend.services.auth import has_perm
+        if not await has_perm(db, current, "can_see_profit"):
+            raise HTTPException(403, "You don't have permission to see profit")
     now = datetime.utcnow()
     start = _range_start(period, now)
     records = await _records(db, current.org_id, subject, start, location_id)

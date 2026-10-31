@@ -1,4 +1,5 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
+import DeviceList from "./DeviceList";
 import { useVisibleInterval } from "../hooks/useVisibleInterval";
 import { toAppPath } from "../lib/deepLink";
 import { TeklyMark } from "./brand/TeklyLogo";
@@ -29,12 +30,21 @@ import {
   CircleDollarSign, Percent, ShieldAlert, Globe, Gift, RotateCcw, SearchCheck, VideoOff,
   ShieldCheck, Target, EyeOff, Car, Sailboat, Bike, Laptop, Cog, Upload,
   ShoppingBag, Split, Nfc, Phone, PhoneIncoming, PhoneOutgoing, PhoneMissed, Network, HelpCircle,
-  LogOut, Menu as MenuIcon, PackageOpen, Info,
+  LogOut, Menu as MenuIcon, PackageOpen, Info, UserCheck, KeyRound, MapPin, Crown,
+  CircleDot, CloudOff, Footprints, Hand, Infinity as InfinityIcon, LayoutGrid, LogIn, MessageSquareText, MessagesSquare, MoveRight, Redo2, SquareCheck, Star, ThumbsUp, TriangleAlert, UserX,
 } from "lucide-react";
+import { fmtServerTime } from "../lib/serverTime";
 
 // Map the old Material-Symbols ligature names to bundled Lucide icons (no web font,
 // works under the app's Content-Security-Policy, and needs no server restart).
 const ICONS: Record<string, any> = {
+  // Names used in the app that had no mapping (they drew as an empty circle).
+  forum: MessagesSquare, grid_view: LayoutGrid, summarize: FileText, reviews: Star,
+  check_box: SquareCheck, check_box_outline_blank: Square, sms: MessageSquareText, thumb_up: ThumbsUp,
+  directions_walk: Footprints, insert_chart: BarChart3, login: LogIn, all_inclusive: InfinityIcon, bedtime: Moon,
+  list_alt: ClipboardList, back_hand: Hand, cloud_off: CloudOff, sync_problem: TriangleAlert,
+  trending_flat: MoveRight, person_off: UserX, redo: Redo2, replay: RotateCcw, print_disabled: Printer,
+  currency_exchange: ArrowLeftRight, fiber_manual_record: CircleDot, radio_button_unchecked: Circle,
   package_2: PackageOpen, info: Info,
   build: Wrench, handyman: Wrench, engineering: HardHat, hammer: Hammer,
   task_alt: CheckCircle2, mail: Mail, chat: MessageSquare, chat_bubble: MessageCircle,
@@ -66,12 +76,12 @@ const ICONS: Record<string, any> = {
   lock_open: LockOpen, merge: Merge, paid: CircleDollarSign, percent: Percent, privacy_tip: ShieldAlert,
   public: Globe, redeem: Gift, refresh: RefreshCw, report: Flag, restore: RotateCcw, rule: ListChecks,
   search_check: SearchCheck, sell: Tag, stop: Square, table_view: Table, tag: Tag, target: Target,
-  verified: BadgeCheck, verified_user: ShieldCheck, videocam_off: VideoOff, web: Globe,
+  verified: BadgeCheck, workspace_premium: Crown, verified_user: ShieldCheck, videocam_off: VideoOff, web: Globe,
   qr_code_2: QrCode, sticky_note_2: StickyNote, receipt: Receipt,
   open_in_new: ExternalLink, link: LinkIcon,
   search: Search, table_rows: Rows3, view_kanban: KanbanSquare,
   notifications: Bell, pause: Pause, play_arrow: Play, more_vert: MoreVertical, more_horiz: MoreHorizontal,
-  print: Printer, save: Save, send: Send, campaign: Send, smartphone: Smartphone,
+  print: Printer, location_on: MapPin, how_to_reg: UserCheck, key: KeyRound, save: Save, send: Send, campaign: Send, smartphone: Smartphone,
   photo_camera: Camera, add_a_photo: Camera, image: ImageIcon,
   barcode: Barcode, qr_code_scanner: QrCode, scan: ScanLine, contactless: Nfc,
   call: Phone, phone: Phone, call_received: PhoneIncoming, phone_missed: PhoneMissed, hub: Network, help: HelpCircle, call_made: PhoneOutgoing,
@@ -179,6 +189,19 @@ export default function Shell({ title, children }: { title: string; children: Re
     api.get<{ items: any[] }>("/tech/notifications?only_unread=true")
       .then((r) => { if (liveRef.current) setUnread((r.items || []).length); }).catch(() => {});
   }, 60000);
+  // Self check-in: people waiting at this location, shown on the Inquiries item.
+  const [walkins, setWalkins] = useState(0);
+  const loadWalkins = () => {
+    if (!can(NAV_PERM["/inquiries"])) return;
+    api.get<{ waiting: number }>("/checkins/count")
+      .then((r) => { if (liveRef.current) setWalkins(Number(r?.waiting) || 0); }).catch(() => {});
+  };
+  useVisibleInterval(loadWalkins, 30000);
+  // The Walk-ins view says when the queue changed (call, no-show, convert) so the badge doesn't lag.
+  useEffect(() => {
+    window.addEventListener("tekly:checkins", loadWalkins);
+    return () => window.removeEventListener("tekly:checkins", loadWalkins);
+  });
 
   // Below 900px the sidebar becomes a slide-in drawer opened from the top bar's menu button.
   const [navOpen, setNavOpen] = useState(false);
@@ -220,6 +243,9 @@ export default function Shell({ title, children }: { title: string; children: Re
                   <>
                     <M n={it.i} c={`text-[17px] ${isActive ? "text-primary" : "text-ink-tertiary"}`} />
                     {!collapsed && <span>{t(it.l)}</span>}
+                    {it.to === "/inquiries" && walkins > 0 && (
+                      <span aria-label={`${walkins} waiting`} title={`${walkins} waiting`} className={`${collapsed ? "absolute ml-5 -mt-4" : "ml-auto"} min-w-[18px] h-[18px] px-1 rounded-full bg-primary text-white text-[11px] font-bold leading-[18px] text-center`}>{walkins}</span>
+                    )}
                   </>
                 )}
               </NavLink>
@@ -313,7 +339,7 @@ export default function Shell({ title, children }: { title: string; children: Re
                         <span className="text-[11px] font-bold bg-slate-100 text-ink-tertiary rounded px-1 ">{lang}</span>
                       </button>
                       <button onClick={() => { setAvatarOpen(false); setSecOpen(true); }} className="w-full flex items-center justify-between px-2.5 py-1.5 rounded-lg text-ink-secondary hover:bg-slate-100 hover:text-ink-primary">
-                        <span className="flex items-center gap-2.5"><M n="lock" c="text-base" />{t("Security & two-factor")}</span>
+                        <span className="flex items-center gap-2.5"><M n="lock" c="text-base" />{t("Security & sign-in")}</span>
                         {me?.mfa_required && !me?.mfa_enabled && <span className="w-2 h-2 rounded-full bg-amber-400" />}
                       </button>
                       <div className="my-1 border-t border-slate-100" />
@@ -394,14 +420,15 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
       <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={forced ? undefined : onClose} />
-      <div className="relative w-full max-w-md bg-white rounded-2xl shadow-clay-drawer border border-slate-200/90 overflow-hidden">
+      <div className="relative w-full max-w-lg max-h-[90vh] flex flex-col bg-white rounded-2xl shadow-clay-drawer border border-slate-200/90 overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
-          <h3 className="text-sm font-bold text-ink-primary flex items-center gap-2"><M n="lock" c="text-base" />Security · Two-factor authentication</h3>
+          <h3 className="text-sm font-bold text-ink-primary flex items-center gap-2"><M n="lock" c="text-base" />Security</h3>
           {forced
             ? <button onClick={signOut} className="text-[11px] font-semibold text-ink-tertiary hover:text-ink-primary">Sign out</button>
             : <button aria-label="Close" onClick={onClose} className="w-7 h-7 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>}
         </div>
-        <div className="p-5 space-y-4 text-sm">
+        <div className="p-5 space-y-4 text-sm overflow-y-auto">
+          <p className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary">Two-factor authentication</p>
           {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
 
           {enabled && step !== "done" && (
@@ -451,6 +478,13 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
               )}
               <button onClick={onClose} className="w-full px-4 py-2 rounded-lg bg-ink-primary text-white text-xs font-bold">Done</button>
             </>
+          )}
+          {!forced && (
+            <div className="border-t border-slate-100 pt-4">
+              <p className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary">Signed-in devices</p>
+              <p className="mt-0.5 mb-1 text-xs text-ink-tertiary">Don't recognise one? Sign it out and change your password.</p>
+              <DeviceList base="/auth/sessions" />
+            </div>
           )}
         </div>
       </div>
@@ -581,7 +615,7 @@ function NotificationsPanel({ onClose, onChanged }: { onClose: () => void; onCha
             <div key={n.id} className={`group relative w-full hover:bg-blue-50/50 ${n.read ? "" : "bg-blue-50/30"}`}>
               <button onClick={() => open(n)} className="w-full text-left px-4 py-3 pr-9 flex gap-3">
                 <span className={`mt-1 w-1.5 h-1.5 rounded-full flex-shrink-0 ${n.read ? "bg-transparent" : "bg-primary"}`} />
-                <div className="min-w-0"><div className="text-xs font-bold text-ink-primary">{n.title || n.kind || "Update"}</div>{n.body && <div className="text-[11px] text-ink-secondary mt-0.5 line-clamp-2">{n.body}</div>}<div className="text-[11px] text-ink-tertiary mt-1">{n.created_at ? new Date(n.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : ""}</div></div>
+                <div className="min-w-0"><div className="text-xs font-bold text-ink-primary">{n.title || n.kind || "Update"}</div>{n.body && <div className="text-[11px] text-ink-secondary mt-0.5 line-clamp-2">{n.body}</div>}<div className="text-[11px] text-ink-tertiary mt-1">{fmtServerTime(n.created_at)}</div></div>
               </button>
               <button onClick={(e) => dismiss(n, e)} title={t("Dismiss")} aria-label={t("Dismiss")}
                 className="absolute top-2 right-2 w-6 h-6 rounded-md flex items-center justify-center text-ink-placeholder hover:text-rose-600 hover:bg-rose-50 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity">

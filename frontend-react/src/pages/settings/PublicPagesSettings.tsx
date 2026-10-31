@@ -1,6 +1,8 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
+import Switch from "../../components/Switch";
+import { SettingRow, NumField } from "../../components/SettingRow";
 
 /* Settings › Public pages — the three pages customers see (booking, job tracking, estimate
    approval), one brand colour for all of them, and a live phone preview. Same
@@ -15,6 +17,22 @@ const ACCENTS = ["#3b6fe0", "#185FA5", "#7F77DD", "#1D9E75", "#0F6E56", "#D85A30
 const SLOTS: [number, string][] = [[15, "15 minutes"], [30, "30 minutes"], [45, "45 minutes"], [60, "1 hour"], [90, "1.5 hours"], [120, "2 hours"]];
 const LEADS: [number, string][] = [[0, "Any time"], [60, "1 hour"], [120, "2 hours"], [240, "4 hours"], [1440, "1 day"], [2880, "2 days"]];
 const WINDOWS: [number, string][] = [[7, "1 week"], [14, "2 weeks"], [30, "1 month"], [60, "2 months"], [90, "3 months"]];
+const inp = "glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary";
+
+// A settings card. Defined here (not inside the page) so typing in it doesn't remount it.
+// `control` is the card's own on/off switch, shown beside the title.
+function Card({ icon, title, hint, control, children, onEnter }: { icon: string; title: string; hint?: string; control?: ReactNode; children?: ReactNode; onEnter?: () => void }) {
+  return (
+    <section className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card" onMouseEnter={onEnter}>
+      <div className="flex items-start gap-3 px-5 pt-4 pb-3">
+        <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n={icon} c="text-lg" /></span>
+        <div className="min-w-0 flex-1"><h3 className="text-sm font-semibold text-ink-primary">{title}</h3>{hint && <p className="text-xs text-ink-tertiary">{hint}</p>}</div>
+        {control && <div className="flex-shrink-0 pt-0.5">{control}</div>}
+      </div>
+      {children && <div className="px-5 pb-4">{children}</div>}
+    </section>
+  );
+}
 
 export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { shopName: string; logo?: string | null; StatusPicker: Picker }) {
   const [cfg, setCfg] = useState<any>(null);
@@ -46,51 +64,38 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
     catch (e: any) { setErr(e?.message || "Couldn't change the link"); }
   }
 
-  const Sw = ({ k, label, hint, onFocus }: { k: string; label: string; hint?: string; onFocus?: typeof page }) => (
-    <label className="flex items-center gap-3 py-3 border-t border-slate-100 first:border-0 cursor-pointer" onMouseEnter={() => onFocus && setPage(onFocus)}>
-      <span className="min-w-0"><span className="block text-sm text-ink-primary">{label}</span>{hint && <span className="block text-[11px] text-ink-tertiary">{hint}</span>}</span>
-      <button type="button" role="switch" aria-checked={!!cfg[k]} aria-label={label} onClick={() => save({ [k]: !cfg[k] })}
-        className={`ml-auto w-10 h-6 rounded-full flex-shrink-0 relative transition-colors ${cfg[k] ? "bg-primary" : "bg-slate-300"}`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${cfg[k] ? "left-[18px]" : "left-0.5"}`} /></button>
-    </label>
+  // Plain functions (not components), so rows aren't remounted on every change.
+  const sw = (k: string, label: string, hint?: string, onFocus?: typeof page) => (
+    <div key={k} className="flex items-center gap-3 py-3 border-t border-slate-100 first:border-0" onMouseEnter={() => onFocus && setPage(onFocus)}>
+      <span className="min-w-0"><span className="block text-sm text-ink-primary">{label}</span>{hint && <span className="block text-xs text-ink-tertiary">{hint}</span>}</span>
+      <span className="ml-auto"><Switch label={label} on={!!cfg[k]} onChange={(v) => save({ [k]: v })} /></span>
+    </div>
   );
-  const Pick = ({ k, label, opts, hint }: { k: string; label: string; opts: [number, string][]; hint?: string }) => {
+  const pick = (k: string, label: string, opts: [number, string][], hint?: string) => {
     const v = cfg[k] ?? opts[0][0];
     const known = opts.some(([x]) => x === v);
     return (
       <label className="block">
-        <span className="block text-xs font-medium text-ink-secondary mb-1.5">{label}</span>
-        <select value={v} onChange={(e) => save({ [k]: Number(e.target.value) })} className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-primary">
+        <span className="block text-sm font-medium text-ink-primary mb-1.5">{label}</span>
+        <select value={v} onChange={(e) => save({ [k]: Number(e.target.value) })} className={inp}>
           {!known && <option value={v}>{v}</option>}
           {opts.map(([x, l]) => <option key={x} value={x}>{l}</option>)}
         </select>
-        {hint && <span className="block text-[11px] text-ink-tertiary mt-1">{hint}</span>}
+        {hint && <span className="block text-xs text-ink-tertiary mt-1">{hint}</span>}
       </label>
     );
   };
-  const Card = ({ icon, title, hint, right, children, focus }: { icon: string; title: string; hint?: string; right?: ReactNode; children?: ReactNode; focus?: typeof page }) => (
-    <section className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card" onMouseEnter={() => focus && setPage(focus)}>
-      <div className="flex items-start gap-3 px-5 pt-4 pb-3">
-        <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n={icon} c="text-lg" /></span>
-        <div className="min-w-0"><h3 className="text-sm font-semibold text-ink-primary">{title}</h3>{hint && <p className="text-[11px] text-ink-tertiary">{hint}</p>}</div>
-        {right && <div className="ml-auto flex-shrink-0">{right}</div>}
-      </div>
-      {children && <div className="px-5 pb-4">{children}</div>}
-    </section>
-  );
-  const BigSwitch = ({ k, label }: { k: string; label: string }) => (
-    <button type="button" role="switch" aria-checked={!!cfg[k]} aria-label={label} onClick={() => save({ [k]: !cfg[k] })}
-      className={`w-11 h-6 rounded-full relative transition-colors ${cfg[k] ? "bg-primary" : "bg-slate-300"}`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${cfg[k] ? "left-[22px]" : "left-0.5"}`} /></button>
-  );
-  const StatusSelect = ({ k, list, label }: { k: string; list: Status[]; label: string }) => (
+  const bigSwitch = (k: string, label: string) => <Switch label={label} on={!!cfg[k]} onChange={(v) => save({ [k]: v })} />;
+  const statusSelect = (k: string, list: Status[], label: string) => (
     <label className="block">
-      <span className="block text-xs font-medium text-ink-secondary mb-1.5">{label}</span>
-      <select value={cfg[k] || ""} onChange={(e) => save({ [k]: e.target.value })} className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm outline-none focus:border-primary">
+      <span className="block text-sm font-medium text-ink-primary mb-1.5">{label}</span>
+      <select value={cfg[k] || ""} onChange={(e) => save({ [k]: e.target.value })} className={inp}>
         <option value="">Keep the status</option>
         {list.map((s) => <option key={s.key} value={s.key}>{s.name}</option>)}
       </select>
     </label>
   );
-  const Approval = ({ prefix, list, noun }: { prefix: "oe" | "oe_wo"; list: Status[]; noun: string }) => {
+  const approval = (prefix: "oe" | "oe_wo", list: Status[], noun: string) => {
     const on = prefix === "oe" ? "oe_allow_approval" : "oe_wo_allow_approval";
     const sig = prefix === "oe" ? "oe_estimate_require_signature" : "oe_wo_require_signature";
     const sts = prefix === "oe" ? "oe_approval_statuses" : "oe_wo_approval_statuses";
@@ -98,18 +103,18 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
     const dec = prefix === "oe" ? "oe_estimate_decline_status" : "oe_wo_decline_status";
     return (
       <Card icon={prefix === "oe" ? "request_quote" : "assignment_late"} title={`Customers approve ${noun}s`} hint={`Adds Approve and Decline buttons to the ${noun} link.`}
-        focus="estimate" right={<BigSwitch k={on} label={`Customers approve ${noun}s`} />}>
+        onEnter={() => setPage("estimate")} control={bigSwitch(on, `Customers approve ${noun}s`)}>
         {cfg[on] && (
           <div className="space-y-4">
-            <Sw k={sig} label="Ask for a signature" hint="They sign with a finger or mouse before approving." onFocus="estimate" />
+            {sw(sig, "Ask for a signature", "They sign with a finger or mouse before approving.", "estimate")}
             <div>
-              <span className="block text-xs font-medium text-ink-secondary mb-1.5">Only while the {noun} is in</span>
+              <span className="block text-sm font-medium text-ink-primary mb-1.5">Only while the {noun} is in</span>
               {StatusPicker({ value: cfg[sts] || "", list, onChange: (v) => save({ [sts]: v }) })}
-              <span className="block text-[11px] text-ink-tertiary mt-1">Leave empty to allow it in any status.</span>
+              <span className="block text-xs text-ink-tertiary mt-1">Leave empty to allow it in any status.</span>
             </div>
             <div className="grid sm:grid-cols-2 gap-3">
-              <StatusSelect k={acc} list={list} label="When approved, move to" />
-              <StatusSelect k={dec} list={list} label="When declined, move to" />
+              {statusSelect(acc, list, "When approved, move to")}
+              {statusSelect(dec, list, "When declined, move to")}
             </div>
           </div>
         )}
@@ -118,7 +123,7 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
   };
 
   const name = shopName || "Your shop";
-  const Logo = ({ show }: { show: boolean }) => show && logo
+  const logoEl = (show: boolean) => show && logo
     ? <img src={logo} alt="" className="w-8 h-8 rounded-lg object-contain bg-white" />
     : <span className="w-8 h-8 rounded-lg grid place-items-center text-xs font-semibold text-white" style={{ background: accent }}>{name.slice(0, 1).toUpperCase()}</span>;
 
@@ -145,14 +150,13 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
                 <M n="colorize" c="text-sm" /><input type="color" value={accent} onChange={(e) => setCfg({ ...cfg, page_color: e.target.value })} onBlur={() => save({ page_color: cfg.page_color })} className="sr-only" />
               </label>
               <span className="ml-auto flex items-center gap-2 text-xs text-ink-secondary">Show logo
-                <button type="button" role="switch" aria-checked={!!cfg.page_show_logo} aria-label="Show logo on customer pages" onClick={() => save({ page_show_logo: !cfg.page_show_logo, oe_show_logo: !cfg.page_show_logo })}
-                  className={`w-10 h-6 rounded-full relative transition-colors ${cfg.page_show_logo ? "bg-primary" : "bg-slate-300"}`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${cfg.page_show_logo ? "left-[18px]" : "left-0.5"}`} /></button>
+                <Switch label="Show logo on customer pages" on={!!cfg.page_show_logo} onChange={(v) => save({ page_show_logo: v, oe_show_logo: v })} />
               </span>
             </div>
           </Card>
 
-          <Card icon="calendar_month" title="Online booking" hint="Customers pick a time and tell you what's wrong." focus="booking"
-            right={<BigSwitch k="appointment_enabled" label="Online booking" />}>
+          <Card icon="calendar_month" title="Online booking" hint="Customers pick a time and tell you what's wrong." onEnter={() => setPage("booking")}
+            control={bigSwitch("appointment_enabled", "Online booking")}>
             <div className={cfg.appointment_enabled ? "" : "opacity-60"}>
               <div className="flex items-center gap-2 mb-4">
                 <div className="flex-1 min-w-0 flex items-center bg-slate-50 border border-slate-200 rounded-xl overflow-hidden">
@@ -164,35 +168,51 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
                 <a href={url} target="_blank" rel="noreferrer" className="px-3 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50 inline-flex items-center gap-1"><M n="open_in_new" c="text-sm" />Open</a>
               </div>
               <div className="grid sm:grid-cols-3 gap-3 mb-2">
-                <Pick k="appointment_time_slot" label="Visit length" opts={SLOTS} />
-                <Pick k="appointment_lead_min" label="Earliest booking" opts={LEADS} hint="How soon from now" />
-                <Pick k="appointment_window_days" label="Book up to" opts={WINDOWS} hint="How far ahead" />
+                {pick("appointment_time_slot", "Visit length", SLOTS)}
+                {pick("appointment_lead_min", "Earliest booking", LEADS, "How soon from now")}
+                {pick("appointment_window_days", "Book up to", WINDOWS, "How far ahead")}
               </div>
-              <Sw k="book_show_employee_step" label="Let customers choose a technician" hint="Off: you assign someone later." onFocus="booking" />
-              <Sw k="appointment_allow_multiple" label="Allow more than one booking at the same time" onFocus="booking" />
-              <Sw k="appointment_consider_orders" label="Keep times free when jobs are scheduled" hint="Scheduled work orders block booking slots too." onFocus="booking" />
+              {sw("book_show_employee_step", "Let customers choose a technician", "Off: you assign someone later.", "booking")}
+              <label className="flex flex-wrap items-center gap-3 py-3 border-t border-slate-100" onMouseEnter={() => setPage("booking")}>
+                <span className="min-w-0"><span className="block text-sm text-ink-primary">How your team's names appear</span><span className="block text-xs text-ink-tertiary">On the booking page and in customer messages. Custom uses each person's “Name on documents” in Team.</span></span>
+                <select value={cfg.public_employee_name || "full"} onChange={(e) => save({ public_employee_name: e.target.value })} aria-label="How your team's names appear"
+                  className="ml-auto glass-input rounded-xl px-3 py-2 text-sm">
+                  <option value="full">Full name</option>
+                  <option value="first_initial">First name and initial</option>
+                  <option value="first">First name only</option>
+                  <option value="custom">Custom name</option>
+                </select>
+              </label>
+              {sw("appointment_allow_multiple", "Allow more than one booking at the same time", undefined, "booking")}
+              {sw("appointment_consider_orders", "Keep times free when jobs are scheduled", "Scheduled work orders block booking slots too.", "booking")}
             </div>
           </Card>
 
-          <Card icon="visibility" title="Repair tracking page" hint="Every job gets a private link the customer can open any time." focus="tracking">
-            <Sw k="oe_allow_messages" label="Customers can message you" hint="Each status can allow or block it too (Statuses)." onFocus="tracking" />
+          <Card icon="visibility" title="Repair tracking page" hint="Every job gets a private link the customer can open any time." onEnter={() => setPage("tracking")}>
+            {sw("oe_allow_messages", "Customers can message you", "Each status can allow or block it too (Statuses).", "tracking")}
             {cfg.oe_allow_messages !== false && (
-              <div className="flex items-center gap-3 pb-3 pl-4">
-                <span className="text-xs text-ink-secondary">Keep messages open after the job is finished for</span>
-                <input type="number" min={0} max={365} value={cfg.oe_msg_days_after_close ?? 14} aria-label="Days after closing"
-                  onChange={(e) => setCfg({ ...cfg, oe_msg_days_after_close: e.target.value === "" ? "" : Math.max(0, Math.min(365, Number(e.target.value))) })}
-                  onBlur={() => save({ oe_msg_days_after_close: Number(cfg.oe_msg_days_after_close) || 0 })}
-                  className="w-16 bg-white border border-slate-200 rounded-lg text-sm px-2 py-1.5 text-right" />
-                <span className="text-xs text-ink-secondary">days</span>
+              <div className="py-3 border-t border-slate-100" onBlur={() => save({ oe_msg_days_after_close: Number(cfg.oe_msg_days_after_close) || 0 })}>
+                <SettingRow htmlFor="pp-msg-days" label="Keep messages open after a job is finished" help="Customers can still write to you for this long once the job is closed.">
+                  <NumField id="pp-msg-days" max={365} value={cfg.oe_msg_days_after_close ?? 14} unit="days"
+                    onChange={(v) => setCfg({ ...cfg, oe_msg_days_after_close: v })} />
+                </SettingRow>
               </div>
             )}
-            <Sw k="oe_allow_staff_reply" label="Your team can reply on the page" onFocus="tracking" />
-            <Sw k="oe_allow_recommend" label="Customers can approve extra work you recommend" onFocus="tracking" />
-            <Sw k="oe_show_scheduled" label="Show the scheduled date" onFocus="tracking" />
+            {sw("oe_allow_staff_reply", "Your team can reply on the page", undefined, "tracking")}
+            {sw("oe_allow_recommend", "Customers can approve extra work you recommend", undefined, "tracking")}
+            {sw("oe_show_scheduled", "Show the scheduled date", undefined, "tracking")}
           </Card>
 
-          <Approval prefix="oe" list={est} noun="estimate" />
-          <Approval prefix="oe_wo" list={wo} noun="work order" />
+          {approval("oe", est, "estimate")}
+          {approval("oe_wo", wo, "work order")}
+
+          <Card icon="draw" title="Drop-off terms" hint="What the customer reads and signs on the tablet when they leave an item (Tekly Go). Leave empty to use the standard wording.">
+            <textarea value={cfg.dropoff_terms ?? ""} maxLength={4000} rows={4} aria-label="Drop-off terms"
+              onChange={(e) => setCfg({ ...cfg, dropoff_terms: e.target.value })}
+              onBlur={() => save({ dropoff_terms: (cfg.dropoff_terms || "").trim() })}
+              placeholder="I'm leaving this item for diagnosis and repair. I've backed up my data; the shop isn't responsible for data loss…"
+              className="glass-input w-full rounded-xl px-3 py-2 text-sm" />
+          </Card>
         </div>
 
         {/* Live preview */}
@@ -206,7 +226,7 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
           <div className="rounded-[34px] border-[7px] border-slate-800 bg-white overflow-hidden mx-auto w-[260px] shadow-clay-card">
             <div className="h-[470px] overflow-hidden flex flex-col text-[11px]">
               <div className="flex items-center gap-2 px-3 py-3 border-b border-slate-100">
-                <Logo show={!!cfg.page_show_logo} /><span className="font-semibold text-ink-primary truncate">{name}</span>
+                {logoEl(!!cfg.page_show_logo)}<span className="font-semibold text-ink-primary truncate">{name}</span>
               </div>
 
               {page === "booking" && (
@@ -223,7 +243,7 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
                       ))}
                     </div>
                     {cfg.book_show_employee_step && (
-                      <div className="flex gap-1.5">{["Any", "Priya", "Amit"].map((p, i) => <span key={p} className="px-2.5 py-1 rounded-full border text-[11px]" style={i === 0 ? { borderColor: accent, color: accent } : { borderColor: "#e2e8f0" }}>{p}</span>)}</div>
+                      <div className="flex flex-wrap gap-1.5">{["Any", ...(cfg.public_employee_name === "first" ? ["Priya", "Amit"] : cfg.public_employee_name === "first_initial" ? ["Priya S.", "Amit R."] : cfg.public_employee_name === "custom" ? ["Priya S.", "Amit (lead tech)"] : ["Priya Shah", "Amit Rao"])].map((p, i) => <span key={p} className="px-2.5 py-1 rounded-full border text-[11px]" style={i === 0 ? { borderColor: accent, color: accent } : { borderColor: "#e2e8f0" }}>{p}</span>)}</div>
                     )}
                     <div className="grid grid-cols-4 gap-1.5">
                       {["9:00", "9:30", "10:00", "10:30", "11:00", "1:00", "1:30", "2:00"].map((t, i) => (
