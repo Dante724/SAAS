@@ -97,3 +97,26 @@ async def add_to_column(db, obj, attr: str, delta, *, round_to=q2) -> float:
                      .execution_options(synchronize_session=False))
     await db.refresh(obj, attribute_names=[attr])
     return getattr(obj, attr)
+
+
+async def claim_status(db, obj, expected, new, *, attr: str = "status", where=(), **values) -> bool:
+    """Move `obj.<attr>` from `expected` to `new` only if nobody else already has.
+
+    Read-check-write lets two identical requests (a double-clicked delete, a retried cancel) both
+    see the old status and both apply their side effects. A conditional
+    `UPDATE … WHERE id = :id AND status = :expected` takes the row lock (Postgres) or the write
+    lock (SQLite); the loser re-reads the changed row and updates nothing. Call it BEFORE the
+    side effects and refuse when it returns False. `expected` may be a tuple of statuses; `where`
+    adds conditions that must still hold (e.g. "not paid"); extra keyword values are written in
+    the same statement."""
+    from sqlalchemy import update
+    model = type(obj)
+    col = getattr(model, attr)
+    cond = col.in_(expected) if isinstance(expected, (tuple, list, set)) else col == expected
+    res = await db.execute(update(model).where(model.id == obj.id, cond, *where)
+                           .values({attr: new, **values})
+                           .execution_options(synchronize_session=False))
+    if res.rowcount != 1:
+        return False
+    await db.refresh(obj, attribute_names=[attr, *values])
+    return True

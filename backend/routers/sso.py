@@ -14,6 +14,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.config import settings
 from backend.db.database import get_db
 from backend.models import Employee, SsoConnection
+from backend.services.audit import record as audit_record
 from backend.services.auth import require_perm
 
 router = APIRouter(prefix="/api/sso", tags=["sso"])
@@ -97,6 +98,10 @@ async def create_config(
     conn = SsoConnection(org_id=current.org_id, **{**data.model_dump(), "email_domain": domain,
                                                      "client_secret": encrypt(data.client_secret)})
     db.add(conn)
+    await db.flush()
+    await audit_record(db, org_id=current.org_id, actor_id=current.id, action="sso.create",
+                       entity_type="sso_connection", entity_id=conn.id,
+                       diff={"fields": sorted(k for k, v in data.model_dump().items() if v not in (None, ""))})
     await db.commit()
     await db.refresh(conn)
     return _ser(conn)
@@ -113,6 +118,8 @@ async def delete_config(
     if not conn:
         raise HTTPException(404, "SSO config not found")
     await db.delete(conn)
+    await audit_record(db, org_id=current.org_id, actor_id=current.id, action="sso.delete",
+                       entity_type="sso_connection", entity_id=conn_id)
     await db.commit()
     return {"ok": True}
 

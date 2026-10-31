@@ -296,7 +296,7 @@ class Employee(Base):
     token_version: Mapped[int] = mapped_column(Integer, default=0)
     must_reset_password: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))  # H1: still on the old default password
     mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False)
-    mfa_secret: Mapped[Optional[str]] = mapped_column(String(64))          # base32 TOTP secret
+    mfa_secret: Mapped[Optional[str]] = mapped_column(String(255))         # base32 TOTP secret, encrypted (services/crypto)
     mfa_recovery_codes: Mapped[Optional[str]] = mapped_column(Text)        # JSON list of hashed single-use codes
     mfa_last_step: Mapped[Optional[int]] = mapped_column(Integer)          # last accepted TOTP time step (replay guard)  # bump to revoke all issued tokens (lost-device logout)
     # Build 144cb: email verification. Existing users default unverified; verification
@@ -956,6 +956,11 @@ class PlatformAdmin(Base):
     name: Mapped[str] = mapped_column(String(200))
     password_hash: Mapped[str] = mapped_column(String(255))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
+    # Audit M6: 2-step sign-in and revocable tokens for the super-admin.
+    token_version: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))  # bump = sign out everywhere
+    mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
+    mfa_secret: Mapped[Optional[str]] = mapped_column(String(255))     # TOTP secret, encrypted (services/crypto)
+    mfa_last_step: Mapped[Optional[int]] = mapped_column(Integer)      # last accepted TOTP step (replay guard)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
@@ -2092,12 +2097,16 @@ class WebhookDelivery(Base):
     endpoint_id: Mapped[str] = mapped_column(String, ForeignKey("webhook_endpoints.id"), index=True)
     event: Mapped[str] = mapped_column(String(60))
     payload: Mapped[str] = mapped_column(Text, default="{}")
-    status: Mapped[str] = mapped_column(String(12), default="pending")  # pending|sent|failed
+    status: Mapped[str] = mapped_column(String(12), default="pending")  # pending|sending|sent|failed|abandoned
     response_code: Mapped[Optional[int]] = mapped_column(Integer)
     attempts: Mapped[int] = mapped_column(Integer, default=0)
     error: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
     delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # Audit R3: when the current send started (a stale one was interrupted and is retried), and
+    # the earliest time the retry sweep may try a failed delivery again (backoff).
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    next_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
 class Lead(Base):

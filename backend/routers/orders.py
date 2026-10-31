@@ -1,3 +1,4 @@
+import logging
 import secrets
 from datetime import datetime, timedelta
 from typing import List, Optional
@@ -732,6 +733,22 @@ async def bulk_action(
     await db.commit()
     return {"ok": True, "updated": n}
 
+
+async def _order_side_effect(db: AsyncSession, order: Order, label: str, fn, *reload) -> None:
+    """Run one best-effort side effect of saving an order and commit it. On failure log it, roll
+    back just that work and reload the order (and `reload` objects, e.g. the signed-in employee),
+    so the next side effect starts from a clean session."""
+    order_id = order.id
+    try:
+        await fn()
+        await db.commit()
+    except Exception:  # noqa: BLE001 — the order is already saved; a side effect must not undo it
+        logging.getLogger("tekly").exception("order %s saved, but %s failed", order_id, label)
+        await db.rollback()
+        for obj in (order, *reload):
+            await db.refresh(obj)
+
+
 @router.post("", status_code=201)
 async def create_order(
     data: OrderIn,
@@ -998,74 +1015,74 @@ async def create_order(
     await db.commit()
     await db.refresh(order)
 
-    # 144gp Phase B — intake custom fields can auto-draft upsells (shared rule surface).
-    try:
+    # Best-effort side effects. Each one commits on its own; a failure is logged and rolled
+    # back so the hooks after it still work (R1: they used to be `except: pass`, and one DB error
+    # left the session broken for every later hook).
+    async def upsells():
+        # 144gp Phase B — intake custom fields can auto-draft upsells (shared rule surface).
         from backend.routers.forms import sync_order_field_upsells
         await sync_order_field_upsells(db, current.org_id, order, current)
-        await db.commit()
-    except Exception:  # noqa: BLE001 — never block order creation on an upsell
-        pass
 
-    # E4 — a new order enters its first status: attach the checklists set to attach on it.
-    try:
+    async def checklists():
+        # E4 — a new order enters its first status: attach the checklists set to attach on it.
         from backend.routers.checklists import auto_attach_for_status
         from backend.routers.feed import log_system_event as _log_ev
         for _title in await auto_attach_for_status(db, order, order.status, author_id=current.id):
             await _log_ev(db, current.org_id, "order", order.id, f"Checklist attached: {_title}")
-        await db.commit()
-    except Exception:  # noqa: BLE001 — never block order creation on a checklist
-        await db.rollback()
 
-    if not order.is_estimate:
-        try:
-            from backend.services.webhooks import emit_event
-            await emit_event(db, current.org_id, "order.created", {
-                "id": order.id, "order_number": order.order_number,
-                "status": order.status, "total": order.total})
-            await db.commit()
-        except Exception:
-            pass
+    async def webhook():
+        from backend.services.webhooks import emit_event
+        await emit_event(db, current.org_id, "order.created", {
+            "id": order.id, "order_number": order.order_number,
+            "status": order.status, "total": order.total})
 
-    # Payroll: order_created commissions to the creator (idempotent).
-    try:
+    async def commissions():
+        # Payroll: order_created commissions to the creator (idempotent).
         from backend.services.payroll import CommissionEngine
         await CommissionEngine(db, current.org_id).commissions_for_order_create(order, current.id)
-    except Exception:
-        pass
 
-    # Notify the assigned technician (in-app + push) on a fresh assignment.
-    if order.assigned_to_id and order.assigned_to_id != current.id:
-        try:
-            from backend.services.push import notify
-            await notify(db, org_id=current.org_id, employee_id=order.assigned_to_id,
-                         kind="job.assigned", title=f"New job {order.order_number}",
-                         body=(order.complaint or "")[:140], deep_link=f"/tech#/order/{order.id}")
-        except Exception:
-            pass
+    async def notify_technician():
+        # Notify the assigned technician (in-app + push) on a fresh assignment.
+        from backend.services.push import notify
+        await notify(db, org_id=current.org_id, employee_id=order.assigned_to_id,
+                     kind="job.assigned", title=f"New job {order.order_number}",
+                     body=(order.complaint or "")[:140], deep_link=f"/tech#/order/{order.id}")
 
-    # Phase 1: fire "order created" notifications (real work orders only).
-    # 144jc: run the rules engine first (client + staff), fall back to the legacy
-    # template dispatch only when no rule matched — same convergence as status change.
-    if not order.is_estimate:
-        created_matched = 0
-        try:
-            from backend.services import notification_rules as _nr
-            _cres = await _nr.evaluate(db, org_id=current.org_id, order_id=order.id, event="created")
-            created_matched = (_cres or {}).get("matched", 0)
-            await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
-                                         event="created", actor_id=current.id)
-        except Exception:  # noqa: BLE001
-            pass
-        if created_matched == 0:
-            from backend.services.notifications import dispatch_order_notifications
-            await dispatch_order_notifications(
-                db, org_id=current.org_id, order_id=order.id, trigger_event="order_created")
-    # Build 144w: workflow automations for order-created (best-effort).
-    try:
+    created_matched = 0
+
+    async def notification_rules():
+        # Phase 1: fire "order created" notifications (real work orders only).
+        # 144jc: run the rules engine first (client + staff), fall back to the legacy
+        # template dispatch only when no rule matched — same convergence as status change.
+        nonlocal created_matched
+        from backend.services import notification_rules as _nr
+        _cres = await _nr.evaluate(db, org_id=current.org_id, order_id=order.id, event="created")
+        created_matched = (_cres or {}).get("matched", 0)
+        await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
+                                     event="created", actor_id=current.id)
+
+    async def legacy_notifications():
+        from backend.services.notifications import dispatch_order_notifications
+        await dispatch_order_notifications(
+            db, org_id=current.org_id, order_id=order.id, trigger_event="order_created")
+
+    async def automations():
+        # Build 144w: workflow automations for order-created.
         from backend.services import automation as _auto
         await _auto.run(db, current.org_id, "order_created", order=order)
-    except Exception:
-        pass
+
+    await _order_side_effect(db, order, "upsell drafting", upsells, current)
+    await _order_side_effect(db, order, "checklist attach", checklists, current)
+    if not order.is_estimate:
+        await _order_side_effect(db, order, "order.created webhook", webhook, current)
+    await _order_side_effect(db, order, "creation commissions", commissions, current)
+    if order.assigned_to_id and order.assigned_to_id != current.id:
+        await _order_side_effect(db, order, "technician notification", notify_technician, current)
+    if not order.is_estimate:
+        await _order_side_effect(db, order, "notification rules", notification_rules, current)
+        if created_matched == 0:
+            await _order_side_effect(db, order, "order notifications", legacy_notifications, current)
+    await _order_side_effect(db, order, "automations", automations, current)
 
     result = await db.execute(
         select(Order)

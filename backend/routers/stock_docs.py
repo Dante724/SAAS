@@ -36,7 +36,7 @@ from backend.models import (
 )
 from backend.services import warehouses as wh
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.money import q2, q4
+from backend.services.money import claim_status, q2, q4
 
 router = APIRouter(prefix="/api/stock-docs", tags=["inventory"])
 
@@ -283,6 +283,10 @@ async def delete_return(
     if doc.paid:
         raise HTTPException(
             409, "This return has been paid. Delete the payment first, then the return.")
+    # Claim the delete before giving stock back, so a second identical request does nothing.
+    # `paid` re-checked in the same statement: a payment that lands in between must win.
+    if not await claim_status(db, doc, doc.status, "deleted", where=(PurchaseReturn.paid.isnot(True),)):
+        raise HTTPException(409, "This return just changed (deleted or paid). Refresh and try again.")
 
     w = await wh.resolve(db, current.org_id, warehouse_id=doc.warehouse_id)
     lines = (await db.execute(select(PurchaseReturnLine).where(
@@ -299,7 +303,6 @@ async def delete_return(
             part_id=ln.part_id, location_id=w.location_id if w else None,
             warehouse_id=doc.warehouse_id, movement_type="return_reverted",
             qty=ln.qty, created_by_id=current.id))
-    doc.status = "deleted"
     # 144ax: only a BALANCE-settled return ever moved the AP balance on create, so only that
     # reverses it here. (Previously the column was bumped unconditionally — a cash-settled return,
     # which is paid from the cashbox, had its deletion wrongly inflate the AP balance with no
@@ -491,6 +494,8 @@ async def delete_write_off(
         raise HTTPException(404, "Write-off not found")
     if doc.status == "reverted":
         return {"ok": True, "already_reverted": True}
+    if not await claim_status(db, doc, doc.status, "reverted", reverted_at=datetime.utcnow()):
+        return {"ok": True, "already_reverted": True}   # a concurrent request got there first
 
     w = await wh.resolve(db, current.org_id, warehouse_id=doc.warehouse_id)
     lines = (await db.execute(select(WriteOffLine).where(
@@ -507,8 +512,6 @@ async def delete_write_off(
             part_id=ln.part_id, location_id=w.location_id if w else None,
             warehouse_id=doc.warehouse_id, movement_type="writeoff_reverted",
             qty=ln.qty, created_by_id=current.id))
-    doc.status = "reverted"
-    doc.reverted_at = datetime.utcnow()
     await db.commit()
     return {"ok": True, "stock_restored": True}
 
@@ -739,9 +742,10 @@ async def delete_posting(
                 409, f"“{name}” from this posting has already been used, sold or "
                      f"transferred (only {have:g} of {ln.qty:g} left on hand). Correct it "
                      f"with a write-off or supplier return instead of deleting the posting.")
+    if not await claim_status(db, doc, doc.status, "deleted", where=(Posting.paid.isnot(True),)):
+        raise HTTPException(409, "This posting just changed (deleted or paid). Refresh and try again.")
     for ln in lines:
         await _apply_posting_line(db, current, w, ln, sign=-1)
-    doc.status = "deleted"
     if doc.settlement == "cash" and doc.account_id and doc.total:
         from backend.routers.cash import post_transaction
         await post_transaction(db, current.org_id, doc.account_id, "income", float(doc.total),

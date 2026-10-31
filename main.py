@@ -154,6 +154,15 @@ app = FastAPI(
 
 # Innermost: cost/margin fields leave the server only for roles allowed to see them.
 from backend.core.cost_redaction import CostRedactionMiddleware  # noqa: E402
+from backend.services.org_creds import CredentialsUnreadable  # noqa: E402
+
+
+@app.exception_handler(CredentialsUnreadable)
+async def _unreadable_creds(_request, exc: CredentialsUnreadable):
+    # Audit M10: a shop's saved keys that can't be decrypted are refused everywhere (never swapped
+    # for the operator's); paths that don't handle it say what to do instead of a 500.
+    return JSONResponse(status_code=409, content={"detail": str(exc)})
+
 
 app.add_middleware(CostRedactionMiddleware)
 app.add_middleware(RequestContextMiddleware)

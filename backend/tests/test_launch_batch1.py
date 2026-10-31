@@ -168,8 +168,15 @@ def test_unsigned_webhooks_need_an_explicit_dev_environment(monkeypatch):
     from backend.config import Settings
     from backend.core import webhook_security as ws
     monkeypatch.delenv("ENVIRONMENT", raising=False)
-    monkeypatch.setattr(ws, "settings", Settings(_env_file=None))     # ENVIRONMENT never set
-    assert ws.settings.ENVIRONMENT == "development"
+    # ENVIRONMENT never set: since audit M5 that is production, which refuses to boot without
+    # real secrets; give it a strong config to look at the webhook rule alone.
+    from cryptography.fernet import Fernet
+    monkeypatch.setattr(ws, "settings", Settings(
+        _env_file=None, SECRET_KEY="s" * 48, CORS_ORIGINS="https://app.example.com",
+        DATABASE_URL="postgresql+asyncpg://u@db/tekly", PUBLIC_BASE_URL="https://app.example.com",
+        SMTP_HOST="smtp.example.com", SMTP_FROM="no-reply@example.com",
+        TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode()))
+    assert ws.settings.ENVIRONMENT == "production"
     assert ws.unsigned_webhooks_allowed() is False
     monkeypatch.setenv("ENVIRONMENT", "development")
     monkeypatch.setattr(ws, "settings", Settings(_env_file=None))

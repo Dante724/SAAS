@@ -13,6 +13,7 @@ from backend.core.jobs import job_runner
 log = logging.getLogger("tekly.jobs")
 
 _MAX_ATTEMPTS = 5
+_STALE_SEND_MIN = 10     # a send times out after seconds; "sending" this long means the worker died
 
 
 @job_runner.every(600, "status-sla-sweep")
@@ -58,8 +59,12 @@ async def sweep_notifications() -> None:
                 queued += await nr.queue_appointment_reminders(db, org_id=oid)
                 res = await nr.run_due(db, org_id=oid)
                 sent += res.get("sent", 0)
+                await db.commit()
             except Exception:  # noqa: BLE001 — one bad org never stalls the sweep
                 log.exception("notification-sweep failed for org %s", oid)
+                # R2: a failed statement leaves the shared session needing a rollback; without
+                # it every later shop in this tick failed too.
+                await db.rollback()
         if queued or sent:
             log.info("notification-sweep: queued %d, sent %d", queued, sent)
 
@@ -83,8 +88,10 @@ async def sweep_contact_lifecycle() -> None:
         for oid in org_ids:
             try:
                 sent += await nr.notify_contact_birthdays(db, org_id=oid)
+                await db.commit()
             except Exception:  # noqa: BLE001
                 log.exception("contact-lifecycle-sweep failed for org %s", oid)
+                await db.rollback()   # R2: same as the notification sweep
         if sent:
             log.info("contact-lifecycle-sweep: sent %d birthday message(s)", sent)
 
@@ -96,15 +103,36 @@ async def retry_failed_webhooks() -> None:
     Moves transient webhook failures off the request path: the original POST is
     best-effort during the request; this sweep gives it durable retries.
     """
+    from datetime import datetime, timedelta
+
+    from sqlalchemy import and_, or_, update
+
     from backend.db.database import AsyncSessionLocal
     from backend.models import WebhookDelivery, WebhookEndpoint
     from backend.services.webhooks import _attempt, claim_delivery
 
     async with AsyncSessionLocal() as db:
+        now = datetime.utcnow()
+        # R3: a worker that died mid-send left the row at "sending" forever. After the send
+        # timeout has long passed, count that try as a failed attempt and let it be retried.
+        stale = now - timedelta(minutes=_STALE_SEND_MIN)
+        await db.execute(update(WebhookDelivery).where(
+            WebhookDelivery.status == "sending",
+            or_(WebhookDelivery.claimed_at < stale,
+                and_(WebhookDelivery.claimed_at.is_(None), WebhookDelivery.created_at < stale)),
+        ).values(status="failed", attempts=WebhookDelivery.attempts + 1, next_attempt_at=None,
+                 error="Interrupted while sending").execution_options(synchronize_session=False))
+        # Out of attempts: say so, instead of sitting at "failed" forever.
+        await db.execute(update(WebhookDelivery).where(
+            WebhookDelivery.status == "failed", WebhookDelivery.attempts >= _MAX_ATTEMPTS,
+        ).values(status="abandoned").execution_options(synchronize_session=False))
+        await db.commit()
         rows = (await db.execute(
             select(WebhookDelivery).where(
                 WebhookDelivery.status.in_(("failed", "pending")),
                 WebhookDelivery.attempts < _MAX_ATTEMPTS,
+                # R3 backoff: a failed delivery waits longer after each try
+                or_(WebhookDelivery.next_attempt_at.is_(None), WebhookDelivery.next_attempt_at <= now),
             ).limit(100)
         )).scalars().all()
         if not rows:

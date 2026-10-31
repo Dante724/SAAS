@@ -67,3 +67,8 @@ def decrypt(value):
         return f.decrypt(value[len(_PREFIX):].encode()).decode()
     except Exception:
         return value
+
+
+def is_encrypted(value) -> bool:
+    """True for our prefixed ciphertext (whether or not the current key can open it)."""
+    return isinstance(value, str) and value.startswith(_PREFIX)

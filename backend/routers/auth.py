@@ -348,10 +348,22 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
         from backend.services.mfa import consume_recovery_code
         from backend.services.mfa import verify_step as _mfa_step
         code = (getattr(form, "client_secret", None) or "").strip()  # OAuth2 form carries it
-        step = _mfa_step(employee.mfa_secret, code) if code else None
+        from backend.services.crypto import decrypt as _decrypt
+        step = _mfa_step(_decrypt(employee.mfa_secret), code) if code else None
         # Each TOTP code works once: refuse a step at or before the last one accepted.
         if step is not None and employee.mfa_last_step is not None and step <= employee.mfa_last_step:
             step = None
+        if step is not None:
+            # Record the step with a conditional UPDATE: two sign-ins racing with the same
+            # intercepted code can't both pass the check above.
+            from sqlalchemy import or_ as _or
+            from sqlalchemy import update as _update
+            res = await db.execute(_update(Employee).where(
+                Employee.id == employee.id,
+                _or(Employee.mfa_last_step.is_(None), Employee.mfa_last_step < step),
+            ).values(mfa_last_step=step).execution_options(synchronize_session=False))
+            if res.rowcount != 1:
+                step = None
         ok = step is not None
         if ok:
             employee.mfa_last_step = step

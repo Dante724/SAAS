@@ -5,7 +5,7 @@ CI_ENV = ENVIRONMENT=test SEED_DEMO=false DATABASE_URL=sqlite+aiosqlite:///./ci_
 install:        ## install runtime + dev deps (pinned — same versions as CI)
 	pip install -r requirements-dev.txt
 run:            ## run the API (dev)
-	uvicorn main:app --reload
+	ENVIRONMENT=$${ENVIRONMENT:-development} uvicorn main:app --reload
 test:           ## run the backend test suite (parallel)
 	pytest -q -n auto
 test-pg:        ## run the suite against Postgres: make test-pg PG=postgresql+asyncpg://user:pass@localhost:5432/repairos_test

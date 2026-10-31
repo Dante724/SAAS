@@ -31,7 +31,7 @@ from backend.models import (
 from backend.services.auth import assert_perm, has_perm, require_perm, record_scope
 from backend.core import paging as _paging
 from backend.services.numbering import next_number
-from backend.services.money import q2
+from backend.services.money import add_to_column, claim_status, q2
 from backend.services.invoicing import settle_status
 
 
@@ -325,6 +325,9 @@ _DOCUMENT_LEGS = {"order": "work order payment", "invoice": "invoice payment", "
                   "payroll_run": "payroll run"}
 
 
+_CHANGED = "Someone else just changed this transaction. Refresh and try again."
+
+
 def _guard_document_leg(t) -> None:
     if t.ref_type in _DOCUMENT_LEGS:
         raise HTTPException(409, f"This transaction is the cash side of a {_DOCUMENT_LEGS[t.ref_type]}. "
@@ -384,18 +387,23 @@ async def delete_transaction(
     _guard_document_leg(t)
     legs = [t]
     if t.transfer_pair_id:
+        # by id, so two requests on the two legs lock them in the same order (no deadlock)
         legs = (await db.execute(select(Transaction).where(
             Transaction.org_id == current.org_id,
-            Transaction.transfer_pair_id == t.transfer_pair_id))).scalars().all()
+            Transaction.transfer_pair_id == t.transfer_pair_id).order_by(Transaction.id))).scalars().all()
     for leg in legs:
         if leg.status == "deleted":
             continue
+        # Claim the leg first: a second identical request that read it as active finds it
+        # already deleted here and reverses nothing.
+        if not await claim_status(db, leg, leg.status, "deleted",
+                                  void_reason=reason, voided_by_id=current.id):
+            await db.rollback()
+            raise HTTPException(409, _CHANGED)
         acc = (await db.execute(select(Account).where(Account.id == leg.account_id))).scalar_one_or_none()
         if acc:
-            acc.balance = q2((acc.balance or 0) - leg.amount)  # reverse; do NOT touch other rows' balance_after
-        leg.status = "deleted"
-        leg.void_reason = reason
-        leg.voided_by_id = current.id
+            # reverse; do NOT touch other rows' balance_after
+            await add_to_column(db, acc, "balance", -float(leg.amount or 0))
     await db.commit()
     return {"ok": True, "voided": len(legs)}
 
@@ -412,20 +420,28 @@ async def restore_transaction(
         raise HTTPException(400, "Transaction is not deleted")
     if t.ref_type == "payroll_run":   # voided with its run; reviving it alone would pay twice
         raise HTTPException(409, "This was the payout of a voided payroll run. Accrue and pay the period again instead.")
+    # Same guards as delete: a sale, payment or refund leg was voided with its document, and
+    # bringing back only the cash row would put money in the till while the document stays void.
+    if t.ref_type in ("refund", "client_return", "purchase_return"):
+        raise HTTPException(409, f"This transaction settled a {t.ref_type.replace('_', ' ')} that was "
+                                 "deleted. Create the return/refund again instead.")
+    if t.ref_type in _DOCUMENT_LEGS:
+        raise HTTPException(409, f"This transaction is the cash side of a {_DOCUMENT_LEGS[t.ref_type]} "
+                                 "that was voided. Take the payment again from that document instead.")
     legs = [t]
     if t.transfer_pair_id:
         legs = (await db.execute(select(Transaction).where(
             Transaction.org_id == current.org_id,
-            Transaction.transfer_pair_id == t.transfer_pair_id))).scalars().all()
+            Transaction.transfer_pair_id == t.transfer_pair_id).order_by(Transaction.id))).scalars().all()
     for leg in legs:
         if leg.status != "deleted":
             continue
+        if not await claim_status(db, leg, "deleted", "active", void_reason=None, voided_by_id=None):
+            await db.rollback()
+            raise HTTPException(409, _CHANGED)
         acc = (await db.execute(select(Account).where(Account.id == leg.account_id))).scalar_one_or_none()
         if acc:
-            acc.balance = q2((acc.balance or 0) + leg.amount)
-        leg.status = "active"
-        leg.void_reason = None
-        leg.voided_by_id = None
+            await add_to_column(db, acc, "balance", float(leg.amount or 0))
     await db.commit()
     return {"ok": True, "restored": len(legs)}
 

@@ -1,5 +1,34 @@
 # Changelog
 
+## Audit 29 Oct 2026 — Medium fixes M3–M11 and reliability R1–R3
+
+Findings in `docs/audits/2026-10-29-full-codebase-audit.md`. Migrations `aud6m01` → `aud8m01` →
+`aud10m01` → `aud3r01` (after `mkw01`; additive, plus a data backfill in `aud8m01`/`aud10m01`).
+
+- **Deploy note: `ENVIRONMENT` unset now means production** (M5). Every fail-closed check applies
+  unless it is explicitly `development` or `test`, so set `ENVIRONMENT=development` in a local `.env`.
+- **Restoring a voided sale, payment or refund row is refused** (M3), like deleting one already was.
+- **Double clicks and retries apply once** (M4): cash delete/restore, transfer status moves and
+  deleting a supplier return, write-off or posting claim the row with a conditional update first.
+- **Operator portal 2-step sign-in** (M6): authenticator-app codes (each usable once), "Sign out on
+  every device", and old tokens stop working. Deployed, the portal shows only the 2-step setup until
+  it is on. Unknown emails take as long to refuse as wrong passwords.
+- **Logs and Sentry leave out customer data** (M7): deployed database errors hide query values;
+  tracebacks, log lines and Sentry events mask emails, secrets and `[parameters: …]`; Sentry no
+  longer sends local variables.
+- **Staff 2-step secrets are encrypted at rest** (M8); existing rows are encrypted by `aud8m01`.
+- **Audit trail** (M9) for payment/SMS key changes, webhooks, SSO, email accounts and operator
+  changes to a shop — field names only, never values.
+- **Unreadable shop keys fail closed** (M10) instead of quietly using the operator's keys; the screen
+  says "Enter keys again". Keys under the old SECRET_KEY-derived key are re-encrypted by `aud10m01`,
+  then that key is no longer used when `TOKEN_ENCRYPTION_KEY` is set.
+- **SSRF** (M11): only globally routable addresses count as public (blocks 100.64.0.0/10, which
+  holds a cloud metadata address, plus 6to4/Teredo forms); automation webhooks connect to the
+  address that was checked.
+- **Reliability**: order side effects are logged and rolled back one by one (R1); one shop's error no
+  longer stops the notification sweep for the rest (R2); interrupted webhook sends are retried and
+  failed ones back off 1, 2, 4… minutes up to 6 hours (R3).
+
 ## WS-C — Inquiries everywhere (Orderry June–July sprint, gaps #8–#12, #17, #18, #20)
 
 Council note: `docs/council-ws-c-inquiries.md`. Migration `wsc1` (after `opd1`, additive only).
