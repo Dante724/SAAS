@@ -124,10 +124,12 @@ async def ensure_seeded(db: AsyncSession, org_id: str):
     # correct estimate-typed copy, producing duplicate keys that crash bare-key
     # status lookups (MultipleResultsFound). Drop the mis-typed estimate orphans;
     # no-op on clean orgs. Estimate keys (est_*) never belong to work_order.
-    heal = await db.execute(delete(OrderStatus).where(
-        OrderStatus.org_id == org_id, OrderStatus.record_type == "work_order",
-        OrderStatus.key.like("est\\_%", escape="\\")))
-    if heal.rowcount:
+    # Look first: this runs on every board load, and an unconditional DELETE took the database's
+    # write lock on every read (a 500 "database is locked" under a 15-user load on SQLite).
+    misfiled = (OrderStatus.org_id == org_id, OrderStatus.record_type == "work_order",
+                OrderStatus.key.like("est\\_%", escape="\\"))
+    if (await db.execute(select(OrderStatus.id).where(*misfiled).limit(1))).first():
+        await db.execute(delete(OrderStatus).where(*misfiled))
         await db.commit()
     # Each pipeline is seeded only while it is empty (a shop that deletes a default status keeps
     # it deleted). Launch QA B2: inserts skip rows that already exist (unique index on

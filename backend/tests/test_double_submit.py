@@ -424,3 +424,32 @@ async def test_cancelled_invoice_does_not_block_a_new_one(client, tenant, db):
     await db.commit()
     r = await client.post("/api/finance/invoices", headers=tenant, json={"order_id": oid, "client_id": cid})
     assert r.status_code == 201, r.text
+
+
+# ── load: reading the board must not write ─────────────────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_ensure_seeded_does_not_write_on_a_seeded_shop(client, tenant, db):
+    from sqlalchemy import event
+
+    from backend.models import Organisation, OrderStatus
+    from backend.routers.statuses import ensure_seeded
+    await client.get("/api/statuses", headers=tenant)                     # seeds
+    org_id = (await db.execute(select(Organisation.id))).scalars().first()
+    writes: list[str] = []
+
+    def _spy(conn, cursor, statement, *a):
+        if statement.lstrip().split(None, 1)[0].upper() in ("INSERT", "UPDATE", "DELETE"):
+            writes.append(statement)
+    event.listen(db.bind.sync_engine, "before_cursor_execute", _spy)
+    try:
+        await ensure_seeded(db, org_id)
+    finally:
+        event.remove(db.bind.sync_engine, "before_cursor_execute", _spy)
+    assert writes == []
+    # the self-heal still removes a mis-typed estimate status when there is one
+    db.add(OrderStatus(org_id=org_id, key="est_orphan", name="Orphan", record_type="work_order"))
+    await db.commit()
+    await ensure_seeded(db, org_id)
+    left = (await db.execute(select(func.count()).select_from(OrderStatus).where(
+        OrderStatus.org_id == org_id, OrderStatus.key == "est_orphan"))).scalar_one()
+    assert left == 0
