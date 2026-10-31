@@ -155,24 +155,26 @@ async def list_returns(
     current: Employee = Depends(get_current_employee),
 ):
     from backend.models import Order, Client, Part
+    from backend.services.batching import names_by_id
     rows = (await db.execute(select(ClientReturn).where(ClientReturn.org_id == current.org_id)
         .order_by(ClientReturn.created_at.desc()).limit(200))).scalars().all()
+    by_return: dict = {}
+    if rows:
+        for ln, name in (await db.execute(select(ClientReturnLine, Part.name)
+                .join(Part, ClientReturnLine.part_id == Part.id)
+                .where(ClientReturnLine.return_id.in_([r.id for r in rows])))).all():
+            by_return.setdefault(ln.return_id, []).append((ln, name))
+    order_no = await names_by_id(db, Order.id, Order.order_number, [r.order_id for r in rows],
+                                 org_col=Order.org_id, org_id=current.org_id)
+    client_name = await names_by_id(db, Client.id, Client.name, [r.client_id for r in rows],
+                                    org_col=Client.org_id, org_id=current.org_id)
     out = []
     for r in rows:
-        lines = (await db.execute(select(ClientReturnLine, Part.name)
-            .join(Part, ClientReturnLine.part_id == Part.id)
-            .where(ClientReturnLine.return_id == r.id))).all()
-        order_no = None
-        if r.order_id:
-            o = (await db.execute(select(Order.order_number).where(Order.id == r.order_id))).scalar_one_or_none()
-            order_no = o
-        client_name = None
-        if r.client_id:
-            client_name = (await db.execute(select(Client.name).where(Client.id == r.client_id))).scalar_one_or_none()
-        out.append({"id": r.id, "order_id": r.order_id, "order_number": order_no,
-                    "client_name": client_name, "reason": r.reason,
+        out.append({"id": r.id, "order_id": r.order_id, "order_number": order_no.get(r.order_id),
+                    "client_name": client_name.get(r.client_id), "reason": r.reason,
                     "created_at": r.created_at.isoformat() if r.created_at else None,
-                    "lines": [{"part_name": name, "qty": l.qty, "restock": l.restock} for l, name in lines]})
+                    "lines": [{"part_name": name, "qty": l.qty, "restock": l.restock}
+                              for l, name in by_return.get(r.id, [])]})
     return {"items": out}
 
 
@@ -184,14 +186,16 @@ async def list_refunds(
     from backend.models import Order, Account as Acct
     rows = (await db.execute(select(Refund).where(Refund.org_id == current.org_id)
         .order_by(Refund.created_at.desc()).limit(200))).scalars().all()
+    from backend.services.batching import names_by_id
+    order_no = await names_by_id(db, Order.id, Order.order_number, [r.order_id for r in rows],
+                                 org_col=Order.org_id, org_id=current.org_id)
+    acct_name = await names_by_id(db, Acct.id, Acct.name, [r.account_id for r in rows],
+                                  org_col=Acct.org_id, org_id=current.org_id)
     out = []
     for r in rows:
-        order_no = None
-        if r.order_id:
-            order_no = (await db.execute(select(Order.order_number).where(Order.id == r.order_id))).scalar_one_or_none()
-        acct_name = (await db.execute(select(Acct.name).where(Acct.id == r.account_id))).scalar_one_or_none()
         out.append({"id": r.id, "amount": r.amount, "reason": r.reason,
-                    "order_id": r.order_id, "order_number": order_no, "account_name": acct_name,
+                    "order_id": r.order_id, "order_number": order_no.get(r.order_id),
+                    "account_name": acct_name.get(r.account_id),
                     "return_id": r.return_id,
                     "created_at": r.created_at.isoformat() if r.created_at else None,
                     "voided_at": r.voided_at.isoformat() if r.voided_at else None,

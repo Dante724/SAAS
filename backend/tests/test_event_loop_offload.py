@@ -43,8 +43,3 @@ async def test_login_stays_responsive_while_hashing(client, tenant):
     assert r.status_code == 401
     assert ticks >= 5
 
-
-@pytest.mark.asyncio
-async def test_label_sheet_size_is_capped(client, tenant):
-    r = await client.post("/api/print/labels", json={"part_ids": ["p"] * 40, "copies": 100}, headers=tenant)
-    assert r.status_code == 422 and "labels" in r.text

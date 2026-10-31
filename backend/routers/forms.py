@@ -346,14 +346,14 @@ async def list_types(
         .order_by(WorkOrderType.sort_order, WorkOrderType.name)
     )
     types = result.scalars().all()
-    # field counts
+    # field counts, one grouped query for every type
+    counts = dict((await db.execute(
+        select(CustomField.type_id, func.count()).where(CustomField.type_id.in_([t.id for t in types]))
+        .group_by(CustomField.type_id))).all()) if types else {}
     out = []
     for t in types:
-        cnt = (await db.execute(
-            select(func.count()).select_from(CustomField).where(CustomField.type_id == t.id)
-        )).scalar() or 0
         d = _ser_type(t)
-        d["field_count"] = cnt
+        d["field_count"] = counts.get(t.id, 0)
         out.append(d)
     return {"items": out}
 

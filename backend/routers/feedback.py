@@ -80,7 +80,9 @@ async def list_feedback(
 ):
     rows = (await db.execute(select(Feedback).where(Feedback.org_id == current.org_id)
         .order_by(Feedback.created_at.desc()).limit(200))).scalars().all()
-    orders = {o.id: o.order_number for o in (await db.execute(select(Order).where(Order.org_id == current.org_id))).scalars().all()}
+    from backend.services.batching import names_by_id
+    orders = await names_by_id(db, Order.id, Order.order_number, [f.order_id for f in rows],
+                               org_col=Order.org_id, org_id=current.org_id)
     submitted = [f for f in rows if f.submitted_at]
     # NPS calc (if any nps responses)
     nps_resp = [f for f in submitted if f.system == "nps" and f.rating is not None]

@@ -30,6 +30,7 @@ from backend.models import (
     StockTransferLine,
 )
 from backend.services.auth import get_current_employee, require_perm
+from backend.services.batching import names_by_id, rows_by
 from backend.services.numbering import next_number
 from backend.services.money import q2
 
@@ -71,11 +72,13 @@ async def list_transfers(
         .order_by(StockTransfer.created_at.desc()).limit(100))).scalars().all()
     loc_names = {l.id: l.name for l in (await db.execute(
         select(Location).where(Location.org_id == current.org_id))).scalars().all()}
-    part_names = {p.id: p.name for p in (await db.execute(
-        select(Part).where(Part.org_id == current.org_id))).scalars().all()}
+    lines_by = await rows_by(db, StockTransferLine, StockTransferLine.transfer_id, [t.id for t in rows])
+    part_names = await names_by_id(db, Part.id, Part.name,
+                                   [l.part_id for ls in lines_by.values() for l in ls],
+                                   org_col=Part.org_id, org_id=current.org_id)
     out = []
     for t in rows:
-        ls = await _lines(db, t.id)
+        ls = lines_by.get(t.id, [])
         out.append(_ser(t, loc_names,
                         [{"part_id": l.part_id, "part_name": part_names.get(l.part_id), "qty": l.qty} for l in ls]))
     return {"items": out}
@@ -95,9 +98,9 @@ async def transfer_detail(
         raise HTTPException(404, "Transfer not found")
     loc_names = {l.id: l.name for l in (await db.execute(
         select(Location).where(Location.org_id == current.org_id))).scalars().all()}
-    parts = {p.id: p for p in (await db.execute(
-        select(Part).where(Part.org_id == current.org_id))).scalars().all()}
     ls = await _lines(db, tid)
+    parts = {p.id: p for p in (await db.execute(select(Part).where(
+        Part.org_id == current.org_id, Part.id.in_({l.part_id for l in ls})))).scalars().all()} if ls else {}
     line_data = []
     total_qty = total_val = 0.0
     for l in ls:
