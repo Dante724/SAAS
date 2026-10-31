@@ -20,7 +20,7 @@ import AutoPrintPicker from "../../components/AutoPrintPicker";
 import { autoPrintIfClosed } from "../../lib/autoPrint";
 import { Order, deviceName, money } from "./types";
 import { Avatar, deviceIcon, dueText, friendlyDate } from "./look";
-import { api, openAuthedDoc } from "../../api/client";
+import { api, idempotencyKey, openAuthedDoc } from "../../api/client";
 import { readAsDataUrl } from "../../lib/files";
 import { confirmDialog, alertDialog, promptDialog } from "../../lib/dialog";
 import AuthedImage from "../../components/AuthedImage";
@@ -1715,19 +1715,24 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyC
   const openPay = async (kind: "pay" | "prepay") => {
     try { const c = await api.get<PayCtx>(`/cash/orders/${orderId}/payment-context`); setCtx(c);
       setAccount(pickDefaultAccount(accountsFor(ctxAccounts(c), method as PaymentOption), c.location_id)); setAmount(String(kind === "pay" ? c.remaining : "")); setModal(kind);
+      payKey.current = idempotencyKey();
     } catch (e: any) { onFlash(`Cannot open payment: ${e.message}`); }
   };
   // Busy guard: the ref blocks a second click landing before React re-renders the disabled button,
   // so a double-click can never post the same payment twice.
   const [payBusy, setPayBusy] = useState(false); const payBusyRef = useRef(false);
+  // One key per payment window: a second click (or another tab's retry) gets the first answer back
+  // from the server instead of posting the money again. A new key once it has gone through.
+  const payKey = useRef(idempotencyKey());
   const [onReader, setOnReader] = useState(false);   // F2/F3: card taken on a reader instead of recorded by hand
   const submit = async () => {
     if (payBusyRef.current) return;
     payBusyRef.current = true; setPayBusy(true);
     const amt = parseFloat(amount);
     try {
-      if (modal === "prepay") await api.post(`/cash/orders/${orderId}/prepay`, { amount: amt, account_id: account });
-      else await api.post(`/cash/orders/${orderId}/pay`, { amount: amt, account_id: account, method });
+      if (modal === "prepay") await api.postOnce(`/cash/orders/${orderId}/prepay`, { amount: amt, account_id: account }, payKey.current);
+      else await api.postOnce(`/cash/orders/${orderId}/pay`, { amount: amt, account_id: account, method }, payKey.current);
+      payKey.current = idempotencyKey();
       setModal(null); onFlash("Payment recorded"); load();
     } catch (e: any) { onFlash(`Failed: ${e.message}`); } finally { payBusyRef.current = false; setPayBusy(false); }
   };

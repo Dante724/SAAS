@@ -1,4 +1,4 @@
-from fastapi import APIRouter, Depends, HTTPException, Query, Body
+from fastapi import APIRouter, Depends, HTTPException, Query, Body, Request
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
@@ -606,14 +606,29 @@ async def send_invoice_email(
 
 @router.post("/invoices/{invoice_id}/pay")
 async def record_payment(
-    invoice_id: str, data: PaymentIn,
+    invoice_id: str, data: PaymentIn, request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
     """Record money received against an invoice. Partial payments are fine. An amount above the
     balance needs ``overpay``: ``keep_balance`` books the excess as client credit (a client
     advance on the contact ledger), ``refund`` records it as handed straight back (needs Create
-    returns). Either way the invoice itself is never paid beyond its total."""
+    returns). Either way the invoice itself is never paid beyond its total. A retry with the
+    same Idempotency-Key gets the first answer back instead of posting twice."""
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "finance.invoice_pay")
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        result = await _record_payment(invoice_id, data, db, current)
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
+
+
+async def _record_payment(invoice_id: str, data: "PaymentIn", db: AsyncSession, current: Employee):
     from decimal import Decimal
 
     from backend.models import Account

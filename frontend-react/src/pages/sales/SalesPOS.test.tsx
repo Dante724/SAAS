@@ -21,7 +21,7 @@ const CABLE = { id: "p1", name: "USB-C cable", sku: "USB-C-1M", barcode: "012345
 let lookups: string[] = [];
 let lookupItems: Record<string, unknown[]> = {};
 let products: unknown[] = [CABLE];
-type Call = { method: string; path: string; body: any };
+type Call = { method: string; path: string; body: any; key?: string };
 let calls: Call[] = [];
 let accounts: unknown[] = [];
 // B5: the server prices the cart; by default a plain sum with no tax or rewards.
@@ -45,7 +45,7 @@ beforeEach(() => {
     const u = new URL(url, "http://x");
     const method = init?.method || "GET";
     const body = init?.body ? JSON.parse(String(init.body)) : null;
-    calls.push({ method, path: u.pathname, body });
+    calls.push({ method, path: u.pathname, body, key: (init?.headers as Record<string, string> | undefined)?.["Idempotency-Key"] });
     if (u.pathname === "/api/sales/quote") return reply(quote(body));
     if (u.pathname === "/api/cash/accounts") return reply({ items: accounts });
     if (u.pathname === "/api/sales" && method === "POST") {
@@ -247,6 +247,7 @@ describe("SalesPOS charges what the button says (B5)", () => {
     await u.click(within(box).getByRole("button", { name: /Take payment/ }));
     await vi.waitFor(() => expect(calls.some((c) => c.path === "/api/sales/s1/pay")).toBe(true));
     expect(calls.find((c) => c.path === "/api/sales/s1/pay")!.body).toMatchObject({ account_id: "till" });
+    expect(calls.find((c) => c.path === "/api/sales/s1/pay")!.key).toMatch(/^web-/);   // a double click posts once
     await vi.waitFor(() => expect(cartLines()).toHaveLength(0));
   });
 

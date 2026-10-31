@@ -3,7 +3,7 @@ from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy import update as sa_update
@@ -622,12 +622,27 @@ class SalePayIn(BaseModel):
 
 @router.post("/{sale_id}/pay")
 async def pay_sale(
-    sale_id: str, data: SalePayIn,
+    sale_id: str, data: SalePayIn, request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_create_sales")),
 ):
     """B5 — take payment for a parked sale, or one whose card was declined: what is still due
-    (the total less any gift card) goes into the chosen cashbox."""
+    (the total less any gift card) goes into the chosen cashbox. A retry with the same
+    Idempotency-Key gets the first answer back."""
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "sales.pay")
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        result = await _pay_sale(sale_id, data, db, current)
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
+
+
+async def _pay_sale(sale_id: str, data: SalePayIn, db: AsyncSession, current: Employee):
     from backend.models import Account
     sale = await _load_sale(db, current, sale_id, lock=True)
     if sale.voided_at:
@@ -644,6 +659,11 @@ async def pay_sale(
     due = await sale_amount_due(db, sale)
     if data.cash_tendered is not None and data.cash_tendered + 0.005 < due:
         raise HTTPException(400, f"Cash received ({data.cash_tendered:.2f}) is less than the {due:.2f} due.")
+    # Claim the sale before any money moves: of two "pay" clicks in flight, one wins.
+    won = await db.execute(sa_update(Sale).where(Sale.id == sale.id, Sale.paid == False)  # noqa: E712
+                           .values(paid=True).execution_options(synchronize_session=False))
+    if won.rowcount != 1:
+        raise HTTPException(409, "This sale is already paid")
     if due > 0:
         from backend.routers.cash import post_transaction
         await post_transaction(db, current.org_id, acc.id, "income", due, comment=f"Sale {sale.sale_number}",

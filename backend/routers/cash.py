@@ -735,12 +735,30 @@ class PrepayIn(BaseModel):
 async def prepay_order(
     order_id: str,
     data: PrepayIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
     """Take a prepayment on an order. Posts income to the chosen cashbox and
-    records a Payment(kind=prepayment) that the close-window math subtracts."""
-    o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+    records a Payment(kind=prepayment) that the close-window math subtracts.
+    A double click with the same Idempotency-Key posts once and gets the first answer back."""
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "cash.prepay_order")
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        result = await _prepay_order(order_id, data, db, current)
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
+
+
+async def _prepay_order(order_id: str, data: PrepayIn, db: AsyncSession, current: Employee):
+    # Row lock so two prepayments serialize on Postgres (SQLite serializes writes anyway).
+    o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
+                          .with_for_update())).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
     if data.amount <= 0:
@@ -764,7 +782,8 @@ async def prepay_order(
         await post_contact_ledger(db, current.org_id, o.client_id, "prepayment", -abs(data.amount),
                                   note=f"Prepayment for {o.order_number}", ref_type="payment",
                                   ref_id=pay.id, created_by_id=current.id)
-    o.prepayment_total = (o.prepayment_total or 0) + data.amount
+    # In SQL, not Python: two prepayments read at once must both count.
+    o.prepayment_total = func.coalesce(Order.prepayment_total, 0) + data.amount
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "order", order_id, f"Prepayment {data.amount} to {acc.name}")
     from backend.services.order_money import apply_deposits, cancel_open_pay_links, primary_invoice
@@ -774,6 +793,7 @@ async def prepay_order(
         await apply_deposits(db, inv, o)   # the job is already invoiced: the deposit lands on it
     await cancel_open_pay_links(db, o)
     await db.commit()
+    await db.refresh(o, ["prepayment_total"])
     return {"ok": True, "prepaid": o.prepayment_total}
 
 

@@ -158,6 +158,12 @@ async function postForm<T>(path: string, form: FormData): Promise<T> {
   return (await res.json()) as T;
 }
 
+/** A fresh key for one money action. Keep it while the same action is retried (double click,
+ *  timeout) and make a new one once it has gone through, so the server posts it once. */
+export function idempotencyKey(): string {
+  try { return `web-${crypto.randomUUID()}`; } catch { return `web-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`; }
+}
+
 export const api = {
   get: <T>(p: string) => request<T>("GET", p),
   post: <T>(p: string, b?: unknown) => request<T>("POST", p, b),

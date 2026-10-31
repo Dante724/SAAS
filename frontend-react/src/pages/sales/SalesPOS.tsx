@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Shell, { M } from "../../components/Shell";
-import { api } from "../../api/client";
+import { api, idempotencyKey } from "../../api/client";
 import { useMe } from "../../context/Me";
 import VoidableList from "../../components/VoidableList";
 import { useClientSearch } from "../../hooks/useClientSearch";
@@ -240,11 +240,13 @@ export default function SalesPOS() {
   const [payCash, setPayCash] = useState("");
   const payAccount = accounts.find((a) => a.id === (payAcct || accountId)) || accounts.find((a) => a.payment_option === "cash") || accounts[0];
   const payTendered = payAccount?.payment_option === "cash" && payCash.trim() !== "" ? Number(payCash) : null;
+  const payKey = useRef(idempotencyKey());   // a double click posts the payment once (server: Idempotency-Key)
   async function payPending() {
     if (!pending || !payAccount) return;
     setBusy(true);
     try {
-      const r = await api.post<{ due: number; change_due: number | null }>(`/sales/${pending.id}/pay`, { account_id: payAccount.id, cash_tendered: payTendered });
+      const r = await api.postOnce<{ due: number; change_due: number | null }>(`/sales/${pending.id}/pay`, { account_id: payAccount.id, cash_tendered: payTendered }, payKey.current);
+      payKey.current = idempotencyKey();
       setPayCash("");
       paid(pending, `Sale ${pending.number} paid · ${cash(r.due)}`, r.change_due);
     } catch (e: any) { flash(e.message || "Couldn't take the payment"); } finally { setBusy(false); }
