@@ -43,6 +43,9 @@ class StockAdjust(BaseModel):
     qty: float
     movement_type: str = "receive"  # receive|writeoff|transfer|adjust
     note: Optional[str] = None
+    # What stock coming in cost (opening stock, a count-up). Omitted → the current average cost,
+    # else the catalog cost — never 0 by accident, which made COGS 0 and margins nonsense.
+    unit_cost: Optional[float] = Field(None, ge=0)
 
 
 # A stock quantity above this is almost certainly a barcode/serial typed into the
@@ -240,7 +243,8 @@ async def adjust_stock(
 ):
     _guard_qty(data.qty)
     result = await db.execute(select(Part).where(Part.id == part_id, Part.org_id == current.org_id))
-    if not result.scalar_one_or_none():
+    part = result.scalar_one_or_none()
+    if not part:
         raise HTTPException(404, "Part not found")
     # Build 89: the warehouse must permit this action, and this employee must be
     # allowed to perform it here (per-employee access beats the role-level scope).
@@ -250,11 +254,19 @@ async def adjust_stock(
     await require_location(db, current.org_id, data.location_id)
     _w = await _wh.guard_action(db, current, _action, location_id=data.location_id)
 
+    if data.movement_type in ("receive", "adjust") and data.qty > 0:
+        # Stock coming in is a receipt like any other: quantity, movement, FIFO layer and moving
+        # average through the one inflow path, at a real cost.
+        cost = data.unit_cost if data.unit_cost is not None else (part.avg_cost or part.cost_price or 0)
+        await stock_posting.apply_receipt_line(
+            db, org_id=current.org_id, part=part, location_id=data.location_id, qty=data.qty,
+            unit_cost=float(cost), created_by_id=current.id, ref_type=data.movement_type,
+            movement_type=data.movement_type, warehouse_id=_w.id if _w else None)
+        await db.commit()
+        return {"ok": True, "qty_available": (await stock_rows.totals(db, part_id, data.location_id))[0]}
     if data.movement_type in ("receive", "adjust"):
-        # Into the location's main row; a first receipt creates it tagged with the warehouse it came through.
-        has_main = any(r.bin_id is None for r in await stock_rows.rows(db, part_id, data.location_id))
-        await stock_rows.add(db, part_id, data.location_id, data.qty,
-                             warehouse_id=None if has_main or not _w else _w.id)
+        # A count down: out of the location's main row.
+        await stock_rows.add(db, part_id, data.location_id, data.qty)
     elif data.movement_type == "writeoff":
         # Never below zero (the old clamp): take what is there, across bins.
         have, _res = await stock_rows.totals(db, part_id, data.location_id)

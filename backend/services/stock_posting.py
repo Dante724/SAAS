@@ -19,7 +19,7 @@ async def apply_receipt_line(
     created_by_id: str | None = None, ref_type: str = "posting", ref_id: str | None = None,
     bin_id: str | None = None, serials: list[str] | None = None,
     create_batch: bool = True, set_last_cost: bool = False, expiry_date=None, lot: str | None = None,
-    supplier_id: str | None = None,
+    supplier_id: str | None = None, movement_type: str = "receive", warehouse_id: str | None = None,
 ) -> float:
     """Post `qty` of `part` into `location_id` at `unit_cost`. Returns the unit cost used.
 
@@ -32,6 +32,8 @@ async def apply_receipt_line(
     - Serials are expected already checked by `serial_intake.validate_intake`.
     - ii144c: no bin given → the location warehouse's default bin, when one is set. Each unit records
       its supplier and supplier-warranty end date (the product's supplier warranty from today).
+    - `movement_type` names the audit row (a manual count-in is an `adjust`, not a `receive`);
+      `warehouse_id` tags the movement and the cost layer.
     """
     from backend.services import stock_rows
     if bin_id:
@@ -56,13 +58,14 @@ async def apply_receipt_line(
     await stock_rows.add(db, part.id, location_id, qty, bin_id=bin_id)
 
     db.add(StockMovement(part_id=part.id, location_id=location_id, bin_id=bin_id,
-                         movement_type="receive", qty=qty, unit_cost=unit_cost or None,
+                         movement_type=movement_type, qty=qty, unit_cost=unit_cost or None,
+                         warehouse_id=warehouse_id,
                          created_by_id=created_by_id, ref_type=ref_type, ref_id=ref_id))
 
     if create_batch:
         from backend.models import SerializedItem, StockItemBatch
         batch = StockItemBatch(org_id=org_id, part_id=part.id, location_id=location_id,
-                               bin_id=bin_id, po_id=ref_id if ref_type == "po" else None,
+                               warehouse_id=warehouse_id, bin_id=bin_id, po_id=ref_id if ref_type == "po" else None,
                                unit_cost=Decimal(str(unit_cost)), qty_received=Decimal(str(qty)),
                                qty_remaining=Decimal(str(qty)), expiry_date=expiry_date,
                                lot_number=(lot or "").strip()[:40] or None)
