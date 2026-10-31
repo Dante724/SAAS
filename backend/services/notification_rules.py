@@ -27,11 +27,20 @@ from backend.models import (
     NotificationTemplate,
     Order,
 )
-from backend.services.notifications import _adapter_for, channel_consented, notif_creds
+from backend.services.notifications import _adapter_for, channel_consented, notif_creds, try_oauth_email
 
 
 async def _send(db, org_id, channel, *, recipient, subject, body, headers=None):
-    """144jn: send through THIS shop's own provider credentials (per-tenant)."""
+    """144jn: send through THIS shop's own provider credentials (per-tenant).
+
+    Email goes out from the shop's connected Gmail/Outlook account when there is one
+    (same as the old template path, build 144ae) and falls back to SMTP / simulated.
+    Mail that carries extra headers (List-Unsubscribe on Tekly Sense emails) stays on
+    SMTP, since the mailbox send can't set them."""
+    if channel == "email" and not headers:
+        result = await try_oauth_email(db, org_id, recipient=recipient, subject=subject, body=body)
+        if result is not None:
+            return result
     creds = await notif_creds(db, org_id, channel)
     adapter = _adapter_for(channel, creds)
     if headers:
