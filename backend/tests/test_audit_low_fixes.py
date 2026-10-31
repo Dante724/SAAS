@@ -566,6 +566,10 @@ async def test_retention_only_touches_its_own_shop_and_covers_messages(client, t
     async def n(model, oid):
         if model is ChatMessage:
             q = select(func.count()).select_from(ChatMessage).join(ChatThread).where(ChatThread.org_id == oid)
+        elif model is AuditLog:
+            # only the rows made above: signing up writes recent audit rows (new sign-in device),
+            # which retention rightly keeps
+            q = select(func.count()).select_from(AuditLog).where(AuditLog.org_id == oid, AuditLog.action == "x")
         else:
             q = select(func.count()).select_from(model).where(model.org_id == oid)
         return (await db.execute(q)).scalar()

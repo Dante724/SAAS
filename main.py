@@ -200,6 +200,9 @@ app.include_router(industry.scan_router)
 from backend.routers import credit_notes  # noqa: E402 — opb: credit notes
 
 app.include_router(credit_notes.router)
+from backend.routers import devices  # noqa: E402 — signed-in devices and the per-login device limit
+
+app.include_router(devices.router)
 
 
 @app.get("/health", include_in_schema=False)

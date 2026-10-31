@@ -11,6 +11,7 @@ POST /api/auth/invite/preview [public]
 POST /api/auth/password/forgot [public]
 POST /api/auth/password/reset [public]
 POST /api/auth/register [public]
+POST /api/auth/session-limit/continue [public]
 POST /api/auth/token [public]
 
 ## Public — provider webhooks (signature-verified per shop, fail closed outside dev/test)
@@ -99,6 +100,8 @@ POST /api/assets/{asset_id}/transfer [staff]
 POST /api/auth/email/resend [staff]
 POST /api/auth/logout [staff]
 POST /api/auth/logout-all-devices [staff]
+POST /api/auth/sessions/sign-out-others [staff]
+POST /api/auth/sessions/{session_id}/sign-out [staff]
 POST /api/auth/refresh [staff]
 # bins
 POST /api/bins/allocate-serial [staff]
