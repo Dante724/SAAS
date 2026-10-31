@@ -1085,17 +1085,11 @@ async def finance_summary(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
-    total_revenue = (await db.execute(
-        # credited revenue was never earned: a paid invoice counts what's left after its credit notes
-        select(func.sum(Invoice.total - Invoice.credited)).where(Invoice.org_id == current.org_id, Invoice.status == "paid")
-    )).scalar() or 0
-    total_outstanding = (await db.execute(
-        select(func.sum(Invoice.total - Invoice.amount_paid - Invoice.credited))
-        .where(Invoice.org_id == current.org_id, Invoice.status.in_(["draft", "partial"]))
-    )).scalar() or 0
-    total_expenses = (await db.execute(
-        select(func.sum(Expense.amount)).where(Expense.org_id == current.org_id)
-    )).scalar() or 0
+    # Revenue, what's owed and expenses as every report defines them (services/revenue)
+    from backend.services import revenue as money_rules
+    total_revenue = (await money_rules.net_sales(db, current.org_id))["revenue"]
+    total_outstanding = await money_rules.receivables(db, current.org_id)
+    total_expenses = await money_rules.operating_expenses(db, current.org_id)
     invoice_count = (await db.execute(
         select(func.count()).select_from(Invoice).where(Invoice.org_id == current.org_id)
     )).scalar() or 0
