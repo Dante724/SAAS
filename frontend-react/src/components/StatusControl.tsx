@@ -1,4 +1,5 @@
 import { useId, useMemo, useState } from "react";
+import { nextStep } from "../lib/nextStatus";
 import { tint } from "../lib/tint";
 import { M } from "./Shell";
 import FloatingMenu from "./FloatingMenu";
@@ -112,8 +113,7 @@ export default function StatusControl({
     [statuses],
   );
   const cur = ordered.find((s) => s.key === currentKey) || ordered.find((s) => s.is_default) || ordered[0];
-  const curIdx = ordered.findIndex((s) => s.id === cur?.id);
-  const nextRec = ordered.slice(curIdx + 1).find((s) => !["closed", "dropped"].includes(s.status_group || ""));
+  const nextRec = nextStep(ordered, cur?.key);
 
   const overdue = cur?.time_limit_min && elapsedMin != null && elapsedMin > cur.time_limit_min;
   const nearing = cur?.time_limit_min && elapsedMin != null && !overdue && elapsedMin > cur.time_limit_min * 0.75;

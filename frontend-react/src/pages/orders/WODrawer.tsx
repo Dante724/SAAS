@@ -405,6 +405,32 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             <TagChips entityType="order" entityId={order.id} />
           </div>
         </header>
+        {gate && (
+          <div role="region" aria-label={gate.kind === "comment" ? "Comment needed" : "Still to pay"}
+            className={`px-4 sm:px-6 py-3 border-b flex-shrink-0 ${gate.kind === "unpaid" ? "bg-amber-50 border-amber-200" : "bg-slate-50 border-slate-200"}`}>
+            {gate.kind === "comment" ? (
+              <form onSubmit={(e) => { e.preventDefault(); if (gateText.trim()) changeStatus(gate.key, { reason: gate.reason, comment: gateText.trim() }); }} className="space-y-2">
+                <p className="text-xs font-semibold text-ink-primary">Moving to {gate.name} needs a comment on the job.</p>
+                <textarea autoFocus value={gateText} onChange={(e) => setGateText(e.target.value)} rows={2} aria-label="Comment"
+                  placeholder="What was done, or what the customer agreed to" className="glass-input w-full p-2.5 text-xs rounded-xl resize-none" />
+                <div className="flex items-center gap-2">
+                  <button type="submit" disabled={!gateText.trim()} className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-primary text-white disabled:opacity-50">Add comment and move to {gate.name}</button>
+                  <button type="button" onClick={() => setGate(null)} className="px-3 py-1.5 rounded-lg text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>
+                </div>
+              </form>
+            ) : (
+              <div className="space-y-2">
+                <p className="text-xs font-semibold text-amber-900">{gate.message}</p>
+                <div className="flex flex-wrap items-center gap-2">
+                  {can("can_view_invoices_tab") && <button type="button" onClick={() => { setGate(null); setTab("invoices"); }} className="px-3 py-1.5 rounded-lg text-xs font-semibold bg-primary text-white">Take payment</button>}
+                  {gate.canOverride && <button type="button" onClick={() => changeStatus(gate.key, { reason: gate.reason, allow_unpaid: true })}
+                    className="px-3 py-1.5 rounded-lg text-xs font-semibold border border-amber-300 text-amber-900 hover:bg-amber-100">Move to {gate.name} unpaid</button>}
+                  <button type="button" onClick={() => setGate(null)} className="px-3 py-1.5 rounded-lg text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>
+                </div>
+              </div>
+            )}
+          </div>
+        )}
         {partsOpen && <PartsPOPanel orderId={order.id} lines={(d.lines || []) as any[]} canBuy={canBuy} isEstimate={!!(order as any).is_estimate}
           onClose={() => setPartsOpen(false)} onChanged={() => { loadIncomingPo(); reload(); }} />}
 
