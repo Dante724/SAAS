@@ -201,7 +201,7 @@ export default function NewPODrawer({ products, onClose, onCreated }:
           </div>
           <div className="flex items-center gap-4 flex-wrap">
             <button onClick={addRow} className="text-xs font-bold text-primary hover:underline flex items-center gap-1"><M n="add" c="text-sm" />Add line</button>
-            <button onClick={() => sheetRef.current?.click()} disabled={busy} className="text-xs font-bold text-primary hover:underline flex items-center gap-1 disabled:opacity-50"><M n="upload_file" c="text-sm" />Lines from Excel / CSV</button>
+            <button onClick={() => sheetRef.current?.click()} disabled={busy} className="text-xs font-bold text-primary hover:underline flex items-center gap-1 disabled:opacity-50"><M n="upload" c="text-sm" />Lines from Excel / CSV</button>
             <input ref={sheetRef} type="file" accept=".xlsx,.csv,text/csv" className="hidden" onChange={onSheet} />
             <button onClick={() => setNewProd((v) => !v)} className="text-xs font-bold text-primary hover:underline flex items-center gap-1"><M n="add_box" c="text-sm" />{newProd ? "Cancel new product" : "New product"}</button>
           </div>
@@ -222,7 +222,7 @@ export default function NewPODrawer({ products, onClose, onCreated }:
                 {sheet.headers.map((h, c) => (
                   <div key={h} className="shrink-0 w-32">
                     <select aria-label={`Field for ${h}`} value={sheet.map[c]} onChange={(e) => remapSheet(c, e.target.value as PasteField)} className="glass-input rounded-lg px-2 py-1.5 text-xs w-full">
-                      {FIELD_ORDER.filter((f) => f !== "markup" && f !== "serials").map((f) => <option key={f} value={f}>{FIELD_LABELS[f]}</option>)}
+                      {FIELD_ORDER.map((f) => <option key={f} value={f}>{FIELD_LABELS[f]}</option>)}
                     </select>
                     <div className="text-[11px] text-ink-tertiary mt-1 px-1 truncate" title={h}>{h}</div>
                   </div>

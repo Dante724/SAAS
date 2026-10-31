@@ -43,7 +43,7 @@ export default function AssetsHub() {
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 flex flex-wrap items-center justify-between gap-3">
           <div className="flex items-center gap-2">
             <button onClick={() => setCreating(true)} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="add" c="text-sm font-bold" />New {term.asset.toLowerCase()}</button>
-            {can("can_view_asset_info") && <button onClick={() => setImporting(true)} className="px-4 py-2 rounded-xl bg-white border border-slate-200 text-ink-secondary text-xs font-semibold hover:bg-slate-50 flex items-center gap-1.5"><M n="upload_file" c="text-sm" />Import</button>}
+            {can("can_view_asset_info") && <button onClick={() => setImporting(true)} className="px-4 py-2 rounded-xl bg-white border border-slate-200 text-ink-secondary text-xs font-semibold hover:bg-slate-50 flex items-center gap-1.5"><M n="upload" c="text-sm" />Import</button>}
           </div>
           <div className="relative w-72"><M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" /><input value={q} onChange={(e) => setQ(e.target.value)} className="glass-input w-full pl-8 pr-3 py-1.5 text-xs rounded-lg font-medium" placeholder={`Search ${term.assets.toLowerCase()}…`} /></div>
         </div>

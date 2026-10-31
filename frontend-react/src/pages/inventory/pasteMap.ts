@@ -165,7 +165,15 @@ export function saveRememberedMap(map: PasteField[]): void {
 // the paste flow uses, so file uploads and pastes share one mapping bar and one preview.
 export function fileToGrid(headers: string[], rows: string[][], suggested: Record<string, string>): { grid: string[][]; map: PasteField[] } {
   const ok = new Set<string>(FIELD_ORDER);
-  const map = headers.map((h) => (ok.has(suggested[h]) ? suggested[h] : headerFieldFor(h) ?? "ignore") as PasteField);
+  // the server's suggestion (incl. the supplier's remembered mapping) wins; header guesses only fill fields it left free
+  const used = new Set<string>(headers.map((h) => suggested[h]).filter((f) => f && f !== "ignore" && ok.has(f)));
+  const map = headers.map((h) => {
+    const s = suggested[h];
+    if (s && ok.has(s)) return s as PasteField;
+    const g = headerFieldFor(h);
+    if (g && !used.has(g)) { used.add(g); return g; }
+    return "ignore" as PasteField;
+  });
   const seen = new Set<PasteField>();
   const clean = map.map((f) => { if (f === "ignore" || seen.has(f)) return "ignore" as PasteField; seen.add(f); return f; });
   return { grid: rows.map((r) => headers.map((_, c) => String(r[c] ?? ""))), map: clean };
@@ -174,7 +182,7 @@ export function fileToGrid(headers: string[], rows: string[][], suggested: Recor
 // Column map → {header: field}, the shape saved per supplier (PUT /imports/{posting|po}/mapping).
 export function mapByHeader(headers: string[], map: PasteField[]): Record<string, string> {
   const out: Record<string, string> = {};
-  headers.forEach((h, c) => { if (map[c] && map[c] !== "ignore") out[h] = map[c]; });
+  headers.forEach((h, c) => { out[h] = map[c] || "ignore"; });   // "ignore" is remembered too
   return out;
 }
 

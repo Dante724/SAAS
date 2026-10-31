@@ -159,10 +159,10 @@ async def test_template_round_trip_products(client, tenant):
     assert float(a["Sell price"]) == 99.5 and float(a["Cost price"]) == 40 and a["Min stock"] == 2
     assert a["Client warranty (days)"] == 90
     assert got["Galaxy S22 Battery"]["SKU"] == "BAT-S22"
-    # the export re-imports as updates, not duplicates
-    exbuf = ex.content
-    again = await _import(client, tenant, "products", None, raw=exbuf, name="products.xlsx")
-    assert again["created"] == 0 and again["updated"] == 2, again
+    # the export re-imports onto the same products, not duplicates — unchanged rows are skipped
+    again = await _import(client, tenant, "products", None, raw=ex.content, name="products.xlsx")
+    assert again["created"] == 0 and again["counts"]["skip"] == 2, again
+    assert all("No changes" in r["warnings"] for r in again["rows"])
 
 
 async def test_example_row_left_in_the_template_is_skipped(client, tenant, db):
@@ -611,3 +611,141 @@ async def test_parse_works_for_posting_files(client, tenant):
     assert parsed["headers"] == ["Part No", "Description", "Qty", "Unit cost", "Serials"]
     assert parsed["rows"] == [["SCR-1", "Screen", "2", "10.5", "X1, X2"]]
     assert parsed["suggested"]["Serials"] == "serials"
+
+
+# ── review fixes (security) ──────────────────────────────────────────────────
+async def test_too_many_columns_is_refused(client, tenant):
+    wide = ("," * 5000 + "x\n" + "a\n").encode()
+    r = await client.post("/api/imports/parse", headers=tenant, params={"kind": "products"},
+                          files={"file": ("w.csv", wide, "text/csv")})
+    assert r.status_code == 413 and "columns" in r.text
+    ok = await _parse(client, tenant, "products", b"Name,,,,\nA,,,,\n", name="t.csv")
+    assert ok["headers"] == ["Name"], "trailing empty columns are dropped"
+
+
+async def test_serial_generation_is_capped_and_template_checked(client, tenant, db):
+    me = await _me(client, tenant)
+    org = (await db.execute(select(Organisation).where(Organisation.id == me["org_id"]))).scalar_one()
+    org.inv_product_serial_template = "SN-{C 6}"          # no real counter → falls back to SN-{C:6}
+    await db.commit()
+    parsed = await _parse(client, tenant, "products", _xlsx([["Name", "Serialized", "Opening stock"],
+                                                             ["Big", "yes", "20000"], ["Ok", "yes", "2"]]))
+    pre = (await _run(client, tenant, "products", parsed, options={"generate_serials": True})).json()
+    assert pre["rows"][0]["action"] == "error" and "10,000" in pre["rows"][0]["errors"][0]
+    out = (await _run(client, tenant, "products", parsed, commit=True, options={"generate_serials": True})).json()
+    assert out["created"] == 1
+    sns = set((await db.execute(select(SerializedItem.serial_number).where(SerializedItem.org_id == me["org_id"]))).scalars())
+    assert len(sns) == 2 and all(s.startswith("SN-") for s in sns)
+    loc = (await client.get("/api/staff/locations", headers=tenant)).json()["items"][0]["id"]
+    p = await _seed_part(db, me["org_id"], name="Phone", serialized=True)
+    r = await client.post("/api/inventory/postings/commit", headers=tenant, json={
+        "location_id": loc, "rows": [{"part_id": p.id, "qty": 1e9}], "generate_serials": True})
+    assert r.status_code == 422
+
+
+async def test_asset_updates_need_manage_inventory(client, tenant, db):
+    me = await _me(client, tenant)
+    db.add(Device(org_id=me["org_id"], brand="Apple", serial="S1", imei="490154203237518"))
+    await db.commit()
+    h = await _staff_with(client, db, me["org_id"], {"can_view_asset_info": True})
+    parsed = await _parse(client, h, "assets", _xlsx([["Brand", "IMEI", "Serial"], ["Apple", "490154203237518", "HACKED"],
+                                                       ["Nokia", "", "N1"]]))
+    pre = (await _run(client, h, "assets", parsed)).json()
+    assert [r["action"] for r in pre["rows"]] == ["error", "create"]
+    assert "edit existing assets" in pre["rows"][0]["errors"][0]
+
+
+async def test_undo_keeps_values_changed_after_the_import(client, tenant, db):
+    me = await _me(client, tenant)
+    p = await _seed_part(db, me["org_id"], name="Lens", sku="L-1", sell_price=10, min_stock=1)
+    out = await _import(client, tenant, "products", [["SKU", "Sell price", "Min stock"], ["L-1", "12", "3"]])
+    r = await client.put(f"/api/catalog/products/{p.id}", headers=tenant, json={"name": "Lens", "sell_price": 15})
+    assert r.status_code == 200, r.text
+    r = await client.post(f"/api/imports/batches/{out['batch_id']}/undo", headers=tenant)
+    assert r.status_code == 200 and r.json()["kept_newer"] == 1
+    await db.refresh(p)
+    assert float(p.sell_price) == 15 and p.min_stock == 1
+
+
+async def test_undo_refuses_after_other_stock_moves_on_an_updated_part(client, tenant, db):
+    me = await _me(client, tenant)
+    loc = (await client.get("/api/staff/locations", headers=tenant)).json()["items"][0]["id"]
+    p = await _seed_part(db, me["org_id"], name="Cable", sku="C-1")
+    out = await _import(client, tenant, "products", [["SKU", "Opening stock", "Cost price"], ["C-1", "5", "2"]],
+                        options={"location_id": loc})
+    r = await client.post("/api/inventory/postings", headers=tenant, json={
+        "location_id": loc, "lines": [{"part_id": p.id, "qty": 3, "purchase_price": 4}]})
+    assert r.status_code == 201, r.text
+    r = await client.post(f"/api/imports/batches/{out['batch_id']}/undo", headers=tenant)
+    assert r.status_code == 409
+
+
+async def test_template_lists_are_formula_safe(client, tenant):
+    await client.post("/api/catalog/categories", headers=tenant, json={"name": '=HYPERLINK("http://x","y")', "entity_type": "product"})
+    r = await client.get("/api/imports/products/template", headers=tenant)
+    wb = openpyxl.load_workbook(io.BytesIO(r.content))
+    vals = [c.value for c in wb["Lists"]["A"]]
+    assert "'=HYPERLINK(\"http://x\",\"y\")" in vals and not any(str(v).startswith("=") for v in vals if v)
+
+
+# ── review fixes (tester) ────────────────────────────────────────────────────
+async def test_cell_parsing_edge_cases():
+    from backend.services.import_cells import CellError, to_code, to_date, to_number
+    assert [to_number(v, "x") for v in ("0,125", "1,2345", "1,234", "1.000,5", "1.234.567", "-1,5", "12,50")] == \
+        [0.125, 1.2345, 1234, 1000.5, 1234567, -1.5, 12.5]
+    assert to_code("100E5", "SKU") == "100E5"
+    for bad in ("1.23457E+12", "4E+12"):
+        with pytest.raises(CellError):
+            to_code(bad, "Barcode")
+    import datetime as dt
+    assert to_date("45292.5", "d") == dt.date(2024, 1, 1)
+    assert to_date("2024-01-02T10:00:00Z", "d") == dt.date(2024, 1, 2)
+    with pytest.raises(CellError):
+        to_date("2024", "d")
+
+
+async def test_undo_removes_categories_the_import_created(client, tenant, db):
+    from backend.models import Category
+    me = await _me(client, tenant)
+    p = await _seed_part(db, me["org_id"], name="Old", sku="O-1")
+    out = await _import(client, tenant, "products", [["Name", "SKU", "Category"], ["X", "X-1", "New > Sub"],
+                                                     ["Old", "O-1", "New > Sub"]], options={"create_categories": True})
+    await db.refresh(p)
+    assert p.category == "Sub"
+    r = await client.post(f"/api/imports/batches/{out['batch_id']}/undo", headers=tenant)
+    assert r.status_code == 200, r.text
+    await db.refresh(p)
+    assert p.category_id is None and p.category is None
+    assert await _count(db, Category, me["org_id"]) == 0
+
+
+async def test_example_row_is_skipped_after_excel_strips_zeros(client, tenant, db):
+    r = await client.get("/api/imports/products/template?fmt=csv", headers=tenant)
+    text = r.content.decode("utf-8-sig").replace("0012345678905", "12345678905")
+    out = await _import(client, tenant, "products", None, raw=text.encode(), name="t.csv")
+    assert out["created"] == 0 and out["counts"]["skip"] == 1
+
+
+async def test_ignored_columns_are_remembered(client, tenant):
+    parsed = await _parse(client, tenant, "products", _xlsx([["Name", "SKU"], ["A", "S-1"]]))
+    r = await _run(client, tenant, "products", parsed, commit=True, mapping={"Name": "name"})
+    assert r.status_code == 200
+    again = await _parse(client, tenant, "products", _xlsx([["Name", "SKU"], ["B", "S-2"]]))
+    assert again["suggested"] == {"Name": "name"}
+
+
+async def test_posting_generated_serials_never_repeat_typed_ones(client, tenant, db):
+    me = await _me(client, tenant)
+    loc = (await client.get("/api/staff/locations", headers=tenant)).json()["items"][0]["id"]
+    p = await _seed_part(db, me["org_id"], name="Phone", serialized=True)
+    first = await client.post("/api/inventory/postings/commit", headers=tenant, json={
+        "location_id": loc, "rows": [{"part_id": p.id, "qty": 1}], "generate_serials": True})
+    assert first.status_code == 201
+    gen = (await db.execute(select(SerializedItem.serial_number).where(SerializedItem.part_id == p.id))).scalar_one()
+    nxt = gen[:-1] + str(int(gen[-1]) + 1)        # what the generator would make next
+    r = await client.post("/api/inventory/postings/commit", headers=tenant, json={
+        "location_id": loc, "generate_serials": True,
+        "rows": [{"part_id": p.id, "qty": 1}, {"part_id": p.id, "qty": 1, "serials": [nxt]}]})
+    assert r.status_code == 201, r.text
+    sns = list((await db.execute(select(SerializedItem.serial_number).where(SerializedItem.part_id == p.id))).scalars())
+    assert len(sns) == 3 and len(set(sns)) == 3

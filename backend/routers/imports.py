@@ -113,7 +113,9 @@ async def commit(kind: str, data: RunIn, db: AsyncSession = Depends(get_db),
     out = await importer.run(db, current, _kind(kind), data.headers, data.rows, data.mapping, data.options,
                              commit=True, file_name=data.file_name, row_numbers=data.row_numbers)
     if data.remember and data.mapping:
-        await _save_mapping(db, current.org_id, kind, None, data.mapping)
+        # columns left unmapped are remembered as "ignore", so they aren't guessed again next time
+        remembered = {**{h: "ignore" for h in data.headers if h not in data.mapping}, **data.mapping}
+        await _save_mapping(db, current.org_id, kind, None, remembered)
         await db.commit()
     return out
 

@@ -145,11 +145,11 @@ export default function ClientsHub() {
             {tab === "clients"
               ? <div className="flex items-center gap-2">
                   {can("can_create_clients") && <button onClick={() => setNewClient(true)} className={btnPrimary}><M n="add" c="text-sm" />New client</button>}
-                  {can("can_create_clients") && <button onClick={() => setImporting("clients")} className={`${btnGhost} bg-white`}><M n="upload_file" c="text-sm" />Import</button>}
+                  {can("can_create_clients") && <button onClick={() => setImporting("clients")} className={`${btnGhost} bg-white`}><M n="upload" c="text-sm" />Import</button>}
                 </div>
               : <div className="flex items-center gap-2">
                   <button onClick={() => setNewSupplier(true)} className={btnPrimary}><M n="add" c="text-sm" />New supplier</button>
-                  {can("can_manage_inventory") && <button onClick={() => setImporting("suppliers")} className={`${btnGhost} bg-white`}><M n="upload_file" c="text-sm" />Import</button>}
+                  {can("can_manage_inventory") && <button onClick={() => setImporting("suppliers")} className={`${btnGhost} bg-white`}><M n="upload" c="text-sm" />Import</button>}
                 </div>}
             <div className="flex flex-wrap items-center gap-2 w-full sm:w-auto">
               {tab === "clients" && <TagFilterChip value={tagId} onChange={(id) => { setTagId(id); clearSel(); }} />}

@@ -29,6 +29,12 @@ from backend.core.spreadsheet import (
     unguard_cell,
 )
 
+MAX_IMPORT_COLS = 200      # a real sheet has a few dozen; a row of 2M commas would pad into gigabytes
+
+
+def _too_wide() -> HTTPException:
+    return HTTPException(413, f"Too many columns (max {MAX_IMPORT_COLS}) — delete the empty columns and try again")
+
 
 class CellError(ValueError):
     """A cell that can't be read as its column's type. The message is shown to the user."""
@@ -71,18 +77,34 @@ def _csv_rows(raw: bytes) -> list[list[str]]:
         dialect = csv.Sniffer().sniff(sample, delimiters=",;\t|")
     except csv.Error:
         dialect = csv.excel
-    return [[_cell_text(c) for c in row] for row in csv.reader(io.StringIO(text), dialect)]
+    out, filled = [], 0
+    for row in csv.reader(io.StringIO(text), dialect):
+        while row and not row[-1].strip():
+            row.pop()                   # trailing empty cells don't count as columns
+        if len(row) > MAX_IMPORT_COLS:
+            raise _too_wide()
+        out.append([_cell_text(c) for c in row])
+        filled += bool(row)
+        if filled > MAX_IMPORT_ROWS + 1:
+            raise HTTPException(413, too_many_rows(filled - 1))
+    return out
 
 
 def _xlsx_rows(raw: bytes) -> list[list[str]]:
     wb = open_xlsx(raw)
     try:
         ws = wb.worksheets[0]
-        out = []
-        for row in ws.iter_rows(values_only=True):
-            out.append([_cell_text(v) for v in row])
-            if len(out) > MAX_IMPORT_ROWS + 1:
-                break
+        out, filled = [], 0
+        for row in ws.iter_rows(values_only=True, max_col=MAX_IMPORT_COLS + 1):
+            cells = [_cell_text(v) for v in row]
+            while cells and not cells[-1]:
+                cells.pop()
+            if len(cells) > MAX_IMPORT_COLS:
+                raise _too_wide()
+            out.append(cells)
+            filled += bool(cells)
+            if filled > MAX_IMPORT_ROWS + 1:
+                raise HTTPException(413, too_many_rows(filled - 1))
         return out
     finally:
         wb.close()
@@ -129,6 +151,8 @@ def norm_header(h: str) -> str:
 
 # ── typed values ─────────────────────────────────────────────────────────────
 _SCI = re.compile(r"^[+-]?\d+(?:[.,]\d+)?[eE][+-]?\d+$")
+# Excel's display of a long number: "1.23457E+12" / "4E+12" — not a code like "100E5" typed as text
+_EXCEL_SCI = re.compile(r"^[+-]?\d+(?:[.,]\d+)?[eE]\+\d+$|^[+-]?\d+[.,]\d+[eE]-?\d+$")
 
 
 def to_number(s: str, label: str) -> float:
@@ -143,7 +167,14 @@ def to_number(s: str, label: str) -> float:
         t = t.replace(".", "").replace(",", ".") if t.rfind(",") > t.rfind(".") else t.replace(",", "")
     elif has_c:
         parts = t.split(",")
-        t = parts[0] + "." + parts[1] if len(parts) == 2 and len(parts[1]) <= 2 else t.replace(",", "")
+        whole = parts[0].lstrip("-")
+        # "1,234" / "12,345,678" are thousands; "12,50", "0,125", "1,2345" are decimal commas
+        if len(parts) == 2 and (len(parts[1]) != 3 or whole in ("", "0")):
+            t = parts[0] + "." + parts[1]
+        else:
+            t = t.replace(",", "")
+    elif t.count(".") > 1:
+        t = t.replace(".", "")          # "1.234.567"
     try:
         return float(t)
     except ValueError:
@@ -177,7 +208,7 @@ def _gtin_ok(digits: str) -> bool:
 
 def to_code(s: str, label: str, *, barcode: bool = False) -> str:
     v = (s or "").strip()
-    if _SCI.match(v):
+    if _EXCEL_SCI.match(v):
         raise CellError(f"{label} '{v}' was turned into a number by Excel (E+) and lost digits — "
                         f"format the column as Text and type the code again")
     if barcode and v.isdigit() and len(v) in (7, 11) and _gtin_ok("0" + v):
@@ -199,9 +230,9 @@ def to_date(s: str, label: str) -> date:
     try:
         if re.fullmatch(r"\d{4}-\d{1,2}-\d{1,2}", v):
             return date.fromisoformat("-".join(p.zfill(2) for p in v.split("-")))
-        if re.fullmatch(r"\d{4}-\d{2}-\d{2}[ T][\d:.]+", v):
+        if re.fullmatch(r"\d{4}-\d{2}-\d{2}[ T][\d:.]+(Z|[+-]\d{2}:?\d{2})?", v):
             return date.fromisoformat(v[:10])
-        if re.fullmatch(r"\d{4,5}(\.0+)?", v) and 1 <= float(v) <= 2958465:
+        if re.fullmatch(r"\d{5}(\.\d+)?", v) and float(v) <= 2958465:   # Excel serial (10000 = 1927)
             return _EXCEL_EPOCH + timedelta(days=int(float(v)))
         m = re.fullmatch(r"(\d{1,2})[./-](\d{1,2})[./-](\d{4})", v)
         if m:

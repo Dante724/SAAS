@@ -158,7 +158,7 @@ export default function ImportDrawer({ kind, onClose, onDone }: { kind: ImportKi
                 onDragOver={(e) => { e.preventDefault(); setDrag(true); }} onDragLeave={() => setDrag(false)}
                 onDrop={(e) => { e.preventDefault(); setDrag(false); const f = e.dataTransfer.files?.[0]; if (f) upload(f); }}
                 className={`rounded-xl border-2 border-dashed p-4 space-y-2 transition-colors ${drag ? "border-primary bg-blue-50/60" : "border-slate-300"}`}>
-                <div className="flex items-center gap-2 font-semibold text-sm text-ink-primary"><M n="upload_file" c="text-base text-primary" />2. Upload your file</div>
+                <div className="flex items-center gap-2 font-semibold text-sm text-ink-primary"><M n="upload" c="text-base text-primary" />2. Upload your file</div>
                 <p className="text-xs text-ink-secondary">Our template or your own sheet (.xlsx or .csv, up to 10,000 rows). Nothing is saved until you confirm.</p>
                 <input ref={fileRef} type="file" accept=".xlsx,.csv,text/csv,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) upload(f); }} />
                 <button onClick={() => fileRef.current?.click()} disabled={busy} className={btnGhost}><M n="attach_file" c="text-sm" />{busy ? "Reading…" : "Choose file"}</button>
@@ -210,7 +210,7 @@ export default function ImportDrawer({ kind, onClose, onDone }: { kind: ImportKi
             {step === "done" && result && (
               <div className="rounded-xl border border-emerald-200 bg-emerald-50 px-4 py-3 text-sm text-emerald-800 flex items-start gap-2">
                 <M n="check_circle" c="text-base text-emerald-600 mt-0.5" />
-                <div>Imported {result.created} new and updated {result.updated} {result.created + result.updated === 1 ? one : many}.
+                <div>Done: {result.created} new {result.created === 1 ? one : many}, {result.updated} updated.
                   {result.failed > 0 && <> {result.failed} row{result.failed === 1 ? "" : "s"} still need fixing — download them, fix and upload again.</>}
                   {result.batch_id && <div className="text-xs text-emerald-700 mt-0.5">Changed your mind? You can undo this import for 24 hours.</div>}
                 </div>
@@ -222,7 +222,7 @@ export default function ImportDrawer({ kind, onClose, onDone }: { kind: ImportKi
                 .filter(([k]) => k === "all" || counts[k as RowVerdict["action"]] > 0)
                 .map(([k, label]) => (
                   <button key={k} onClick={() => setFilter(k)} aria-pressed={filter === k}
-                    className={`px-2.5 py-1 rounded-full border text-xs font-semibold ${k === "all" ? (filter === k ? "bg-ink-primary text-white border-ink-primary" : "bg-white text-ink-secondary border-slate-200") : `${TONE[k as RowVerdict["action"]]} ${filter === k ? "ring-2 ring-offset-1 ring-primary/40" : ""}`}`}>{label}</button>
+                    className={`px-2.5 py-1 rounded-full border text-xs font-semibold ${k === "all" ? (filter === k ? "bg-primary text-white border-primary" : "bg-white text-ink-secondary border-slate-200") : `${TONE[k as RowVerdict["action"]]} ${filter === k ? "ring-2 ring-offset-1 ring-primary/40" : ""}`}`}>{label}</button>
                 ))}
               {counts.error > 0 && <div className="flex items-center gap-2 sm:ml-auto">
                 <button onClick={() => downloadErrors("xlsx")} className="text-xs font-semibold text-primary flex items-center gap-1 hover:underline"><M n="download" c="text-sm" />Rows to fix (.xlsx)</button>

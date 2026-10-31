@@ -2,7 +2,7 @@ import base64 as _base64
 from typing import Optional
 
 from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, UploadFile
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -445,6 +445,13 @@ class CommitRow(BaseModel):
     markup_pct: Optional[float] = None
     serials: Optional[list[str]] = Field(None, max_length=1000)   # one per unit (serialized products)
 
+    @field_validator("qty")
+    @classmethod
+    def _qty_cap(cls, v):
+        if v > 100_000:
+            raise ValueError("Quantity looks like a barcode or serial, not a count")
+        return v
+
 
 class PostingCommitIn(BaseModel):
     location_id: str
@@ -467,6 +474,7 @@ async def _check_posting_serials(db, current, rows: list, parts: dict, generate:
     ctx.data["serial_n"] = (await db.execute(select(func.count()).select_from(SerializedItem).where(
         SerializedItem.org_id == current.org_id))).scalar() or 0
     seen: set = set()
+    todo = []            # (line no, row, typed serials, how many to generate)
     for i, ln in enumerate(rows, start=1):
         sns = [s.strip() for s in (ln.get("serials") or []) if s and s.strip()]
         part = parts[ln["part_id"]]
@@ -488,11 +496,14 @@ async def _check_posting_serials(db, current, rows: list, parts: dict, generate:
             ctx.seen[("serial", sn)] = i
         if len(sns) > qty:
             raise HTTPException(422, f"Line {i}: more serial numbers ({len(sns)}) than units ({int(qty)})")
-        if len(sns) < qty:
-            if not generate:
-                raise HTTPException(422, f"Line {i}: {int(qty)} units of {part.name} need {int(qty)} serial numbers "
-                                         f"({len(sns)} given)")
-            sns += importer.generate_serials(ctx, int(qty) - len(sns), importer.Row(row=i, rec={}))
+        if len(sns) < qty and not generate:
+            raise HTTPException(422, f"Line {i}: {int(qty)} units of {part.name} need {int(qty)} serial numbers "
+                                     f"({len(sns)} given)")
+        todo.append((i, ln, sns, int(qty) - len(sns)))
+    # every typed serial is claimed first, so a generated one can never repeat a later line's
+    for i, ln, sns, missing in todo:
+        if missing > 0:
+            sns = sns + importer.generate_serials(ctx, missing, importer.Row(row=i, rec={}))
         ln["serials"] = sns
 
 
@@ -506,6 +517,8 @@ async def commit_posting(
     every row through the same WAC engine as a normal posting — one transaction."""
     if not data.location_id:
         raise HTTPException(422, "Warehouse is required")
+    from backend.services import warehouses as _wh
+    await _wh.guard_action(db, current, "post", location_id=data.location_id)
     if not data.rows:
         raise HTTPException(422, "Add at least one row")
     created = 0

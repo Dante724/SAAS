@@ -1175,7 +1175,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
             <div className="flex items-center justify-between flex-wrap gap-2">
               <label className={lbl2} style={{ marginBottom: 0 }}>Rows — Code/SKU · MPN · Name · Qty · Cost · Markup% · Serials</label>
               <div className="flex gap-2 flex-wrap">
-                <button onClick={() => sheetRef.current?.click()} disabled={busy} className="text-primary text-xs font-semibold flex items-center gap-1 disabled:opacity-50"><M n="upload_file" c="text-sm" />Excel / CSV file</button>
+                <button onClick={() => sheetRef.current?.click()} disabled={busy} className="text-primary text-xs font-semibold flex items-center gap-1 disabled:opacity-50"><M n="upload" c="text-sm" />Excel / CSV file</button>
                 <button onClick={() => fileRef.current?.click()} disabled={busy} className="text-primary text-xs font-semibold flex items-center gap-1 disabled:opacity-50"><M n="document_scanner" c="text-sm" />Scan invoice / photo</button>
                 <button onClick={() => setPasteOpen((o) => !o)} className="text-primary text-xs font-semibold flex items-center gap-1"><M n="content_paste" c="text-sm" />Paste from Excel</button>
                 <button onClick={() => { setRows([...rows, blank()]); clearMap(); }} className="text-primary text-xs font-semibold">+ Add row</button>

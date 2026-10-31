@@ -361,7 +361,7 @@ export function Services({ onOpen, refresh }: { onOpen: (s?: Service) => void; r
       {importing && <ImportDrawer kind="services" onClose={() => setImporting(false)} onDone={() => { load(); loadCats(); }} />}
       <div className="flex items-center gap-3 flex-wrap">
         <button onClick={() => onOpen()} className={primaryBtn}><M n="add" c="text-sm" />New service</button>
-        {can("can_edit_labors") && <button onClick={() => setImporting(true)} className={ghostBtn}><M n="upload_file" c="text-sm" />Import</button>}
+        {can("can_edit_labors") && <button onClick={() => setImporting(true)} className={ghostBtn}><M n="upload" c="text-sm" />Import</button>}
         <button onClick={() => setCat(true)} className={ghostBtn}><M n="inventory" c="text-sm" />Categories</button>
         <select aria-label="Category" value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className={filterCls(!!catFilter)}>
           <option value="">Category: All</option>
@@ -443,7 +443,7 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
       {importing && <ImportDrawer kind="products" onClose={() => setImporting(false)} onDone={() => { load(); loadCats(); }} />}
       <div className="flex items-center gap-3 flex-wrap">
         <button onClick={() => onOpen()} className={primaryBtn}><M n="add" c="text-sm" />New product</button>
-        {(can("can_create_products") || can("can_edit_products") || can("can_manage_inventory")) && <button onClick={() => setImporting(true)} className={ghostBtn}><M n="upload_file" c="text-sm" />Import</button>}
+        {(can("can_create_products") || can("can_edit_products") || can("can_manage_inventory")) && <button onClick={() => setImporting(true)} className={ghostBtn}><M n="upload" c="text-sm" />Import</button>}
         <button onClick={() => setCat(true)} className={ghostBtn}><M n="inventory" c="text-sm" />Categories</button>
         <select aria-label="Category" value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className={filterCls(!!catFilter)}>
           <option value="">Category: All</option>

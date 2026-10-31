@@ -23,9 +23,9 @@ from decimal import Decimal
 from typing import Any, Optional
 
 from fastapi import HTTPException
-from sqlalchemy import Date, and_, delete, func, not_, or_, select
+from sqlalchemy import Date, and_, delete, func, not_, or_, select, update
 
-from backend.core.spreadsheet import unguard_cell
+from backend.core.spreadsheet import safe_cell, unguard_cell
 from backend.models import (
     Category,
     Client,
@@ -50,6 +50,7 @@ from backend.services.money import q2
 UNDO_WINDOW = timedelta(hours=24)
 COST_PERM = "can_view_purchase_price"
 MAX_OPENING_QTY = 100_000
+MAX_SERIALS = 10_000          # serial numbers (given or generated) in one import or posting
 
 
 # ── columns ──────────────────────────────────────────────────────────────────
@@ -159,12 +160,14 @@ def _changes(target, values: dict) -> dict:
 
 
 def _apply_update(ctx: Ctx, table: str, target, changes: dict, extra_before: Optional[dict] = None):
+    """Write `changes` and remember the old values (and the new ones, so undo only restores a field
+    nobody has touched since)."""
     before = {k: _jsonable(getattr(target, k)) for k in changes}
     before.update(extra_before or {})
     for k, v in changes.items():
         setattr(target, k, v)
     if before:
-        ctx.undo["updated"].append([table, target.id, before])
+        ctx.undo["updated"].append([table, target.id, before, {k: _jsonable(v) for k, v in changes.items()}])
 
 
 async def _category_paths(db, org_id, entity_type) -> dict:
@@ -197,6 +200,7 @@ async def _ensure_category(ctx: Ctx, entity_type: str, path: str) -> str:
             ctx.db.add(c)
             await ctx.db.flush()
             paths[k] = (c.id, " > ".join(built), c.name)
+            ctx.undo["created"].append(["categories", c.id])
         parent = paths[k][0]
     return parent
 
@@ -309,6 +313,13 @@ class Products(Kind):
         if loc_id and not loc:
             raise HTTPException(404, "Warehouse not found")
         ctx.data["location"] = loc
+        ctx.data["location_denied"] = None
+        if loc is not None:
+            from backend.services import warehouses as wh
+            try:
+                await wh.guard_action(db, ctx.current, "post", location_id=loc.id)
+            except HTTPException as e:
+                ctx.data["location_denied"] = e.detail
         bins = (await db.execute(select(StorageBin).where(
             StorageBin.org_id == org.id, StorageBin.active == True,  # noqa: E712
             StorageBin.location_id == (loc.id if loc else None)))).scalars().all()
@@ -395,7 +406,18 @@ class Products(Kind):
             if row.changes and not ctx.perms["can_edit_products"]:
                 row.errors.append("Your role can't edit products")
             is_serial = t.serialized or bool(values.get("serialized"))
+        for k in ("sku", "barcode"):
+            if rec.get(k) and k not in ctx.data["keys"]:
+                other = [p for p in maps[k].get(self._norm(k, rec[k]), []) if p is not row.target]
+                if other:
+                    row.warnings.append(f"{k.upper() if k == 'sku' else 'Barcode'} {rec[k]} is also on {other[0].name}")
         self._plan_stock(ctx, row, is_serial, serials)
+        if row.target is not None and row.extra.get("stock"):
+            row.warnings.append(f"Adds {row.extra['stock']['qty']:g} to the stock already there")
+        if row.action == "update" and not row.changes and not row.extra.get("stock") \
+                and not row.extra.get("new_category") and not row.errors:
+            row.action = "skip"
+            row.warnings.append("No changes")
 
     def _plan_stock(self, ctx, row, is_serial, serials):
         rec = row.rec
@@ -418,6 +440,9 @@ class Products(Kind):
         if loc is None:
             row.errors.append("Add a warehouse before posting opening stock")
             return
+        if ctx.data["location_denied"]:
+            row.errors.append(f"Opening stock: {ctx.data['location_denied']}")
+            return
         bin_obj = None
         if rec.get("bin"):
             bin_obj = ctx.data["bins"].get(rec["bin"].strip().lower())
@@ -428,6 +453,9 @@ class Products(Kind):
                 row.errors.append("Serialized stock must be a whole number of units")
                 return
             n = int(qty)
+            if n > MAX_SERIALS:
+                row.errors.append(f"At most {MAX_SERIALS:,} serialized units per row")
+                return
             if len(serials) > n:
                 row.errors.append(f"More serial numbers ({len(serials)}) than units ({n})")
             seen_here = set()
@@ -443,7 +471,11 @@ class Products(Kind):
             missing = n - len(serials)
             if missing > 0:
                 if ctx.options.get("generate_serials"):
-                    serials = serials + generate_serials(ctx, missing, row)
+                    try:
+                        serials = serials + generate_serials(ctx, missing, row)
+                    except HTTPException as e:
+                        row.errors.append(e.detail)
+                        return
                     row.warnings.append(f"{missing} serial number{'s' if missing != 1 else ''} will be generated")
                 else:
                     row.errors.append(f"{n} units need {n} serial numbers ({len(serials)} given) — add them or "
@@ -457,6 +489,8 @@ class Products(Kind):
         values = dict(row.changes)
         if row.extra.get("new_category"):
             values["category_id"] = await _ensure_category(ctx, "product", row.extra["new_category"])
+        if "category_id" in values:   # the name the POS groups by moves with it (and is undone with it)
+            values["category"] = row.extra.get("category_name") or row.extra["new_category"].split(">")[-1].strip()[:100]
         stock = row.extra.get("stock")
         if row.target is None:
             part = Part(org_id=ctx.org.id, **values)
@@ -472,7 +506,10 @@ class Products(Kind):
             from backend.routers.catalog_products import _sync_part_category_name
             await _sync_part_category_name(db, ctx.org.id, part)
         if stock:
-            await post_stock(ctx, part, stock, unit_cost=float(row.rec.get("cost_price") or 0))
+            cost = row.rec.get("cost_price")
+            if cost is None:      # no cost column (or the role can't see costs): keep the average where it is
+                cost = part.avg_cost or part.cost_price or 0
+            await post_stock(ctx, part, stock, unit_cost=float(cost))
         await db.flush()
 
 
@@ -493,16 +530,31 @@ async def post_stock(ctx: Ctx, part: Part, stock: dict, unit_cost: float):
                               "batch_ids": sorted(after - before)})
 
 
+def serial_template(org) -> str:
+    """The shop's product serial template if it has a usable counter ({C} or {C:n}, n ≤ 12)."""
+    import re
+    tpl = (org.inv_product_serial_template or "").strip()
+    m = re.search(r"\{C(?::(\d+))?\}", tpl)
+    if not m or (m.group(1) and int(m.group(1)) > 12):
+        return "SN-{C:6}"
+    return tpl
+
+
 def generate_serials(ctx: Ctx, n: int, row: Row) -> list[str]:
     """`n` new serials from the shop's product serial template (Settings → Inventory, e.g. SN-{C:6}),
     skipping any already used in stock or elsewhere in this file."""
     from backend.services.numbering import render
-    tpl = ctx.org.inv_product_serial_template or "SN-{C:6}"
-    if "{C" not in tpl:
-        tpl += "-{C:6}"
+    used = ctx.data.get("serials_made", 0) + n
+    if used > MAX_SERIALS:
+        raise HTTPException(422, f"At most {MAX_SERIALS:,} serial numbers can be generated at a time")
+    ctx.data["serials_made"] = used
+    tpl = serial_template(ctx.org)
     taken = ctx.data["serials_in_stock"]
-    out = []
+    out, tries = [], 0
     while len(out) < n:
+        tries += 1
+        if tries > n + 100_000:
+            raise HTTPException(422, "Couldn't generate unique serial numbers — check the serial template in Settings")
         ctx.data["serial_n"] += 1
         sn = render(tpl, ctx.data["serial_n"])
         if sn in taken or ("serial", sn) in ctx.seen:
@@ -738,6 +790,8 @@ class Assets(Kind):
         else:
             row.action = "update"
             row.changes = _changes(row.target, values)
+            if row.changes and not ctx.perms["can_manage_inventory"]:
+                row.errors.append("Your role can't edit existing assets")
 
     async def apply(self, ctx, row):
         if row.target is None:
@@ -837,12 +891,13 @@ def suggest_mapping(kind: str, headers: list[str], remembered: Optional[dict]) -
     fields = fields_for(kind)
     keys = {f.key for f in fields}
     out, used = {}, set()
+    skipped = {h for h, f in (remembered or {}).items() if f == "ignore"}   # columns the user chose not to import
     for h, f in (remembered or {}).items():
         if h in headers and f in keys and f not in used:
             out[h], used = f, used | {f}
     for pass_ in ("label", "synonym"):
         for h in headers:
-            if h in out:
+            if h in out or h in skipped:
                 continue
             n = C.norm_header(h)
             for f in fields:
@@ -873,9 +928,13 @@ def _is_example(kind: Kind, rec: dict) -> bool:
     ex = {f.key: f.example for f in kind.fields if f.example not in ("", None)}
     if not ex or set(rec) - set(ex) or not rec:
         return False
+    types = {f.key: f.type for f in kind.fields}
     for k, v in rec.items():
         e = ex[k]
-        if isinstance(v, (int, float)) and not isinstance(v, bool):
+        if types[k] in ("code", "barcode"):
+            if C.code_key(str(v)) != C.code_key(str(e)):     # Excel may have stripped the zeros
+                return False
+        elif isinstance(v, (int, float)) and not isinstance(v, bool):
             if not isinstance(e, (int, float)) or float(v) != float(e):
                 return False
         elif isinstance(v, bool):
@@ -961,12 +1020,15 @@ async def run(db, current, kind_key: str, headers: list, rows: list, mapping: di
         if r.action not in ("create", "update"):
             continue
         mark = {k: len(v) for k, v in ctx.undo.items()}
+        cats = dict(ctx.data["cats"]) if "cats" in ctx.data else None
         try:
             async with db.begin_nested():
                 await kind.apply(ctx, r)
         except Exception as e:     # one row's surprise never sinks the file
             for k, n in mark.items():
                 del ctx.undo[k][n:]
+            if cats is not None:
+                ctx.data["cats"] = cats     # categories made in the rolled-back savepoint are gone
             r.action = "error"
             r.errors.append(getattr(e, "detail", None) or "Couldn't save this row")
             continue
@@ -1050,7 +1112,13 @@ async def undo(db, current, batch: ImportBatch) -> dict:
 
     used = 0
     for t, ids in created.items():
-        used += await _references(db, t, ids, created)
+        if t != "categories":      # a category made by the import is removed only if nothing else uses it
+            used += await _references(db, t, ids, created)
+    stocked = sorted({s["part_id"] for s in stock} - set(created.get("parts", [])))
+    if stocked:       # an existing part got opening stock: any other stock move since makes the old cost stale
+        used += (await db.execute(select(func.count()).select_from(StockMovement).where(
+            StockMovement.part_id.in_(stocked), StockMovement.created_at >= batch.created_at,
+            not_(and_(StockMovement.ref_type == "import", StockMovement.ref_id == batch.id))))).scalar() or 0
     if created.get("parts"):
         used += (await db.execute(select(func.count()).select_from(StockMovement).where(
             StockMovement.part_id.in_(created["parts"]),
@@ -1064,6 +1132,12 @@ async def undo(db, current, batch: ImportBatch) -> dict:
     if used:
         raise HTTPException(409, f"Can't undo: {used} of the imported records or stock have been used since "
                                  f"(on jobs, sales, documents or stock moves)")
+    # claim the undo first, so two clicks (or two tabs) can't both reverse the stock
+    claimed = await db.execute(update(ImportBatch).where(ImportBatch.id == batch.id, ImportBatch.undone_at.is_(None))
+                               .values(undone_at=datetime.utcnow()))
+    if claimed.rowcount != 1:
+        await db.rollback()
+        raise HTTPException(409, "This import was already undone")
 
     for s in stock:
         await db.execute(delete(SerializedItem).where(SerializedItem.batch_id.in_(s["batch_ids"])))
@@ -1074,27 +1148,38 @@ async def undo(db, current, batch: ImportBatch) -> dict:
             StockLevel.part_id == s["part_id"], StockLevel.location_id == s["location_id"]))).scalars().first()
         if sl is not None:
             sl.qty_available = (sl.qty_available or 0) - s["qty"]
-    for t, i, before in reversed(u.get("updated", [])):
+    kept = 0
+    for entry in reversed(u.get("updated", [])):
+        t, i, before = entry[0], entry[1], entry[2]
+        after = entry[3] if len(entry) > 3 else {}
         obj = await db.get(models[t], i)
         if obj is None:
             continue
         for k, v in before.items():
+            if k in after and not _same(_jsonable(getattr(obj, k)), after[k]):
+                kept += 1         # changed again after the import: the newer value wins
+                continue
             col = models[t].__table__.c.get(k)
             if isinstance(v, str) and col is not None and isinstance(col.type, Date):
                 v = date.fromisoformat(v[:10])
             setattr(obj, k, v)
+    await db.flush()
+    kept_categories = 0
     for t, i in reversed(u.get("created", [])):
+        if t == "categories" and await _references(db, "categories", [i], {}):
+            kept_categories += 1
+            continue
         if t == "parts":
             for m in (StockLevel, StockMovement, StockItemBatch, SerializedItem):
                 await db.execute(delete(m).where(m.part_id == i))
         await db.execute(delete(models[t]).where(models[t].id == i))
-    batch.undone_at = datetime.utcnow()
     from backend.services import audit
     await audit.record(db, org_id=batch.org_id, actor_id=current.id, action="import_undo", entity_type=batch.kind,
                        entity_id=batch.id, diff={"file_name": batch.file_name, "removed": len(u.get("created", [])),
                                                  "restored": len(u.get("updated", []))})
     await db.commit()
-    return {"ok": True, "removed": len(u.get("created", [])), "restored": len(u.get("updated", []))}
+    return {"ok": True, "removed": len(u.get("created", [])), "restored": len(u.get("updated", [])),
+            "kept_newer": kept}
 
 
 # ── templates ────────────────────────────────────────────────────────────────
@@ -1138,7 +1223,7 @@ async def template(db, org_id: str, kind_key: str, fmt: str) -> tuple[bytes, str
         for j, (name, values) in enumerate(lists.items(), start=1):
             lsheet.cell(row=1, column=j, value=name.capitalize()).font = Font(bold=True)
             for r, v in enumerate(values, start=2):
-                lsheet.cell(row=r, column=j, value=v)
+                lsheet.cell(row=r, column=j, value=safe_cell(v))
             list_cols[name] = (get_column_letter(j), max(2, len(values) + 1))
     for i, f in enumerate(cols, start=1):
         letter = get_column_letter(i)
@@ -1168,7 +1253,7 @@ async def template(db, org_id: str, kind_key: str, fmt: str) -> tuple[bytes, str
     for f in cols:
         v = f.example
         ex.append(str(v) if f.type in ("code", "barcode") and v not in ("", None) else (None if v == "" else v))
-    ws.append(ex)
+    ws.append([safe_cell(v) for v in ex])
     for i, f in enumerate(cols, start=1):
         c = ws.cell(row=2, column=i)
         c.font = Font(italic=True, color="64748B")
