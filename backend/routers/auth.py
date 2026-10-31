@@ -80,6 +80,7 @@ REGION_TAX = {
     "ca":   {"name": "GST",       "rate": 5.0,  "mode": "imposed"},
     "eu":   {"name": "VAT",       "rate": 21.0, "mode": "included"},
     "mena": {"name": "VAT",       "rate": 5.0,  "mode": "included"},
+    "au":   {"name": "GST",       "rate": 10.0, "mode": "included"},
     "other": None,
 }
 COUNTRY_VAT = {  # ISO alpha-2 → (name, rate, mode)
@@ -87,6 +88,7 @@ COUNTRY_VAT = {  # ISO alpha-2 → (name, rate, mode)
     "IT": ("IVA", 22.0, "included"), "NL": ("BTW", 21.0, "included"), "IE": ("VAT", 23.0, "included"),
     "GB": ("VAT", 20.0, "included"), "AE": ("VAT", 5.0, "included"), "SA": ("VAT", 15.0, "included"),
     "QA": ("VAT", 0.0, "included"), "US": ("Sales tax", 0.0, "imposed"), "CA": ("GST", 5.0, "imposed"),
+    "AU": ("GST", 10.0, "included"), "NZ": ("GST", 15.0, "included"),
 }
 
 
@@ -103,6 +105,7 @@ REGION_DEFAULTS = {
     "ca":   {"currency": "$", "currency_code": "CAD", "timezone": "America/Toronto", "language": "en"},
     "eu":   {"currency": "€", "currency_code": "EUR", "timezone": "Europe/Berlin", "language": "en"},
     "mena": {"currency": "AED", "currency_code": "AED", "timezone": "Asia/Dubai", "language": "en"},
+    "au":   {"currency": "A$", "currency_code": "AUD", "timezone": "Australia/Sydney", "language": "en"},
     "other": {"currency": "$", "currency_code": "USD", "timezone": "UTC", "language": "en"},
 }
 
@@ -128,6 +131,8 @@ def _region_hint(country: str | None) -> str | None:
         return "eu"
     if c in _MENA_ISO:
         return "mena"
+    if c == "AU":
+        return "au"
     return "other"
 
 
@@ -151,6 +156,7 @@ async def signup_options(request: Request):
             {"key": "ca", "label": "Canada"},
             {"key": "eu", "label": "Europe"},
             {"key": "mena", "label": "Middle East"},
+            {"key": "au", "label": "Australia"},
             {"key": "other", "label": "Other"},
         ],
         "region_defaults": REGION_DEFAULTS,
@@ -206,6 +212,15 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
         raise HTTPException(400, "We couldn't create an account with these details. If you already "
                                  "have one, sign in or reset your password.")
 
+    # An unknown industry used to become "general" without a word; known synonyms still map.
+    _industry_key = None
+    if data.industry_template:
+        from backend.services import industry as _ind
+        _industry_key = _ind.resolve_template_key(data.industry_template)
+        if _industry_key is None:
+            raise HTTPException(422, f"Unknown industry_template '{data.industry_template}'. "
+                                     f"Valid: {', '.join(_ind.TEMPLATE_KEYS)}")
+
     import secrets as _sec
     org = Organisation(name=data.org_name, webhook_secret=_sec.token_urlsafe(24),
                        sub_status="trial")   # build 144ce
@@ -236,8 +251,9 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
     if data.employee_count:
         org.employee_count = data.employee_count
     if data.industry_template:
-        from backend.services import industry as _ind
-        org.industry_template = _ind.normalize_template_key(data.industry_template)
+        org.industry_template = _industry_key
+    if data.country and data.country.upper() == "AU" and not data.region:
+        org.region = "au"
     org.sub_start = platform_today()   # subscription dates are platform (UTC) days
     db.add(org)
     await db.flush()

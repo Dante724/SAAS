@@ -21,7 +21,7 @@ from backend.services.money import ZERO_DECIMAL, d2
 
 # Common ISO-4217 code → display symbol (falls back to the code itself).
 CURRENCY_SYMBOLS = {
-    "USD": "$", "CAD": "$", "AUD": "$", "NZD": "$", "SGD": "$", "HKD": "$", "MXN": "$",
+    "USD": "$", "CAD": "$", "AUD": "A$", "NZD": "NZ$", "SGD": "$", "HKD": "$", "MXN": "$",
     "EUR": "€", "GBP": "£", "JPY": "¥", "CNY": "¥", "INR": "\u20b9",
     "AED": "AED", "SAR": "SAR", "QAR": "QAR", "KWD": "KWD", "BHD": "BHD", "OMR": "OMR",
     "CHF": "CHF", "SEK": "kr", "NOK": "kr", "DKK": "kr", "ZAR": "R", "BRL": "R$", "TRY": "₺",

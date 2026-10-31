@@ -18,6 +18,8 @@ from typing import Optional
 COUNTRY_TAX: dict[str, tuple[str, float, str]] = {
     # North America
     "US": ("Sales tax", 0.0, "imposed"), "CA": ("GST", 5.0, "imposed"),
+    # Oceania
+    "AU": ("GST", 10.0, "included"), "NZ": ("GST", 15.0, "included"),
     # Europe
     "GB": ("VAT", 20.0, "included"), "DE": ("VAT", 19.0, "included"), "FR": ("VAT", 20.0, "included"),
     "ES": ("IVA", 21.0, "included"), "IT": ("IVA", 22.0, "included"), "NL": ("BTW", 21.0, "included"),
@@ -50,7 +52,7 @@ EINVOICE: dict[str, dict] = {
 
 # ── Currency + formatting per country ─────────────────────────────────────────
 COUNTRY_CURRENCY: dict[str, tuple[str, str]] = {  # ISO4217, symbol
-    "US": ("USD", "$"), "CA": ("CAD", "$"),
+    "US": ("USD", "$"), "CA": ("CAD", "$"), "AU": ("AUD", "A$"), "NZ": ("NZD", "NZ$"),
     "GB": ("GBP", "£"), "DE": ("EUR", "€"), "FR": ("EUR", "€"), "ES": ("EUR", "€"), "IT": ("EUR", "€"),
     "NL": ("EUR", "€"), "IE": ("EUR", "€"), "PT": ("EUR", "€"), "PL": ("PLN", "zł"), "BE": ("EUR", "€"),
     "SE": ("SEK", "kr"), "AT": ("EUR", "€"),
