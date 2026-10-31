@@ -77,6 +77,15 @@ class SmtpEmailAdapter(ChannelAdapter):
         from_addr = c.get("from") or settings.SMTP_FROM or user
         use_tls = c.get("use_tls") if c.get("use_tls") is not None else settings.SMTP_USE_TLS
         use_tls = str(use_tls).lower() in ("1", "true", "yes", "on") if isinstance(use_tls, str) else bool(use_tls)
+        # A shop's own SMTP server is a host we connect to for them: it must be public, and we
+        # connect to the address that was checked (as webhooks do). The operator's is trusted.
+        connect_to = host
+        if host and host != settings.SMTP_HOST:
+            from backend.core.ssrf import UnsafeURLError, public_ip_for
+            try:
+                connect_to = await asyncio.to_thread(public_ip_for, host, port)
+            except UnsafeURLError:
+                return {"status": "failed", "error": "SMTP: the server must be a public address"}
 
         def _blocking() -> dict:
             import re
@@ -90,7 +99,11 @@ class SmtpEmailAdapter(ChannelAdapter):
             msg["From"] = from_addr
             msg["To"] = recipient
             try:
-                with smtplib.SMTP(host, port, timeout=10) as s:
+                with smtplib.SMTP(timeout=10) as s:
+                    s.connect(connect_to, port)
+                    # starttls() checks the certificate against _host, which connect() set to the
+                    # address; put the real name back so verification uses the name.
+                    s._host = host
                     if use_tls:
                         s.starttls()
                     if user:

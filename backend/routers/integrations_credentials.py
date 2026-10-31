@@ -34,6 +34,19 @@ async def set_credentials(data: CredIn, db: AsyncSession = Depends(get_db),
                           current: Employee = Depends(require_perm("can_manage_settings"))):
     if data.provider not in org_creds.PROVIDER_FIELDS:
         raise HTTPException(422, f"Unknown provider '{data.provider}'")
+    host = str((data.data or {}).get("host") or "").strip()
+    if data.provider == "smtp" and host:
+        import asyncio
+
+        from backend.core.ssrf import UnsafeURLError, public_ip_for
+        try:
+            port = int((data.data or {}).get("port") or 587)
+        except (TypeError, ValueError):
+            raise HTTPException(422, "SMTP port must be a number")
+        try:
+            await asyncio.to_thread(public_ip_for, host, port)
+        except UnsafeURLError:
+            raise HTTPException(422, "The SMTP server must be a public address")
     try:
         await org_creds.set_creds(db, current.org_id, data.provider, data.data or {})
     except ValueError as e:   # F4: live payment keys outside production
