@@ -86,6 +86,8 @@ def round_to_step(x, step) -> float:
 def json_default(o):
     """json.dumps(default=…) hook: Decimal money is written as a number, as floats were."""
     if isinstance(o, Decimal):
+        if not o.is_finite():
+            return None   # NaN/Infinity aren't JSON numbers
         return int(o) if o.as_tuple().exponent >= 0 else float(o)   # same rule as FastAPI
     raise TypeError(f"Object of type {type(o).__name__} is not JSON serializable")
 

@@ -43,6 +43,7 @@ async def test_dec_lifts_without_rounding():
 async def test_json_writes_decimal_as_a_number():
     assert json.loads(json_dumps({"a": Decimal("10.50"), "b": Decimal("7"), "c": [Decimal("0.10")]})) == \
         {"a": 10.5, "b": 7, "c": [0.1]}
+    assert json.loads(json_dumps({"x": Decimal("NaN")})) == {"x": None}
     with pytest.raises(TypeError):
         json_default(object())
 
@@ -106,9 +107,14 @@ async def test_gift_card_redeem_to_the_cent(client, tenant, db):
     assert dsum(x.amount for x in led) == Decimal("30.01")
     card = (await client.get(f"/api/giftcards/{code}", headers=tenant)).json()
     assert card["balance"] == 30.01 and isinstance(card["balance"], float)
+    # Paying off exactly what's left works: 30.01 (float) > Decimal("30.01") is True in Python,
+    # so the check must compare Decimals.
+    r = await client.post(f"/api/orders/{oid}/redeem-giftcard", json={"code": code, "amount": 30.01}, headers=tenant)
+    assert r.status_code == 200, r.text
+    assert r.json()["card_balance"] == 0.0
     # More than the card holds is refused, to the cent.
-    r = await client.post(f"/api/orders/{oid}/redeem-giftcard", json={"code": code, "amount": 30.02}, headers=tenant)
-    assert r.status_code == 400 and "30.01" in r.text
+    r = await client.post(f"/api/orders/{oid}/redeem-giftcard", json={"code": code, "amount": 0.01}, headers=tenant)
+    assert r.status_code == 400 and "0.00" in r.text
 
 
 async def test_expenses_and_payouts_stay_numbers(client, tenant):

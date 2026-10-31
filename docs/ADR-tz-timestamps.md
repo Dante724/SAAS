@@ -15,6 +15,10 @@ calls, no timezone-aware columns, and "today" computed with the server's `date.t
    with the org's `timezone`: `today_in(tz)`, `org_today(org)`, `await shop_today(db, org_id)`, and
    `day_start_utc(day, tz)` / `day_end_utc(day, tz)` to turn a shop day into a naive-UTC range for
    queries. `date.today()` is not used in request code.
+4. **Platform-owned dates are UTC days** (`platform_today()`): subscription start/end, platform
+   coupons and the staff access windows set from the admin portal. `Organisation.timezone` is set by
+   the tenant, so evaluating these in it would let a shop stretch its own subscription by up to
+   ~12h (security review, 31 Oct 2026).
 
 ## Why not timestamptz now
 

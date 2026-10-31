@@ -18,7 +18,7 @@ from backend.services.auth import (create_access_token, get_current_employee, ha
 from backend.services.notifications import send_direct_email
 from backend.services.ratelimit import client_ip as _ip
 from backend.services.ratelimit import aenforce as _rate
-from backend.services.dates import now_utc, org_today
+from backend.services.dates import now_utc, platform_today
 
 router = APIRouter(prefix="/api/auth", tags=["auth"])
 
@@ -219,7 +219,7 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
     if data.industry_template:
         from backend.services import industry as _ind
         org.industry_template = _ind.normalize_template_key(data.industry_template)
-    org.sub_start = org_today(org)   # the trial starts on the shop's own calendar day
+    org.sub_start = platform_today()   # subscription dates are platform (UTC) days
     db.add(org)
     await db.flush()
 
@@ -330,7 +330,7 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
     # term end date can't sign in — the platform admin controls these dates.
     _org = (await db.execute(select(Organisation).where(
         Organisation.id == employee.org_id))).scalar_one_or_none()
-    _today = org_today(_org)   # dates are the shop's calendar days, not the server's
+    _today = platform_today()   # platform-set dates: UTC, not the tenant-controlled timezone
     if _org:
         if _org.sub_status == "suspended":
             raise HTTPException(status_code=403, detail="This account is suspended. Please contact support.")

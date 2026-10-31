@@ -6,6 +6,7 @@ make every balance derivable. Loyalty earning happens automatically in the
 payment reconciliation hook.
 """
 import secrets
+from decimal import Decimal
 from datetime import datetime
 from typing import Optional
 
@@ -154,27 +155,29 @@ async def redeem_giftcard(
         raise HTTPException(400, "Gift card has expired")
     from backend.services.order_money import balance_due
     order_balance = await balance_due(db, order)
-    amount = q2(data.amount if data.amount is not None else min(g.balance, max(order_balance, 0)))
+    # Decimal from here on: a float compared with the Decimal balance is exact binary vs exact
+    # decimal, so 30.01 > Decimal("30.01") is True and paying off the card would be refused.
+    amount = d2(data.amount if data.amount is not None else min(g.balance, max(dec(order_balance), 0)))
     if amount <= 0:
         raise HTTPException(400, "Nothing to redeem")
-    if amount > order_balance + 0.005:
+    if amount > dec(order_balance) + Decimal("0.005"):
         # an uncapped redemption drove the order total negative, which refund_overpayment then
         # paid out in cash — turning gift-card balance into money
         raise HTTPException(400, f"Amount exceeds the order balance ({order_balance:.2f})")
     if amount > g.balance:
         raise HTTPException(400, f"Amount exceeds card balance ({g.balance:.2f})")
     # 144bc — guarded atomic decrement: a concurrent redemption can't drive the balance negative.
-    new_balance = q2(dec(g.balance) - dec(amount))   # card balance reads back as Decimal
+    new_balance = q2(g.balance - amount)
     res = await db.execute(sa_update(GiftCard)
         .where(GiftCard.id == g.id, GiftCard.balance >= amount)
-        .values(balance=GiftCard.balance - d2(amount)))   # Decimal: the session evaluates this on g
+        .values(balance=GiftCard.balance - amount))
     if res.rowcount == 0:
         raise HTTPException(409, "Gift card balance changed — please retry")
     db.add(GiftCardLedger(org_id=current.org_id, gift_card_id=g.id, amount=-amount,
                           ref_type="order", ref_id=order.id, note=f"Redeemed on {order.order_number}"))
     await _add_discount_line(db, order, f"Gift card {g.code}", amount)
     await db.commit()
-    return {"ok": True, "redeemed": amount, "card_balance": new_balance}
+    return {"ok": True, "redeemed": float(amount), "card_balance": new_balance}
 
 
 # ── Coupons / promotions ─────────────────────────────────────────────────────

@@ -86,10 +86,10 @@ MFA_ENROLLMENT_PATHS = ("/api/mfa/", "/api/auth/me", "/api/auth/refresh", "/api/
 def assert_org_active(org, today=None) -> None:
     """Suspended or lapsed orgs are locked out of every credential they hold — staff tokens
     and public-API keys alike."""
-    from backend.services.dates import org_today
+    from backend.services.dates import platform_today
     if org is None:
         return
-    today = today or org_today(org)
+    today = today or platform_today()
     if org.sub_status == "suspended":
         raise HTTPException(status_code=403, detail="This account is suspended. Please contact support.")
     if getattr(org, "sub_end", None) and org.sub_end < today:
@@ -147,10 +147,10 @@ async def get_current_employee(
     # out-of-window employees. Platform admins use a separate identity and are
     # unaffected.
     from backend.models import Organisation
-    from backend.services.dates import org_today
+    from backend.services.dates import platform_today
     org = (await db.execute(select(Organisation).where(
         Organisation.id == employee.org_id))).scalar_one_or_none()
-    today = org_today(org)   # the shop's calendar day: access windows are dates on its clock
+    today = platform_today()   # platform-set dates: UTC, not the tenant-controlled timezone
     assert_org_active(org, today)
     if (employee.access_start and employee.access_start > today) or \
        (employee.access_end and employee.access_end < today):

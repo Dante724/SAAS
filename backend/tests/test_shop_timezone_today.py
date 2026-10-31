@@ -54,14 +54,17 @@ async def test_day_start_in_utc():
     assert london == timedelta(hours=25)
 
 
-async def test_subscription_end_uses_shop_day(monkeypatch):
+async def test_subscription_end_is_a_utc_day_whatever_the_shop_timezone(monkeypatch):
+    """sub_end is set by the platform; the tenant controls Organisation.timezone, so it must not
+    be able to stretch (or shrink) its own subscription by picking a far zone."""
     from backend.services.auth import assert_org_active
-    _freeze(monkeypatch, 2026, 10, 31, 12, 0)      # Kiritimati: 1 Nov already
-    ended = SimpleNamespace(timezone=AHEAD, sub_status="active", sub_end=date(2026, 10, 31))
-    with pytest.raises(HTTPException) as e:
-        assert_org_active(ended)
-    assert e.value.status_code == 403
-    assert_org_active(SimpleNamespace(timezone=BEHIND, sub_status="active", sub_end=date(2026, 10, 31)))
+    _freeze(monkeypatch, 2026, 10, 31, 12, 0)      # Kiritimati: 1 Nov already; Pago Pago: 31 Oct
+    for tz in (AHEAD, BEHIND, "UTC"):
+        assert_org_active(SimpleNamespace(timezone=tz, sub_status="active", sub_end=date(2026, 10, 31)))
+        with pytest.raises(HTTPException) as e:
+            assert_org_active(SimpleNamespace(timezone=tz, sub_status="active", sub_end=date(2026, 10, 30)))
+        assert e.value.status_code == 403
+    assert dates.platform_today() == date(2026, 10, 31)
 
 
 async def test_payroll_cutoff_counts_back_from_given_day():

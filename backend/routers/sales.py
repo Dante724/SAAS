@@ -22,7 +22,7 @@ from backend.models import (
 )
 from backend.services.auth import assert_perm, get_current_employee, require_perm
 from backend.services.numbering import next_number
-from backend.services.money import add_to_column, d2, q2, q4
+from backend.services.money import add_to_column, d2, dec, q2, q4
 from backend.core.spreadsheet import MAX_IMPORT_ROWS, safe_row
 from backend.services.dates import now_utc
 
@@ -127,18 +127,18 @@ async def _pos_redemptions(db, org_id, sale, client_id, gross, data):
             raise HTTPException(404, "Gift card not found or inactive")
         if g.expires_at and g.expires_at < now_utc():
             raise HTTPException(400, "Gift card has expired")
-        amt = q2(min(g.balance, max(remaining, 0)))
+        amt = d2(min(g.balance, max(dec(remaining), 0)))   # Decimal: compared/written against the balance
         if amt > 0:
             # 144bc — guarded atomic decrement: refuse to drive the balance negative if a
             # concurrent redemption drained the card between the read above and this write.
             res = await db.execute(sa_update(GiftCard)
                 .where(GiftCard.id == g.id, GiftCard.balance >= amt)
-                .values(balance=GiftCard.balance - d2(amt)))   # Decimal column: no float operand
+                .values(balance=GiftCard.balance - amt))
             if res.rowcount == 0:
                 raise HTTPException(409, "Gift card balance changed — please retry")
             db.add(GiftCardLedger(org_id=org_id, gift_card_id=g.id, amount=-amt,
                                   ref_type="sale", ref_id=sale.id, note=f"Redeemed on {sale.sale_number}"))
-            extra += amt; remaining -= amt; detail["gift_card"] = amt
+            extra += float(amt); remaining -= float(amt); detail["gift_card"] = float(amt)
     if data.redeem_points and data.redeem_points > 0:
         if not client_id:
             raise HTTPException(400, "Select a customer to redeem points")

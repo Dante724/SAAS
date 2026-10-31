@@ -38,6 +38,14 @@ def org_today(org) -> date:
     return today_in(getattr(org, "timezone", None))
 
 
+def platform_today() -> date:
+    """The UTC calendar day, for dates the platform owns rather than the shop: subscription
+    start/end, platform coupons and the staff access windows set from the admin portal. These must
+    not move with Organisation.timezone, which the tenant controls (a far-west zone would otherwise
+    keep a lapsed account open for up to 12 more hours)."""
+    return today_in("UTC")
+
+
 async def shop_today(db, org_id: str, location_id: str | None = None) -> date:
     return today_in(await shop_tzname(db, org_id, location_id))
 
