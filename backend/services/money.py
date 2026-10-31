@@ -159,3 +159,19 @@ async def claim_status(db, obj, expected, new, *, attr: str = "status", where=()
         return False
     await db.refresh(obj, attribute_names=[attr, *values])
     return True
+
+
+MAX_MONEY = 1e9      # a single price/amount above this is a typo, not a repair-shop price
+
+
+def check_money(v, *, allow_negative: bool = False):
+    """Pydantic-validator helper: a finite money amount, not negative, below MAX_MONEY."""
+    if v is None:
+        return v
+    import math
+    if not math.isfinite(v) or abs(v) >= MAX_MONEY:
+        raise ValueError("Amount is too large")
+    if v < 0 and not allow_negative:
+        raise ValueError("Amount can't be negative")
+    return v
+

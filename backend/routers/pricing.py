@@ -7,7 +7,7 @@ import json
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -407,6 +407,28 @@ class PriceDefaultsIn(BaseModel):
     min_margin_pct: Optional[float] = None
     margin_guard: Optional[str] = None       # off | warn | block
     discount_approval_pct: Optional[float] = None
+
+    # QA 2026-10-31 B: price_decimals -3 and margin_guard "banana" used to be stored.
+    @field_validator("price_decimals")
+    @classmethod
+    def _decimals(cls, v):
+        if v is not None and not 0 <= v <= 4:
+            raise ValueError("price_decimals must be between 0 and 4")
+        return v
+
+    @field_validator("margin_guard")
+    @classmethod
+    def _guard(cls, v):
+        if v is not None and v not in ("off", "warn", "block"):
+            raise ValueError("margin_guard must be off, warn or block")
+        return v
+
+    @field_validator("min_margin_pct", "discount_approval_pct")
+    @classmethod
+    def _pct(cls, v):
+        if v is not None and not 0 <= v <= 100:
+            raise ValueError("Percentages must be between 0 and 100")
+        return v
 
 
 @router.get("/defaults")

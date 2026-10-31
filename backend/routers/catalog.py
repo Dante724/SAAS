@@ -5,7 +5,7 @@ work-order line editor uses to pick either a service or a product (part).
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -16,6 +16,9 @@ from backend.services.auth import get_current_employee, has_perm, require_perm
 from backend.core import paging as _paging
 from backend.core.likes import contains as _contains
 from backend.services.redact import can_see_costs
+from backend.services.money import check_money
+from backend.services.commission_input import (
+    check_commission_amount, check_commission_basis, check_commission_calc_type)
 
 router = APIRouter(prefix="/api/catalog", tags=["catalog"])
 
@@ -58,6 +61,26 @@ class ServiceIn(BaseModel):
     bookable: bool = True              # 144ee: show on public appointment page
     allowed_employee_ids: list = []   # 144ek: who can perform (empty = all)
     required_resource_types: list = []# 144ek: resource types this service needs
+
+    # QA 2026-10-31 B: negative / absurd numbers used to be stored (or silently clamped).
+    @field_validator("price", "cost_price")
+    @classmethod
+    def _money(cls, v):
+        return check_money(v)
+
+    @field_validator("duration_min")
+    @classmethod
+    def _duration(cls, v):
+        if v is not None and not 0 <= v <= 7 * 24 * 60:
+            raise ValueError("Duration must be between 0 and 10080 minutes")
+        return v
+
+    @field_validator("warranty_days")
+    @classmethod
+    def _warranty(cls, v):
+        if v is not None and not 0 <= v <= 36500:
+            raise ValueError("Warranty days must be between 0 and 36500")
+        return v
 
 
 def _ser(s: Service, cat_names: Optional[dict] = None) -> dict:
@@ -233,9 +256,26 @@ async def delete_service(
 
 class ServiceCommissionIn(BaseModel):
     employee_id: Optional[str] = None      # None = applies to all staff
-    calc_type: str = "percent"             # percent|flat
+    calc_type: str = "percent"             # percent|flat ("fixed" = flat, as on discounts)
     amount: float = 0                       # % (0-100) or flat money
     percent_basis: str = "total"           # total|margin
+
+    # QA 2026-10-31 B: "fixed" was saved as percent, 150% accepted and an unknown basis
+    # silently became "total". One shared check (also used by payroll rules).
+    @field_validator("calc_type")
+    @classmethod
+    def _calc(cls, v):
+        return check_commission_calc_type(v)
+
+    @field_validator("percent_basis")
+    @classmethod
+    def _basis(cls, v):
+        return check_commission_basis(v)
+
+    @field_validator("amount")
+    @classmethod
+    def _amount(cls, v, info):
+        return check_commission_amount(info.data.get("calc_type"), v)
 
 
 def _ser_svc_comm(r) -> dict:
@@ -271,8 +311,7 @@ async def add_service_commission(
     r = CommissionRule(
         org_id=current.org_id, name=f"{s.name} commission", event="labor_performed",
         rule_level="service", service_id=service_id, employee_id=data.employee_id,
-        calc_type=("flat" if data.calc_type == "flat" else "percent"),
-        percent_basis=("margin" if data.percent_basis == "margin" else "total"),
+        calc_type=data.calc_type, percent_basis=data.percent_basis,
         amount=Decimal(str(data.amount or 0)), calc_timing="on_close")
     db.add(r)
     await db.commit()
@@ -403,6 +442,28 @@ class TaxIn(BaseModel):
     name_for_document: Optional[str] = None
     location_scope: str = "all"
     location_ids: list[str] = []
+
+    # QA 2026-10-31 B: a 150% / -7% rate or mode "sideways" used to be stored as sent.
+    @field_validator("rate")
+    @classmethod
+    def _rate(cls, v):
+        if v is None or not 0 <= v <= 100:
+            raise ValueError("Tax rate must be between 0 and 100%")
+        return v
+
+    @field_validator("mode")
+    @classmethod
+    def _mode(cls, v):
+        if v not in ("included", "imposed"):
+            raise ValueError("Tax mode must be included or imposed")
+        return v
+
+    @field_validator("location_scope")
+    @classmethod
+    def _scope(cls, v):
+        if v not in ("all", "selected"):
+            raise ValueError("location_scope must be all or selected")
+        return v
 
 def _ser_tax(t: Tax) -> dict:
     import json as _j
