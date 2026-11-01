@@ -318,3 +318,13 @@ async def test_scan_to_stock_writes_off_the_phone_whose_imei_was_scanned(client,
     assert r.status_code == 200 and r.json()["part_id"] == p["id"], r.text
     assert await _units(db, p["id"]) == {sns[0]: ("written_off", here), sns[1]: ("in_stock", here)}
     await _ledger_matches(db, p["id"])
+
+
+@pytest.mark.asyncio
+async def test_catalog_write_off_only_takes_a_unit_at_that_location(client, tenant, db):
+    p, here, sns = await _phone(client, tenant, n=1)
+    other = await _branch(client, tenant, db, "Branch w/o")
+    r = await client.post(f"/api/catalog/products/{p['id']}/write-off", headers=tenant,
+                          json={"location_id": other, "serials": [sns[0]]})
+    assert r.status_code == 404, r.text
+    assert await _units(db, p["id"]) == {sns[0]: ("in_stock", here)}
