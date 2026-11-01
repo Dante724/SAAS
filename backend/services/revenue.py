@@ -36,7 +36,7 @@ is never an expense, even where a path posts it as one against an order, invoice
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import func, or_, select
+from sqlalchemy import case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import (
@@ -272,15 +272,17 @@ async def cash_collected(db: AsyncSession, org_id: str, df: Optional[datetime] =
         mine = or_(Payment.order_id.in_(select(Order.id).where(Order.org_id == org_id)),
                    Payment.invoice_id.in_(select(Invoice.id).where(Invoice.org_id == org_id)),
                    Payment.account_id.in_(select(Account.id).where(Account.org_id == org_id)))
-    rows = dict((await db.execute(select(Payment.kind == "refund", func.coalesce(func.sum(Payment.amount), 0))
-        .where(mine, func.coalesce(Payment.method, "") != "balance", *_in(Payment.paid_at, df, dt))
-        .group_by(Payment.kind == "refund"))).all())
+    is_refund = func.coalesce(Payment.kind, "payment") == "refund"
+    paid_in, paid_back = (await db.execute(select(
+        func.coalesce(func.sum(case((is_refund, 0), else_=Payment.amount)), 0),
+        func.coalesce(func.sum(case((is_refund, Payment.amount), else_=0)), 0))
+        .where(mine, func.coalesce(Payment.method, "") != "balance", *_in(Payment.paid_at, df, dt)))).one()
     sq = select(func.coalesce(func.sum(Sale.total), 0)).where(
         Sale.org_id == org_id, Sale.paid == True, Sale.voided_at.is_(None), *_in(Sale.created_at, df, dt))  # noqa: E712
     if location_id:
         sq = sq.where(Sale.location_id == location_id)
-    money_in = float(rows.get(False, 0) or 0) + float((await db.execute(sq)).scalar() or 0)
-    back = abs(float(rows.get(True, 0) or 0))
+    money_in = float(paid_in or 0) + float((await db.execute(sq)).scalar() or 0)
+    back = abs(float(paid_back or 0))
     return {"in": q2(money_in), "refunds": q2(back), "net": q2(money_in - back)}
 
 
