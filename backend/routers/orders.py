@@ -1543,8 +1543,6 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     via_api = isinstance(current, ApiActor)
     if not via_api:
         await _guard_order_access(db, current, order)
-        if data.status != order.status and await _is_closed(db, current.org_id, order):
-            await assert_perm(db, current, "can_edit_closed_ticket")   # reopening counts as editing it
 
     # Resolve the target status from the configurable status table, scoped to this
     # record's pipeline. .first() (not scalar_one_or_none) so legacy duplicate keys
@@ -1559,12 +1557,28 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         .order_by(OrderStatus.sort_order)
     )).scalars().first()
     is_closing = target.is_terminal if target else (data.status in ("done", "closed", "delivered"))
+    # Reopening a closed job counts as editing it. Moving it on between closed statuses
+    # (done -> delivered) doesn't: the desk hands the device over without "Edit the closed ticket".
+    if not via_api and data.status != order.status and await _is_closed(db, current.org_id, order) \
+            and not (target and target.status_group == "closed"):
+        await assert_perm(db, current, "can_edit_closed_ticket")
     # Finishing a job is its own permission (closing used to need none). Bulk changes and
     # /complete come through here too.
     if is_closing:
-        from backend.services.auth import has_perm
         if not await has_perm(db, current, "can_close_tickets"):
             raise HTTPException(403, "Your role can't finish jobs. Move it to a ready status, or ask someone who can.")
+    # Closing a job the customer still owes on is a money decision: it needs the right to take
+    # client payments, as in Orderry's close dialog (a technician could close an unpaid job —
+    # QA 31 Oct 2026). "Not collected" isn't a close.
+    if target and target.status_group == "closed" and data.status != order.status \
+            and not order.is_estimate and not await has_perm(db, current, "can_make_client_payments"):
+        from backend.services.order_money import balance_due as _due_now
+        due = await _due_now(db, order)
+        if due > 0:
+            from backend.services.currency import org_money
+            fmt = await org_money(db, current.org_id)
+            raise HTTPException(403, f"{order.order_number} still has {fmt(due)} to pay. Take the payment "
+                                     "first, or ask someone who takes payments to close it.")
     # Dropped jobs (the customer never collected, refused the repair…): a reason is required,
     # the finished-work checks below are skipped and what's still owed is written off.
     is_dropping = bool(target and (target.status_group or "") == "dropped" and not order.is_estimate)
@@ -4095,6 +4109,10 @@ async def _guard_discount_approval(db, org_id, perms, discount, discount_type, i
         discount = 100.0 if not base or base <= 0 else min(100.0, float(discount) / float(base) * 100)
     if perms.get("can_approve_discount") is not False:
         return
+    # Giving the whole line away is always an approval, threshold or not (with no threshold set,
+    # a role denied approval could still make a job free — QA 31 Oct 2026).
+    if (discount or 0) >= 100:
+        raise HTTPException(403, "A 100% discount needs manager approval.")
     org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
     thr = float(getattr(org, "discount_approval_pct", 0) or 0)
     if thr <= 0 or (discount or 0) <= thr:
@@ -4908,10 +4926,12 @@ async def update_line(
     if payload.keys() & {"qty", "unit_price", "discount", "discount_type", "tax_rate", "tax_mode"}:
         from backend.services.invoice_money import assert_line_editable
         await assert_line_editable(db, line.id)   # not under a sent or paid invoice
-    if current.role_id and not (await _order_perms(db, current)).get("can_view_purchase_price"):
-        payload.pop("cost_price", None)
+    # A cost change from someone who may not set costs is refused, not silently dropped (a 200
+    # that changed nothing — QA 31 Oct 2026). The editor only sends cost when it showed it.
     if "cost_price" in payload and float(payload["cost_price"] or 0) != float(line.cost_price or 0):
         await assert_perm(db, current, "can_set_cost_price")
+    if current.role_id and not (await _order_perms(db, current)).get("can_view_purchase_price"):
+        payload.pop("cost_price", None)
     if "discount_type" in payload and (payload["discount_type"] or "pct") != (line.discount_type or "pct"):
         await assert_perm(db, current, "can_set_discount_type")
     # Changing what the customer pays needs the matching right (a technician can't zero a job).

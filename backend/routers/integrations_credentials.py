@@ -12,14 +12,14 @@ from backend.db.database import get_db
 from backend.models import Employee
 from backend.services import org_creds
 from backend.services.audit import record as audit_record
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import require_perm
 
 router = APIRouter(prefix="/api/integrations/credentials", tags=["integrations"])
 
 
 @router.get("")
 async def list_credentials(db: AsyncSession = Depends(get_db),
-                           current: Employee = Depends(get_current_employee)):
+                           current: Employee = Depends(require_perm("can_manage_settings"))):
     """Masked status of every keyed provider for THIS shop."""
     return await org_creds.status(db, current.org_id)
 

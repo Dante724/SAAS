@@ -33,7 +33,7 @@ class NumberingIn(BaseModel):
 @router.get("/numbering")
 async def list_numbering(
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     rows = (await db.execute(select(NumberSequence).where(
         NumberSequence.org_id == current.org_id))).scalars().all()

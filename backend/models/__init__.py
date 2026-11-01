@@ -319,6 +319,17 @@ class Role(Base):
     employees: Mapped[list["Employee"]] = relationship(back_populates="role")
 
 
+class RolePermissionBackup(Base):
+    """A role's permissions before a data migration changed them, so its downgrade can restore
+    them (rt144a1: existing technician roles tightened). Written by migrations only."""
+    __tablename__ = "role_permission_backups"
+    role_id: Mapped[str] = mapped_column(String, primary_key=True)
+    migration: Mapped[str] = mapped_column(String(40), primary_key=True)
+    org_id: Mapped[Optional[str]] = mapped_column(String)
+    permissions: Mapped[Optional[dict]] = mapped_column(JSON)
+    created_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=now_utc)
+
+
 class EmployeeGroup(Base):
     """Build 83 — a named group of employees, separate from roles. Roles grant
     permissions; groups are used for assignment and notification targeting."""

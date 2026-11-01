@@ -14,10 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Employee, Role
 from backend.services import audit
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import get_current_employee, has_perm, require_perm
 from backend.services.permissions import (
     ALL_CODES,
     CATALOG,
+    ROLE_READERS,
     TEMPLATES,
     make_explicit,
     new_role_permissions,
@@ -59,13 +60,21 @@ def _ser_role(r: Role) -> dict:
 @router.get("/roles")
 async def list_roles(db: AsyncSession = Depends(get_db),
                      current: Employee = Depends(get_current_employee)):
+    await assert_can_read_roles(db, current)
     rows = (await db.execute(select(Role).where(Role.org_id == current.org_id))).scalars().all()
     return {"items": [_ser_role(r) for r in rows]}
 
 
+async def assert_can_read_roles(db: AsyncSession, current: Employee) -> None:
+    for code in ROLE_READERS:
+        if await has_perm(db, current, code):
+            return
+    raise HTTPException(403, "You don't have access to roles")
+
+
 class RoleIn(BaseModel):
     name: str
-    permissions: dict = {}          # {code: bool}; omitted => allowed (deny-wins)
+    permissions: dict = {}          # {code: bool}; without a template, omitted => off
     template: Optional[str] = None  # seed from a template
     location_scope: str = "all"
     location_ids: list[str] = []

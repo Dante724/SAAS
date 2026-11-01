@@ -92,7 +92,7 @@ async def _shop(client, tz):
 
 
 async def _no_retro_teammate(client, H):
-    r = await client.post("/api/settings/rbac/roles", json={
+    r = await client.post("/api/settings/rbac/roles", json={"template": "Full access", 
         "name": f"No retro {uuid.uuid4().hex[:4]}", "permissions": {"can_retroactive_cash": False}}, headers=H)
     assert r.status_code in (200, 201), r.text
     email = f"tm-{uuid.uuid4().hex[:8]}@t.dev"

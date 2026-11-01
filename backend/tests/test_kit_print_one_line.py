@@ -298,7 +298,7 @@ async def test_old_untagged_kit_lines_print_as_before(client, tenant, db):
 # ── roles ──────────────────────────────────────────────────────────────────────────────────────
 
 async def _person(client, h, perms):
-    r = await client.post("/api/settings/rbac/roles", headers=h, json={"name": f"R{uuid.uuid4().hex[:4]}", "permissions": perms})
+    r = await client.post("/api/settings/rbac/roles", headers=h, json={"template": "Full access", "name": f"R{uuid.uuid4().hex[:4]}", "permissions": perms})
     assert r.status_code == 201, r.text
     email = f"p-{uuid.uuid4().hex[:6]}@test.dev"
     r = await client.post("/api/staff/employees", headers=h, json={

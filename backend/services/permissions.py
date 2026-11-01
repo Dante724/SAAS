@@ -196,6 +196,14 @@ _NOT_FOR_STAFF = {
     "can_view_purchase_price": False, "can_see_profit": False, "can_set_cost_price": False,
     "can_see_asset_cost": False,
     "can_take_payments": False, "can_create_payment_links": False,
+    # QA 31 Oct 2026: the template still showed cash balances, every invoice and credit note,
+    # and let a technician give a 100% discount. Billing stays with the desk.
+    "can_view_balance": False, "can_view_cashbox": False,
+    "can_view_invoices": False, "can_create_invoices": False, "can_edit_invoices": False,
+    "can_edit_issued_invoices": False, "can_view_credit_notes": False, "can_create_credit_notes": False,
+    "can_create_incomes": False, "can_create_expenses": False, "can_create_returns": False,
+    "can_approve_discount": False, "can_set_discount": False, "can_set_discount_type": False,
+    "can_make_client_payments": False,
 }
 TEMPLATES = {
     "Full access": {"can_use_sense_suggestions": True, "can_approve_agent_sends": True},   # nothing denied
@@ -209,6 +217,10 @@ TEMPLATES = {
                    "can_manage_membership_plans": False, "can_change_memberships": False},
 }
 
+
+# Who may read the role list (the role editor, the invite form, payroll's per-role filter). A
+# technician read every role's permissions (QA 31 Oct 2026); their own come from /auth/me.
+ROLE_READERS = ("can_manage_roles", "can_manage_employees", "can_view_payroll")
 
 # Codes that were always opt-in (only an explicit True grants them), even for legacy roles.
 OPT_IN = {"can_override_reservation", "can_change_kit_price", "can_use_sense_suggestions", "can_approve_agent_sends"}
@@ -255,10 +267,15 @@ def make_explicit(role) -> bool:
 
 
 def new_role_permissions(template: str | None = None, overrides: dict | None = None) -> dict:
-    """Permissions for a role created now: every current code on (except the opt-in ones),
-    then the template's denies, then what the editor set."""
-    perms = {code: code not in OPT_IN for code in ALL_CODES}
-    perms.update(TEMPLATES.get(template or "", {}))
+    """Permissions for a role created now. With a template: every current code on (except the
+    opt-in ones), then the template's denies. Without one: everything off. Then what the editor
+    set. (Starting a blank role from all-on let a role sent with a few codes get ~110 of them,
+    settings and roles included — QA 31 Oct 2026.)"""
+    if template:
+        perms = {code: code not in OPT_IN for code in ALL_CODES}
+        perms.update(TEMPLATES.get(template, {}))
+    else:
+        perms = {code: False for code in ALL_CODES}
     perms.update({k: bool(v) for k, v in (overrides or {}).items()})
     return perms
 
