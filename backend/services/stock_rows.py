@@ -88,6 +88,15 @@ async def row_for(db, part_id: str, location_id: str, bin_id: Optional[str] = No
 COUNTED_UNITS = {"pcs", "pc", "piece", "pieces", "ea", "each", "unit", "units", "set", "sets"}
 
 
+def order_qty(part, qty: float) -> float:
+    """A suggested quantity to buy: whole items (rounded up) for a product counted in whole
+    items, one decimal otherwise (W3-D: the reorder forecast suggested 0.5 pcs)."""
+    if (getattr(part, "uom", None) or "pcs").strip().lower() in COUNTED_UNITS:
+        import math
+        return float(math.ceil(qty - _EPS))
+    return round(qty, 1)
+
+
 def check_whole(part, *qtys) -> None:
     """422 when a product counted in whole items is given a fractional quantity."""
     if (getattr(part, "uom", None) or "pcs").strip().lower() not in COUNTED_UNITS:
