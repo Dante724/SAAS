@@ -24,7 +24,7 @@ const FEED_SIGNALS: [string, string][] = [
 const PRESETS: [string, string, string][] = [
   ["Full access", "Everything, like the owner", "verified_user"],
   ["Manager", "Runs the shop, no billing setup", "badge"],
-  ["Specialist", "Works on jobs, sees their own pay", "build"],
+  ["Specialist", "Works on jobs; doesn't take payments or give discounts", "build"],
   ["Partner", "Outside partner, limited view", "group"],
 ];
 

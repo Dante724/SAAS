@@ -29,6 +29,7 @@ describe("Role editor, new role", () => {
     render(<RoleEditor role={null} catalog={catalog} statuses={[]} onClose={() => {}} onSaved={saved} />);
     expect(screen.getByText("Can do 0 of 2 things")).toBeInTheDocument();
     expect(screen.getByText(/Nothing is switched on yet/)).toBeInTheDocument();
+    expect(screen.getByText("Works on jobs; doesn't take payments or give discounts")).toBeInTheDocument();
     await u.type(screen.getByPlaceholderText(/name/i), "Tech");
     await u.click(screen.getByRole("button", { name: /Workflows/ }));
     await u.click(screen.getByRole("switch", { name: /Create tickets/ }));
