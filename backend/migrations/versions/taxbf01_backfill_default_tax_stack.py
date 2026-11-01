@@ -7,13 +7,13 @@ shop: id + tax name) and saved in tax_stack_backfill_log so downgrade can put th
 Logic and rules: backend/services/tax_backfill.py.
 
 Revision ID: taxbf01
-Revises: idem01
+Revises: rt144a1
 """
 import sqlalchemy as sa
 from alembic import op
 
 revision = "taxbf01"
-down_revision = "idem01"
+down_revision = "rt144a1"
 branch_labels = None
 depends_on = None
 
