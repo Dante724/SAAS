@@ -138,7 +138,9 @@ async def display_lines(db: AsyncSession, inv: "Invoice", *, itemised: bool = Fa
         lines = sorted(lines, key=_k)
         from backend.services import kit_print
         for l in kit_print.customer_lines(lines, itemised=itemised):
-            row = {**kit_print.row(l), "order_id": getattr(l, "order_id", None)}
+            row = kit_print.row(l)
+            if not row.get("kit"):   # a plain line says which job it's from (per-row job fields)
+                row["order_id"] = getattr(l, "order_id", None)
             if names:
                 n = names.get(getattr(l, "order_item_id", None))
                 row["item_id"] = l.order_item_id if n else None

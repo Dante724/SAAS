@@ -85,14 +85,13 @@ async def resync_write_off(db: AsyncSession, order: Order, actor_id: str | None 
                                       ref_type="order", ref_id=order.id, created_by_id=actor_id)
 
 
-def balances_due(org_id: str):
-    """`balance_due` for every order of a shop in one query: a subquery of (order_id, owed). Same
-    rules (total − what was written off when the job was dropped − payments net of refunds −
-    credit notes, an invoice billing several orders sharing its credit by order total, never
-    below 0), so reports agree with the job screen."""
+def invoice_job_shares():
+    """Subquery of (invoice_id, order_id, share): each job an invoice bills (its links plus the
+    primary order_id) and its share of that invoice — by job total, equal shares when the totals
+    are 0, the whole invoice for a single job. The one rule for splitting an invoice's credit
+    notes between its jobs (`credited`, `balances_due`, and the reports in services/revenue)."""
     from sqlalchemy import case, union
     from backend.models import InvoiceOrder
-    void = ("void", "voided", "cancelled", "canceled")
     inv_jobs = union(
         select(InvoiceOrder.invoice_id.label("invoice_id"), InvoiceOrder.order_id.label("order_id")),
         select(Invoice.id.label("invoice_id"), Invoice.order_id.label("order_id"))
@@ -100,15 +99,26 @@ def balances_due(org_id: str):
     whole = (select(inv_jobs.c.invoice_id, func.sum(func.coalesce(Order.total, 0)).label("whole"),
                     func.count().label("n"))
              .join(Order, Order.id == inv_jobs.c.order_id).group_by(inv_jobs.c.invoice_id).subquery())
-    share = case((whole.c.n <= 1, Invoice.credited),
-                 (whole.c.whole != 0, Invoice.credited * func.coalesce(Order.total, 0) / whole.c.whole),
-                 else_=Invoice.credited / whole.c.n)
-    credit = (select(inv_jobs.c.order_id, func.sum(share).label("credited"))
-              .join(Invoice, Invoice.id == inv_jobs.c.invoice_id)
-              .join(whole, whole.c.invoice_id == inv_jobs.c.invoice_id)
-              .join(Order, Order.id == inv_jobs.c.order_id)
+    share = case((whole.c.n <= 1, 1.0),
+                 (whole.c.whole != 0, func.coalesce(Order.total, 0) * 1.0 / whole.c.whole),
+                 else_=1.0 / whole.c.n)
+    return (select(inv_jobs.c.invoice_id, inv_jobs.c.order_id, share.label("share"))
+            .join(whole, whole.c.invoice_id == inv_jobs.c.invoice_id)
+            .join(Order, Order.id == inv_jobs.c.order_id).subquery())
+
+
+def balances_due(org_id: str):
+    """`balance_due` for every order of a shop in one query: a subquery of (order_id, owed). Same
+    rules (total − what was written off when the job was dropped − payments net of refunds −
+    credit notes, an invoice billing several orders sharing its credit by order total, never
+    below 0), so reports agree with the job screen."""
+    from sqlalchemy import case
+    void = ("void", "voided", "cancelled", "canceled")
+    sh = invoice_job_shares()
+    credit = (select(sh.c.order_id, func.sum(Invoice.credited * sh.c.share).label("credited"))
+              .join(Invoice, Invoice.id == sh.c.invoice_id)
               .where(Invoice.org_id == org_id, Invoice.credited > 0, Invoice.status.notin_(void))
-              .group_by(inv_jobs.c.order_id).subquery())
+              .group_by(sh.c.order_id).subquery())
     paid = (select(Payment.order_id,
                    func.sum(case((Payment.kind.in_(("payment", "prepayment")), Payment.amount),
                                  (Payment.kind == "refund", -func.abs(Payment.amount)), else_=0)).label("net"))

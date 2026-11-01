@@ -81,9 +81,14 @@ def is_customer_refund():
         (Transaction.txn_type == "expense") & func.coalesce(Transaction.ref_type, "").in_(CUSTOMER_REF_TYPES))
 
 
-async def _dropped_keys(db: AsyncSession, org_id: str) -> set:
+async def dropped_keys(db: AsyncSession, org_id: str) -> set:
+    """The shop's work-order statuses in the dropped group (the one definition of a dropped job)."""
     return set((await db.execute(select(OrderStatus.key).where(
-        OrderStatus.org_id == org_id, OrderStatus.status_group == "dropped"))).scalars().all())
+        OrderStatus.org_id == org_id, OrderStatus.status_group == "dropped",
+        OrderStatus.record_type == "work_order"))).scalars().all())
+
+
+_dropped_keys = dropped_keys
 
 
 def _in(col, df, dt):
@@ -149,12 +154,17 @@ async def job_figures(db: AsyncSession, orders, dropped: Optional[set] = None) -
             .where(ClientReturnLine.restock == True)  # noqa: E712
             .group_by(ClientReturn.order_id))).all():
         fig(oid)["parts_cost"] -= float(back or 0)
-    # credit notes on the job's invoices (primary order); ex tax and with tax
+    # credit notes on the invoices billing the job, ex tax and with tax — an invoice billing several
+    # jobs shares them out by job total, the same split the job screen uses (order_money)
+    from backend.services.order_money import invoice_job_shares
+    sh = invoice_job_shares()
     for oid, sub, tot in (await db.execute(
-            select(Invoice.order_id, func.sum(CreditNote.subtotal), func.sum(CreditNote.total))
-            .join(Invoice, Invoice.id == CreditNote.invoice_id)
-            .where(_ids_cond(Invoice.order_id, orders), CreditNote.status == "issued")
-            .group_by(Invoice.order_id))).all():
+            select(sh.c.order_id, func.sum(CreditNote.subtotal * sh.c.share), func.sum(CreditNote.total * sh.c.share))
+            .join(Invoice, Invoice.id == sh.c.invoice_id)
+            .join(CreditNote, CreditNote.invoice_id == Invoice.id)
+            .where(_ids_cond(sh.c.order_id, orders), CreditNote.status == "issued",
+                   Invoice.status.notin_(VOID_STATUSES))
+            .group_by(sh.c.order_id))).all():
         f = fig(oid)
         f["credit_net"], f["credited_gross"] = float(sub or 0), float(tot or 0)
     for oid, paid, back in (await db.execute(
@@ -204,8 +214,10 @@ async def earned_jobs_query(db, org_id, df=None, dt=None, location_id=None, cols
     count; dropped jobs only with include_dropped (they earn the money they kept, see job_figures).
     with_date=True returns (Order, earned_at) rows."""
     billed = _billed_on(org_id)
+    dropped = await _dropped_keys(db, org_id)
     earned_at = case((Order.closed_at.is_(None), billed.c.billed_at),
                      (billed.c.billed_at.is_(None), Order.closed_at),
+                     *([(Order.status.in_(dropped), Order.closed_at)] if dropped else []),   # the day it was dropped
                      (billed.c.billed_at < Order.closed_at, billed.c.billed_at),
                      else_=Order.closed_at)
     cols = cols if cols is not None else ((Order, earned_at.label("earned_at")) if with_date else (Order,))
@@ -213,10 +225,8 @@ async def earned_jobs_query(db, org_id, df=None, dt=None, location_id=None, cols
          .outerjoin(billed, billed.c.order_id == Order.id)
          .where(Order.org_id == org_id, Order.is_estimate == False, Order.archived == False,  # noqa: E712
                 Order.closed_at.isnot(None) | billed.c.billed_at.isnot(None), *_in(earned_at, df, dt)))
-    if not include_dropped:
-        dropped = await _dropped_keys(db, org_id)
-        if dropped:
-            q = q.where(Order.status.notin_(dropped))
+    if not include_dropped and dropped:
+        q = q.where(Order.status.notin_(dropped))
     if location_id:
         q = q.where(Order.location_id == location_id)
     if allowed_locations is not None:
@@ -268,14 +278,23 @@ async def net_sales(db: AsyncSession, org_id: str, df: Optional[datetime] = None
     # credit notes issued in the period (a branch sees only those on its own jobs' invoices)
     cq = select(func.coalesce(func.sum(CreditNote.subtotal), 0), func.coalesce(func.sum(CreditNote.tax_total), 0)) \
         .where(CreditNote.org_id == org_id, CreditNote.status == "issued", *_in(CreditNote.issued_at, df, dt))
-    if dropped:   # a dropped job's credit notes are already inside what it kept
-        cq = cq.where(CreditNote.invoice_id.is_(None) | ~CreditNote.invoice_id.in_(
-            select(Invoice.id).join(Order, Order.id == Invoice.order_id)
-            .where(Order.org_id == org_id, Order.status.in_(dropped))))
     if location_id:
         cq = cq.join(Invoice, Invoice.id == CreditNote.invoice_id).join(Order, Order.id == Invoice.order_id) \
             .where(Order.location_id == location_id)
     cn_net, cn_tax = (float(x or 0) for x in (await db.execute(cq)).one())
+    if dropped:   # a dropped job's share of its invoices' credit notes is already inside what it kept
+        from backend.services.order_money import invoice_job_shares
+        sh = invoice_job_shares()
+        dq = (select(func.coalesce(func.sum(CreditNote.subtotal * sh.c.share), 0),
+                     func.coalesce(func.sum(CreditNote.tax_total * sh.c.share), 0))
+              .select_from(CreditNote).join(sh, sh.c.invoice_id == CreditNote.invoice_id)
+              .join(Order, Order.id == sh.c.order_id)
+              .where(CreditNote.org_id == org_id, CreditNote.status == "issued", Order.status.in_(dropped),
+                     *_in(CreditNote.issued_at, df, dt)))
+        if location_id:
+            dq = dq.where(Order.location_id == location_id)
+        d_net, d_tax = (float(x or 0) for x in (await db.execute(dq)).one())
+        cn_net, cn_tax = cn_net - d_net, cn_tax - d_tax
 
     # counter sales and their card refunds (a sale's tax, where the till stores it, isn't revenue)
     sale_tax_col = getattr(Sale, "tax", None)

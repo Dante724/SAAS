@@ -294,6 +294,9 @@ async def test_receivables_are_what_the_job_screens_say_is_owed(client, db):
 async def test_revenue_and_receivables_are_summed_in_the_database(client, db):
     """Council review: no list of every job id sent as query parameters (asyncpg stops at 32,767)
     — the date filter and the sums stay in SQL however many jobs a shop has."""
+    from datetime import datetime
+
+    from backend.services.profit import total_profit
     from backend.services.revenue import net_sales, receivables
     H, loc, acc = await _setup(client)
     cid = (await client.post("/api/clients", json={"name": "Cy"}, headers=H)).json()["id"]
@@ -310,6 +313,7 @@ async def test_revenue_and_receivables_are_summed_in_the_database(client, db):
         try:
             sales = await net_sales(db, org_id)
             owed = await receivables(db, org_id)
+            await total_profit(db, org_id, datetime(2026, 1, 1), datetime(2100, 1, 1))
         finally:
             event.remove(engine, "before_cursor_execute", count)
         return max(widest), sales["revenue"], owed
@@ -373,3 +377,50 @@ async def test_a_dropped_job_earns_what_it_kept_and_owes_nothing(client, db):
                                                         "reason": "Deposit back"}, headers=H)
     assert r.status_code == 201, r.text
     assert await figures() == (20.0, 20.0, 20.0, 20.0, 0.0, 0.0, 0.0)
+
+
+async def test_money_paid_after_dropping_is_kept_not_written_off(client, db):
+    """Architect review: a payment that arrives after a job was dropped (an old pay link, the desk)
+    lowers what was written off, so the job never shows kept + written off above its total."""
+    H, loc, acc = await _setup(client)
+    cid = (await client.post("/api/clients", json={"name": "Ed"}, headers=H)).json()["id"]
+    oid = await _job(client, H, loc, cid, 100)
+    r = await client.patch(f"/api/orders/{oid}/status",
+                           json={"status": await _status(client, H, "dropped"), "reason": "Gone"}, headers=H)
+    assert r.status_code == 200, r.text
+    o = (await db.execute(select(Order).where(Order.id == oid).execution_options(populate_existing=True))).scalar_one()
+    assert o.written_off == 100.0
+    r = await client.post(f"/api/cash/orders/{oid}/prepay", json={"amount": 40, "account_id": acc}, headers=H)
+    assert r.status_code == 201, r.text
+    o = (await db.execute(select(Order).where(Order.id == oid).execution_options(populate_existing=True))).scalar_one()
+    assert o.written_off == 60.0
+    tp = await _total_profit(client, H)
+    row = next(r for r in tp["rows"] if r["id"] == oid)
+    assert (row["revenue"], row["written_off"]) == (40.0, 60.0)
+    dash = (await client.get("/api/reports/dashboard", headers=H)).json()["stats"]
+    assert dash["outstanding"] == 0.0 and await _job_screen_owed(db, await _org_of(db, oid)) == 0.0
+
+
+async def test_a_dropped_job_takes_its_share_of_a_shared_credit_note(client, db):
+    """Architect review: an invoice billing two jobs shares its credit notes between them by job
+    total in every figure — what's owed, what was written off and what a dropped job kept."""
+    H, loc, acc = await _setup(client)
+    cid = (await client.post("/api/clients", json={"name": "Flo"}, headers=H)).json()["id"]
+    a = await _job(client, H, loc, cid, 100)
+    b = await _job(client, H, loc, cid, 100)
+    r = await client.post(f"/api/cash/orders/{a}/prepay", json={"amount": 30, "account_id": acc}, headers=H)
+    assert r.status_code == 201, r.text
+    iid = (await client.post("/api/finance/invoices", json={"order_ids": [a, b]}, headers=H)).json()["id"]
+    cn = (await client.post("/api/finance/credit-notes", headers=H, json={
+        "client_id": cid, "invoice_id": iid, "reason": "Goodwill",
+        "lines": [{"description": "Goodwill", "qty": 1, "unit_price": 40}]})).json()
+    assert (await client.post(f"/api/finance/credit-notes/{cn['id']}/issue", headers=H)).status_code == 200
+    r = await client.patch(f"/api/orders/{a}/status",
+                           json={"status": await _status(client, H, "dropped"), "reason": "Gone"}, headers=H)
+    assert r.status_code == 200, r.text
+    o = (await db.execute(select(Order).where(Order.id == a).execution_options(populate_existing=True))).scalar_one()
+    assert o.written_off == 50.0                      # 100 − 20 of the credit − 30 paid
+    row = next(r for r in (await _total_profit(client, H))["rows"] if r["id"] == a)
+    assert (row["revenue"], row["written_off"]) == (30.0, 50.0)
+    dash = (await client.get("/api/reports/dashboard", headers=H)).json()["stats"]
+    assert dash["outstanding"] == await _job_screen_owed(db, await _org_of(db, a)) == 80.0   # B: 100 − 20

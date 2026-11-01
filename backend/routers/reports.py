@@ -255,11 +255,11 @@ async def _rep_cancellations(db, org, df, dt, **kw):
 
 
 async def _rep_dropped_jobs(db, org, df, dt, **kw):
-    """Unsuccessful jobs profit: one row per job dropped in the period — what was paid, what was
+    """Dropped jobs: one row per job dropped in the period — what was paid, what was
     written off, and the profit after costs, tax and commission (services/profit)."""
     from backend.services.profit import closed_jobs_query, dropped_keys, job_figures
     cols = ["Job #", "Dropped", "Client", "Technician", "Type", "Status", "Reason", "Job total",
-            "Money kept", "Written off", "Tax", "Parts cost", "Labour cost", "Commission", "Profit"]
+            "Paid and kept (incl. tax)", "Written off", "Tax", "Parts cost", "Labour cost", "Commission", "Profit"]
     dropped = await dropped_keys(db, org)
     if kw.get("status"):
         dropped &= {kw["status"]}
@@ -270,7 +270,7 @@ async def _rep_dropped_jobs(db, org, df, dt, **kw):
         q = q.where(Order.type_id == kw["type_id"])
     orders = (await db.execute(q.options(selectinload(Order.client), selectinload(Order.assigned_to))
                                .order_by(Order.closed_at.desc()))).scalars().all()
-    figs = await job_figures(db, org, list(orders), dropped)
+    figs = await job_figures(db, org, q.with_only_columns(Order.id), dropped)   # sums in SQL, no id list
     from backend.models import WorkOrderType
     tids = {o.type_id for o in orders if o.type_id}
     tname = dict((await db.execute(select(WorkOrderType.id, WorkOrderType.name).where(
@@ -297,7 +297,7 @@ async def _rep_wo_profit(db, org, df, dt, **kw):
         Order.org_id == org, Order.is_estimate == False, Order.archived == False,  # noqa: E712
         Order.created_at >= df, Order.created_at <= dt), kw)
     orders = (await db.execute(_q.order_by(Order.created_at.desc()))).scalars().all()
-    figs = await job_figures(db, org, list(orders))
+    figs = await job_figures(db, org, _q.with_only_columns(Order.id))   # sums in SQL, no id list
     cols = ["Order #", "Revenue", "Cost", "Gross profit", "Markup %"]
     data = []
     for o in orders:
@@ -955,7 +955,7 @@ REPORTS = {
     "wo_profit":        ("Finance", "Work orders profit", _rep_wo_profit),
     "lead_sources":     ("Customers", "Revenue by lead source", _rep_lead_source_revenue),
     "cancellations":    ("Work Orders", "Cancellations by reason", _rep_cancellations),
-    "dropped_jobs":     ("Finance", "Unsuccessful jobs profit", _rep_dropped_jobs),
+    "dropped_jobs":     ("Finance", "Dropped jobs", _rep_dropped_jobs),
     "technicians":      ("Work Orders", "Technicians performance", _rep_technicians),
     "provided_services":("Assortment", "Provided services (Ready+Closed)", _rep_provided_services),
     "sold_products":    ("Assortment", "Sold products (Ready+Closed)", _rep_sold_products),
@@ -1286,13 +1286,13 @@ async def job_profitability(
 
     # jobs earned in the window — closed, or first billed on an invoice staff sent: the date rule
     # net sales uses (services/revenue). Dropped jobs are left out here (see Total profit).
-    orders = [o for o in await money_rules.earned_jobs(db, oid, start, end, location_id)
-              if allow is None or o.location_id in allow]
+    earned = await money_rules.earned_jobs_query(db, oid, start, end, location_id, allowed_locations=allow)
+    orders = (await db.execute(earned)).scalars().all()
     if not orders:
         return {"rows": [], "by_location": [], "totals": {
             "revenue": 0, "tax": 0, "parts_cost": 0, "labour_cost": 0, "commission": 0, "margin": 0,
             "margin_pct": 0, "jobs": 0}, "range": {"from": start.isoformat(), "to": end.isoformat()}}
-    figs = await job_figures(db, oid, list(orders))
+    figs = await job_figures(db, oid, earned.with_only_columns(Order.id))   # sums in SQL, no id list
 
     # client + location names
     cids = {o.client_id for o in orders if o.client_id}
@@ -1356,13 +1356,52 @@ async def total_profit_report(
     commissions, with the previous period of the same length, by location and technician, and
     the rows behind every number. Cost and profit fields are removed for roles that can't see
     purchase prices (core/cost_redaction)."""
+    return await _total_profit_for(db, current, date_from, date_to, location_id, technician_id)
+
+
+@router.get("/total-profit.csv")
+async def total_profit_csv(
+    date_from: Optional[str] = Query(None),
+    date_to: Optional[str] = Query(None),
+    location_id: Optional[str] = Query(None),
+    technician_id: Optional[str] = Query(None, max_length=64),
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_see_profit")),
+):
+    """Total profit's rows as CSV, for the accountant (the same rows and figures as the page)."""
+    import csv
+
+    from backend.services.auth import assert_perm
+    await assert_perm(db, current, "can_export_sales")
+    out = await _total_profit_for(db, current, date_from, date_to, location_id, technician_id)
+    kinds = {"job": "Job", "dropped": "Dropped job", "sale": "Counter sale", "other": "Refunds and other"}
+    fields = [("Sales (ex tax)", "revenue"), ("Tax", "tax"), ("Parts cost", "cogs"),
+              ("Labour cost", "labour_cost"), ("Commission", "commission"), ("Profit", "profit"),
+              ("Written off", "written_off")]
+    fields = [(label, key) for label, key in fields if any(key in r for r in out["rows"]) or not out["rows"]]
+    buf = io.StringIO()
+    w = csv.writer(buf)
+    w.writerow(["Type", "Number", "Date", "Location", "Technician", "Customer", "Reason", *[f[0] for f in fields]])
+    for r in out["rows"]:
+        w.writerow(safe_row([kinds.get(r["kind"], r["kind"]), r.get("number") or "", (r.get("date") or "")[:10],
+                             r.get("location_name") or "", r.get("employee_name") or "", r.get("client_name") or "",
+                             r.get("reason") or "", *[r.get(key, "") for _, key in fields]]))
+    t = out["totals"]
+    w.writerow(safe_row(["Total", "", "", "", "", "", "", *[t.get(key, "") for _, key in fields]]))
+    rng = out["range"]
+    fname = f"total_profit_{rng['from'][:10].replace('-', '')}_{rng['to'][:10].replace('-', '')}.csv"
+    return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
+                             headers={"Content-Disposition": f'attachment; filename="{fname}"'})
+
+
+async def _total_profit_for(db, current, date_from, date_to, location_id, technician_id) -> dict:
+    from fastapi import HTTPException
+
     from backend.models import Role
     from backend.services.auth import assert_perm
     from backend.services.profit import total_profit
-    await assert_perm(db, current, "can_view_reports")
-    from fastapi import HTTPException
-
     from backend.services.redact import can_see_costs
+    await assert_perm(db, current, "can_view_reports")
     try:
         df, dt = _parse_range(date_from, date_to)
     except ValueError:
@@ -1439,9 +1478,12 @@ async def home_feed(
     urgent = await count(*open_conds, Order.priority >= 1)
     ready = await count(Order.org_id == oid, Order.closed_at == None, Order.status.in_(ready_keys), *mine) if ready_keys else 0  # noqa: E711
 
+    # a dropped job's open invoice isn't owed any more (its balance was written off)
+    dropped_jobs = select(Order.id).where(Order.org_id == oid, Order.status.in_(await money_rules.dropped_keys(db, oid)))
     unpaid_n = (await db.execute(select(func.count()).select_from(Invoice).where(
         Invoice.org_id == oid, Invoice.status.in_(["draft", "partial", "issued"]),
-        (Invoice.total - Invoice.amount_paid - Invoice.credited) > 0))).scalar() or 0
+        (Invoice.total - Invoice.amount_paid - Invoice.credited) > 0,
+        Invoice.order_id.is_(None) | ~Invoice.order_id.in_(dropped_jobs)))).scalar() or 0
 
     # the same rule as the dashboard tile and the low-stock report (services/revenue)
     low = (await db.execute(low_stock_count_query(oid))).scalar() or 0

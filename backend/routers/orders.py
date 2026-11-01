@@ -1569,13 +1569,18 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         order.written_off = await _owed(db, order)
         # Writing off what a customer owes is a money decision, not just a status change.
         if order.written_off > _was_written_off and not await has_perm(db, current, "can_view_finance"):
-            raise HTTPException(403, f"This job still has {order.written_off:.2f} owed. Only someone who can use "
-                                     "finance can drop it and write that off — ask a manager.")
+            from backend.services.currency import org_money
+            fmt = await org_money(db, current.org_id)
+            raise HTTPException(403, f"The customer still owes {fmt(order.written_off)} on this job. Dropping it "
+                                     "writes that off, so a manager with finance access has to do it.")
     if q2(float(order.written_off or 0)) != _was_written_off:
         await _audit_wo(db, org_id=current.org_id, actor_id=current.id, action="order.write_off",
                         entity_type="order", entity_id=order.id,
                         diff={"amount": q2(float(order.written_off or 0)), "previous": _was_written_off,
                               "reason": order.cancel_reason if is_dropping else None})
+    if is_dropping:   # nothing is owed now: a pay link sent earlier can't charge the customer any more
+        from backend.services.order_money import cancel_open_pay_links
+        await cancel_open_pay_links(db, order)
     order.status_entered_at = now_utc()
     from backend.services.audit import record as _audit_sc
     await _audit_sc(db, org_id=current.org_id, actor_id=current.id, action="order.status_change",

@@ -782,9 +782,10 @@ async def _prepay_order(order_id: str, data: PrepayIn, db: AsyncSession, current
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "order", order_id, f"Prepayment {data.amount} to {acc.name}")
     from backend.services.invoice_money import apply_order_money, notify_payment_received
-    from backend.services.order_money import cancel_open_pay_links
+    from backend.services.order_money import cancel_open_pay_links, resync_write_off
     await db.flush()
     await apply_order_money(db, o)
+    await resync_write_off(db, o, current.id)   # paid after dropping: less is written off
     await cancel_open_pay_links(db, o)
     await db.commit()
     await notify_payment_received(db, current.org_id, [order_id], current.id)

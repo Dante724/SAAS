@@ -582,10 +582,10 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
 
               <div className="grid grid-cols-1 sm:grid-cols-2 gap-4"><ChecklistRings orderId={order.id} onOpen={() => setTab("checklists")} /></div>
 
-              {(d as any).written_off > 0 && (
+              {((d as any).written_off > 0 || !!droppedStatus(statuses as any[], d.status || "")) && (
                 <div role="note" className="flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-xs text-ink-secondary">
                   <M n="block" c="text-base text-ink-tertiary" />
-                  <span>Dropped{(d as any).cancel_reason ? `: ${(d as any).cancel_reason}` : ""}. The {money((d as any).written_off)} the customer still owed was written off, so it isn't counted as a debt or as profit.</span>
+                  <span>Dropped{(d as any).cancel_reason ? `: ${(d as any).cancel_reason}` : ""}.{(d as any).written_off > 0 ? ` ${money((d as any).written_off)} the customer didn't pay was written off. It's not a debt and not in sales.` : ""}</span>
                 </div>
               )}
               <LinkedJobs orderId={order.id} />

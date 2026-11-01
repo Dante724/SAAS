@@ -265,6 +265,8 @@ async def apply_order_payment(db: AsyncSession, order: Order, amount: float, **f
         out.append(_new_payment(invoice_id=None, order_id=order.id, amount=left, **fields))
         db.add(out[-1])
     await db.flush()
+    from backend.services.order_money import resync_write_off   # paid after dropping: less is written off
+    await resync_write_off(db, order, fields.get("received_by_id"))
     return out
 
 
@@ -294,6 +296,9 @@ async def apply_payment_to_invoice(db: AsyncSession, inv: Invoice, amount: float
         db.add(out[-1])
     await _credit(db, inv, q2(amount))
     await db.flush()
+    from backend.services.order_money import resync_write_off   # paid after dropping: less is written off
+    for o in orders:
+        await resync_write_off(db, o, fields.get("received_by_id"))
     return out
 
 

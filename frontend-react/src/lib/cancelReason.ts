@@ -7,7 +7,7 @@ import { selectDialog } from "./dialog";
 // user backed out of cancelling.
 export async function askCancelReason(statusName?: string, count = 1): Promise<string | null> {
   const r = await api.get<{ items: { value: string }[] }>("/directories/by-key/cancel_reason/items").catch(() => ({ items: [] }));
-  const as = statusName ? `marked “${statusName}”` : "cancelled";
+  const as = statusName ? `marked “${statusName}”` : "dropped";
   return selectDialog(count > 1 ? `Why are these ${count} jobs being ${as}?` : `Why is this job being ${as}?`,
     (r.items || []).map((i) => i.value), { title: "Reason", confirmLabel: "Save reason", allowOther: true, danger: true, required: true });
 }

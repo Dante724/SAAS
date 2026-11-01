@@ -31,7 +31,7 @@ from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import (
-    Client, Employee, EmployeeBalanceLedger, Location, Order, OrderLine, OrderStatus, Sale, TimeEntry,
+    Client, Employee, EmployeeBalanceLedger, Location, Order, OrderLine, Sale, TimeEntry,
     WorkOrderType,
 )
 from backend.services import revenue as money_rules
@@ -40,10 +40,7 @@ from backend.services.money import q2
 FIELDS = ("revenue", "tax", "cogs", "labour_cost", "commission", "profit", "written_off")
 
 
-async def dropped_keys(db: AsyncSession, org_id: str) -> set[str]:
-    return set((await db.execute(select(OrderStatus.key).where(
-        OrderStatus.org_id == org_id, OrderStatus.status_group == "dropped",
-        OrderStatus.record_type == "work_order"))).scalars().all())
+dropped_keys = money_rules.dropped_keys
 
 
 async def job_figures(db: AsyncSession, org_id: str, orders, dropped: Optional[set[str]] = None) -> dict[str, dict]:
@@ -148,7 +145,7 @@ async def _period(db, org_id, df, dt, **flt) -> tuple[dict, dict, list]:
                                              technician_id=flt.get("technician_id"),
                                              allowed_locations=flt.get("allowed_locations"), with_date=True)
     jobs = (await db.execute(eq)).all()
-    figs = await job_figures(db, org_id, [o for o, _ in jobs], dropped)
+    figs = await job_figures(db, org_id, eq.with_only_columns(Order.id), dropped)   # sums in SQL, no id list
     sales = (await db.execute(_sales_query(org_id, df, dt, **flt))).scalars().all()
     buckets = {"jobs": _zero(), "dropped": _zero(), "sales": _zero(), "other": _zero()}
     rows = []
@@ -212,6 +209,19 @@ def _pct(cur: float, prev: float) -> Optional[float]:
     return round((cur - prev) / abs(prev) * 100, 1) if prev else None
 
 
+def previous_period(df: datetime, dt: datetime) -> tuple[datetime, datetime]:
+    """The period to compare with: whole calendar months compare with the same number of months
+    just before (October with September); any other range with the same length just before."""
+    whole_months = (df.day == 1 and df.time() == datetime.min.time()
+                    and (dt + timedelta(seconds=1)).day == 1 and (dt + timedelta(seconds=1)).time() == datetime.min.time())
+    if whole_months:
+        months = (dt.year - df.year) * 12 + dt.month - df.month + 1
+        y, m = divmod(df.year * 12 + df.month - 1 - months, 12)
+        return df.replace(year=y, month=m + 1), df - timedelta(seconds=1)
+    p_dt = df - timedelta(seconds=1)
+    return p_dt - (dt - df), p_dt
+
+
 async def total_profit(db: AsyncSession, org_id: str, df: datetime, dt: datetime, *,
                        location_id: Optional[str] = None, technician_id: Optional[str] = None,
                        allowed_locations: Optional[Iterable[str]] = None) -> dict:
@@ -220,8 +230,7 @@ async def total_profit(db: AsyncSession, org_id: str, df: datetime, dt: datetime
     allow = set(allowed_locations) if allowed_locations is not None else None
     flt = {"location_id": location_id, "technician_id": technician_id, "allowed_locations": allow}
     buckets, totals, rows = await _period(db, org_id, df, dt, **flt)
-    p_dt = df - timedelta(seconds=1)          # the period of equal length just before
-    p_df = p_dt - (dt - df)
+    p_df, p_dt = previous_period(df, dt)
     p_buckets, p_totals, _ = await _period(db, org_id, p_df, p_dt, **flt)
 
     names = await _names(db, org_id, rows)
