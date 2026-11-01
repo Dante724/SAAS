@@ -382,3 +382,20 @@ async def test_a_deposit_can_be_asked_at_check_in(client, tenant):
     oid, _ = await K.job(client, tenant, await K.loc(client, tenant))
     r = await client.patch(f"/api/orders/{oid}/deposit", json={"amount": 50}, headers=tenant)
     assert r.status_code == 200, r.text
+
+
+# ── 2. one coupon, one discount, however many taps ─────────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_same_coupon_applied_twice_at_once_discounts_once(client, tenant):
+    import asyncio
+    oid, _ = await K.job(client, tenant, await K.loc(client, tenant))
+    await K.add_line(client, tenant, oid, **{**P, "unit_price": 100}, qty=1)
+    r = await client.post("/api/coupons", json={"code": "TWICE10", "kind": "pct", "value": 10}, headers=tenant)
+    assert r.status_code in (200, 201), r.text
+    rs = await asyncio.gather(*[client.post(f"/api/orders/{oid}/apply-coupon", json={"code": "twice10"},
+                                            headers=tenant) for _ in range(3)])
+    assert sorted(r.status_code for r in rs)[0] == 200, [r.text for r in rs]
+    coupon_lines = [ln for ln in await K.lines(client, tenant, oid) if ln["description"] == "Coupon TWICE10"]
+    assert sum(ln["total"] for ln in coupon_lines) == pytest.approx(-10, abs=0.02)
+    assert len([r for r in rs if r.status_code == 200]) == 1
+
