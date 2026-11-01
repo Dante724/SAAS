@@ -7,7 +7,7 @@ import { NavLink, useNavigate } from "react-router-dom";
 import { api, getLocationScope, setLocationScope } from "../api/client";
 import { alertDialog } from "../lib/dialog";
 import { t, getLang, setLang, applyDir } from "../i18n";
-import { useMe, NAV_PERM } from "../context/Me";
+import { useMe, NAV_PERM, NAV_FEATURE, hasFeature, type Billing } from "../context/Me";
 import {
   Wrench, Mail, MessageSquare, MessageCircle, Calendar, CalendarRange, Users, User,
   UserPlus, ShoppingCart, Package, Boxes, Landmark, Wallet, BarChart3, Settings as SettingsIcon,
@@ -30,14 +30,23 @@ import {
   CircleDollarSign, Percent, ShieldAlert, Globe, Gift, RotateCcw, SearchCheck, VideoOff,
   ShieldCheck, Target, EyeOff, Car, Sailboat, Bike, Laptop, Cog, Upload,
   ShoppingBag, Split, Nfc, Phone, PhoneIncoming, PhoneOutgoing, PhoneMissed, Network, HelpCircle,
-  LogOut, Menu as MenuIcon, PackageOpen, Info,
+  LogOut, Menu as MenuIcon, PackageOpen, Info, UserCheck, KeyRound, MapPin, Crown,
+  CircleDot, CloudOff, Footprints, Hand, Infinity as InfinityIcon, LayoutGrid, LogIn, MessageSquareText, MessagesSquare, MoveRight, Redo2, SquareCheck, Star, ThumbsUp, TriangleAlert, UserX,
 } from "lucide-react";
 import { loadFailed } from "../lib/notice";
 import { supportContact } from "../lib/support";
+import { fmtServerTime } from "../lib/serverTime";
 
 // Map the old Material-Symbols ligature names to bundled Lucide icons (no web font,
 // works under the app's Content-Security-Policy, and needs no server restart).
 const ICONS: Record<string, any> = {
+  // Names used in the app that had no mapping (they drew as an empty circle).
+  forum: MessagesSquare, grid_view: LayoutGrid, summarize: FileText, reviews: Star,
+  check_box: SquareCheck, check_box_outline_blank: Square, sms: MessageSquareText, thumb_up: ThumbsUp,
+  directions_walk: Footprints, insert_chart: BarChart3, login: LogIn, all_inclusive: InfinityIcon, bedtime: Moon,
+  list_alt: ClipboardList, back_hand: Hand, cloud_off: CloudOff, sync_problem: TriangleAlert,
+  trending_flat: MoveRight, person_off: UserX, redo: Redo2, replay: RotateCcw, print_disabled: Printer,
+  currency_exchange: ArrowLeftRight, fiber_manual_record: CircleDot, radio_button_unchecked: Circle,
   package_2: PackageOpen, info: Info,
   build: Wrench, handyman: Wrench, engineering: HardHat, hammer: Hammer,
   task_alt: CheckCircle2, mail: Mail, chat: MessageSquare, chat_bubble: MessageCircle,
@@ -69,12 +78,12 @@ const ICONS: Record<string, any> = {
   lock_open: LockOpen, merge: Merge, paid: CircleDollarSign, percent: Percent, privacy_tip: ShieldAlert,
   public: Globe, redeem: Gift, refresh: RefreshCw, report: Flag, restore: RotateCcw, rule: ListChecks,
   search_check: SearchCheck, sell: Tag, stop: Square, table_view: Table, tag: Tag, target: Target,
-  verified: BadgeCheck, verified_user: ShieldCheck, videocam_off: VideoOff, web: Globe,
+  verified: BadgeCheck, workspace_premium: Crown, verified_user: ShieldCheck, videocam_off: VideoOff, web: Globe,
   qr_code_2: QrCode, sticky_note_2: StickyNote, receipt: Receipt,
   open_in_new: ExternalLink, link: LinkIcon,
   search: Search, table_rows: Rows3, view_kanban: KanbanSquare,
   notifications: Bell, pause: Pause, play_arrow: Play, more_vert: MoreVertical, more_horiz: MoreHorizontal,
-  print: Printer, save: Save, send: Send, campaign: Send, smartphone: Smartphone,
+  print: Printer, location_on: MapPin, how_to_reg: UserCheck, key: KeyRound, save: Save, send: Send, campaign: Send, smartphone: Smartphone,
   photo_camera: Camera, add_a_photo: Camera, image: ImageIcon,
   barcode: Barcode, qr_code_scanner: QrCode, scan: ScanLine, contactless: Nfc,
   call: Phone, phone: Phone, call_received: PhoneIncoming, phone_missed: PhoneMissed, hub: Network, help: HelpCircle, call_made: PhoneOutgoing,
@@ -144,6 +153,40 @@ const NAV_GROUPS: { name: string; items: NavItem[] }[] = [
 ];
 const NAV: NavItem[] = NAV_GROUPS.flatMap((g) => g.items);
 
+// Subscription notice under the top bar: read-only, a failed payment, or the last week of the trial.
+export function billingNotice(b?: Billing | null): { tone: "bad" | "warn" | "info"; text: string; cta: string } | null {
+  if (!b) return null;
+  if (b.read_only) return { tone: "bad", text: `${b.read_only_reason || ""} Your shop is read-only: you can view and export everything.`.trim(), cta: "Choose a plan" };
+  if (b.status === "past_due") return { tone: "warn", text: "Your last Tekly payment didn't go through.", cta: "Update card" };
+  if (b.status === "trial" && b.trial_days_left != null && b.trial_days_left <= 7) {
+    const n = b.trial_days_left;
+    const fit = b.suggested_plan ? ` ${PLAN_LABEL[b.suggested_plan]} fits your shop.` : "";
+    return { tone: n <= 3 ? "warn" : "info", text: `${n} ${n === 1 ? "day" : "days"} left in your free trial.${fit}`, cta: "Choose a plan" };
+  }
+  return null;
+}
+
+const PLAN_LABEL = { solo: "Solo", shop: "Shop", pro: "Pro" } as const;
+
+// Next to the logo: the plan the shop is on (TRIAL while trialling). Nothing until /me loads.
+export function planBadge(b?: Billing | null): string | null {
+  if (!b) return null;
+  if (b.status === "trial" && !b.read_only) return "TRIAL";
+  return (PLAN_LABEL[b.plan] || "Solo").toUpperCase();
+}
+
+function BillingBanner({ billing }: { billing?: Billing | null }) {
+  const n = billingNotice(billing);
+  if (!n) return null;
+  const cls = { bad: "bg-rose-50 border-rose-200 text-rose-800 hover:bg-rose-100", warn: "bg-amber-50 border-amber-200 text-amber-800 hover:bg-amber-100",
+    info: "bg-indigo-50 border-indigo-200 text-indigo-800 hover:bg-indigo-100" }[n.tone];
+  return (
+    <a href="/settings?section=billing" className={`w-full text-left border-b text-xs font-semibold px-6 py-2 flex items-center gap-2 ${cls}`}>
+      <M n={n.tone === "bad" ? "lock" : "credit_card"} c="text-sm" />{n.text} <span className="underline">{n.cta}</span>
+    </a>
+  );
+}
+
 export default function Shell({ title, children }: { title: string; children: ReactNode }) {
   const { can, me, refresh } = useMe();
   const support = supportContact(me);
@@ -184,6 +227,19 @@ export default function Shell({ title, children }: { title: string; children: Re
     api.get<{ items: any[] }>("/tech/notifications?only_unread=true")
       .then((r) => { if (liveRef.current) setUnread((r.items || []).length); }).catch(() => { /* silent: background unread-count poll; the next tick retries */ });
   }, 60000);
+  // Self check-in: people waiting at this location, shown on the Inquiries item.
+  const [walkins, setWalkins] = useState(0);
+  const loadWalkins = () => {
+    if (!can(NAV_PERM["/inquiries"])) return;
+    api.get<{ waiting: number }>("/checkins/count")
+      .then((r) => { if (liveRef.current) setWalkins(Number(r?.waiting) || 0); }).catch(() => { /* silent: background walk-in count poll; the next tick retries */ });
+  };
+  useVisibleInterval(loadWalkins, 30000);
+  // The Walk-ins view says when the queue changed (call, no-show, convert) so the badge doesn't lag.
+  useEffect(() => {
+    window.addEventListener("tekly:checkins", loadWalkins);
+    return () => window.removeEventListener("tekly:checkins", loadWalkins);
+  });
 
   // Below 900px the sidebar becomes a slide-in drawer opened from the top bar's menu button.
   const [navOpen, setNavOpen] = useState(false);
@@ -198,7 +254,7 @@ export default function Shell({ title, children }: { title: string; children: Re
   const renderNav = (collapsed: boolean, onNavigate?: () => void) => (
     <>
       {NAV_GROUPS.map((group) => {
-        const visible = group.items.filter((it) => can(NAV_PERM[it.to]));
+        const visible = group.items.filter((it) => can(NAV_PERM[it.to]) && (!NAV_FEATURE[it.to] || hasFeature(me, NAV_FEATURE[it.to])));
         if (visible.length === 0) return null;
         return (
           <div key={group.name || "home"} className="pb-1">
@@ -225,6 +281,9 @@ export default function Shell({ title, children }: { title: string; children: Re
                   <>
                     <M n={it.i} c={`text-[17px] ${isActive ? "text-primary" : "text-ink-tertiary"}`} />
                     {!collapsed && <span>{t(it.l)}</span>}
+                    {it.to === "/inquiries" && walkins > 0 && (
+                      <span aria-label={`${walkins} waiting`} title={`${walkins} waiting`} className={`${collapsed ? "absolute ml-5 -mt-4" : "ml-auto"} min-w-[18px] h-[18px] px-1 rounded-full bg-primary text-white text-[11px] font-bold leading-[18px] text-center`}>{walkins}</span>
+                    )}
                   </>
                 )}
               </NavLink>
@@ -239,7 +298,7 @@ export default function Shell({ title, children }: { title: string; children: Re
       <TeklyMark size={32} />
       {!collapsed && (
         <div>
-          <div className="font-bold text-[17px] leading-none tracking-[-0.05em] text-ink-primary flex items-center gap-1.5" aria-label="Tekly">tekly <span className="text-[10px] tracking-normal px-1 py-px rounded bg-blue-100 text-primary font-bold">PRO</span></div>
+          <div className="font-bold text-[17px] leading-none tracking-[-0.05em] text-ink-primary flex items-center gap-1.5" aria-label="Tekly">tekly {planBadge(me?.billing) && <span className="text-[10px] tracking-normal px-1 py-px rounded bg-blue-100 text-primary font-bold">{planBadge(me?.billing)}</span>}</div>
           {me?.org_name && <p className="max-w-[140px] truncate text-[11px] text-ink-tertiary font-medium" title={me.org_name}>{me.org_name}</p>}
         </div>
       )}
@@ -292,8 +351,8 @@ export default function Shell({ title, children }: { title: string; children: Re
             </div>
             <div className="flex items-center gap-1.5 sm:gap-3 shrink-0">
               <div className="hidden min-[900px]:block"><LocationSwitcher /></div>
-              <ScanBox />
-              {(me?.clock_attendance_enabled || me?.clock_wo_enabled) && <TimeClockChip me={me} />}
+              {hasFeature(me, "labels") && <ScanBox />}
+              {(me?.clock_attendance_enabled || me?.clock_wo_enabled) && hasFeature(me, "time_clock") && <TimeClockChip me={me} />}
               <a href={support.href} {...supportLinkProps} aria-label={t("Help & support")} title={t("Help & support")} className="hidden sm:flex w-8 h-8 rounded-full border border-slate-200 bg-white items-center justify-center text-ink-secondary hover:text-ink-primary shadow-xs"><M n="help" c="text-sm" /></a>
               <button onClick={() => setNotifOpen((o) => !o)} aria-label="Notifications" className="w-8 h-8 rounded-full border border-slate-200 bg-white flex items-center justify-center text-ink-secondary hover:text-ink-primary shadow-xs relative"><M n="notifications" c="text-sm" />{unread > 0 && <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-primary text-white text-[11px] font-bold flex items-center justify-center border-2 border-white">{unread > 9 ? "9+" : unread}</span>}</button>
               <div className="relative">
@@ -341,6 +400,7 @@ export default function Shell({ title, children }: { title: string; children: Re
               <M n="lock" c="text-sm" />Your organization requires two-factor authentication. <span className="underline">Set it up now</span> to keep access.
             </button>
           )}
+          <BillingBanner billing={me?.billing} />
           {children}
         </main>
       </div>
@@ -479,14 +539,14 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
 /* ── ⌘K command palette: jump to modules + live order/client search ───────── */
 function CommandPalette({ onClose }: { onClose: () => void }) {
   const nav = useNavigate();
-  const { can } = useMe();
+  const { can, me } = useMe();
   const [q, setQ] = useState("");
   const [hits, setHits] = useState<{ label: string; sub: string; to: string; icon: string }[]>([]);
   const inputRef = useRef<HTMLInputElement>(null);
   useEffect(() => { inputRef.current?.focus(); }, []);
 
   // Respect permissions like the sidebar — don't offer jumps to modules the user can't see.
-  const commands = NAV.filter((n) => can(NAV_PERM[n.to])).map((n) => ({ label: n.l, sub: "Go to " + n.l, to: n.to, icon: n.i }));
+  const commands = NAV.filter((n) => can(NAV_PERM[n.to]) && (!NAV_FEATURE[n.to] || hasFeature(me, NAV_FEATURE[n.to]))).map((n) => ({ label: n.l, sub: "Go to " + n.l, to: n.to, icon: n.i }));
   const filteredCmds = commands.filter((c) => !q || c.label.toLowerCase().includes(q.toLowerCase()));
 
   useEffect(() => {
@@ -599,7 +659,7 @@ function NotificationsPanel({ onClose, onChanged }: { onClose: () => void; onCha
             <div key={n.id} className={`group relative w-full hover:bg-blue-50/50 ${n.read ? "" : "bg-blue-50/30"}`}>
               <button onClick={() => open(n)} className="w-full text-left px-4 py-3 pr-9 flex gap-3">
                 <span className={`mt-1 w-1.5 h-1.5 rounded-full flex-shrink-0 ${n.read ? "bg-transparent" : "bg-primary"}`} />
-                <div className="min-w-0"><div className="text-xs font-bold text-ink-primary">{n.title || n.kind || "Update"}</div>{n.body && <div className="text-[11px] text-ink-secondary mt-0.5 line-clamp-2">{n.body}</div>}<div className="text-[11px] text-ink-tertiary mt-1">{n.created_at ? new Date(n.created_at).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : ""}</div></div>
+                <div className="min-w-0"><div className="text-xs font-bold text-ink-primary">{n.title || n.kind || "Update"}</div>{n.body && <div className="text-[11px] text-ink-secondary mt-0.5 line-clamp-2">{n.body}</div>}<div className="text-[11px] text-ink-tertiary mt-1">{fmtServerTime(n.created_at)}</div></div>
               </button>
               <button onClick={(e) => dismiss(n, e)} title={t("Dismiss")} aria-label={t("Dismiss")}
                 className="absolute top-2 right-2 w-6 h-6 rounded-md flex items-center justify-center text-ink-placeholder hover:text-rose-600 hover:bg-rose-50 opacity-0 group-hover:opacity-100 focus:opacity-100 transition-opacity">

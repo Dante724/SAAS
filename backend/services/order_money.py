@@ -57,17 +57,41 @@ async def credited(db: AsyncSession, order_id: str) -> float:
 
 
 async def balance_due(db: AsyncSession, order: Order) -> float:
-    """Amount still owed on the order (never negative), net of payments and credit notes."""
-    return q2(max(0.0, float(order.total or 0) - await net_paid(db, order.id) - await credited(db, order.id)))
+    """Amount still owed on the order (never negative), net of payments, credit notes and what
+    was written off when the job was dropped."""
+    return q2(max(0.0, float(order.total or 0) - float(getattr(order, "written_off", 0) or 0)
+                  - await net_paid(db, order.id) - await credited(db, order.id)))
 
 
-def balances_due(org_id: str):
-    """`balance_due` for every order of a shop in one query: a subquery of (order_id, owed). Same
-    rules (total − payments net of refunds − credit notes, an invoice billing several orders
-    sharing its credit by order total, never below 0), so reports agree with the job screen."""
+async def resync_write_off(db: AsyncSession, order: Order, actor_id: str | None = None) -> None:
+    """A dropped job's write-off follows the money the shop actually kept: when money comes back
+    to the customer (a refund) after the job was dropped, the written-off part grows by the same
+    amount and the customer's ledger charge shrinks with it — so a refund never revives a debt.
+    No-op for any job that isn't in a dropped status. Caller commits."""
+    from backend.models import OrderStatus
+    grp = (await db.execute(select(OrderStatus.status_group).where(
+        OrderStatus.org_id == order.org_id, OrderStatus.key == order.status,
+        OrderStatus.record_type == "work_order"))).scalars().first()
+    if grp != "dropped" or order.is_estimate:
+        return
+    order.written_off = q2(max(0.0, float(order.total or 0) - await credited(db, order.id)
+                               - await net_paid(db, order.id)))
+    if order.client_id:
+        from backend.services.ledger import order_charge_net, post_contact_ledger
+        delta = q2(float(order.total or 0) - float(order.written_off) - await order_charge_net(db, order.client_id, order.id))
+        if delta:
+            await post_contact_ledger(db, order.org_id, order.client_id, "charge", delta,
+                                      note=f"Order {order.order_number} dropped: write-off updated",
+                                      ref_type="order", ref_id=order.id, created_by_id=actor_id)
+
+
+def invoice_job_shares():
+    """Subquery of (invoice_id, order_id, share): each job an invoice bills (its links plus the
+    primary order_id) and its share of that invoice — by job total, equal shares when the totals
+    are 0, the whole invoice for a single job. The one rule for splitting an invoice's credit
+    notes between its jobs (`credited`, `balances_due`, and the reports in services/revenue)."""
     from sqlalchemy import case, union
     from backend.models import InvoiceOrder
-    void = ("void", "voided", "cancelled", "canceled")
     inv_jobs = union(
         select(InvoiceOrder.invoice_id.label("invoice_id"), InvoiceOrder.order_id.label("order_id")),
         select(Invoice.id.label("invoice_id"), Invoice.order_id.label("order_id"))
@@ -75,21 +99,33 @@ def balances_due(org_id: str):
     whole = (select(inv_jobs.c.invoice_id, func.sum(func.coalesce(Order.total, 0)).label("whole"),
                     func.count().label("n"))
              .join(Order, Order.id == inv_jobs.c.order_id).group_by(inv_jobs.c.invoice_id).subquery())
-    share = case((whole.c.n <= 1, Invoice.credited),
-                 (whole.c.whole != 0, Invoice.credited * func.coalesce(Order.total, 0) / whole.c.whole),
-                 else_=Invoice.credited / whole.c.n)
-    credit = (select(inv_jobs.c.order_id, func.sum(share).label("credited"))
-              .join(Invoice, Invoice.id == inv_jobs.c.invoice_id)
-              .join(whole, whole.c.invoice_id == inv_jobs.c.invoice_id)
-              .join(Order, Order.id == inv_jobs.c.order_id)
+    share = case((whole.c.n <= 1, 1.0),
+                 (whole.c.whole != 0, func.coalesce(Order.total, 0) * 1.0 / whole.c.whole),
+                 else_=1.0 / whole.c.n)
+    return (select(inv_jobs.c.invoice_id, inv_jobs.c.order_id, share.label("share"))
+            .join(whole, whole.c.invoice_id == inv_jobs.c.invoice_id)
+            .join(Order, Order.id == inv_jobs.c.order_id).subquery())
+
+
+def balances_due(org_id: str):
+    """`balance_due` for every order of a shop in one query: a subquery of (order_id, owed). Same
+    rules (total − what was written off when the job was dropped − payments net of refunds −
+    credit notes, an invoice billing several orders sharing its credit by order total, never
+    below 0), so reports agree with the job screen."""
+    from sqlalchemy import case
+    void = ("void", "voided", "cancelled", "canceled")
+    sh = invoice_job_shares()
+    credit = (select(sh.c.order_id, func.sum(Invoice.credited * sh.c.share).label("credited"))
+              .join(Invoice, Invoice.id == sh.c.invoice_id)
               .where(Invoice.org_id == org_id, Invoice.credited > 0, Invoice.status.notin_(void))
-              .group_by(inv_jobs.c.order_id).subquery())
+              .group_by(sh.c.order_id).subquery())
     paid = (select(Payment.order_id,
                    func.sum(case((Payment.kind.in_(("payment", "prepayment")), Payment.amount),
                                  (Payment.kind == "refund", -func.abs(Payment.amount)), else_=0)).label("net"))
             .join(Order, Order.id == Payment.order_id).where(Order.org_id == org_id)
             .group_by(Payment.order_id).subquery())
-    owed = func.coalesce(Order.total, 0) - func.coalesce(paid.c.net, 0) - func.coalesce(credit.c.credited, 0)
+    owed = (func.coalesce(Order.total, 0) - func.coalesce(Order.written_off, 0)
+            - func.coalesce(paid.c.net, 0) - func.coalesce(credit.c.credited, 0))
     return (select(Order.id.label("order_id"), case((owed > 0, owed), else_=0).label("owed"))
             .outerjoin(paid, paid.c.order_id == Order.id)
             .outerjoin(credit, credit.c.order_id == Order.id)
@@ -100,6 +136,43 @@ async def overpaid(db: AsyncSession, order: Order) -> float:
     """Amount received beyond the order total (refundable as overpayment)."""
     # A negative total (older data, before the floor in _recalc_order) never counts as money owed back.
     return q2(max(0.0, await net_paid(db, order.id) - max(float(order.total or 0), 0.0)))
+
+
+async def apply_deposits(db: AsyncSession, inv: Invoice, order: Order) -> float:
+    """Put the job's deposits on its invoice (B3). A prepayment is taken before any invoice exists,
+    so it was never counted on the invoice: a fully paid job's invoice stayed Partial and Home
+    offered to "Remind" the customer. Links each loose prepayment to ``inv``, raises amount_paid
+    (never beyond the total) and settles the status. Idempotent. Returns the amount applied.
+    Caller commits."""
+    from backend.services.invoicing import settle_status
+    loose = (await db.execute(select(Payment).where(
+        Payment.order_id == order.id, Payment.kind == "prepayment",
+        Payment.invoice_id.is_(None)))).scalars().all()
+    applied = 0.0
+    for p in loose:
+        room = q2(float(inv.total or 0) - float(inv.amount_paid or 0))
+        if room <= 0:
+            break
+        p.invoice_id = inv.id
+        add = min(float(p.amount or 0), room)
+        inv.amount_paid = q2(float(inv.amount_paid or 0) + add)
+        applied = q2(applied + add)
+    if applied:
+        settle_status(inv)
+    return applied
+
+
+async def open_receivables(db: AsyncSession, order_ids: list[str]) -> float:
+    """"To collect": what the given jobs (all of one shop) still owe, by `balances_due` (totals
+    less write-offs, money taken net of refunds and credit notes), summed in the database."""
+    if not order_ids:
+        return 0.0
+    org_id = (await db.execute(select(Order.org_id).where(Order.id == order_ids[0]))).scalar()
+    if not org_id:
+        return 0.0
+    due = balances_due(org_id)
+    return q2(float((await db.execute(select(func.coalesce(func.sum(due.c.owed), 0))
+                                      .where(due.c.order_id.in_(order_ids)))).scalar() or 0))
 
 
 async def primary_invoice(db: AsyncSession, order_id: str):
@@ -170,11 +243,10 @@ async def _expire_stripe_checkout(db: AsyncSession, intent: PaymentIntent) -> bo
 
     import httpx
 
-    from backend.config import settings
     from backend.services import org_creds
     from backend.services.payment_guard import LivePaymentsRefused
     try:
-        key = (await org_creds.effective(db, intent.org_id, "stripe")).get("secret_key") or settings.STRIPE_SECRET_KEY
+        key = (await org_creds.effective(db, intent.org_id, "stripe", own_only=True)).get("secret_key")
     except LivePaymentsRefused:
         return False   # F4: live keys refused on this server; the link is still cancelled here
     if not key:
@@ -197,15 +269,14 @@ async def _delete_square_link(db: AsyncSession, intent: PaymentIntent) -> bool:
 
     import httpx
 
-    from backend.config import settings
     from backend.services import org_creds
     from backend.services.payment_guard import LivePaymentsRefused
     from backend.services.payments import SquareGateway
     try:
-        c = await org_creds.effective(db, intent.org_id, "square")
+        c = await org_creds.effective(db, intent.org_id, "square", own_only=True)
     except LivePaymentsRefused:
         return False   # F4: live keys refused on this server; the link is still cancelled here
-    token = c.get("access_token") or settings.SQUARE_ACCESS_TOKEN
+    token = c.get("access_token")
     if not token:
         return False
     try:

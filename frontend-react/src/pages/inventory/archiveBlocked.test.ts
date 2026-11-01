@@ -12,12 +12,13 @@ describe("archive blocked items", () => {
   it("offers to write off and archive", () => {
     expect(writeOffPrompt([stocked])).toBe("“Screen”: 3 still in stock. Write them off and archive?");
     expect(writeOffPrompt([stocked, { ...stocked, id: "c", name: "Glass", in_stock: 1 }]))
-      .toContain("2 products still have stock:\nScreen — 3\nGlass — 1");
+      .toContain("2 products still have stock:\nScreen: 3 in stock\nGlass: 1 in stock");
   });
 
   it("shows the server's reason per item, not a guess", () => {
     expect(keptMessage([kit, { ...stocked, reason: "2 of “Screen” are reserved for a job." }]))
-      .toBe("2 item(s) were kept:\nCable — Used in a bundle or job kit. Remove it there first\n"
-        + "Screen — 2 of “Screen” are reserved for a job.");
+      .toBe("2 products were kept:\nCable: Used in a bundle or job kit. Remove it there first\n"
+        + "Screen: 2 of “Screen” are reserved for a job.");
+    expect(keptMessage([kit])).toBe("This product was kept:\nCable: Used in a bundle or job kit. Remove it there first");
   });
 });

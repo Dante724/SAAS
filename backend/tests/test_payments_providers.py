@@ -144,9 +144,12 @@ async def test_sumup_refresh_poll_marks_paid(monkeypatch, client, tenant, db):
     from backend.config import settings
     from backend.models import PaymentIntent
 
-    monkeypatch.setattr(settings, "SUMUP_API_KEY", "su-test")
     monkeypatch.setattr(settings, "ENVIRONMENT", "production")      # SumUp keys count as live (S1)
     monkeypatch.setattr(settings, "ALLOW_LIVE_PAYMENTS", True)
+    # the shop's own SumUp keys: the poll never uses the operator's account (B7)
+    r = await client.put("/api/integrations/credentials", headers=tenant, json={
+        "provider": "sumup", "data": {"api_key": "su-test", "merchant_code": "M1"}})
+    assert r.status_code == 200, r.text
     monkeypatch.setattr(httpx, "AsyncClient", _fake_client(
         lambda m, u, k: _Resp(200, {"id": "chk_9", "status": "PAID"})))
     me = (await client.get("/api/auth/me", headers=tenant)).json()

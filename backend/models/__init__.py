@@ -9,6 +9,7 @@ from decimal import Decimal
 from typing import Optional
 
 from sqlalchemy import (
+    DDL,
     JSON,
     Boolean,
     Date,
@@ -21,10 +22,12 @@ from sqlalchemy import (
     String,
     Text,
     UniqueConstraint,
+    event,
     text,
 )
-from sqlalchemy.orm import Mapped, mapped_column, relationship, validates
+from sqlalchemy.orm import Mapped, Session, mapped_column, relationship, validates
 
+from backend.core.client_source import current_client
 from backend.db.database import Base
 from backend.db.secret_json import SecretFieldsJSON   # passcode-like custom fields, encrypted
 from backend.services.dates import now_utc
@@ -36,6 +39,16 @@ def _uuid() -> str:
 def _now() -> datetime:
     return now_utc()
 
+
+TRIAL_DAYS = 14
+
+
+def _trial_end() -> date:
+    from datetime import timedelta
+
+    from backend.services.dates import platform_today
+    return platform_today() + timedelta(days=TRIAL_DAYS)
+
 # ─────────────────────────────────────────────
 # ORGANISATION & LOCATIONS
 # ─────────────────────────────────────────────
@@ -44,7 +57,9 @@ class Organisation(Base):
     __tablename__ = "organisations"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     name: Mapped[str] = mapped_column(String(200))
-    plan: Mapped[str] = mapped_column(String(50), default="trial")
+    # Billing: the plan the shop is on (or will be on after its trial) — "solo" | "shop" | "pro".
+    # During the trial every Pro feature is open; see services/billing.py.
+    plan: Mapped[str] = mapped_column(String(50), default="pro")
     brand_primary_color: Mapped[Optional[str]] = mapped_column(String(9))     # #RRGGBB white-label accent
     brand_custom_domain: Mapped[Optional[str]] = mapped_column(String(120))   # portal.acme.com
     brand_email_from: Mapped[Optional[str]] = mapped_column(String(160))      # "Acme <no-reply@acme.com>"
@@ -116,8 +131,8 @@ class Organisation(Base):
     default_due_days: Mapped[int] = mapped_column(Integer, default=0)
     default_comment_visibility: Mapped[str] = mapped_column(String(10), default="private")
     default_file_visibility: Mapped[str] = mapped_column(String(10), default="private")
-    # WS-C: how staff names show on public pages (booking, portal). An employee's own
-    # "Name on documents" always wins. full | first | first_initial
+    # How staff names show on the booking page, portal and customer messages:
+    # full | first | first_initial | custom (custom = Employee.public_name, falling back to the full name).
     public_employee_name: Mapped[str] = mapped_column(String(16), default="full", server_default="full")
     warranty_count_from: Mapped[str] = mapped_column(String(10), default="closure")  # closure|created
     asset_one_open_ticket: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -136,8 +151,38 @@ class Organisation(Base):
     sub_status: Mapped[str] = mapped_column(String(20), default="trial")
     sub_start: Mapped[Optional[date]] = mapped_column(Date)
     sub_end: Mapped[Optional[date]] = mapped_column(Date)     # term end; past this the tenant is locked
-    discount_pct: Mapped[float] = mapped_column(Float, default=0.0)   # manual per-account discount %
+    discount_pct: Mapped[float] = mapped_column(Numeric(5, 2, asdecimal=False), default=0.0)   # per-account discount %
+    # Subscription billing (Tekly's own Stripe account, not the shop's). sub_status also takes
+    # past_due (card failed, Stripe still retrying) and unpaid (retries gave up) from Stripe.
+    billing_period: Mapped[str] = mapped_column(String(10), default="month")   # month | year
+    trial_ends_at: Mapped[Optional[date]] = mapped_column(Date, default=lambda: _trial_end())
+    past_due_since: Mapped[Optional[date]] = mapped_column(Date)
+    stripe_customer_id: Mapped[Optional[str]] = mapped_column(String(64), unique=True)
+    stripe_subscription_id: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    stripe_subscription_item_id: Mapped[Optional[str]] = mapped_column(String(64))
+    stripe_seat_item_id: Mapped[Optional[str]] = mapped_column(String(64))   # Shop's extra team members
+    # Stripe current_period_end, or for a custom-priced shop the end of the term the admin agreed.
+    billing_period_end: Mapped[Optional[date]] = mapped_column(Date)
+    # "stripe" (self-serve Checkout) or "custom" (India and large deals: plan and term set by the
+    # platform admin, invoiced outside Tekly; billing_note records the agreed price).
+    billing_mode: Mapped[str] = mapped_column(String(10), default="stripe")
+    billing_note: Mapped[Optional[str]] = mapped_column(Text)
+    stripe_price_id: Mapped[Optional[str]] = mapped_column(String(64))   # the price being paid
+    # Founding customers: while in the future, the shop keeps the Stripe price it signed up on
+    # even when list prices change (services/billing never re-prices an existing subscription).
+    price_locked_until: Mapped[Optional[date]] = mapped_column(Date)
+    cancel_at_period_end: Mapped[bool] = mapped_column(Boolean, default=False)
+    # `created` of the last subscription event applied, so a late, older event can't undo a newer one.
+    billing_event_at: Mapped[Optional[int]] = mapped_column(Integer)
     admin_notes: Mapped[Optional[str]] = mapped_column(Text)          # platform-admin notes (never shown to tenant)
+    # Admin panel sprint 1: a short, unique, typo-proof account ID the shop and Tekly
+    # staff can read out (TK-7K4M-92Q); see backend/services/account_id.py.
+    account_id: Mapped[str] = mapped_column(String(12), unique=True, index=True, nullable=False)   # set on insert
+    discount_until: Mapped[Optional[date]] = mapped_column(Date)       # discount ends after this day
+    discount_reason: Mapped[Optional[str]] = mapped_column(String(300))
+    suspend_message: Mapped[Optional[str]] = mapped_column(String(500))  # shown to the shop while suspended
+    assigned_admin_id: Mapped[Optional[str]] = mapped_column(String, index=True)  # whose book this shop is in
+    last_contacted_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     # ── Time clocks (build 144x): org master switches. Effective clock for an
     # employee = org switch ON *and* their per-employee track_* flag ON. ──
     clock_wo_enabled: Mapped[bool] = mapped_column(Boolean, default=True)          # job/task labour timer
@@ -185,6 +230,9 @@ class Organisation(Base):
     # 144ii — Orderry-exact accept/decline transitions + require-signature, per doc type.
     oe_estimate_require_signature: Mapped[bool] = mapped_column(Boolean, default=False)
     oe_wo_require_signature: Mapped[bool] = mapped_column(Boolean, default=False)
+    # gc144g3 — what a customer agrees to when they sign at drop-off (Tekly Go intake). Empty =
+    # the built-in wording (DEFAULT_DROPOFF_TERMS in routers/mobile_messages.py).
+    dropoff_terms: Mapped[Optional[str]] = mapped_column(Text)
     oe_estimate_accept_status: Mapped[Optional[str]] = mapped_column(String(50))
     oe_estimate_decline_status: Mapped[Optional[str]] = mapped_column(String(50))
     oe_wo_accept_status: Mapped[Optional[str]] = mapped_column(String(50))
@@ -196,7 +244,18 @@ class Organisation(Base):
     cash_category_sales_id: Mapped[Optional[str]] = mapped_column(String)
     # Build 110: shared secret for inbound provider webhooks (inbox, comms). Generated at
     # registration; rotatable from Settings -> API. Inbound posts must present it.
-    webhook_secret: Mapped[Optional[str]] = mapped_column(String(64))
+    # whh1 (B8): every org gets one at creation, whatever the path (registration, platform admin,
+    # seed); the migration backfilled orgs that had none, and inbound posts now fail closed.
+    webhook_secret: Mapped[Optional[str]] = mapped_column(String(64), default=lambda: secrets.token_urlsafe(24))
+    # Memberships (docs/SPEC_memberships.md §5): how plan money shows in the books, how long an
+    # unpaid plan keeps its benefits, and whether checkout offers a plan to non-members.
+    membership_spread_revenue: Mapped[bool] = mapped_column(Boolean, default=False)
+    membership_grace_days: Mapped[int] = mapped_column(Integer, default=7)
+    membership_lapse_days: Mapped[int] = mapped_column(Integer, default=30)
+    membership_renewal_notice_days: Mapped[int] = mapped_column(Integer, default=30)
+    membership_checkout_prompt: Mapped[bool] = mapped_column(Boolean, default=True)
+    membership_prompt_threshold_pct: Mapped[float] = mapped_column(Float, default=25.0)
+    membership_prompt_snooze_days: Mapped[int] = mapped_column(Integer, default=90)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     locations: Mapped[list["Location"]] = relationship(back_populates="org")
@@ -369,6 +428,8 @@ class Client(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     name: Mapped[str] = mapped_column(String(200))
+    # Memberships: "Not now" on the checkout plan offer hides it for this client until this date.
+    membership_offer_snoozed_until: Mapped[Optional[date]] = mapped_column(Date)
     client_type: Mapped[str] = mapped_column(String(20), default="person")  # person|organization
     is_supplier: Mapped[bool] = mapped_column(Boolean, default=False)
     manager_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
@@ -395,6 +456,9 @@ class Client(Base):
     loyalty_tier: Mapped[str] = mapped_column(String(50), default="standard")
     consent_phone: Mapped[bool] = mapped_column(Boolean, default=True)
     consent_email: Mapped[bool] = mapped_column(Boolean, default=True)
+    # WhatsApp is its own consent (agreeing to texts isn't agreeing to WhatsApp).
+    # None = not asked yet; staff record the customer's answer from the phone app.
+    consent_whatsapp: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
     balance: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     blacklisted: Mapped[bool] = mapped_column(Boolean, default=False)
     # Build 122: preferred billing currency for this contact (None → org base). Documents
@@ -598,6 +662,9 @@ class Order(Base):
     # Why a job was cancelled (a value from the "Cancellation reasons" directory), set when the
     # order enters a dropped-group status. Feeds the cancellations-by-reason report.
     cancel_reason: Mapped[Optional[str]] = mapped_column(String(120))
+    # What the customer still owed when the job was dropped, written off so it isn't left as a
+    # debt (balance due and the contact ledger both net it out). Back to 0 when reopened.
+    written_off: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0, server_default="0")
     tech_notes: Mapped[Optional[str]] = mapped_column(Text)   # 144bj: technician's working notes
     conclusion: Mapped[Optional[str]] = mapped_column(Text)   # 144bj: conclusion / client recommendations
     labour_total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
@@ -626,6 +693,9 @@ class Order(Base):
     # 144dg — {original_blob_id: marked_blob_id}: a marked-up copy of an intake photo. The ORIGINAL
     # (in intake_photos) is never mutated, so the untouched check-in shot survives for disputes.
     intake_markups: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
+    # gc144g3 — {blob_id: "intake"|"before"|"after"|"damage"}: what a job photo shows, so a
+    # before/after pair or a damage shot can be found again (unlabelled photos are just "photos").
+    intake_photo_labels: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
     public_token: Mapped[Optional[str]] = mapped_column(String(40), unique=True, index=True, default=lambda: secrets.token_urlsafe(16))  # 144cu — unique track link, never repeated
     client_msg_unread: Mapped[int] = mapped_column(Integer, default=0)  # 144ba: unread customer messages
     rec_unread: Mapped[int] = mapped_column(Integer, default=0)  # 144bd: unread recommendation decisions (approve/decline)
@@ -639,6 +709,8 @@ class Order(Base):
     archived_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     # Several items per job: the job an item was split off from ("Split into its own job").
     split_from_order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
+    # "Continue as a linked job": the job this one carries on from (any job, open or closed).
+    continued_from_order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id", ondelete="SET NULL"), index=True)
     client: Mapped[Optional["Client"]] = relationship(back_populates="orders")
     device: Mapped[Optional["Device"]] = relationship(back_populates="orders")
     location: Mapped["Location"] = relationship(back_populates="orders")
@@ -660,8 +732,11 @@ class OrderLine(Base):
     qty: Mapped[float] = mapped_column(Float, default=1.0)
     unit_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     cost_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    kind: Mapped[Optional[str]] = mapped_column(String(20))  # service|product|custom
+    kind: Mapped[Optional[str]] = mapped_column(String(20))  # service|product|custom|membership
     technician_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"), index=True)
+    # Memberships: set by the server only, when a plan covers or discounts this line (the
+    # selling line of a plan carries it too). Never accepted from the client.
+    membership_id: Mapped[Optional[str]] = mapped_column(String, index=True)
     work_share: Mapped[float] = mapped_column(Float, default=1.0)  # for split lines (0.5/0.5)
     # 144av #2 — flat-rate/estimated labour hours we bill, to compare against actual clocked time.
     booked_hours: Mapped[float] = mapped_column(Float, default=0.0)
@@ -673,6 +748,8 @@ class OrderLine(Base):
     discount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     discount_type: Mapped[str] = mapped_column(String(10), default="pct")  # pct|fixed
     discount_paid_by: Mapped[str] = mapped_column(String(10), default="client")  # client|company
+    # Who set the discount (stamped by backend/db/actors.py on every path); feeds Tekly Sense Watchdog.
+    discount_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"), index=True)
     tax_id: Mapped[Optional[str]] = mapped_column(String)
     tax_rate: Mapped[float] = mapped_column(Float, default=0.0)
     tax_mode: Mapped[str] = mapped_column(String(10), default="imposed")  # included|imposed
@@ -725,6 +802,8 @@ class OrderStatusLog(Base):
     changed_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     note: Mapped[Optional[str]] = mapped_column(Text)
     changed_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # "go/<version>" | "web" | None (no request): which app made the change (core/client_source)
+    client: Mapped[Optional[str]] = mapped_column(String(32), default=current_client)
     order: Mapped["Order"] = relationship(back_populates="status_logs")
 
 class OrderComment(Base):
@@ -735,6 +814,7 @@ class OrderComment(Base):
     body: Mapped[str] = mapped_column(Text)
     visible_to_client: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    client: Mapped[Optional[str]] = mapped_column(String(32), default=current_client)   # which app (core/client_source)
     order: Mapped["Order"] = relationship(back_populates="comments")
 
 # ─────────────────────────────────────────────
@@ -789,6 +869,8 @@ class Appointment(Base):
     order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)  # Build 85: appointment → work order
     client_phone: Mapped[Optional[str]] = mapped_column(String(40))                   # Build 85: public appointments
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # API v2 (bk1): last change, for GET /api/v2/appointments?updated_since= (UTC, like created_at).
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=_now, onupdate=_now)
     # Build 144bz: DB-level guard against the concurrent-create race — two clients
     # can't both grab the same offered slot for the same technician.
     __table_args__ = (
@@ -999,12 +1081,146 @@ class PlatformAdmin(Base):
     name: Mapped[str] = mapped_column(String(200))
     password_hash: Mapped[str] = mapped_column(String(255))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
-    # Audit M6: 2-step sign-in and revocable tokens for the super-admin.
-    token_version: Mapped[int] = mapped_column(Integer, default=0, server_default=text("0"))  # bump = sign out everywhere
-    mfa_enabled: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
-    mfa_secret: Mapped[Optional[str]] = mapped_column(String(255))     # TOTP secret, encrypted (services/crypto)
-    mfa_last_step: Mapped[Optional[int]] = mapped_column(Integer)      # last accepted TOTP step (replay guard)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # Admin panel sprint 1
+    role_id: Mapped[Optional[str]] = mapped_column(String, index=True)       # admin_roles.id; none = owner (legacy)
+    token_version: Mapped[int] = mapped_column(Integer, default=0)           # bump = every session ends
+    mfa_secret: Mapped[Optional[str]] = mapped_column(Text)                  # encrypted at rest (crypto.encrypt)
+    mfa_recovery: Mapped[Optional[str]] = mapped_column(Text)                # JSON of hashed single-use codes
+    mfa_enrolled_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    mfa_last_step: Mapped[Optional[int]] = mapped_column(Integer)            # refuse a code twice
+    last_login_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+
+@event.listens_for(Session, "before_flush")
+def _unique_account_ids(session, flush_context, instances):
+    """Give each new shop an account ID no other shop has: redraw on a clash with the
+    database or with another shop in the same flush. The UNIQUE column stays the
+    final guard against a race between two signups."""
+    new = [o for o in session.new if isinstance(o, Organisation)]
+    if not new:
+        return
+    from backend.services import account_id as _acct
+    taken = set()
+    for org in new:
+        for _ in range(20):
+            if not org.account_id:
+                org.account_id = _acct.new_account_id()
+            clash = org.account_id in taken or session.execute(
+                text("SELECT 1 FROM organisations WHERE account_id = :a"), {"a": org.account_id}).first()
+            if not clash:
+                break
+            org.account_id = None
+        else:
+            raise RuntimeError("Couldn't find a free account ID")
+        taken.add(org.account_id)
+
+
+class AdminSession(Base):
+    """One signed-in admin session. Tokens carry its id; logout, deactivation and a
+    password or role change end it on the next request."""
+    __tablename__ = "admin_sessions"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    admin_id: Mapped[str] = mapped_column(String, ForeignKey("platform_admins.id"), index=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    last_seen_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    revoked_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    ip: Mapped[Optional[str]] = mapped_column(String(64))
+
+
+class AdminRole(Base):
+    """What an admin may do (permissions), on which shops (scope), which fields they
+    see (field levels) and how far they can go (limits). See services/admin_access.py."""
+    __tablename__ = "admin_roles"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    name: Mapped[str] = mapped_column(String(80), unique=True)
+    builtin: Mapped[Optional[str]] = mapped_column(String(30))     # owner|sales|account_manager|sales_am|support
+    permissions: Mapped[Optional[dict]] = mapped_column(JSON)      # {code: true}; unticked = no
+    field_levels: Mapped[Optional[dict]] = mapped_column(JSON)     # {field: hidden|own|shown}
+    scope: Mapped[Optional[dict]] = mapped_column(JSON)            # {countries:[..], own_book:bool, stages:[..]}
+    limits: Mapped[Optional[dict]] = mapped_column(JSON)           # {max_discount_pct, max_discount_months, max_trial_days}
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class AdminActionLog(Base):
+    """Append-only record of every admin action, allowed or refused. A database trigger
+    refuses UPDATE and DELETE, and each row carries a hash of the previous one so any
+    tampering shows. Written in the same transaction as the change it records."""
+    __tablename__ = "admin_action_log"
+    id: Mapped[int] = mapped_column(Integer, primary_key=True, autoincrement=True)
+    at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    admin_id: Mapped[Optional[str]] = mapped_column(String, index=True)
+    admin_email: Mapped[Optional[str]] = mapped_column(String(200))
+    action: Mapped[str] = mapped_column(String(60), index=True)
+    outcome: Mapped[str] = mapped_column(String(20), default="allowed")    # allowed|refused|requested
+    org_id: Mapped[Optional[str]] = mapped_column(String, index=True)
+    target: Mapped[Optional[str]] = mapped_column(String(120))
+    before: Mapped[Optional[dict]] = mapped_column(JSON)
+    after: Mapped[Optional[dict]] = mapped_column(JSON)
+    reason: Mapped[Optional[str]] = mapped_column(String(500))
+    ip: Mapped[Optional[str]] = mapped_column(String(64))
+    prev_hash: Mapped[Optional[str]] = mapped_column(String(64))
+    row_hash: Mapped[Optional[str]] = mapped_column(String(64))
+
+
+# Append-only at the database level. Dev and tests build tables with create_all, so the
+# triggers ride on the table's after_create; the Alembic migration installs the same.
+ADMIN_LOG_SQLITE_TRIGGERS = [
+    "CREATE TRIGGER IF NOT EXISTS admin_action_log_no_update BEFORE UPDATE ON admin_action_log "
+    "BEGIN SELECT RAISE(ABORT, 'admin_action_log is append-only'); END",
+    "CREATE TRIGGER IF NOT EXISTS admin_action_log_no_delete BEFORE DELETE ON admin_action_log "
+    "BEGIN SELECT RAISE(ABORT, 'admin_action_log is append-only'); END",
+]
+ADMIN_LOG_PG_TRIGGERS = [
+    "CREATE OR REPLACE FUNCTION admin_action_log_append_only() RETURNS trigger AS $$ "
+    "BEGIN RAISE EXCEPTION 'admin_action_log is append-only'; END; $$ LANGUAGE plpgsql",
+    "DROP TRIGGER IF EXISTS admin_action_log_no_change ON admin_action_log",
+    "CREATE TRIGGER admin_action_log_no_change BEFORE UPDATE OR DELETE ON admin_action_log "
+    "FOR EACH ROW EXECUTE FUNCTION admin_action_log_append_only()",
+]
+for _sql in ADMIN_LOG_SQLITE_TRIGGERS:
+    event.listen(AdminActionLog.__table__, "after_create", DDL(_sql).execute_if(dialect="sqlite"))
+for _sql in ADMIN_LOG_PG_TRIGGERS:
+    event.listen(AdminActionLog.__table__, "after_create", DDL(_sql).execute_if(dialect="postgresql"))
+
+
+class AdminApprovalRequest(Base):
+    """An action over someone's limit, waiting for the owner (e.g. a 30% discount)."""
+    __tablename__ = "admin_approval_requests"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    requester_id: Mapped[str] = mapped_column(String, index=True)
+    org_id: Mapped[str] = mapped_column(String, index=True)
+    action: Mapped[str] = mapped_column(String(40))
+    payload: Mapped[Optional[dict]] = mapped_column(JSON)
+    reason: Mapped[Optional[str]] = mapped_column(String(500))
+    status: Mapped[str] = mapped_column(String(20), default="pending")   # pending|approved|declined|expired|cancelled
+    decided_by: Mapped[Optional[str]] = mapped_column(String)
+    decided_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+
+class AdminShopNote(Base):
+    """A note on a shop's admin timeline (call notes, emails sent, contact)."""
+    __tablename__ = "admin_shop_notes"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, index=True)
+    admin_id: Mapped[Optional[str]] = mapped_column(String)
+    kind: Mapped[str] = mapped_column(String(20), default="note")       # note|call|email
+    body: Mapped[str] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class AdminAssignmentLog(Base):
+    """Who a shop was handed from and to (sales → account manager, someone leaving)."""
+    __tablename__ = "admin_assignment_log"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, index=True)
+    from_admin_id: Mapped[Optional[str]] = mapped_column(String)
+    to_admin_id: Mapped[Optional[str]] = mapped_column(String)
+    by_admin_id: Mapped[Optional[str]] = mapped_column(String)
+    reason: Mapped[Optional[str]] = mapped_column(String(300))
+    at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
 class PlatformCoupon(Base):
@@ -1018,6 +1234,16 @@ class PlatformCoupon(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     expires_at: Mapped[Optional[date]] = mapped_column(Date)
     note: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class BillingEvent(Base):
+    """A Stripe Billing webhook event already applied. The primary key is Stripe's event id,
+    so a redelivered event can't be applied twice (the insert fails and the handler stops)."""
+    __tablename__ = "billing_events"
+    id: Mapped[str] = mapped_column(String(255), primary_key=True)
+    type: Mapped[str] = mapped_column(String(80))
+    org_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
@@ -1118,6 +1344,10 @@ class Tag(Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     name: Mapped[str] = mapped_column(String(40))
     color: Mapped[str] = mapped_column(String(20), default="#64748b")
+    # Memberships: a tag Tekly adds and removes itself ("Boat Care member"). Staff can't edit,
+    # attach or remove a system tag; `source` says what owns it (e.g. "plan:<id>").
+    system: Mapped[bool] = mapped_column(Boolean, default=False)
+    source: Mapped[Optional[str]] = mapped_column(String(80))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
@@ -1347,6 +1577,7 @@ class CashShift(Base):
     expected_cash: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
     opened_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    closed_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"), index=True)  # who closed (counted) the drawer
     # 144bc — optional denomination breakdowns {"100": 2, "20": 5, ...} captured on open/close.
     open_denoms: Mapped[Optional[dict]] = mapped_column(JSON)
     close_denoms: Mapped[Optional[dict]] = mapped_column(JSON)
@@ -1430,9 +1661,9 @@ class ConsentLog(Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     client_id: Mapped[str] = mapped_column(String, ForeignKey("clients.id"), index=True)
-    channel: Mapped[str] = mapped_column(String(20))     # email|phone|marketing
+    channel: Mapped[str] = mapped_column(String(20))     # email|phone|whatsapp|marketing
     granted: Mapped[bool] = mapped_column(Boolean)
-    source: Mapped[Optional[str]] = mapped_column(String(60))   # staff|appointment|import|erasure
+    source: Mapped[Optional[str]] = mapped_column(String(60))   # staff|appointment|import|erasure|mobile_verbal
     actor_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
@@ -1648,6 +1879,8 @@ class CustomField(Base):
     # Forms step 2 — "Shows on": the work order screen (job card) and the customer portal / tracking page
     show_on_job_card: Mapped[bool] = mapped_column(Boolean, default=True)
     show_in_portal: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Self check-in: ask this field on the customer's check-in page (customer-facing fields only)
+    ask_at_checkin: Mapped[bool] = mapped_column(Boolean, default=False)
     # 144gq — auto-fill source: "asset.<attr>" (from the linked device) or
     # "last_order.<field_key>" (from the client's most recent order). Pre-fills on open.
     autofill_source: Mapped[Optional[str]] = mapped_column(String(80))
@@ -1697,6 +1930,7 @@ class AuditLog(Base):
     entity_id: Mapped[Optional[str]] = mapped_column(String)
     diff: Mapped[Optional[dict]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    client: Mapped[Optional[str]] = mapped_column(String(32), default=current_client)   # which app (core/client_source)
 
 
 class EventFeedItem(Base):
@@ -2219,16 +2453,36 @@ class TimeEntryAudit(Base):
     at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
 
+def _new_webhook_secret() -> str:
+    """A fresh endpoint signing secret, encrypted for storage (see services.webhooks)."""
+    from backend.services.crypto import encrypt
+    return encrypt("whsec_" + secrets.token_urlsafe(32))
+
+
 class WebhookEndpoint(Base):
-    """A customer-registered URL that receives event callbacks."""
+    """A customer-registered URL that receives event callbacks.
+
+    whh1: the signing secret is a `whsec_` token stored encrypted (services.crypto) and shown only
+    on create / rotate. A rotation keeps the previous secret signing alongside the new one until
+    previous_secret_expires_at. kind="automation" rows are the hidden targets of automation-rule
+    webhook actions (source_id = the rule) so those go through the same signed, pinned outbox.
+    Deleting is a soft delete (deleted_at) so the delivery log keeps its rows."""
     __tablename__ = "webhook_endpoints"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     url: Mapped[str] = mapped_column(String(500))
-    secret: Mapped[str] = mapped_column(String(64), default=_uuid)
+    secret: Mapped[str] = mapped_column(String(500), default=lambda: _new_webhook_secret())
     events: Mapped[str] = mapped_column(String(500), default="*")  # csv of events or *
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    description: Mapped[Optional[str]] = mapped_column(String(200))
+    kind: Mapped[str] = mapped_column(String(20), default="endpoint", server_default="endpoint")  # endpoint|automation
+    source_id: Mapped[Optional[str]] = mapped_column(String, index=True)   # automation rule id
+    previous_secret: Mapped[Optional[str]] = mapped_column(String(500))
+    previous_secret_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    failing_since: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    disabled_reason: Mapped[Optional[str]] = mapped_column(String(200))
+    deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
 class WebhookDelivery(Base):
@@ -2245,10 +2499,11 @@ class WebhookDelivery(Base):
     error: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
     delivered_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    # Audit R3: when the current send started (a stale one was interrupted and is retried), and
-    # the earliest time the retry sweep may try a failed delivery again (backoff).
+    # whh1 (B5): when the retry sweep may try a failed row again (None = due now, or given up
+    # once attempts reach the schedule's end); claimed_at lets the sweep reclaim rows a crashed
+    # worker left in "sending".
+    next_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime, index=True)
     claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
-    next_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
 class Lead(Base):
@@ -2284,6 +2539,75 @@ class Lead(Base):
     call_count: Mapped[int] = mapped_column(Integer, default=0, server_default="0")  # missed calls merged in
     last_call_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     idempotency_key: Mapped[Optional[str]] = mapped_column(String(64))
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class CheckinPoint(Base):
+    """Self check-in: a place where customers arrive (front door, key box, dock, counter
+    tablet). A location can have several; each has its own unguessable QR token, which is
+    all the public page ever sees — the server works out the shop and location from it."""
+    __tablename__ = "checkin_points"
+    __table_args__ = (
+        Index("uq_checkin_points_token", "token", unique=True),
+        Index("ix_checkin_points_org_loc", "org_id", "location_id"),
+    )
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
+    location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
+    name: Mapped[str] = mapped_column(String(80))
+    mode: Mapped[str] = mapped_column(String(12), default="auto")   # walk_in|key_drop|auto (by working hours)
+    kiosk: Mapped[bool] = mapped_column(Boolean, default=False)      # shared tablet: resets after each check-in
+    job_type_ids: Mapped[Optional[list]] = mapped_column(JSON, default=list)   # offered job types; empty = default
+    welcome_text: Mapped[Optional[str]] = mapped_column(Text)
+    terms_template_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("document_templates.id"))
+    require_photo: Mapped[bool] = mapped_column(Boolean, default=False)
+    show_wait: Mapped[bool] = mapped_column(Boolean, default=True)
+    token: Mapped[str] = mapped_column(String(64), default=lambda: secrets.token_urlsafe(24))
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    scans: Mapped[int] = mapped_column(Integer, default=0)
+    submits: Mapped[int] = mapped_column(Integer, default=0)
+    rotated_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class Checkin(Base):
+    """One customer's self check-in. The inquiry (Lead, source walk_in) is the record staff
+    work with; this row keeps what only a check-in has: the queue number, the scanned
+    identifier, the reading, the answers against the form as it was, the signature."""
+    __tablename__ = "checkins"
+    __table_args__ = (
+        Index("uq_checkins_status_token", "status_token", unique=True),
+        Index("uq_checkins_lead", "lead_id", unique=True),
+        Index("uq_checkins_queue", "org_id", "location_id", "queue_day", "queue_no", unique=True),
+    )
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
+    location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
+    point_id: Mapped[str] = mapped_column(String, ForeignKey("checkin_points.id"))
+    lead_id: Mapped[str] = mapped_column(String, ForeignKey("leads.id"))
+    kind: Mapped[str] = mapped_column(String(10), default="walk_in")      # walk_in|key_drop
+    queue_no: Mapped[int] = mapped_column(Integer)
+    queue_day: Mapped[date] = mapped_column(Date)                          # shop-local day; numbers restart daily
+    state: Mapped[str] = mapped_column(String(12), default="waiting")     # waiting|called|no_show|converted|cancelled
+    job_type_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("work_order_types.id"))
+    asset_group: Mapped[Optional[str]] = mapped_column(String(40))
+    identifier_kind: Mapped[Optional[str]] = mapped_column(String(20))
+    identifier_value: Mapped[Optional[str]] = mapped_column(String(100))
+    decoded: Mapped[Optional[dict]] = mapped_column(JSON)                  # make / model / year from the decoders
+    reading_kind: Mapped[Optional[str]] = mapped_column(String(20))       # template field key: mileage|hours|…
+    reading_value: Mapped[Optional[float]] = mapped_column(Float)
+    answers: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)   # field key -> value
+    form_snapshot: Mapped[Optional[dict]] = mapped_column(JSON)          # the form as the customer saw it
+    signature_png: Mapped[Optional[str]] = mapped_column(Text)
+    signer_name: Mapped[Optional[str]] = mapped_column(String(200))
+    signer_ip: Mapped[Optional[str]] = mapped_column(String(64))
+    terms_hash: Mapped[Optional[str]] = mapped_column(String(64))
+    photo_ids: Mapped[Optional[list]] = mapped_column(JSON, default=list)  # media blob ids (key drop)
+    key_tag: Mapped[Optional[str]] = mapped_column(String(40))
+    status_token: Mapped[str] = mapped_column(String(64), default=lambda: secrets.token_urlsafe(24))
+    called_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    converted_order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
@@ -2334,6 +2658,8 @@ class Sale(Base):
     total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     total_cost: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     discount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)  # whole-sale discount amount
+    # Launch B4: the tax inside `total` (imposed tax added on top + VAT contained in the price).
+    tax: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0, server_default="0")
     paid: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     coupon_id: Mapped[Optional[str]] = mapped_column(String)          # the coupon used, so a void can give the use back
@@ -2354,6 +2680,10 @@ class SaleLine(Base):
     cost_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)  # exact FIFO COGS for products
     discount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)    # pct
     total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    # Launch B4: the tax the line carried (services/tax.pos_line_tax). total includes imposed tax.
+    tax_rate: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
+    tax_mode: Mapped[str] = mapped_column(String(10), default="imposed", server_default="imposed")
+    tax: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0, server_default="0")
     # What the line drew, so a void puts it back exactly: {"layers": [{batch_id, qty}],
     # "holds": [{hold_id, qty}]} — FIFO cost layers and other jobs' reservations (override).
     stock_draws: Mapped[Optional[dict]] = mapped_column(JSON)
@@ -2447,6 +2777,7 @@ class Refund(Base):
     payment_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("payments.id"))  # the refund Payment
     voided_at: Mapped[Optional[datetime]] = mapped_column(DateTime)   # deleted ("Delete refunds"): kept, but reversed
     voided_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"), index=True)  # who made the refund
     void_reason: Mapped[Optional[str]] = mapped_column(String(300))
 
 
@@ -2591,6 +2922,12 @@ class ApiKey(Base):
     last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # apih1: keys can expire (None = never, which is what keys made before apih1 keep), and a
+    # rotation keeps the previous secret working until previous_expires_at so callers can swap.
+    expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    previous_key_hash: Mapped[Optional[str]] = mapped_column(String(64), index=True)
+    previous_expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    rotated_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
 class PaymentIntent(Base):
@@ -3174,7 +3511,9 @@ class Call(Base):
     Populated by the provider webhook; the provider itself is a gated seam."""
     __tablename__ = "calls"
     # D1: one row per provider call (Twilio CallSid), so webhook retries never duplicate.
-    __table_args__ = (Index("uq_calls_org_provider_sid", "org_id", "provider_sid", unique=True),)
+    # whh1 (B9): the generic call webhook upserts on the provider's own call id.
+    __table_args__ = (Index("uq_calls_org_provider_sid", "org_id", "provider_sid", unique=True),
+                      Index("uq_calls_org_provider_external", "org_id", "provider", "external_id", unique=True))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     provider: Mapped[str] = mapped_column(String(20), default="manual")   # aircall|twilio|zadarma|manual
@@ -3781,5 +4120,152 @@ class IdempotencyRecord(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
     __table_args__ = (UniqueConstraint("org_id", "key", name="uq_idempotency_org_key"),)
 
-# ii144a: registers the before-flush hook that mirrors parts.barcode into product_barcodes.
-from backend.services import product_codes as _product_codes  # noqa: E402,F401
+
+class MessageHandoff(Base):
+    """A text or WhatsApp a staff member opened on their own phone from Tekly Go. Tekly fills in
+    the message; the phone's own SMS/WhatsApp app sends it after the person taps Send, so Tekly
+    can't know it was delivered, only what the person told us when they came back ("Sent?").
+    state: opened → sent | cancelled, or unknown when nobody answered within 24h. Only `sent`
+    goes into the customer's portal thread."""
+    __tablename__ = "message_handoffs"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id", ondelete="SET NULL"), index=True)
+    client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id", ondelete="SET NULL"))
+    actor_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id", ondelete="SET NULL"))
+    channel: Mapped[str] = mapped_column(String(10))            # sms|whatsapp
+    template_id: Mapped[Optional[str]] = mapped_column(String)
+    body: Mapped[str] = mapped_column(Text)
+    to_number: Mapped[Optional[str]] = mapped_column(String(32))
+    state: Mapped[str] = mapped_column(String(12), default="opened")
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+
+
+class ApiIdempotencyKey(Base):
+    """apih1: a public-API write sent with an Idempotency-Key header. The same key with the same
+    body replays the stored response; with a different body it is refused. Kept for 24 hours.
+    status_code is None while the first request is still running."""
+    __tablename__ = "api_idempotency_keys"
+    __table_args__ = (UniqueConstraint("org_id", "key_id", "idem_key", name="uq_api_idempotency_key"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    key_id: Mapped[str] = mapped_column(String, ForeignKey("api_keys.id"), index=True)
+    idem_key: Mapped[str] = mapped_column(String(255))
+    route: Mapped[str] = mapped_column(String(80))
+    request_hash: Mapped[str] = mapped_column(String(64))
+    status_code: Mapped[Optional[int]] = mapped_column(Integer)
+    response_body: Mapped[Optional[str]] = mapped_column(Text)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+
+
+# ── Memberships (docs/SPEC_memberships.md) ───────────────────────────────────────────────────────
+
+class MembershipPlan(Base):
+    """What a shop sells: a list of included items, priced monthly and/or yearly."""
+    __tablename__ = "membership_plans"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    name: Mapped[str] = mapped_column(String(120))
+    description: Mapped[str] = mapped_column(Text, default="")
+    template_key: Mapped[Optional[str]] = mapped_column(String(30))       # null = any asset
+    asset_group_ids: Mapped[Optional[list]] = mapped_column(JSON)          # empty = any group
+    price_monthly: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
+    price_yearly: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
+    term: Mapped[str] = mapped_column(String(10), default="rolling")      # rolling|season
+    season_start: Mapped[Optional[str]] = mapped_column(String(5))        # "MM-DD"
+    season_end: Mapped[Optional[str]] = mapped_column(String(5))
+    presale_days: Mapped[int] = mapped_column(Integer, default=60)
+    late_join: Mapped[str] = mapped_column(String(10), default="prorated")  # prorated|full
+    color: Mapped[str] = mapped_column(String(20), default="#0059ba")
+    active: Mapped[bool] = mapped_column(Boolean, default=True)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class MembershipPlanItem(Base):
+    """One included item: a catalog service with a count per plan year, a discount, or a perk."""
+    __tablename__ = "membership_plan_items"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    plan_id: Mapped[str] = mapped_column(String, ForeignKey("membership_plans.id"), index=True)
+    kind: Mapped[str] = mapped_column(String(10), default="service")      # service|discount|perk
+    service_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("services.id"))
+    label: Mapped[str] = mapped_column(String(200), default="")
+    qty: Mapped[int] = mapped_column(Integer, default=1)
+    pct: Mapped[float] = mapped_column(Float, default=0.0)
+    applies_to: Mapped[str] = mapped_column(String(10), default="labour")  # labour|parts|both
+    window_start: Mapped[Optional[str]] = mapped_column(String(5))        # "MM-DD", seasonal items
+    window_end: Mapped[Optional[str]] = mapped_column(String(5))
+    rollover: Mapped[bool] = mapped_column(Boolean, default=False)
+    sort_order: Mapped[int] = mapped_column(Integer, default=0)
+
+
+class Membership(Base):
+    """One plan on one asset, paid by one client."""
+    __tablename__ = "memberships"
+    __table_args__ = (Index("ix_memberships_org_status_end", "org_id", "status", "period_end"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    plan_id: Mapped[str] = mapped_column(String, ForeignKey("membership_plans.id"), index=True)
+    client_id: Mapped[str] = mapped_column(String, ForeignKey("clients.id"), index=True)
+    device_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("devices.id"), index=True)
+    billing: Mapped[str] = mapped_column(String(10), default="yearly")    # monthly|yearly
+    price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    # scheduled (pre-sold) | active | paused (unpaid, in grace) | lapsed | cancelled
+    status: Mapped[str] = mapped_column(String(12), default="active")
+    term_start: Mapped[date] = mapped_column(Date)                         # plan year / season
+    term_end: Mapped[date] = mapped_column(Date)
+    period_start: Mapped[date] = mapped_column(Date)                       # current billing period
+    period_end: Mapped[date] = mapped_column(Date)
+    renews: Mapped[bool] = mapped_column(Boolean, default=True)            # off = ends at period end
+    manager_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    sold_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
+    ended_on: Mapped[Optional[date]] = mapped_column(Date)
+    ended_reason: Mapped[Optional[str]] = mapped_column(String(20))       # cancelled|unpaid|transferred
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+
+
+class MembershipAsset(Base):
+    """The assets a membership covers. Phase 1 writes one row; fleet plans will write several."""
+    __tablename__ = "membership_assets"
+    __table_args__ = (UniqueConstraint("membership_id", "device_id", name="uq_membership_asset"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    membership_id: Mapped[str] = mapped_column(String, ForeignKey("memberships.id"), index=True)
+    device_id: Mapped[str] = mapped_column(String, ForeignKey("devices.id"), index=True)
+
+
+class MembershipPeriod(Base):
+    """One billing period and what charges it: a plan invoice, or the work order it was sold on."""
+    __tablename__ = "membership_periods"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    membership_id: Mapped[str] = mapped_column(String, ForeignKey("memberships.id"), index=True)
+    period_start: Mapped[date] = mapped_column(Date)
+    period_end: Mapped[date] = mapped_column(Date)
+    amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    invoice_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("invoices.id"), index=True)
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
+    due_on: Mapped[date] = mapped_column(Date)
+    paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    nudges: Mapped[int] = mapped_column(Integer, default=0)                # reminders already sent
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class MembershipUsage(Base):
+    """An included item used on a work order, at the list price that was waived."""
+    __tablename__ = "membership_usage"
+    __table_args__ = (UniqueConstraint("order_line_id", name="uq_membership_usage_line"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    membership_id: Mapped[str] = mapped_column(String, ForeignKey("memberships.id"), index=True)
+    plan_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("membership_plan_items.id"))
+    device_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("devices.id"))
+    order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
+    order_line_id: Mapped[Optional[str]] = mapped_column(String)
+    qty: Mapped[float] = mapped_column(Float, default=1.0)
+    value: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    term_start: Mapped[date] = mapped_column(Date)                         # which plan year it counts in
+    used_at: Mapped[datetime] = mapped_column(DateTime, default=_now)

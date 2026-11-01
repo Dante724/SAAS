@@ -118,7 +118,7 @@ export default function ImportDrawer({ kind, onClose, onDone }: { kind: ImportKi
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end" role="dialog" aria-modal="true" aria-label={`Import ${many}`}>
-      <div aria-hidden="true" className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" onClick={busy ? undefined : onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={busy ? undefined : onClose} />
       <div className="relative w-[760px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <div>

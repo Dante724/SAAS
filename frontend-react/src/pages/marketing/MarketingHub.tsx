@@ -1,5 +1,6 @@
 import SkeletonRows from "../../components/SkeletonRows";
 import { humanize } from "../../lib/humanize";
+import { safeHttpsUrl } from "../../lib/safeHtml";
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
 import { api } from "../../api/client";
@@ -8,7 +9,6 @@ import { confirmDialog, alertDialog } from "../../lib/dialog";
 import { Link } from "react-router-dom";
 import { Avatar } from "../orders/look";
 import { PhoneIncoming, PhoneOutgoing } from "lucide-react";
-import { safeHttpHref } from "../../lib/safeFileHref";
 
 // Marketing: campaigns (SMS/email blasts by segment) + call log — legacy /comms surface.
 const CHANNEL: Record<string, string> = { sms: "SMS", email: "Email" };
@@ -126,7 +126,7 @@ export default function MarketingHub() {
                       </td>
                       <td className={`py-2.5 px-4 ${missed ? "text-rose-600 font-medium" : ""}`}>{humanize(c.status)}</td>
                       <td className="py-2.5 px-4 text-right tabular-nums">{c.duration_s != null ? `${Math.floor(c.duration_s / 60)}:${String(c.duration_s % 60).padStart(2, "0")}` : "—"}</td>
-                      <td className="py-2.5 px-4">{safeHttpHref(c.recording_url) ? <a href={safeHttpHref(c.recording_url)} target="_blank" rel="noreferrer" className="inline-flex items-center gap-1 text-primary font-semibold hover:underline"><M n="play_arrow" c="text-sm" />Play</a> : "—"}</td>
+                      <td className="py-2.5 px-4">{safeHttpsUrl(c.recording_url) ? <a href={safeHttpsUrl(c.recording_url)!} target="_blank" rel="noreferrer noopener" className="inline-flex items-center gap-1 text-primary font-semibold hover:underline"><M n="play_arrow" c="text-sm" />Play</a> : "—"}</td>
                     </tr>
                   );
                 })}

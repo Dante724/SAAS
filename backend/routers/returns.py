@@ -169,6 +169,11 @@ async def create_refund(
     # job's total goes down with it, so a goodwill refund or a returned item never shows the
     # customer as owing (QA F1). Handing back an overpayment leaves the total alone.
     take_off = round(data.amount - min(data.amount, max(0.0, net_paid - float(locked.total or 0))), 2)
+    # A dropped job keeps its bill: money handed back there is more of the bill not collected
+    # (written off, order_money.resync_write_off), not a smaller bill. As in Orderry.
+    from backend.services.revenue import dropped_keys
+    if locked.status in await dropped_keys(db, current.org_id):
+        take_off = 0.0
     data.order_id = order_id
     refund = Refund(org_id=current.org_id, order_id=data.order_id, return_id=data.return_id,
                     account_id=data.account_id, amount=data.amount, reason=data.reason)
@@ -205,6 +210,8 @@ async def create_refund(
                 await post_contact_ledger(db, current.org_id, order.client_id, "refund", abs(data.amount),
                                           note=f"Refund for {order.order_number}", ref_type="refund",
                                           ref_id=refund.id, created_by_id=current.id)
+            from backend.services.order_money import resync_write_off   # dropped job: no debt comes back
+            await resync_write_off(db, order, current.id)
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "refund", refund.id,
                            f"Refund {data.amount:g} from {acct.name}")

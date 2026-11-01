@@ -4,11 +4,10 @@ Two small, self-contained defenses:
 
 1.  Org webhook tokens. Inbound provider webhooks (unified inbox, VoIP calls) are keyed
     by org id in the URL — which is guessable/leakable. Every org gets a random
-    ``webhook_secret`` at registration; inbound posts must present it in an
-    ``X-Webhook-Token`` header. Fail-closed: an org with a secret rejects unsigned posts.
-    Orgs created before this build (secret is NULL) are lazily issued one the first time
-    an admin views it, and until then continue to accept posts — a deliberate
-    compatibility window rather than silently breaking existing integrations.
+    ``webhook_secret`` when it is created; inbound posts must present it in an
+    ``X-Webhook-Token`` header. Fail-closed (whh1, B8): the migration backfilled orgs that
+    had none, and an org without a token, an unknown org and a wrong token all get the same
+    401, so the endpoint can't be used to learn which org ids exist. 120 posts/min per org.
 
 2.  A sliding-window rate limiter for public endpoints. ``/api/public/lookup`` pairs an
     order number with a phone; without throttling it can be brute-forced. The limiter is
@@ -31,20 +30,22 @@ from backend.models import Organisation
 log = logging.getLogger("tekly")
 
 
-async def verify_org_webhook(db: AsyncSession, org_id: str, request: Request) -> None:
-    """Reject an inbound webhook that doesn't present the org's token.
+INBOUND_TOKEN_LIMIT_PER_MIN = 120
+_BAD_TOKEN = "Invalid or missing X-Webhook-Token"
 
-    404 (not 401) when the org doesn't exist, so the endpoint can't be used to probe
-    which org ids are real.
-    """
+
+async def verify_org_webhook(db: AsyncSession, org_id: str, request: Request) -> None:
+    """Reject an inbound webhook that doesn't present the org's token. Fails closed."""
+    from backend.services.ratelimit import aenforce
+    await aenforce("inbound_token_webhook", (org_id or "")[:64], INBOUND_TOKEN_LIMIT_PER_MIN, 60)
     org = (await db.execute(select(Organisation).where(
         Organisation.id == org_id))).scalar_one_or_none()
-    if not org:
-        raise HTTPException(404, "Unknown organisation")
-    if org.webhook_secret:  # fail-closed once a secret exists
-        presented = request.headers.get("X-Webhook-Token", "")
-        if not presented or not hmac.compare_digest(presented, org.webhook_secret):
-            raise HTTPException(401, "Invalid or missing X-Webhook-Token")
+    expected = (org.webhook_secret or "") if org else ""
+    presented = request.headers.get("X-Webhook-Token", "")
+    # Compare even when there is nothing to compare against, so timing doesn't tell them apart.
+    ok = hmac.compare_digest(presented.encode(), (expected or "\0" * 32).encode())
+    if not (org and expected and presented and ok):
+        raise HTTPException(401, _BAD_TOKEN)
 
 
 # ── Provider-signed webhooks (Stripe, Square, Meta, Twilio) ──────────────────

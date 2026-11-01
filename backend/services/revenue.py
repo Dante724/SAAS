@@ -8,7 +8,9 @@ job totals with tax inside), receivables four ways, and an order refund showed u
     billed on an invoice staff issued (sent to the customer), whichever came first. A payment on
     an open job doesn't earn it: the invoice a payment makes for itself was never issued. A line's
     total always carries its tax (added on top or already in the price), so its net is
-    total / (1 + rate). Estimates and dropped jobs never count. Job profitability uses this date too.
+    total / (1 + rate). Estimates and deleted jobs never count. Job profitability uses this date too.
+  + dropped jobs: only the money the shop kept (paid less refunds, capped at the bill), ex tax,
+    on the day the job was dropped. What was written off when it was dropped is never revenue.
   + counter sales (POS), on the day of the sale. Deleted (voided) sales never count.
   + invoices that bill no work order (manual invoices): subtotal − discount, on their issue date.
   − credit notes, ex tax, on the day they are issued.
@@ -26,7 +28,7 @@ counter sales) minus money handed back, on the day it moved. Paying from a clien
 moves no new money and isn't counted.
 
 **Receivables (owed to you)**: what customers still owe on work orders, by the job screen's own
-rule (order_money.balance_due: total − money paid net of refunds − credit notes, never below 0;
+rule (order_money.balance_due: total − written off − money paid net of refunds − credit notes, never below 0;
 estimates and dropped jobs excluded), plus the balance of issued manual invoices. Client balances (`ar`) come from the contact ledger: a different measure.
 
 **Operating expenses**: expense records plus expense cash transactions. A refund to a customer
@@ -79,9 +81,14 @@ def is_customer_refund():
         (Transaction.txn_type == "expense") & func.coalesce(Transaction.ref_type, "").in_(CUSTOMER_REF_TYPES))
 
 
-async def _dropped_keys(db: AsyncSession, org_id: str) -> set:
+async def dropped_keys(db: AsyncSession, org_id: str) -> set:
+    """The shop's work-order statuses in the dropped group (the one definition of a dropped job)."""
     return set((await db.execute(select(OrderStatus.key).where(
-        OrderStatus.org_id == org_id, OrderStatus.status_group == "dropped"))).scalars().all())
+        OrderStatus.org_id == org_id, OrderStatus.status_group == "dropped",
+        OrderStatus.record_type == "work_order"))).scalars().all())
+
+
+_dropped_keys = dropped_keys
 
 
 def _in(col, df, dt):
@@ -100,18 +107,32 @@ def _ids_cond(col, orders):
     return col.in_([getattr(o, "id", o) for o in orders])
 
 
-async def job_figures(db: AsyncSession, orders) -> dict:
-    """Per job: gross, net and tax of its lines; parts cost (less returned, restocked parts); and
-    what credit notes and revenue refunds took off it (ex tax, all time). `orders` is a list of
-    orders or a SELECT of order ids; the sums run in the database, one row per job comes back."""
+async def job_figures(db: AsyncSession, orders, dropped: Optional[set] = None) -> dict:
+    """Per job: gross, net and tax of its lines; parts cost (less returned, restocked parts); what
+    credit notes and revenue refunds took off it; and what it earned (all time):
+    `charged` (with tax), `revenue` (ex tax) and `tax`. A dropped job earns only the money the
+    shop kept (paid less refunds, capped at the bill); what was written off is never revenue.
+    `orders` is a list of orders or a SELECT of order ids; the sums run in the database, one row
+    per job comes back. `dropped` = the shop's dropped status keys (looked up when not given)."""
     blank = {"gross": 0.0, "net": 0.0, "parts_cost": 0.0, "credit_net": 0.0, "refund_gross": 0.0,
-             "refund_net": 0.0, "credited_gross": 0.0, "paid": 0.0, "refunded": 0.0}
+             "refund_net": 0.0, "credited_gross": 0.0, "paid": 0.0, "refunded": 0.0,
+             "dropped": False, "written_off": 0.0, "status": None, "total": 0.0}
     out: dict = {} if isinstance(orders, Select) else {getattr(o, "id", o): dict(blank) for o in orders}
     if not isinstance(orders, Select) and not out:
         return out
 
     def fig(oid):
         return out.setdefault(oid, dict(blank))
+
+    org_of = None
+    for oid, status, org, total, wo in (await db.execute(
+            select(Order.id, Order.status, Order.org_id, Order.total, Order.written_off)
+            .where(_ids_cond(Order.id, orders)))).all():
+        f = fig(oid)
+        f["status"], f["total"], f["written_off"] = status, float(total or 0), float(wo or 0)
+        org_of = org_of or org
+    if dropped is None:
+        dropped = await _dropped_keys(db, org_of) if org_of else set()
 
     is_part = (OrderLine.line_type == "part") | (OrderLine.kind == "product")
     rate = func.coalesce(OrderLine.tax_rate, 0)
@@ -138,12 +159,28 @@ async def job_figures(db: AsyncSession, orders) -> dict:
             .where(ClientReturnLine.restock == True)  # noqa: E712
             .group_by(ClientReturn.order_id))).all():
         fig(oid)["parts_cost"] -= float(back or 0)
-    # credit notes on the job's invoices (primary order); ex tax and with tax
+    # A dropped job puts its parts back on the shelf (orders._return_parts_on_drop marks them
+    # pending_stock again): those aren't a cost of the job either.
+    if dropped:
+        for oid, back in (await db.execute(
+                select(OrderLine.order_id,
+                       func.sum(func.coalesce(OrderLine.cost_price, 0) * func.coalesce(OrderLine.pending_stock, 0)))
+                .join(Order, Order.id == OrderLine.order_id)
+                .where(is_part, _ids_cond(OrderLine.order_id, orders), Order.status.in_(list(dropped)))
+                .group_by(OrderLine.order_id))).all():
+            f = fig(oid)
+            f["parts_cost"] = max(0.0, f["parts_cost"] - float(back or 0))
+    # credit notes on the invoices billing the job, ex tax and with tax — an invoice billing several
+    # jobs shares them out by job total, the same split the job screen uses (order_money)
+    from backend.services.order_money import invoice_job_shares
+    sh = invoice_job_shares()
     for oid, sub, tot in (await db.execute(
-            select(Invoice.order_id, func.sum(CreditNote.subtotal), func.sum(CreditNote.total))
-            .join(Invoice, Invoice.id == CreditNote.invoice_id)
-            .where(_ids_cond(Invoice.order_id, orders), CreditNote.status == "issued")
-            .group_by(Invoice.order_id))).all():
+            select(sh.c.order_id, func.sum(CreditNote.subtotal * sh.c.share), func.sum(CreditNote.total * sh.c.share))
+            .join(Invoice, Invoice.id == sh.c.invoice_id)
+            .join(CreditNote, CreditNote.invoice_id == Invoice.id)
+            .where(_ids_cond(sh.c.order_id, orders), CreditNote.status == "issued",
+                   Invoice.status.notin_(VOID_STATUSES))
+            .group_by(sh.c.order_id))).all():
         f = fig(oid)
         f["credit_net"], f["credited_gross"] = float(sub or 0), float(tot or 0)
     for oid, paid, back in (await db.execute(
@@ -159,6 +196,15 @@ async def job_figures(db: AsyncSession, orders) -> dict:
         f["refund_gross"] = max(0.0, f["refunded"] - overpaid)
         f["refund_net"] = f["refund_gross"] * (f["net"] / f["gross"]) if f["gross"] else f["refund_gross"]
         f["revenue"] = f["net"] - f["credit_net"] - f["refund_net"]
+        f["charged"] = billed - f["refund_gross"]
+        f["dropped"] = f["status"] in dropped
+        if f["dropped"]:
+            # the money kept, ex tax at the job's own tax share
+            f["charged"] = min(max(f["paid"] - f["refunded"], 0.0), max(billed, 0.0))
+            f["revenue"] = f["charged"] * (f["net"] / f["gross"]) if f["gross"] else f["charged"]
+        else:
+            f["written_off"] = 0.0
+        f["tax"] = f["charged"] - f["revenue"]
     return out
 
 
@@ -175,24 +221,34 @@ def _billed_on(org_id):
     return select(jobs.c.order_id, func.min(jobs.c.at).label("billed_at")).group_by(jobs.c.order_id).subquery()
 
 
-async def earned_jobs_query(db, org_id, df=None, dt=None, location_id=None, cols=None):
+async def earned_jobs_query(db, org_id, df=None, dt=None, location_id=None, cols=None, *,
+                            include_dropped: bool = False, technician_id: Optional[str] = None,
+                            allowed_locations=None, with_date: bool = False):
     """SELECT of the work orders earned in the period — closed, or first billed on an issued
     invoice, whichever came first — with the date filter applied in the database. The one date
-    rule for every report that counts a job's revenue."""
-    dropped = await _dropped_keys(db, org_id)
+    rule for every report that counts a job's revenue. Estimates and deleted (archived) jobs never
+    count; dropped jobs only with include_dropped (they earn the money they kept, see job_figures).
+    with_date=True returns (Order, earned_at) rows."""
     billed = _billed_on(org_id)
+    dropped = await _dropped_keys(db, org_id)
     earned_at = case((Order.closed_at.is_(None), billed.c.billed_at),
                      (billed.c.billed_at.is_(None), Order.closed_at),
+                     *([(Order.status.in_(dropped), Order.closed_at)] if dropped else []),   # the day it was dropped
                      (billed.c.billed_at < Order.closed_at, billed.c.billed_at),
                      else_=Order.closed_at)
-    q = (select(*(cols if cols is not None else (Order,))).select_from(Order)
+    cols = cols if cols is not None else ((Order, earned_at.label("earned_at")) if with_date else (Order,))
+    q = (select(*cols).select_from(Order)
          .outerjoin(billed, billed.c.order_id == Order.id)
-         .where(Order.org_id == org_id, Order.is_estimate == False,  # noqa: E712
+         .where(Order.org_id == org_id, Order.is_estimate == False, Order.archived == False,  # noqa: E712
                 Order.closed_at.isnot(None) | billed.c.billed_at.isnot(None), *_in(earned_at, df, dt)))
-    if dropped:
+    if not include_dropped and dropped:
         q = q.where(Order.status.notin_(dropped))
     if location_id:
         q = q.where(Order.location_id == location_id)
+    if allowed_locations is not None:
+        q = q.where(Order.location_id.in_(list(allowed_locations) or [""]))
+    if technician_id:
+        q = q.where(Order.assigned_to_id == technician_id)
     return q
 
 
@@ -209,14 +265,18 @@ def _manual_invoice():
 async def net_sales(db: AsyncSession, org_id: str, df: Optional[datetime] = None,
                     dt: Optional[datetime] = None, location_id: Optional[str] = None) -> dict:
     """Revenue, tax and COGS for a period (None = open-ended), per the definition above."""
-    jf = await job_figures(db, await earned_jobs_query(db, org_id, df, dt, location_id, cols=(Order.id,)))
-    job_net = sum(f["net"] for f in jf.values())
-    job_tax = sum(f["gross"] - f["net"] for f in jf.values())
+    dropped = await _dropped_keys(db, org_id)
+    jf = await job_figures(db, await earned_jobs_query(db, org_id, df, dt, location_id, cols=(Order.id,),
+                                                       include_dropped=True), dropped)
+    # a dropped job adds what it kept (net of its refunds and credit notes already)
+    job_net = sum(f["revenue"] if f["dropped"] else f["net"] for f in jf.values())
+    job_tax = sum(f["tax"] if f["dropped"] else f["gross"] - f["net"] for f in jf.values())
     job_cost = sum(f["parts_cost"] for f in jf.values())
 
     # refunds paid in the period, on any job (closed or not): their revenue share, ex tax
     rq = (select(Payment.order_id, func.sum(Payment.amount)).join(Order, Order.id == Payment.order_id)
-          .where(Order.org_id == org_id, Payment.kind == "refund", *_in(Payment.paid_at, df, dt))
+          .where(Order.org_id == org_id, Payment.kind == "refund", *_in(Payment.paid_at, df, dt),
+                 *([Order.status.notin_(dropped)] if dropped else []))
           .group_by(Payment.order_id))
     if location_id:
         rq = rq.where(Order.location_id == location_id)
@@ -238,6 +298,19 @@ async def net_sales(db: AsyncSession, org_id: str, df: Optional[datetime] = None
         cq = cq.join(Invoice, Invoice.id == CreditNote.invoice_id).join(Order, Order.id == Invoice.order_id) \
             .where(Order.location_id == location_id)
     cn_net, cn_tax = (float(x or 0) for x in (await db.execute(cq)).one())
+    if dropped:   # a dropped job's share of its invoices' credit notes is already inside what it kept
+        from backend.services.order_money import invoice_job_shares
+        sh = invoice_job_shares()
+        dq = (select(func.coalesce(func.sum(CreditNote.subtotal * sh.c.share), 0),
+                     func.coalesce(func.sum(CreditNote.tax_total * sh.c.share), 0))
+              .select_from(CreditNote).join(sh, sh.c.invoice_id == CreditNote.invoice_id)
+              .join(Order, Order.id == sh.c.order_id)
+              .where(CreditNote.org_id == org_id, CreditNote.status == "issued", Order.status.in_(dropped),
+                     *_in(CreditNote.issued_at, df, dt)))
+        if location_id:
+            dq = dq.where(Order.location_id == location_id)
+        d_net, d_tax = (float(x or 0) for x in (await db.execute(dq)).one())
+        cn_net, cn_tax = cn_net - d_net, cn_tax - d_tax
 
     # counter sales and their card refunds (a sale's tax, where the till stores it, isn't revenue)
     sale_tax_col = getattr(Sale, "tax", None)

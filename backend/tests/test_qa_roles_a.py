@@ -48,7 +48,9 @@ def test_new_role_from_template_keeps_the_template():
     perms = P.new_role_permissions("Specialist", {"can_view_reports": True})
     assert perms["can_create_tickets"] is True and perms["can_manage_roles"] is False
     assert perms["can_view_reports"] is True
-    assert P.new_role_permissions("Full access") == {c: c not in P.OPT_IN for c in P.ALL_CODES}
+    # main's Full access template also grants the Sense opt-ins
+    assert P.new_role_permissions("Full access") == {**{c: c not in P.OPT_IN for c in P.ALL_CODES},
+                                                    **P.TEMPLATES["Full access"]}
 
 
 @pytest.mark.asyncio
@@ -182,7 +184,8 @@ async def test_closing_an_unpaid_job_needs_the_payments_right(client):
     assert (await client.get(f"/api/orders/{o['id']}", headers=H)).json()["status"] == "ready"
     # the right to take client payments is what lets someone close it unpaid (no finance needed)
     C = await _person(client, H, (await _role(client, H, {"name": "Closer", "permissions": {
-        "can_create_tickets": True, "can_make_client_payments": True}}))["id"], "Cleo")
+        "can_create_tickets": True, "can_make_client_payments": True,
+        "can_close_tickets": True}}))["id"], "Cleo")      # finishing a job is its own right on main
     o2, _ = await _shop_job(client, H)
     r = await client.patch(f"/api/orders/{o2['id']}/status", json={"status": "done"}, headers=C)
     assert r.status_code == 200, r.text
@@ -195,7 +198,8 @@ async def test_closing_an_unpaid_job_needs_the_payments_right(client):
 
 _DESK = {"can_create_tickets": True, "can_view_client_info": True, "can_view_item_prices": True,
          "can_view_finance": True, "can_view_invoices": True, "can_create_invoices": True,
-         "can_view_invoices_tab": True, "can_create_returns": True}
+         "can_view_invoices_tab": True, "can_create_returns": True,
+         "can_take_payments": True, "can_close_tickets": True}     # main: taking money / finishing jobs
 
 
 @pytest.mark.asyncio

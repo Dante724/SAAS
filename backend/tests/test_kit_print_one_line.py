@@ -182,7 +182,7 @@ async def test_two_kits_correct_to_the_cent(client, tenant):
     assert (await k.order(client, tenant, oid))["total"] == round(149.99 * 2 + 25, 2)
     inv = await k.invoice_lines(client, tenant, await k.invoice(client, tenant, oid, cid))
     # Line order isn't fixed on Postgres, so find the kit line rather than reading inv[0].
-    assert [ln for ln in inv if ln.get("kit")] == [
+    assert [{k: v for k, v in ln.items() if k != "order_id"} for ln in inv if ln.get("kit")] == [
         {"description": "Screen Replacement", "qty": 2, "unit_price": 149.99, "total": 299.98, "kit": True}]
     assert await k.stock(client, tenant, s.screen) == 8
 
@@ -525,11 +525,11 @@ async def test_kit_price_must_be_a_real_amount(client, tenant, price):
     body = f'{{"price": {raw}, "reason": "test"}}'
     r = await client.patch(f"/api/orders/{oid}/kits/{gid}", headers={**tenant, "Content-Type": "application/json"},
                            content=body)
-    assert r.status_code == 400, r.text
+    assert r.status_code in (400, 422), r.text   # 422 when the request-wide NaN/Infinity check catches it first
     r = await client.post("/api/bundles", headers={**tenant, "Content-Type": "application/json"}, content=(
         f'{{"name": "Bad", "price_mode": "fixed", "price": {raw}, '
         f'"components": [{{"ref_type": "service", "ref_id": "{s.fit}"}}]}}'))
-    assert r.status_code == 400, r.text
+    assert r.status_code in (400, 422), r.text
 
 
 @pytest.mark.asyncio

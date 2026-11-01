@@ -34,3 +34,15 @@ describe("escapeHtml", () => {
     expect(escapeHtml(`<img src="x" onerror='y'>&`)).toBe("&lt;img src=&quot;x&quot; onerror=&#39;y&#39;&gt;&amp;"));
   it("handles null/undefined", () => expect(escapeHtml(undefined)).toBe(""));
 });
+
+describe("safeHttpsUrl", () => {
+  it("keeps https links and drops everything else", async () => {
+    const { safeHttpsUrl } = await import("./safeHtml");
+    expect(safeHttpsUrl("https://rec.example.com/a.mp3")).toBe("https://rec.example.com/a.mp3");
+    expect(safeHttpsUrl("javascript:alert(1)")).toBeNull();
+    expect(safeHttpsUrl(" JavaScript:alert(1)")).toBeNull();
+    expect(safeHttpsUrl("data:text/html,<script>1</script>")).toBeNull();
+    expect(safeHttpsUrl("http://rec.example.com/a.mp3")).toBeNull();
+    expect(safeHttpsUrl(null)).toBeNull();
+  });
+});

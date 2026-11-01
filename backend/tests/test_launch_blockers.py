@@ -179,9 +179,11 @@ async def test_csp_blocks_inline_script(client, path):
 
 
 @pytest.mark.asyncio
-async def test_admin_page_keeps_its_own_inline_policy(client):
+async def test_admin_page_has_no_inline_script_allowance(client):
+    # The React /admin page has no inline script, so it gets the app's strict policy.
     r = await client.get("/admin")
-    assert "script-src 'self' 'unsafe-inline'" in r.headers.get("content-security-policy", "")
+    csp = r.headers.get("content-security-policy", "")
+    assert "script-src 'self';" in csp and "unsafe-inline' ;" not in csp and "script-src 'self' 'unsafe-inline'" not in csp
 
 
 @pytest.mark.asyncio

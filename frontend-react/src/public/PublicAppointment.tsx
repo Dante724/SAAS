@@ -182,7 +182,7 @@ export default function PublicAppointment() {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ phone }),
       });
       const d = await r.json();
-      if (d.known) { setHello(d.name || "there"); if (d.name && !name) setName(d.name); }
+      if (d.known) setHello("");   // recognised; the server never sends the name back
       else setHello(null);
     } catch { /* silent */ }
   }
@@ -464,7 +464,7 @@ export default function PublicAppointment() {
           </div>
           <label className={lbl}>Phone</label>
           <input value={phone} onChange={(e) => setPhone(e.target.value)} onBlur={checkHello} inputMode="tel" className={input} placeholder="So we can confirm your appointment" autoFocus />
-          {hello && <div className="mt-2 rounded-lg px-3 py-2 text-[13px] font-semibold" style={{ background: `${accent}14`, color: accent }}>Welcome back, {hello}!</div>}
+          {hello !== null && <div className="mt-2 rounded-lg px-3 py-2 text-[13px] font-semibold" style={{ background: `${accent}14`, color: accent }}>Welcome back!</div>}
           <label className={lbl}>Your name</label>
           <input value={name} onChange={(e) => setName(e.target.value)} className={input} />
           <label className={lbl}>Email <span className="font-normal text-ink-tertiary">(optional)</span></label>

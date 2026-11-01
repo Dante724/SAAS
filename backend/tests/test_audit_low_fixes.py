@@ -267,8 +267,8 @@ async def test_smtp_sends_plain_template_as_plain_text_and_strips_subject_newlin
         def __exit__(self, *a):
             return False
 
-        def connect(self, *a):
-            pass
+        def connect(self, host, port):
+            sent["connect"] = (host, port)
 
         def starttls(self):
             pass
@@ -282,7 +282,8 @@ async def test_smtp_sends_plain_template_as_plain_text_and_strips_subject_newlin
 
     from backend.core import ssrf
     monkeypatch.setattr(smtplib, "SMTP", FakeSMTP)
-    monkeypatch.setattr(ssrf, "public_ip_for", lambda host, port: "93.184.216.34")   # a shop's host must resolve public
+    # A shop's own SMTP host must resolve to a public address (release B-fix); fake that answer.
+    monkeypatch.setattr(ssrf, "public_ip_for", lambda host, port: "93.184.216.34")
     ad = n.SmtpEmailAdapter({"host": "smtp.test", "from": "shop@test.dev"})
     r = await ad.send(recipient="c@test.dev", subject="Ready\r\nBcc: victim@evil.test",
                       body="Hi <b>Bo</b>", html=False)
@@ -381,7 +382,10 @@ def _strong(**kw):
     return dict(ENVIRONMENT="production", SECRET_KEY="x" * 48, CORS_ORIGINS="https://app.tekly.test",
                 DATABASE_URL="postgresql+asyncpg://u:p@db/tekly", PUBLIC_BASE_URL="https://app.tekly.test",
                 SMTP_HOST="smtp.test", SMTP_FROM="no-reply@tekly.test",
-                TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode(), **kw)
+                TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+                STRIPE_BILLING_SECRET_KEY="sk_test_x", STRIPE_BILLING_WEBHOOK_SECRET="whsec_x",
+                **{f"STRIPE_BILLING_PRICE_{p}_{t}": f"price_{p}_{t}".lower()
+                   for p in ("SOLO", "SHOP", "PRO", "SHOP_SEAT") for t in ("MONTH", "YEAR")}, **kw)
 
 
 def test_deploy_with_several_workers_needs_redis(monkeypatch):
@@ -564,6 +568,8 @@ async def test_retention_only_touches_its_own_shop_and_covers_messages(client, t
     await retention.purge_all(db)
 
     async def n(model, oid):
+        # only rows past the 30-day window: signing in writes a fresh auth.session_created entry
+        cutoff = datetime.utcnow() - timedelta(days=30)
         if model is ChatMessage:
             q = select(func.count()).select_from(ChatMessage).join(ChatThread).where(ChatThread.org_id == oid)
         elif model is AuditLog:
@@ -572,7 +578,7 @@ async def test_retention_only_touches_its_own_shop_and_covers_messages(client, t
             q = select(func.count()).select_from(AuditLog).where(AuditLog.org_id == oid, AuditLog.action == "x")
         else:
             q = select(func.count()).select_from(model).where(model.org_id == oid)
-        return (await db.execute(q)).scalar()
+        return (await db.execute(q.where(model.created_at < cutoff))).scalar()
     for model in (ChatMessage, InboxMessage, AuditLog):
         assert await n(model, me["org_id"]) == 0, model
         assert await n(model, other_org) == 1, model

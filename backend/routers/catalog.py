@@ -23,6 +23,9 @@ from backend.services.commission_input import (
 router = APIRouter(prefix="/api/catalog", tags=["catalog"])
 
 
+MAX_CODE_DATA = 512
+
+
 @router.get("/code.svg")
 async def render_code_svg(
     data: str, type: str = "code128", height: int = 48,
@@ -35,6 +38,8 @@ async def render_code_svg(
     data = (data or "").strip()
     if not data:
         raise HTTPException(400, "data is required")
+    if len(data) > MAX_CODE_DATA:      # a QR holds ~2.9 KB at best; refuse before the encoder churns
+        raise HTTPException(422, f"Codes hold at most {MAX_CODE_DATA} characters")
     if type not in BARCODE_TYPES:
         raise HTTPException(400, f"type must be one of {'|'.join(BARCODE_TYPES)}")
     try:                     # opa: EAN-13 / UPC-A are validated (check digit, length)
@@ -42,7 +47,7 @@ async def render_code_svg(
     except ValueError as e:
         raise HTTPException(400, str(e))
     return Response(content=svg, media_type="image/svg+xml",
-                    headers={"Cache-Control": "public, max-age=86400"})
+                    headers={"Cache-Control": "private, max-age=86400"})   # signed-in only: no shared caches
 
 
 class ServiceIn(BaseModel):
@@ -483,6 +488,16 @@ def _ser_tax(t: Tax, default_id: Optional[str]) -> dict:
             "location_ids": _j.loads(t.location_ids or "[]"),
             "is_default": t.id == default_id, "active": t.active}
 
+async def _sync_default_flags(db: AsyncSession, org_id: str) -> None:
+    """The stored is_default flag follows the job tax stack (its first tax is the default), so
+    code that still reads the flag (shop_setup.ensure_default_on_stack, the backfill) agrees."""
+    await db.flush()
+    stack = await job_stack(db, org_id)
+    first = stack[0] if stack else None
+    for row in (await db.execute(select(Tax).where(Tax.org_id == org_id))).scalars().all():
+        row.is_default = row.id == first
+
+
 @router.get("/taxes")
 async def list_taxes(
     db: AsyncSession = Depends(get_db),
@@ -513,6 +528,7 @@ async def create_tax(
     await db.flush()
     if data.is_default:      # the default is the first tax in the job tax stack
         await set_default_tax(db, current.org_id, t, True)
+        await _sync_default_flags(db, current.org_id)
     await db.commit()
     await db.refresh(t)
     stack = await job_stack(db, current.org_id)
@@ -531,6 +547,7 @@ async def update_tax(
     sent = data.model_fields_set
     if "is_default" in sent:
         await set_default_tax(db, current.org_id, t, data.is_default)
+        await _sync_default_flags(db, current.org_id)
     import json as _j3
     t.name = data.name
     for k in ("rate", "mode", "code", "name_for_document", "location_scope"):
@@ -538,6 +555,8 @@ async def update_tax(
             setattr(t, k, getattr(data, k))
     if "location_ids" in sent:
         t.location_ids = _j3.dumps(data.location_ids) if data.location_ids else None
+    from backend.services.shop_setup import ensure_default_on_stack
+    await ensure_default_on_stack(db, current.org_id, t)
     await db.commit()
     stack = await job_stack(db, current.org_id)
     return _ser_tax(t, stack[0] if stack else None)

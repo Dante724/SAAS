@@ -37,13 +37,15 @@ beforeEach(() => {
   });
 });
 
-describe("CustomView columns-vs-groupby", () => {
+describe("CustomView columns-vs-groupby", { timeout: 15000 }, () => {
   it("shows the Columns picker in flat mode, hides it + shows a hint under a Group by", async () => {
     const user = userEvent.setup();
     render(<CustomView />);
 
-    // pick a source → flat mode: Columns picker appears with the field chips
-    const sourceSelect = await screen.findByRole("combobox");
+    // pick a source → flat mode: Columns picker appears with the field chips.
+    // The select renders before /custom-reports/sources resolves, so wait for the option itself.
+    await screen.findByRole("option", { name: "Invoices" }, { timeout: 5000 });
+    const sourceSelect = screen.getByRole("combobox");
     await user.selectOptions(sourceSelect, "invoices");
     expect(screen.getByText("Columns")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Invoice #" })).toBeInTheDocument();

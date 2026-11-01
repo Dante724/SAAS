@@ -27,4 +27,10 @@ describe("publicRoute", () => {
     expect(publicRoute("/portal")).toEqual({ page: "app" });
     expect(publicRoute("/portals/x")).toEqual({ page: "app" });
   });
+
+  it("sends a check-in point's QR and the customer's status page to self check-in", () => {
+    expect(publicRoute("/c/k7Q2abc")).toEqual({ page: "checkin", token: "k7Q2abc" });
+    expect(publicRoute("/c/s/st9")).toEqual({ page: "checkinStatus", token: "st9" });
+    expect(publicRoute("/clients")).toEqual({ page: "app" });
+  });
 });

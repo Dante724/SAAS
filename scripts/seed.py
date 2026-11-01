@@ -11,9 +11,22 @@ from backend.models import (
 )
 from backend.services.auth import hash_password
 from scripts.demo_credentials import DEMO_FILE, demo_passwords
+from backend.services.permissions import TEMPLATES
 import uuid
 from datetime import timedelta
 from backend.services.dates import now_utc
+
+# The demo technician is a Specialist with no access to money: no finance pages, cash,
+# invoices or payroll.
+TECHNICIAN_FINANCE_DENIALS = (
+    "can_view_finance", "can_view_cashflow", "can_view_cashflow_any_period", "can_view_cashbox",
+    "can_view_balance", "can_create_incomes", "can_create_expenses", "can_transfer_money",
+    "can_retroactive_cash", "can_correct_transactions", "can_delete_transactions",
+    "can_manage_accounts", "can_export_accountant", "can_create_returns", "can_delete_refunds",
+    "can_view_invoices", "can_view_invoices_tab", "can_create_invoices", "can_edit_invoices",
+    "can_delete_invoices", "can_edit_issued_invoices", "can_make_client_payments",
+    "can_view_payroll", "can_accrue_payroll", "can_export_payroll", "can_manage_payroll",
+)
 
 def uid(): return str(uuid.uuid4())
 def now(): return now_utc()
@@ -40,13 +53,13 @@ async def seed_demo_data():
         await db.flush()
 
         # Roles
+        # Real permission codes only: enforcement honours an explicit False on a catalog code
+        # and nothing else (an old-style {"finance": "none"} granted full access).
         admin_role = Role(id=uid(), org_id=org.id, name="admin",
-                          permissions={"orders": "write", "clients": "write",
-                                       "inventory": "write", "finance": "write",
-                                       "staff": "write", "reports": "write"})
+                          permissions=dict(TEMPLATES["Full access"]))
         tech_role = Role(id=uid(), org_id=org.id, name="technician",
-                         permissions={"orders": "write", "clients": "read",
-                                      "inventory": "read", "finance": "none"})
+                         permissions={**TEMPLATES["Specialist"],
+                                      **{code: False for code in TECHNICIAN_FINANCE_DENIALS}})
         db.add(admin_role)
         db.add(tech_role)
         await db.flush()
@@ -71,6 +84,7 @@ async def seed_demo_data():
                          wage_type="hourly", wage_value=250)
         db.add(admin); db.add(tech1); db.add(tech2)
         await db.flush()
+        org.owner_id = admin.id   # the demo admin is the shop owner (owner-only settings, owner protections)
 
         # Work order types + custom fields
         repair_type = WorkOrderType(id=uid(), org_id=org.id, name="Repair",

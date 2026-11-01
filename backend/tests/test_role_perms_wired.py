@@ -208,7 +208,8 @@ async def test_can_view_item_prices(client):
     assert r.status_code == 201, r.text
     lines = (await client.get(f"/api/orders/{oid}", headers=H)).json()["lines"]
     assert [ln["unit_price"] for ln in lines if ln["ref_id"] == sid] == [80]
-    assert [ln["unit_price"] for ln in lines if ln["ref_id"] != sid] == [100]   # row order isn't fixed on Postgres
+    # Postgres returns lines in no fixed order, so find the original line rather than taking lines[0].
+    assert [ln["unit_price"] for ln in lines if ln["ref_id"] != sid] == [100]
 
 
 @pytest.mark.asyncio

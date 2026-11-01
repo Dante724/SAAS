@@ -6,8 +6,6 @@
 Revision ID: aud6m01
 Revises: mkw01
 """
-import sqlalchemy as sa
-from alembic import op
 
 revision = "aud6m01"
 down_revision = "mkw01"
@@ -16,16 +14,10 @@ depends_on = None
 
 
 def upgrade() -> None:
-    with op.batch_alter_table("platform_admins") as b:
-        b.add_column(sa.Column("token_version", sa.Integer(), nullable=False, server_default=sa.text("0")))
-        b.add_column(sa.Column("mfa_enabled", sa.Boolean(), nullable=False, server_default=sa.text("false")))
-        b.add_column(sa.Column("mfa_secret", sa.String(255), nullable=True))
-        b.add_column(sa.Column("mfa_last_step", sa.Integer(), nullable=True))
+    # Superseded in the merged launch line by ad144s1 (admin panel sprint 1), which adds the same columns (platform_admins.token_version / mfa_secret / mfa_last_step; 2-step is mfa_enrolled_at there).
+    # Kept as a no-op so the revision chain (and any database already stamped here) stays valid.
+    pass
 
 
 def downgrade() -> None:
-    with op.batch_alter_table("platform_admins") as b:
-        b.drop_column("mfa_last_step")
-        b.drop_column("mfa_secret")
-        b.drop_column("mfa_enabled")
-        b.drop_column("token_version")
+    pass

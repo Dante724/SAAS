@@ -4,7 +4,8 @@ import { M } from "../../components/Shell";
 import { hueText, tint } from "../../lib/tint";
 import type { Order } from "./types";
 
-const AVATAR_HUES = ["#378ADD", "#1D9E75", "#7F77DD", "#D85A30", "#D4537E", "#639922", "#BA7517", "#185FA5"];
+// No red, amber or green: those mean status (overdue, waiting, done), and a customer must never look like one.
+const AVATAR_HUES = ["#378ADD", "#7F77DD", "#185FA5", "#D4537E", "#0E7490", "#6D5BD0", "#475569", "#A855F7"];
 export function Avatar({ name, size = 28 }: { name?: string | null; size?: number }) {
   const n = (name || "").trim();
   if (!n) return <span className="rounded-full bg-slate-100 grid place-items-center text-ink-tertiary flex-shrink-0" style={{ width: size, height: size }}><M n="person" c="text-[13px]" /></span>;

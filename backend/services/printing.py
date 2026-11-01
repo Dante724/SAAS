@@ -3,10 +3,6 @@
 The stock documents the shop hands over — write-off, transfer, return, purchase order and
 the stocktake settlement act. (ii144c: labels and price tags print from label templates as HTML —
 routers/documents.py.)
-
-Barcodes are generated with reportlab's own Code128/QR, so there's no extra dependency
-and no image round-trip: the barcode is drawn as vectors and stays crisp at any printer
-resolution, which matters because a fuzzy barcode is a barcode that doesn't scan.
 """
 import io
 from xml.sax.saxutils import escape as _x
@@ -39,8 +35,9 @@ def _styles():
 
 def _doc_table(headers: list[str], rows: list[list], totals: Optional[list] = None) -> Table:
     data = [headers] + rows
-    if totals:
-        data.append(totals)
+    # totals: one row, or several (subtotal, a line per tax, total); the last one is bold.
+    total_rows = totals if totals and isinstance(totals[0], (list, tuple)) else ([totals] if totals else [])
+    data += [list(r) for r in total_rows]
     t = Table(data, repeatRows=1, hAlign="LEFT")
     style = [
         ("BACKGROUND", (0, 0), (-1, 0), colors.HexColor("#F1F1F1")),
@@ -52,9 +49,9 @@ def _doc_table(headers: list[str], rows: list[list], totals: Optional[list] = No
         ("BOTTOMPADDING", (0, 0), (-1, -1), 5),
         ("TOPPADDING", (0, 0), (-1, -1), 5),
     ]
-    if totals:
+    if total_rows:
         style += [("FONTNAME", (0, -1), (-1, -1), "Helvetica-Bold"),
-                  ("BACKGROUND", (0, -1), (-1, -1), colors.HexColor("#FAFAFA"))]
+                  ("BACKGROUND", (0, -len(total_rows)), (-1, -1), colors.HexColor("#FAFAFA"))]
     t.setStyle(TableStyle(style))
     return t
 
@@ -88,7 +85,8 @@ def _t(phrase: str, lang: str) -> str:
 def render_document(*, title: str, org_name: str, number: Optional[str],
                     meta: list[tuple], headers: list[str], rows: list[list],
                     totals: Optional[list] = None, footer: Optional[str] = None,
-                    lang: str = "en") -> bytes:
+                    lang: str = "en", header_lines: Optional[list[str]] = None,
+                    tz: Optional[str] = None) -> bytes:
     """One layout for every stock document — they differ only in their columns, so
     giving each its own renderer would just be four ways to drift apart.
 
@@ -106,6 +104,8 @@ def render_document(*, title: str, org_name: str, number: Optional[str],
     # Paragraph() parses its text as markup (<img src=...>, <link>, <font>...). Everything here
     # is data — supplier names, notes, references — so escape it to plain text.
     story.append(Paragraph(_x(org_name or ""), ss["Small"]))
+    for line in header_lines or []:   # the issuer's address / contact lines
+        story.append(Paragraph(_x(str(line)), ss["Small"]))
     story.append(Paragraph(_x(f"{title}{f' — {number}' if number else ''}"), ss["Title"]))
     story.append(Spacer(1, 4))
 
@@ -130,8 +130,12 @@ def render_document(*, title: str, org_name: str, number: Optional[str],
                              ("TEXTCOLOR", (0, 0), (-1, -1), colors.HexColor("#666666"))]))
     story.append(sig)
     story.append(Spacer(1, 6))
-    story.append(Paragraph(
-        f"Generated {now_utc():%Y-%m-%d %H:%M} UTC", ss["Small"]))
+    # On the shop's clock when we know it (launch B6), else UTC as before.
+    generated, zone = now_utc(), "UTC"
+    if tz and tz != "UTC":
+        from backend.services.dates import utc_to_wall
+        generated, zone = utc_to_wall(generated, tz), tz
+    story.append(Paragraph(_x(f"Generated {generated:%Y-%m-%d %H:%M} {zone}"), ss["Small"]))
 
     doc.build(story)
     return buf.getvalue()

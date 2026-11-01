@@ -74,3 +74,21 @@ def test_one_country_tax_table():
     assert auth.COUNTRY_VAT is regions.COUNTRY_TAX
     assert regions.COUNTRY_TAX["AU"] == ("GST", 10.0, "included")
     assert regions.COUNTRY_TAX["AE"] == ("VAT", 5.0, "included")
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("country,code,tax", [
+    ("AU", "AUD", ("GST", 10.0, "included")), ("US", "USD", ("Sales tax", 0.0, "imposed")),
+    ("GB", "GBP", ("VAT", 20.0, "included")), ("CA", "CAD", ("GST", 5.0, "imposed")),
+    ("DE", "EUR", ("VAT", 19.0, "included")), ("NZ", "NZD", ("GST", 15.0, "included")),
+])
+async def test_country_alone_sets_currency_timezone_and_tax(client, country, code, tax):
+    """Final gate (1 Nov 2026): a shop that picks only its country got INR and Asia/Kolkata.
+    The country decides currency, timezone and the default tax, from the one country table."""
+    r = await client.post("/api/auth/register", json=_reg(country=country))
+    assert r.status_code == 201, r.text
+    co, taxes = await _company_and_taxes(client, r)
+    assert co["currency_code"] == code, co
+    assert co["timezone"] != "Asia/Kolkata", co
+    default = [t for t in taxes if t["is_default"]]
+    assert default and (default[0]["name"], default[0]["rate"], default[0]["mode"]) == tax, taxes
