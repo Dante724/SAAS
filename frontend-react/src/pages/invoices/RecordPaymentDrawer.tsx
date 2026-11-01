@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import DateField from "../../components/DateField";
-import { api } from "../../api/client";
+import { api, idempotencyKey } from "../../api/client";
 import { useMe } from "../../context/Me";
 import AccountPicker, { type PayAccount, type PaymentOption, accountsFor } from "../../components/AccountPicker";
 import { Drawer, ErrorNote, btnGhost, btnPrimary, cash, inputCls, labelCls, round2, todayIso, type InvoiceDetail } from "./billing";
@@ -27,6 +27,7 @@ export default function RecordPaymentDrawer({ invoice, onClose, onPaid }: { invo
   const [reference, setReference] = useState("");
   const [overpay, setOverpay] = useState<"" | "keep_balance" | "refund">("");
   const [busy, setBusy] = useState(false); const busyRef = useRef(false);
+  const payKey = useRef(idempotencyKey());   // one payment per drawer: a retried click gets the first answer
   const [err, setErr] = useState<string | null>(null);
   const hasClient = !!invoice.client_id;
   const canRefund = can("can_create_returns");
@@ -59,13 +60,14 @@ export default function RecordPaymentDrawer({ invoice, onClose, onPaid }: { invo
     if (busyRef.current || problem) { setErr(problem); return; }
     busyRef.current = true; setBusy(true); setErr(null);
     try {
-      await api.post(`/finance/invoices/${invoice.id}/pay`, {
+      await api.postOnce(`/finance/invoices/${invoice.id}/pay`, {
         amount: amt, method,
         account_id: method === "balance" || !hasAccount ? null : accountId || null,
         reference: reference.trim() || null,
         paid_at: paidAt && paidAt !== todayIso() ? paidAt : null,
         overpay: over ? overpay : null,
-      });
+      }, payKey.current);
+      payKey.current = idempotencyKey();
       onPaid();
     } catch (e: any) { setErr(e.message || "Could not record the payment"); }
     finally { busyRef.current = false; setBusy(false); }

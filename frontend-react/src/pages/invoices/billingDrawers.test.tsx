@@ -67,6 +67,30 @@ describe("RecordPaymentDrawer", () => {
     expect(posted("/finance/invoices/i1/pay")[0].body).toMatchObject({ amount: 75.5, overpay: "refund" });
   });
 
+  it("sends an Idempotency-Key and re-sends the same one when the click is retried", async () => {
+    const u = userEvent.setup(); const onPaid = vi.fn();
+    const keys: (string | undefined)[] = [];
+    let first = true;
+    const f = vi.mocked(fetch);
+    const base = f.getMockImplementation()!;
+    f.mockImplementation(async (url: any, init?: RequestInit) => {
+      if (init?.method === "POST") {
+        keys.push((init.headers as Record<string, string>)["Idempotency-Key"]);
+        if (first) { first = false; return reply({ detail: "timeout" }, 504); }
+      }
+      return base(url, init);
+    });
+    render(<RecordPaymentDrawer invoice={inv()} onClose={() => {}} onPaid={onPaid} />);
+    await screen.findByRole("option", { name: "Front till" });
+    await u.click(screen.getByRole("button", { name: /Record/ }));
+    await screen.findByText(/timeout/);
+    await u.click(screen.getByRole("button", { name: /Record/ }));
+    await vi.waitFor(() => expect(onPaid).toHaveBeenCalled());
+    expect(keys).toHaveLength(2);
+    expect(keys[0]).toMatch(/^web-/);
+    expect(keys[1]).toBe(keys[0]);
+  });
+
   it("can't keep credit on a walk-in invoice or refund without the permission", async () => {
     perms.deny.add("can_create_returns");
     const u = userEvent.setup();

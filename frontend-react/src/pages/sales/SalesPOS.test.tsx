@@ -262,3 +262,31 @@ describe("SalesPOS charges what the button says (B5)", () => {
     await vi.waitFor(() => expect(cartLines()).toHaveLength(0));
   });
 });
+
+describe("SalesPOS charge", () => {
+  it("sends an Idempotency-Key and re-sends it when a failed charge is retried", async () => {
+    const keys: (string | undefined)[] = [];
+    let fail = true;
+    const base = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (url: any, init?: RequestInit) => {
+      if (init?.method === "POST" && new URL(url, "http://x").pathname === "/api/sales") {
+        keys.push((init.headers as Record<string, string>)["Idempotency-Key"]);
+        if (fail) { fail = false; return reply({ detail: "timeout" }, 504); }
+        return reply({ id: "s1", sale_number: "S-1", total: 9.5, paid: true, redeemed: {} }, 201);
+      }
+      return base(url, init);
+    });
+    const u = userEvent.setup();
+    render(<SalesPOS />);
+    await act(async () => wedge("0123456789012"));
+    await vi.waitFor(() => expect(cartLines()).toHaveLength(1));
+    await u.click(screen.getByRole("button", { name: /^Charge [^o]/ }));
+    await vi.waitFor(() => expect(keys).toHaveLength(1));
+    await vi.waitFor(() => expect(screen.getByRole("button", { name: /^Charge [^o]/ })).toBeEnabled());
+    await u.click(screen.getByRole("button", { name: /^Charge [^o]/ }));
+    await vi.waitFor(() => expect(keys).toHaveLength(2));
+    expect(keys[0]).toMatch(/^web-/);
+    expect(keys[1]).toBe(keys[0]);                       // the retry can't make a second sale
+    await vi.waitFor(() => expect(cartLines()).toHaveLength(0));   // the sale went through once
+  });
+});

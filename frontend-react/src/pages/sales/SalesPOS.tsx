@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Shell, { M } from "../../components/Shell";
-import { api } from "../../api/client";
+import { api, idempotencyKey } from "../../api/client";
 import { useMe } from "../../context/Me";
 import VoidableList from "../../components/VoidableList";
 import { useClientSearch } from "../../hooks/useClientSearch";
@@ -215,14 +215,16 @@ export default function SalesPOS() {
     setReceiptFor({ id: p.id, change: change && change > 0 ? change : null });
   }
 
+  const saleKey = useRef(idempotencyKey());   // a double click on Charge makes one sale (server: Idempotency-Key)
   async function charge(onReader = false) {
     if (!quoteBody || !quote) return;
     setBusy(true);
     try {
-      const r = await api.post<any>("/sales", {
+      const r = await api.postOnce<any>("/sales", {
         ...quoteBody, account_id: onReader ? null : (accountId || null), cash_tendered: onReader ? null : tendered,
         expected_due: quote.due,
-      });
+      }, saleKey.current);
+      saleKey.current = idempotencyKey();
       try { if (accountId) localStorage.setItem(LAST_ACCT, accountId); } catch { /* ignore */ }
       setRecentKey((k) => k + 1);
       if (onReader && r.due > 0) {
