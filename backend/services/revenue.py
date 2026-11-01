@@ -119,7 +119,12 @@ async def job_figures(db: AsyncSession, orders) -> dict:
             select(OrderLine.order_id, func.sum(OrderLine.total),
                    func.sum(OrderLine.total / (1 + rate / 100.0)),
                    func.sum(case((is_part, func.coalesce(OrderLine.cost_price, 0) * OrderLine.qty), else_=0)))
-            .where(_ids_cond(OrderLine.order_id, orders)).group_by(OrderLine.order_id))).all():
+            .where(_ids_cond(OrderLine.order_id, orders),
+                   # A refund's own line (returns.REFUND_LINE_KIND) lowers what the customer owes on
+                   # the job screen; for revenue the job keeps its sold value and the refund comes
+                   # off below, once, on the day it was paid.
+                   func.coalesce(OrderLine.kind, "") != "refund")
+            .group_by(OrderLine.order_id))).all():
         f = fig(oid)
         f["gross"], f["net"], f["parts_cost"] = float(gross or 0), float(net or 0), float(cost or 0)
     # goods that came back to the shelf are no longer a cost of the job (at the job's cost for that item)

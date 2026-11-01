@@ -437,3 +437,19 @@ async def test_card_refund_needs_the_card_refund_right(client, tenant):
                                          "can_view_finance": False, "can_refund_card_payments": False})
     r = await client.post("/api/returns/refunds", json={"account_id": card, "amount": 10, "order_id": oid}, headers=desk)
     assert r.status_code == 403 and "card" in r.json()["detail"], r.text
+
+
+@pytest.mark.asyncio
+async def test_a_refund_on_a_part_paid_job_comes_off_revenue_once(client, tenant):
+    oid, _ = await K.job(client, tenant, await K.loc(client, tenant))
+    await K.add_line(client, tenant, oid, **{**P, "unit_price": 100})
+    till = await _till(client, tenant)
+    await client.post(f"/api/cash/orders/{oid}/pay", json={"method": "cash", "account_id": till, "amount": 50},
+                      headers=tenant)
+    assert (await client.post("/api/returns/refunds", json={"account_id": till, "amount": 20, "order_id": oid},
+                              headers=tenant)).status_code == 201
+    r = await client.patch(f"/api/orders/{oid}/status", json={"status": "done"}, headers=tenant)
+    assert r.status_code == 200, r.text
+    pnl = (await client.get("/api/finance/pnl", headers=tenant)).json()
+    assert pnl["revenue"] == pytest.approx(80)            # sold 100, 20 given back: not 60
+    assert (await K.order(client, tenant, oid))["total"] == pytest.approx(80)

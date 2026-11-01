@@ -141,10 +141,10 @@ async def test_every_report_reads_the_known_day_the_same(client, db):
     REVENUE = 200.0          # job 170 ex tax − returned protector 20 ex tax + small job 20 + counter sale 30
     JOBS = 170.0
     # What's owed is what each job screen says is owed (order_money.balance_due): 34 on the open
-    # job, and 22 on the first job, whose refunded return doesn't lower the job total yet (a job-
-    # screen issue, session F) — the reports follow the job screen rather than a rule of their own.
+    # job. The first job's refunded return lowers its total (QA F1), so nothing is owed there —
+    # the reports follow the job screen rather than a rule of their own.
     OWED = await _job_screen_owed(db, await _org_of(db, oid))
-    assert OWED == 56.0, OWED
+    assert OWED == 34.0, OWED
     COGS = round(job_cost + sale_cost, 2)   # the returned, restocked protector is no cost
 
     dash = (await client.get("/api/reports/dashboard", headers=H)).json()["stats"]
