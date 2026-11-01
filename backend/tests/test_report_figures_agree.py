@@ -323,3 +323,53 @@ async def test_revenue_and_receivables_are_summed_in_the_database(client, db):
     many, sales, owed = await widest_query()
     assert sales == owed == 250.0
     assert many == few, (few, many)               # no parameter per job
+
+
+async def _total_profit(client, H):
+    from backend.services.dates import now_utc
+    day = now_utc().date().isoformat()
+    r = await client.get(f"/api/reports/total-profit?date_from=2026-01-01&date_to={day}", headers=H)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+async def test_total_profit_reads_the_known_day_like_every_other_report(client, db):
+    """Total profit (Workstream B) is built on the same figures: its revenue, tax and cost of goods
+    for the period are the period's net sales, row by row plus one labelled reconciling row."""
+    H, oid, job_cost, sale_cost = await _known_day(client, db)
+    tp = await _total_profit(client, H)
+    pnl = (await client.get("/api/finance/pnl", headers=H)).json()
+    assert tp["totals"]["revenue"] == pnl["revenue"] == 200.0, (tp["totals"], tp["buckets"])
+    assert tp["totals"]["tax"] == pnl["tax_collected"]
+    assert tp["totals"]["cogs"] == pnl["cogs"]
+    other = [r for r in tp["rows"] if r["kind"] == "other"]
+    assert len(other) <= 1
+
+
+async def test_a_dropped_job_earns_what_it_kept_and_owes_nothing(client, db):
+    """A job dropped after a 30 deposit on 100: the 70 written off is neither revenue nor owed, on
+    every report; a later 10 refund of the deposit lowers what it kept, not a debt."""
+    H, loc, acc = await _setup(client)
+    cid = (await client.post("/api/clients", json={"name": "Di"}, headers=H)).json()["id"]
+    oid = await _job(client, H, loc, cid, 100)
+    r = await client.post(f"/api/cash/orders/{oid}/prepay", json={"amount": 30, "account_id": acc}, headers=H)
+    assert r.status_code == 201, r.text
+    r = await client.patch(f"/api/orders/{oid}/status",
+                           json={"status": await _status(client, H, "dropped"), "reason": "Never came back"},
+                           headers=H)
+    assert r.status_code == 200, r.text
+
+    async def figures():
+        from backend.routers.reports import _dash_cache
+        _dash_cache.clear()
+        dash = (await client.get("/api/reports/dashboard", headers=H)).json()["stats"]
+        summ = (await client.get("/api/finance/reports/summary", headers=H)).json()
+        tp = await _total_profit(client, H)
+        return (dash["revenue"], summ["total_revenue"], tp["totals"]["revenue"], tp["buckets"]["dropped"]["revenue"],
+                dash["outstanding"], summ["total_outstanding"], await _job_screen_owed(db, await _org_of(db, oid)))
+
+    assert await figures() == (30.0, 30.0, 30.0, 30.0, 0.0, 0.0, 0.0)
+    r = await client.post("/api/returns/refunds", json={"account_id": acc, "amount": 10, "order_id": oid,
+                                                        "reason": "Deposit back"}, headers=H)
+    assert r.status_code == 201, r.text
+    assert await figures() == (20.0, 20.0, 20.0, 20.0, 0.0, 0.0, 0.0)

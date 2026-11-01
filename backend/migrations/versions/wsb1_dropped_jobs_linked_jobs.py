@@ -6,13 +6,13 @@ orders.continued_from_order_id: "Continue as a linked job" — the job a new one
 Additive; existing rows are untouched.
 
 Revision ID: wsb1
-Revises: opd1
+Revises: qad01
 """
 import sqlalchemy as sa
 from alembic import op
 
 revision = "wsb1"
-down_revision = "opd1"
+down_revision = "qad01"
 branch_labels = None
 depends_on = None
 

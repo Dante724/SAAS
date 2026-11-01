@@ -27,7 +27,7 @@ for a job finished last month), and invoices that bill no job.
 from datetime import datetime, timedelta
 from typing import Iterable, Optional
 
-from sqlalchemy import Select, case, func, select
+from sqlalchemy import Select, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import (

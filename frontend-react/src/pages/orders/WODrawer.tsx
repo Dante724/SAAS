@@ -118,7 +118,6 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
     // The server says why in a sentence ("WO-12 still has $40 to pay…"): show it as it is.
     catch (e: any) { setD({ ...d, status: prev }); flash(e.message || "Couldn't change the status"); }
   }
-  const nav = useNavigate();
   async function continueLinked() {
     const why = await promptDialog(`Start a new job that carries on from ${d.order_number}? It keeps the customer, device and job details, and the two jobs are linked.`,
       { title: "Continue as a linked job", placeholder: "What needs doing this time (optional)", defaultValue: "" });

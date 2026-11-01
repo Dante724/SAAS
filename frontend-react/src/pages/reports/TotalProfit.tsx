@@ -10,7 +10,7 @@ type Bucket = { count: number; revenue: number; tax: number; cogs?: number; labo
 type Group = Bucket & { name: string; jobs: number; dropped: number; sales: number; location_id?: string | null; employee_id?: string | null };
 type Report = {
   totals: Bucket & { margin_pct?: number };
-  buckets: { jobs: Bucket; dropped: Bucket; sales: Bucket };
+  buckets: { jobs: Bucket; dropped: Bucket; sales: Bucket; other?: Bucket };
   previous: Bucket & { buckets: { jobs: Bucket; dropped: Bucket; sales: Bucket } };
   by_location: Group[]; by_technician: Group[]; rows: ProfitRow[];
 };
@@ -52,7 +52,7 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
 
   const costsHidden = !!rep && rep.totals.profit === undefined;
   const cards: { key: "jobs" | "dropped" | "sales"; title: string; hint: string; icon: string }[] = [
-    { key: "jobs", title: "Jobs", hint: "Closed jobs", icon: "build" },
+    { key: "jobs", title: "Jobs", hint: "Jobs closed, or invoiced and sent", icon: "build" },
     { key: "dropped", title: "Dropped jobs", hint: "Money kept from jobs that weren't finished", icon: "block" },
     { key: "sales", title: "Counter sales", hint: "Sales without a job", icon: "point_of_sale" },
   ];
@@ -121,6 +121,12 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
               );
             })}
           </div>
+          {rep.buckets.other && n(rep.buckets.other.revenue) !== 0 && (
+            <button type="button" onClick={() => setDrill({ title: "Refunds and other", d: { kind: "other" } })}
+              className="text-left text-xs text-ink-secondary hover:text-primary">
+              The total includes {money(rep.buckets.other.revenue)} of refunds, returns and credit notes dated in this period that aren't inside a job above, and invoices without a job.
+            </button>
+          )}
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
             {([["By location", rep.by_location, "location_id"], ["By technician", rep.by_technician, "employee_id"]] as const).map(([title, list, key]) => (
@@ -167,9 +173,10 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
                   <tbody className="divide-y divide-slate-100">
                     {shown.length === 0 && <tr><td colSpan={10} className="py-4 px-3 text-ink-tertiary">Nothing here for this period.</td></tr>}
                     {shown.map((r) => (
-                      <tr key={r.kind + r.id} className="hover:bg-blue-50/50">
+                      <tr key={r.kind + (r.id ?? "")} className="hover:bg-blue-50/50">
                         <td className="py-2 px-3 whitespace-nowrap">
-                          {r.kind === "sale"
+                          {r.kind === "other" ? <span className="text-ink-tertiary">—</span>
+                            : r.kind === "sale"
                             ? <span className="font-mono font-semibold">{r.number}</span>
                             : <button type="button" onClick={() => nav(`/orders?open=${r.id}`)} className="font-mono font-semibold text-primary hover:underline">{r.number}</button>}
                         </td>
@@ -191,7 +198,7 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
             </div>
           )}
           <p className="text-[11px] text-ink-tertiary">
-            Profit = takings after tax − parts − labour − commissions. Jobs count on the day they were closed or dropped; a dropped job counts only the money you kept. Counter sales carry no tax or commission.
+            Profit = takings after tax − parts − labour − commissions. Jobs count on the day they were closed, invoiced and sent, or dropped; a dropped job counts only the money you kept. Takings are the same sales figure as the dashboard and P&L.
           </p>
         </>
       )}
