@@ -66,6 +66,21 @@ async def default_for_location(db: AsyncSession, org_id: str,
     return w
 
 
+async def provision_default(db: AsyncSession, location) -> Warehouse:
+    """A new location's default product warehouse, named and set up like the one sign-up makes —
+    so it shows in Settings › Warehouses straight away, not only after the first stock document."""
+    w = (await db.execute(select(Warehouse).where(
+        Warehouse.org_id == location.org_id, Warehouse.location_id == location.id,
+        Warehouse.kind == "product", Warehouse.deleted_at.is_(None)))).scalars().first()
+    if w:
+        return w
+    w = Warehouse(org_id=location.org_id, name=f"{location.name} warehouse"[:120], kind="product",
+                  scope="location", location_id=location.id, is_default=True, allowed_actions=list(ACTIONS))
+    db.add(w)
+    await db.flush()
+    return w
+
+
 async def resolve(db: AsyncSession, org_id: str, *, warehouse_id: Optional[str] = None,
                   location_id: Optional[str] = None) -> Optional[Warehouse]:
     """Accept either a warehouse id (new callers) or a location id (old callers)."""

@@ -28,6 +28,7 @@ import AssetStateTabs, { AssetCounts, useAssetState } from "../../components/Ass
 import { useDebounced, useServerPage } from "../../hooks/useServerPage";
 import { useMe } from "../../context/Me";
 import { alertDialog, confirmDialog, promptDialog } from "../../lib/dialog";
+import { type BlockedItem, keptMessage, splitBlocked, writeOffPrompt } from "./archiveBlocked";
 import { printHtmlInFrame } from "../../lib/safeHtml";
 import { inputCls } from "../invoices/billing";
 import { productGlyph } from "../sales/SalesPOS";
@@ -273,9 +274,21 @@ export default function InventoryHub() {
   async function pBulk(act: "delete" | "price", extra: any = {}) {
     setPBusy(true);
     try {
-      const r = await api.post<{ count?: number; blocked?: string[] }>("/catalog/products/bulk", { ids: [...psel], action: act, ...extra });
-      pClear(); loadProducts();
-      if (r?.blocked?.length) await alertDialog(`${r.blocked.length} item(s) were kept because they're used in a bundle or job kit: ${r.blocked.join(", ")}. Remove them there first.`, "Some items weren't deleted");
+      type BulkOut = { count?: number; blocked?: string[]; blocked_items?: BlockedItem[] };
+      const r = await api.post<BulkOut>("/catalog/products/bulk", { ids: [...psel], action: act, ...extra });
+      pClear();
+      let { stocked, other } = splitBlocked(r?.blocked_items || []);
+      // still in stock: one step — write it off and archive
+      if (stocked.length && await confirmDialog(writeOffPrompt(stocked), { danger: true, confirmLabel: "Write off and archive" })) {
+        const r2 = await api.post<BulkOut>("/catalog/products/bulk",
+          { ids: stocked.map((i) => i.id), action: "delete", write_off_remaining: true });
+        other = [...other, ...(r2?.blocked_items || [])];
+        stocked = [];
+      }
+      loadProducts();
+      const kept = [...other, ...stocked];
+      if (kept.length) await alertDialog(keptMessage(kept), "Some items weren't archived");
+      else if (!r?.blocked_items && r?.blocked?.length) await alertDialog(`${r.blocked.length} item(s) were kept: ${r.blocked.join(", ")}.`, "Some items weren't archived");
     }
     catch (e: any) { await alertDialog(e.message || "Bulk action failed"); }
     finally { setPBusy(false); }

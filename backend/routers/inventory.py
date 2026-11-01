@@ -37,12 +37,17 @@ class PartIn(BaseModel):
     min_order_qty: float = 0
     weight: Optional[float] = None       # kg — used for weight-basis freight allocation (144ar)
     dimensions: Optional[str] = None     # "LxWxH" cm
+    active: Optional[bool] = None        # false archives (refused while the product still has stock)
+    write_off_remaining: Optional[bool] = None   # with active=false: write the stock off, then archive
 
 class StockAdjust(BaseModel):
     location_id: str
     qty: float
     movement_type: str = "receive"  # receive|writeoff|transfer|adjust
     note: Optional[str] = None
+    # What stock coming in cost (opening stock, a count-up). Omitted → the current average cost,
+    # else the catalog cost — never 0 by accident, which made COGS 0 and margins nonsense.
+    unit_cost: Optional[float] = Field(None, ge=0)
 
 
 # A stock quantity above this is almost certainly a barcode/serial typed into the
@@ -182,6 +187,9 @@ async def create_part(
     current: Employee = Depends(require_perm("can_create_products")),
 ):
     payload = data.model_dump()
+    payload.pop("write_off_remaining", None)
+    if payload.get("active") is None:
+        payload.pop("active", None)
     if not await can_see_costs(db, current):
         drop_cost_fields(payload)
     part = Part(org_id=current.org_id, **payload)
@@ -222,11 +230,26 @@ async def update_part(
     # exclude_unset so a client that omits a field (e.g. an older bundle without weight)
     # leaves it untouched instead of nulling it.
     payload = data.model_dump(exclude_unset=True)
+    write_off = bool(payload.pop("write_off_remaining", None))
     if not await can_see_costs(db, current):
         drop_cost_fields(payload)
+    if "active" in payload:
+        if payload["active"] is None:
+            payload.pop("active")
+        elif payload["active"] is False and part.active:
+            from backend.services import stock_archive
+            if write_off:      # one step: what's left on the shelf is written off, then archived
+                await stock_archive.write_off_remaining(db, current, part)
+            why = await stock_archive.archive_blocker(db, current.org_id, part)
+            if why:
+                raise HTTPException(409, f"Can't archive “{part.name}”: {why}, "
+                                         "or archive with write_off_remaining.")
+    checks = set(payload)
+    if payload.get("active") and not part.active:
+        checks |= {"name", "sku", "barcode", "code"}     # coming back: its identity must be free again
     await product_codes.ensure_identity_free(
-        db, current.org_id, exclude_part_id=part.id, fields=set(payload), **{
-            k: payload.get(k) for k in ("name", "sku", "barcode", "code")})
+        db, current.org_id, exclude_part_id=part.id, fields=checks, **{
+            k: payload.get(k, getattr(part, k)) for k in ("name", "sku", "barcode", "code")})
     for k, v in payload.items():
         setattr(part, k, v)
     await db.commit()
@@ -240,8 +263,10 @@ async def adjust_stock(
 ):
     _guard_qty(data.qty)
     result = await db.execute(select(Part).where(Part.id == part_id, Part.org_id == current.org_id))
-    if not result.scalar_one_or_none():
+    part = result.scalar_one_or_none()
+    if not part:
         raise HTTPException(404, "Part not found")
+    stock_rows.check_whole(part, data.qty)
     # Build 89: the warehouse must permit this action, and this employee must be
     # allowed to perform it here (per-employee access beats the role-level scope).
     from backend.services import warehouses as _wh
@@ -250,15 +275,29 @@ async def adjust_stock(
     await require_location(db, current.org_id, data.location_id)
     _w = await _wh.guard_action(db, current, _action, location_id=data.location_id)
 
-    if data.movement_type in ("receive", "adjust"):
-        # Into the location's main row; a first receipt creates it tagged with the warehouse it came through.
-        has_main = any(r.bin_id is None for r in await stock_rows.rows(db, part_id, data.location_id))
-        await stock_rows.add(db, part_id, data.location_id, data.qty,
-                             warehouse_id=None if has_main or not _w else _w.id)
-    elif data.movement_type == "writeoff":
-        # Never below zero (the old clamp): take what is there, across bins.
-        have, _res = await stock_rows.totals(db, part_id, data.location_id)
-        await stock_rows.draw(db, part_id, data.location_id, min(data.qty, max(have, 0)))
+    if data.movement_type in ("receive", "adjust") and data.qty > 0:
+        # Stock coming in is a receipt like any other: quantity, movement, FIFO layer and moving
+        # average through the one inflow path, at a real cost.
+        cost = data.unit_cost if data.unit_cost is not None else (part.avg_cost or part.cost_price or 0)
+        await stock_posting.apply_receipt_line(
+            db, org_id=current.org_id, part=part, location_id=data.location_id, qty=data.qty,
+            unit_cost=float(cost), created_by_id=current.id, ref_type=data.movement_type,
+            movement_type=data.movement_type, warehouse_id=_w.id if _w else None,
+            cost_known=data.unit_cost is not None)
+        await db.commit()
+        return {"ok": True, "qty_available": (await stock_rows.totals(db, part_id, data.location_id))[0]}
+    if data.movement_type == "writeoff" or (data.movement_type in ("receive", "adjust") and data.qty < 0):
+        # Out of stock the one way (services/stock_writeoff): refused beyond what is on hand, FIFO
+        # layers consumed, outflow logged negative. A write-off is sent as a positive quantity.
+        if data.movement_type == "writeoff" and data.qty < 0:
+            raise HTTPException(422, "Send the quantity to write off as a positive number")
+        from backend.services import stock_writeoff
+        out = await stock_writeoff.write_off(
+            db, part=part, location_id=data.location_id, qty=abs(data.qty), created_by_id=current.id,
+            movement_type=data.movement_type, ref_type=data.movement_type,
+            warehouse_id=_w.id if _w else None)
+        await db.commit()
+        return {"ok": True, "qty_available": out["qty_available"]}
 
     movement = StockMovement(
         part_id=part_id, location_id=data.location_id,
@@ -338,6 +377,7 @@ async def _do_posting(db, org_id, created_by_id, location_id, supplier_id, lines
             Part.id == pid, Part.org_id == org_id))).scalar_one_or_none()
         if not part:
             raise HTTPException(404, f"Part {pid} not found")
+        stock_rows.check_whole(part, qty)
         cost = float(_g(ln, "purchase_price") or 0.0)
         serials = await serial_intake.validate_intake(db, org_id, part, qty, _g(ln, "serials"), seen_serials)
         from backend.services import inventory_alerts as _alerts
@@ -1813,6 +1853,7 @@ async def recost_po(
     # Freight that *should* now sit in the units already received, at current charges.
     target = 0.0
     per_part_target: dict[str, float] = {}
+    per_part_recvd: dict[str, float] = {}
     for pl in po_lines:
         recvd = pl.qty_received or 0
         if recvd <= 0:
@@ -1820,13 +1861,17 @@ async def recost_po(
         tline = per_unit_map.get(pl.id, 0.0) * recvd
         target += tline
         per_part_target[pl.part_id] = per_part_target.get(pl.part_id, 0.0) + tline
+        per_part_recvd[pl.part_id] = per_part_recvd.get(pl.part_id, 0.0) + recvd
 
     delta_total = q2(target - (po.freight_capitalised or 0))
     if abs(delta_total) < 0.005:
         await db.commit()
         return {"ok": True, "applied": 0.0, "note": "Already up to date"}
 
-    applied = 0.0
+    # QA fix D: the freight belongs to this PO's units only. What lands on stock is the share of its
+    # units still on hand; the share of units already sold / used is sunk COGS (`expensed`). Both
+    # count as accounted for, so the same bill recosted again applies nothing.
+    applied = expensed = 0.0
     scale = (delta_total / target) if target else 0
     for part_id, tpart in per_part_target.items():
         part = (await db.execute(select(Part).where(Part.id == part_id))).scalar_one_or_none()
@@ -1834,11 +1879,21 @@ async def recost_po(
             continue
         res = await stock_posting.apply_cost_adjustment(
             db, org_id=current.org_id, part=part, add_cost_total=q4(tpart * scale),
-            po_id=po_id, created_by_id=current.id)
+            po_id=po_id, created_by_id=current.id, received_qty=per_part_recvd.get(part_id))
         applied += res["applied"]
-    po.freight_capitalised = q2((po.freight_capitalised or 0) + applied)
+        expensed += res["expensed"]
+    po.freight_capitalised = q2((po.freight_capitalised or 0) + delta_total)
+    if abs(expensed) >= 0.005:
+        # The freight on units already sold or used can't go into stock any more — it's cost of goods
+        # sold now. Record it as a (non-cash) business expense so it reaches profit instead of vanishing.
+        from backend.models import Expense
+        from backend.services.dates import shop_today
+        db.add(Expense(org_id=current.org_id, location_id=po.location_id, category="Cost of goods sold",
+                       recorded_by_id=current.id, amount=q2(expensed),
+                       description=f"Freight on PO {po.po_number}: share of units already sold or used",
+                       expense_date=await shop_today(db, current.org_id)))
     await db.commit()
-    return {"ok": True, "applied": q2(applied), "delta_total": delta_total}
+    return {"ok": True, "applied": q2(applied), "expensed": q2(expensed), "delta_total": delta_total}
 
 
 class POInvoiceIn(BaseModel):
@@ -1951,6 +2006,7 @@ async def receive_po(
         part = (await db.execute(select(Part).where(Part.id == pl.part_id))).scalar_one_or_none()
         if not part:
             continue
+        stock_rows.check_whole(part, recv)
         plan.append((pl, recv, part, rline))
 
     # 16b: serial-tracked lines need one valid, unique serial per unit — checked for the whole
@@ -1977,7 +2033,9 @@ async def receive_po(
     for pl, recv, part, rline in plan:
         line_bin = (rline.bin_id if rline and rline.bin_id else data.bin_id)
         pl.qty_received = (pl.qty_received or 0) + recv
-        unit_cost = pl.unit_cost or part.cost_price or 0
+        # The PO line's price is what we pay — an explicit 0 (a free line) is 0, not the catalog cost;
+        # only a line with no price at all (older data) falls back to the catalog.
+        unit_cost = pl.unit_cost if pl.unit_cost is not None else (part.cost_price or 0)
         if allocate_freight:
             fpu = po_freight_pu.get(pl.id, 0.0)
             unit_cost = q4(unit_cost + fpu)
@@ -1993,7 +2051,8 @@ async def receive_po(
             db, org_id=current.org_id, part=part, location_id=po.location_id,
             qty=recv, unit_cost=unit_cost, created_by_id=current.id,
             ref_type="po", ref_id=po_id, bin_id=line_bin, supplier_id=po.supplier_id,
-            serials=checked_serials.get(pl.id) or None, create_batch=True)
+            serials=checked_serials.get(pl.id) or None, create_batch=True,
+            cost_known=pl.unit_cost is not None)
         # 144bo: reset low-stock dedupe + notify any job that was waiting on this part.
         after_oh = await _alerts.global_on_hand(db, part.id)
         await _alerts.on_received(db, current.org_id, part, before_oh, after_oh)
@@ -2551,6 +2610,7 @@ class BulkAction(BaseModel):
     action: str          # set_category|set_min_stock|adjust_price_pct|set_active|set_supplier
     value: Optional[str] = None      # category id / supplier id
     number: Optional[float] = None   # min stock / percent / 0|1
+    write_off_remaining: bool = False   # set_active=0: write off what's still in stock, then archive
 
 
 @router.post("/parts/bulk")
@@ -2577,6 +2637,7 @@ async def bulk_update_parts(
         raise HTTPException(404, "No matching products")
 
     changed = 0
+    blocked: list[dict] = []      # products the action was refused for, and why
     if data.action == "set_category":
         if data.value:
             from backend.models import Category
@@ -2603,7 +2664,27 @@ async def bulk_update_parts(
     elif data.action == "set_active":
         if data.number not in (0, 1):
             raise HTTPException(422, "set_active expects 0 or 1")
+        from backend.services import stock_archive
         for p in parts:
+            if not data.number and p.active:
+                if data.write_off_remaining:
+                    try:
+                        await stock_archive.write_off_remaining(db, current, p)
+                    except HTTPException as e:
+                        blocked.append({"id": p.id, "name": p.name, "reason": e.detail})
+                        continue
+                why = await stock_archive.archive_blocker(db, current.org_id, p)   # still stocked → not archived
+                if why:
+                    blocked.append({"id": p.id, "name": p.name, "reason": why})
+                    continue
+            elif data.number and not p.active:
+                try:
+                    await product_codes.ensure_identity_free(
+                        db, current.org_id, exclude_part_id=p.id, name=p.name, sku=p.sku,
+                        barcode=p.barcode, code=p.code)
+                except HTTPException as e:
+                    blocked.append({"id": p.id, "name": p.name, "reason": e.detail})
+                    continue
             p.active = bool(data.number)
             changed += 1
     elif data.action == "set_supplier":
@@ -2616,7 +2697,7 @@ async def bulk_update_parts(
         raise HTTPException(422, f"Unknown action “{data.action}”")
 
     await db.commit()
-    return {"ok": True, "changed": changed, "action": data.action}
+    return {"ok": True, "changed": changed, "action": data.action, "blocked": blocked}
 
 
 async def _atomic_add(db, obj, attr, delta, *, round_to=None):
