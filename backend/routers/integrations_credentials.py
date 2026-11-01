@@ -19,7 +19,7 @@ router = APIRouter(prefix="/api/integrations/credentials", tags=["integrations"]
 
 @router.get("")
 async def list_credentials(db: AsyncSession = Depends(get_db),
-                           current: Employee = Depends(get_current_employee)):
+                           current: Employee = Depends(require_perm("can_manage_settings"))):
     """Masked status of every keyed provider for THIS shop."""
     return await org_creds.status(db, current.org_id)
 

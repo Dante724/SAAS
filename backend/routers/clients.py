@@ -1024,7 +1024,7 @@ async def move_balance(
 async def client_payments(
     client_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_finance")),   # money, not contact info
 ):
     """Build 124 — the contact's Payments tab: every payment, prepayment and refund
     recorded against them, newest first, each linked back to its source order. Reads the

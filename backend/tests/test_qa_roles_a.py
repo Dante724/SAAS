@@ -272,3 +272,14 @@ async def test_no_technician_response_carries_stock_cost(client):
     prices = (await client.get(f"/api/pricing/parts/{part['id']}/prices", headers=T)).json()
     assert "basis" not in prices and all("markup_pct" not in p for p in prices["prices"])
 
+
+@pytest.mark.asyncio
+async def test_technician_cannot_read_admin_settings_or_a_contacts_payments(client):
+    H = await _owner(client)
+    T = await _person(client, H, (await _role(client, H, {"name": "Tech", "template": "Specialist"}))["id"])
+    cid = (await client.post("/api/clients", json={"name": "Dana"}, headers=H)).json()["id"]
+    for url in ("/api/integrations/credentials", "/api/integrations/qbo/mappings", "/api/integrations/qbo/logs",
+                "/api/webhooks/deliveries", "/api/settings/numbering", f"/api/clients/{cid}/payments"):
+        assert (await client.get(url, headers=T)).status_code == 403, url
+        assert (await client.get(url, headers=H)).status_code == 200, url
+
