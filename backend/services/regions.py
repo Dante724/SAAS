@@ -24,13 +24,15 @@ COUNTRY_TAX: dict[str, tuple[str, float, str]] = {
     "GB": ("VAT", 20.0, "included"), "DE": ("VAT", 19.0, "included"), "FR": ("VAT", 20.0, "included"),
     "ES": ("IVA", 21.0, "included"), "IT": ("IVA", 22.0, "included"), "NL": ("BTW", 21.0, "included"),
     "IE": ("VAT", 23.0, "included"), "PT": ("IVA", 23.0, "included"), "PL": ("VAT", 23.0, "included"),
-    "BE": ("VAT", 21.0, "included"), "SE": ("VAT", 25.0, "included"), "AT": ("VAT", 20.0, "included"),
+    "BE": ("BTW", 21.0, "included"), "SE": ("VAT", 25.0, "included"), "AT": ("VAT", 20.0, "included"),
     # Middle East
     "AE": ("VAT", 5.0, "included"), "SA": ("VAT", 15.0, "included"), "QA": ("VAT", 0.0, "included"),
     # LATAM
     "MX": ("IVA", 16.0, "included"), "BR": ("ICMS", 17.0, "included"), "AR": ("IVA", 21.0, "included"),
     "CL": ("IVA", 19.0, "included"), "CO": ("IVA", 19.0, "included"), "PE": ("IGV", 18.0, "included"),
     "UY": ("IVA", 22.0, "included"), "EC": ("IVA", 15.0, "included"),
+    # Asia
+    "IN": ("GST", 18.0, "imposed"),
 }
 
 # ── E-invoice standard per country (what the market mandates/uses) ─────────────
@@ -60,6 +62,7 @@ COUNTRY_CURRENCY: dict[str, tuple[str, str]] = {  # ISO4217, symbol
     "SE": ("SEK", "kr"), "AT": ("EUR", "€"),
     "MX": ("MXN", "$"), "BR": ("BRL", "R$"), "AR": ("ARS", "$"), "CL": ("CLP", "$"),
     "CO": ("COP", "$"), "PE": ("PEN", "S/"), "UY": ("UYU", "$U"), "EC": ("USD", "$"),
+    "IN": ("INR", "₹"),
 }
 
 # ── Region-level fallbacks (when only region, not country, is known) ───────────

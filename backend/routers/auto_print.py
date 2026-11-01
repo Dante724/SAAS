@@ -20,16 +20,16 @@ router = APIRouter(prefix="/api/auto-print", tags=["printing"])
 @router.get("/order-created/{order_id}")
 async def order_created(order_id: str, db: AsyncSession = Depends(get_db),
                         current: Employee = Depends(get_current_employee)):
-    from backend.routers.documents import LABEL_DOC_TYPES, _labels_html, _render, _resolve_asset
+    from backend.routers.documents import LABEL_DOC_TYPES, _labels_html, _render, _resolve_asset, auto_events
     from backend.services.scoping import can_view_order
     order = await own(db, Order, order_id, current.org_id, "Job")
     if not await can_view_order(db, current, order):
         return {"items": []}
     tpls = (await db.execute(select(DocumentTemplate).where(
-        DocumentTemplate.org_id == current.org_id, DocumentTemplate.auto_print_on == "create",
+        DocumentTemplate.org_id == current.org_id, DocumentTemplate.auto_print_on.isnot(None),
         DocumentTemplate.doc_type.in_(LABEL_DOC_TYPES), DocumentTemplate.active == True)  # noqa: E712
         .order_by(DocumentTemplate.name))).scalars().all()
-    tpls = [t for t in tpls if "{Asset " in (t.body_html or "")]
+    tpls = [t for t in tpls if "create" in auto_events(t) and "{Asset " in (t.body_html or "")]
     if not tpls:
         return {"items": []}
     ids = [order.device_id] if order.device_id else []

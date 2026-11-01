@@ -9,12 +9,8 @@ from backend.services.auth import hash_password
 
 
 async def _admin_hdr(client):
-    async with AsyncSessionLocal() as db:
-        if not (await db.execute(select(PlatformAdmin).where(PlatformAdmin.email == "ops@ch.dev"))).scalar_one_or_none():
-            db.add(PlatformAdmin(email="ops@ch.dev", name="Ops", password_hash=hash_password("portal-pass-123")))
-            await db.commit()
-    r = await client.post("/api/admin/login", json={"email": "ops@ch.dev", "password": "portal-pass-123"})
-    return {"Authorization": f"Bearer {r.json()['access_token']}"}
+    from backend.tests.admin_helpers import admin_headers
+    return (await admin_headers(client))[0]
 
 
 @pytest.mark.asyncio
@@ -28,7 +24,7 @@ async def test_suspension_kills_live_session(client):
     assert (await client.get("/api/auth/me", headers=thdr)).status_code == 200
     oid = reg.json()["org_id"]
     # suspend from the operator portal
-    await client.patch(f"/api/admin/tenants/{oid}", json={"sub_status": "suspended"}, headers=hdr)
+    await client.post(f"/api/admin/tenants/{oid}/suspend", json={"reason": "Unpaid"}, headers=hdr)
     # the SAME live token is now rejected immediately (token version bumped)
     assert (await client.get("/api/auth/me", headers=thdr)).status_code == 401
 
@@ -40,7 +36,7 @@ async def test_expiring_in_past_kills_live_session(client):
         "org_name": "ExpLiveCo", "name": "Owner", "email": "explive@ch.dev", "password": "pw-12345678"})
     thdr = {"Authorization": f"Bearer {reg.json()['access_token']}"}
     assert (await client.get("/api/auth/me", headers=thdr)).status_code == 200
-    await client.patch(f"/api/admin/tenants/{reg.json()['org_id']}", json={"sub_end": "2020-01-01"}, headers=hdr)
+    await client.patch(f"/api/admin/tenants/{reg.json()['org_id']}", json={"sub_end": "2020-01-01", "reason": "Ended"}, headers=hdr)
     assert (await client.get("/api/auth/me", headers=thdr)).status_code == 401
 
 
@@ -51,7 +47,7 @@ async def test_reactivating_does_not_bump_needlessly(client):
         "org_name": "ActiveCo", "name": "Owner", "email": "active@ch.dev", "password": "pw-12345678"})
     thdr = {"Authorization": f"Bearer {reg.json()['access_token']}"}
     # setting status to active (not blocking) must NOT invalidate the live token
-    await client.patch(f"/api/admin/tenants/{reg.json()['org_id']}", json={"sub_status": "active"}, headers=hdr)
+    await client.patch(f"/api/admin/tenants/{reg.json()['org_id']}", json={"sub_status": "active", "reason": "Paid"}, headers=hdr)
     assert (await client.get("/api/auth/me", headers=thdr)).status_code == 200
 
 

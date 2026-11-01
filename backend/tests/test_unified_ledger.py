@@ -32,6 +32,13 @@ async def _order_with_total(client, h, cid, price=1000):
     return oid, float(total)
 
 
+async def _cash(client, h):
+    """A cash drawer to take payments into ("pay from balance" needs credit the client holds, B3)."""
+    r = await client.post("/api/cash/accounts", json={"name": "Cash", "payment_option": "cash"}, headers=h)
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
 async def _balance(client, h, cid):
     return (await client.get(f"/api/clients/{cid}/balance", headers=h)).json()
 
@@ -61,9 +68,9 @@ async def test_payment_nets_balance_to_zero(client, tenant):
     oid, total = await _order_with_total(client, tenant, cid)
     await client.patch(f"/api/orders/{oid}/status", json={"status": "done"}, headers=tenant)
 
-    # close on account (no cashbox needed) — must REDUCE the receivable, not double it
+    # a payment must REDUCE the receivable, not double it
     r = await client.post(f"/api/cash/orders/{oid}/pay",
-                          json={"method": "balance", "amount": total}, headers=tenant)
+                          json={"method": "cash", "account_id": await _cash(client, tenant), "amount": total}, headers=tenant)
     assert r.status_code == 200, r.text
 
     bal = await _balance(client, tenant, cid)
@@ -102,7 +109,7 @@ async def test_payments_tab_lists_payment(client, tenant):
     oid, total = await _order_with_total(client, tenant, cid)
     await client.patch(f"/api/orders/{oid}/status", json={"status": "done"}, headers=tenant)
     await client.post(f"/api/cash/orders/{oid}/pay",
-                      json={"method": "balance", "amount": total}, headers=tenant)
+                      json={"method": "cash", "account_id": await _cash(client, tenant), "amount": total}, headers=tenant)
 
     pays = (await client.get(f"/api/clients/{cid}/payments", headers=tenant)).json()["items"]
     assert len(pays) == 1
@@ -172,7 +179,7 @@ async def test_rebuild_is_idempotent(client, tenant):
     oid, total = await _order_with_total(client, tenant, cid)
     await client.patch(f"/api/orders/{oid}/status", json={"status": "done"}, headers=tenant)
     await client.post(f"/api/cash/orders/{oid}/pay",
-                      json={"method": "balance", "amount": total}, headers=tenant)
+                      json={"method": "cash", "account_id": await _cash(client, tenant), "amount": total}, headers=tenant)
     before = await _balance(client, tenant, cid)
     assert before["balance"] == pytest.approx(0.0)
     n_before = len(before["entries"])
@@ -196,7 +203,7 @@ async def test_rebuild_reconstructs_history(client, tenant, db):
     oid, total = await _order_with_total(client, tenant, cid)
     await client.patch(f"/api/orders/{oid}/status", json={"status": "done"}, headers=tenant)
     await client.post(f"/api/cash/orders/{oid}/pay",
-                      json={"method": "balance", "amount": total}, headers=tenant)
+                      json={"method": "cash", "account_id": await _cash(client, tenant), "amount": total}, headers=tenant)
 
     # simulate legacy data: wipe the auto-posted ledger and leave a stale balance
     await db.execute(delete(ClientLedgerEntry).where(ClientLedgerEntry.client_id == cid))

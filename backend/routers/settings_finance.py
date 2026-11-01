@@ -18,7 +18,7 @@ from backend.models import (
     TaxRule,
 )
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.numbering import DEFAULT_TEMPLATES, _existing_count, doc_template_problem, peek_example
+from backend.services.numbering import DEFAULT_TEMPLATES, doc_template_problem, last_issued, peek_example
 from backend.services.owned import require_owned_ids
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
@@ -52,9 +52,12 @@ async def list_numbering(
     for dt, default in DEFAULT_TEMPLATES.items():
         r = configured.get((dt, "org"))
         tmpl = r.template if r else default
+        # Unconfigured: show where the counter will really start, not 1, so saving the row as-is
+        # doesn't try to rewind past numbers that are already out.
+        nxt = r.next_value if r else (await last_issued(db, current.org_id, dt, "org", tmpl))[0] + 1
         out.append({"doc_type": dt, "scope_key": "org", "template": tmpl,
-                    "next_value": r.next_value if r else 1,
-                    "example": await peek_example(tmpl, r.next_value if r else 1),
+                    "next_value": nxt,
+                    "example": await peek_example(tmpl, nxt),
                     "is_default": r is None})
     # include any non-org scopes too
     for r in rows:
@@ -75,6 +78,11 @@ async def set_numbering(
     if data.doc_type not in DEFAULT_TEMPLATES:
         raise HTTPException(422, f"Unknown doc_type. Valid: {sorted(DEFAULT_TEMPLATES)}")
     _check_template(data.template, data.begins_from)
+    # Never rewind onto numbers that are already out: the next number must be past the last issued.
+    issued, issued_number = await last_issued(db, current.org_id, data.doc_type, data.scope_key, data.template)
+    if data.begins_from is not None and data.begins_from <= issued:
+        raise HTTPException(422, f"{issued_number} has already been issued. Start {data.doc_type} numbering "
+                                 f"from {issued + 1} or higher.")
     seq = (await db.execute(select(NumberSequence).where(
         NumberSequence.org_id == current.org_id, NumberSequence.doc_type == data.doc_type,
         NumberSequence.scope_key == data.scope_key))).scalar_one_or_none()
@@ -83,9 +91,8 @@ async def set_numbering(
         if data.begins_from is not None:
             seq.next_value = data.begins_from
     else:
-        # Same starting point next_number would pick: past any documents already issued.
-        start = data.begins_from if data.begins_from is not None else \
-            await _existing_count(db, current.org_id, data.doc_type) + 1
+        # Omitted begins_from: start just past the documents already issued.
+        start = data.begins_from if data.begins_from is not None else issued + 1
         seq = NumberSequence(org_id=current.org_id, doc_type=data.doc_type,
                              scope_key=data.scope_key, template=data.template,
                              next_value=start)
@@ -94,14 +101,15 @@ async def set_numbering(
     return {"ok": True, "example": await peek_example(data.template, seq.next_value)}
 
 
-async def _next_value(db: AsyncSession, org_id: str, doc_type: Optional[str], scope_key: str) -> int:
+async def _next_value(db: AsyncSession, org_id: str, doc_type: Optional[str], scope_key: str,
+                      template: str) -> int:
     """Where this doc type's counter really is — what a save without begins_from keeps."""
     if not doc_type:
         return 1
     seq = (await db.execute(select(NumberSequence.next_value).where(
         NumberSequence.org_id == org_id, NumberSequence.doc_type == doc_type,
         NumberSequence.scope_key == scope_key))).scalar_one_or_none()
-    return seq if seq is not None else await _existing_count(db, org_id, doc_type) + 1
+    return seq if seq is not None else (await last_issued(db, org_id, doc_type, scope_key, template))[0] + 1
 
 
 @router.post("/numbering/preview")
@@ -109,7 +117,7 @@ async def preview_numbering(data: NumberingIn, db: AsyncSession = Depends(get_db
                             current: Employee = Depends(get_current_employee)):
     _check_template(data.template, data.begins_from)
     start = data.begins_from if data.begins_from is not None else \
-        await _next_value(db, current.org_id, data.doc_type, data.scope_key)
+        await _next_value(db, current.org_id, data.doc_type, data.scope_key, data.template)
     return {"example": await peek_example(data.template, start)}
 
 
@@ -120,7 +128,7 @@ async def preview_numbering_get(template: str, begins_from: Optional[int] = None
                                 current: Employee = Depends(get_current_employee)):
     _check_template(template, begins_from)
     start = begins_from if begins_from is not None else \
-        await _next_value(db, current.org_id, doc_type, scope_key)
+        await _next_value(db, current.org_id, doc_type, scope_key, template)
     return {"example": await peek_example(template, start)}
 
 

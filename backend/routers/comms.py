@@ -8,7 +8,7 @@ actually deliver — under the simulated adapter they're recorded, not sent.
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import select
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -35,12 +35,27 @@ async def list_calls(
     return {"items": [{"id": c.id, "provider": c.provider, "direction": c.direction,
                        "from": c.from_number, "to": c.to_number, "client_id": c.client_id,
                        "status": c.status, "duration_s": c.duration_s,
-                       "recording_url": c.recording_url, "provider_sid": c.provider_sid,
+                       "recording_url": safe_recording_url(c.recording_url), "provider_sid": c.provider_sid,
                        "created_at": c.created_at.isoformat() if c.created_at else None}
                       for c in rows]}
 
 
 MISSED = ("missed", "no-answer", "failed", "busy", "canceled")
+
+
+def safe_recording_url(url):
+    """B9: only an https link with a host is ever stored or returned (never javascript:, data:)."""
+    from urllib.parse import urlparse
+    if not url or not isinstance(url, str):
+        return None
+    u = url.strip()
+    try:
+        p = urlparse(u)
+    except ValueError:
+        return None
+    if p.scheme.lower() != "https" or not p.hostname or any(ch in u for ch in "\x00\r\n\t <>\"'"):
+        return None
+    return u
 
 
 async def record_inbound_call(db, org_id, *, provider, from_number, to_number, status,
@@ -82,15 +97,24 @@ async def on_missed(db, org_id, call) -> dict:
 
 
 class CallEventIn(BaseModel):
-    provider: str = "manual"
+    provider: str = Field("manual", max_length=20)
     direction: str = "inbound"
-    from_number: Optional[str] = None
-    to_number: Optional[str] = None
-    status: str = "completed"
-    duration_s: int = 0
-    recording_url: Optional[str] = None
-    external_id: Optional[str] = None
-    extension: Optional[str] = None   # D2: the dialled extension, when the provider sends one
+    from_number: Optional[str] = Field(None, max_length=40)
+    to_number: Optional[str] = Field(None, max_length=40)
+    status: str = Field("completed", max_length=40)
+    duration_s: int = Field(0, ge=0, le=7 * 86400)
+    recording_url: Optional[str] = Field(None, max_length=400)
+    external_id: Optional[str] = Field(None, max_length=120)   # the provider's call id: retries upsert on it
+    extension: Optional[str] = Field(None, max_length=20)   # D2: the dialled extension, when the provider sends one
+
+    @field_validator("recording_url")
+    @classmethod
+    def _https_recording(cls, v):
+        if v in (None, ""):
+            return None
+        if safe_recording_url(v) is None:
+            raise ValueError("recording_url must be an https:// link")
+        return v.strip()
 
 
 @router.post("/calls/webhook", status_code=201)
@@ -107,28 +131,54 @@ async def call_webhook(
     if data.direction not in ("inbound", "outbound"):
         raise HTTPException(422, "direction must be inbound or outbound")
     provider = (data.provider or "manual")[:20]
-    if data.external_id:   # WS-C: a replayed event is the same call, not another missed call
-        prior = (await db.execute(select(Call).where(
-            Call.org_id == org_id, Call.provider == provider, Call.external_id == data.external_id[:100]))).scalars().first()
-        if prior:
-            # The same call reported again: move its status on (ringing → missed raises the
-            # inquiry once); an exact replay changes nothing.
-            new = (data.status or "completed")[:20]
-            res = None
-            if prior.status != new and prior.status not in ("completed", "missed") and prior.status.lower() not in MISSED:
-                prior.status = new
-                prior.duration_s = data.duration_s or prior.duration_s
-                await db.commit()
-                if prior.direction == "inbound" and new.lower() in MISSED:
-                    res = await on_missed(db, org_id, prior)
-            return {"id": prior.id, "client_id": prior.client_id, "matched": prior.client_id is not None,
-                    "client_created": False, "follow_up_task_id": (res or {}).get("task_id"),
-                    "lead_id": (res or {}).get("lead_id"), "duplicate": res is None}
-    return await record_inbound_call(
-        db, org_id, provider=provider, direction=data.direction,
-        from_number=data.from_number, to_number=data.to_number, status=(data.status or "completed")[:20],
-        duration_s=data.duration_s, recording_url=data.recording_url,
-        external_id=data.external_id, extension=data.extension)
+    ext_id = (data.external_id or "").strip() or None
+    if ext_id:
+        # B9 + WS-C: a provider retry (same call id) is the same call, not another one: update it
+        # (ringing → missed raises the inquiry once; an exact replay changes nothing).
+        existing = (await db.execute(select(Call).where(
+            Call.org_id == org_id, Call.provider == provider, Call.external_id == ext_id))).scalar_one_or_none()
+        if existing:
+            return _JSON(await _update_call(db, org_id, existing, data), 200)
+    try:
+        return await record_inbound_call(
+            db, org_id, provider=provider, direction=data.direction,
+            from_number=data.from_number, to_number=data.to_number, status=(data.status or "completed")[:20],
+            duration_s=data.duration_s, recording_url=data.recording_url,
+            external_id=ext_id, extension=data.extension)
+    except IntegrityError:          # lost a race with a concurrent retry of the same call
+        await db.rollback()
+        existing = (await db.execute(select(Call).where(
+            Call.org_id == org_id, Call.provider == provider, Call.external_id == ext_id))).scalar_one_or_none()
+        if not existing:
+            raise
+        return _JSON(await _update_call(db, org_id, existing, data), 200)
+
+
+def _JSON(body, status):
+    from fastapi.responses import JSONResponse
+    return JSONResponse(body, status_code=status)
+
+
+async def _update_call(db, org_id: str, call: Call, data: "CallEventIn") -> dict:
+    """Apply a later event for a call we already logged (status, duration, recording).
+
+    The status only moves on while the call is still in progress: once completed or missed, a
+    replay can't flip it again (so a missed call raises its inquiry exactly once)."""
+    new = (data.status or "")[:20]
+    settled = (call.status or "").lower() == "completed" or (call.status or "").lower() in MISSED
+    became_missed = False
+    if new and new != call.status and not settled:
+        call.status = new
+        became_missed = call.direction == "inbound" and new.lower() in MISSED
+    if data.duration_s:
+        call.duration_s = data.duration_s
+    if data.recording_url:
+        call.recording_url = data.recording_url
+    await db.commit()
+    res = await on_missed(db, org_id, call) if became_missed else None
+    return {"id": call.id, "client_id": call.client_id, "matched": call.client_id is not None,
+            "client_created": False, "follow_up_task_id": (res or {}).get("task_id"),
+            "lead_id": (res or {}).get("lead_id"), "duplicate": res is None}
 
 
 # ── D1: Twilio Programmable Voice webhooks ───────────────────────────────────

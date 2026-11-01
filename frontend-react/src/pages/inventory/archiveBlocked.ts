@@ -14,10 +14,11 @@ export function writeOffPrompt(stocked: BlockedItem[]): string {
     const [i] = stocked;
     return `“${i.name}”: ${i.in_stock} still in stock. Write ${i.in_stock === 1 ? "it" : "them"} off and archive?`;
   }
-  const list = stocked.map((i) => `${i.name} — ${i.in_stock}`).join("\n");
-  return `${stocked.length} products still have stock:\n${list}\n\nWrite it off and archive them?`;
+  const list = stocked.map((i) => `${i.name}: ${i.in_stock} in stock`).join("\n");
+  return `${stocked.length} products still have stock:\n${list}\n\nWrite off the stock and archive them?`;
 }
 
 export function keptMessage(other: BlockedItem[]): string {
-  return `${other.length} item(s) were kept:\n${other.map((i) => `${i.name} — ${i.reason}`).join("\n")}`;
+  const head = other.length === 1 ? "This product was kept:" : `${other.length} products were kept:`;
+  return `${head}\n${other.map((i) => `${i.name}: ${i.reason}`).join("\n")}`;
 }

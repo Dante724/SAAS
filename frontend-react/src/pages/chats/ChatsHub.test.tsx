@@ -155,3 +155,44 @@ describe("ChatsHub polish", () => {
     expect(within(tabs).queryByText("0")).toBeNull();
   });
 });
+
+// B10: switching chats fast must never show one customer's messages under another's name.
+describe("ChatsHub switching conversations", () => {
+  it("drops a late reply for the chat you just left", async () => {
+    let releaseAna!: () => void;
+    const anaHeld = new Promise<void>((r) => { releaseAna = r; });
+    const base = (globalThis.fetch as any).getMockImplementation();
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/threads/t1/messages")) {
+        await anaHeld;   // Ana's messages arrive after we've already moved to Ben
+        return reply({ items: [{ id: "a1", direction: "in", body: "Alice's private message", status: "received" }] });
+      }
+      if (url.endsWith("/threads/t2/messages")) return reply({ items: [{ id: "b1", direction: "in", body: "Ben asks about his laptop", status: "received" }] });
+      return base(url, init);
+    }));
+    const u = userEvent.setup();
+    render(<ChatsHub />);
+    // the first chat (Ana) opens on desktop and its messages are still loading; pick Ben
+    const list = await screen.findAllByRole("button", { name: /Ben/ });
+    await u.click(list[0]);
+    expect(await screen.findByText("Ben asks about his laptop")).toBeInTheDocument();
+    releaseAna();
+    await new Promise((r) => setTimeout(r, 20));
+    expect(screen.queryByText("Alice's private message")).toBeNull();
+    expect(screen.getByText("Ben asks about his laptop")).toBeInTheDocument();
+  });
+
+  it("never shows the last chat's messages while the next one loads", async () => {
+    const base = (globalThis.fetch as any).getMockImplementation();
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.endsWith("/threads/t1/messages")) return reply({ items: [{ id: "a1", direction: "in", body: "Alice's private message", status: "received" }] });
+      if (url.endsWith("/threads/t2/messages")) return new Promise<Response>(() => {});   // Ben's never come back
+      return base(url, init);
+    }));
+    const u = userEvent.setup();
+    render(<ChatsHub />);
+    expect(await screen.findByText("Alice's private message")).toBeInTheDocument();
+    await u.click((await screen.findAllByRole("button", { name: /Ben/ }))[0]);
+    expect(screen.queryByText("Alice's private message")).toBeNull();
+  });
+});

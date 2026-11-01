@@ -34,6 +34,13 @@ function authHeader(): Record<string, string> {
   }
 }
 
+// Which app is calling, sent as X-Tekly-Client. Tekly Go sets "go/<version>" at start-up so the
+// server can tell actions made on a phone from the web app's (the Go pilot report); the web app
+// leaves it empty and sends nothing.
+let clientTag = "";
+export function setClientTag(tag: string) { clientTag = tag; }
+export function clientHeader(): Record<string, string> { return clientTag ? { "X-Tekly-Client": clientTag } : {}; }
+
 async function request<T>(method: string, path: string, body?: unknown, extra?: Record<string, string>): Promise<T> {
   const res = await fetch(BASE + scoped(method, path), {
     method,
@@ -41,6 +48,7 @@ async function request<T>(method: string, path: string, body?: unknown, extra?: 
     headers: {
       "Content-Type": "application/json",
       ...authHeader(),
+      ...clientHeader(),
       ...(extra || {}),
     },
     body: body != null ? JSON.stringify(body) : undefined,
@@ -54,7 +62,9 @@ async function request<T>(method: string, path: string, body?: unknown, extra?: 
         /* ignore */
       }
       if (typeof window !== "undefined" && window.location.pathname !== "/login") {
-        window.location.replace("/login");
+        // Tekly Go comes back to itself after signing in; the web app lands on its home page.
+        const p = window.location.pathname;
+        window.location.replace(p === "/go" || p.startsWith("/go/") ? "/login?next=" + encodeURIComponent(p) : "/login");
       }
     }
     const text = await res.text().catch(() => "");
@@ -110,7 +120,7 @@ export class ApiError extends Error {
 // token, so window.open(url) would 401. Fetch with auth, then open the blob in a
 // new tab. Reused by WO, PO, invoice and payroll print buttons.
 export async function openAuthedDoc(path: string): Promise<void> {
-  const res = await fetch(BASE + path, { credentials: "include", headers: { ...authHeader() } });
+  const res = await fetch(BASE + path, { credentials: "include", headers: { ...authHeader(), ...clientHeader() } });
   if (!res.ok) throw new ApiError(res.status, (await res.text().catch(() => "")) || res.statusText);
   const blob = await res.blob();
   // A blob URL runs with this app's origin, so only open types that can't execute script;
@@ -155,7 +165,7 @@ export async function downloadAuthed(path: string): Promise<void> {
 
 // Multipart upload (no JSON Content-Type → browser sets the boundary). Reuses the session.
 async function postForm<T>(path: string, form: FormData): Promise<T> {
-  const res = await fetch(BASE + path, { method: "POST", credentials: "include", headers: { ...authHeader() }, body: form });
+  const res = await fetch(BASE + path, { method: "POST", credentials: "include", headers: { ...authHeader(), ...clientHeader() }, body: form });
   if (!res.ok) throw new ApiError(res.status, (await res.text().catch(() => "")) || res.statusText);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -170,8 +180,8 @@ export function idempotencyKey(): string {
 export const api = {
   get: <T>(p: string) => request<T>("GET", p),
   post: <T>(p: string, b?: unknown) => request<T>("POST", p, b),
-  // Payments a double click or a retry could send twice: the server runs one request per
-  // Idempotency-Key and answers a repeat with the first result (backend/services/idempotency.py).
+  // Creates and payments a double click, a retry or a phone could send twice: the server runs one
+  // request per Idempotency-Key and answers a repeat with the first result (backend/services/idempotency.py).
   postOnce: <T>(p: string, b: unknown, key: string) => request<T>("POST", p, b, { "Idempotency-Key": key }),
   postForm,
   patch: <T>(p: string, b?: unknown) => request<T>("PATCH", p, b),

@@ -99,9 +99,10 @@ async def _feed(db, org_id: str, lead_id: str, message: str) -> None:
 
 
 async def _emit(db, org_id: str, event: str, lead: Lead) -> None:
-    from backend.services.webhooks import emit_event
-    await emit_event(db, org_id, event, {"id": lead.id, "status": lead.status, "source": lead.source,
-                                         "client_id": lead.client_id})
+    """inquiry.updated / inquiry.converted. (inquiry.created comes from the ORM hook in
+    services/webhooks.py, so every way an inquiry is made sends it exactly once.)"""
+    from backend.services.webhooks import emit_event, lead_data
+    await emit_event(db, org_id, event, lead_data(lead))
 
 
 def _clean(v, n: int) -> Optional[str]:
@@ -162,7 +163,6 @@ async def create_lead(db: AsyncSession, org_id: str, data: dict, *, actor: Optio
         return prior, False
     who = actor.name if actor else ("the API" if via == "api" else "Tekly")
     await _feed(db, org_id, lead.id, f"Inquiry logged by {who}" + (f" ({ltype.name})" if ltype else ""))
-    await _emit(db, org_id, "inquiry.created", lead)
     await db.commit()
     await db.refresh(lead)
     return lead, True
@@ -210,9 +210,13 @@ async def update_lead(db: AsyncSession, org_id: str, lead: Lead, payload: dict,
 
 
 async def convert_lead(db: AsyncSession, org_id: str, lead: Lead, *, actor: Optional[Employee] = None,
-                       is_estimate: bool = False) -> dict:
+                       is_estimate: bool = False, device_for=None, extra=None) -> dict:
     """Win the inquiry: link (or create) the contact, attach the device, open the job (or
-    estimate) at its default status. Commits."""
+    estimate) at its default status. Commits.
+
+    Self check-in passes `device_for(client) -> device_id` to pick or create the device itself
+    (VIN / HIN as well as IMEI / serial) and `extra(order, client)` to fill the job before the
+    commit, so the whole conversion lands at once."""
     from backend.services.call_contacts import find_client
     from backend.services.numbering import next_number
     if lead.converted_order_id:
@@ -230,7 +234,9 @@ async def convert_lead(db: AsyncSession, org_id: str, lead: Lead, *, actor: Opti
     lead.client_id = client.id
 
     device_id = None
-    if lead.device_brand or lead.device_model or lead.serial:
+    if device_for is not None:
+        device_id = await device_for(client)
+    elif lead.device_brand or lead.device_model or lead.serial:
         from backend.services import identifiers as ids
         kind = ids.guess_kind(lead.serial) if lead.serial else "serial"
         ident = {"imei": None, "serial": None}
@@ -265,6 +271,8 @@ async def convert_lead(db: AsyncSession, org_id: str, lead: Lead, *, actor: Opti
                   assigned_to_id=lead.manager_id or (actor.id if actor else None))
     db.add(order)
     await db.flush()
+    if extra is not None:
+        await extra(order, client)
     db.add(OrderStatusLog(order_id=order.id, from_status=None, to_status=order.status,
                           changed_by_id=actor.id if actor else None,
                           note=f"Created from inquiry ({lead.source})"))
@@ -388,8 +396,7 @@ async def on_missed_call(db: AsyncSession, org_id: str, call) -> Optional[dict]:
         db.add(lead)
         await db.flush()
         await _feed(db, org_id, lead.id, "Inquiry opened from a missed call")
-        await _emit(db, org_id, "inquiry.created", lead)
-
+    
     # The older task-only automation's settings still shape the call-back task when it's on.
     legacy = (await db.execute(select(AutomationSetting).where(
         AutomationSetting.org_id == org_id, AutomationSetting.key == "task_on_missed_call"))).scalar_one_or_none()

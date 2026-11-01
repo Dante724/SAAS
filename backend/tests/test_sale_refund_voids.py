@@ -115,10 +115,11 @@ async def test_sale_void_puts_back_stock_layers_holds_rewards_and_cash(client, d
             {"kind": "service", "description": "Fit", "qty": 1, "unit_price": 100}]}, headers=H)
     assert r.status_code == 201, r.text
     sale = r.json()
-    assert sale["total"] == pytest.approx(370 - 37 - 20 - 5)
+    assert sale["total"] == pytest.approx(370 - 37 - 5)        # coupon and points off
+    assert sale["due"] == pytest.approx(370 - 37 - 5 - 20)     # B5: the gift card paid 20 of it
     # the sale took the whole older layer, 6 of the newer, and 1 unit held for the job (override)
     assert await _stock_state(db, pid, loc, old_id, new_id, hold_id) == (1, 1, [0, 1], 1, False)
-    assert await _account_balance(client, H, till) == pytest.approx(sale["total"])
+    assert await _account_balance(client, H, till) == pytest.approx(sale["due"])
 
     T = await _teammate(client, H, "can_delete_sales")
     assert (await client.delete(f"/api/sales/{sale['id']}", headers=T)).status_code == 403

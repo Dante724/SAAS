@@ -2,7 +2,10 @@
    1. Keeps UTM / ad-click parameters from the landing URL for the visit and appends them to
       every sign-up and sign-in link, so the app can attribute trials to campaigns.
    2. Pushes CTA clicks and demo requests to window.dataLayer (GTM/GA4-compatible).
-   3. Loads Google Tag Manager only if TEKLY_SITE.analytics.gtmId is set. */
+   3. Loads Google Tag Manager only if TEKLY_SITE.analytics.gtmId is set.
+   4. window.TeklyLead.send(): delivers a demo request to the first destination that's set up —
+      demoEndpoint, else Tekly's own Inquiries board (the "Tekly Demos" shop's booking slug),
+      else the visitor's email app. Returns "sent" or "mailto". */
 (() => {
   const C = window.TEKLY_SITE || {};
   const KEYS = ["utm_source", "utm_medium", "utm_campaign", "utm_term", "utm_content", "gclid", "fbclid", "msclkid", "ref"];
@@ -35,7 +38,40 @@
     if (!a) return;
     push("cta_click", { cta: a.dataset.cta || a.textContent.trim().slice(0, 40), cta_href: a.getAttribute("href") || "", page: location.pathname });
   });
-  document.addEventListener("tekly:demo_request", e => push("generate_lead", { form: "demo", industry: e.detail?.industry || "", locations: e.detail?.locations || "", ...attr }));
+
+  const lines = d => [d.shop && "Shop: " + d.shop, d.industry && "Trade: " + d.industry,
+    d.locations && "Locations: " + d.locations, d.current && "Using today: " + d.current,
+    d.preferred && "Preferred time: " + d.preferred, d.message && "Note: " + d.message,
+    attr.utm_source && "Source: " + attr.utm_source + (attr.utm_campaign ? "/" + attr.utm_campaign : ""),
+    attr.landing && "Landing page: " + attr.landing].filter(Boolean);
+  const post = async (url, body) => {
+    const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body),
+      signal: AbortSignal.timeout ? AbortSignal.timeout(10000) : undefined });
+    if (!r.ok) throw Object.assign(new Error("HTTP " + r.status), { status: r.status });
+  };
+  window.TeklyLead = {
+    /* Tries each configured route in order; a failure falls through to the next one, ending
+       with the visitor's email app, so a request is never lost to a server error. */
+    async send(d, source = "website") {
+      const inbox = (C.assistant && C.assistant.booking) || {};
+      const routes = [];
+      if (C.demoEndpoint) routes.push(() => post(C.demoEndpoint, { ...d, source, ...attr }));
+      if (inbox.slug) {   // lands as a web lead in Tekly → Inquiries, with the reply-time clock running
+        const base = (inbox.apiBase || (C.appUrl || "").replace(/\/$/, "") + "/api/public").replace(/\/$/, "");
+        routes.push(() => post(`${base}/appointment/${encodeURIComponent(inbox.slug)}/request`, {
+          name: d.name, email: d.email, phone: d.phone || null,
+          service_name: "Demo request (" + source + ")", issue: lines(d).join(" · ").slice(0, 1900) }));
+      }
+      for (const go of routes) {
+        try { await go(); push("generate_lead", { form: source, delivery: "sent", industry: d.industry || "", locations: d.locations || "", ...attr }); return "sent"; }
+        catch (err) { push("lead_route_failed", { form: source, error: String(err && err.message || err).slice(0, 80) }); }
+      }
+      const body = [`Name: ${d.name}`, `Email: ${d.email}`, d.phone && `Phone: ${d.phone}`, ...lines(d)].filter(Boolean).join("\n");
+      push("generate_lead", { form: source, delivery: "mailto", industry: d.industry || "", locations: d.locations || "", ...attr });
+      location.href = `mailto:${C.demoEmail}?subject=${encodeURIComponent("Tekly demo request — " + (d.shop || d.name))}&body=${encodeURIComponent(body)}`;
+      return "mailto";
+    },
+  };
 
   const id = C.analytics && C.analytics.gtmId;
   if (id && /^GTM-[A-Z0-9]+$/.test(id)) {

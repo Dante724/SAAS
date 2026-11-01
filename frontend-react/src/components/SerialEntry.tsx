@@ -47,8 +47,8 @@ export default function SerialEntry({ value, onChange, target, partId, onState, 
   function add(raw: string) {
     if (!raw.trim()) return;
     const r = addSerials(value, raw);
-    if (target && r.list.length > target) setNote(`Only ${target} needed — remove one first.`);
-    else setNote(r.skipped ? `${r.skipped} already in the list — skipped.` : null);
+    if (target && r.list.length > target) setNote(`Only ${target} needed. Remove one first.`);
+    else setNote(r.skipped ? `${r.skipped} already in the list, so skipped.` : null);
     onChange(target ? r.list.slice(0, Math.max(target, value.length)) : r.list);
     setText("");
     inputRef.current?.focus();
@@ -69,7 +69,7 @@ export default function SerialEntry({ value, onChange, target, partId, onState, 
             onPaste={(e) => { const t = e.clipboardData.getData("text"); if (/[\r\n,;\t]/.test(t.trim())) { e.preventDefault(); add(t); } }}
             disabled={done}
             aria-label="Scan or type a serial or IMEI"
-            placeholder={done ? "All units have a serial" : "Scan or type a serial / IMEI, then Enter — or paste a list"}
+            placeholder={done ? "All units have a serial" : "Scan or type an IMEI / serial, then Enter, or paste a list"}
             className="glass-input w-full pl-8 pr-3 py-1.5 text-xs rounded-lg font-mono disabled:opacity-60" />
         </div>
         <span className={`text-[11px] font-bold tabular-nums whitespace-nowrap ${target && value.length === target ? "text-emerald-700" : "text-ink-secondary"}`}>
@@ -95,7 +95,7 @@ export default function SerialEntry({ value, onChange, target, partId, onState, 
         <ul className="space-y-0.5">
           {rows.filter((r) => r.message && r.status !== "ok").map((r, i) => (
             <li key={i} className={`text-[11px] ${r.status === "block" ? "text-rose-700" : "text-amber-800"}`}>
-              <span className="font-mono">{r.serial || r.input}</span> — {r.message}
+              <span className="font-mono">{r.serial || r.input}</span>: {r.message}
             </li>
           ))}
         </ul>

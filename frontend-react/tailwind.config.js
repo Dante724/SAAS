@@ -53,6 +53,14 @@ export default {
         sans: ["Geist Variable", "Geist", "Inter", "system-ui", "sans-serif"],
         mono: ["Geist Mono Variable", "Geist Mono", "JetBrains Mono", "ui-monospace", "monospace"],
       },
+      // Tekly Go's five type steps (size/line-height): large title, title, body, subhead, caption.
+      fontSize: {
+        "go-display": ["28px", { lineHeight: "34px" }],
+        "go-title": ["20px", { lineHeight: "25px" }],
+        "go-body": ["16px", { lineHeight: "22px" }],
+        "go-sub": ["14px", { lineHeight: "19px" }],
+        "go-caption": ["12px", { lineHeight: "16px" }],
+      },
       boxShadow: {
         // Shadows follow the theme (soft clay in light; quiet in dark, where surfaces carry depth).
         "clay-sm": "var(--sh-sm)",

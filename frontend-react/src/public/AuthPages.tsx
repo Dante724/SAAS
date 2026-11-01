@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { ArrowLeft, CheckCircle2, ChevronDown, Eye, EyeOff, Loader2, MailCheck, XCircle } from "lucide-react";
 import { AuthShell, Field, FootLink, Notice, Submit, inputCls, selectCls } from "./authUi";
+import { signupTimezone } from "../lib/serverTime";
 
 // React auth deep-links (replace the legacy vanilla-JS shell):
 //   /signup            → create org + first user   POST /api/auth/register
@@ -49,7 +50,10 @@ function Select({ id, label, value, onChange, options }: {
 }
 
 // ── Sign up: two short steps (your shop, then you) ─────────────────────────
-type Opts = { templates: { key: string; label: string }[]; regions: { key: string; label: string }[]; region_defaults: Record<string, { currency_code?: string }>; employee_brackets: string[] };
+type Country = { code: string; label: string; currency_code: string; timezone: string };
+type Opts = { templates: { key: string; label: string }[]; regions: { key: string; label: string }[]; region_defaults: Record<string, { currency_code?: string }>; employee_brackets: string[]; countries?: Country[]; country_hint?: string | null };
+const OTHER_COUNTRY = "other";
+
 // The marketing site hosts the legal pages; bump TERMS_VERSION when they change.
 const SITE_URL = "https://tekly.app";
 const TERMS_VERSION = "2026-10-19";
@@ -69,12 +73,18 @@ export function Signup() {
       // not a lock — the user can change it); else the first option.
       const hinted = (d as any).region_hint && d.regions?.some((r) => r.key === (d as any).region_hint)
         ? (d as any).region_hint : (d.regions?.[0]?.key || "");
+      // Launch B4: the Country picker (currency, tax and timezone follow it). Pre-selected from the
+      // same CDN hint; a country we don't list yet falls back to "Other" and the region defaults.
+      const countries = d.countries || [];
+      const listed = countries.find((c) => c.code === d.country_hint);
+      const pick = listed || (d.country_hint ? undefined : countries[0]);
       setF((s) => ({
         ...s,
         template: d.templates?.[0]?.key || "",
         region: hinted,
+        country: countries.length ? (pick?.code || OTHER_COUNTRY) : "",
         employees: d.employee_brackets?.[0] || "",
-        currency: d.region_defaults?.[hinted]?.currency_code || "",
+        currency: pick?.currency_code || d.region_defaults?.[hinted]?.currency_code || "",
       }));
     }).catch(() => setO({ templates: [], regions: [], region_defaults: {}, employee_brackets: [] }));
   }, []);
@@ -83,6 +93,7 @@ export function Signup() {
     setF((s) => {
       const n = { ...s, [k]: v };
       if (k === "region" && o) n.currency = o.region_defaults?.[v]?.currency_code || n.currency;
+      if (k === "country" && o) n.currency = o.countries?.find((c) => c.code === v)?.currency_code || n.currency;
       return n;
     });
   }
@@ -99,11 +110,13 @@ export function Signup() {
     setBusy(true); setErr(null);
     let tz: string | null = null;
     try { tz = Intl.DateTimeFormat().resolvedOptions().timeZone || null; } catch { /* ignore */ }
+    const country = o?.countries?.find((c) => c.code === f.country);
+    tz = signupTimezone(country?.timezone, tz);
     try {
       const d = await postJson("/api/auth/register", {
         org_name: f.org, name: f.name, email: f.email, password: f.pass,
-        industry_template: f.template || null, region: f.region || null,
-        country: f.country || null, timezone: tz,
+        industry_template: f.template || null, region: country ? null : (f.region || null),
+        country: country ? country.code : null, timezone: tz,
         currency_code: f.currency || null, currency: f.currency || null,
         employee_count: f.employees || null, company_phone: f.phone || null,
         accept_terms: true, terms_version: TERMS_VERSION,
@@ -125,7 +138,12 @@ export function Signup() {
             </Field>
             <Select id="su-template" label="What you repair" value={f.template} onChange={(v) => set("template", v)} options={opt(o?.templates)} />
             <div className="grid grid-cols-2 gap-3">
-              <Select id="su-region" label="Region" value={f.region} onChange={(v) => set("region", v)} options={opt(o?.regions)} />
+              {o?.countries?.length ? (
+                <Select id="su-country" label="Country" value={f.country} onChange={(v) => set("country", v)}
+                  options={[...o.countries.map((c) => ({ value: c.code, label: c.label })), { value: OTHER_COUNTRY, label: "Other" }]} />
+              ) : (
+                <Select id="su-region" label="Region" value={f.region} onChange={(v) => set("region", v)} options={opt(o?.regions)} />
+              )}
               <Field id="su-currency" label="Currency">
                 <input id="su-currency" className={inputCls} value={f.currency} onChange={(e) => set("currency", e.target.value.toUpperCase())} placeholder=" " maxLength={3} />
               </Field>

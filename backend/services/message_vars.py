@@ -204,7 +204,11 @@ async def order_values(db: AsyncSession, org_id: str, order, *texts: str | None,
         vals["device"] = " ".join(x for x in (getattr(dev, "brand", None), getattr(dev, "model", None)) if x)
     if "technician" in want:
         tech = await _related(db, order, "assigned_to", Employee, order.assigned_to_id)
-        vals["technician"] = getattr(tech, "name", None) or ""
+        from backend.models import Organisation
+        from backend.services.public_name import public_staff_name
+        mode = (await db.execute(select(Organisation.public_employee_name).where(
+            Organisation.id == org_id))).scalar_one_or_none()
+        vals["technician"] = public_staff_name(tech, mode)   # customers see the shop's chosen form
     if {"total", "balance_due"} & want:
         ci = await _cur.resolve_for_client(db, org_id, order.client_id, order.currency_code)
         fx = order.fx_rate or ci["rate"] or 1.0

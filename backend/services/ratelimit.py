@@ -67,8 +67,8 @@ def client_ip(request) -> str:
     if hops <= 0 or request is None:
         return peer
     chain = [p.strip() for p in (request.headers.get("x-forwarded-for") or "").split(",") if p.strip()]
-    # A chain shorter than our own proxies didn't come through all of them: its entries are
-    # whatever the client wrote, so use the connection's address.
+    # A chain shorter than the configured hops did not come through all our proxies, so none
+    # of it can be trusted (its left-most entry is whatever the client wrote): use the peer.
     return chain[-hops] if len(chain) >= hops else peer
 
 
@@ -98,8 +98,9 @@ async def _get_aredis():
         return None
 
 
-async def aenforce(bucket: str, key: str, limit: int, window_sec: int) -> None:
+async def aenforce(bucket: str, key: str, limit: int, window_sec: int) -> int:
     """Async enforce(): allow `limit` events per `window_sec` for (bucket, key); else 429.
+    Returns how many events are left in the current window (for X-RateLimit-Remaining).
     Redis: SET NX EX (start the window) + INCR + TTL in one pipeline — one round trip, and the
     expiry is set atomically with the key, so a crash between calls can't leave a key that
     never expires."""
@@ -115,12 +116,12 @@ async def aenforce(bucket: str, key: str, limit: int, window_sec: int) -> None:
                 _, n, ttl = await p.execute()
             if n > limit:
                 raise _too_many(ttl if ttl and ttl > 0 else window_sec)
-            return
+            return max(0, limit - int(n))
         except HTTPException:
             raise
         except Exception:   # noqa: BLE001 — Redis hiccup => fall back to in-process
             _aredis, _aredis_retry_at = False, time.time() + _REDIS_RETRY_S
-    _local_enforce(bucket, key, limit, window_sec)
+    return _local_enforce(bucket, key, limit, window_sec)
 
 
 def enforce(bucket: str, key: str, limit: int, window_sec: int) -> None:
@@ -142,8 +143,8 @@ def enforce(bucket: str, key: str, limit: int, window_sec: int) -> None:
     _local_enforce(bucket, key, limit, window_sec)
 
 
-def _local_enforce(bucket: str, key: str, limit: int, window_sec: int) -> None:
-    """In-process sliding window (single instance)."""
+def _local_enforce(bucket: str, key: str, limit: int, window_sec: int) -> int:
+    """In-process sliding window (single instance). Returns the events left in the window."""
     global _calls
     now = time.time()
     _calls += 1
@@ -156,3 +157,4 @@ def _local_enforce(bucket: str, key: str, limit: int, window_sec: int) -> None:
     if len(dq) >= limit:
         raise _too_many(int(dq[0] + window_sec - now) + 1)
     dq.append(now)
+    return max(0, limit - len(dq))

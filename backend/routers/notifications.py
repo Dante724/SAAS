@@ -12,6 +12,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select
 from pydantic import BaseModel
 from typing import Optional
+from backend.services.dates import utc_iso
 from backend.db.database import get_db
 from backend.models import NotificationTemplate, Employee, Order
 from backend.services.auth import get_current_employee, require_perm
@@ -185,7 +186,7 @@ async def notification_log(
         "id": r.id, "scope": r.scope, "channel": r.channel, "trigger_event": r.trigger_event,
         "order_id": r.order_id, "client_id": r.client_id, "recipient": r.recipient,
         "subject": r.subject, "body": r.body, "status": r.status, "error": r.error,
-        "created_at": r.created_at.isoformat() if r.created_at else None,
+        "created_at": utc_iso(r.created_at),
     } for r in rows]}
 
 

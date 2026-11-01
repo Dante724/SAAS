@@ -155,7 +155,9 @@ async def delete_template(
 
 
 # ── print labels ─────────────────────────────────────────────────────────────
-# ii144c: the PDF label sheet (POST /api/print/labels) is retired. Every label — products, bins,
+# Product labels print as HTML from /api/documents (documents.render_labels). The old reportlab
+# PDF sheet here (POST /api/print/labels), and the print view of the removed stock-docs postings,
+# had no caller and were deleted (audit 29 Oct 2026). ii144c: every label — products, bins,
 # serial units, assets, clients — prints from a label DocumentTemplate through the HTML renderer
 # in routers/documents.py (render-labels, render-bin-labels, render-serial-labels, …).
 

@@ -130,7 +130,7 @@ async def test_delivery_does_not_follow_redirects(dns, transport):
 @pytest.mark.asyncio
 async def test_delivery_errors_are_generic(dns, monkeypatch):
     class Boom(httpx.AsyncClient):
-        async def post(self, *a, **kw):
+        async def send(self, *a, **kw):   # deliveries stream the response (B4), so fail at send
             raise httpx.ConnectError("[Errno 61] Connection refused to 10.0.0.9:6379")
     monkeypatch.setattr(httpx, "AsyncClient", Boom)
     d = _delivery()

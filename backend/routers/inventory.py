@@ -40,10 +40,13 @@ class PartIn(BaseModel):
     active: Optional[bool] = None        # false archives (refused while the product still has stock)
     write_off_remaining: Optional[bool] = None   # with active=false: write the stock off, then archive
 
+_ADJUST_TYPES = {"receive", "adjust", "writeoff"}
+
+
 class StockAdjust(BaseModel):
     location_id: str
     qty: float
-    movement_type: str = "receive"  # receive|writeoff|transfer|adjust
+    movement_type: str = "receive"  # receive|writeoff|adjust (transfers go through /transfers)
     note: Optional[str] = None
     # What stock coming in cost (opening stock, a count-up). Omitted → the current average cost,
     # else the catalog cost — never 0 by accident, which made COGS 0 and margins nonsense.
@@ -188,7 +191,9 @@ async def create_part(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_create_products")),
 ):
-    payload = data.model_dump()
+    payload = product_codes.clean_codes(data.model_dump())   # " abc-1 " and "abc-1" are one SKU
+    if not payload.get("name"):
+        raise HTTPException(422, "Name is required")
     payload.pop("write_off_remaining", None)
     if payload.get("active") is None:
         payload.pop("active", None)
@@ -231,7 +236,9 @@ async def update_part(
         raise HTTPException(404, "Part not found")
     # exclude_unset so a client that omits a field (e.g. an older bundle without weight)
     # leaves it untouched instead of nulling it.
-    payload = data.model_dump(exclude_unset=True)
+    payload = product_codes.clean_codes(data.model_dump(exclude_unset=True))
+    if "name" in payload and not payload["name"]:
+        raise HTTPException(422, "Name is required")
     write_off = bool(payload.pop("write_off_remaining", None))
     if not await can_see_costs(db, current):
         drop_cost_fields(payload)
@@ -240,6 +247,9 @@ async def update_part(
             payload.pop("active")
         elif payload["active"] is False and part.active:
             from backend.services import stock_archive
+            why = await product_codes.in_use_blocker(db, current.org_id, part)   # open job / estimate / PO
+            if why:
+                raise HTTPException(409, f"Can't archive “{part.name}”: it is {why}. Remove it there first.")
             if write_off:      # one step: what's left on the shelf is written off, then archived
                 await stock_archive.write_off_remaining(db, current, part)
             why = await stock_archive.archive_blocker(db, current.org_id, part)
@@ -264,6 +274,13 @@ async def adjust_stock(
     current: Employee = Depends(require_perm("can_manage_inventory")),
 ):
     _guard_qty(data.qty)
+    # Receive and write-off are a positive count of units moving in the named direction (a negative
+    # "receive" used to take stock out, and a negative write-off put it back in). A correction
+    # ("adjust") can go either way: down goes out through the write-off path below.
+    if not data.qty or (data.qty < 0 and data.movement_type != "adjust"):
+        raise HTTPException(422, "Quantity must be greater than zero")
+    if data.movement_type not in _ADJUST_TYPES:
+        raise HTTPException(422, "movement_type must be one of: " + ", ".join(sorted(_ADJUST_TYPES)))
     result = await db.execute(select(Part).where(Part.id == part_id, Part.org_id == current.org_id))
     part = result.scalar_one_or_none()
     if not part:
@@ -571,7 +588,7 @@ class CommitRow(BaseModel):
     qty: float = 1
     purchase_price: Optional[float] = None
     markup_pct: Optional[float] = None
-    serials: Optional[list[SerialStr]] = Field(None, max_length=500)  # one per unit for serial-tracked products
+    serials: Optional[list[SerialStr]] = Field(None, max_length=1000)  # one per unit for serial-tracked products
     expiry_date: Optional[date] = None   # dates this delivery's batch (expiry-tracked products)
     lot: Optional[str] = Field(None, max_length=40)   # ii144b: batch / lot, e.g. GS1 (10) from the label
     bin_id: Optional[str] = None         # ii144c: put this row away into a bin
@@ -593,8 +610,13 @@ class PostingCommitIn(BaseModel):
 
 
 async def _check_posting_serials(db, current, rows: list, parts: dict, generate: bool) -> None:
-    """Serials on a posting: one per unit of a serialized product, none already in stock, none
-    twice in the file; missing ones generated on request. Fills each row's `serials` in place."""
+    """Missing serials on a posting generated on request (the import centre's "generate serials").
+    Fills each row's `serials` in place. The rules themselves (one per unit, none already in stock,
+    none twice, whole units) are serial_intake.validate_intake's, applied to every line by
+    _do_posting — so without `generate` there is nothing to do here, and the messages are the same
+    ones the scan box and PO receiving give."""
+    if not generate:
+        return
     from backend.models import Organisation
     from backend.services import importer
     org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one()
@@ -613,23 +635,18 @@ async def _check_posting_serials(db, current, rows: list, parts: dict, generate:
             if sns:
                 raise HTTPException(422, f"Line {i}: {part.name} isn't serialized — remove the serial numbers")
             continue
-        if not sns and not generate:
-            continue                  # serials are optional on a posting unless asked for
         qty = float(ln["qty"] or 0)
         if not qty.is_integer():
             raise HTTPException(422, f"Line {i}: serialized stock must be a whole number of units")
         for sn in sns:
             if sn in seen:
-                raise HTTPException(422, f"Serial {sn} is listed twice")
+                raise HTTPException(409, f"{sn} is entered twice. Each unit needs its own serial.")
             if sn in ctx.data["serials_in_stock"]:
                 raise HTTPException(409, f"Serial {sn} is already in stock")
             seen.add(sn)
             ctx.seen[("serial", sn)] = i
         if len(sns) > qty:
             raise HTTPException(422, f"Line {i}: more serial numbers ({len(sns)}) than units ({int(qty)})")
-        if len(sns) < qty and not generate:
-            raise HTTPException(422, f"Line {i}: {int(qty)} units of {part.name} need {int(qty)} serial numbers "
-                                     f"({len(sns)} given)")
         todo.append((i, ln, sns, int(qty) - len(sns)))
     # every typed serial is claimed first, so a generated one can never repeat a later line's
     for i, ln, sns, missing in todo:
@@ -860,8 +877,11 @@ async def bulk_adjust(
             delta = float(r.set_qty) - float(cur)
         if delta == 0:
             continue
+        # A count down is a write-off of the difference (never below zero, logged negative); a
+        # count up is an adjustment in. The single adjust endpoint only takes positive quantities.
         await adjust_stock(r.part_id, StockAdjust(
-            location_id=data.location_id, qty=delta, movement_type="adjust",
+            location_id=data.location_id, qty=abs(delta),
+            movement_type="adjust" if delta > 0 else "writeoff",
             note=r.note or "Bulk adjust"), db, current)
         adjusted += 1
     await db.commit()
@@ -2695,9 +2715,14 @@ async def bulk_update_parts(
         from backend.services import stock_archive
         for p in parts:
             if not data.number and p.active:
+                why = await product_codes.in_use_blocker(db, current.org_id, p)   # open job / PO: keep its stock
+                if why:
+                    blocked.append({"id": p.id, "name": p.name, "reason": why})
+                    continue
                 if data.write_off_remaining:
-                    try:
-                        await stock_archive.write_off_remaining(db, current, p)
+                    try:   # per product: a write-off refused halfway leaves nothing behind
+                        async with db.begin_nested():
+                            await stock_archive.write_off_remaining(db, current, p)
                     except HTTPException as e:
                         blocked.append({"id": p.id, "name": p.name, "reason": e.detail})
                         continue

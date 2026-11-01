@@ -11,7 +11,7 @@ one of its lines is earmarked for it (`POLine.reserved_order_id`). Two things fo
 from sqlalchemy import or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.models import Order, OrderLine, OrderStatus, POLine, PurchaseOrder, StockMovement
+from backend.models import Order, OrderLine, OrderStatus, POLine, PurchaseOrder
 
 KIND_PO_UPDATE = "inventory.po_update"
 _CLOSED = {"closed", "done", "delivered", "dropped", "cancelled", "completed", "picked_up"}
@@ -75,17 +75,15 @@ async def apply_receipt_to_orders(db: AsyncSession, org_id: str, po: PurchaseOrd
         for line in lines:
             if left <= 0:
                 break
-            from backend.services import stock_rows
-            sl = await stock_rows.rows(db, pl.part_id, po.location_id, lock=True)
-            if not sl:
-                break
-            take = min(line.pending_stock or 0, left, max(sum(r.qty_available or 0 for r in sl), 0))
+            # The same deduction every job path uses: row-locked draw, cost layers and serials.
+            from backend.services import stock_consume
+            want = min(line.pending_stock or 0, left)
+            take = await stock_consume.consume_for_line(
+                db, org_id=org_id, order_id=oid, line=line, location_id=po.location_id,
+                qty=want, part_id=pl.part_id, alert=False)
             if take <= 0:
                 break
-            await stock_rows.draw(db, pl.part_id, po.location_id, take)
             line.pending_stock = (line.pending_stock or 0) - take
-            db.add(StockMovement(part_id=pl.part_id, location_id=po.location_id, movement_type="use",
-                                 qty=-take, ref_type="order", ref_id=oid))
             left -= take
             used_here += take
         if used_here:

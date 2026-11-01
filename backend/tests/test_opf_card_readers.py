@@ -142,9 +142,9 @@ async def _tenant(client):
 
 
 async def _card_account(client, h, fee_pct=0):
-    await client.post("/api/cash/accounts", json={"name": "Card", "payment_option": "card", "fee_pct": fee_pct},
-                      headers=h)
-    return [a for a in (await client.get("/api/cash/accounts", headers=h)).json()["items"] if a["name"] == "Card"][0]["id"]
+    # The id of the account made here: a new shop also has its own seeded "Card" account.
+    return (await client.post("/api/cash/accounts", json={"name": "Card", "payment_option": "card",
+                                                           "fee_pct": fee_pct}, headers=h)).json()["id"]
 
 
 async def _order(client, h, total=100):
@@ -841,7 +841,8 @@ async def test_s1_sumup_keys_are_treated_as_live(client, tenant, monkeypatch):
     assert cfg["available"]["sumup"] is False
     oid = await _order(client, tenant, 10)
     r = await client.post("/api/payments/checkout", json={"order_id": oid, "amount": 10}, headers=tenant)
-    assert r.status_code == 502 and "SumUp" in r.json()["detail"]
+    # B7: operator-wide keys are never used for a shop, so they can't be charged live either
+    assert r.status_code == 201 and r.json()["provider"] != "sumup"
     # With live payments switched on in production, SumUp works.
     monkeypatch.setattr(settings, "ENVIRONMENT", "production")
     monkeypatch.setattr(settings, "ALLOW_LIVE_PAYMENTS", True)

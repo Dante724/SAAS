@@ -167,6 +167,8 @@ WAGE_AUDIT_FIELDS = ("wage_type", "wage_value", "hourly_basis", "weekly_hours",
 # everything the actor is denied — i.e. never hand out or take over more access than they have.
 
 async def _denied_for_role(db: AsyncSession, org_id: str, role_id: Optional[str]) -> set:
+    # No role grants nothing through has_perm, but a few older checks still read "no role" as
+    # the owner (record scope, POS overrides), so handing it out stays an owner-only action.
     if not role_id:
         return set()
     role = (await db.execute(select(Role).where(Role.id == role_id, Role.org_id == org_id))).scalar_one_or_none()
@@ -254,6 +256,8 @@ async def create_employee(
     if is_old_default_password(data.password):
         raise HTTPException(400, "Choose a different password")
     await _assert_can_assign_role(db, current, data.role_id)
+    from backend.services.billing import assert_can_add
+    await assert_can_add(db, current.org_id, "team_members")
     from backend.services.auth import has_perm
     from backend.services.payroll_views import payroll_scope_ids
     # A role limited to some people's payroll (E3) can't set a newcomer's pay: they're outside it.
@@ -290,7 +294,10 @@ async def create_employee(
     if not data.password:
         await _send_set_password_email(db, emp, current.org_id)
         invite_sent = True
-    return {"id": emp.id, "name": emp.name, "invite_sent": invite_sent}
+    out = {"id": emp.id, "name": emp.name, "invite_sent": invite_sent}
+    from backend.services.billing import sync_seats
+    await sync_seats(db, current.org_id)   # Shop and Pro bill members beyond the included ones as seats
+    return out
 
 
 MIN_PASSWORD_LEN = 8
@@ -357,6 +364,9 @@ async def update_employee(
         emp.email_verified = False   # the new address hasn't been proven yet
     if "hourly_basis" in payload and payload["hourly_basis"] not in ("labour", "attendance"):
         payload["hourly_basis"] = "labour"
+    if payload.get("active") and not emp.active:
+        from backend.services.billing import assert_can_add
+        await assert_can_add(db, current.org_id, "team_members")
     if "hired_at" in payload:
         payload["hired_at"] = _parse_date(payload["hired_at"])
     changes = {k: {"from": getattr(emp, k), "to": v} for k, v in payload.items()
@@ -370,6 +380,9 @@ async def update_employee(
                        entity_type="employee", entity_id=emp.id,
                        diff={"fields": sorted(payload), **changes})
     await db.commit()
+    if "active" in changes:
+        from backend.services.billing import sync_seats
+        await sync_seats(db, current.org_id)
     return {"ok": True}
 
 
@@ -491,6 +504,8 @@ async def create_invite(data: InviteIn, db: AsyncSession = Depends(get_db),
     if not email or "@" not in email:
         raise HTTPException(400, "A valid email is required")
     await _assert_can_assign_role(db, current, data.role_id)
+    from backend.services.billing import assert_can_add
+    await assert_can_add(db, current.org_id, "team_members")
     dupe = (await db.execute(select(Employee).where(func.lower(Employee.email) == email))).scalar_one_or_none()
     if dupe and dupe.org_id == current.org_id:
         raise HTTPException(400, "Someone with that email is already on the team")
@@ -628,6 +643,8 @@ async def deactivate_employee(
     await audit.record(db, org_id=current.org_id, actor_id=current.id, action="employee.deactivate",
                        entity_type="employee", entity_id=emp.id)
     await db.commit()
+    from backend.services.billing import sync_seats
+    await sync_seats(db, current.org_id)   # Shop and Pro bill members beyond the included ones as seats
     return {"ok": True}
 
 # ── Tasks ─────────────────────────────────────
@@ -727,6 +744,9 @@ async def create_location(
     from backend.models import Location
     if not data.name.strip():
         raise HTTPException(422, "Location name is required")
+    from backend.services import billing
+    if data.active is not False:
+        await billing.assert_can_add(db, current.org_id, "locations")
     ln = Location(org_id=current.org_id, name=data.name.strip(),
                   address=data.address, phone=data.phone,
                   timezone=data.timezone or "UTC",
@@ -735,10 +755,14 @@ async def create_location(
                   legal_entity_id=data.legal_entity_id, price_type_id=data.price_type_id)
     db.add(ln)
     await db.flush()
+    # Launch B2/B6: the shop's timezone (unless one was picked) and a Cash drawer + Card account.
+    from backend.services.shop_setup import setup_location
+    await setup_location(db, ln)
     from backend.services.warehouses import provision_default
     await provision_default(db, ln)      # QA fix D: its stock has a warehouse from day one
     await db.commit()
     await db.refresh(ln)
+    await billing.sync_quantity(db, current.org_id)   # billed per active location
     return _ser_location(ln)
 
 
@@ -753,10 +777,17 @@ async def update_location(
         Location.id == location_id, Location.org_id == current.org_id))).scalar_one_or_none()
     if not ln:
         raise HTTPException(404, "Location not found")
-    for k, v in data.model_dump(exclude_unset=True).items():
+    from backend.services import billing
+    changes = data.model_dump(exclude_unset=True)
+    reactivating = changes.get("active") and not ln.active
+    if reactivating:
+        await billing.assert_can_add(db, current.org_id, "locations")
+    for k, v in changes.items():
         setattr(ln, k, v)
     await db.commit()
     await db.refresh(ln)
+    if "active" in changes:
+        await billing.sync_quantity(db, current.org_id)
     return _ser_location(ln)
 
 
@@ -779,6 +810,8 @@ async def deactivate_location(
         raise HTTPException(409, "You must keep at least one active location")
     ln.active = False
     await db.commit()
+    from backend.services.billing import sync_quantity
+    await sync_quantity(db, current.org_id)
     return {"ok": True}
 
 
@@ -794,7 +827,8 @@ async def get_company(
     if not org:
         raise HTTPException(404, "Company not found")
     return {
-        "name": org.name, "company_email": org.company_email, "company_phone": org.company_phone,
+        "name": org.name, "account_id": org.account_id,   # read-only; what Tekly support asks for
+        "company_email": org.company_email, "company_phone": org.company_phone,
         "company_address": org.company_address, "company_details": org.company_details,
         "company_note": org.company_note, "website": org.website, "logo_data": org.logo_data,
         "country": org.country,
@@ -852,7 +886,7 @@ class CompanyIn(BaseModel):
     default_due_days: Optional[int] = None
     default_comment_visibility: Optional[str] = None
     default_file_visibility: Optional[str] = None
-    public_employee_name: Optional[str] = None          # WS-C #18: full | first | first_initial
+    public_employee_name: Optional[str] = None          # full | first | first_initial | custom
     warranty_count_from: Optional[str] = None
     asset_one_open_ticket: Optional[bool] = None
     multi_asset_jobs: Optional[bool] = None            # several items per job (eligible industries only)
@@ -886,6 +920,13 @@ async def update_company(
         valid = set(_ind.TEMPLATE_KEYS) | set(_ind.LEGACY_ALIASES)
         if payload["industry_template"] not in valid:
             raise HTTPException(422, f"Unknown industry_template. Valid: {sorted(valid)}")
+    for k in ("default_comment_visibility", "default_file_visibility"):
+        if k in payload and payload[k] not in ("private", "public"):
+            raise HTTPException(422, "Visibility must be private or public")
+    if "public_employee_name" in payload:
+        from backend.services.public_name import MODES as _name_modes
+        if payload["public_employee_name"] not in _name_modes:
+            raise HTTPException(422, f"public_employee_name must be one of {list(_name_modes)}")
     if payload.get("max_sessions_per_login") is not None:
         from backend.services.sessions import LIMIT_CHOICES
         if payload["max_sessions_per_login"] not in LIMIT_CHOICES:
@@ -910,11 +951,6 @@ async def update_company(
         except (KeyError, ValueError):
             raise problem(422, f"{payload['timezone']} isn't a time zone we know. Pick one from the list.",
                           "timezone must be an IANA name like Europe/London", field="timezone")
-    for k in ("default_comment_visibility", "default_file_visibility"):
-        if k in payload and payload[k] not in ("private", "public"):
-            raise HTTPException(422, "Visibility must be private or public")
-    if "public_employee_name" in payload and payload["public_employee_name"] not in ("full", "first", "first_initial"):
-        raise HTTPException(422, "Name display must be full, first or first_initial")
     if "payment_provider" in payload:
         valid = ("auto", "stripe", "square", "sumup", "simulated")
         if payload["payment_provider"] not in valid:
@@ -927,8 +963,20 @@ async def update_company(
     # Build 121: the API field is 'currencies' but the column is 'currencies_json'
     if "currencies" in payload:
         org.currencies_json = payload.pop("currencies")
+    old_tz = org.timezone
     for k, v in payload.items():
         setattr(org, k, v)
+    # Launch B6: locations that followed the company clock (or never had one) follow the change;
+    # a branch given its own zone keeps it.
+    if payload.get("timezone") and payload["timezone"] != old_tz:
+        from sqlalchemy import or_ as _or
+        from sqlalchemy import update as _update
+
+        from backend.models import Location
+        await db.execute(_update(Location).where(
+            Location.org_id == org.id,
+            _or(Location.timezone.is_(None), Location.timezone.in_(["UTC", old_tz or "UTC"])))
+            .values(timezone=payload["timezone"]).execution_options(synchronize_session=False))
     # Several items per job is strictly for tools / equipment / phone / computer shops:
     # moving to any other industry switches it off (moving back needs a fresh opt-in).
     if "industry_template" in payload and not _ma.available(org):
@@ -1070,6 +1118,7 @@ async def get_public_pages(
         "oe_allow_recommend": getattr(org, "oe_allow_recommend", True),
         "oe_show_scheduled": getattr(org, "oe_show_scheduled", False),
         "book_show_employee_step": getattr(org, "book_show_employee_step", True),
+        "public_employee_name": getattr(org, "public_employee_name", None) or "full",
         "auto_draft_invoice_on_close": getattr(org, "auto_draft_invoice_on_close", False),
         "default_invoice_display": getattr(org, "default_invoice_display", "detailed"),
         "oe_allow_staff_reply": getattr(org, "oe_allow_staff_reply", True),
@@ -1078,6 +1127,7 @@ async def get_public_pages(
         "oe_wo_approval_statuses": getattr(org, "oe_wo_approval_statuses", None) or "",
         "oe_estimate_require_signature": getattr(org, "oe_estimate_require_signature", False),
         "oe_wo_require_signature": getattr(org, "oe_wo_require_signature", False),
+        "dropoff_terms": getattr(org, "dropoff_terms", None) or "",
         "oe_estimate_accept_status": getattr(org, "oe_estimate_accept_status", None) or "",
         "oe_estimate_decline_status": getattr(org, "oe_estimate_decline_status", None) or "",
         "oe_wo_accept_status": getattr(org, "oe_wo_accept_status", None) or "",
@@ -1109,11 +1159,13 @@ class PublicPagesIn(BaseModel):
     oe_allow_staff_reply: Optional[bool] = None
     oe_show_scheduled: Optional[bool] = None            # 144dr
     book_show_employee_step: Optional[bool] = None      # 144dr
+    public_employee_name: Optional[str] = None          # full | first | first_initial | custom
     oe_wo_allow_approval: Optional[bool] = None         # 144ih
     oe_approval_statuses: Optional[str] = None          # 144ih comma-separated status keys
     oe_wo_approval_statuses: Optional[str] = None       # 144ih
     oe_estimate_require_signature: Optional[bool] = None  # 144ii
     oe_wo_require_signature: Optional[bool] = None
+    dropoff_terms: Optional[str] = Field(default=None, max_length=4000)   # gc144g3 — signed at drop-off
     oe_estimate_accept_status: Optional[str] = None
     oe_estimate_decline_status: Optional[str] = None
     oe_wo_accept_status: Optional[str] = None
@@ -1136,7 +1188,12 @@ async def update_public_pages(
     org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
     if not org:
         raise HTTPException(404, "Company not found")
-    for k, v in data.model_dump(exclude_unset=True).items():
+    payload = data.model_dump(exclude_unset=True)
+    if "public_employee_name" in payload:
+        from backend.services.public_name import MODES
+        if payload["public_employee_name"] not in MODES:
+            raise HTTPException(422, f"public_employee_name must be one of {list(MODES)}")
+    for k, v in payload.items():
         setattr(org, k, v)
     await db.commit()
     return {"ok": True}

@@ -1,8 +1,11 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { M } from "../../components/Shell";
 import CurrencyManager from "../../components/CurrencyManager";
+import Switch from "../../components/Switch";
 import { getLang, setLang, LANGS } from "../../i18n";
 import { api } from "../../api/client";
+import { useMe } from "../../context/Me";
+import { SenseSettingsSection } from "../../components/sense/Sense";
 
 /* Settings › General — the shop's profile. Edits land in local state and save together from a
    bar that only appears when something changed; a live preview shows how customers see the
@@ -19,7 +22,7 @@ type Opts = {
 const SAVED_KEYS = ["name", "company_email", "company_phone", "company_address", "company_details", "company_note", "logo_data",
   "website", "country", "timezone", "currency", "currency_code", "document_language", "industry_template",
   "prohibit_dup_phone", "prohibit_dup_email", "require_mfa", "clock_wo_enabled", "clock_attendance_enabled",
-  "clock_labour_billing", "rounding_enabled"];
+  "clock_labour_billing", "rounding_enabled", "default_comment_visibility", "default_file_visibility"];
 const snap = (co: any) => JSON.stringify(SAVED_KEYS.map((k) => co?.[k] ?? null));
 
 const INDUSTRY_ICON: Record<string, string> = {
@@ -35,7 +38,7 @@ function Section({ icon, title, hint, children }: { icon: string; title: string;
         <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n={icon} c="text-lg" /></span>
         <div className="min-w-0">
           <h3 className="text-sm font-semibold text-ink-primary">{title}</h3>
-          {hint && <p className="text-[11px] text-ink-tertiary">{hint}</p>}
+          {hint && <p className="text-xs text-ink-tertiary">{hint}</p>}
         </div>
       </div>
       <div className="px-5 pb-5">{children}</div>
@@ -43,13 +46,32 @@ function Section({ icon, title, hint, children }: { icon: string; title: string;
   );
 }
 
-const inp = "w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-ink-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 placeholder:text-ink-tertiary";
+const inp = "glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary placeholder:text-ink-tertiary";
+/** The shop's Tekly account ID: read-only, with a copy button. Tekly support asks for it. */
+function AccountId({ value }: { value: string }) {
+  const [copied, setCopied] = useState(false);
+  async function copy() {
+    try { await navigator.clipboard.writeText(value); setCopied(true); setTimeout(() => setCopied(false), 1500); } catch { /* clipboard blocked: the ID is still selectable */ }
+  }
+  return (
+    <div className="mt-5 pt-4 border-t border-slate-100 flex flex-wrap items-center gap-3">
+      <div className="min-w-0">
+        <div className="text-[11px] font-semibold text-ink-tertiary">Tekly account ID</div>
+        <div className="font-mono text-sm text-ink-primary select-all">{value}</div>
+      </div>
+      <button type="button" onClick={copy} className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">
+        <M n={copied ? "check" : "content_copy"} c="text-sm" />{copied ? "Copied" : "Copy"}</button>
+      <div className="w-full text-[11px] text-ink-tertiary">Give this to Tekly support so they can find your shop.</div>
+    </div>
+  );
+}
+
 function Field({ label, hint, children, wide }: { label: string; hint?: string; children: ReactNode; wide?: boolean }) {
   return (
     <label className={`block ${wide ? "sm:col-span-2" : ""}`}>
-      <span className="block text-xs font-medium text-ink-secondary mb-1.5">{label}</span>
+      <span className="block text-sm font-medium text-ink-primary mb-1.5">{label}</span>
       {children}
-      {hint && <span className="block text-[11px] text-ink-tertiary mt-1">{hint}</span>}
+      {hint && <span className="block text-xs text-ink-tertiary mt-1">{hint}</span>}
     </label>
   );
 }
@@ -59,6 +81,7 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
 }) {
   // `saved` lives in the hub so leaving the section and coming back still shows unsaved edits.
   if (saved.current == null) saved.current = co;
+  const { me } = useMe();
   const [saving, setSaving] = useState(false);
   const [dragOver, setDragOver] = useState(false);
   const fileRef = useRef<HTMLInputElement>(null);
@@ -98,13 +121,31 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
   }
   const discard = () => setCo(() => saved.current);
 
-  const Switch = ({ k, label, hint }: { k: string; label: string; hint?: string }) => (
-    <label className="flex items-center gap-3 py-3 border-t border-slate-100 first:border-0 cursor-pointer">
-      <span className="min-w-0"><span className="block text-sm text-ink-primary">{label}</span>{hint && <span className="block text-[11px] text-ink-tertiary">{hint}</span>}</span>
-      <button type="button" role="switch" aria-checked={!!co?.[k]} aria-label={label} onClick={() => set(k, !co?.[k])}
-        className={`ml-auto w-10 h-6 rounded-full flex-shrink-0 relative transition-colors ${co?.[k] ? "bg-primary" : "bg-slate-300"}`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${co?.[k] ? "left-[18px]" : "left-0.5"}`} /></button>
-    </label>
+  // Plain functions (not components), so the rows aren't remounted on every change.
+  const sw = (k: string, label: string, hint?: string) => (
+    <div className="flex items-center gap-3 py-3 border-t border-slate-100 first:border-0">
+      <span className="min-w-0"><span className="block text-sm text-ink-primary">{label}</span>{hint && <span className="block text-xs text-ink-tertiary">{hint}</span>}</span>
+      <span className="ml-auto"><Switch label={label} on={!!co?.[k]} onChange={(v) => set(k, v)} /></span>
+    </div>
   );
+
+  // Private / Shown to customer, for the defaults on new comments and files.
+  const visibility = (k: string, label: string, hint: string) => {
+    const v = co?.[k] === "public" ? "public" : "private";
+    return (
+      <div className="flex flex-wrap items-center gap-3 py-3 border-t border-slate-100 first:border-0">
+        <span className="min-w-0"><span className="block text-sm text-ink-primary">{label}</span><span className="block text-xs text-ink-tertiary">{hint}</span></span>
+        <div role="radiogroup" aria-label={label} className="ml-auto inline-flex rounded-lg bg-slate-100 p-0.5 flex-shrink-0">
+          {([["private", "Private", "lock"], ["public", "Shown to customer", "visibility"]] as const).map(([val, text, icon]) => (
+            <button key={val} type="button" role="radio" aria-checked={v === val} onClick={() => set(k, val)}
+              className={`px-2.5 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1 transition-colors ${v === val ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>
+              <M n={icon} c="text-[14px]" />{text}
+            </button>
+          ))}
+        </div>
+      </div>
+    );
+  };
 
   const country = opts.countries.find((c) => c[0] === co.country);
   const contact = [co.company_phone, co.company_email, co.website].filter(Boolean);
@@ -131,7 +172,7 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
               <input ref={fileRef} type="file" accept="image/*" onChange={(e) => readLogo(e.target.files?.[0])} className="hidden" />
               <div className="min-w-0">
                 <div className="text-sm text-ink-primary">{co.logo_data ? "Your logo" : "Add your logo"}</div>
-                <div className="text-[11px] text-ink-tertiary">Drop an image here or click to choose. A square PNG looks best.</div>
+                <div className="text-xs text-ink-tertiary">Drop an image here or click to choose. A square PNG looks best.</div>
                 {co.logo_data && <button onClick={() => set("logo_data", "")} className="mt-1 text-[11px] font-semibold text-rose-600 hover:underline">Remove logo</button>}
               </div>
             </div>
@@ -142,6 +183,7 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
               <Field label="Website"><input value={co.website || ""} onChange={(e) => set("website", e.target.value)} placeholder="yourshop.com" className={inp} /></Field>
               <Field label="Address"><input value={co.company_address || ""} onChange={(e) => set("company_address", e.target.value)} placeholder="123 Main St, Austin, TX" className={inp} /></Field>
             </div>
+            {co.account_id && <AccountId value={co.account_id} />}
           </Section>
 
           <Section icon="language" title="Region, money and language" hint="Picking a country fills in the time zone and currency. You can still change them.">
@@ -182,23 +224,6 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
             </div>
           </Section>
 
-          <Section icon="visibility" title="What customers see" hint="Defaults for new notes and files on jobs and inquiries. Staff can still change each one.">
-            <div className="grid sm:grid-cols-2 gap-4">
-              <Field label="New comments are">
-                <select aria-label="New comments are" value={co.default_comment_visibility || "private"} onChange={(e) => set("default_comment_visibility", e.target.value)} className={inp}>
-                  <option value="private">Staff only</option><option value="public">Shared with the customer</option>
-                </select></Field>
-              <Field label="New files and photos are">
-                <select aria-label="New files and photos are" value={co.default_file_visibility || "private"} onChange={(e) => set("default_file_visibility", e.target.value)} className={inp}>
-                  <option value="private">Staff only</option><option value="public">Shared with the customer</option>
-                </select></Field>
-              <Field wide label="Staff names on public pages" hint="Online booking and the customer pages. A name set under the employee's “Name on documents” is always used.">
-                <select aria-label="Staff names on public pages" value={co.public_employee_name || "full"} onChange={(e) => set("public_employee_name", e.target.value)} className={inp}>
-                  <option value="full">Full name (Jane Doe)</option><option value="first_initial">First name and initial (Jane D.)</option><option value="first">First name only (Jane)</option>
-                </select></Field>
-            </div>
-          </Section>
-
           <CurrencyManager />
 
           <Section icon="handyman" title="What you repair" hint="Sets the words used across the app (vehicles, vessels, devices…), the ID to ask for, and starter brands and models. Jobs you already have keep their wording.">
@@ -220,25 +245,31 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
 
           <div className="grid md:grid-cols-2 gap-5">
             <Section icon="timer" title="Time tracking">
-              <Switch k="clock_wo_enabled" label="Job and task timer" hint="Track time spent on jobs" />
-              <Switch k="clock_attendance_enabled" label="Clock in and out" hint="Shop attendance" />
-              <Switch k="clock_labour_billing" label="Bill labour from the timer" hint="Time × the tech's rate adds a labour line" />
+              {sw("clock_wo_enabled", "Job and task timer", "Track time spent on jobs")}
+              {sw("clock_attendance_enabled", "Clock in and out", "Shop attendance")}
+              {sw("clock_labour_billing", "Bill labour from the timer", "Time × the tech's rate adds a labour line")}
             </Section>
             <Section icon="verified_user" title="Rules and security">
-              <Switch k="prohibit_dup_phone" label="No duplicate phone numbers" hint="Stops two customers with the same phone" />
-              <Switch k="prohibit_dup_email" label="No duplicate emails" />
-              <Switch k="rounding_enabled" label="Round invoice totals" />
-              <Switch k="require_mfa" label="Two-step sign-in for everyone" hint="Staff can't turn it off for themselves" />
+              {sw("prohibit_dup_phone", "No duplicate phone numbers", "Stops two customers with the same phone")}
+              {sw("prohibit_dup_email", "No duplicate emails")}
+              {sw("rounding_enabled", "Round invoice totals")}
+              {sw("require_mfa", "Two-step sign-in for everyone", "Staff can't turn it off for themselves")}
             </Section>
           </div>
 
-          <div className="flex items-center gap-3 rounded-2xl border border-slate-200/90 bg-white px-5 py-4">
+          {(me?.is_shop_owner || me?.is_owner) && <SenseSettingsSection />}
+          <Section icon="chat" title="Comments and files on jobs" hint="What new comments and files start as. Anyone posting can still switch a single one.">
+            {visibility("default_comment_visibility", "New comments", "Shown to customer means it appears on their tracking page")}
+            {visibility("default_file_visibility", "New files and photos", "Intake photos and checklist files stay private")}
+          </Section>
+
+          <div className="flex items-start gap-3 rounded-2xl border border-slate-200/90 bg-white px-5 py-4">
             <span className="w-9 h-9 rounded-xl bg-slate-100 text-ink-secondary grid place-items-center flex-shrink-0"><M n="refresh" c="text-lg" /></span>
             <div className="min-w-0">
               <div className="text-sm text-ink-primary">Recalculate balances</div>
-              <div className="text-[11px] text-ink-tertiary">Rebuilds every customer and supplier balance from history. Safe to run any time.</div>
+              <div className="text-xs text-ink-tertiary">Rebuilds every customer and supplier balance from history. Safe to run any time.</div>
+              <button onClick={onRebuild} disabled={rebuilding} className="mt-3 h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 disabled:opacity-60">{rebuilding ? "Working…" : "Recalculate"}</button>
             </div>
-            <button onClick={onRebuild} disabled={rebuilding} className="ml-auto px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50 disabled:opacity-60 flex-shrink-0">{rebuilding ? "Working…" : "Recalculate"}</button>
           </div>
         </div>
 
@@ -276,7 +307,7 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
           </div>
           <div className="flex flex-wrap gap-1.5 px-1">
             {country && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-[11px] text-ink-secondary"><M n="public" c="text-[12px]" />{country[1]}</span>}
-            {co.timezone && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-[11px] text-ink-secondary"><M n="schedule" c="text-[12px]" />{co.timezone.replace(/_/g, " ")}</span>}
+            {co.timezone && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-[11px] text-ink-secondary"><M n="public" c="text-[12px]" />{co.timezone.replace(/_/g, " ")}</span>}
             {co.currency_code && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-[11px] text-ink-secondary"><M n="payments" c="text-[12px]" />{co.currency_code}</span>}
           </div>
         </aside>

@@ -296,6 +296,9 @@ async def test_receivables_are_what_the_job_screens_say_is_owed(client, db):
 async def test_revenue_and_receivables_are_summed_in_the_database(client, db):
     """Council review: no list of every job id sent as query parameters (asyncpg stops at 32,767)
     — the date filter and the sums stay in SQL however many jobs a shop has."""
+    from datetime import datetime
+
+    from backend.services.profit import total_profit
     from backend.services.revenue import net_sales, receivables
     H, loc, acc = await _setup(client)
     cid = (await client.post("/api/clients", json={"name": "Cy"}, headers=H)).json()["id"]
@@ -312,6 +315,7 @@ async def test_revenue_and_receivables_are_summed_in_the_database(client, db):
         try:
             sales = await net_sales(db, org_id)
             owed = await receivables(db, org_id)
+            await total_profit(db, org_id, datetime(2026, 1, 1), datetime(2100, 1, 1))
         finally:
             event.remove(engine, "before_cursor_execute", count)
         return max(widest), sales["revenue"], owed
@@ -325,6 +329,103 @@ async def test_revenue_and_receivables_are_summed_in_the_database(client, db):
     many, sales, owed = await widest_query()
     assert sales == owed == 250.0
     assert many == few, (few, many)               # no parameter per job
+
+
+async def _total_profit(client, H):
+    from backend.services.dates import now_utc
+    day = now_utc().date().isoformat()
+    r = await client.get(f"/api/reports/total-profit?date_from=2026-01-01&date_to={day}", headers=H)
+    assert r.status_code == 200, r.text
+    return r.json()
+
+
+async def test_total_profit_reads_the_known_day_like_every_other_report(client, db):
+    """Total profit (Workstream B) is built on the same figures: its revenue, tax and cost of goods
+    for the period are the period's net sales, row by row plus one labelled reconciling row."""
+    H, oid, job_cost, sale_cost = await _known_day(client, db)
+    tp = await _total_profit(client, H)
+    pnl = (await client.get("/api/finance/pnl", headers=H)).json()
+    assert tp["totals"]["revenue"] == pnl["revenue"] == 200.0, (tp["totals"], tp["buckets"])
+    assert tp["totals"]["tax"] == pnl["tax_collected"]
+    assert tp["totals"]["cogs"] == pnl["cogs"]
+    other = [r for r in tp["rows"] if r["kind"] == "other"]
+    assert len(other) <= 1
+
+
+async def test_a_dropped_job_earns_what_it_kept_and_owes_nothing(client, db):
+    """A job dropped after a 30 deposit on 100: the 70 written off is neither revenue nor owed, on
+    every report; a later 10 refund of the deposit lowers what it kept, not a debt."""
+    H, loc, acc = await _setup(client)
+    cid = (await client.post("/api/clients", json={"name": "Di"}, headers=H)).json()["id"]
+    oid = await _job(client, H, loc, cid, 100)
+    r = await client.post(f"/api/cash/orders/{oid}/prepay", json={"amount": 30, "account_id": acc}, headers=H)
+    assert r.status_code == 201, r.text
+    r = await client.patch(f"/api/orders/{oid}/status",
+                           json={"status": await _status(client, H, "dropped"), "reason": "Never came back"},
+                           headers=H)
+    assert r.status_code == 200, r.text
+
+    async def figures():
+        from backend.routers.reports import _dash_cache
+        _dash_cache.clear()
+        dash = (await client.get("/api/reports/dashboard", headers=H)).json()["stats"]
+        summ = (await client.get("/api/finance/reports/summary", headers=H)).json()
+        tp = await _total_profit(client, H)
+        return (dash["revenue"], summ["total_revenue"], tp["totals"]["revenue"], tp["buckets"]["dropped"]["revenue"],
+                dash["outstanding"], summ["total_outstanding"], await _job_screen_owed(db, await _org_of(db, oid)))
+
+    assert await figures() == (30.0, 30.0, 30.0, 30.0, 0.0, 0.0, 0.0)
+    r = await client.post("/api/returns/refunds", json={"account_id": acc, "amount": 10, "order_id": oid,
+                                                        "reason": "Deposit back"}, headers=H)
+    assert r.status_code == 201, r.text
+    assert await figures() == (20.0, 20.0, 20.0, 20.0, 0.0, 0.0, 0.0)
+
+
+async def test_money_paid_after_dropping_is_kept_not_written_off(client, db):
+    """Architect review: a payment that arrives after a job was dropped (an old pay link, the desk)
+    lowers what was written off, so the job never shows kept + written off above its total."""
+    H, loc, acc = await _setup(client)
+    cid = (await client.post("/api/clients", json={"name": "Ed"}, headers=H)).json()["id"]
+    oid = await _job(client, H, loc, cid, 100)
+    r = await client.patch(f"/api/orders/{oid}/status",
+                           json={"status": await _status(client, H, "dropped"), "reason": "Gone"}, headers=H)
+    assert r.status_code == 200, r.text
+    o = (await db.execute(select(Order).where(Order.id == oid).execution_options(populate_existing=True))).scalar_one()
+    assert o.written_off == 100.0
+    r = await client.post(f"/api/cash/orders/{oid}/prepay", json={"amount": 40, "account_id": acc}, headers=H)
+    assert r.status_code == 201, r.text
+    o = (await db.execute(select(Order).where(Order.id == oid).execution_options(populate_existing=True))).scalar_one()
+    assert o.written_off == 60.0
+    tp = await _total_profit(client, H)
+    row = next(r for r in tp["rows"] if r["id"] == oid)
+    assert (row["revenue"], row["written_off"]) == (40.0, 60.0)
+    dash = (await client.get("/api/reports/dashboard", headers=H)).json()["stats"]
+    assert dash["outstanding"] == 0.0 and await _job_screen_owed(db, await _org_of(db, oid)) == 0.0
+
+
+async def test_a_dropped_job_takes_its_share_of_a_shared_credit_note(client, db):
+    """Architect review: an invoice billing two jobs shares its credit notes between them by job
+    total in every figure — what's owed, what was written off and what a dropped job kept."""
+    H, loc, acc = await _setup(client)
+    cid = (await client.post("/api/clients", json={"name": "Flo"}, headers=H)).json()["id"]
+    a = await _job(client, H, loc, cid, 100)
+    b = await _job(client, H, loc, cid, 100)
+    r = await client.post(f"/api/cash/orders/{a}/prepay", json={"amount": 30, "account_id": acc}, headers=H)
+    assert r.status_code == 201, r.text
+    iid = (await client.post("/api/finance/invoices", json={"order_ids": [a, b]}, headers=H)).json()["id"]
+    cn = (await client.post("/api/finance/credit-notes", headers=H, json={
+        "client_id": cid, "invoice_id": iid, "reason": "Goodwill",
+        "lines": [{"description": "Goodwill", "qty": 1, "unit_price": 40}]})).json()
+    assert (await client.post(f"/api/finance/credit-notes/{cn['id']}/issue", headers=H)).status_code == 200
+    r = await client.patch(f"/api/orders/{a}/status",
+                           json={"status": await _status(client, H, "dropped"), "reason": "Gone"}, headers=H)
+    assert r.status_code == 200, r.text
+    o = (await db.execute(select(Order).where(Order.id == a).execution_options(populate_existing=True))).scalar_one()
+    assert o.written_off == 50.0                      # 100 − 20 of the credit − 30 paid
+    row = next(r for r in (await _total_profit(client, H))["rows"] if r["id"] == a)
+    assert (row["revenue"], row["written_off"]) == (30.0, 50.0)
+    dash = (await client.get("/api/reports/dashboard", headers=H)).json()["stats"]
+    assert dash["outstanding"] == await _job_screen_owed(db, await _org_of(db, a)) == 80.0   # B: 100 − 20
 
 
 async def test_home_shows_the_same_sales_as_every_report(client, db):

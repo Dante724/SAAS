@@ -48,7 +48,7 @@ async def test_credential_changes_are_recorded_without_values(client, tenant, db
 @pytest.mark.asyncio
 async def test_webhook_changes_are_recorded(client, tenant, db, monkeypatch):
     from backend.core import ssrf
-    monkeypatch.setattr(ssrf, "assert_safe_url", lambda url: None)
+    monkeypatch.setattr(ssrf, "assert_webhook_url", lambda url: None)   # release (whh1) checks webhook URLs with assert_webhook_url
     me = await _me(client, tenant)
     e = (await client.post("/api/webhooks", headers=tenant, json={"url": "https://hooks.example.com/a"})).json()
     assert (await client.patch(f"/api/webhooks/{e['id']}", headers=tenant, json={"active": False})).status_code == 200
@@ -92,26 +92,28 @@ async def test_email_account_changes_are_recorded(client, tenant, db, monkeypatc
 
 @pytest.mark.asyncio
 async def test_platform_admin_changes_to_a_shop_are_in_its_audit_trail(client, tenant, db):
-    from backend.db.database import AsyncSessionLocal
-    from backend.models import PlatformAdmin
-    from backend.services.auth import hash_password
+    # Rewritten for release's admin panel (sprint 1): sign-in is password + 2-step, every change
+    # carries a reason, and admin_log.write mirrors shop-affecting changes into the shop's trail.
+    from backend.tests.admin_helpers import login, seed_admin
     me = await _me(client, tenant)
-    async with AsyncSessionLocal() as s:
-        s.add(PlatformAdmin(email="m9ops@test.dev", name="Ops", password_hash=hash_password("portal-pass-123")))
-        await s.commit()
-    tok = (await client.post("/api/admin/login", json={"email": "m9ops@test.dev",
-                                                       "password": "portal-pass-123"})).json()["access_token"]
-    h = {"Authorization": f"Bearer {tok}"}
+    email = await seed_admin("m9ops@test.dev", role="owner")
+    h = await login(client, email)
     r = await client.patch(f"/api/admin/tenants/{me['org_id']}", headers=h,
-                           json={"discount_pct": 20, "admin_notes": "private note"})
+                           json={"sub_status": "active", "sub_end": "2099-01-01", "reason": "private reason"})
     assert r.status_code == 200, r.text
+    r = await client.post(f"/api/admin/tenants/{me['org_id']}/notes", headers=h,
+                          json={"body": "private note", "kind": "note"})
+    assert r.status_code == 201, r.text
     r = await client.patch(f"/api/admin/tenants/{me['org_id']}/employees/{me['id']}", headers=h,
-                           json={"active": True})
+                           json={"active": True, "reason": "checking access"})
     assert r.status_code == 200, r.text
     rows = await _rows(db, me["org_id"], "platform.")
     by = {r.action: r for r in rows}
-    diff = by["platform.tenant_update"].diff
-    assert diff["platform_admin"] == "Tekly support" and diff["fields"] == ["admin_notes", "discount_pct"]
-    assert "m9ops@test.dev" not in json.dumps(diff)       # shop owners read this trail
-    assert "platform.employee_access_update" in by
-    assert "private note" not in json.dumps([r.diff for r in rows])
+    diff = by["platform.edit_subscription"].diff
+    assert diff["platform_admin"] == "Tekly support" and diff["fields"] == ["sub_end", "sub_status"]
+    assert all(r.actor_id is None for r in rows)
+    assert by["platform.staff_access"].entity_id == me["id"]
+    assert "platform.note" in by
+    blob = json.dumps([r.diff for r in rows])
+    assert "m9ops@test.dev" not in blob                   # shop owners read this trail
+    assert "private note" not in blob and "private reason" not in blob and "2099" not in blob

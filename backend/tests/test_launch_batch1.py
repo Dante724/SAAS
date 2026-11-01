@@ -67,8 +67,10 @@ async def test_viewed_pay_link_is_cancelled_and_stripe_checkout_expired(client, 
     # checkout: catch the call that closes it
     intent.status, intent.provider, intent.provider_ref = "viewed", "stripe", "cs_test_123"
     await db.commit()
-    from backend.config import settings
-    monkeypatch.setattr(settings, "STRIPE_SECRET_KEY", "sk_test_x")
+    # the shop's own Stripe keys: links are never closed with the operator's account (B7)
+    r = await client.put("/api/integrations/credentials", headers=tenant,
+                         json={"provider": "stripe", "data": {"secret_key": "sk_test_x"}})
+    assert r.status_code == 200, r.text
     calls = []
 
     class _Resp:
@@ -175,7 +177,10 @@ def test_unsigned_webhooks_need_an_explicit_dev_environment(monkeypatch):
         _env_file=None, SECRET_KEY="s" * 48, CORS_ORIGINS="https://app.example.com",
         DATABASE_URL="postgresql+asyncpg://u@db/tekly", PUBLIC_BASE_URL="https://app.example.com",
         SMTP_HOST="smtp.example.com", SMTP_FROM="no-reply@example.com",
-        TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode()))
+        TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode(),
+        STRIPE_BILLING_SECRET_KEY="sk_test_x", STRIPE_BILLING_WEBHOOK_SECRET="whsec_x",
+        **{f"STRIPE_BILLING_PRICE_{p}_{t}": f"price_{p}_{t}".lower()
+           for p in ("SOLO", "SHOP", "PRO", "SHOP_SEAT") for t in ("MONTH", "YEAR")}))
     assert ws.settings.ENVIRONMENT == "production"
     assert ws.unsigned_webhooks_allowed() is False
     monkeypatch.setenv("ENVIRONMENT", "development")

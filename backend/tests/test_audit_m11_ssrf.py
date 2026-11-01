@@ -56,18 +56,28 @@ def transport(monkeypatch):
     return seen
 
 
-def _rule(url):
-    return SimpleNamespace(action_type="webhook", action_config=json.dumps({"url": url}),
-                           event="order_created", name="Ping")
+def _delivery():
+    return SimpleNamespace(id="d1", attempts=0, status="pending", error=None, response_code=None,
+                           delivered_at=None, next_attempt_at=None)
 
+
+def _body():
+    return json.dumps({"event": "order_created", "data": {"rule": "Ping", "order_id": "o1"}})
+
+
+# Release (whh1) replaced the inline automation call with the signed outbox: automation rules
+# queue a delivery on a hidden "automation" endpoint (services.webhooks.queue_automation_webhook)
+# and every attempt goes through webhooks._attempt. These tests check the M11 guarantee on that
+# path: the attempt connects to the address that passed the check, and CGNAT metadata is refused.
 
 @pytest.mark.asyncio
 async def test_automation_webhook_connects_to_the_checked_address(dns, transport):
+    from backend.services import webhooks
     # first answer public (the check), any later answer internal (a rebinding attacker)
     dns["hooks.example.com"] = [[PUBLIC], ["169.254.169.254"]]
-    order = SimpleNamespace(id="o1", order_number="1", status="new")
-    out = await automation._do_action(None, "org", _rule("https://hooks.example.com/in"), order, None)
-    assert out and out.startswith("called webhook"), out
+    d = _delivery()
+    await webhooks._attempt(d, "https://hooks.example.com/in", "sec", _body())
+    assert d.status == "sent", d.error
     req = transport[0]
     assert req.url.host == PUBLIC
     assert req.headers["host"] == "hooks.example.com"
@@ -76,7 +86,15 @@ async def test_automation_webhook_connects_to_the_checked_address(dns, transport
 
 @pytest.mark.asyncio
 async def test_automation_webhook_refuses_cgnat_metadata(dns, transport):
+    from backend.services import webhooks
     dns["hooks.example.com"] = [["100.100.100.200"]]
-    order = SimpleNamespace(id="o1", order_number="1", status="new")
-    out = await automation._do_action(None, "org", _rule("http://hooks.example.com/"), order, None)
-    assert "blocked" in out and transport == []
+    d = _delivery()
+    await webhooks._attempt(d, "https://hooks.example.com/", "sec", _body())
+    assert d.status == "failed" and "Blocked" in (d.error or "") and transport == []
+
+
+def test_automation_webhook_action_goes_through_the_checked_outbox():
+    """The automation action must use the outbox (which pins + re-checks), not its own httpx call."""
+    import inspect
+    src = inspect.getsource(automation._do_action)
+    assert "queue_automation_webhook" in src and "httpx" not in src

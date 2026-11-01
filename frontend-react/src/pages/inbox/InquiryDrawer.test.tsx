@@ -87,8 +87,8 @@ describe("InquiryDrawer", () => {
     const onChanged = vi.fn();
     serve((m, url) => (m === "POST" && url.includes("/convert") ? { ok: true, order_number: "WO-1042", order_id: "o1" } : { items: [] }));
     render(<InquiryDrawer lead={lead()} types={types} onClose={() => {}} onChanged={onChanged} onOpenOrder={() => {}} />);
-    await u.click(screen.getByRole("button", { name: "Convert to job" }));
-    await waitFor(() => expect(onChanged).toHaveBeenCalledWith(null, "Job WO-1042 created"));
+    await u.click(screen.getByRole("button", { name: "Create work order" }));
+    await waitFor(() => expect(onChanged).toHaveBeenCalledWith(null, "Work order WO-1042 created"));
     expect(calls.some((c) => c.url === "/api/leads/l1/convert?is_estimate=false")).toBe(true);
   });
 
@@ -96,7 +96,7 @@ describe("InquiryDrawer", () => {
     const u = userEvent.setup();
     serve((m, url) => (m === "POST" && url.includes("/convert") ? new Error("Add a location before converting inquiries") : { items: [] }));
     render(<InquiryDrawer lead={lead()} types={types} onClose={() => {}} onChanged={() => {}} onOpenOrder={() => {}} />);
-    await u.click(screen.getByRole("button", { name: "Convert to job" }));
+    await u.click(screen.getByRole("button", { name: "Create work order" }));
     expect((await screen.findAllByRole("alert")).some((a) => /Add a location/.test(a.textContent || ""))).toBe(true);
   });
 
@@ -114,8 +114,8 @@ describe("InquiryDrawer", () => {
     render(<InquiryDrawer lead={lead({ status: "won", converted_order_id: "o9", converted_order_number: "WO-9" })} types={types}
       onClose={() => {}} onChanged={() => {}} onOpenOrder={open} />);
     expect(screen.getByText(/Converted to WO-9/)).toBeInTheDocument();
-    expect(screen.queryByRole("button", { name: "Convert to job" })).toBeNull();
-    screen.getByRole("button", { name: "Open job" }).click();
+    expect(screen.queryByRole("button", { name: "Create work order" })).toBeNull();
+    screen.getByRole("button", { name: "Open work order" }).click();
     expect(open).toHaveBeenCalledWith("o9");
   });
 });

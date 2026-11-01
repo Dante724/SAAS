@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { ago } from "../components/DeviceList";
+import { safeNext } from "../lib/safeNext";
 import { ArrowLeft, Eye, EyeOff } from "lucide-react";
 import { AuthShell, Field, FootLink, Notice, Submit, inputCls as input } from "./authUi";
 
@@ -36,13 +37,13 @@ export default function Login() {
   // If already signed in, skip the form. (AuthShell follows the device theme.)
   useEffect(() => {
     try {
-      if (localStorage.getItem("ros_tok")) window.location.replace("/");
+      if (localStorage.getItem("ros_tok")) window.location.replace(safeNext(window.location.search));
     } catch { /* ignore */ }
   }, []);
 
   function finish(token: string) {
     localStorage.setItem("ros_tok", token);
-    window.location.replace("/");
+    window.location.replace(safeNext(window.location.search));   // same-site ?next= only (Tekly Go)
   }
 
   async function continueAtLimit() {

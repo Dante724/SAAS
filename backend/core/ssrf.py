@@ -2,9 +2,13 @@
 
 Any URL a *tenant* can set (automation webhooks, etc.) must pass through
 ``assert_safe_url`` before we fetch it. We allow only http/https, and refuse
-hosts that resolve to private, loopback, link-local, or otherwise non-public
-IP ranges — blocking access to cloud metadata (169.254.169.254) and internal
-services. Fail-closed: anything we can't resolve is rejected.
+hosts that resolve to anything but a globally routable unicast address — blocking
+cloud metadata (169.254.169.254, Alibaba's 100.100.100.200 in CGNAT space),
+private and internal services. Fail-closed: anything we can't resolve is rejected.
+
+Outbound webhooks (endpoints and automation actions) use the stricter
+``assert_webhook_url`` / ``pinned_target(..., webhook=True)``: once deployed only
+https on port 443 or 8443 (local development also allows http and port 80).
 """
 from __future__ import annotations
 
@@ -33,17 +37,38 @@ def _ip_is_public(ip: str) -> bool:
         if addr in _NAT64:
             return _ip_is_public(str(ipaddress.IPv4Address(int(addr) & 0xFFFFFFFF)))
         # 6to4 (2002::/16) and Teredo carry an IPv4 address too.
-        if addr.sixtofour:
+        if addr.sixtofour is not None:
             return _ip_is_public(str(addr.sixtofour))
-        if addr.teredo:
+        if addr.teredo is not None:
             return all(_ip_is_public(str(a)) for a in addr.teredo)
-    # is_global, not "not private": 100.64.0.0/10 (carrier-grade NAT, which holds the
-    # 100.100.100.200 cloud metadata address), 198.18.0.0/15, 192.0.0.0/24 and similar ranges are
-    # neither private nor global. Multicast can be global, but is never a webhook receiver.
+    # B3: an allow-list, not a deny-list. `is_global` is False for private, loopback,
+    # link-local, CGNAT (100.64/10, where Alibaba Cloud's metadata service lives at
+    # 100.100.100.200), benchmarking (198.18/15), documentation, 192.0.0.0/24 and reserved
+    # ranges. Multicast can be global, but is never a webhook receiver.
     return addr.is_global and not addr.is_multicast
 
 
-def _resolve_public(url: str):
+# B3: ports an outbound webhook may use. Deployed: https on 443/8443 only.
+WEBHOOK_PORTS_DEPLOYED = (443, 8443)
+WEBHOOK_PORTS_DEV = (80, 443, 8443)
+
+
+def _webhook_policy(parsed) -> None:
+    from backend.config import settings
+    deployed = settings.is_deployed
+    if deployed and parsed.scheme != "https":
+        raise UnsafeURLError("webhooks must use https")
+    try:
+        port = parsed.port or (443 if parsed.scheme == "https" else 80)
+    except ValueError as e:
+        raise UnsafeURLError("bad port") from e
+    if port not in (WEBHOOK_PORTS_DEPLOYED if deployed else WEBHOOK_PORTS_DEV):
+        raise UnsafeURLError("port not allowed")
+    if parsed.username or parsed.password:
+        raise UnsafeURLError("credentials in the URL are not allowed")
+
+
+def _resolve_public(url: str, *, webhook: bool = False):
     """Parse and resolve `url`; return (parsed, sorted public IPs) or raise UnsafeURLError."""
     if not url or not isinstance(url, str):
         raise UnsafeURLError("empty url")
@@ -53,6 +78,8 @@ def _resolve_public(url: str):
     host = parsed.hostname
     if not host:
         raise UnsafeURLError("missing host")
+    if webhook:
+        _webhook_policy(parsed)
     return parsed, _public_ips(host, parsed.port or (443 if parsed.scheme == "https" else 80))
 
 
@@ -85,14 +112,20 @@ def assert_safe_url(url: str) -> str:
     return url
 
 
-def pinned_target(url: str) -> tuple[str, dict, dict]:
+def assert_webhook_url(url: str) -> str:
+    """assert_safe_url plus the outbound-webhook scheme/port policy (B3)."""
+    _resolve_public(url, webhook=True)
+    return url
+
+
+def pinned_target(url: str, *, webhook: bool = False) -> tuple[str, dict, dict]:
     """Validate `url` and pin the connection to the address that was checked.
 
     Returns (url_with_ip, headers, extensions) for httpx: the request connects to the
     validated IP — so a DNS answer that changes between check and connect (DNS rebinding)
     can't redirect it to an internal host — while the Host header and TLS SNI/certificate
     check still use the original hostname."""
-    parsed, ips = _resolve_public(url)
+    parsed, ips = _resolve_public(url, webhook=webhook)
     ip = ips[0]
     ip_host = f"[{ip}]" if ":" in ip else ip
     userinfo = parsed.netloc.rpartition("@")[0]

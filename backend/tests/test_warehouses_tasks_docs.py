@@ -357,7 +357,10 @@ async def test_appointment_reminder_queues(client, tenant, db):
         "module": "appointment", "event": "reminder", "channel": "email",
         "reminder_offset_min": 120}, headers=tenant)
     me = await _me(client, tenant)
-    soon = now_utc() + timedelta(minutes=60)
+    # Scheduled times are the shop's wall clock (the test shop runs on the default India time),
+    # not UTC: "UTC + 1h" was 4.5 hours in the past there (launch B6).
+    from backend.services.dates import local_now
+    soon = local_now("Asia/Kolkata") + timedelta(minutes=60)
     b = await client.post("/api/appointments", json={
         "client_id": cid, "employee_id": me["id"],
         "scheduled_for": soon.strftime("%Y-%m-%dT%H:%M:%S"),

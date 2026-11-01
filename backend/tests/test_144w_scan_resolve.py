@@ -32,3 +32,21 @@ async def test_resolve_product_by_sku(client, tenant):
 async def test_unmatched_code(client, tenant):
     r = await client.post("/api/scan/resolve", json={"code": "NOPE-ZZZ-404"}, headers=tenant)
     assert r.status_code == 200 and r.json()["matched"] is False
+
+
+async def test_resolve_tracking_link_qr(client, tenant, db):
+    """The customer ticket's 'public page' QR encodes the tracking URL; scanning it opens the job."""
+    from sqlalchemy import select
+
+    from backend.models import Order
+    o = (await client.post("/api/orders", headers=tenant, json={"complaint": "ticket qr"})).json()
+    row = (await db.execute(select(Order).where(Order.id == o["id"]))).scalar_one()
+    if not row.public_token:
+        row.public_token = "tok_scan_test_123456"
+        await db.commit()
+    url = f"https://shop.example.com/track/{row.public_token}"
+    r = await client.post("/api/scan/resolve", json={"code": url}, headers=tenant)
+    assert r.status_code == 200 and r.json()["type"] == "order" and r.json()["id"] == o["id"], r.text
+    # an unknown token falls through to the normal lookups and stays unmatched
+    r2 = await client.post("/api/scan/resolve", json={"code": "https://x/track/doesnotexist99"}, headers=tenant)
+    assert r2.json()["matched"] is False

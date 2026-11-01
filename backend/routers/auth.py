@@ -1,6 +1,7 @@
 import asyncio
 import logging
 from datetime import datetime as _datetime
+from datetime import timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
@@ -11,13 +12,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
 from backend.db.database import get_db
-from backend.models import Employee, Location, Organisation, Role
+from backend.models import TRIAL_DAYS, Employee, Location, Organisation, Role
+from backend.services import shop_setup as _shop_setup
 from backend.services import tokens as _tok
 from backend.services.audit import record as _audit
 from backend.services.currency import symbol_for as _symbol_for  # sign-up sends a code; we store its symbol
-from backend.services.auth import (account_off_message, create_access_token, get_current_employee, hash_password,
-                                   is_old_default_password, norm_email, subscription_ended_message,
-                                   verify_password)
+from backend.services.auth import (account_off_message, assert_org_active, create_access_token,
+                                   get_current_employee, hash_password, is_old_default_password,
+                                   is_shop_owner, norm_email, verify_password)
 from backend.services.notifications import send_direct_email
 from backend.services.ratelimit import client_ip as _ip
 from backend.services.ratelimit import aenforce as _rate
@@ -73,6 +75,7 @@ class RegisterRequest(BaseModel):
     document_language: Optional[str] = None
     company_phone: Optional[str] = None
     employee_count: Optional[str] = None
+    plan: Optional[str] = None            # solo | shop | pro, from the pricing page (default pro)
 
 
 _signup_log = logging.getLogger("tekly.signup")
@@ -162,6 +165,9 @@ async def signup_options(request: Request):
         ],
         "region_defaults": REGION_DEFAULTS,
         "region_hint": _region_hint(country),
+        # Launch B4: the Country picker. country_hint pre-selects it the same way region_hint does.
+        "countries": _shop_setup.country_options(),
+        "country_hint": (country or "").strip().upper() or None,
         "employee_brackets": ["1", "2-5", "6-20", "21-50", "50+"],
     }
 
@@ -226,7 +232,20 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
 
     import secrets as _sec
     org = Organisation(name=data.org_name, webhook_secret=_sec.token_urlsafe(24),
-                       sub_status="trial")   # build 144ce
+                       sub_status="trial",   # build 144ce
+                       # Subscription billing: the plan picked on the pricing page (Pro by default);
+                       # every Pro feature is open for the trial (services/billing.py).
+                       trial_ends_at=platform_today() + timedelta(days=TRIAL_DAYS),
+                       plan=data.plan if data.plan in ("solo", "shop", "pro") else "pro")
+    # Launch B4/B6: the sign-up Country picker decides currency, timezone and tax. What the form
+    # sends explicitly still wins; the country fills in the rest.
+    cdef = _shop_setup.country_defaults(data.country)
+    if cdef:
+        data.country = data.country.strip().upper()
+        data.region = data.region or cdef["region"]
+        data.currency_code = data.currency_code or cdef["currency_code"]
+        data.currency = data.currency or cdef["currency"]
+        data.timezone = data.timezone or cdef["timezone"]
     # Build 144cg — apply onboarding choices with region-based defaults.
     if data.region:
         org.region = data.region
@@ -264,6 +283,8 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
     location = Location(org_id=org.id, name="Main location")
     db.add(location)
     await db.flush()
+    # B6: on the shop's clock, not UTC. B2: a Cash drawer and a Card account to take money into.
+    await _shop_setup.setup_location(db, location, org, first=True)
 
     # Build 84: every location owns one default product warehouse. It's what makes the
     # location_id → warehouse compatibility shim resolve, so it must exist from day one.
@@ -281,17 +302,14 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
     await db.flush()
 
     # Build 144cl: seed a region-appropriate default tax rate (owner can edit/disable it).
-    _tax = _default_tax_for(data.region, data.country)
+    # Launch B4: the tax goes on the sales stack too, or it is never charged.
+    if cdef:
+        _n, _r, _m = cdef["tax"]
+        _tax = {"name": _n, "rate": _r, "mode": _m}
+    else:
+        _tax = _default_tax_for(data.region, data.country)
     if _tax is not None:
-        from backend.models import Tax
-        from backend.models import TaxRule
-        _seeded = Tax(org_id=org.id, name=_tax["name"], rate=_tax["rate"], mode=_tax["mode"],
-                      is_default=True, active=True)
-        db.add(_seeded)
-        await db.flush()
-        # QA 2026-10-31 B: the default tax is what jobs charge, so it starts the job tax stack.
-        db.add(TaxRule(org_id=org.id, doc_family="tickets_sales", tax_id=_seeded.id, priority=0))
-        await db.flush()
+        await _shop_setup.seed_default_tax(db, org.id, _tax["name"], _tax["rate"], _tax["mode"])
 
     employee = Employee(
         org_id=org.id,
@@ -376,10 +394,8 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
         Organisation.id == employee.org_id))).scalar_one_or_none()
     _today = platform_today()   # platform-set dates: UTC, not the tenant-controlled timezone
     if _org:
-        if _org.sub_status == "suspended":
-            raise HTTPException(status_code=403, detail=account_off_message())
-        if _org.sub_end and _org.sub_end < _today:
-            raise HTTPException(status_code=403, detail=subscription_ended_message())
+        # Same gate as every request (shows the admin's suspend message, if any).
+        assert_org_active(_org, _today)
     # Build 144ce: per-employee access window (set from the /admin portal).
     if (employee.access_start and employee.access_start > _today) or \
        (employee.access_end and employee.access_end < _today):
@@ -549,6 +565,98 @@ async def logout_all_devices(
     return {"ok": True, "token_version": current.token_version}
 
 
+
+# ── Tekly Go: payment PIN (quick re-check before money on a shared phone) ─────
+# A 4–6 digit PIN per person. The phone asks for it before taking a payment or making a pay
+# link once it has been idle, and to unlock after the auto-lock. Only a hash lives here (HMAC'd
+# with the server secret first, so a leaked table alone can't be brute-forced); nothing is kept
+# on the device. Setting or changing it needs the account password, so someone holding an
+# unattended phone can't just set their own. Five wrong PINs in 15 minutes signs the person
+# out everywhere (token_version bump): they have to sign in again with their password.
+PIN_FAIL_LIMIT = 5
+PIN_WINDOW_SEC = 900
+
+
+def _pin_secret(emp_id: str, pin: str) -> str:
+    import hashlib
+    import hmac
+    return hmac.new(settings.SECRET_KEY.encode(), f"{emp_id}:{pin}".encode(), hashlib.sha256).hexdigest()
+
+
+def pin_problem(pin: str) -> Optional[str]:
+    """Why a PIN can't be used, or None. Refuses the ones people guess first."""
+    if not pin.isdigit() or not 4 <= len(pin) <= 6:
+        return "Use 4 to 6 digits"
+    if len(set(pin)) == 1:
+        return "Pick a PIN that isn't one digit repeated"
+    steps = {int(b) - int(a) for a, b in zip(pin, pin[1:])}
+    if steps in ({1}, {-1}):
+        return "Pick a PIN that isn't a run like 1234"
+    return None
+
+
+async def _pin_perms(db: AsyncSession, emp: Employee) -> bool:
+    from backend.services.auth import has_perm
+    return await has_perm(db, emp, "can_take_payments") or await has_perm(db, emp, "can_create_payment_links")
+
+
+@router.get("/pin")
+async def pin_status(db: AsyncSession = Depends(get_db), current: Employee = Depends(get_current_employee)):
+    """Is a PIN set, and does this person need one (they can take payments or make pay links)."""
+    return {"set": bool(current.pin_hash), "required": await _pin_perms(db, current)}
+
+
+class PinSetIn(BaseModel):
+    pin: str
+    password: str
+
+
+@router.post("/pin")
+async def pin_set(data: PinSetIn, db: AsyncSession = Depends(get_db),
+                  current: Employee = Depends(get_current_employee)):
+    await _rate("pin_set", current.id, limit=5, window_sec=PIN_WINDOW_SEC)
+    pin = (data.pin or "").strip()
+    why = pin_problem(pin)
+    if why:
+        raise HTTPException(400, why)
+    if not await asyncio.to_thread(verify_password, data.password or "", current.password_hash):
+        raise HTTPException(403, "Password incorrect")
+    had = bool(current.pin_hash)
+    current.pin_hash = await asyncio.to_thread(hash_password, _pin_secret(current.id, pin))
+    await _audit(db, org_id=current.org_id, actor_id=current.id, action="auth.pin_changed" if had else "auth.pin_set",
+                 entity_type="employee", entity_id=current.id)
+    await db.commit()
+    return {"set": True}
+
+
+class PinVerifyIn(BaseModel):
+    pin: str
+
+
+@router.post("/pin/verify")
+async def pin_verify(data: PinVerifyIn, db: AsyncSession = Depends(get_db),
+                     current: Employee = Depends(get_current_employee)):
+    await _rate("pin_verify", current.id, limit=30, window_sec=PIN_WINDOW_SEC)
+    if not current.pin_hash:
+        raise HTTPException(409, "No PIN set yet")
+    pin = (data.pin or "").strip()
+    ok = pin.isdigit() and await asyncio.to_thread(verify_password, _pin_secret(current.id, pin), current.pin_hash)
+    if ok:
+        return {"ok": True}
+    await _audit(db, org_id=current.org_id, actor_id=current.id, action="auth.pin_failed",
+                 entity_type="employee", entity_id=current.id)
+    try:
+        await _rate("pin_fail", current.id, limit=PIN_FAIL_LIMIT - 1, window_sec=PIN_WINDOW_SEC)
+    except HTTPException:
+        current.token_version = (current.token_version or 0) + 1
+        await _audit(db, org_id=current.org_id, actor_id=current.id, action="auth.pin_locked",
+                     entity_type="employee", entity_id=current.id)
+        await db.commit()
+        raise HTTPException(429, "Too many wrong PINs. You've been signed out. Sign in again with your password.",
+                            headers={"X-Signed-Out": "1"})
+    await db.commit()
+    raise HTTPException(403, "Wrong PIN")
+
 # ── Build 144cb: password reset (self-service, logged out) ───────────────────
 @router.post("/password/forgot")
 async def password_forgot(data: ForgotRequest, request: Request, db: AsyncSession = Depends(get_db)):
@@ -687,6 +795,13 @@ async def invite_accept(data: InviteAccept, request: Request, db: AsyncSession =
             func.lower(Employee.email) == norm_email(inv.email)))).scalar_one_or_none():
         raise HTTPException(409, "An account with this email already exists. Sign in with it, "
                                  "or ask for an invite to a different email address.")
+    # The invite was sent earlier; the shop's plan decides now (unauthenticated route, so the
+    # staff-request gate in get_current_employee doesn't cover it).
+    from backend.services import billing as _billing
+    _org = (await db.execute(select(Organisation).where(Organisation.id == inv.org_id))).scalar_one_or_none()
+    if _org is not None and _billing.state(_org).read_only:
+        raise HTTPException(402, "This shop's Tekly plan has lapsed. Ask the owner to renew, then accept again.")
+    await _billing.assert_can_add(db, inv.org_id, "team_members")
     emp = Employee(
         org_id=inv.org_id, location_id=inv.location_id, role_id=inv.role_id,
         name=(data.name or inv.name or inv.email.split("@")[0]),
@@ -698,8 +813,10 @@ async def invite_accept(data: InviteAccept, request: Request, db: AsyncSession =
     role = (await db.execute(select(Role).where(Role.id == emp.role_id))).scalar_one_or_none()
     from backend.services.sessions import issue_session
     token = await issue_session(db, emp, request, via="invite")
-    return TokenResponse(access_token=token, employee_id=emp.id, org_id=emp.org_id,
-                         name=emp.name, role=role.name if role else "staff")
+    out = TokenResponse(access_token=token, employee_id=emp.id, org_id=emp.org_id,
+                        name=emp.name, role=role.name if role else "staff")
+    await _billing.sync_seats(db, inv.org_id)   # Shop and Pro bill members beyond the included ones as seats
+    return out
 
 
 @router.get("/me")
@@ -721,6 +838,12 @@ async def me(current: Employee = Depends(get_current_employee),
             from backend.services.permissions import effective_permissions
             permissions = effective_permissions(role)
             home_route = getattr(role, "home_route", None) or None
+    shop_owner = await is_shop_owner(db, current)
+    if shop_owner:
+        # The server grants the shop owner every permission (has_perm), including codes added
+        # after their role was saved, so the UI must not hide those controls from them.
+        from backend.services.permissions import ALL_CODES
+        permissions = {code: True for code in sorted(ALL_CODES)}
     return {
         "id": current.id,
         "name": current.name,
@@ -732,12 +855,16 @@ async def me(current: Employee = Depends(get_current_employee),
         "currency": (org.currency if org else None) or _symbol_for(org.currency_code if org else None, ""),
         "currency_code": (org.currency_code if org else None) or "",
         "role": role_name,
-        "is_owner": current.role_id is None,
+        "is_owner": current.role_id is None and shop_owner,   # a roleless invitee is not the owner
+        # The shop's creator (organisations.owner_id), who may also hold a role: owner-only
+        # screens such as Tekly Sense settings key off this, matching the server's check.
+        "is_shop_owner": shop_owner,
         "home_route": home_route,
         "permissions": permissions,
         # build 144cb: account-security surface for the UI (verify banner, 2FA badge)
         "email_verified": bool(current.email_verified),
         "mfa_enabled": bool(current.mfa_enabled),
+        "pin_set": bool(current.pin_hash),   # Tekly Go payment PIN
         # build 144cd: org 2FA policy — the app forces enrollment when required and not yet set up
         "mfa_required": bool(org.require_mfa) if org else False,
         # build 144j: which time clocks this employee sees in the widget
@@ -748,4 +875,12 @@ async def me(current: Employee = Depends(get_current_employee),
         "clock_attendance_enabled": (org.clock_attendance_enabled if org and org.clock_attendance_enabled is not None else True),
         # where the Help & support menu and "contact support" errors point
         "support": {"email": settings.SUPPORT_EMAIL, "url": settings.SUPPORT_URL},
+        # Subscription: plan, trial, read-only state and the Pro features unlocked, so the app
+        # hides what the plan lacks (the server enforces the same in services/billing.py).
+        "billing": await _billing_summary(db, org),
     }
+
+
+async def _billing_summary(db, org):
+    from backend.services.billing import summary_with_usage
+    return await summary_with_usage(db, org)
