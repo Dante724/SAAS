@@ -91,9 +91,14 @@ async def job_figures(db: AsyncSession, org_id: str, orders, dropped: Optional[s
     return out
 
 
-def sale_figures(s: Sale) -> dict:
-    gross, tax = float(s.total or 0), float(getattr(s, "tax", 0) or 0)
-    rev, c = q2(gross - tax), q2(float(s.total_cost or 0))
+def sale_figures(s: Sale, back: Optional[tuple] = None) -> dict:
+    """A counter sale's figures, net of what came back in the same period (`back` = the till
+    returns' (amount, tax, cost), ClientReturn.sale_id): revenue, tax and cost of goods go down
+    with the return, as in net sales."""
+    amount, back_tax, back_cost = back or (0.0, 0.0, 0.0)
+    gross = float(s.total or 0) - float(amount or 0)
+    tax = float(getattr(s, "tax", 0) or 0) - float(back_tax or 0)
+    rev, c = q2(gross - tax), q2(float(s.total_cost or 0) - float(back_cost or 0))
     return {"dropped": False, "total": q2(gross), "charged": q2(gross), "tax": q2(tax), "revenue": rev,
             "cogs": c, "labour_cost": 0.0, "commission": 0.0, "profit": q2(rev - c), "written_off": 0.0,
             "clocked_minutes": 0.0}
@@ -147,6 +152,15 @@ async def _period(db, org_id, df, dt, **flt) -> tuple[dict, dict, list]:
     jobs = (await db.execute(eq)).all()
     figs = await job_figures(db, org_id, eq.with_only_columns(Order.id), dropped)   # sums in SQL, no id list
     sales = (await db.execute(_sales_query(org_id, df, dt, **flt))).scalars().all()
+    # till returns in the period, per sale (the rest of the period's returns reach the "other" row)
+    from backend.models import ClientReturn
+    sale_ids = _sales_query(org_id, df, dt, **flt).with_only_columns(Sale.id)
+    back = {sid: (a, t, c) for sid, a, t, c in (await db.execute(
+        select(ClientReturn.sale_id, func.coalesce(func.sum(ClientReturn.amount), 0),
+               func.coalesce(func.sum(ClientReturn.tax), 0), func.coalesce(func.sum(ClientReturn.cost), 0))
+        .where(ClientReturn.org_id == org_id, ClientReturn.sale_id.in_(sale_ids),
+               ClientReturn.created_at >= df, ClientReturn.created_at <= dt)
+        .group_by(ClientReturn.sale_id))).all()}
     buckets = {"jobs": _zero(), "dropped": _zero(), "sales": _zero(), "other": _zero()}
     rows = []
     for o, earned_at in jobs:
@@ -158,7 +172,7 @@ async def _period(db, org_id, df, dt, **flt) -> tuple[dict, dict, list]:
                      "type_id": o.type_id, "status": o.status,
                      "reason": o.cancel_reason if f["dropped"] else None, **_pick(f)})
     for s in sales:
-        f = sale_figures(s)
+        f = sale_figures(s, back.get(s.id))
         _add(buckets["sales"], f)
         rows.append({"kind": "sale", "id": s.id, "number": s.sale_number, "date": s.created_at.isoformat(),
                      "location_id": s.location_id, "employee_id": s.seller_id, "client_id": s.client_id,
