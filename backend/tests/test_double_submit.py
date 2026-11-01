@@ -170,6 +170,25 @@ async def test_double_decide_from_stale_copies_adds_once_and_total_matches_lines
 
 
 @pytest.mark.asyncio
+async def test_two_different_approvals_at_once_both_count(client, tenant):
+    """Customer approves one item while staff take another by phone: both lines and the total
+    agree. (The lost update is a Postgres READ COMMITTED race; both requests take lock_order.)"""
+    import asyncio
+    oid, pid, rid = await _wo_with_product_rec(client, tenant)
+    r2 = await client.post(f"/api/orders/{oid}/recommendations", headers=tenant, json={
+        "title": "Case", "kind": "custom", "qty": 1, "unit_price": 15})
+    await client.post(f"/api/orders/{oid}/recommendations/publish-all", headers=tenant, json={})
+    tok = (await K.order(client, tenant, oid))["public_token"]
+    a, b = await asyncio.gather(
+        client.post(f"/api/public/track/{tok}/recommendations/decide", json={"approve_ids": [rid]}),
+        client.post(f"/api/orders/{oid}/recommendations/{r2.json()['id']}/approve-for-customer",
+                    headers=tenant, json={"how": "phone"}))
+    assert a.status_code == 200 and b.status_code == 200, (a.text, b.text)
+    o = await K.order(client, tenant, oid)
+    assert o["total"] == pytest.approx(sum(x["total"] for x in o["lines"])) == pytest.approx(115)
+
+
+@pytest.mark.asyncio
 async def test_customer_cannot_add_recommendations_to_a_closed_job(client, tenant):
     oid, pid, rid = await _wo_with_product_rec(client, tenant)
     sts = (await client.get("/api/statuses?is_estimate=false", headers=tenant)).json()
@@ -215,6 +234,20 @@ async def test_prepay_double_click_with_same_key_posts_once(client, tenant):
     assert await _balance(client, tenant, till) == 30
     o = await K.order(client, tenant, oid)
     assert float(o.get("prepayment_total") or 30) == 30
+
+
+@pytest.mark.asyncio
+async def test_two_prepayments_from_stale_copies_both_count(client, tenant, db):
+    from backend.models import Employee
+    from backend.routers.cash import PrepayIn, _prepay_order
+    _cid, oid = await _priced_job(client, tenant)
+    till = await _till(client, tenant)
+    stale = (await db.execute(select(Order).where(Order.id == oid))).scalar_one()   # A: prepaid 0
+    me = (await db.execute(select(Employee))).scalars().first()
+    assert (await client.post(f"/api/cash/orders/{oid}/prepay", headers=tenant,
+                              json={"amount": 30, "account_id": till})).status_code == 201
+    r = await _prepay_order(oid, PrepayIn(amount=20, account_id=till), db, me)
+    assert r["prepaid"] == 50 and stale is not None
 
 
 @pytest.mark.asyncio

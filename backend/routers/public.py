@@ -982,9 +982,14 @@ async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDe
     if not ids:
         raise HTTPException(400, "Nothing selected")
     name = (data.name or "").strip()[:200] or None
+    # The job's lock before any line goes in: two approvals at once (two taps, or the customer and
+    # staff) queue up, so the job total is recomputed over every line and neither is lost.
+    from backend.services.invoice_money import lock_order
+    await lock_order(db, order.id)
+    await db.refresh(order)
     rows = {r.id: r for r in (await db.execute(select(_R).where(
         _R.order_id == order.id, _R.org_id == order.org_id, _R.id.in_(ids))
-        .with_for_update())).scalars().all()}
+        .with_for_update().execution_options(populate_existing=True))).scalars().all()}
     approved = later_n = 0
     new_lines: list[str] = []
     skipped: list[str] = []

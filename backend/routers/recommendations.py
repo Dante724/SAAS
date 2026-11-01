@@ -284,9 +284,13 @@ async def approve_for_customer(
     if data.how not in ("phone", "in_person"):
         raise HTTPException(422, "how must be phone|in_person")
     order = await _order(db, current.org_id, order_id)
+    from backend.services.invoice_money import lock_order
+    await lock_order(db, order.id)          # approvals on one job queue up (see add_approved_to_total)
+    await db.refresh(order)
     r = (await db.execute(select(Recommendation).where(
         Recommendation.id == rec_id, Recommendation.org_id == current.org_id,
-        Recommendation.order_id == order_id).with_for_update())).scalar_one_or_none()
+        Recommendation.order_id == order_id).with_for_update()
+        .execution_options(populate_existing=True))).scalar_one_or_none()
     if not r:
         raise HTTPException(404, "Recommendation not found")
     if r.status not in ("draft", "sent", "declined"):
@@ -425,8 +429,8 @@ async def approve_recommendation(db: AsyncSession, rec: Recommendation,
 
 
 async def add_approved_to_total(db: AsyncSession, order: Order, new_line_ids: list[str]) -> None:
-    """Fold approved lines into the job total. A total that is the sum of its lines is
-    recomputed from the lines (so concurrent approvals can't lose one another). A job priced
+    """Fold approved lines into the job total. Callers hold lock_order, so this reads every line
+    saved so far. A total that is the sum of its lines is recomputed from the lines. A job priced
     at check-in whose total isn't its lines keeps its quote and the new lines are added on."""
     if not new_line_ids:
         return

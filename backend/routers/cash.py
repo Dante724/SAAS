@@ -749,11 +749,14 @@ async def prepay_order(
 
 
 async def _prepay_order(order_id: str, data: PrepayIn, db: AsyncSession, current: Employee):
-    # Row lock so two prepayments serialize: prepayment_total below is then read fresh.
-    o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
-                          .with_for_update())).scalar_one_or_none()
+    o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
+    # The job's lock (a real one on SQLite too), then a fresh read: two prepayments at once both
+    # count in prepayment_total below.
+    from backend.services.invoice_money import lock_order
+    await lock_order(db, o.id)
+    await db.refresh(o)
     if data.amount <= 0:
         raise HTTPException(400, "Amount must be positive")
     acc = (await db.execute(select(Account).where(Account.id == data.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
