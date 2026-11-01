@@ -272,6 +272,17 @@ async def set_tax_rules(data: TaxRuleIn, db: AsyncSession = Depends(get_db),
                         current: Employee = Depends(require_perm("can_manage_settings"))):
     if data.doc_family not in ("tickets_sales", "posting"):
         raise HTTPException(422, "doc_family must be tickets_sales|posting")
+    from backend.models import Tax
+    known = {t.id: t for t in (await db.execute(select(Tax).where(
+        Tax.org_id == current.org_id))).scalars().all()}
+    for tid in data.tax_ids:
+        if tid not in known:
+            raise HTTPException(422, "Unknown tax in tax_ids")
+        if not known[tid].active:
+            raise HTTPException(422, f"{known[tid].name} is switched off. Remove it from the "
+                                     "list or switch it back on.")
+    if len(set(data.tax_ids)) != len(data.tax_ids):
+        raise HTTPException(422, "A tax can only be in the list once")
     # replace the stack for this family
     for r in (await db.execute(select(TaxRule).where(
             TaxRule.org_id == current.org_id, TaxRule.doc_family == data.doc_family))).scalars().all():
