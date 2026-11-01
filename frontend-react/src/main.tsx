@@ -13,6 +13,9 @@ import { publicRoute } from "./publicRoutes";
 import Login from "./public/Login";
 import { Signup, ResetPassword, VerifyEmail, AcceptInvite } from "./public/AuthPages";
 import "./index.css";
+import { initSentry } from "./lib/sentry";
+
+void initSentry();   // no-op unless VITE_SENTRY_DSN was set at build time
 
 const path = window.location.pathname;
 const root = ReactDOM.createRoot(document.getElementById("root")!);

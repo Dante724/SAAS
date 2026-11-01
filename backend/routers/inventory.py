@@ -780,14 +780,17 @@ async def extract_posting(
     image_b64 = media = None
     if file is not None:
         raw = await file.read()
-        if len(raw) > 8 * 1024 * 1024:
-            raise HTTPException(413, "File too large (max 8 MB)")
+        if len(raw) > ai_service.MAX_IMAGE_BYTES:
+            raise HTTPException(413, "That file is too big (max about 3.5 MB). Try a smaller photo or PDF.")
         media = file.content_type or "image/jpeg"
         if not (media.startswith("image/") or media == "application/pdf"):
             raise HTTPException(422, "Upload an image or PDF of the invoice / packing slip")
         image_b64 = _base64.b64encode(raw).decode()
     if image_b64 is None and not (text and text.strip()):
         raise HTTPException(422, "Provide a file or some pasted text")
+    if text and len(text) > ai_service.MAX_TEXT_CHARS:
+        raise HTTPException(413, "That's too much text at once. Paste a shorter part, or split it in two.")
+    await ai_service.enforce_quota(current)
     return await ai_service.extract_posting_rows(text=text, image_b64=image_b64, media_type=media)
 
 

@@ -14,8 +14,9 @@ from backend.models import Employee, Location, Organisation, Role
 from backend.services import tokens as _tok
 from backend.services.audit import record as _audit
 from backend.services.currency import symbol_for as _symbol_for  # sign-up sends a code; we store its symbol
-from backend.services.auth import (ACCOUNT_OFF, create_access_token, get_current_employee, hash_password,
-                                   is_old_default_password, norm_email, verify_password)
+from backend.services.auth import (account_off_message, create_access_token, get_current_employee, hash_password,
+                                   is_old_default_password, norm_email, subscription_ended_message,
+                                   verify_password)
 from backend.services.notifications import send_direct_email
 from backend.services.ratelimit import client_ip as _ip
 from backend.services.ratelimit import aenforce as _rate
@@ -352,7 +353,7 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
         raise HTTPException(status_code=401, detail="Incorrect email or password")
     if not employee.active:
         await _login_failed(db, employee, "disabled")
-        raise HTTPException(status_code=403, detail=ACCOUNT_OFF)
+        raise HTTPException(status_code=403, detail=account_off_message())
     # H1: an account still on the old default password (flagged by migration dp144q1, or simply
     # signing in with it) gets no session: the password is public, so whoever typed it may not be
     # the owner. A reset link goes to the account's own email instead.
@@ -373,9 +374,9 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
     _today = platform_today()   # platform-set dates: UTC, not the tenant-controlled timezone
     if _org:
         if _org.sub_status == "suspended":
-            raise HTTPException(status_code=403, detail=ACCOUNT_OFF)
+            raise HTTPException(status_code=403, detail=account_off_message())
         if _org.sub_end and _org.sub_end < _today:
-            raise HTTPException(status_code=403, detail="Your subscription has ended. Please contact support to renew.")
+            raise HTTPException(status_code=403, detail=subscription_ended_message())
     # Build 144ce: per-employee access window (set from the /admin portal).
     if (employee.access_start and employee.access_start > _today) or \
        (employee.access_end and employee.access_end < _today):
@@ -742,4 +743,6 @@ async def me(current: Employee = Depends(get_current_employee),
         # build 144x: org master switches — effective clock = org ON *and* employee tracks it
         "clock_wo_enabled": (org.clock_wo_enabled if org and org.clock_wo_enabled is not None else True),
         "clock_attendance_enabled": (org.clock_attendance_enabled if org and org.clock_attendance_enabled is not None else True),
+        # where the Help & support menu and "contact support" errors point
+        "support": {"email": settings.SUPPORT_EMAIL, "url": settings.SUPPORT_URL},
     }

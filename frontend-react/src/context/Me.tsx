@@ -17,6 +17,7 @@ export type Me = {
   track_job_hours?: boolean; track_attendance?: boolean;
   mfa_enabled?: boolean; mfa_required?: boolean; email_verified?: boolean;
   location_id?: string | null;
+  support?: { email?: string; url?: string };
 };
 
 type Ctx = {

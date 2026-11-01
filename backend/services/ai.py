@@ -12,6 +12,33 @@ from typing import Optional
 from backend.config import settings
 
 
+# Every AI call runs on the platform's Anthropic key, so each person and each shop gets a budget:
+# a burst limit per user and a daily ceiling per shop. Shared by every route that can reach the model.
+AI_USER_PER_MIN = 20
+AI_ORG_PER_DAY = 1000
+MAX_TEXT_CHARS = 20000            # pasted text sent to the model
+# The model's 5 MB per-image ceiling applies to the base64 payload, ~4/3 of the raw file.
+MAX_IMAGE_BYTES = 5 * 1024 * 1024 * 3 // 4
+
+
+async def enforce_quota(employee) -> None:
+    """Raise 429 (with Retry-After) once this person or their shop is over the AI budget."""
+    from fastapi import HTTPException
+
+    from backend.services.ratelimit import aenforce
+    try:
+        await aenforce("ai_user", employee.id, AI_USER_PER_MIN, 60)
+    except HTTPException as e:
+        raise HTTPException(429, "You've used the AI helper a lot in the last minute — please "
+                                 "wait a moment and try again.", headers=e.headers)
+    try:
+        await aenforce("ai_org", employee.org_id, AI_ORG_PER_DAY, 86400)
+    except HTTPException as e:
+        raise HTTPException(429, "Your shop has reached today's limit for the AI helper. It resets "
+                                 f"within 24 hours. Need more? Email {settings.SUPPORT_EMAIL}.",
+                            headers=e.headers)
+
+
 def is_live() -> bool:
     return bool(settings.ANTHROPIC_API_KEY)
 
@@ -33,7 +60,8 @@ async def _complete(system: str, user: str, max_tokens: int = 700) -> Optional[s
                          "anthropic-version": "2023-06-01",
                          "content-type": "application/json"},
                 json={"model": settings.AI_MODEL, "max_tokens": max_tokens,
-                      "system": system, "messages": [{"role": "user", "content": user}]})
+                      "system": system,
+                      "messages": [{"role": "user", "content": user[:MAX_TEXT_CHARS]}]})
         if resp.status_code != 200:
             return None
         blocks = resp.json().get("content", [])

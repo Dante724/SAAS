@@ -10,6 +10,10 @@ WORKDIR /app/frontend-react
 COPY frontend-react/package.json frontend-react/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY frontend-react/ ./
+# Optional browser error tracking, baked in at build time (a frontend DSN is public by design):
+#   docker build --build-arg VITE_SENTRY_DSN=https://...  --build-arg VITE_RELEASE=$(git rev-parse HEAD)
+ARG VITE_SENTRY_DSN=""
+ARG VITE_RELEASE=""
 RUN npm run build
 
 # ── 2. Python runtime ────────────────────────────────────────────────────────

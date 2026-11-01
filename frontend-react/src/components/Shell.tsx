@@ -33,6 +33,7 @@ import {
   LogOut, Menu as MenuIcon, PackageOpen, Info,
 } from "lucide-react";
 import { loadFailed } from "../lib/notice";
+import { supportContact } from "../lib/support";
 
 // Map the old Material-Symbols ligature names to bundled Lucide icons (no web font,
 // works under the app's Content-Security-Policy, and needs no server restart).
@@ -145,6 +146,8 @@ const NAV: NavItem[] = NAV_GROUPS.flatMap((g) => g.items);
 
 export default function Shell({ title, children }: { title: string; children: ReactNode }) {
   const { can, me, refresh } = useMe();
+  const support = supportContact(me);
+  const supportLinkProps = support.external ? { target: "_blank", rel: "noopener noreferrer" } : {};
   const initials = ((me?.name || "").trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("") || "?").toUpperCase();
   const [palette, setPalette] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
@@ -291,6 +294,7 @@ export default function Shell({ title, children }: { title: string; children: Re
               <div className="hidden min-[900px]:block"><LocationSwitcher /></div>
               <ScanBox />
               {(me?.clock_attendance_enabled || me?.clock_wo_enabled) && <TimeClockChip me={me} />}
+              <a href={support.href} {...supportLinkProps} aria-label={t("Help & support")} title={t("Help & support")} className="hidden sm:flex w-8 h-8 rounded-full border border-slate-200 bg-white items-center justify-center text-ink-secondary hover:text-ink-primary shadow-xs"><M n="help" c="text-sm" /></a>
               <button onClick={() => setNotifOpen((o) => !o)} aria-label="Notifications" className="w-8 h-8 rounded-full border border-slate-200 bg-white flex items-center justify-center text-ink-secondary hover:text-ink-primary shadow-xs relative"><M n="notifications" c="text-sm" />{unread > 0 && <span className="absolute -top-1 -right-1 min-w-[16px] h-4 px-1 rounded-full bg-primary text-white text-[11px] font-bold flex items-center justify-center border-2 border-white">{unread > 9 ? "9+" : unread}</span>}</button>
               <div className="relative">
                 <button onClick={() => setAvatarOpen((o) => !o)} aria-label={t("Account menu")} className="w-8 h-8 rounded-full bg-primary text-white font-semibold text-xs flex items-center justify-center shadow-xs hover:brightness-110 relative">{initials}{me?.mfa_required && !me?.mfa_enabled && <span className="absolute -top-0.5 -right-0.5 w-2.5 h-2.5 rounded-full bg-amber-400 border-2 border-white" />}</button>
@@ -318,6 +322,10 @@ export default function Shell({ title, children }: { title: string; children: Re
                         <span className="flex items-center gap-2.5"><M n="lock" c="text-base" />{t("Security & sign-in")}</span>
                         {me?.mfa_required && !me?.mfa_enabled && <span className="w-2 h-2 rounded-full bg-amber-400" />}
                       </button>
+                      <a href={support.href} {...supportLinkProps} onClick={() => setAvatarOpen(false)} className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-ink-secondary hover:bg-slate-100 hover:text-ink-primary">
+                        <M n="contact_support" c="text-base" />
+                        <span className="min-w-0">{t("Help & support")}{!support.external && <span className="block text-[11px] text-ink-tertiary truncate">{support.email}</span>}</span>
+                      </a>
                       <div className="my-1 border-t border-slate-100" />
                       <button onClick={() => { setAvatarOpen(false); signOut(); }} className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-ink-secondary hover:bg-slate-100 hover:text-ink-primary">
                         <M n="logout" c="text-base" />{t("Sign out")}

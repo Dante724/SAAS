@@ -13,11 +13,8 @@ from backend.services.auth import get_current_employee, record_scope
 from backend.services import ai
 
 async def ai_quota(current: Employee = Depends(get_current_employee)) -> None:
-    """Every AI call runs on the platform's Anthropic key, so each person and each shop gets a
-    budget: a burst limit per user and a daily ceiling per shop."""
-    from backend.services.ratelimit import aenforce
-    await aenforce("ai_user", current.id, 20, 60)
-    await aenforce("ai_org", current.org_id, 1000, 86400)
+    """Per-user and per-shop AI budget (see ai.enforce_quota)."""
+    await ai.enforce_quota(current)
 
 
 router = APIRouter(prefix="/api/ai", tags=["ai"],

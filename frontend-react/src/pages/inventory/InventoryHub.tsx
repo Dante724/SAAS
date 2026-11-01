@@ -7,6 +7,7 @@ import { api, openAuthedDoc } from "../../api/client";
 import { downloadSheet } from "../../lib/downloadSheet";
 import { isoDate } from "../../lib/localDate";
 import { missingBarcodesMessage } from "../../lib/barcodes";
+import { shrinkImageFile } from "../../lib/files";
 import { Product, Supplier, PO, Service, Bundle, Asset, currencySymbol, money } from "./types";
 import { analyzePaste, gridToRows, mergeRemap, loadRememberedMap, saveRememberedMap, fileToGrid, mapByHeader, splitSerials, FIELD_LABELS, FIELD_ORDER } from "./pasteMap";
 import type { PasteField, PostRow } from "./pasteMap";
@@ -1045,7 +1046,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
     const f = e.target.files?.[0]; if (!f) return;
     setBusy(true); setErr(null); setInfo(null);
     try {
-      const fd = new FormData(); fd.append("file", f);
+      const fd = new FormData(); fd.append("file", await shrinkImageFile(f));
       const r = await api.postForm<any>("/inventory/postings/extract", fd);
       const rws: PostRow[] = (r.rows || []).map((x: any) => ({ code: x.code || "", mpn: x.mpn || "", name: x.name || "", qty: Number(x.qty) || 1, purchase_price: Number(x.purchase_price) || 0, markup_pct: 0 }));
       if (rws.length) { setRows(rws); setMapCols(null); setDataGrid(null); setInfo(`Read ${rws.length} line${rws.length === 1 ? "" : "s"} from the file — check each before posting.`); }

@@ -84,7 +84,13 @@ MFA_ENROLLMENT_PATHS = ("/api/mfa/", "/api/auth/me", "/api/auth/refresh", "/api/
 
 
 # One reply for a disabled person and a suspended shop, so it says nothing about which it is.
-ACCOUNT_OFF = "This account can't sign in right now. Please contact your shop owner or Tekly support."
+def account_off_message() -> str:
+    return ("This account can't sign in right now. Please contact your shop owner or Tekly "
+            f"support ({settings.SUPPORT_EMAIL}).")
+
+
+def subscription_ended_message() -> str:
+    return f"Your Tekly subscription has ended. Please contact Tekly support ({settings.SUPPORT_EMAIL}) to renew."
 
 
 def assert_org_active(org, today=None) -> None:
@@ -95,9 +101,9 @@ def assert_org_active(org, today=None) -> None:
         return
     today = today or platform_today()
     if org.sub_status == "suspended":
-        raise HTTPException(status_code=403, detail=ACCOUNT_OFF)
+        raise HTTPException(status_code=403, detail=account_off_message())
     if getattr(org, "sub_end", None) and org.sub_end < today:
-        raise HTTPException(status_code=403, detail="Your subscription has ended. Please contact support to renew.")
+        raise HTTPException(status_code=403, detail=subscription_ended_message())
 
 
 async def get_current_employee(
