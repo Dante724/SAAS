@@ -12,12 +12,14 @@ from backend.models import (
     Employee,
     LegalEntity,
     NumberSequence,
+    Tax,
     TaxException,
     TaxGroup,
     TaxRule,
 )
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.numbering import DEFAULT_TEMPLATES, peek_example
+from backend.services.numbering import DEFAULT_TEMPLATES, _existing_count, doc_template_problem, peek_example
+from backend.services.owned import require_owned_ids
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -26,14 +28,22 @@ router = APIRouter(prefix="/api/settings", tags=["settings"])
 class NumberingIn(BaseModel):
     doc_type: str
     template: str
-    begins_from: int = 1
+    begins_from: Optional[int] = None   # omitted: keep the counter where it is (prefix-only change)
     scope_key: str = "org"
+
+
+def _check_template(template: str, begins_from: Optional[int]) -> None:
+    problem = doc_template_problem(template)
+    if problem:
+        raise HTTPException(422, problem)
+    if begins_from is not None and begins_from < 1:
+        raise HTTPException(422, "Numbering must start from 1 or higher")
 
 
 @router.get("/numbering")
 async def list_numbering(
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     rows = (await db.execute(select(NumberSequence).where(
         NumberSequence.org_id == current.org_id))).scalars().all()
@@ -64,26 +74,54 @@ async def set_numbering(
 ):
     if data.doc_type not in DEFAULT_TEMPLATES:
         raise HTTPException(422, f"Unknown doc_type. Valid: {sorted(DEFAULT_TEMPLATES)}")
-    if "{C" not in data.template:
-        raise HTTPException(422, "Template must contain a {C} counter token")
+    _check_template(data.template, data.begins_from)
     seq = (await db.execute(select(NumberSequence).where(
         NumberSequence.org_id == current.org_id, NumberSequence.doc_type == data.doc_type,
         NumberSequence.scope_key == data.scope_key))).scalar_one_or_none()
     if seq:
         seq.template = data.template
-        seq.next_value = data.begins_from
+        if data.begins_from is not None:
+            seq.next_value = data.begins_from
     else:
+        # Same starting point next_number would pick: past any documents already issued.
+        start = data.begins_from if data.begins_from is not None else \
+            await _existing_count(db, current.org_id, data.doc_type) + 1
         seq = NumberSequence(org_id=current.org_id, doc_type=data.doc_type,
                              scope_key=data.scope_key, template=data.template,
-                             next_value=data.begins_from)
+                             next_value=start)
         db.add(seq)
     await db.commit()
-    return {"ok": True, "example": await peek_example(data.template, data.begins_from)}
+    return {"ok": True, "example": await peek_example(data.template, seq.next_value)}
+
+
+async def _next_value(db: AsyncSession, org_id: str, doc_type: Optional[str], scope_key: str) -> int:
+    """Where this doc type's counter really is — what a save without begins_from keeps."""
+    if not doc_type:
+        return 1
+    seq = (await db.execute(select(NumberSequence.next_value).where(
+        NumberSequence.org_id == org_id, NumberSequence.doc_type == doc_type,
+        NumberSequence.scope_key == scope_key))).scalar_one_or_none()
+    return seq if seq is not None else await _existing_count(db, org_id, doc_type) + 1
 
 
 @router.post("/numbering/preview")
-async def preview_numbering(data: NumberingIn, current: Employee = Depends(get_current_employee)):
-    return {"example": await peek_example(data.template, data.begins_from)}
+async def preview_numbering(data: NumberingIn, db: AsyncSession = Depends(get_db),
+                            current: Employee = Depends(get_current_employee)):
+    _check_template(data.template, data.begins_from)
+    start = data.begins_from if data.begins_from is not None else \
+        await _next_value(db, current.org_id, data.doc_type, data.scope_key)
+    return {"example": await peek_example(data.template, start)}
+
+
+@router.get("/numbering/preview")
+async def preview_numbering_get(template: str, begins_from: Optional[int] = None,
+                                doc_type: Optional[str] = None, scope_key: str = "org",
+                                db: AsyncSession = Depends(get_db),
+                                current: Employee = Depends(get_current_employee)):
+    _check_template(template, begins_from)
+    start = begins_from if begins_from is not None else \
+        await _next_value(db, current.org_id, doc_type, scope_key)
+    return {"example": await peek_example(template, start)}
 
 
 # ── Legal entities ───────────────────────────────────────────────────────────
@@ -204,6 +242,7 @@ async def list_tax_groups(db: AsyncSession = Depends(get_db),
 @router.post("/tax-groups", status_code=201)
 async def create_tax_group(data: TaxGroupIn, db: AsyncSession = Depends(get_db),
                            current: Employee = Depends(require_perm("can_manage_settings"))):
+    await require_owned_ids(db, Tax, data.member_tax_ids, current.org_id, "tax")
     g = TaxGroup(org_id=current.org_id, name=data.name,
                  member_tax_ids=json.dumps(data.member_tax_ids))
     db.add(g)
@@ -233,6 +272,17 @@ async def set_tax_rules(data: TaxRuleIn, db: AsyncSession = Depends(get_db),
                         current: Employee = Depends(require_perm("can_manage_settings"))):
     if data.doc_family not in ("tickets_sales", "posting"):
         raise HTTPException(422, "doc_family must be tickets_sales|posting")
+    from backend.models import Tax
+    known = {t.id: t for t in (await db.execute(select(Tax).where(
+        Tax.org_id == current.org_id))).scalars().all()}
+    for tid in data.tax_ids:
+        if tid not in known:
+            raise HTTPException(422, "Unknown tax in tax_ids")
+        if not known[tid].active:
+            raise HTTPException(422, f"{known[tid].name} is switched off. Remove it from the "
+                                     "list or switch it back on.")
+    if len(set(data.tax_ids)) != len(data.tax_ids):
+        raise HTTPException(422, "A tax can only be in the list once")
     # replace the stack for this family
     for r in (await db.execute(select(TaxRule).where(
             TaxRule.org_id == current.org_id, TaxRule.doc_family == data.doc_family))).scalars().all():
@@ -267,6 +317,7 @@ async def create_tax_exception(data: TaxExceptionIn, db: AsyncSession = Depends(
                                current: Employee = Depends(require_perm("can_manage_settings"))):
     if not data.exempt and not data.tax_id:
         raise HTTPException(422, "Provide tax_id or set exempt=true")
+    await require_owned_ids(db, Tax, [data.tax_id], current.org_id, "tax")
     e = TaxException(org_id=current.org_id, doc_family=data.doc_family,
                      target_type=data.target_type, target_id=data.target_id,
                      tax_id=data.tax_id, exempt=data.exempt, taxation_system=data.taxation_system)

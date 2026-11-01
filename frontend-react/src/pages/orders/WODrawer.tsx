@@ -15,7 +15,7 @@ import { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import { Order, deviceName, money } from "./types";
 import { Avatar, deviceIcon, dueText, friendlyDate } from "./look";
-import { api, openAuthedDoc } from "../../api/client";
+import { api, idempotencyKey, openAuthedDoc } from "../../api/client";
 import { readAsDataUrl } from "../../lib/files";
 import { confirmDialog, alertDialog, promptDialog } from "../../lib/dialog";
 import AuthedImage from "../../components/AuthedImage";
@@ -115,7 +115,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
     { const ds = droppedStatus(statuses as any[], key); if (ds) { reason = await askCancelReason(ds.name); if (reason === null) return; } }
     const prev = d.status; setD({ ...d, status: key });
     try { await api.patch(`/orders/${order.id}/status`, { status: key, reason: reason || undefined }); flash("Status updated"); onChanged?.(); }
-    catch (e: any) { setD({ ...d, status: prev }); flash(`Failed: ${e.message}`); }
+    // The server says why in a sentence ("WO-12 still has $40 to pay…"): show it as it is.
+    catch (e: any) { setD({ ...d, status: prev }); flash(e.message || "Couldn't change the status"); }
   }
   async function saveNotes(tech_notes: string, conclusion: string) {
     try { await api.patch(`/orders/${order.id}/notes`, { tech_notes, conclusion }); setD({ ...d, tech_notes, conclusion }); flash("Notes saved"); }
@@ -1643,19 +1644,24 @@ export function InvoicesTab({ orderId, total, deposit, currencyCode, fxRate, cur
     try { const c = await api.get<PayCtx>(`/cash/orders/${orderId}/payment-context`); setCtx(c);
       const firstAcc = (c.accounts_by_method[method] || c.accounts_by_method.cash || [])[0];
       setAccount(firstAcc?.id || ""); setAmount(String(kind === "pay" ? c.remaining : "")); setModal(kind);
+      payKey.current = idempotencyKey();
     } catch (e: any) { onFlash(`Cannot open payment: ${e.message}`); }
   };
   // Busy guard: the ref blocks a second click landing before React re-renders the disabled button,
   // so a double-click can never post the same payment twice.
   const [payBusy, setPayBusy] = useState(false); const payBusyRef = useRef(false);
+  // One key per payment window: a second click (or another tab's retry) gets the first answer back
+  // from the server instead of posting the money again. A new key once it has gone through.
+  const payKey = useRef(idempotencyKey());
   const [onReader, setOnReader] = useState(false);   // F2/F3: card taken on a reader instead of recorded by hand
   const submit = async () => {
     if (payBusyRef.current) return;
     payBusyRef.current = true; setPayBusy(true);
     const amt = parseFloat(amount);
     try {
-      if (modal === "prepay") await api.post(`/cash/orders/${orderId}/prepay`, { amount: amt, account_id: account });
-      else await api.post(`/cash/orders/${orderId}/pay`, { amount: amt, account_id: account, method });
+      if (modal === "prepay") await api.postOnce(`/cash/orders/${orderId}/prepay`, { amount: amt, account_id: account }, payKey.current);
+      else await api.postOnce(`/cash/orders/${orderId}/pay`, { amount: amt, account_id: account, method }, payKey.current);
+      payKey.current = idempotencyKey();
       setModal(null); onFlash("Payment recorded"); load();
     } catch (e: any) { onFlash(`Failed: ${e.message}`); } finally { payBusyRef.current = false; setPayBusy(false); }
   };

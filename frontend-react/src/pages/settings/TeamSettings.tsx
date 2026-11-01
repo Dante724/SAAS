@@ -24,7 +24,7 @@ const FEED_SIGNALS: [string, string][] = [
 const PRESETS: [string, string, string][] = [
   ["Full access", "Everything, like the owner", "verified_user"],
   ["Manager", "Runs the shop, no billing setup", "badge"],
-  ["Specialist", "Works on jobs, sees their own pay", "build"],
+  ["Specialist", "Works on jobs; doesn't take payments or give discounts", "build"],
   ["Partner", "Outside partner, limited view", "group"],
 ];
 
@@ -238,7 +238,8 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
 
   // Saved roles are allow-lists on the server: a code they don't list is off, so show it off
   // (otherwise a permission added later looks granted here while the API refuses it).
-  const explicit = !!role?.perms_explicit;
+  // A new role with no preset starts with nothing on: the server grants only what's sent.
+  const explicit = !!role?.perms_explicit || (isNew && !preset);
   const allowed = (code: string) => (explicit ? perms[code] === true : perms[code] !== false);
   const toggle = (code: string) => setPerms((p) => ({ ...p, [code]: !(explicit ? p[code] === true : p[code] !== false) }));
   const grantAll = (codes: { code: string }[], on: boolean) => setPerms((p) => { const n = { ...p }; codes.forEach((c) => { n[c.code] = on; }); return n; });
@@ -341,7 +342,8 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
                     </button>
                   ))}
                 </div>
-                {preset && <p className="text-xs text-ink-tertiary mt-2">Changes you make below are added on top of {preset}. You can fine-tune everything after saving.</p>}
+                {preset ? <p className="text-xs text-ink-tertiary mt-2">Changes you make below are added on top of {preset}. You can fine-tune everything after saving.</p>
+                  : <p className="text-xs text-ink-tertiary mt-2">Nothing is switched on yet. Pick a starting point, or switch on what this role needs below.</p>}
               </div>
             )}
             <div className="flex items-center gap-2 pt-1">

@@ -12,7 +12,7 @@ import pytest
 async def _emp_headers(client, H, perms=None):
     role_id = None
     if perms is not None:
-        role_id = (await client.post("/api/staff/roles", json={"name": "R", "permissions": perms}, headers=H)).json()["id"]
+        role_id = (await client.post("/api/staff/roles", json={"name": f"R {uuid.uuid4().hex[:6]}", "permissions": perms}, headers=H)).json()["id"]
     email = f"e-{uuid.uuid4().hex[:6]}@t.dev"
     body = {"name": "Emp", "email": email, "password": "pw-test-12345"}
     if role_id:

@@ -88,7 +88,7 @@ async def pull(entity_type: str,
 
 
 @router.get("/mappings")
-async def mappings(db: AsyncSession = Depends(get_db), current: Employee = Depends(get_current_employee)):
+async def mappings(db: AsyncSession = Depends(get_db), current: Employee = Depends(require_perm("can_manage_settings"))):
     rows = (await db.execute(select(IntegrationMapping).where(
         IntegrationMapping.org_id == current.org_id, IntegrationMapping.integration == "qbo"))).scalars().all()
     return {"items": [{"entity_type": m.entity_type, "local_id": m.local_id, "remote_id": m.remote_id,
@@ -96,7 +96,7 @@ async def mappings(db: AsyncSession = Depends(get_db), current: Employee = Depen
 
 
 @router.get("/logs")
-async def logs(db: AsyncSession = Depends(get_db), current: Employee = Depends(get_current_employee)):
+async def logs(db: AsyncSession = Depends(get_db), current: Employee = Depends(require_perm("can_manage_settings"))):
     rows = (await db.execute(select(IntegrationSyncLog).where(
         IntegrationSyncLog.org_id == current.org_id, IntegrationSyncLog.integration == "qbo")
         .order_by(desc(IntegrationSyncLog.created_at)).limit(100))).scalars().all()

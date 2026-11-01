@@ -53,9 +53,33 @@ def pct_amounts(subtotal: float, discount_pct: float, tax_pct: float) -> tuple[f
 
 
 async def lock_order(db: AsyncSession, order_id: str) -> None:
-    """Serialize money moves on one job (Postgres row lock; SQLite already serializes writes), so
-    two requests can't both apply the same held deposit or both create the job's first invoice."""
-    await db.execute(select(Order.id).where(Order.id == order_id).with_for_update())
+    """Serialize changes to one job's money and lines, so two requests can't both apply the same
+    held deposit, both create the job's first invoice, or edit its lines over each other. Postgres:
+    a row lock. SQLite ignores FOR UPDATE and only serializes writes, so there a no-op UPDATE
+    takes the write lock now (the second request waits, then reads what the first one saved)."""
+    if db.get_bind().dialect.name == "sqlite":
+        from sqlalchemy import update
+        await db.execute(update(Order).where(Order.id == order_id)
+                         .values(updated_at=Order.updated_at).execution_options(synchronize_session=False))
+    else:
+        await db.execute(select(Order.id).where(Order.id == order_id).with_for_update())
+
+
+async def billed_on(db: AsyncSession, order_id: str, *, exclude_invoice_id: str | None = None):
+    """What live invoices already bill on this job, read under lock_order: (an invoice billing
+    the whole job — it lists none of the job's lines, so it follows the job — or None,
+    {order_line_id: invoice} for lines listed on an invoice, partial or frozen when sent/paid)."""
+    job_lines = set((await db.execute(select(OrderLine.id).where(OrderLine.order_id == order_id))).scalars().all())
+    whole, lines = None, {}
+    for inv in await invoices_for_order(db, order_id):
+        if inv.id == exclude_invoice_id:
+            continue
+        mine = [r.order_line_id for r in await _billed_rows(db, inv) if r.order_line_id in job_lines]
+        if mine:
+            lines.update({lid: inv for lid in mine})
+        elif whole is None:
+            whole = inv
+    return whole, lines
 
 
 async def invoices_for_order(db: AsyncSession, order_id: str) -> list[Invoice]:

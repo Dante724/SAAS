@@ -42,7 +42,7 @@ async def _register(client, name="Co"):
 
 
 async def _teammate(client, H, *deny):
-    r = await client.post("/api/settings/rbac/roles", json={
+    r = await client.post("/api/settings/rbac/roles", json={"template": "Full access", 
         "name": f"No {deny[0]} {uuid.uuid4().hex[:4]}", "permissions": {c: False for c in deny}}, headers=H)
     assert r.status_code in (200, 201), r.text
     email = f"tm-{uuid.uuid4().hex[:8]}@t.dev"

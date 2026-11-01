@@ -34,13 +34,14 @@ function authHeader(): Record<string, string> {
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(method: string, path: string, body?: unknown, extra?: Record<string, string>): Promise<T> {
   const res = await fetch(BASE + scoped(method, path), {
     method,
     credentials: "include", // send the existing session cookie
     headers: {
       "Content-Type": "application/json",
       ...authHeader(),
+      ...(extra || {}),
     },
     body: body != null ? JSON.stringify(body) : undefined,
   });
@@ -160,9 +161,18 @@ async function postForm<T>(path: string, form: FormData): Promise<T> {
   return (await res.json()) as T;
 }
 
+/** A fresh key for one money action. Keep it while the same action is retried (double click,
+ *  timeout) and make a new one once it has gone through, so the server posts it once. */
+export function idempotencyKey(): string {
+  try { return `web-${crypto.randomUUID()}`; } catch { return `web-${Date.now()}-${Math.random().toString(36).slice(2, 10)}`; }
+}
+
 export const api = {
   get: <T>(p: string) => request<T>("GET", p),
   post: <T>(p: string, b?: unknown) => request<T>("POST", p, b),
+  // Payments a double click or a retry could send twice: the server runs one request per
+  // Idempotency-Key and answers a repeat with the first result (backend/services/idempotency.py).
+  postOnce: <T>(p: string, b: unknown, key: string) => request<T>("POST", p, b, { "Idempotency-Key": key }),
   postForm,
   patch: <T>(p: string, b?: unknown) => request<T>("PATCH", p, b),
   put: <T>(p: string, b?: unknown) => request<T>("PUT", p, b),

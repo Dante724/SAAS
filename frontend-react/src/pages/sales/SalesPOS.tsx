@@ -1,6 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import Shell, { M } from "../../components/Shell";
-import { api } from "../../api/client";
+import { api, idempotencyKey } from "../../api/client";
 import { useMe } from "../../context/Me";
 import VoidableList from "../../components/VoidableList";
 import { useClientSearch } from "../../hooks/useClientSearch";
@@ -142,15 +142,17 @@ export default function SalesPOS() {
 
   useWedgeScanner((code) => { scan(code); }, { enabled: !receiptFor && !readerFor && !newClient && !matches });
 
+  const saleKey = useRef(idempotencyKey());   // a double click on Charge makes one sale (server: Idempotency-Key)
   async function charge(onReader = false) {
     if (cart.length === 0) { flash("Cart is empty"); return; }
     setBusy(true);
     try {
-      const r = await api.post<any>("/sales", {
+      const r = await api.postOnce<any>("/sales", {
         client_id: client?.id || null, account_id: onReader ? null : (accountId || null), discount,
         coupon_code: coupon.trim() || null, gift_card_code: giftCard.trim() || null, redeem_points: redeemPts || 0,
         lines: cart.map((l) => ({ kind: l.kind, ref_id: l.ref_id, description: l.description, qty: l.qty, unit_price: l.unit_price, discount: l.discount })),
-      });
+      }, saleKey.current);
+      saleKey.current = idempotencyKey();
       const red = r.redeemed && Object.keys(r.redeemed).length
         ? " · redeemed " + Object.entries(r.redeemed).map(([k, v]) => `${k} ${money(v as number)}`).join(", ") : "";
       // No profit here: the customer is usually looking at this screen.

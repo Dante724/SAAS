@@ -13,7 +13,7 @@ async def test_me_admin_role_denies_nothing(client, tenant):
 
 @pytest.mark.asyncio
 async def test_me_reflects_explicit_denies(client, tenant):
-    role = await client.post("/api/settings/rbac/roles", json={
+    role = await client.post("/api/settings/rbac/roles", json={"template": "Full access", 
         "name": "Front desk",
         "permissions": {"can_view_cashflow": False,
                         "can_view_client_info": False,
@@ -45,7 +45,7 @@ async def test_me_reflects_explicit_denies(client, tenant):
 @pytest.mark.asyncio
 async def test_denied_permission_is_still_enforced_server_side(client, tenant):
     """Hiding is a convenience; the API must refuse regardless of the UI."""
-    role = await client.post("/api/settings/rbac/roles", json={
+    role = await client.post("/api/settings/rbac/roles", json={"template": "Full access", 
         "name": "No settings", "permissions": {"can_manage_settings": False}},
         headers=tenant)
     rid = role.json()["id"]

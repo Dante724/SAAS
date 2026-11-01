@@ -7,7 +7,7 @@ import json
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -311,6 +311,12 @@ class PriceItemIn(BaseModel):
     item_id: str
     price: float
 
+    @field_validator("price")
+    @classmethod
+    def _money(cls, v):
+        from backend.services.money import check_money
+        return check_money(v)
+
 
 @router.get("/types/{type_id}/items")
 async def list_type_items(
@@ -336,11 +342,13 @@ async def set_type_item(
     row = (await db.execute(select(PriceTypeItem).where(
         PriceTypeItem.price_type_id == type_id, PriceTypeItem.item_type == data.item_type,
         PriceTypeItem.item_id == data.item_id, PriceTypeItem.org_id == current.org_id))).scalar_one_or_none()
+    from backend.services.money import org_price_decimals, round_price
+    price = round_price(data.price, await org_price_decimals(db, current.org_id))
     if row:
-        row.price = data.price
+        row.price = price
     else:
         db.add(PriceTypeItem(org_id=current.org_id, price_type_id=type_id,
-                             item_type=data.item_type, item_id=data.item_id, price=data.price))
+                             item_type=data.item_type, item_id=data.item_id, price=price))
     await db.commit()
     return {"ok": True}
 
@@ -407,6 +415,28 @@ class PriceDefaultsIn(BaseModel):
     min_margin_pct: Optional[float] = None
     margin_guard: Optional[str] = None       # off | warn | block
     discount_approval_pct: Optional[float] = None
+
+    # QA 2026-10-31 B: price_decimals -3 and margin_guard "banana" used to be stored.
+    @field_validator("price_decimals")
+    @classmethod
+    def _decimals(cls, v):
+        if v is not None and not 0 <= v <= 2:      # prices are stored with 2 decimals
+            raise ValueError("price_decimals must be 0, 1 or 2")
+        return v
+
+    @field_validator("margin_guard")
+    @classmethod
+    def _guard(cls, v):
+        if v is not None and v not in ("off", "warn", "block"):
+            raise ValueError("margin_guard must be off, warn or block")
+        return v
+
+    @field_validator("min_margin_pct", "discount_approval_pct")
+    @classmethod
+    def _pct(cls, v):
+        if v is not None and not 0 <= v <= 100:
+            raise ValueError("Percentages must be between 0 and 100")
+        return v
 
 
 @router.get("/defaults")

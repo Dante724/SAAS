@@ -14,10 +14,12 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Employee, Role
 from backend.services import audit
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import get_current_employee, has_perm, require_perm
+from backend.services.owned import require_unique_name
 from backend.services.permissions import (
     ALL_CODES,
     CATALOG,
+    ROLE_READERS,
     TEMPLATES,
     make_explicit,
     new_role_permissions,
@@ -58,13 +60,21 @@ def _ser_role(r: Role) -> dict:
 @router.get("/roles")
 async def list_roles(db: AsyncSession = Depends(get_db),
                      current: Employee = Depends(get_current_employee)):
+    await assert_can_read_roles(db, current)
     rows = (await db.execute(select(Role).where(Role.org_id == current.org_id))).scalars().all()
     return {"items": [_ser_role(r) for r in rows]}
 
 
+async def assert_can_read_roles(db: AsyncSession, current: Employee) -> None:
+    for code in ROLE_READERS:
+        if await has_perm(db, current, code):
+            return
+    raise HTTPException(403, "You don't have access to roles")
+
+
 class RoleIn(BaseModel):
     name: str
-    permissions: dict = {}          # {code: bool}; omitted => allowed (deny-wins)
+    permissions: dict = {}          # {code: bool}; without a template, omitted => off
     template: Optional[str] = None  # seed from a template
     location_scope: str = "all"
     location_ids: list[str] = []
@@ -184,6 +194,7 @@ async def create_role(data: RoleIn, db: AsyncSession = Depends(get_db),
     _validate(data.permissions)
     if data.template and data.template not in TEMPLATES:
         raise HTTPException(422, f"Unknown template. Valid: {list(TEMPLATES)}")
+    await require_unique_name(db, Role, current.org_id, data.name, "role")
     perms = new_role_permissions(data.template, data.permissions)
     perms = await guard_role_change(db, current, None, perms, data)
     r = Role(org_id=current.org_id, name=data.name, permissions=perms, perms_explicit=True,
@@ -207,6 +218,7 @@ async def update_role(role_id: str, data: RoleIn, db: AsyncSession = Depends(get
     if not r:
         raise HTTPException(404, "Role not found")
     _validate(data.permissions)
+    await require_unique_name(db, Role, current.org_id, data.name, "role", exclude_id=r.id, current_name=r.name)
     # A field the client didn't send keeps its current value. Defaulting it to "all" would quietly
     # widen a restricted role (the old role editor never sent location or account limits).
     current_vals = _ser_role(r)

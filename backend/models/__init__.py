@@ -260,6 +260,17 @@ class Role(Base):
     employees: Mapped[list["Employee"]] = relationship(back_populates="role")
 
 
+class RolePermissionBackup(Base):
+    """A role's permissions before a data migration changed them, so its downgrade can restore
+    them (rt144a1: existing technician roles tightened). Written by migrations only."""
+    __tablename__ = "role_permission_backups"
+    role_id: Mapped[str] = mapped_column(String, primary_key=True)
+    migration: Mapped[str] = mapped_column(String(40), primary_key=True)
+    org_id: Mapped[Optional[str]] = mapped_column(String)
+    permissions: Mapped[Optional[dict]] = mapped_column(JSON)
+    created_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=now_utc)
+
+
 class EmployeeGroup(Base):
     """Build 83 — a named group of employees, separate from roles. Roles grant
     permissions; groups are used for assignment and notification targeting."""
@@ -2937,6 +2948,17 @@ class TaxRule(Base):
     priority: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class TaxStackBackfillLog(Base):
+    """Migration taxbf01: one row per shop whose job tax stack was set to its default tax, with
+    the stack it had before, so the migration's downgrade can put it back."""
+    __tablename__ = "tax_stack_backfill_log"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    org_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    previous_tax_ids: Mapped[str] = mapped_column(Text, nullable=False)   # JSON list, priority order
+    tax_id: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
 class TaxException(Base):
     """Override the default stack for a specific labor/service/product/category."""
     __tablename__ = "tax_exceptions"
@@ -3247,7 +3269,7 @@ all_models = [
     StaffNotification, PushSubscription,
     ChecklistTemplate, ChecklistTemplateItem, OrderChecklistItem,
     GiftCard, GiftCardLedger, Coupon, LoyaltyLedger,
-    NumberSequence, LegalEntity, TaxGroup, TaxRule, TaxException,
+    NumberSequence, LegalEntity, TaxGroup, TaxRule, TaxStackBackfillLog, TaxException,
     XeroConnection,
     Directory, DirectoryItem,
     AssetGroup, AssetBrand, AssetModel, AssetIdentifierRule,
@@ -3741,6 +3763,20 @@ class ImportMapping(Base):
     mapping: Mapped[dict] = mapped_column(JSON, default=dict)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
+
+class IdempotencyRecord(Base):
+    """One row per client-chosen Idempotency-Key, so a create or a payment that is retried
+    (double tap, a timeout on a phone's flaky connection) runs once and the retry gets the
+    first answer back. `response` is null while the first request is still in flight.
+    Rows older than 48h are swept by services/idempotency.sweep()."""
+    __tablename__ = "idempotency_records"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    key: Mapped[str] = mapped_column(String(80))
+    endpoint: Mapped[str] = mapped_column(String(80))
+    response: Mapped[Optional[dict]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    __table_args__ = (UniqueConstraint("org_id", "key", name="uq_idempotency_org_key"),)
 
 # ii144a: registers the before-flush hook that mirrors parts.barcode into product_barcodes.
 from backend.services import product_codes as _product_codes  # noqa: E402,F401

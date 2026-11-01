@@ -73,9 +73,14 @@ async def order(client, h, oid):
 
 
 async def invoice(client, h, oid, cid, mode="detailed"):
+    """The job's invoice in the given display mode. A job is billed once, so a second call gets
+    the same invoice back and switches its mode (its lines re-resolve on the next GET)."""
     r = await client.post("/api/finance/invoices", headers=h, json={
         "order_id": oid, "client_id": cid, "display_mode": mode})
-    assert r.status_code == 201, r.text
+    assert r.status_code in (200, 201), r.text
+    if r.status_code == 200:
+        p = await client.patch(f"/api/finance/invoices/{r.json()['id']}", headers=h, json={"display_mode": mode})
+        assert p.status_code == 200, p.text
     return r.json()["id"]
 
 

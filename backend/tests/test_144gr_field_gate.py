@@ -13,7 +13,7 @@ async def test_field_gates_status(client, tenant):
     loc_id = await _loc(client, H)
     t = (await client.post("/api/forms/types", json={"name": "Repair"}, headers=H)).json()
     # A status to gate, and a field that blocks it when severity = severe.
-    st = await client.post("/api/statuses", json={"name": "Ready", "status_group": "ready"}, headers=H)
+    st = await client.post("/api/statuses", json={"name": "Ready (gated)", "status_group": "ready"}, headers=H)
     skey = st.json()["key"]
     fr = await client.post(f"/api/forms/types/{t['id']}/fields", json={
         "field_label": "Damage severity", "field_type": "text",

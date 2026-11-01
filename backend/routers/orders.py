@@ -1442,8 +1442,6 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     arguments so both callers share one code path."""
     data = StatusChange(status=new_status, note=note, reason=reason)
     await _guard_order_access(db, current, order)
-    if data.status != order.status and await _is_closed(db, current.org_id, order):
-        await assert_perm(db, current, "can_edit_closed_ticket")   # reopening counts as editing it
 
     # Resolve the target status from the configurable status table, scoped to this
     # record's pipeline. .first() (not scalar_one_or_none) so legacy duplicate keys
@@ -1458,6 +1456,23 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         .order_by(OrderStatus.sort_order)
     )).scalars().first()
     is_closing = target.is_terminal if target else (data.status in ("done", "closed", "delivered"))
+    # Reopening a closed job counts as editing it. Moving it on between closed statuses
+    # (done -> delivered) doesn't: the desk hands the device over without "Edit the closed ticket".
+    if data.status != order.status and await _is_closed(db, current.org_id, order) \
+            and not (target and target.status_group == "closed"):
+        await assert_perm(db, current, "can_edit_closed_ticket")
+    # Closing a job the customer still owes on is a money decision: it needs the right to take
+    # client payments, as in Orderry's close dialog (a technician could close an unpaid job —
+    # QA 31 Oct 2026). "Not collected" isn't a close.
+    if target and target.status_group == "closed" and data.status != order.status \
+            and not order.is_estimate and not await has_perm(db, current, "can_make_client_payments"):
+        from backend.services.order_money import balance_due as _due_now
+        due = await _due_now(db, order)
+        if due > 0:
+            from backend.services.currency import org_money
+            fmt = await org_money(db, current.org_id)
+            raise HTTPException(403, f"{order.order_number} still has {fmt(due)} to pay. Take the payment "
+                                     "first, or ask someone who takes payments to close it.")
 
     # Phase B.7: enforce status transfer rules (allowed from->to for this role)
     from backend.routers.statuses import is_transition_allowed
@@ -1733,8 +1748,18 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
 async def _convert_estimate(db, current, estimate):
     """Convert an estimate into a work order IN PLACE (Build 144di, Orderry-style):
     the same record flips ``is_estimate`` off, gets a fresh WO number, keeps its
-    lines and history, and now deducts stock. Irreversible. Returns the id."""
+    lines and history, and now deducts stock. Irreversible. Returns the id, or None when another
+    request converted it first (double tap, accept + staff convert): the flip below is a
+    conditional UPDATE, so only one caller wins and stock / the WO number move once."""
+    from sqlalchemy import update as _update
+
     from backend.models import OrderLine, OrderStatus, StockMovement, WorkOrderType
+    won = await db.execute(_update(Order).where(
+        Order.id == estimate.id, Order.is_estimate == True)  # noqa: E712
+        .values(is_estimate=False).execution_options(synchronize_session=False))
+    if won.rowcount != 1:
+        await db.refresh(estimate)
+        return None
     old_number = estimate.order_number
     # initial work-order status: the job type's own starting status (E3), else the org default, else "new"
     init = "new"
@@ -1801,11 +1826,15 @@ async def convert_estimate_endpoint(
     if not est:
         raise HTTPException(404, "Estimate not found")
     await _guard_order_access(db, current, est)
+    # A second click (or the customer accepting at the same moment) gets the work order back
+    # instead of an error: the screen just opens it. Nothing converts twice.
     if not est.is_estimate:
-        raise HTTPException(400, "This is already a work order")
+        return {"ok": True, "order_id": est.id, "already_converted": True}
     if est.converted_order_id:
-        raise HTTPException(400, "Already converted")
+        return {"ok": True, "order_id": est.converted_order_id, "already_converted": True}
     new_id = await _convert_estimate(db, current, est)
+    if new_id is None:
+        return {"ok": True, "order_id": est.id, "already_converted": True}
     return {"ok": True, "order_id": new_id}
 
 
@@ -2373,8 +2402,11 @@ async def invoice_preview(
     )).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    # QA 2026-10-31 B: the stored line total (after its discount and tax), so lines add up.
     lines = [{"description": l.description, "qty": l.qty, "unit_price": l.unit_price,
-              "line_type": l.line_type, "total": q2((l.qty or 0) * (l.unit_price or 0))}
+              "discount": l.discount or 0, "discount_type": l.discount_type,
+              "line_type": l.line_type,
+              "total": q2(l.total if l.total is not None else (l.qty or 0) * (l.unit_price or 0))}
              for l in order.lines]
     from backend.services.order_money import balance_due
     balance = await balance_due(db, order)
@@ -3723,6 +3755,10 @@ async def _guard_discount_approval(db, org_id, perms, discount, discount_type, i
         discount = 100.0 if not base or base <= 0 else min(100.0, float(discount) / float(base) * 100)
     if perms.get("can_approve_discount") is not False:
         return
+    # Giving the whole line away is always an approval, threshold or not (with no threshold set,
+    # a role denied approval could still make a job free — QA 31 Oct 2026).
+    if (discount or 0) >= 100:
+        raise HTTPException(403, "A 100% discount needs manager approval.")
     org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
     thr = float(getattr(org, "discount_approval_pct", 0) or 0)
     if thr <= 0 or (discount or 0) <= thr:
@@ -3837,6 +3873,7 @@ async def add_line(
     order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    await _lock_for_lines(db, order)
     await _guard_editable(db, order, current)
     if (data.discount or 0) > 0:
         await assert_perm(db, current, "can_set_discount")
@@ -3998,7 +4035,8 @@ async def add_line(
         # A kit's lines are never merged into: an extra must stay a line of its own.
         existing = (await db.execute(select(OrderLine).where(
             OrderLine.order_id == order_id, OrderLine.ref_id == data.ref_id, OrderLine.kind == "product",
-            OrderLine.bundle_group_id.is_(None)).limit(1))).scalars().first()
+            OrderLine.bundle_group_id.is_(None)).limit(1)
+            .execution_options(populate_existing=True))).scalars().first()
         if existing and not kit_group:
             existing.qty += data.qty
             existing.total = q2(existing.qty * existing.unit_price *
@@ -4261,6 +4299,16 @@ async def _maybe_deduct(db, order, line, qty, perms, current, *, bin_id=None, se
     line.pending_stock = (line.pending_stock or 0) + shortfall
 
 
+async def _lock_for_lines(db, order) -> None:
+    """Every change to a job's lines (add, edit, remove, merge) takes the job's lock first and
+    re-reads it, so two people on one job queue up: neither loses the other's edit, stock moves
+    for what is saved now (not a stale qty), a line removed twice returns its stock once, and the
+    order total is recomputed from every line. Lines are read after this with populate_existing."""
+    from backend.services.invoice_money import lock_order
+    await lock_order(db, order.id)
+    await db.refresh(order)
+
+
 def _line_as_in(line) -> "LineIn":
     return LineIn(line_type=line.line_type, description=line.description or "", qty=line.qty,
                   unit_price=line.unit_price or 0, cost_price=line.cost_price or 0,
@@ -4461,18 +4509,22 @@ async def update_line(
     order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    await _lock_for_lines(db, order)
     await _guard_editable(db, order, current)
-    line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id))).scalar_one_or_none()
+    line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id)
+                             .execution_options(populate_existing=True))).scalar_one_or_none()
     if not line:
         raise HTTPException(404, "Line not found")
     payload = data.model_dump(exclude_unset=True)
     if payload.keys() & {"qty", "unit_price", "discount", "discount_type", "tax_rate", "tax_mode"}:
         from backend.services.invoice_money import assert_line_editable
         await assert_line_editable(db, line.id)   # not under a sent or paid invoice
-    if current.role_id and not (await _order_perms(db, current)).get("can_view_purchase_price"):
-        payload.pop("cost_price", None)
+    # A cost change from someone who may not set costs is refused, not silently dropped (a 200
+    # that changed nothing — QA 31 Oct 2026). The editor only sends cost when it showed it.
     if "cost_price" in payload and float(payload["cost_price"] or 0) != float(line.cost_price or 0):
         await assert_perm(db, current, "can_set_cost_price")
+    if current.role_id and not (await _order_perms(db, current)).get("can_view_purchase_price"):
+        payload.pop("cost_price", None)
     if "discount_type" in payload and (payload["discount_type"] or "pct") != (line.discount_type or "pct"):
         await assert_perm(db, current, "can_set_discount_type")
     # Changing what the customer pays needs the matching right (a technician can't zero a job).
@@ -4563,8 +4615,10 @@ async def delete_line(
     order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    await _lock_for_lines(db, order)
     await _guard_editable(db, order, current)
-    line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id))).scalar_one_or_none()
+    line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id)
+                             .execution_options(populate_existing=True))).scalar_one_or_none()
     if not line:
         raise HTTPException(404, "Line not found")
     if line.bundle_group_id:
