@@ -63,14 +63,14 @@ export function RowMenu({ items, label = "More actions" }: { items: RowMenuItem[
 }
 
 type Dash = {
-  today?: { work_orders?: number; revenue?: number; refunds?: number };
+  today?: { work_orders?: number; revenue?: number; paid?: number; refunds?: number };
   kpis?: {
     new?: number; urgent?: number; overdue?: number; receivables?: number;
     ar?: number; ap?: number; total_money?: number; cash?: number; cashless?: number;
   };
   status_mix?: { group: string; count: number }[];
   monthly?: {
-    work_orders_created?: number; work_orders_won?: number; revenue?: number;
+    work_orders_created?: number; work_orders_won?: number; revenue?: number; paid?: number;
     conversion?: number; avg_work_order?: number;
   };
 };
@@ -159,7 +159,8 @@ function Dashboard() {
   const val = (v: string) => (loading ? sk() : v);
   const stats: SummaryStat[] = [
     { label: "New jobs today", value: val(String(t.work_orders ?? 0)), onClick: () => navigate("/orders") },
-    ...(loading || has(t.revenue) ? [{ label: "Paid today", value: val(money(t.revenue)), hint: t.refunds ? `${money(t.refunds)} refunded` : undefined, onClick: () => navigate("/finance") }] : []),
+    ...(loading || has(t.revenue) ? [{ label: "Sales today (ex tax)", value: val(money(t.revenue)), hint: "After returns, without tax", onClick: () => navigate("/reports") }] : []),
+    ...(loading || has(t.paid) ? [{ label: "Paid today", value: val(money(t.paid)), hint: t.refunds ? `${money(t.refunds)} refunded` : "Money in", onClick: () => navigate("/finance") }] : []),
     { label: "Waiting to start", value: val(String(k.new ?? 0)), onClick: () => navigate("/orders?status=new") },
     { label: "Urgent", value: val(String(k.urgent ?? 0)), onClick: () => navigate("/orders?priority=urgent") },
     { label: "Late", value: val(String(k.overdue ?? 0)), tone: "bad", zero: isZero(k.overdue), onClick: () => navigate("/orders") },
@@ -241,9 +242,10 @@ function Dashboard() {
           <div className="grid grid-cols-2 gap-4 text-sm">
             <Metric l="Jobs in" v={String(m.work_orders_created ?? 0)} loading={loading} />
             <Metric l="Jobs finished" v={String(m.work_orders_won ?? 0)} loading={loading} />
-            {(loading || has(m.revenue)) && <Metric l="Paid" v={money(m.revenue)} loading={loading} />}
+            {(loading || has(m.revenue)) && <Metric l="Sales (ex tax)" v={money(m.revenue)} loading={loading} />}
+            {(loading || has(m.paid)) && <Metric l="Paid" v={money(m.paid)} loading={loading} />}
             <Metric l="Finished share" v={`${m.conversion ?? 0}%`} loading={loading} />
-            {(loading || has(m.avg_work_order)) && <Metric l="Average job" v={money(m.avg_work_order)} loading={loading} />}
+            {(loading || has(m.avg_work_order)) && <Metric l="Average job (ex tax)" v={money(m.avg_work_order)} loading={loading} />}
           </div>
         </div>
         <div className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-sm p-5">

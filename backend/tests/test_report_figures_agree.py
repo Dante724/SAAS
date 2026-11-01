@@ -159,6 +159,8 @@ async def test_every_report_reads_the_known_day_the_same(client, db):
         "pnl.revenue": pnl["revenue"],
         "company.today.net_sales": comp["today"]["net_sales"],
         "company.monthly.net_sales": comp["monthly"]["net_sales"],
+        "company.today.revenue": comp["today"]["revenue"],
+        "company.monthly.revenue": comp["monthly"]["revenue"],
     }
     assert got == {k: REVENUE for k in got}, got
     assert pnl["tax_collected"] == 15.0          # 17 on the job − 2 on the refunded protector
@@ -170,7 +172,7 @@ async def test_every_report_reads_the_known_day_the_same(client, db):
 
     # cash collected is its own, labelled figure: 50 + 137 + 10 + 25 + 30 in, 22 + 5 back
     assert comp["today"]["cash_collected"] == 225.0, comp["today"]
-    assert comp["today"]["revenue"] == 252.0 and comp["today"]["refunds"] == 27.0
+    assert comp["today"]["paid"] == 252.0 and comp["today"]["refunds"] == 27.0
 
     owed = {
         "dashboard.outstanding": dash["outstanding"],
@@ -323,3 +325,33 @@ async def test_revenue_and_receivables_are_summed_in_the_database(client, db):
     many, sales, owed = await widest_query()
     assert sales == owed == 250.0
     assert many == few, (few, many)               # no parameter per job
+
+
+async def test_home_shows_the_same_sales_as_every_report(client, db):
+    """Regression pack C-1: a job of 176 with tax (160 without), paid and closed. Home's sales
+    and average job are 160 like the dashboard, finance summary, P&L and job profitability; the
+    176 that came in is Home's separate "paid" figure."""
+    H, loc, acc = await _setup(client)
+    cid = (await client.post("/api/clients", json={"name": "Gus"}, headers=H)).json()["id"]
+    o = (await client.post("/api/orders", json={"client_id": cid, "location_id": loc, "complaint": "x"},
+                           headers=H)).json()["id"]
+    r = await client.post(f"/api/orders/{o}/lines", json={
+        "kind": "service", "line_type": "labour", "description": "Repair", "qty": 1, "unit_price": 160,
+        "tax_rate": 10, "tax_mode": "imposed"}, headers=H)
+    assert r.status_code in (200, 201), r.text
+    r = await client.post(f"/api/cash/orders/{o}/pay", json={"method": "cash", "account_id": acc}, headers=H)
+    assert r.status_code in (200, 201), r.text
+    r = await client.patch(f"/api/orders/{o}/status", json={"status": await _status(client, H, "closed")},
+                           headers=H)
+    assert r.status_code == 200, r.text
+
+    comp = (await client.get("/api/reports/company-dashboard", headers=H)).json()
+    dash = (await client.get("/api/reports/dashboard", headers=H)).json()["stats"]
+    summ = (await client.get("/api/finance/reports/summary", headers=H)).json()
+    pnl = (await client.get("/api/finance/pnl", headers=H)).json()
+    prof = (await client.get("/api/reports/job-profitability", headers=H)).json()["totals"]
+    sales = {"company.today": comp["today"]["revenue"], "company.month": comp["monthly"]["revenue"],
+             "company.avg_job": comp["monthly"]["avg_work_order"], "dashboard": dash["revenue"],
+             "summary": summ["total_revenue"], "pnl": pnl["revenue"], "profitability": prof["revenue"]}
+    assert sales == {k: 160.0 for k in sales}, sales
+    assert comp["today"]["paid"] == comp["monthly"]["paid"] == 176.0

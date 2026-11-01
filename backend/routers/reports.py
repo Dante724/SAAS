@@ -1062,8 +1062,9 @@ async def company_dashboard(
     def is_open(o): return grp.get(o.status) not in closed_groups
 
     wo_today = sum(1 for o in orders if o.created_at >= today0)
-    # Two different measures, both labelled (services/revenue): "revenue" here is cash collected
-    # ("Paid today"), net_sales is revenue as every report defines it.
+    # Two different measures, both labelled (services/revenue): "revenue" is net sales (ex tax,
+    # after returns — the same figure as the dashboard, finance summary and P&L); "paid" is the
+    # money that came in ("Paid today"), with refunds and cash_collected beside it.
     cash_today = await money_rules.cash_collected(db, oid, today0, None, location_id)
     sales_today = (await money_rules.net_sales(db, oid, today0, None, location_id))["revenue"]
 
@@ -1111,9 +1112,13 @@ async def company_dashboard(
     won_month = [o for o in wo_month if grp.get(o.status) in closed_groups]
     cash_month = await money_rules.cash_collected(db, oid, month0, None, location_id)
     sales_month = (await money_rules.net_sales(db, oid, month0, None, location_id))["revenue"]
-    closed_total = sum((o.total or 0) for o in orders if grp.get(o.status) in closed_groups)
-    closed_n = sum(1 for o in orders if grp.get(o.status) in closed_groups)
-    avg_wo = q2(closed_total / closed_n) if closed_n else 0
+    # average finished job, ex tax after refunds and credit notes (services/revenue)
+    closed_q = select(Order.id).where(Order.org_id == oid, Order.is_estimate == False,  # noqa: E712
+                                      Order.status.in_([k for k, g in grp.items() if g == "closed"] or [""]))
+    if location_id:
+        closed_q = closed_q.where(Order.location_id == location_id)
+    closed_figs = await money_rules.job_figures(db, closed_q)
+    avg_wo = q2(sum(f["revenue"] for f in closed_figs.values()) / len(closed_figs)) if closed_figs else 0
     conversion = round(len(won_month) / len(wo_month) * 100, 0) if wo_month else 0
 
     # Money on Home follows the role: balances need "see balance", takings and amounts owed
@@ -1124,7 +1129,8 @@ async def company_dashboard(
     return {
         "today": {
             "work_orders": wo_today,
-            "revenue": cash_today["in"] if see_fin else None,           # money in ("Paid today")
+            "revenue": sales_today if see_fin else None,                # net sales, ex tax
+            "paid": cash_today["in"] if see_fin else None,              # money in ("Paid today")
             "refunds": cash_today["refunds"] if see_fin else None,
             "cash_collected": cash_today["net"] if see_fin else None,   # in − refunds
             "net_sales": sales_today if see_fin else None,              # revenue, ex tax
@@ -1143,7 +1149,8 @@ async def company_dashboard(
         "monthly": {
             "work_orders_created": len(wo_month),
             "work_orders_won": len(won_month),
-            "revenue": cash_month["in"] if see_fin else None,           # money in ("Paid")
+            "revenue": sales_month if see_fin else None,                # net sales, ex tax
+            "paid": cash_month["in"] if see_fin else None,              # money in ("Paid")
             "cash_collected": cash_month["net"] if see_fin else None,
             "net_sales": sales_month if see_fin else None,
             "conversion": conversion,
