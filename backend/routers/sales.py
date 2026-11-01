@@ -2,7 +2,7 @@
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy import update as sa_update
@@ -345,12 +345,28 @@ async def delete_sale(
 @router.post("", status_code=201)
 async def create_sale(
     data: SaleIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_create_sales")),
 ):
     """One warehouse per sale (the seller's location). Products deduct stock via
     the guarded UPDATE + FIFO cost layers, so COGS — and therefore the estimated
-    profit (total − cost) — is exact."""
+    profit (total − cost) — is exact. A double click on Charge with the same
+    Idempotency-Key makes one sale and gets the first answer back."""
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "sales.create")
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        result = await _create_sale(data, db, current)
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
+
+
+async def _create_sale(data: SaleIn, db: AsyncSession, current: Employee):
     if not data.lines:
         raise HTTPException(400, "A sale needs at least one line")
     if any(ln.kind == "service" for ln in data.lines):
@@ -767,6 +783,12 @@ async def post_stocktake(
     if not st:
         raise HTTPException(404, "Stocktake not found")
     if st.status == "posted":
+        raise HTTPException(409, "Stocktake is already posted")
+    # Claim the post first: a second click sent while the first is in flight applies nothing.
+    won = await db.execute(sa_update(Stocktake).where(
+        Stocktake.id == st.id, Stocktake.status != "posted")
+        .values(status="posted").execution_options(synchronize_session=False))
+    if won.rowcount != 1:
         raise HTTPException(409, "Stocktake is already posted")
     if data.uncounted == "zero":
         for l in (await db.execute(select(StocktakeLine).where(

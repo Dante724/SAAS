@@ -3730,5 +3730,19 @@ class ImportMapping(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
+class IdempotencyRecord(Base):
+    """One row per client-chosen Idempotency-Key, so a create or a payment that is retried
+    (double tap, a timeout on a phone's flaky connection) runs once and the retry gets the
+    first answer back. `response` is null while the first request is still in flight.
+    Rows older than 48h are swept by services/idempotency.sweep()."""
+    __tablename__ = "idempotency_records"
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    key: Mapped[str] = mapped_column(String(80))
+    endpoint: Mapped[str] = mapped_column(String(80))
+    response: Mapped[Optional[dict]] = mapped_column(JSON)
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
+    __table_args__ = (UniqueConstraint("org_id", "key", name="uq_idempotency_org_key"),)
+
 # ii144a: registers the before-flush hook that mirrors parts.barcode into product_barcodes.
 from backend.services import product_codes as _product_codes  # noqa: E402,F401

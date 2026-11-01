@@ -8,7 +8,7 @@ income transaction to the chosen account (or to client debt).
 from datetime import datetime
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -635,9 +635,26 @@ async def post_order_payment(db, org_id, o, amount, acc, method, *, actor_id=Non
 async def pay_order(
     order_id: str,
     data: OrderPaymentIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
+    # A retried click with the same Idempotency-Key returns the first payment's answer: the row
+    # lock below only stops a second "pay the balance", not a part payment sent twice.
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "cash.pay_order")
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        result = await _pay_order(order_id, data, db, current)
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
+
+
+async def _pay_order(order_id: str, data: OrderPaymentIn, db: AsyncSession, current: Employee):
     # Lock the order row so two concurrent "pay" requests serialize (Postgres) — combined with the
     # remaining<=0 guard below this prevents a double-click / webhook-race from double-posting a
     # payment. (with_for_update is a no-op on SQLite, which already serializes writes.)
@@ -710,15 +727,36 @@ class PrepayIn(BaseModel):
 async def prepay_order(
     order_id: str,
     data: PrepayIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
     """Take a prepayment on an order. Posts income to the chosen cashbox and
     records a Payment(kind=prepayment) that the close-window math subtracts. It lands on the
-    job's open invoice now, or on the job's next invoice when it gets one (G4)."""
+    job's open invoice now, or on the job's next invoice when it gets one (G4).
+    A double click with the same Idempotency-Key posts once and gets the first answer back."""
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "cash.prepay_order")
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        result = await _prepay_order(order_id, data, db, current)
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
+
+
+async def _prepay_order(order_id: str, data: PrepayIn, db: AsyncSession, current: Employee):
     o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
+    # The job's lock (a real one on SQLite too), then a fresh read: two prepayments at once both
+    # count in prepayment_total below.
+    from backend.services.invoice_money import lock_order
+    await lock_order(db, o.id)
+    await db.refresh(o)
     if data.amount <= 0:
         raise HTTPException(400, "Amount must be positive")
     acc = (await db.execute(select(Account).where(Account.id == data.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
@@ -803,6 +841,7 @@ class SubInvoiceIn(BaseModel):
 async def create_sub_invoice(
     order_id: str,
     data: SubInvoiceIn,
+    response: Response,
     db: AsyncSession = Depends(get_db),
     # the same right as POST /finance/invoices: invoicing isn't taking money
     current: Employee = Depends(require_perm("can_create_invoices")),
@@ -813,9 +852,23 @@ async def create_sub_invoice(
     if not o:
         raise HTTPException(404, "Order not found")
     lines = (await db.execute(select(OrderLine).where(OrderLine.order_id == order_id))).scalars().all()
-    chosen = [l for l in lines if not data.line_ids or l.id in data.line_ids]
+    # A line is billed once. No lines picked = bill the rest (every line not on an invoice yet).
+    from backend.services.invoice_money import billed_on, lock_order
+    await lock_order(db, o.id)
+    whole, billed = await billed_on(db, o.id)
+    if whole:
+        if data.line_ids:
+            raise HTTPException(409, f"This job is billed in full on invoice {whole.invoice_number}, "
+                                     "which follows the job. Edit that invoice instead.")
+        response.status_code = 200
+        return {"ok": True, "invoice_id": whole.id, "invoice_number": whole.invoice_number,
+                "total": whole.total, "existing": True}
+    again = [l for l in lines if l.id in billed and l.id in (data.line_ids or [])]
+    if again:
+        raise HTTPException(409, f"'{again[0].description}' is already on invoice {billed[again[0].id].invoice_number}.")
+    chosen = [l for l in lines if (l.id in data.line_ids if data.line_ids else l.id not in billed)]
     if not chosen:
-        raise HTTPException(400, "No lines selected")
+        raise HTTPException(400, "Every line on this job is already billed" if billed else "No lines selected")
     await _check_backdating(db, current.org_id)
     from backend.services.invoice_money import new_invoice
     inv = await new_invoice(db, org_id=current.org_id, orders=[o], lines=chosen)
