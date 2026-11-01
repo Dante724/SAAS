@@ -420,8 +420,8 @@ class PriceDefaultsIn(BaseModel):
     @field_validator("price_decimals")
     @classmethod
     def _decimals(cls, v):
-        if v is not None and not 0 <= v <= 4:
-            raise ValueError("price_decimals must be between 0 and 4")
+        if v is not None and not 0 <= v <= 2:      # prices are stored with 2 decimals
+            raise ValueError("price_decimals must be 0, 1 or 2")
         return v
 
     @field_validator("margin_guard")

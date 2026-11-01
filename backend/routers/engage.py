@@ -206,7 +206,7 @@ async def create_coupon(
     from backend.services.coupons import check_coupon_value
     check_coupon_value(data.kind, data.value)
     if data.min_total < 0 or data.max_uses < 0:
-        raise HTTPException(422, "min_total and max_uses can't be negative")
+        raise HTTPException(422, "Minimum order and usage limit can't be negative")
     code = data.code.strip().upper()
     dup = (await db.execute(select(Coupon).where(
         Coupon.org_id == current.org_id, Coupon.code == code))).scalar_one_or_none()

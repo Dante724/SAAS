@@ -63,9 +63,16 @@ class ServiceIn(BaseModel):
     required_resource_types: list = []# 144ek: resource types this service needs
 
     # QA 2026-10-31 B: negative / absurd numbers used to be stored (or silently clamped).
-    @field_validator("price", "cost_price")
+    @field_validator("price")
     @classmethod
-    def _money(cls, v):
+    def _price(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("A service price can't be negative. Use a discount on the job instead.")
+        return check_money(v)
+
+    @field_validator("cost_price")
+    @classmethod
+    def _cost(cls, v):
         return check_money(v)
 
     @field_validator("duration_min")

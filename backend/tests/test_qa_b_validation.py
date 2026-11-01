@@ -21,7 +21,7 @@ async def test_tax_rate_and_mode_are_checked(client, tenant, body):
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("body", [
-    {"price_decimals": -3}, {"price_decimals": 9}, {"margin_guard": "banana"},
+    {"price_decimals": -3}, {"price_decimals": 3}, {"margin_guard": "banana"},
     {"min_margin_pct": 150}, {"discount_approval_pct": -1},
 ])
 async def test_price_defaults_are_checked(client, tenant, body):
@@ -75,3 +75,17 @@ async def test_commission_bad_values_are_refused(client, tenant, body):
     sid = await _service(client, tenant)
     r = await client.post(f"/api/catalog/services/{sid}/commissions", headers=tenant, json=body)
     assert r.status_code == 422, r.text
+
+
+@pytest.mark.asyncio
+async def test_negative_service_price_points_to_discounts(client, tenant):
+    r = await client.post("/api/catalog/services", headers=tenant, json={"name": "S", "price": -5})
+    assert r.status_code == 422
+    assert "Use a discount on the job instead" in r.text
+
+
+@pytest.mark.asyncio
+async def test_coupon_negative_limits_message(client, tenant):
+    r = await client.post("/api/coupons", headers=tenant, json={"code": "NEG", "kind": "pct", "value": 5, "max_uses": -1})
+    assert r.status_code == 422
+    assert r.json()["detail"] == "Minimum order and usage limit can't be negative"
