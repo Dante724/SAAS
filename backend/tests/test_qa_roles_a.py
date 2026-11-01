@@ -128,7 +128,7 @@ async def test_specialist_sees_no_money_and_no_cost(client):
     assert listed["total"] >= 1                                  # the count stays
     assert all("total" not in p for p in listed["items"])
     stock = (await client.get(f"/api/inventory/parts/{part['id']}/stock", headers=T)).json()
-    assert stock["total_value"] is None and stock.get("unit_cost") is None
+    assert stock.get("total_value") is None and stock.get("unit_cost") is None
     assert (await client.get(f"/api/inventory/parts/{part['id']}/stock", headers=H)).json()["total_value"] == 578
 
 
@@ -239,3 +239,36 @@ async def test_technician_reads_names_not_contacts_invites_or_roles(client):
     assert (await client.get("/api/settings/rbac/roles", headers=T)).status_code == 403
     assert (await client.get("/api/staff/invites", headers=H)).json()["items"]
     assert (await client.get("/api/settings/rbac/roles", headers=H)).status_code == 200
+
+
+# ── follow-up: every technician GET checked for cost and admin data ─────────────────────────
+# A probe ran every GET route as a Specialist and searched the responses for the unit cost
+# (289) and its multiples. These were the last ones that still gave the cost away.
+
+@pytest.mark.asyncio
+async def test_no_technician_response_carries_stock_cost(client):
+    H = await _owner(client)
+    loc = await _loc(client, H)
+    loc2 = (await client.post("/api/staff/locations", json={"name": "B"}, headers=H)).json()["id"]
+    T = await _person(client, H, (await _role(client, H, {"name": "Tech", "template": "Specialist"}))["id"])
+    sup = (await client.post("/api/suppliers", json={"name": "Acme"}, headers=H)).json()
+    part = (await client.post("/api/inventory/parts", json={"name": "Crown", "sku": "CR-1", "cost_price": 289,
+                                                             "sell_price": 499}, headers=H)).json()
+    po = (await client.post("/api/inventory/po", json={"supplier_id": sup["id"], "location_id": loc,
+          "lines": [{"part_id": part["id"], "qty_ordered": 2, "unit_cost": 289}]}, headers=H)).json()
+    await client.post(f"/api/inventory/po/{po['po_id']}/receive", json={"lines": []}, headers=H)
+    tr = (await client.post("/api/transfers", json={"from_location_id": loc, "to_location_id": loc2,
+          "lines": [{"part_id": part["id"], "qty": 1}]}, headers=H)).json()
+    await client.post("/api/pricing/types", json={"name": "Trade", "markup_pct": 50}, headers=H)
+    urls = [f"/api/transfers/{tr['id']}", f"/api/inventory/parts/{part['id']}/batches",
+            f"/api/pricing/parts/{part['id']}/prices", f"/api/suppliers/{sup['id']}/performance"]
+    for url in urls:
+        owner = await client.get(url, headers=H)
+        assert owner.status_code == 200, (url, owner.text)
+        assert any(n in owner.text for n in ("289", "578")), url           # the owner sees the cost
+        tech = await client.get(url, headers=T)
+        assert tech.status_code == 200, (url, tech.text)
+        assert "289" not in tech.text and "578" not in tech.text, (url, tech.text)
+    prices = (await client.get(f"/api/pricing/parts/{part['id']}/prices", headers=T)).json()
+    assert "basis" not in prices and all("markup_pct" not in p for p in prices["prices"])
+
