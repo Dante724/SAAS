@@ -1,4 +1,4 @@
-# RepairOS — Production Readiness Audit
+# Tekly — Production Readiness Audit
 _Senior staff engineering review. Baseline: repairos-27 (287 routes, 278 API endpoints)._
 
 ## 1. Current architecture

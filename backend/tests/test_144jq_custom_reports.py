@@ -45,7 +45,7 @@ async def test_isolation_flat_and_group_aggregate(client, tenant, db):
     assert a != b
 
     for org, total, status in [(a, 100, "paid"), (a, 50, "paid"), (a, 30, "draft"), (b, 999, "paid")]:
-        db.add(Invoice(id=uuid.uuid4().hex, org_id=org, invoice_number="X", total=total, status=status,
+        db.add(Invoice(id=uuid.uuid4().hex, org_id=org, invoice_number=f"X-{uuid.uuid4().hex[:6]}", total=total, status=status,
                        issued_at=datetime(2026, 9, 10)))
     await db.commit()
 
@@ -116,7 +116,7 @@ async def test_grouped_run_ignores_stale_columns(client, tenant, db):
     never widen the output by those columns. Locks the contract against a future refactor."""
     org = await _org(client, tenant)
     for total, status in [(10, "paid"), (20, "paid"), (5, "draft")]:
-        db.add(Invoice(id=uuid.uuid4().hex, org_id=org, invoice_number="X", total=total,
+        db.add(Invoice(id=uuid.uuid4().hex, org_id=org, invoice_number=f"X-{uuid.uuid4().hex[:6]}", total=total,
                        status=status, issued_at=datetime(2026, 9, 10)))
     await db.commit()
     out = await cr.build_and_run(db, org, {

@@ -20,7 +20,9 @@ module.exports = defineConfig({
   },
   projects: [
     { name: 'mobile', use: { ...devices['Pixel 5'] } },
-    { name: 'tablet', use: { ...devices['iPad (gen 7)'] } },
+    // iPad viewport/touch, but on Chromium: the workflow installs only Chromium (and Lighthouse
+    // attaches to it), while the iPad descriptor would otherwise launch WebKit.
+    { name: 'tablet', use: { ...devices['iPad (gen 7)'], browserName: 'chromium' } },
   ],
   webServer: {
     command:
@@ -28,7 +30,8 @@ module.exports = defineConfig({
       `python3 -m uvicorn main:app --port ${PORT}`,
     cwd: '..',
     url: `${BASE}/api/health`,
-    reuseExistingServer: !process.env.CI,
+    // The e2e workflow starts the app itself (Lighthouse needs it up first), so reuse it.
+    reuseExistingServer: true,
     timeout: 60000,
   },
 });

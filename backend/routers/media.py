@@ -63,7 +63,43 @@ async def get_media(
     if not blob:
         raise HTTPException(404, "Media not found")
     raw, mime = await load(blob)
-    return Response(content=raw, media_type=mime)
+    return Response(content=raw, **safe_media_response(raw, mime, blob.name))
+
+
+# Types a browser may render inline without running script. Everything else — HTML, SVG,
+# XML, JS, unknown — is served as an opaque download so an uploaded file can never execute
+# as the app (the staff session token lives in this origin's localStorage).
+_MAGIC = {
+    "image/png": (b"\x89PNG\r\n\x1a\n",),
+    "image/jpeg": (b"\xff\xd8\xff",),
+    "image/gif": (b"GIF87a", b"GIF89a"),
+    "application/pdf": (b"%PDF-",),
+}
+_INLINE_NO_MAGIC = ("image/webp", "image/heic", "image/heif", "audio/", "video/", "text/plain")
+
+
+def _inline_ok(raw: bytes, mime: str) -> bool:
+    if mime in _MAGIC:
+        return raw.startswith(_MAGIC[mime])   # declared type must match the bytes
+    if mime == "image/webp":
+        return raw[:4] == b"RIFF" and raw[8:12] == b"WEBP"
+    return mime.startswith(_INLINE_NO_MAGIC)
+
+
+def safe_media_response(raw: bytes, mime: str, name: str | None) -> dict:
+    """Response kwargs (media_type + headers) that keep stored media inert."""
+    from urllib.parse import quote
+    mime = (mime or "").split(";", 1)[0].strip().lower()
+    headers = {"X-Content-Type-Options": "nosniff", "Cache-Control": "private, no-store"}
+    if mime and _inline_ok(raw, mime):
+        if mime != "application/pdf":     # sandboxing a PDF would block the browser's viewer
+            headers["Content-Security-Policy"] = "default-src 'none'; img-src 'self' data:; media-src 'self'; sandbox"
+        return {"media_type": "text/plain; charset=utf-8" if mime == "text/plain" else mime,
+                "headers": headers}
+    fname = quote((name or "download").replace("\\", "_").replace("/", "_")[:120])
+    headers["Content-Disposition"] = f"attachment; filename*=UTF-8''{fname}"
+    headers["Content-Security-Policy"] = "default-src 'none'; sandbox"
+    return {"media_type": "application/octet-stream", "headers": headers}
 
 
 @router.post("/migrate-feed")

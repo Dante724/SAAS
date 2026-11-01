@@ -17,7 +17,7 @@ from backend.models import (
     TaxRule,
 )
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.numbering import DEFAULT_TEMPLATES, peek_example
+from backend.services.numbering import DEFAULT_TEMPLATES, last_issued, peek_example
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 
@@ -42,9 +42,12 @@ async def list_numbering(
     for dt, default in DEFAULT_TEMPLATES.items():
         r = configured.get((dt, "org"))
         tmpl = r.template if r else default
+        # Unconfigured: show where the counter will really start, not 1, so saving the row as-is
+        # doesn't try to rewind past numbers that are already out.
+        nxt = r.next_value if r else (await last_issued(db, current.org_id, dt, "org", tmpl))[0] + 1
         out.append({"doc_type": dt, "scope_key": "org", "template": tmpl,
-                    "next_value": r.next_value if r else 1,
-                    "example": await peek_example(tmpl, r.next_value if r else 1),
+                    "next_value": nxt,
+                    "example": await peek_example(tmpl, nxt),
                     "is_default": r is None})
     # include any non-org scopes too
     for r in rows:
@@ -66,6 +69,13 @@ async def set_numbering(
         raise HTTPException(422, f"Unknown doc_type. Valid: {sorted(DEFAULT_TEMPLATES)}")
     if "{C" not in data.template:
         raise HTTPException(422, "Template must contain a {C} counter token")
+    if data.begins_from < 1:
+        raise HTTPException(422, "Numbering must start from 1 or higher")
+    # Never rewind onto numbers that are already out: the next number must be past the last issued.
+    issued, issued_number = await last_issued(db, current.org_id, data.doc_type, data.scope_key, data.template)
+    if data.begins_from <= issued:
+        raise HTTPException(422, f"{issued_number} has already been issued. Start {data.doc_type} numbering "
+                                 f"from {issued + 1} or higher.")
     seq = (await db.execute(select(NumberSequence).where(
         NumberSequence.org_id == current.org_id, NumberSequence.doc_type == data.doc_type,
         NumberSequence.scope_key == data.scope_key))).scalar_one_or_none()

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { M } from "./Shell";
 import { api } from "../api/client";
+import { printHtmlInFrame } from "../lib/safeHtml";
 
 /**
  * 144ie — one dialog for bulk exact-size printing of any record type. It loads the
@@ -51,11 +52,7 @@ export default function BulkPrintDialog({ open, onClose, ids, noun, endpoint, id
       const r = await api.post<any>(endpoint, body);
       const html = r?.html;
       if (html) {
-        const ifr = document.createElement("iframe");
-        ifr.style.cssText = "position:fixed;right:0;bottom:0;width:0;height:0;border:0;visibility:hidden";
-        ifr.srcdoc = html;
-        ifr.onload = () => { try { ifr.contentWindow?.focus(); ifr.contentWindow?.print(); } catch { /* noop */ } setTimeout(() => ifr.remove(), 2000); };
-        document.body.appendChild(ifr);
+        printHtmlInFrame(html);
       }
       onClose();
     } catch { /* noop */ } finally { setBusy(false); }
@@ -64,20 +61,20 @@ export default function BulkPrintDialog({ open, onClose, ids, noun, endpoint, id
   if (!open) return null;
   const total = copies ? ids.length * nCopies : ids.length;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-primary/40 backdrop-blur-[2px]" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-primary/40 backdrop-blur-[2px]" role="presentation" onClick={onClose}>
       <div className="bg-white rounded-2xl shadow-drawer w-[380px] max-w-full p-5" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-bold text-ink-primary">Print {noun}s</h3>
           <button aria-label="Close" onClick={onClose} className="w-7 h-7 rounded-lg hover:bg-slate-100 grid place-items-center text-ink-tertiary"><M n="close" c="text-base" /></button>
         </div>
         <p className="text-xs text-ink-tertiary mb-3">{ids.length} {noun}{ids.length === 1 ? "" : "s"} selected. Each prints at the template's exact size.</p>
-        <label className="block text-[11px] font-semibold text-ink-tertiary uppercase mb-1">Template</label>
+        <label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Template</label>
         <select value={tplId} onChange={(e) => setTplId(e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2.5 py-2 mb-3">
           {tpls.length === 0 && <option value="">No matching templates — create one in Settings</option>}
           {tpls.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
         </select>
         {copies && (<>
-          <label className="block text-[11px] font-semibold text-ink-tertiary uppercase mb-1">Copies each</label>
+          <label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Copies each</label>
           <input type="number" min={1} max={500} value={nCopies} onChange={(e) => setNCopies(Math.max(1, +e.target.value || 1))} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2.5 py-2 mb-4" />
         </>)}
         <div className="flex justify-end gap-2">

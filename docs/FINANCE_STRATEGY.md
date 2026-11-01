@@ -1,10 +1,10 @@
-# RepairOS Finance — gap analysis & how we beat Orderry
+# Tekly Finance — gap analysis & how we beat Orderry
 
 *Research + product brainstorm. Target market: SMB repair shops across **US, LATAM, Europe, and Asia** — multi-currency, multi-tax-regime. Pre-launch, multi-tenant B2B SaaS.*
 
 ---
 
-## 1. What RepairOS Finance is today (verified in code)
+## 1. What Tekly Finance is today (verified in code)
 
 **Finance hub** — Overview KPIs · Transactions · Invoices (create with service/product/labor/custom lines, discount %, tax %, multi-order fan-out, send by email, pay, **UBL 2.1 e-invoice** issue/clear/XML) · Client balances · Payroll (calculation per month, adjustments, runs, payslip print).
 
@@ -18,7 +18,7 @@ This is already a serious, real finance module — not a toy. The gaps below are
 
 ## 2. What Orderry has that we're thin on (parity gaps)
 
-| # | Orderry capability | RepairOS today | Gap |
+| # | Orderry capability | Tekly today | Gap |
 |---|---|---|---|
 | P1 | **Cash flow statement** for any period, print/export, first-class | `cash_flow` report exists | Medium — needs a proper period statement view + export |
 | P2 | **Retroactive/backdated** cash entries (income/transfer/expense) | transactions are "now" | Medium — allow a back-dated `paid_at` with an audit flag |
@@ -37,7 +37,7 @@ None of these are moats — they're table stakes Orderry ships. Worth closing th
 
 Orderry is a competent but **one-size-fits-all global** tool: a single generic tax model, Stripe/Square/SumUp payments, QuickBooks/Xero accounting. It is "good enough" in the US and thin-to-wrong the moment a shop needs a **country-mandated fiscal e-invoice, a local payment rail, or its own accountant's file format.** Across US + LATAM + Europe + Asia those requirements are *not optional* — in much of LATAM and the EU, e-invoicing is legally mandatory and Orderry simply doesn't do it.
 
-So the moat is not any one country feature — it's an **architecture bet: a pluggable RegionPack.** Ship the finance core once; make the *locale-specific* pieces plug-ins so RepairOS is correct out of the box in each market, and adding a country is a config + adapter, not a rewrite.
+So the moat is not any one country feature — it's an **architecture bet: a pluggable RegionPack.** Ship the finance core once; make the *locale-specific* pieces plug-ins so Tekly is correct out of the box in each market, and adding a country is a config + adapter, not a rewrite.
 
 ### The RegionPack abstraction (the product bet)
 

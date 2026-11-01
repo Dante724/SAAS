@@ -18,6 +18,7 @@ from sqlalchemy import and_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import EventFeedItem, Order, OrderStatus
+from backend.services.dates import now_utc
 
 _SLA_MARKER = "[sla]"   # prefix used to recognise (and dedupe) SLA feed events
 
@@ -37,7 +38,7 @@ def _minutes_in_status(order: Order, now: datetime) -> Optional[int]:
 
 async def find_breaches(db: AsyncSession, org_id: str, now: Optional[datetime] = None) -> list[dict]:
     """Return current SLA breaches for one org."""
-    now = now or datetime.utcnow()
+    now = now or now_utc()
     statuses = await _status_index(db, org_id)
     open_orders = (await db.execute(
         select(Order).where(and_(Order.org_id == org_id, Order.closed_at.is_(None)))
@@ -65,7 +66,7 @@ async def find_breaches(db: AsyncSession, org_id: str, now: Optional[datetime] =
 async def sweep_breaches(db: AsyncSession, now: Optional[datetime] = None) -> int:
     """Record a one-time client-internal feed event for each new breach across
     all orgs. Returns the number of new events written."""
-    now = now or datetime.utcnow()
+    now = now or now_utc()
     org_ids = [r[0] for r in (await db.execute(select(Order.org_id).distinct())).all()]
     written = 0
     for org_id in org_ids:

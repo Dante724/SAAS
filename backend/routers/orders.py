@@ -1,15 +1,18 @@
+import logging
 import secrets
-from datetime import datetime, timedelta
-from typing import List, Optional
+from dataclasses import dataclass
+from datetime import date, datetime, timedelta
+from typing import List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
+from backend.core import paging as _paging
 from backend.db.database import get_db
-from backend.services.dates import parse_dt
+from backend.services.dates import parse_dt, parse_wall_dt
 from backend.models import (
     Client,
     DocumentSignature,
@@ -20,14 +23,16 @@ from backend.models import (
     OrderStatus,
     OrderStatusLog,
     Organisation,
-    StockLevel,
     StockMovement,
 )
 from backend.services import industry as _ind
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import assert_perm, get_current_employee, has_perm, require_perm, record_scope
+from backend.services.batching import names_by_id, rows_by
 from backend.services.numbering import next_number
+from backend.services.dates import now_utc
 
-router = APIRouter(prefix="/api/orders", tags=["orders"])
+router = APIRouter(prefix="/api/orders", tags=["orders"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 
 async def unique_order_code(db: AsyncSession) -> str:
@@ -61,8 +66,15 @@ async def unique_public_token(db: AsyncSession) -> str:
 
 # ── Schemas ──────────────────────────────────
 
+# Line kind as the catalog/UI names it -> billing line_type. A custom line is billed as labour.
+_LINE_TYPE_FROM_KIND = {"service": "labour", "custom": "labour", "product": "part"}
+
+
 class LineIn(BaseModel):
-    line_type: str  # labour|part|fee
+    # labour|part|fee. Optional because the web "New work order" form only sends `kind`
+    # (launch QA B1) — derived from kind in _fill_line_type below.
+    line_type: Optional[str] = None
+    order_item_id: Optional[str] = None             # several items per job: which item (null = whole job)
     description: str
     qty: float = 1.0
     unit_price: float = 0.0
@@ -78,10 +90,60 @@ class LineIn(BaseModel):
     tax_id: Optional[str] = None
     tax_rate: float = 0.0
     tax_mode: str = "imposed"  # included|imposed
-    warranty_days: int = 0
+    warranty_days: Optional[int] = None    # None = take the catalog item's warranty (G2)
     ref_id: Optional[str] = None
     save_to_catalog: bool = False          # build 126: persist a custom line as a catalog item
     catalog_kind: Optional[str] = None     # service|product (when save_to_catalog)
+    bundle_group_id: Optional[str] = None  # add this line INSIDE a kit already on the job
+    catalog_sku: Optional[str] = Field(None, max_length=100)      # 3: product saved to the catalog
+    catalog_barcode: Optional[str] = Field(None, max_length=100)
+    bin_id: Optional[str] = None           # ii144c: take this product from this bin first
+    serial_number: Optional[str] = Field(None, max_length=120)   # ii144c: use this exact unit
+
+    # Security phase 3: negative quantities/prices/discounts and >100% discounts used to
+    # create phantom stock and zero/negative totals that slipped past every guard.
+    @field_validator("qty")
+    @classmethod
+    def _qty_positive(cls, v):
+        if v is not None and v <= 0:
+            raise ValueError("Quantity must be greater than zero")
+        return v
+
+    @field_validator("unit_price", "cost_price", "discount")
+    @classmethod
+    def _non_negative(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("Prices, costs and discounts can't be negative")
+        return v
+
+    @field_validator("discount_type")
+    @classmethod
+    def _known_discount_type(cls, v):
+        if v is not None and v not in ("pct", "fixed"):
+            raise ValueError("discount_type must be 'pct' or 'fixed'")
+        return v
+
+    @model_validator(mode="after")
+    def _pct_at_most_100(self):
+        if (self.discount_type or "pct") == "pct" and (self.discount or 0) > 100:
+            raise ValueError("A percentage discount can't exceed 100%")
+        return self
+
+    @model_validator(mode="after")
+    def _fixed_within_line(self):
+        # B3: an amount off can't be more than the line itself.
+        if (self.discount_type or "pct") == "fixed" and \
+                (self.discount or 0) > q2((self.qty or 0) * (self.unit_price or 0)) + 0.005:
+            raise ValueError("A discount can't be more than the line's price")
+        return self
+
+    @model_validator(mode="after")
+    def _fill_line_type(self):
+        if not self.line_type:
+            self.line_type = _LINE_TYPE_FROM_KIND.get((self.kind or "").lower())
+            if not self.line_type:
+                raise ValueError("line_type (labour|part|fee) or kind (service|product|custom) is required")
+        return self
 
 class OrderIn(BaseModel):
     client_id: Optional[str] = None
@@ -93,6 +155,7 @@ class OrderIn(BaseModel):
     manager_id: Optional[str] = None   # 144cp: WO manager/owner (Orderry parity)
     scheduled_for: Optional[str] = None
     scheduled_to: Optional[str] = None
+    due_at: Optional[str] = None   # gc144g3 — promised-by date/time set at intake (drives "overdue")
     duration_min: int = 60
     resource_id: Optional[str] = None
     type_id: Optional[str] = None
@@ -110,6 +173,7 @@ class OrderIn(BaseModel):
     template_key: Optional[str] = None   # industry template; defaults to the org's active one
     asset_group_id: Optional[str] = None
     asset_custom_data: Optional[dict] = None
+    device_passcode: Optional[str] = None   # J3: the device's unlock code, stored encrypted on the device
     intake_photos: Optional[List[str]] = None   # 144ak: media blob ids documenting condition at check-in
     is_estimate: bool = False
     currency_code: Optional[str] = None   # Build 122: per-document currency override
@@ -125,10 +189,15 @@ class RescheduleIn(BaseModel):
 class StatusChange(BaseModel):
     status: str
     note: Optional[str] = None
+    reason: Optional[str] = Field(None, max_length=300)   # cancellation reason when moving into a dropped status
+    # B11: a status that needs a comment can take it with the change, so the drawer can meet the gate.
+    comment: Optional[str] = Field(None, max_length=5000)
+    # B11: finishing a job that still owes money needs this, and finance access (a manager's call).
+    allow_unpaid: bool = False
 
 class CommentIn(BaseModel):
     body: str
-    visible_to_client: bool = False
+    visible_to_client: Optional[bool] = None   # left out: the shop's default comment visibility
 
 # ── Helpers ──────────────────────────────────
 
@@ -171,7 +240,8 @@ def _calc_line(line: "LineIn") -> float:
     if dtype == "fixed":
         after_discount = max(base - line.discount, 0)
     else:
-        after_discount = base * (1 - line.discount / 100)
+        # B3: clamped, so no path (old rows, imports) can turn a discount into a negative job.
+        after_discount = base * (1 - min(max(line.discount or 0, 0), 100) / 100)
     mode = getattr(line, "tax_mode", "imposed")
     if mode == "included":
         # price already contains tax; customer total does not change
@@ -179,10 +249,12 @@ def _calc_line(line: "LineIn") -> float:
     return q2(after_discount * (1 + line.tax_rate / 100))
 
 
-async def _auto_apply_tax(db, org_id: str, data: "LineIn") -> None:
+async def _auto_apply_tax(db, org_id: str, data: "LineIn", location_id: str | None = None) -> None:
     """When a line has no explicit tax, apply the org's default tax stack for the
-    Tickets&Sales family (honouring product/category exceptions). Stamps a single
-    effective rate/mode onto the line so existing per-line math keeps working."""
+    Tickets&Sales family (honouring product/category exceptions and location-scoped
+    taxes for the order's location). Stamps a single effective rate/mode onto the
+    line so existing per-line math keeps working — which can't represent a stack
+    that mixes included and imposed taxes, so that combination is refused."""
     if data.tax_id or (data.tax_rate or 0):
         return
     try:
@@ -191,13 +263,19 @@ async def _auto_apply_tax(db, org_id: str, data: "LineIn") -> None:
         return
     item_type = "product" if data.kind == "product" else ("service" if (data.kind == "service" or data.line_type == "labour") else None)
     res = await resolve_taxes(db, org_id, doc_family="tickets_sales", net_amount=100.0,
-                              item_type=item_type, item_id=data.ref_id)
+                              item_type=item_type, item_id=data.ref_id, location_id=location_id)
     if res.get("exempt"):
         data.tax_rate, data.tax_mode = 0.0, "imposed"
         return
     taxes = res.get("taxes") or []
     if taxes:
-        # single-rate stamp: sum rates of the resolved stack, mode from the first
+        modes = {t["mode"] for t in taxes}
+        if len(modes) > 1:
+            names = ", ".join(f"{t['name']} ({t['mode']})" for t in taxes)
+            raise HTTPException(422, f"The default tax stack mixes included and imposed taxes ({names}), "
+                                     f"which can't be applied to one line. Set every tax in the stack "
+                                     f"to the same mode, or set the line's tax explicitly.")
+        # single-rate stamp: sum rates of the resolved stack (all share one mode)
         data.tax_rate = q4(sum(t["rate"] or 0 for t in taxes))
         data.tax_mode = taxes[0]["mode"]
         data.tax_id = taxes[0]["tax_id"]
@@ -214,6 +292,15 @@ def _line_tax_amount(line: "LineIn") -> float:
         return q2(after_discount - after_discount / (1 + rate)) if rate else 0.0
     return q2(after_discount * rate)
 
+def order_tax(lines) -> float:
+    """Launch B4: the tax inside an order's total (imposed tax added on top plus VAT contained in
+    VAT-inclusive prices), stored on Order.tax so invoices, the PDF and reports can show it."""
+    from backend.services.tax import line_tax
+    return q2(sum(line_tax(qty=l.qty, unit_price=l.unit_price, discount=l.discount,
+                           discount_type=getattr(l, "discount_type", None), tax_rate=l.tax_rate,
+                           tax_mode=getattr(l, "tax_mode", None)) for l in lines))
+
+
 def _order_totals(lines: list[OrderLine]):
     labour = sum(l.total for l in lines if l.line_type == "labour")
     parts = sum(l.total for l in lines if l.line_type == "part")
@@ -224,9 +311,10 @@ def _intake_photos_payload(o: Order) -> list:
     """144dg — intake photos with their marked-up copy (if any). The original id/url is always the
     check-in shot; marked_id/url is the annotated derivative. Original is never replaced."""
     mk = getattr(o, "intake_markups", None) or {}
+    labels = getattr(o, "intake_photo_labels", None) or {}
     out = []
     for b in (getattr(o, "intake_photos", None) or []):
-        row = {"id": b, "url": f"/api/media/{b}"}
+        row = {"id": b, "url": f"/api/media/{b}", "label": labels.get(b)}
         m = mk.get(b)
         if m:
             row["marked_id"] = m
@@ -235,11 +323,16 @@ def _intake_photos_payload(o: Order) -> list:
     return out
 
 
-def _serialize_order(o: Order) -> dict:
+def _serialize_order_scalars(o: Order) -> dict:
+    """Every field of a work order except its lines, comments and status history."""
     return {
         "id": o.id,
         "order_number": o.order_number,
+        "location_id": o.location_id,       # ii144c: which location's bins a product line can come from
         "status": o.status,
+        "cancel_reason": getattr(o, "cancel_reason", None),
+        "written_off": float(getattr(o, "written_off", 0) or 0),
+        "continued_from_order_id": getattr(o, "continued_from_order_id", None),
         "priority": o.priority,
         "complaint": o.complaint,
         "diagnosis": o.diagnosis,
@@ -258,10 +351,14 @@ def _serialize_order(o: Order) -> dict:
         "resource_id": o.resource_id,
         "barcode": o.barcode,
         "due_at": o.due_at.isoformat() if o.due_at else None,
-        "overdue_by_date": bool(o.due_at and not o.closed_at and o.due_at < datetime.utcnow()),
+        "overdue_by_date": bool(o.due_at and not o.closed_at and o.due_at < now_utc()),
         "status_entered_at": o.status_entered_at.isoformat() if o.status_entered_at else None,
         "is_estimate": o.is_estimate,
         "estimate_approved_at": o.estimate_approved_at.isoformat() if o.estimate_approved_at else None,
+        # E5 — estimate terms and the customer's answer
+        "estimate_valid_until": o.estimate_valid_until.isoformat() if getattr(o, "estimate_valid_until", None) else None,
+        "estimate_revision": getattr(o, "estimate_revision", None) or 1,
+        "estimate_decline_reason": getattr(o, "estimate_decline_reason", None),
         "converted_order_id": o.converted_order_id,
         "converted_from_id": o.converted_from_id,
         "duration_min": o.duration_min,
@@ -272,71 +369,78 @@ def _serialize_order(o: Order) -> dict:
         "client_msg_unread": getattr(o, "client_msg_unread", 0) or 0,
         "rec_unread": getattr(o, "rec_unread", 0) or 0,
         "public_token": o.public_token,
+        "signed": bool(getattr(o, "signature", None)),   # customer signature captured (Go shows it)
         "created_at": o.created_at.isoformat(),
         "closed_at": o.closed_at.isoformat() if o.closed_at else None,
         "client": {"id": o.client.id, "name": o.client.name, "phone": o.client.phone,
                    "balance": float(getattr(o.client, "balance", 0) or 0),
                    "watch_out": getattr(o.client, "watch_out", None)} if o.client else None,
-        "device": {"id": o.device.id, "brand": o.device.brand, "model": o.device.model, "serial": o.device.serial, "imei": o.device.imei, "vin": o.device.vin, "hin": o.device.hin, "asset_type": o.device.asset_type, "asset_label": _ind.asset_label(getattr(o.device, "template_key", None)), "image_data": getattr(o.device, "image_data", None), "watch_out": getattr(o.device, "watch_out", None), "custom_data": o.device.custom_data or {}} if o.device else None,
         "assigned_to": {"id": o.assigned_to.id, "name": o.assigned_to.name} if o.assigned_to else None,
         "assigned_to_id": o.assigned_to_id,
         "manager": {"id": o.manager.id, "name": o.manager.name} if getattr(o, "manager", None) else None,
         "manager_id": getattr(o, "manager_id", None),
+        "device": None,
+    }
+
+
+def _asset_custom(cd):
+    from backend.routers.assets import public_custom
+    return public_custom(cd)
+
+
+def _asset_has_passcode(d) -> bool:
+    from backend.routers.assets import has_passcode
+    return has_passcode(d)
+
+
+def _serialize_order(o: Order) -> dict:
+    row = _serialize_order_scalars(o)
+    row.update({
+        "signature": o.signature,   # J1: the drawer shows the in-shop signature (detail view only)
+        "device": {"id": o.device.id, "brand": o.device.brand, "model": o.device.model, "serial": o.device.serial, "imei": o.device.imei, "vin": o.device.vin, "hin": o.device.hin, "asset_type": o.device.asset_type, "asset_label": _ind.asset_label(getattr(o.device, "template_key", None)), "image_data": getattr(o.device, "image_data", None), "watch_out": getattr(o.device, "watch_out", None), "custom_data": _asset_custom(o.device.custom_data), "has_passcode": _asset_has_passcode(o.device)} if o.device else None,
         "lines": [{"id": l.id, "line_type": l.line_type, "kind": l.kind, "description": l.description,
                    "qty": l.qty, "unit_price": l.unit_price, "cost_price": l.cost_price,
                    "discount": l.discount, "discount_type": l.discount_type, "discount_paid_by": l.discount_paid_by,
+                   "membership_id": getattr(l, "membership_id", None),
                    "tax_rate": l.tax_rate, "tax_mode": l.tax_mode, "technician_id": l.technician_id,
-                   "work_share": getattr(l, "work_share", 1.0), "booked_hours": getattr(l, "booked_hours", 0) or 0,
+                   "work_share": getattr(l, "work_share", 1.0), "booked_hours": getattr(l, "booked_hours", 0) or 0, "warranty_days": l.warranty_days or 0,
                    "co_technicians": getattr(l, "co_technicians", None) or [],
-                   "pending_stock": l.pending_stock or 0, "ref_id": l.ref_id, "total": l.total} for l in o.lines],
+                   "pending_stock": l.pending_stock or 0, "ref_id": l.ref_id, "total": l.total,
+                   "order_item_id": getattr(l, "order_item_id", None),
+                   "bundle_group_id": l.bundle_group_id, "bundle_name": l.bundle_name,
+                   "bundle_print_mode": l.bundle_print_mode, "bundle_price_locked": l.bundle_price_locked,
+                   "bundle_qty": l.bundle_qty} for l in o.lines],
         "comments": [{"id": c.id, "body": c.body, "visible_to_client": c.visible_to_client,
                       "created_at": c.created_at.isoformat()} for c in o.comments],
         "status_logs": [{"from": s.from_status, "to": s.to_status, "at": s.changed_at.isoformat(),
                          "note": s.note} for s in o.status_logs],
-    }
+    })
+    return row
 
 # ── Routes ───────────────────────────────────
 
-@router.get("")
-async def list_orders(
-    status: Optional[str] = None,
-    location_id: Optional[str] = None,
-    search: Optional[str] = None,
-    type_id: Optional[str] = None,
-    assigned_to_id: Optional[str] = None,
-    priority: Optional[int] = None,
-    client_id: Optional[str] = None,
-    brand: Optional[str] = None,
-    model: Optional[str] = None,
-    is_estimate: Optional[bool] = None,   # Build 144di: None = unified list (both)
-    created_from: Optional[str] = None,
-    created_to: Optional[str] = None,
-    include_archived: bool = False,
-    skip: int = 0,
-    limit: int = Query(50, ge=1, le=1000),   # WorkOrdersHub bulk-loads up to 1000 then paginates
-                                             # client-side; a lower cap 422s the whole page.
-    db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
-):
-    q = (select(Order)
-         .where(Order.org_id == current.org_id)
-         .options(
-             selectinload(Order.client),
-             selectinload(Order.device),
-             selectinload(Order.assigned_to),
-             selectinload(Order.lines),
-             selectinload(Order.comments),
-             selectinload(Order.status_logs),
-         )
-         .order_by(Order.created_at.desc()))
-    # estimates and work orders share this table; filter by the flag only when the
-    # caller asks for a specific type (None => unified list of both).
+# Work-order list paging. Old clients asked for limit=1000 and paginated in the browser; a
+# request above the page ceiling is clamped (not 422'd) so a cached bundle keeps working, and
+# `total` tells it there is more. The validation bound still rejects absurd values.
+ORDER_PAGE_MAX = 200
+BOARD_COLUMN_MAX = 200
+
+
+def _apply_order_filters(q, org_id: str, *, status=None, location_id=None, search=None,
+                         type_id=None, assigned_to_id=None, priority=None, priority_min=None,
+                         client_id=None, brand=None, model=None, is_estimate=None,
+                         created_from=None, created_to=None, include_archived=False,
+                         scheduled=None):
+    """The work-order list filters, shared by the list, its facet counts and the board, so a
+    total always counts exactly the rows the filters select. Device/client filters use
+    subqueries (not joins) so rows never duplicate and the count stays a plain count."""
+    from sqlalchemy import or_
+
+    from backend.models import Device
     if is_estimate is not None:
         q = q.where(Order.is_estimate == is_estimate)
-    # archived (soft-deleted) orders are hidden unless explicitly requested
     if not include_archived:
         q = q.where(Order.archived == False)  # noqa: E712
-    # status may be a single value or a comma-separated list (status group)
     if status:
         statuses = [s for s in status.split(",") if s]
         if len(statuses) == 1:
@@ -347,34 +451,125 @@ async def list_orders(
         q = q.where(Order.location_id == location_id)
     if type_id:
         q = q.where(Order.type_id == type_id)
-    if assigned_to_id:
+    if assigned_to_id == "__none":
+        q = q.where(Order.assigned_to_id.is_(None))
+    elif assigned_to_id:
         q = q.where(Order.assigned_to_id == assigned_to_id)
     if priority is not None:
         q = q.where(Order.priority == priority)
+    if priority_min is not None:
+        q = q.where(Order.priority >= priority_min)
     if client_id:
         q = q.where(Order.client_id == client_id)
+    if scheduled == "yes":
+        q = q.where(Order.scheduled_for.is_not(None))
+    elif scheduled == "no":
+        q = q.where(Order.scheduled_for.is_(None))
     if brand or model:
-        from backend.models import Device
-        q = q.join(Device, Order.device_id == Device.id)
+        dq = select(Device.id).where(Device.org_id == org_id)
         if brand:
-            q = q.where(Device.brand.icontains(brand))
+            dq = dq.where(Device.brand.icontains(brand))
         if model:
-            q = q.where(Device.model.icontains(model))
+            dq = dq.where(Device.model.icontains(model))
+        q = q.where(Order.device_id.in_(dq))
     if created_from:
         q = q.where(Order.created_at >= parse_dt(created_from, "created_from"))
     if created_to:
         q = q.where(Order.created_at <= parse_dt(created_to, "created_to"))
-    if search:
-        q = q.where(Order.order_number.contains(search))
-    # Build 83: record-level scope ("my work orders" / selected locations)
+    s = (search or "").strip()
+    if s:
+        # order number, client name/phone, or the device (brand, model, serial, IMEI)
+        cq = select(Client.id).where(Client.org_id == org_id, or_(
+            Client.name.icontains(s), Client.phone.contains(s)))
+        dq = select(Device.id).where(Device.org_id == org_id, or_(
+            Device.brand.icontains(s), Device.model.icontains(s),
+            Device.serial.icontains(s), Device.imei.contains(s)))
+        q = q.where(or_(Order.order_number.icontains(s),
+                        Order.client_id.in_(cq), Order.device_id.in_(dq)))
+    return q
+
+
+def _device_image_url(device_id: Optional[str], has_image: bool) -> Optional[str]:
+    return f"/api/assets/{device_id}/image" if (device_id and has_image) else None
+
+
+def _serialize_order_row(o: Order, has_image: bool) -> dict:
+    """List-row shape: every scalar field of the detail serializer, but no lines, comments or
+    status history, and the asset photo as a URL instead of inline base64. The drawer loads
+    GET /orders/{id} for the full record."""
+    row = _serialize_order_scalars(o)
+    if o.device:
+        d = o.device
+        row["device"] = {"id": d.id, "brand": d.brand, "model": d.model, "serial": d.serial,
+                         "imei": d.imei, "vin": d.vin, "hin": d.hin, "asset_type": d.asset_type,
+                         "asset_label": _ind.asset_label(getattr(d, "template_key", None)),
+                         "image_url": _device_image_url(d.id, has_image),
+                         "watch_out": getattr(d, "watch_out", None),
+                         "custom_data": _asset_custom(d.custom_data)}
+    return row
+
+
+async def _devices_with_images(db, device_ids) -> set:
+    """Which of these devices carry a photo — one query, without reading the photo bytes."""
+    from backend.models import Device
+    ids = [i for i in set(device_ids) if i]
+    if not ids:
+        return set()
+    return set((await db.execute(select(Device.id).where(
+        Device.id.in_(ids), Device.image_data.is_not(None), Device.image_data != ""))).scalars().all())
+
+
+def _order_list_options():
+    from sqlalchemy.orm import defer
+
+    from backend.models import Device
+    return (selectinload(Order.client), selectinload(Order.device).options(defer(Device.image_data)),
+            selectinload(Order.assigned_to), selectinload(Order.manager))
+
+
+@router.get("")
+async def list_orders(
+    status: Optional[str] = None,
+    location_id: Optional[str] = None,
+    search: Optional[str] = None,
+    q: Optional[str] = None,                  # alias of search (global search box sends q=)
+    type_id: Optional[str] = None,
+    assigned_to_id: Optional[str] = None,     # "__none" = unassigned
+    priority: Optional[int] = None,
+    priority_min: Optional[int] = None,       # 1 = urgent or VIP
+    scheduled: Optional[str] = Query(None, pattern="^(yes|no)$"),
+    client_id: Optional[str] = None,
+    brand: Optional[str] = None,
+    model: Optional[str] = None,
+    is_estimate: Optional[bool] = None,   # Build 144di: None = unified list (both)
+    created_from: Optional[str] = None,
+    created_to: Optional[str] = None,
+    include_archived: bool = False,
+    facets: bool = False,                     # also return status counts + assignees for the toolbar
+    skip: int = Query(0, ge=0),
+    limit: int = Query(50, ge=1, le=1000),
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    limit = min(limit, ORDER_PAGE_MAX)
     from backend.services import scoping
     role = await scoping.role_for(db, current)
-    q = scoping.scope_orders(q, role, current)
-    result = await db.execute(q.offset(skip).limit(limit))
-    orders = result.scalars().all()
-    count_q = select(func.count()).select_from(Order).where(Order.org_id == current.org_id)
-    count_q = scoping.scope_orders(count_q, role, current)   # count respects the same scope
-    total = (await db.execute(count_q)).scalar()
+    flt = dict(location_id=location_id, search=search or q, type_id=type_id,
+               assigned_to_id=assigned_to_id, priority=priority, priority_min=priority_min,
+               client_id=client_id, brand=brand, model=model, is_estimate=is_estimate,
+               created_from=created_from, created_to=created_to,
+               include_archived=include_archived, scheduled=scheduled)
+
+    def scoped(base):
+        return scoping.scope_orders(base.where(Order.org_id == current.org_id), role, current)
+
+    base = _apply_order_filters(scoped(select(Order)), current.org_id, status=status, **flt)
+    orders = (await db.execute(base.options(*_order_list_options())
+                               .order_by(Order.created_at.desc(), Order.id.desc())
+                               .offset(skip).limit(limit))).scalars().all()
+    # total = rows matching the same filters + record scope (it used to count the whole org)
+    total = (await db.execute(_apply_order_filters(
+        scoped(select(func.count(Order.id))), current.org_id, status=status, **flt))).scalar() or 0
     # Build 144ds — invoice status per order for the list column (batched, no N+1).
     from backend.models import Invoice as _Inv
     oids = [o.id for o in orders]
@@ -396,20 +591,57 @@ async def list_orders(
         for (oid,) in (await db.execute(select(_OCI.order_id).where(
                 _OCI.order_id.in_(oids), _OCI.required == True, _OCI.done == False))).all():  # noqa: E712
             pending_cl.add(oid)
+    with_img = await _devices_with_images(db, [o.device_id for o in orders])
     items = []
     for o in orders:
-        row = _serialize_order(o)
+        row = _serialize_order_row(o, o.device_id in with_img)
         row["invoice_status"] = inv_status.get(o.id)  # None = not invoiced
         row["checklists_pending"] = o.id in pending_cl
         items.append(row)
-    return {"total": total, "items": items}
+    out = {"total": total, "items": items, "skip": skip, "limit": limit}
+    if facets:
+        out.update(await _order_facets(db, current, role, status, flt))
+    if (search or q) and not skip:
+        # Go pilot: how the counter looks jobs up — the kind of search, never its text
+        from backend.services import pilot
+        await pilot.record_lookup(db, current, via="search", by=pilot.classify_query(search or q),
+                                  surface="orders_list" if search else "search_box",
+                                  order_id=items[0]["id"] if total == 1 else None,
+                                  matched=total > 0, collapse=True)
+    return out
+
+
+async def _order_facets(db, current, role, status, flt) -> dict:
+    """Toolbar numbers for the paged list: per-status counts under every filter except status,
+    the assignees present, and open work orders — all aggregates, no rows loaded."""
+    from backend.services import scoping
+
+    def scoped(base):
+        return scoping.scope_orders(base.where(Order.org_id == current.org_id), role, current)
+
+    counts = dict((await db.execute(_apply_order_filters(
+        scoped(select(Order.status, func.count(Order.id))), current.org_id, **flt)
+        .group_by(Order.status))).all())
+    people = (await db.execute(
+        scoped(select(Employee.id, Employee.name).select_from(Order)
+               .join(Employee, Order.assigned_to_id == Employee.id))
+        .where(Order.archived == False).distinct())).all()  # noqa: E712
+    closed_keys = select(OrderStatus.key).where(
+        OrderStatus.org_id == current.org_id, OrderStatus.record_type == "work_order",
+        OrderStatus.status_group.in_(("closed", "dropped")))
+    open_jobs = (await db.execute(scoped(select(func.count(Order.id))).where(
+        Order.archived == False, Order.is_estimate == False,  # noqa: E712
+        Order.status.not_in(closed_keys)))).scalar() or 0
+    return {"status_counts": counts,
+            "assignees": sorted(({"id": i, "name": n} for i, n in people), key=lambda a: (a["name"] or "").lower()),
+            "open_jobs": open_jobs}
 
 
 class BulkActionIn(BaseModel):
     order_ids: List[str]
     action: str            # set_status | assign | set_priority | create_invoice | group_invoice | archive | restore
     value: Optional[str] = None
-    reason: Optional[str] = None   # 144-G: archive reason
+    reason: Optional[str] = None   # 144-G: archive reason; also the cancellation reason for set_status
     refund: bool = True            # 144-G: refund payments when bulk-archiving
 
 
@@ -421,6 +653,11 @@ async def bulk_action(
 ):
     if not data.order_ids:
         raise HTTPException(400, "No orders selected")
+    # Bulk actions need the same permission as doing it to one order.
+    _bulk_perm = {"assign": "can_assign_staff", "create_invoice": "can_create_invoices",
+                  "group_invoice": "can_create_invoices"}.get(data.action)
+    if _bulk_perm:
+        await assert_perm(db, current, _bulk_perm)
 
     # 144-G: archive / restore are destructive — gate them (default-allow, like require_perm)
     # and run each through the single-order helper so refunds, commission reversal and audit
@@ -429,8 +666,11 @@ async def bulk_action(
         if current.role_id:
             from backend.models import Role
             _role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
-            if _role and (_role.permissions or {}).get("can_delete_orders") is False:
+            from backend.services.permissions import role_allows as _ra
+            if _role is None or not _ra(_role, "can_delete_orders"):
                 raise HTTPException(403, "Your role does not allow deleting orders")
+        if data.action == "archive":
+            await assert_perm(db, current, "can_delete_tickets")
         reason = (data.reason or "Bulk delete").strip()
         done, skipped = 0, []
         for oid in data.order_ids:
@@ -441,7 +681,7 @@ async def bulk_action(
                     await _restore_order(db, current, oid)
                 done += 1
             except HTTPException as e:
-                skipped.append({"id": oid, "reason": e.detail})
+                skipped.append({"id": oid, "reason": e.detail.get("message") if isinstance(e.detail, dict) else e.detail})
         msg = f"{'Archived' if data.action == 'archive' else 'Restored'} {done} order{'s' if done != 1 else ''}"
         if skipped:
             msg += f", skipped {len(skipped)}"
@@ -477,11 +717,12 @@ async def bulk_action(
                 if not o:
                     skipped.append({"id": oid, "reason": "Order not found"})
                     continue
-                await _apply_status_change(db, current, o, data.value, note="Bulk update")
+                await _apply_status_change(db, current, o, data.value, note="Bulk update",
+                                           reason=getattr(data, "reason", None))
                 done += 1
             except HTTPException as e:
                 await db.rollback()
-                skipped.append({"id": oid, "reason": e.detail})
+                skipped.append({"id": oid, "reason": e.detail.get("message") if isinstance(e.detail, dict) else e.detail})
         msg = f"Updated {done} order{'s' if done != 1 else ''}"
         if skipped:
             msg += f", skipped {len(skipped)}"
@@ -492,6 +733,10 @@ async def bulk_action(
         .options(selectinload(Order.client), selectinload(Order.assigned_to))
     )
     orders = result.scalars().all()
+    # M3: a role limited to its own jobs can't reach colleagues' jobs through a bulk action
+    # (each single-order route already enforces this via _guard_order_access).
+    from backend.services import scoping as _scoping
+    orders = [o for o in orders if await _scoping.can_view_order(db, current, o)]
     from backend.routers.feed import log_system_event
     n = 0
     for o in orders:
@@ -505,20 +750,11 @@ async def bulk_action(
             except (TypeError, ValueError):
                 raise HTTPException(400, "priority must be a number")
         elif data.action == "create_invoice":
-            from backend.models import Invoice
-            # skip if order already has an invoice
-            existing = (await db.execute(
-                select(Invoice).where(Invoice.order_id == o.id)
-            )).scalar_one_or_none()
-            if existing:
+            from backend.services.invoice_money import invoices_for_order, new_invoice
+            # skip if order already has a live invoice (a cancelled one doesn't count)
+            if await invoices_for_order(db, o.id):
                 continue
-            inv = Invoice(
-                invoice_number=await next_number(db, current.org_id, "invoice"),
-                org_id=current.org_id, order_id=o.id, client_id=o.client_id,
-                status="draft", subtotal=o.total or 0, total=o.total or 0,
-                issued_at=datetime.utcnow(),
-            )
-            db.add(inv)
+            inv = await new_invoice(db, org_id=current.org_id, orders=[o])
             await log_system_event(db, current.org_id, "order", o.id,
                                    f"Invoice {inv.invoice_number} created (bulk)")
         else:
@@ -530,19 +766,16 @@ async def bulk_action(
         # several jobs" case. Orders must share a client; we group by client_id.
         from collections import defaultdict
 
-        from backend.models import Invoice
+        from backend.services.invoice_money import new_invoice
         by_client: dict = defaultdict(list)
         for o in orders:
             if o.client_id:
                 by_client[o.client_id].append(o)
         made = 0
         for client_id, grp in by_client.items():
-            total = sum((o.total or 0) for o in grp)
-            inv = Invoice(
-                invoice_number=await next_number(db, current.org_id, "invoice"),
-                org_id=current.org_id, order_id=grp[0].id, client_id=client_id,
-                status="draft", subtotal=total, total=total, issued_at=datetime.utcnow())
-            db.add(inv)
+            # Links every job (so a payment credits each and the invoice lists all their lines)
+            # and applies their deposits.
+            inv = await new_invoice(db, org_id=current.org_id, orders=grp, client_id=client_id)
             for o in grp:
                 await log_system_event(db, current.org_id, "order", o.id,
                                        f"Added to group invoice {inv.invoice_number}")
@@ -554,12 +787,138 @@ async def bulk_action(
     await db.commit()
     return {"ok": True, "updated": n}
 
+
+async def _order_side_effect(db: AsyncSession, order: Order, label: str, fn, *reload) -> None:
+    """Run one best-effort side effect of saving an order and commit it. On failure log it, roll
+    back just that work and reload the order (and `reload` objects, e.g. the signed-in employee),
+    so the next side effect starts from a clean session."""
+    order_id = order.id
+    try:
+        await fn()
+        await db.commit()
+    except Exception:  # noqa: BLE001 — the order is already saved; a side effect must not undo it
+        logging.getLogger("tekly").exception("order %s saved, but %s failed", order_id, label)
+        await db.rollback()
+        for obj in (order, *reload):
+            await db.refresh(obj)
+
+
+class SystemActor:
+    """Stands in for an employee when the customer (not staff) causes a change, e.g. approving
+    an estimate online. No id (nobody on staff did it), no role (shop-wide rules apply)."""
+    id = None
+    role_id = None
+    location_id = None
+    active = True
+
+    def __init__(self, org_id: str, name: str = "Customer"):
+        self.org_id = org_id
+        self.name = name
+
+
+async def _new_job_steps(db, current, order, creator_id=None):
+    """What happens once a job exists: checklists for its first status, the order.created
+    webhook, the creator's commission, the assignee's alert, the "created" notification rules
+    and automations. Shared by create_order and estimate conversion (flow check E3), so a job
+    made from an approved estimate gets the same treatment as one typed in at the counter.
+    Every step is best-effort and commits on its own (R1): the job is already saved."""
+    reload = (current,) if isinstance(current, Employee) else ()
+
+    async def checklists():
+        # E4 — a new order enters its first status: attach the checklists set to attach on it.
+        from backend.routers.checklists import auto_attach_for_status
+        from backend.routers.feed import log_system_event as _log_ev
+        for _title in await auto_attach_for_status(db, order, order.status, author_id=current.id):
+            await _log_ev(db, current.org_id, "order", order.id, f"Checklist attached: {_title}")
+
+    async def webhook():
+        from backend.services.webhooks import emit_event
+        await emit_event(db, current.org_id, "order.created", {
+            "id": order.id, "order_number": order.order_number,
+            "status": order.status, "total": order.total})
+
+    # Payroll: order_created commissions to the creator (idempotent per job and rule). For a
+    # converted estimate that's whoever wrote the estimate, not whoever converted it.
+    creator_id = creator_id or current.id
+
+    async def commissions():
+        from backend.services.payroll import CommissionEngine
+        await CommissionEngine(db, current.org_id).commissions_for_order_create(order, creator_id)
+
+    async def notify_technician():
+        from backend.services.push import notify
+        await notify(db, org_id=current.org_id, employee_id=order.assigned_to_id,
+                     kind="job.assigned", title=f"New job {order.order_number}",
+                     body=(order.complaint or "")[:140], deep_link=f"/tech#/order/{order.id}")
+
+    created_matched = 0
+
+    async def notification_rules():
+        # 144jc: run the rules engine first (client + staff), fall back to the legacy
+        # template dispatch only when no rule matched — same convergence as status change.
+        nonlocal created_matched
+        from backend.services import notification_rules as _nr
+        _cres = await _nr.evaluate(db, org_id=current.org_id, order_id=order.id, event="created")
+        created_matched = (_cres or {}).get("matched", 0)
+        await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
+                                     event="created", actor_id=current.id)
+
+    async def legacy_notifications():
+        from backend.services.notifications import dispatch_order_notifications
+        await dispatch_order_notifications(
+            db, org_id=current.org_id, order_id=order.id, trigger_event="order_created")
+
+    async def automations():
+        from backend.services import automation as _auto
+        await _auto.run(db, current.org_id, "order_created", order=order)
+
+    await _order_side_effect(db, order, "checklist attach", checklists, *reload)
+    if not order.is_estimate:
+        await _order_side_effect(db, order, "order.created webhook", webhook, *reload)
+    if creator_id:
+        await _order_side_effect(db, order, "creation commissions", commissions, *reload)
+    # Not when the customer approved online: the assignee already got that alert
+    # (customer_messages.notify_staff_about_customer).
+    if current.id and order.assigned_to_id and order.assigned_to_id != current.id:
+        await _order_side_effect(db, order, "technician notification", notify_technician, *reload)
+    if not order.is_estimate:
+        await _order_side_effect(db, order, "notification rules", notification_rules, *reload)
+        if created_matched == 0:
+            await _order_side_effect(db, order, "order notifications", legacy_notifications, *reload)
+    await _order_side_effect(db, order, "automations", automations, *reload)
+
+
 @router.post("", status_code=201)
 async def create_order(
     data: OrderIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_tickets")),
 ):
+    # Estimates have their own permission (it used to be listed but never checked).
+    if data.is_estimate:
+        await assert_perm(db, current, "can_create_estimates")
+    else:
+        from backend.services.billing import assert_can_add_job
+        await assert_can_add_job(db, current.org_id)   # Solo: new jobs a month
+    await _assert_listed(db, current.org_id, data.manager_id, "display_in_managers", "Managers")
+    await _assert_listed(db, current.org_id, data.assigned_to_id, "display_in_assignees", "Assignee")
+    # A retried create (double tap, phone timeout) with the same Idempotency-Key returns the
+    # first job instead of raising a second one.
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "orders.create")
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        result = await _create_order(data, db, current)
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
+
+
+async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
     # Build 144df: location is optional from the client — default to the org's
     # first active location, creating a "Main" one if the org has none yet, so a
     # fresh shop can raise its first work order without a setup dead-end.
@@ -569,14 +928,22 @@ async def create_order(
             select(Location).where(Location.org_id == current.org_id, Location.active == True)  # noqa: E712
             .order_by(Location.created_at))).scalars().first()
         if not loc:
-            loc = Location(org_id=current.org_id, name="Main", timezone="UTC")
+            loc = Location(org_id=current.org_id, name="Main")
             db.add(loc)
             await db.flush()
+            from backend.services.shop_setup import setup_location
+            await setup_location(db, loc, first=True)
         data.location_id = loc.id
 
     # Item 2: role location-scope enforcement (no-op for unscoped roles/owners).
     from backend.services.auth import check_location_access
     await check_location_access(db, current, data.location_id)
+
+    # Fields the work-order form requires at intake (Settings → Forms → Customize).
+    from backend.routers.forms import missing_at_intake
+    _missing = await missing_at_intake(db, current.org_id, data.type_id, data)
+    if _missing:
+        raise HTTPException(422, f"Fill in {', '.join(_missing)} first.")
 
     # Industry template this order (and any asset auto-created with it) is stamped
     # with. Defaults to the org's active template; historical orders keep theirs.
@@ -592,9 +959,16 @@ async def create_order(
     stock_writeoffs = []  # (part_id, qty, line_obj) to apply after order flush
     from backend.routers.pricing import evaluate_line_margin
     _perms_create = await _order_perms(db, current)
+    _hide_cost = bool(current.role_id) and not _perms_create.get("can_view_purchase_price")
+    _fixed_cost = not _hide_cost and not await has_perm(db, current, "can_set_cost_price")
     for li in data.lines:
+        await _assert_line_rights(db, current, li)
+        if _hide_cost or _fixed_cost:
+            li.cost_price = await _catalog_cost(db, current.org_id, li.kind, li.ref_id)
         await _apply_client_discount(db, current.org_id, data.client_id, li)
-        await _guard_discount_approval(db, current.org_id, _perms_create, li.discount, li.discount_type, is_owner=not current.role_id)
+        await _auto_apply_tax(db, current.org_id, li, data.location_id)   # launch B4: lines on a new job were never taxed
+        await _guard_discount_approval(db, current.org_id, _perms_create, li.discount, li.discount_type, is_owner=not current.role_id,
+                                          base=(li.qty or 0) * (li.unit_price or 0))
         # 144ha — margin-floor guardrail on create (block a below-floor line)
         _mg = await evaluate_line_margin(
             db, current.org_id, kind=li.kind, ref_id=li.ref_id, unit_price=li.unit_price or 0,
@@ -604,6 +978,8 @@ async def create_order(
             raise HTTPException(409, f"'{li.description}': margin {_mg['margin_pct']}% is below the "
                                      f"{_mg['floor']}% floor. Lower the discount or raise the price.")
         total = _calc_line(li)
+        if li.warranty_days is None:
+            li.warranty_days = await _catalog_warranty(db, current.org_id, li.kind, li.ref_id)
         ol = OrderLine(line_type=li.line_type, description=li.description,
                        qty=li.qty, unit_price=li.unit_price, cost_price=li.cost_price,
                        kind=li.kind, discount=li.discount, discount_type=li.discount_type, discount_paid_by=li.discount_paid_by,
@@ -617,7 +993,7 @@ async def create_order(
             parts_total += total
             # Estimates never deduct stock (Orderry: estimate = order w/o stock impact)
             if li.kind == "product" and li.ref_id and not data.is_estimate:
-                stock_writeoffs.append((li.ref_id, li.qty, ol))
+                stock_writeoffs.append((li.ref_id, li.qty, ol, li.bin_id))
         else:  # fee and any other line types count toward labour-side total
             labour_total += total
 
@@ -627,8 +1003,10 @@ async def create_order(
     if data.is_estimate:
         # estimates use the estimate status set; default to its New-group status
         from backend.models import OrderStatus as _OS
+        # A shop may have several New-group estimate statuses: take the default, then the first.
         edflt = (await db.execute(select(_OS).where(
-            _OS.org_id == current.org_id, _OS.is_estimate == True, _OS.status_group == "new", _OS.active == True))).scalar_one_or_none()  # noqa: E712
+            _OS.org_id == current.org_id, _OS.is_estimate == True, _OS.status_group == "new", _OS.active == True)  # noqa: E712
+            .order_by(_OS.is_default.desc(), _OS.sort_order, _OS.id).limit(1))).scalars().first()
         if edflt:
             initial_status = edflt.key
     if data.type_id and not data.is_estimate:
@@ -642,7 +1020,7 @@ async def create_order(
         from backend.models import OrderStatus as _OS
         dflt = (await db.execute(select(_OS).where(
             _OS.org_id == current.org_id, _OS.is_default == True, _OS.active == True,  # noqa: E712
-            _OS.record_type == ("estimate" if data.is_estimate else "work_order")))).scalar_one_or_none()
+            _OS.record_type == ("estimate" if data.is_estimate else "work_order")))).scalars().first()
         if dflt:
             initial_status = dflt.key
         elif data.is_estimate:
@@ -664,9 +1042,25 @@ async def create_order(
             custom_data=data.asset_custom_data or {},
             image_data=data.asset_image,
         )
+        from backend.routers.assets import absorb_custom_passcode
+        from backend.services import asset_catalog as _cat
+        from backend.services import identifiers as _ids
+        absorb_custom_passcode(new_asset)
+        _ids.tidy_device(new_asset)
+        new_asset.brand, new_asset.model = await _cat.canonical(
+            db, current.org_id, order_template_key, new_asset.brand, new_asset.model)
         db.add(new_asset)
         await db.flush()
         device_id = new_asset.id
+
+    # J3 — the unlock code the customer gives at intake, stored encrypted on the device.
+    if device_id and (data.device_passcode or "").strip():
+        from backend.models import Device as _Dev
+        from backend.routers.assets import store_passcode
+        _dev = (await db.execute(select(_Dev).where(
+            _Dev.id == device_id, _Dev.org_id == current.org_id))).scalar_one_or_none()
+        if _dev:
+            store_passcode(_dev, data.device_passcode)
 
     # Item 1: optionally forbid an asset being on more than one open ticket.
     if device_id and not data.is_estimate:
@@ -713,8 +1107,11 @@ async def create_order(
         complaint=data.complaint,
         assigned_to_id=assigned_to_id,
         manager_id=manager_id,
-        scheduled_for=parse_dt(data.scheduled_for, "scheduled_for") if data.scheduled_for else None,
-        scheduled_to=parse_dt(data.scheduled_to, "scheduled_to") if data.scheduled_to else None,
+        scheduled_for=(await parse_wall_dt(db, current.org_id, data.location_id, data.scheduled_for, "scheduled_for")
+                       if data.scheduled_for else None),
+        scheduled_to=(await parse_wall_dt(db, current.org_id, data.location_id, data.scheduled_to, "scheduled_to")
+                      if data.scheduled_to else None),
+        due_at=parse_dt(data.due_at, "due_at") if data.due_at else None,
         duration_min=data.duration_min or 60,
         resource_id=data.resource_id or None,
         type_id=data.type_id,
@@ -726,6 +1123,7 @@ async def create_order(
         labour_total=labour_total,
         parts_total=parts_total,
         total=labour_total + parts_total,
+        tax=order_tax(lines),
         currency_code=_cinfo["code"],
         fx_rate=_cinfo["rate"],
         lines=lines,
@@ -738,6 +1136,8 @@ async def create_order(
                  diff={"order_number": order.order_number, "location_id": data.location_id})   # assigns order.id before we reference it
     log = OrderStatusLog(order_id=order.id, from_status=None, to_status=initial_status, changed_by_id=current.id)
     db.add(log)
+    from backend.services import pilot as _pilot
+    _pilot.record_photos(db, current, order.id, len(_intake or []), "create")
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "order", order.id, "Work order created")
 
@@ -748,43 +1148,17 @@ async def create_order(
     if current.role_id:
         from backend.models import Role
         role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
-        perms = (role.permissions or {}) if role else {}
-    can_add_without_stock = bool(perms.get("can_add_without_stock", True))  # default allow unless explicitly false
-
+        from backend.services.permissions import effective_permissions as _eff
+        perms = _eff(role) if role else {c: False for c in _all_codes()}
     # write off products from stock at order creation; if not enough on hand
-    # and record the shortfall as pending_stock (Orderry's "add without deduction")
-    from backend.services import reservations as _rsv
-    _allow_override = _can_override_reservation(perms, current)
-    for part_id, qty, line_obj in stock_writeoffs:
-        sl = (await db.execute(
-            select(StockLevel).where(StockLevel.part_id == part_id, StockLevel.location_id == data.location_id).with_for_update()
-        )).scalar_one_or_none()
-        # 144at — reservation-aware: a new WO can take only FREE stock (+ override for others' holds).
-        g = await _rsv.guard_and_draw(
-            db, org_id=current.org_id, part_id=part_id, location_id=data.location_id,
-            order_id=order.id, qty=qty, actor_id=current.id, allow_override=_allow_override,
-            taken_label=order.order_number)
-        if g["blocked"] > 0:
-            raise HTTPException(409, f"{g['blocked']:g} unit(s) of a part are reserved for another job. "
-                                     f"A manager with override permission must approve using them.")
-        deducted = g["take"]
-        shortfall = g["pending"]
-        if shortfall > 0 and not can_add_without_stock:
-            raise HTTPException(
-                403,
-                "Not enough free stock and you don't have permission to add products "
-                "without deduction. Reduce the quantity or receive more stock."
-            )
-        if sl:
-            sl.qty_available -= deducted
-        line_obj.pending_stock = shortfall
+    # record the shortfall as pending_stock (Orderry's "add without deduction"). Same deduction as
+    # adding a line later: reservation-aware, row-locked, cost layers + serials drawn, and
+    # (ii144c) taken from the bin the line names first.
+    for part_id, qty, line_obj, line_bin in stock_writeoffs:
+        before = line_obj.pending_stock or 0
+        deducted = await _maybe_deduct(db, order, line_obj, qty, perms, current, bin_id=line_bin)
+        shortfall = (line_obj.pending_stock or 0) - before
         if deducted > 0:
-            db.add(StockMovement(
-                part_id=part_id, location_id=data.location_id,
-                movement_type="use", qty=-deducted, ref_type="order", ref_id=order.id,
-            ))
-            from backend.services import inventory_alerts as _alerts  # 144bo: low-stock alert
-            await _alerts.maybe_low_stock_by_id(db, current.org_id, part_id)
             await log_system_event(db, current.org_id, "order", order.id,
                                    f"Stock written off: {deducted:g} unit(s)")
         if shortfall > 0:
@@ -794,64 +1168,16 @@ async def create_order(
     await db.commit()
     await db.refresh(order)
 
-    # 144gp Phase B — intake custom fields can auto-draft upsells (shared rule surface).
-    try:
+    # Best-effort side effects. Each one commits on its own; a failure is logged and rolled
+    # back so the hooks after it still work (R1: they used to be `except: pass`, and one DB error
+    # left the session broken for every later hook).
+    async def upsells():
+        # 144gp Phase B — intake custom fields can auto-draft upsells (shared rule surface).
         from backend.routers.forms import sync_order_field_upsells
         await sync_order_field_upsells(db, current.org_id, order, current)
-        await db.commit()
-    except Exception:  # noqa: BLE001 — never block order creation on an upsell
-        pass
 
-    if not order.is_estimate:
-        try:
-            from backend.services.webhooks import emit_event
-            await emit_event(db, current.org_id, "order.created", {
-                "id": order.id, "order_number": order.order_number,
-                "status": order.status, "total": order.total})
-            await db.commit()
-        except Exception:
-            pass
-
-    # Payroll: order_created commissions to the creator (idempotent).
-    try:
-        from backend.services.payroll import CommissionEngine
-        await CommissionEngine(db, current.org_id).commissions_for_order_create(order, current.id)
-    except Exception:
-        pass
-
-    # Notify the assigned technician (in-app + push) on a fresh assignment.
-    if order.assigned_to_id and order.assigned_to_id != current.id:
-        try:
-            from backend.services.push import notify
-            await notify(db, org_id=current.org_id, employee_id=order.assigned_to_id,
-                         kind="job.assigned", title=f"New job {order.order_number}",
-                         body=(order.complaint or "")[:140], deep_link=f"/tech#/order/{order.id}")
-        except Exception:
-            pass
-
-    # Phase 1: fire "order created" notifications (real work orders only).
-    # 144jc: run the rules engine first (client + staff), fall back to the legacy
-    # template dispatch only when no rule matched — same convergence as status change.
-    if not order.is_estimate:
-        created_matched = 0
-        try:
-            from backend.services import notification_rules as _nr
-            _cres = await _nr.evaluate(db, org_id=current.org_id, order_id=order.id, event="created")
-            created_matched = (_cres or {}).get("matched", 0)
-            await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
-                                         event="created", actor_id=current.id)
-        except Exception:  # noqa: BLE001
-            pass
-        if created_matched == 0:
-            from backend.services.notifications import dispatch_order_notifications
-            await dispatch_order_notifications(
-                db, org_id=current.org_id, order_id=order.id, trigger_event="order_created")
-    # Build 144w: workflow automations for order-created (best-effort).
-    try:
-        from backend.services import automation as _auto
-        await _auto.run(db, current.org_id, "order_created", order=order)
-    except Exception:
-        pass
+    await _order_side_effect(db, order, "upsell drafting", upsells, current)
+    await _new_job_steps(db, current, order)
 
     result = await db.execute(
         select(Order)
@@ -866,12 +1192,23 @@ async def create_order(
 async def board(
     is_estimate: bool = False,
     location_id: Optional[str] = None,        # build 138: scope the board to a branch
+    search: Optional[str] = None,
+    assigned_to_id: Optional[str] = None,     # "__none" = unassigned
+    priority_min: Optional[int] = None,
+    scheduled: Optional[str] = Query(None, pattern="^(yes|no)$"),
+    per_column: int = Query(50, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
     """Kanban board: open orders grouped by status GROUP (Orderry board view).
     Columns follow status groups in canonical order; each card carries enough
-    to render + drag. Drag → PATCH /status applies transfer rules + triggers."""
+    to render + drag. Drag → PATCH /status applies transfer rules + triggers.
+
+    Load-bounded: only open (non-archived, not closed/dropped) orders become cards, at most
+    `per_column` per column (newest first); every column and status still gets its full
+    count from one aggregate, and `truncated` says a column has more than it shows. Cards
+    carry the asset photo as a URL, never inline."""
+    per_column = min(per_column, BOARD_COLUMN_MAX)
     # Make sure the org has its default statuses, so the board is never blank on
     # first visit (the statuses list endpoint does the same on-demand seeding).
     from backend.routers.statuses import ensure_seeded
@@ -890,56 +1227,87 @@ async def board(
         statuses_by_group.setdefault(s.status_group, []).append(
             {"key": s.key, "name": s.name, "color": s.color})
 
-    _bq = select(Order).where(Order.org_id == current.org_id, Order.is_estimate == is_estimate)  # noqa: E712
-    if location_id:
-        _bq = _bq.where(Order.location_id == location_id)
     # record-level scoping: a role scoped to "own" only sees its own board cards
     # (same rule as the list — the board must never leak others' work).
     from backend.services import scoping
     _brole = await scoping.role_for(db, current)
-    _bq = scoping.scope_orders(_bq, _brole, current)
-    orders = (await db.execute(_bq
-        .options(selectinload(Order.client), selectinload(Order.device), selectinload(Order.assigned_to))
-        .order_by(Order.created_at.desc()))).scalars().all()
 
-    now = datetime.utcnow()
+    def _scoped(base):
+        base = scoping.scope_orders(base.where(Order.org_id == current.org_id), _brole, current)
+        return _apply_order_filters(base, current.org_id, is_estimate=is_estimate,
+                                    location_id=location_id, search=search,
+                                    assigned_to_id=assigned_to_id, priority_min=priority_min,
+                                    scheduled=scheduled)
+
+    status_counts = dict((await db.execute(_scoped(select(Order.status, func.count(Order.id)))
+                                           .group_by(Order.status))).all())
+    group_counts: dict = {}
+    for st, n in status_counts.items():
+        g = grp_of.get(st, "new")
+        group_counts[g] = group_counts.get(g, 0) + n
+
+    now = now_utc()
+    known = list(grp_of)
     cards_by_group = {g: [] for g in group_order}
-    for o in orders:
-        g = grp_of.get(o.status, "new")
-        if g not in cards_by_group:
-            cards_by_group[g] = []
-        cards_by_group[g].append({
-            "id": o.id, "order_number": o.order_number, "status": o.status,
-            "priority": o.priority, "total": o.total,
-            "client_name": o.client.name if o.client else None,
-            # A device may have a serial but no brand/model (checked in by serial only),
-            # so guard against None — concatenating None here 500'd the whole board.
-            "device": (f"{o.device.brand or ''} {o.device.model or ''}".strip() or None)
-                      if o.device else None,
-            "device_image": getattr(o.device, "image_data", None) if o.device else None,
-            "assigned_to_name": o.assigned_to.name if o.assigned_to else None,
-            "scheduled_for": o.scheduled_for.isoformat() if o.scheduled_for else None,
-            # flag: scheduled but still in New group → needs attention (Orderry)
-            "needs_attention": bool(o.scheduled_for and g == "new"),
-            "overdue": bool(o.due_at and o.due_at < now and g not in ("closed", "dropped")),
-            "client_msg_unread": getattr(o, "client_msg_unread", 0) or 0,
-        "rec_unread": getattr(o, "rec_unread", 0) or 0,
-        })
+    for g in group_order:
+        if g in ("closed", "dropped") or not group_counts.get(g):
+            continue
+        keys = [k for k, gg in grp_of.items() if gg == g]
+        cond = Order.status.in_(keys) if keys else None
+        if g == "new":   # an unknown status lands in New, as before
+            from sqlalchemy import or_, true
+            unknown = Order.status.not_in(known) if known else true()
+            cond = or_(cond, unknown) if cond is not None else unknown
+        if cond is None:
+            continue
+        rows = (await db.execute(_scoped(select(Order)).where(cond)
+                                 .options(*_order_list_options())
+                                 .order_by(Order.created_at.desc(), Order.id.desc())
+                                 .limit(per_column))).scalars().all()
+        with_img = await _devices_with_images(db, [o.device_id for o in rows])
+        for o in rows:
+            cards_by_group[g].append({
+                "id": o.id, "order_number": o.order_number, "status": o.status,
+                "priority": o.priority, "total": o.total,
+                "client_name": o.client.name if o.client else None,
+                "client_id": o.client_id,
+                # A device may have a serial but no brand/model (checked in by serial only),
+                # so guard against None — concatenating None here 500'd the whole board.
+                "device": (f"{o.device.brand or ''} {o.device.model or ''}".strip() or None)
+                          if o.device else None,
+                "device_image_url": _device_image_url(o.device_id, o.device_id in with_img),
+                "assigned_to_id": o.assigned_to_id,
+                "assigned_to_name": o.assigned_to.name if o.assigned_to else None,
+                "scheduled_for": o.scheduled_for.isoformat() if o.scheduled_for else None,
+                # Tekly Go's Today rows: "Device · Problem", the promised time and how long it's been in
+                "complaint": o.complaint or "",
+                "due_at": o.due_at.isoformat() if o.due_at else None,
+                "created_at": o.created_at.isoformat() if o.created_at else None,
+                "age_days": (now - o.created_at).days if o.created_at else None,
+                # flag: scheduled but still in New group → needs attention (Orderry)
+                "needs_attention": bool(o.scheduled_for and g == "new"),
+                "overdue": bool(o.due_at and o.due_at < now),
+                "client_msg_unread": getattr(o, "client_msg_unread", 0) or 0,
+                "rec_unread": getattr(o, "rec_unread", 0) or 0,
+            })
 
     columns = []
     for g in group_order:
         if g in statuses_by_group:  # only show groups that have statuses
+            cards = cards_by_group.get(g, [])
             columns.append({
                 "group": g, "label": group_label.get(g, g),
                 "statuses": statuses_by_group[g],
-                "cards": cards_by_group.get(g, []),
+                "cards": cards,
+                "count": group_counts.get(g, 0),
+                "truncated": group_counts.get(g, 0) > len(cards),
             })
-    return {"columns": columns}
+    return {"columns": columns, "status_counts": status_counts, "per_column": per_column}
 
 
 @router.get("/archived")
 async def list_archived_orders(
-    limit: int = 100,
+    limit: int = _paging.limit_query(100),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
@@ -948,7 +1316,7 @@ async def list_archived_orders(
     rows = (await db.execute(
         select(Order).where(Order.org_id == current.org_id, Order.archived == True)  # noqa: E712
         .options(selectinload(Order.client), selectinload(Order.assigned_to))
-        .order_by(Order.archived_at.desc()).limit(limit))).scalars().all()
+        .order_by(Order.archived_at.desc()).limit(_paging.clamp(limit)))).scalars().all()
     emp_names = {}
     ids = [o.archived_by_id for o in rows if o.archived_by_id]
     if ids:
@@ -984,6 +1352,14 @@ async def get_order(
     if not await scoping.can_view_order(db, current, order):
         raise HTTPException(403, "You can only open work orders assigned to you")
     data = _serialize_order(order)
+    if order.type_id:      # J6: the job type's name for the "Job type" picker
+        from backend.models import WorkOrderType as _WOT
+        data["type_name"] = (await db.execute(select(_WOT.name).where(
+            _WOT.id == order.type_id, _WOT.org_id == current.org_id))).scalar_one_or_none()
+    if not await has_perm(db, current, "can_view_item_prices"):
+        for ln in data["lines"]:
+            for k in LINE_PRICE_KEYS:
+                ln.pop(k, None)
     # 144dd — checklists_pending drives the amber Checklists-tab dot: True iff a REQUIRED checklist
     # item is still undone (same definition as the completion gate). No required-undone item → no dot.
     from backend.models import OrderChecklistItem as _OCI
@@ -992,10 +1368,17 @@ async def get_order(
     # 144dd — payment_due drives the Invoices-tab "Due" badge: an ISSUED (non-draft/cancelled)
     # invoice on this order still has a balance. No issued-unpaid invoice → no badge.
     from backend.models import Invoice as _Inv
-    _due = (await db.execute(select(func.coalesce(func.sum(_Inv.total - _Inv.amount_paid), 0)).where(
+    from sqlalchemy import case as _case
+    _owed = _Inv.total - _Inv.amount_paid - _Inv.credited     # per invoice, never below 0
+    _due = (await db.execute(select(func.coalesce(func.sum(_case((_owed > 0, _owed), else_=0)), 0)).where(
         _Inv.order_id == order.id,
         _Inv.status.notin_(["draft", "cancelled", "canceled"])))).scalar() or 0
     data["payment_due"] = q2(float(_due)) > 0
+    if data["payment_due"] and float(order.written_off or 0) > 0:
+        # A dropped job's unpaid balance is written off: the job isn't owed, even while an issued
+        # invoice keeps its balance until the shop credits it.
+        from backend.services.order_money import balance_due as _bd
+        data["payment_due"] = await _bd(db, order) > 0
     # 144bj: prior-visit count for this device (repeat-repair signal on the WO card).
     if order.device_id and data.get("device"):
         vc = (await db.execute(select(func.count()).select_from(Order).where(
@@ -1017,8 +1400,8 @@ async def get_order(
     if order.status_entered_at and not order.closed_at:
         st = (await db.execute(select(OrderStatus).where(
             OrderStatus.org_id == current.org_id, OrderStatus.key == order.status,
-            OrderStatus.is_estimate == bool(order.is_estimate)))).scalar_one_or_none()
-        mins = int((datetime.utcnow() - order.status_entered_at).total_seconds() // 60)
+            OrderStatus.is_estimate == bool(order.is_estimate)))).scalars().first()
+        mins = int((now_utc() - order.status_entered_at).total_seconds() // 60)
         data["minutes_in_status"] = mins
         data["status_time_limit_min"] = st.time_limit_min if st else None
         data["status_sla_overdue"] = bool(st and st.time_limit_min and mins > st.time_limit_min)
@@ -1033,6 +1416,7 @@ async def get_order(
 
 @router.get("/timing/flags")
 async def timing_flags(
+    ids: Optional[str] = None,   # comma-separated order ids (the visible page); omitted = every open order
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
@@ -1047,6 +1431,8 @@ async def timing_flags(
         Order.org_id == current.org_id, Order.is_estimate == False,  # noqa: E712
         Order.status.notin_(terminal_keys or {"__none__"}))
     _fq = scoping.scope_orders(_fq, await scoping.role_for(db, current), current)  # flags only for orders I can see
+    if ids:
+        _fq = _fq.where(Order.id.in_([i for i in ids.split(",") if i][:ORDER_PAGE_MAX]))
     orders = (await db.execute(_fq)).scalars().all()
     flags = {}
     for o in orders:
@@ -1092,23 +1478,78 @@ async def change_status(
     order = result.scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
-    return await _apply_status_change(db, current, order, data.status, note=data.note)
+    return await _apply_status_change(db, current, order, data.status, note=data.note, reason=data.reason,
+                                      comment=data.comment, allow_unpaid=data.allow_unpaid)
 
 
-async def _apply_status_change(db, current, order, new_status, note=None):
+@router.post("/{order_id}/status/check")
+async def check_status_change(
+    order_id: str,
+    data: StatusChange,
+    assume_paid: bool = False,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """B11: would this status change go through? Runs every gate and changes nothing, so a screen
+    can ask before it takes money ("Finish & take payment") or show the comment box up front.
+    ``assume_paid`` skips the money-owed check, for a close that takes the payment with it."""
+    order = (await db.execute(
+        select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
+        .options(selectinload(Order.lines)))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    try:
+        await _apply_status_change(db, current, order, data.status, note=data.note, reason=data.reason,
+                                   comment=data.comment, allow_unpaid=data.allow_unpaid,
+                                   check_only=True, assume_paid=assume_paid)
+    except HTTPException as e:
+        await db.rollback()
+        d = e.detail if isinstance(e.detail, dict) else {"message": e.detail}
+        return {"ok": False, "status_code": e.status_code, "code": d.get("code") or "blocked", **d}
+    await db.rollback()
+    return {"ok": True}
+
+
+def _gate(code: str, message: str, status_code: int = 409, **extra) -> HTTPException:
+    """A refused status change the screens can act on: ``code`` says which gate, ``message`` is
+    the sentence to show (the API client reads ``detail.message``)."""
+    return HTTPException(status_code, {"code": code, "message": message, **extra})
+
+
+@dataclass(frozen=True)
+class ApiActor:
+    """A public API key changing an order (API v2), in place of the signed-in employee.
+
+    It has no employee id and no role: the key's own scope (orders:write) is its permission for
+    the whole shop, so the employee-only checks (record scope, "Edit the closed ticket") don't
+    apply, and status transfer rules apply as for a role with no rules of its own (only the
+    shop's all-roles rules). Every other gate and side effect is the app's, unchanged."""
+    org_id: str
+    api_key_id: str
+    id: Optional[str] = None
+    role_id: Optional[str] = None
+
+
+async def _apply_status_change(db, current, order, new_status, note=None, reason=None, *,
+                               comment=None, allow_unpaid=False, check_only=False, assume_paid=False):
     """Shared gate + side-effect flow for a single-step status change, used by the
-    single-order PATCH endpoint and the bulk set_status path so both enforce the same
-    transition RBAC, completion + pending-stock-write-off gates, status_entered_at,
+    single-order PATCH endpoint, the bulk set_status path and API v2
+    (POST /api/v2/orders/{id}/status, with an ApiActor as ``current``) so all of them enforce
+    the same transition RBAC, completion + pending-stock-write-off gates, status_entered_at,
     audit, ledger, commissions and (best-effort) notifications. The original endpoint
     body is preserved verbatim; it is simply reached via ``data`` rebuilt from the
     arguments so both callers share one code path."""
-    data = StatusChange(status=new_status, note=note)
-    await _guard_order_access(db, current, order)
+    data = StatusChange(status=new_status, note=note, reason=reason, comment=comment, allow_unpaid=allow_unpaid)
+    via_api = isinstance(current, ApiActor)
+    if not via_api:
+        await _guard_order_access(db, current, order)
+        if data.status != order.status and await _is_closed(db, current.org_id, order):
+            await assert_perm(db, current, "can_edit_closed_ticket")   # reopening counts as editing it
 
     # Resolve the target status from the configurable status table, scoped to this
     # record's pipeline. .first() (not scalar_one_or_none) so legacy duplicate keys
     # across record types can never crash the status change.
-    from backend.models import Invoice, OrderStatus
+    from backend.models import OrderStatus
     _rt = "estimate" if order.is_estimate else "work_order"
     target = (await db.execute(
         select(OrderStatus).where(OrderStatus.org_id == current.org_id,
@@ -1118,11 +1559,22 @@ async def _apply_status_change(db, current, order, new_status, note=None):
         .order_by(OrderStatus.sort_order)
     )).scalars().first()
     is_closing = target.is_terminal if target else (data.status in ("done", "closed", "delivered"))
+    # Finishing a job is its own permission (closing used to need none). Bulk changes and
+    # /complete come through here too.
+    if is_closing:
+        from backend.services.auth import has_perm
+        if not await has_perm(db, current, "can_close_tickets"):
+            raise HTTPException(403, "Your role can't finish jobs. Move it to a ready status, or ask someone who can.")
+    # Dropped jobs (the customer never collected, refused the repair…): a reason is required,
+    # the finished-work checks below are skipped and what's still owed is written off.
+    is_dropping = bool(target and (target.status_group or "") == "dropped" and not order.is_estimate)
 
     # Phase B.7: enforce status transfer rules (allowed from->to for this role)
     from backend.routers.statuses import is_transition_allowed
     if not await is_transition_allowed(db, current.org_id, current.role_id, order.status, data.status):
         raise HTTPException(403, f"You can't move this order from '{order.status}' to '{data.status}'.")
+    if is_dropping and data.status != order.status and not ((data.reason or "").strip() or order.cancel_reason):
+        raise HTTPException(422, "Choose a reason for dropping this job.")
 
     # 144gr — Smart Fields: a custom field value can block entering a status.
     if target and order.status != data.status:
@@ -1131,31 +1583,53 @@ async def _apply_status_change(db, current, order, new_status, note=None):
         if _block:
             raise HTTPException(409, _block)
 
+    # J6 / B11 — nobody keeps clocking time on a finished job. Before the gates, so time billed as
+    # labour is in the total the "fully paid" check sees (and on the auto-drafted invoice), as if
+    # each technician pressed Stop. A cancelled job's time is stopped but not billed. A refused
+    # change (or a check-only dry run) rolls back with the request.
+    if is_closing and order.status != data.status and not check_only:
+        await _stop_job_timers(db, order, bill=not (target and (target.status_group or "") == "dropped"))
+
     # 144gj — Orderry requirement gates on ENTERING the target status.
     if target and order.status != data.status:
         from backend.models import OrderChecklistItem, OrderComment
         if target.require_comment:
             n = (await db.execute(select(func.count()).select_from(OrderComment).where(
                 OrderComment.order_id == order.id))).scalar() or 0
-            if not n:
-                raise HTTPException(409, f"'{target.name}' requires a comment on the order first.")
+            if not n and not (data.comment or "").strip():
+                _msg = f"'{target.name}' needs a comment on the job. Add one to move it."
+                raise HTTPException(409, _msg) if via_api else _gate("comment_required", _msg)
         if target.require_checklist:
+            # Only required items hold a job back; optional ones are a reminder, not a gate.
             items = (await db.execute(select(OrderChecklistItem).where(
-                OrderChecklistItem.order_id == order.id))).scalars().all()
+                OrderChecklistItem.order_id == order.id,
+                OrderChecklistItem.required == True))).scalars().all()  # noqa: E712
             undone = [c for c in items if not c.done]
             if undone:
-                raise HTTPException(409, f"'{target.name}' requires all {len(items)} checklist item(s) done ({len(undone)} left).")
-        if target.require_payment:
-            from backend.models import Invoice as _Inv
-            paid = (await db.execute(select(func.coalesce(func.sum(_Inv.amount_paid), 0)).where(
-                _Inv.order_id == order.id))).scalar() or 0
-            if q2((order.total or 0) - float(paid)) > 0:
-                raise HTTPException(409, f"'{target.name}' requires the order to be fully paid first.")
+                raise HTTPException(409, f"'{target.name}' needs every required checklist item done ({len(undone)} left).")
+        if target.require_payment and not assume_paid:
+            # B11: e.g. Delivered (on by default) — the device can't leave with money owed unless a
+            # manager says so, and the refusal says how much and what to do.
+            from backend.services.order_money import balance_due as _due
+            _owed_now = q2(await _due(db, order))   # payments, refunds and credit notes all count
+            if _owed_now > 0:
+                if via_api:
+                    raise HTTPException(409, f"'{target.name}' requires the order to be fully paid first.")
+                from backend.services.auth import has_perm as _hp
+                _mgr = await _hp(db, current, "can_view_finance")
+                if not data.allow_unpaid:
+                    _who = ("Take the payment first, or move it on unpaid if the customer will pay later."
+                            if _mgr else "Take the payment first, or ask a manager to move it on unpaid.")
+                    raise _gate("unpaid", f"This job still has {_owed_now:,.2f} to pay before '{target.name}'. {_who}",
+                                owed=_owed_now, can_override=_mgr)
+                if not _mgr:
+                    raise _gate("unpaid", f"This job still has {_owed_now:,.2f} to pay. Only a manager can move it "
+                                          f"to '{target.name}' unpaid.", status_code=403, owed=_owed_now, can_override=False)
 
     # Completion gate: when closing, enforce required checklist items + (optional)
     # customer signature. Only bites when the work has required checklist items or
     # the order's type opts in, so other closes are unaffected.
-    if is_closing:
+    if is_closing and not is_dropping:
         from backend.models import OrderChecklistItem, WorkOrderType
         req_items = (await db.execute(select(OrderChecklistItem).where(
             OrderChecklistItem.order_id == order.id,
@@ -1170,9 +1644,15 @@ async def _apply_status_change(db, current, order, new_status, note=None):
             raise HTTPException(409, f"Cannot complete: {len(undone)} required checklist item(s) not done.")
         if wtype and wtype.requires_signature and not order.signature:
             raise HTTPException(409, "Cannot complete: customer signature required.")
+        # Fields the form marks "Before closing" (Settings → Forms → Customize).
+        if order.status != data.status:
+            from backend.routers.forms import missing_before_close
+            _missing = await missing_before_close(db, current.org_id, order)
+            if _missing:
+                raise HTTPException(409, f"Fill in before closing: {', '.join(_missing)}.")
 
     # Orderry rule: cannot close an order with products not yet written off from stock
-    if is_closing:
+    if is_closing and not is_dropping:
         pending = sum((l.pending_stock or 0) for l in order.lines)
         if pending > 0:
             raise HTTPException(
@@ -1180,30 +1660,73 @@ async def _apply_status_change(db, current, order, new_status, note=None):
                 f"Cannot close: {pending:g} unit(s) still pending stock write-off. "
                 f"Receive the stock or reduce the quantity first."
             )
+    if check_only:
+        return {"ok": True}
+    if target and target.require_comment and (data.comment or "").strip() and order.status != data.status:
+        from backend.models import OrderComment as _OC
+        from backend.routers.feed import default_visibility
+        _vis = await default_visibility(db, current.org_id, "comment") == "client"
+        db.add(_OC(order_id=order.id, author_id=current.id, body=data.comment.strip(), visible_to_client=_vis))
     prev = order.status
     prev_terminal = (await db.execute(select(OrderStatus.is_terminal).where(
         OrderStatus.org_id == current.org_id, OrderStatus.key == prev,
         OrderStatus.record_type == _rt))).scalars().first() or False
     _prev_status = order.status
     order.status = data.status
-    order.status_entered_at = datetime.utcnow()
+    if target and (target.status_group or "") == "dropped" and (data.reason or "").strip():
+        order.cancel_reason = data.reason.strip()[:120]
+    # Write off (or, on reopen / a normal close, undo) what the customer still owes.
+    from backend.services.audit import record as _audit_wo
+    from backend.services.order_money import balance_due as _owed
+    _was_written_off = q2(float(order.written_off or 0))
+    order.written_off = 0.0
+    if is_dropping:
+        order.written_off = await _owed(db, order)
+        # Writing off what a customer owes is a money decision, not just a status change.
+        if order.written_off > _was_written_off and not await has_perm(db, current, "can_view_finance"):
+            raise HTTPException(403, f"This job still has {order.written_off:.2f} owed. Only someone who can use "
+                                     "finance can drop it and write that off — ask a manager.")
+    if q2(float(order.written_off or 0)) != _was_written_off:
+        await _audit_wo(db, org_id=current.org_id, actor_id=current.id, action="order.write_off",
+                        entity_type="order", entity_id=order.id,
+                        diff={"amount": q2(float(order.written_off or 0)), "previous": _was_written_off,
+                              "reason": order.cancel_reason if is_dropping else None})
+    order.status_entered_at = now_utc()
     from backend.services.audit import record as _audit_sc
     await _audit_sc(db, org_id=current.org_id, actor_id=current.id, action="order.status_change",
-                    entity_type="order", entity_id=order.id, diff={"status": [_prev_status, data.status]})   # for status time-limit tracking
+                    entity_type="order", entity_id=order.id,
+                    diff={"status": [_prev_status, data.status],
+                          **({"via_api_key": current.api_key_id} if via_api else {})})   # for status time-limit tracking
+    if is_closing and not order.is_estimate and not is_dropping:
+        # Memberships: re-check every plan-covered line (a paused plan or a used-up count puts the
+        # line back to full price), then count what the plan gave on this job.
+        from backend.services import memberships as _mb
+        _dropped = await _mb.check_order_lines(db, order)
+        if _dropped:
+            for _l in _dropped:
+                _l.total = _calc_line(_l)
+            await _recalc_order(db, order)
+            from backend.routers.feed import log_system_event
+            await log_system_event(db, current.org_id, "order", order.id,
+                                   "Plan no longer covers: " + ", ".join(_l.description for _l in _dropped))
+        await _mb.record_usage(db, order)
     if is_closing:
-        order.closed_at = datetime.utcnow()
+        order.closed_at = now_utc()
         # Build 144dr — auto-draft an invoice on close (org opt-in). Never blocks
-        # the status change if it fails.
-        if not order.is_estimate:
+        # the status change if it fails. A dropped job isn't billed.
+        if not order.is_estimate and not is_dropping:
             try:
                 from backend.services.invoicing import auto_draft_on_close
-                await auto_draft_on_close(db, order)
+                async with db.begin_nested():     # a failure undoes only the half-made invoice
+                    await auto_draft_on_close(db, order)
             except Exception:  # noqa: BLE001
-                pass
-        # Phase E groundwork: activate warranty on close from the longest line warranty
+                import logging
+                logging.getLogger("tekly").exception("auto-draft invoice failed for order %s", order.id)
+        # Phase E groundwork: activate warranty on close from the longest line warranty.
+        # Not for estimates: closing one (approved → converted, or declined) repairs nothing.
         try:
             wdays = max([(getattr(l, "warranty_days", 0) or 0) for l in order.lines] or [0])
-            if wdays:
+            if wdays and not order.is_estimate and not is_dropping:
                 from datetime import timedelta as _td
                 # Item 4: warranty start honors org policy (closure date vs order creation date)
                 _org = (await db.execute(select(Organisation).where(
@@ -1220,6 +1743,12 @@ async def _apply_status_change(db, current, order, new_status, note=None):
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "order", order.id,
                            f"Status changed: {prev} \u2192 {data.status}")
+    # E4 — checklists set to attach on this status (after the gates above, so they never block
+    # entering it; the next require_checklist / close gate waits for them).
+    if prev != data.status:
+        from backend.routers.checklists import auto_attach_for_status
+        for _title in await auto_attach_for_status(db, order, data.status, author_id=current.id):
+            await log_system_event(db, current.org_id, "order", order.id, f"Checklist attached: {_title}")
 
     # Phase B.7: asset auto-movement between zones driven by the status
     if target and target.moves_asset_to and order.device_id:
@@ -1234,12 +1763,9 @@ async def _apply_status_change(db, current, order, new_status, note=None):
 
     # Per-status trigger: auto-create invoice
     if target and target.triggers_invoice:
-        existing_inv = (await db.execute(select(Invoice).where(Invoice.order_id == order.id))).scalar_one_or_none()
-        if not existing_inv:
-            _inv = Invoice(invoice_number=await next_number(db, current.org_id, "invoice"), org_id=current.org_id,
-                           order_id=order.id, client_id=order.client_id, status="draft",
-                           subtotal=order.total or 0, total=order.total or 0, issued_at=datetime.utcnow())
-            db.add(_inv)
+        from backend.services.invoice_money import invoices_for_order, new_invoice
+        if not await invoices_for_order(db, order.id):
+            _inv = await new_invoice(db, org_id=current.org_id, orders=[order])
             await log_system_event(db, current.org_id, "order", order.id, "Invoice auto-created on status change")
             # Build 144z: mirror the new invoice (and its customer) to QuickBooks if connected.
             try:
@@ -1250,32 +1776,9 @@ async def _apply_status_change(db, current, order, new_status, note=None):
             except Exception:
                 pass
 
-    # N-GAP-3: the rules engine (Build 80) is the canonical path. Run it first; each
-    # rule carries its own status trigger so it isn't gated on triggers_notification.
-    # Only fall back to the legacy NotificationTemplate dispatch when NO rule matched
-    # this event — that stops the two systems double-sending while keeping
-    # template-only orgs working. Both are best-effort: never block the status change.
-    rules_matched = 0
-    try:
-        from backend.services import notification_rules as _nr
-        _ev = "closed" if is_closing else "status_changed"
-        _res = await _nr.evaluate(db, org_id=current.org_id, order_id=order.id,
-                                  event=_ev, status_key=data.status)
-        rules_matched = (_res or {}).get("matched", 0)
-        # 144jb: Internal › Workflows — notify the assignee + manager (staff-scoped rules).
-        await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
-                                     event=_ev, status_key=data.status, actor_id=current.id)
-    except Exception:  # noqa: BLE001
-        pass
-    if rules_matched == 0 and (not target or target.triggers_notification):
-        try:
-            from backend.services.notifications import dispatch_order_notifications
-            await dispatch_order_notifications(
-                db, org_id=current.org_id, order_id=order.id,
-                trigger_event="status_change", status_key=data.status)
-        except Exception:  # noqa: BLE001
-            import logging
-            logging.getLogger("repairos").exception("status notification dispatch failed for order %s", order.id)
+    # Customer status messages come only from the notification rules engine (run after
+    # commit, below). OrderStatus.triggers_notification is retired: see
+    # services/legacy_status_notifs.py for how flagged statuses became rules.
     # Build 144w: workflow automations for status_changed (create task / assign /
     # tag / webhook). Order.status is already the new value here.
     try:
@@ -1290,7 +1793,7 @@ async def _apply_status_change(db, current, order, new_status, note=None):
         await _wh.on_order_status(db, current.org_id, order, data.status, is_closing=is_closing)
     except Exception:  # noqa: BLE001
         import logging
-        logging.getLogger("repairos").exception("asset auto-move failed for order %s", order.id)
+        logging.getLogger("tekly").exception("asset auto-move failed for order %s", order.id)
 
     # Build 124: unified contact ledger — the receivable tracks the order's closed state.
     # We reconcile the net 'charge' rows to the order total when it closes, and back to
@@ -1301,7 +1804,8 @@ async def _apply_status_change(db, current, order, new_status, note=None):
     if not order.is_estimate and order.client_id:
         from backend.services.ledger import order_charge_net, post_contact_ledger
         _net = await order_charge_net(db, order.client_id, order.id)
-        _target = q2(float(order.total or 0)) if is_closing else 0.0
+        # A dropped job is charged only what wasn't written off, so it leaves no debt.
+        _target = q2(float(order.total or 0) - float(order.written_off or 0)) if is_closing else 0.0
         _delta = q2(_target - _net)
         if _delta:
             _note = (f"Order {order.order_number} ready" if is_closing
@@ -1310,7 +1814,47 @@ async def _apply_status_change(db, current, order, new_status, note=None):
                 db, current.org_id, order.client_id, "charge", _delta,
                 note=_note, ref_type="order", ref_id=order.id, created_by_id=current.id)
 
+    # (Preview: the dropped-job write-off above, from workstream B, is the one in charge.)
+
+    # Mandate 1: payroll commissions. Accrue when the order enters a terminal
+    # (closed) state; claw back when it leaves one (reopen) or is an estimate.
+    # Runs before the commit below so the status, the client ledger and the commissions save
+    # together: accruing after it left a closed order with no commissions if accrual failed.
+    if not order.is_estimate:
+        from backend.services.payroll import CommissionEngine
+        eng = CommissionEngine(db, current.org_id)
+        if is_closing and not prev_terminal:
+            await db.refresh(order, ["lines"])
+            await eng.accrue_for_order_close(order)
+        elif prev_terminal and not is_closing:
+            await eng.clawback_for_order_reopen(order)
+            # Reopened: what the plan gave on this job is counted again at the next close.
+            from sqlalchemy import delete as _sa_delete
+            from backend.models import MembershipUsage
+            await db.execute(_sa_delete(MembershipUsage).where(MembershipUsage.order_id == order.id))
+        else:
+            await db.refresh(order, ["lines"])
+            await eng.accrue_on_status(order, order.status)
+
     await db.commit()
+
+    # Customer/staff messages go out only AFTER the status change is committed — sending them
+    # inside the transaction meant a failed commit still texted the customer about a change
+    # that never happened.
+    try:
+        from backend.services import notification_rules as _nr
+        _ev = "closed" if is_closing else "status_changed"
+        await _nr.evaluate(db, org_id=current.org_id, order_id=order.id,
+                           event=_ev, status_key=data.status)
+        # 144jb: Internal › Workflows — notify the assignee + manager (staff-scoped rules).
+        await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
+                                     event=_ev, status_key=data.status, actor_id=current.id)
+    except Exception:  # noqa: BLE001
+        pass
+    # No legacy fallback: the old "templates when no rule matched and the status has
+    # triggers_notification" path is gone so one setting (Settings › Notifications) decides
+    # what the customer gets. Flagged statuses were converted to equivalent per-status rules.
+    await db.commit()   # persist the notification log rows written above
 
     # Notify the assigned technician their job's status moved (unless they did it).
     if order.assigned_to_id and order.assigned_to_id != current.id:
@@ -1327,23 +1871,14 @@ async def _apply_status_change(db, current, order, new_status, note=None):
         await emit_event(db, current.org_id, "order.status_changed", {
             "id": order.id, "order_number": order.order_number,
             "from": prev, "to": data.status})
+        if is_closing and not prev_terminal and not order.is_estimate:
+            await emit_event(db, current.org_id, "order.closed", {
+                "id": order.id, "order_number": order.order_number, "status": data.status,
+                "total": order.total,
+                "closed_at": order.closed_at.replace(microsecond=0).isoformat() + "Z" if order.closed_at else None})
         await db.commit()
     except Exception:
         pass
-
-    # Mandate 1: payroll commissions. Accrue when the order enters a terminal
-    # (closed) state; claw back when it leaves one (reopen) or is an estimate.
-    if not order.is_estimate:
-        from backend.services.payroll import CommissionEngine
-        eng = CommissionEngine(db, current.org_id)
-        if is_closing and not prev_terminal:
-            await db.refresh(order, ["lines"])
-            await eng.accrue_for_order_close(order)
-        elif prev_terminal and not is_closing:
-            await eng.clawback_for_order_reopen(order)
-        else:
-            await db.refresh(order, ["lines"])
-            await eng.accrue_on_status(order, order.status)
 
     # Phase E: if this status is the configured feedback trigger, create a
     # pending Feedback row and fire a notification with the rating link.
@@ -1375,39 +1910,49 @@ async def _convert_estimate(db, current, estimate):
     """Convert an estimate into a work order IN PLACE (Build 144di, Orderry-style):
     the same record flips ``is_estimate`` off, gets a fresh WO number, keeps its
     lines and history, and now deducts stock. Irreversible. Returns the id."""
-    from backend.models import OrderLine, OrderStatus, StockLevel, StockMovement
+    from backend.models import OrderLine, OrderStatus, WorkOrderType
     old_number = estimate.order_number
-    # initial work-order status (org default or "new")
+    # initial work-order status: the job type's own starting status (E3), else the org default, else "new"
     init = "new"
     dflt = (await db.execute(select(OrderStatus).where(
         OrderStatus.org_id == current.org_id, OrderStatus.is_default == True,
-        OrderStatus.active == True, OrderStatus.record_type == "work_order"))).scalar_one_or_none()  # noqa: E712
+        OrderStatus.active == True, OrderStatus.record_type == "work_order"))).scalars().first()  # noqa: E712
     if dflt:
         init = dflt.key
+    if estimate.type_id:
+        _type_start = (await db.execute(select(WorkOrderType.initial_status).where(
+            WorkOrderType.id == estimate.type_id, WorkOrderType.org_id == current.org_id))).scalar_one_or_none()
+        if _type_start and (await db.execute(select(OrderStatus.id).where(
+                OrderStatus.org_id == current.org_id, OrderStatus.key == _type_start,
+                OrderStatus.active == True, OrderStatus.record_type == "work_order"))).first():  # noqa: E712
+            init = _type_start
     # renumber E -> WO and flip type on the SAME record
     estimate.order_number = await next_number(db, current.org_id, "order")
     estimate.is_estimate = False
     estimate.status = init
-    # deduct stock now (the estimate never did)
+    estimate.status_entered_at = datetime.utcnow()
+    # the estimate's own closing status ("Converted") closed it; the new job is open
+    estimate.closed_at = None
+    estimate.warranty_until = None
+    # deduct stock now (the estimate never did) — the same deduction as adding a line: only free
+    # stock (+ this job's own holds), cost layers and serials drawn, every shortfall booked as
+    # pending (a line with no stock row too, so removing it later can't conjure stock).
     src_lines = (await db.execute(select(OrderLine).where(OrderLine.order_id == estimate.id))).scalars().all()
     for l in src_lines:
         if l.kind == "product" and l.ref_id:
-            sl = (await db.execute(select(StockLevel).where(
-                StockLevel.part_id == l.ref_id, StockLevel.location_id == estimate.location_id).with_for_update())).scalar_one_or_none()
-            if sl:
-                deduct = min(l.qty, max(sl.qty_available, 0))
-                sl.qty_available -= deduct
-                l.pending_stock = l.qty - deduct
-                # log the ACTUAL deducted quantity, negative — matches every other
-                # consumption movement; was qty=+l.qty which corrupted movement-sum reports.
-                db.add(StockMovement(part_id=l.ref_id, location_id=estimate.location_id,
-                                     movement_type="use", qty=-deduct, ref_type="order", ref_id=estimate.id))
+            l.pending_stock = 0
+            await _maybe_deduct(db, estimate, l, l.qty or 0, {}, current, lenient=True)
     db.add(OrderStatusLog(order_id=estimate.id, from_status=None, to_status=init,
                           changed_by_id=current.id, note=f"Converted from estimate {old_number}"))
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "order", estimate.id,
                            f"Converted from estimate {old_number} to work order {estimate.order_number}")
     await db.commit()
+    from backend.models import AuditLog
+    creator = (await db.execute(select(AuditLog.actor_id).where(
+        AuditLog.org_id == current.org_id, AuditLog.action == "order.create",
+        AuditLog.entity_id == estimate.id).limit(1))).scalar_one_or_none()
+    await _new_job_steps(db, current, estimate, creator_id=creator)
     return estimate.id
 
 
@@ -1415,17 +1960,22 @@ async def _convert_estimate(db, current, estimate):
 async def convert_estimate_endpoint(
     order_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_tickets")),
 ):
-    """Manually convert an estimate into a work order."""
+    """Staff convert an estimate into a work order ("Convert to work order"). Creating the
+    job needs the same permission as creating one at the counter, and the record must be
+    within the person's access (E1)."""
     est = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
-        .options(selectinload(Order.lines)))).scalar_one_or_none()
+        .options(selectinload(Order.lines)).with_for_update(of=Order))).scalar_one_or_none()
     if not est:
         raise HTTPException(404, "Estimate not found")
+    await _guard_order_access(db, current, est)
     if not est.is_estimate:
         raise HTTPException(400, "This is already a work order")
     if est.converted_order_id:
         raise HTTPException(400, "Already converted")
+    from backend.services.billing import assert_can_add_job
+    await assert_can_add_job(db, current.org_id)
     new_id = await _convert_estimate(db, current, est)
     return {"ok": True, "order_id": new_id}
 
@@ -1491,6 +2041,11 @@ async def _clean_intake_photos(db, org_id: str, ids) -> list:
 
 class IntakePhotosIn(BaseModel):
     photos: List[str] = []   # the full desired list of media blob ids (replaces the current set)
+    label: Optional[Literal["intake", "before", "after", "damage"]] = None   # gc144g3 — /add only: tag the new photos
+
+
+class PhotoLabelIn(BaseModel):
+    label: Optional[Literal["intake", "before", "after", "damage"]] = None   # None clears it
 
 
 @router.patch("/{order_id}/intake-photos")
@@ -1507,9 +2062,71 @@ async def set_intake_photos(
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, order)
+    before = set(order.intake_photos or [])
     order.intake_photos = await _clean_intake_photos(db, current.org_id, data.photos)
+    from backend.services import pilot
+    pilot.record_photos(db, current, order.id, len([b for b in order.intake_photos if b not in before]), "intake")
     # 144dg — drop markups whose original photo is no longer on the order
     order.intake_markups = {k: v for k, v in (order.intake_markups or {}).items() if k in order.intake_photos}
+    order.intake_photo_labels = {k: v for k, v in (order.intake_photo_labels or {}).items() if k in order.intake_photos}
+    await db.commit()
+    return {"ok": True, "intake_photos": _intake_photos_payload(order)}
+
+
+@router.post("/{order_id}/intake-photos/add")
+async def add_intake_photos(
+    order_id: str,
+    data: IntakePhotosIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Append photos to a work order (the phone app's camera button). Unlike the PATCH, which
+    replaces the whole list, this adds to whatever is there now under a row lock, so two people
+    adding photos at once can't wipe each other's. Adding an id that's already there is a no-op,
+    so a retry is safe. Still capped at 40."""
+    order = (await db.execute(select(Order).where(
+        Order.id == order_id, Order.org_id == current.org_id).with_for_update())).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)
+    current_ids = list(order.intake_photos or [])
+    if len(current_ids) >= 40 and any(i not in current_ids for i in data.photos):
+        raise HTTPException(409, "This job already has 40 photos, the most it can hold.")
+    order.intake_photos = await _clean_intake_photos(db, current.org_id, current_ids + list(data.photos))
+    from backend.services import pilot
+    pilot.record_photos(db, current, order.id, len([b for b in order.intake_photos if b not in current_ids]), "intake")
+    if data.label:
+        labels = dict(order.intake_photo_labels or {})
+        for b in data.photos:
+            if b in order.intake_photos and b not in current_ids:   # only the photos this call added
+                labels[b] = data.label
+        order.intake_photo_labels = labels
+    await db.commit()
+    return {"ok": True, "intake_photos": _intake_photos_payload(order)}
+
+
+@router.patch("/{order_id}/intake-photos/{blob_id}/label")
+async def set_intake_photo_label(
+    order_id: str,
+    blob_id: str,
+    data: PhotoLabelIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """gc144g3 — mark what a job photo shows (check-in, before, after, damage), or clear it."""
+    order = (await db.execute(select(Order).where(
+        Order.id == order_id, Order.org_id == current.org_id).with_for_update())).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)
+    if blob_id not in (order.intake_photos or []):
+        raise HTTPException(404, "That photo isn't on this job.")
+    labels = dict(order.intake_photo_labels or {})
+    if data.label:
+        labels[blob_id] = data.label
+    else:
+        labels.pop(blob_id, None)
+    order.intake_photo_labels = labels
     await db.commit()
     return {"ok": True, "intake_photos": _intake_photos_payload(order)}
 
@@ -1592,11 +2209,12 @@ async def switch_type(
     order.type_id = data.type_id
     remapped = None
     # if the type defines an initial status and the order is still in a 'new' group, align it
-    if wot.initial_status:
-        cur = (await db.execute(select(OrderStatus).where(OrderStatus.org_id == current.org_id, OrderStatus.key == order.status))).scalar_one_or_none()
+    # (not on an estimate: its starting status applies when it becomes a work order)
+    if wot.initial_status and not order.is_estimate:
+        cur = (await db.execute(select(OrderStatus).where(OrderStatus.org_id == current.org_id, OrderStatus.key == order.status))).scalars().first()
         if cur and cur.status_group == "new" and order.status != wot.initial_status:
             order.status = wot.initial_status
-            order.status_entered_at = datetime.utcnow()
+            order.status_entered_at = now_utc()
             remapped = wot.initial_status
             db.add(OrderStatusLog(order_id=order.id, from_status=cur.key, to_status=wot.initial_status,
                                   changed_by_id=current.id, note="Type switched"))
@@ -1604,6 +2222,154 @@ async def switch_type(
     await log_system_event(db, current.org_id, "order", order.id, f"Type switched to {wot.name}")
     await db.commit()
     return {"ok": True, "type_id": data.type_id, "status": order.status, "remapped_to": remapped}
+
+
+class PriorityIn(BaseModel):
+    priority: int = Field(ge=0, le=2)    # 0 normal · 1 high · 2 urgent, same day
+
+
+@router.patch("/{order_id}/priority")
+async def set_priority(
+    order_id: str,
+    data: PriorityIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """J6 — change a job's priority from the job itself (Normal / High / Urgent, same day)."""
+    order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)
+    await _guard_editable(db, order, current)       # a closed job keeps its priority
+    if order.priority != data.priority:
+        prev = order.priority
+        order.priority = data.priority
+        from backend.routers.feed import log_system_event
+        names = {0: "Normal", 1: "High", 2: "Urgent, same day"}
+        await log_system_event(db, current.org_id, "order", order.id,
+                               f"Priority changed: {names.get(prev, prev)} \u2192 {names[data.priority]}")
+        await db.commit()
+    return {"ok": True, "priority": order.priority}
+
+
+class EstimateTermsIn(BaseModel):
+    valid_until: Optional[date] = None
+
+
+async def _open_estimate(db, current, order_id: str) -> Order:
+    order = (await db.execute(select(Order).where(
+        Order.id == order_id, Order.org_id == current.org_id).with_for_update())).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)
+    if not order.is_estimate or order.converted_order_id:
+        raise HTTPException(409, "This is a work order now, not an estimate.")
+    return order
+
+
+@router.patch("/{order_id}/estimate")
+async def set_estimate_terms(
+    order_id: str,
+    data: EstimateTermsIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_create_tickets")),
+):
+    """E5 — an estimate's "valid until" date. After it the customer can't approve online; send a new
+    revision (or move the date) to let them. Empty clears it."""
+    order = await _open_estimate(db, current, order_id)
+    if "valid_until" in data.model_fields_set:
+        order.estimate_valid_until = data.valid_until
+        from backend.routers.feed import log_system_event
+        await log_system_event(db, current.org_id, "order", order.id,
+                               f"Valid until {data.valid_until:%d %b %Y}" if data.valid_until else "Valid-until date cleared")
+    await db.commit()
+    return {"ok": True, "estimate_valid_until": order.estimate_valid_until.isoformat() if order.estimate_valid_until else None}
+
+
+class RevisionIn(BaseModel):
+    note: Optional[str] = Field(default=None, max_length=500)
+
+
+def _ser_revision(r) -> dict:
+    return {"id": r.id, "revision": r.revision, "lines": r.lines or [], "total": float(r.total or 0),
+            "valid_until": r.valid_until.isoformat() if r.valid_until else None,
+            "deposit_amount": float(r.deposit_amount or 0), "decision": r.decision,
+            "decline_reason": r.decline_reason, "skipped": r.skipped or [], "note": r.note,
+            "created_by_name": r.created_by_name,
+            "created_at": r.created_at.isoformat() if r.created_at else None}
+
+
+@router.post("/{order_id}/estimate/revisions", status_code=201)
+async def new_estimate_revision(
+    order_id: str,
+    data: RevisionIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_create_tickets")),
+):
+    """E5 — start a new version of the estimate. The version the customer saw (and their answer) is
+    kept in the history; the estimate becomes version N+1, which the customer can approve or decline
+    again. A declined estimate re-opens at the first estimate status."""
+    from backend.routers.public import snapshot_revision
+    order = await _open_estimate(db, current, order_id)
+    await snapshot_revision(db, order, note=data.note, actor=current)
+    order.estimate_revision = (order.estimate_revision or 1) + 1
+    order.estimate_decline_reason = None
+    order.estimate_approved_at = None
+    # pay links made for the old version (e.g. its deposit) stop working
+    from backend.models import PaymentIntent
+    from backend.services.order_money import revoke_pay_link
+    for _pi in (await db.execute(select(PaymentIntent).where(
+            PaymentIntent.org_id == current.org_id, PaymentIntent.order_id == order.id,
+            PaymentIntent.status.in_(("created", "viewed", "pending"))))).scalars().all():
+        await revoke_pay_link(db, _pi)
+    cur = (await db.execute(select(OrderStatus).where(
+        OrderStatus.org_id == current.org_id, OrderStatus.key == order.status,
+        OrderStatus.record_type == "estimate"))).scalars().first()
+    if cur and (cur.is_terminal or cur.status_group in ("closed", "dropped")):
+        first = (await db.execute(select(OrderStatus).where(
+            OrderStatus.org_id == current.org_id, OrderStatus.record_type == "estimate",
+            OrderStatus.active == True, OrderStatus.is_terminal == False,  # noqa: E712
+            OrderStatus.status_group.notin_(("closed", "dropped")))
+            .order_by(OrderStatus.sort_order))).scalars().first()
+        if first:
+            db.add(OrderStatusLog(order_id=order.id, from_status=order.status, to_status=first.key,
+                                  changed_by_id=current.id, note=f"Revision {order.estimate_revision}"))
+            order.status = first.key
+            order.status_entered_at = datetime.utcnow()
+            order.closed_at = None
+    from backend.routers.feed import log_system_event
+    await log_system_event(db, current.org_id, "order", order.id,
+                           f"Revision {order.estimate_revision} started" + (f": {data.note}" if data.note else ""))
+    await db.commit()
+    return {"ok": True, "revision": order.estimate_revision, "status": order.status}
+
+
+@router.get("/{order_id}/estimate/revisions")
+async def list_estimate_revisions(
+    order_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """E5 — earlier versions of an estimate, oldest first."""
+    from backend.models import EstimateRevision
+    order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    from backend.services import scoping
+    if not await scoping.can_view_order(db, current, order):
+        raise HTTPException(403, "You can only open work orders assigned to you")
+    rows = (await db.execute(select(EstimateRevision).where(
+        EstimateRevision.order_id == order.id, EstimateRevision.org_id == current.org_id)
+        .order_by(EstimateRevision.created_at, EstimateRevision.revision))).scalars().all()
+    items = [_ser_revision(r) for r in rows]
+    if not await has_perm(db, current, "can_view_item_prices"):
+        for it in items:
+            it.pop("total", None)
+            it.pop("deposit_amount", None)
+            for ln in it["lines"]:
+                ln.pop("unit_price", None)
+                ln.pop("total", None)
+    return {"items": items, "current": order.estimate_revision or 1}
 
 @router.post("/{order_id}/comments", status_code=201)
 async def add_comment(
@@ -1616,32 +2382,56 @@ async def add_comment(
     if not _co:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, _co)
+    if data.visible_to_client is None:
+        from backend.routers.feed import default_visibility
+        data.visible_to_client = await default_visibility(db, current.org_id, "comment") == "client"
     comment = OrderComment(order_id=order_id, author_id=current.id,
                            body=data.body, visible_to_client=data.visible_to_client)
     db.add(comment)
     await db.commit()
-    # Fire comment_added notifications (only for client-visible comments).
-    # 144jc: rules engine first (client + staff), legacy template fallback.
     if data.visible_to_client:
-        c_matched = 0
-        try:
-            from backend.services import notification_rules as _nr
-            _cr = await _nr.evaluate(db, org_id=current.org_id, order_id=order_id, event="comment_added")
-            c_matched = (_cr or {}).get("matched", 0)
-            await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order_id,
-                                         event="comment_added", actor_id=current.id)
-        except Exception:  # noqa: BLE001
-            pass
-        if c_matched == 0:
-            from backend.services.notifications import dispatch_order_notifications
-            await dispatch_order_notifications(
-                db, org_id=current.org_id, order_id=order_id, trigger_event="comment_added")
+        await notify_comment_added(db, current.org_id, order_id, actor_id=current.id)
     return {"ok": True}
+
+
+_SIG_RE = __import__("re").compile(r"^data:image/(png|jpeg);base64,[A-Za-z0-9+/=]+$")
+
+
+def _check_signature(v: Optional[str]) -> Optional[str]:
+    """A signature is a PNG/JPEG data URL of sane size, not any string (the job-type
+    "customer must sign" close gate trusts it)."""
+    if v is None or v == "":
+        return v
+    if len(v) > 2_000_000 or not _SIG_RE.match(v):
+        raise ValueError("signature must be a PNG or JPEG image")
+    return v
+
+
+async def notify_comment_added(db: AsyncSession, org_id: str, order_id: str, actor_id: Optional[str]) -> None:
+    """comment_added notifications for a client-visible comment (shared by the app and the API).
+    144jc: rules engine first (client + staff), legacy template fallback."""
+    c_matched = 0
+    try:
+        from backend.services import notification_rules as _nr
+        _cr = await _nr.evaluate(db, org_id=org_id, order_id=order_id, event="comment_added")
+        c_matched = (_cr or {}).get("matched", 0)
+        await _nr.notify_staff_order(db, org_id=org_id, order_id=order_id,
+                                     event="comment_added", actor_id=actor_id)
+    except Exception:  # noqa: BLE001
+        pass
+    if c_matched == 0:
+        from backend.services.notifications import dispatch_order_notifications
+        await dispatch_order_notifications(db, org_id=org_id, order_id=order_id, trigger_event="comment_added")
 
 
 class SignatureIn(BaseModel):
     signature: str                 # data URL / base64 PNG
     note: Optional[str] = None     # e.g. "Device collected by customer"
+
+    @field_validator("signature")
+    @classmethod
+    def _sig(cls, v):
+        return _check_signature(v)
 
 
 @router.post("/{order_id}/signature")
@@ -1693,22 +2483,68 @@ async def order_incoming_po(
     await _guard_order_access(db, current, order)
     open_states = ("draft", "ordered", "partial")
     # POs raised for this WO, or with any line reserved for it — scoped to org via supplier
-    pos = (await db.execute(select(PurchaseOrder)
+    # De-duplicate on the id in a subquery: SELECT DISTINCT over whole PO rows fails on Postgres
+    # (purchase_orders has JSON columns, which have no equality operator).
+    po_ids = (select(PurchaseOrder.id)
         .join(Supplier, PurchaseOrder.supplier_id == Supplier.id)
         .outerjoin(POLine, POLine.po_id == PurchaseOrder.id)
         .where(Supplier.org_id == current.org_id, PurchaseOrder.status.in_(open_states),
                or_(PurchaseOrder.source_order_id == order_id, POLine.reserved_order_id == order_id))
-        .distinct())).scalars().all()
-    part_names = {p.id: p.name for p in (await db.execute(
-        select(Part).where(Part.org_id == current.org_id))).scalars().all()}
+        .distinct())
+    pos = (await db.execute(select(PurchaseOrder).where(PurchaseOrder.id.in_(po_ids))
+                            .order_by(PurchaseOrder.po_number))).scalars().all()
+    lines_by = await rows_by(db, POLine, POLine.po_id, [po.id for po in pos])
+    part_names = await names_by_id(db, Part.id, Part.name,
+                                   [l.part_id for ls in lines_by.values() for l in ls],
+                                   org_col=Part.org_id, org_id=current.org_id)
     out = []
     for po in pos:
-        lines = (await db.execute(select(POLine).where(POLine.po_id == po.id))).scalars().all()
+        lines = lines_by.get(po.id, [])
         rel = [l for l in lines if l.reserved_order_id == order_id] or lines
         out.append({"po_id": po.id, "po_number": po.po_number, "status": po.status,
                     "expected_at": po.expected_at.isoformat() if po.expected_at else None,
                     "parts": [{"part": part_names.get(l.part_id, l.part_id),
                                "outstanding": max((l.qty_ordered or 0) - (l.qty_received or 0), 0)} for l in rel]})
+    return {"items": out}
+
+
+@router.get("/{order_id}/purchase-orders")
+async def order_purchase_orders(
+    order_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Every PO linked to this job — open and finished — line by line, for the work order's
+    "Parts & purchase orders" panel (ADR-144po)."""
+    from backend.models import Part, POLine, Supplier
+    from backend.services.po_links import pos_for_order
+    order = (await db.execute(select(Order).where(
+        Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)
+    pos = await pos_for_order(db, current.org_id, order_id)
+    sup_names = {s.id: s.name for s in (await db.execute(select(Supplier).where(
+        Supplier.id.in_({p.supplier_id for p in pos})))).scalars().all()} if pos else {}
+    lines_by = await rows_by(db, POLine, POLine.po_id, [po.id for po in pos])
+    names = await names_by_id(db, Part.id, Part.name,
+                              [l.part_id for ls in lines_by.values() for l in ls],
+                              org_col=Part.org_id, org_id=current.org_id)
+    out = []
+    for po in pos:
+        lines = lines_by.get(po.id, [])
+        rel = [l for l in lines if l.reserved_order_id == order_id] or lines
+        out.append({
+            "po_id": po.id, "po_number": po.po_number, "status": po.status,
+            "workflow_status": po.workflow_status, "supplier": sup_names.get(po.supplier_id),
+            "raised_here": po.source_order_id == order_id,
+            "ordered_at": po.ordered_at.isoformat() if po.ordered_at else None,
+            "expected_at": po.expected_at.isoformat() if po.expected_at else None,
+            "received_at": po.received_at.isoformat() if po.received_at else None,
+            "lines": [{"part": names.get(l.part_id, "Part"), "ordered": l.qty_ordered or 0,
+                       "received": l.qty_received or 0,
+                       "outstanding": max((l.qty_ordered or 0) - (l.qty_received or 0), 0)} for l in rel],
+        })
     return {"items": out}
 
 
@@ -1726,7 +2562,6 @@ async def order_labor(
         raise HTTPException(404, "Order not found")
     entries = (await db.execute(select(TimeEntry).where(
         TimeEntry.org_id == current.org_id, TimeEntry.order_id == order_id))).scalars().all()
-    from datetime import datetime as _dt
     # 144v: enrich with employee names + line label so the WO "Time & people" panel
     # can show who's on the job, on which line, and running vs total per person.
     emp_names = {e.id: e.name for e in (await db.execute(select(Employee).where(
@@ -1737,7 +2572,7 @@ async def order_labor(
     def _sec(e):  # live seconds for a still-running entry
         if e.ended_at:
             return int(e.duration_sec or 0)
-        return max(0, int((_dt.utcnow() - e.started_at).total_seconds())) if e.started_at else 0
+        return max(0, int((now_utc() - e.started_at).total_seconds())) if e.started_at else 0
 
     total = sum(_sec(e) for e in entries)
     running = any(e.ended_at is None for e in entries)
@@ -1785,7 +2620,8 @@ async def invoice_preview(
     lines = [{"description": l.description, "qty": l.qty, "unit_price": l.unit_price,
               "line_type": l.line_type, "total": q2((l.qty or 0) * (l.unit_price or 0))}
              for l in order.lines]
-    balance = q2((order.total or 0) - (order.prepayment_total or 0))
+    from backend.services.order_money import balance_due
+    balance = await balance_due(db, order)
     return {
         "order_id": order.id, "order_number": order.order_number,
         "client": order.client.name if order.client else "Walk-in",
@@ -1800,7 +2636,7 @@ async def payment_link(
     order_id: str,
     regenerate: bool = False,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_view_finance")),
+    current: Employee = Depends(require_perm("can_create_payment_links")),
 ):
     """Create a payment intent for the order's outstanding balance and return a
     shareable link + QR code. Uses the live gateway's checkout URL when
@@ -1809,6 +2645,7 @@ async def payment_link(
     A2: generate-once — if a live (non-paid, non-revoked) link already exists for
     this order, return it instead of minting a new URL. Pass regenerate=true to
     revoke the old one and issue a fresh link."""
+    await assert_perm(db, current, "can_create_payment_links")
     from backend.config import settings
     from backend.models import PaymentIntent
     from backend.services import payments as pay
@@ -1818,7 +2655,8 @@ async def payment_link(
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, order)
-    balance = q2((order.total or 0) - (order.prepayment_total or 0))
+    from backend.services.order_money import balance_due
+    balance = await balance_due(db, order)   # net of every payment, not just prepayments
     if balance <= 0:
         raise HTTPException(400, "Nothing to collect: order balance is zero.")
     # reuse an existing live link unless regenerating
@@ -1826,18 +2664,21 @@ async def payment_link(
         PaymentIntent.org_id == current.org_id, PaymentIntent.order_id == order_id,
         PaymentIntent.status.in_(("created", "viewed", "pending"))
     ).order_by(PaymentIntent.created_at.desc()))).scalars().first()
-    if existing and not regenerate:
+    # A live link is only reused while it still asks for what's owed: after a part payment or a
+    # change to the order it would charge the old amount, so it's revoked and re-issued.
+    if existing and not regenerate and abs(float(existing.amount or 0) - float(balance)) < 0.005:
         base0 = (settings.PUBLIC_BASE_URL or "").rstrip("/")
         rel0 = existing.checkout_url if (existing.provider != "simulated" and existing.checkout_url) else f"/pay/{existing.id}"
         url0 = (base0 + rel0) if (base0 and rel0.startswith("/")) else rel0
         return {"intent_id": existing.id, "amount": existing.amount, "currency": existing.currency,
                 "gateway": existing.provider, "url": url0, "qr_svg": qr_svg_data_uri(url0),
                 "status": existing.status, "reused": True}
-    if existing and regenerate:
-        existing.status = "canceled"   # revoke the stale link before issuing a new one
+    if existing:
+        from backend.services.order_money import revoke_pay_link
+        await revoke_pay_link(db, existing)   # stale or regenerated: close it at the provider too
     try:
         intent = await pay.create_intent(db, org_id=current.org_id, order_id=order_id,
-                                         amount=balance, account_id=None, currency="usd")
+                                         amount=balance, account_id=None)   # org base currency
     except RuntimeError as e:
         raise HTTPException(502, f"Gateway error: {e}")
     base = (settings.PUBLIC_BASE_URL or "").rstrip("/")
@@ -1854,6 +2695,11 @@ async def payment_link(
 class CompleteIn(BaseModel):
     status: Optional[str] = None       # terminal status to move to (default: first terminal)
     signature: Optional[str] = None    # optionally capture a signature first
+
+    @field_validator("signature")
+    @classmethod
+    def _sig(cls, v):
+        return _check_signature(v)
 
 
 @router.post("/{order_id}/complete")
@@ -1890,6 +2736,105 @@ async def complete_order(
     return await change_status(order_id, StatusChange(status=target), db, current)
 
 
+class FinishPaymentIn(BaseModel):
+    method: str = "cash"               # cash|cashless|card
+    account_id: str
+    amount: float
+
+
+class FinishIn(BaseModel):
+    status: Optional[str] = None       # finishing status (default: the first one in the closed group)
+    payment: Optional[FinishPaymentIn] = None
+
+
+@router.post("/{order_id}/finish")
+async def finish_order(
+    order_id: str,
+    data: FinishIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """B11: take the payment and finish the job in one step (Tekly Go's "Finish & take").
+    Every close gate runs before any money moves, and the payment and the close save in one
+    commit: if the job can't close, no money is taken; if the payment fails, the job stays open."""
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "orders.finish")
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        result = await _finish_order(order_id, data, db, current)
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
+
+
+async def _finish_order(order_id: str, data: FinishIn, db: AsyncSession, current: Employee):
+    order = (await db.execute(
+        select(Order).where(Order.id == order_id, Order.org_id == current.org_id).with_for_update()
+        .options(selectinload(Order.client), selectinload(Order.device), selectinload(Order.assigned_to),
+                 selectinload(Order.manager), selectinload(Order.lines)))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    target = data.status
+    if not target:
+        term = (await db.execute(select(OrderStatus).where(
+            OrderStatus.org_id == current.org_id, OrderStatus.is_terminal == True,  # noqa: E712
+            OrderStatus.active == True, OrderStatus.status_group == "closed",  # noqa: E712
+            OrderStatus.record_type == "work_order").order_by(OrderStatus.sort_order))).scalars().first()
+        if not term:
+            raise HTTPException(409, "No finishing status is set up for jobs.")
+        target = term.key
+    p = data.payment
+    # Every gate first, with the payment counted as taken: a job that can't close takes no money.
+    await _apply_status_change(db, current, order, target, check_only=True, assume_paid=bool(p))
+    paid = None
+    if p:
+        from backend.services.auth import has_perm
+        if not await has_perm(db, current, "can_take_payments"):
+            raise HTTPException(403, "Your role can't take payments.")
+        from backend.models import Account
+        from backend.routers.cash import post_order_payment
+        from backend.services.order_money import balance_due, reader_charge_in_flight
+        if await reader_charge_in_flight(db, order.id):
+            raise HTTPException(409, "A card reader charge for this job is still in progress. "
+                                     "Finish or cancel it on the reader first.")
+        if p.method not in ("cash", "cashless", "card"):
+            raise HTTPException(400, "Pay by cash or card here.")
+        remaining = q2(await balance_due(db, order))
+        if not p.amount or p.amount <= 0:
+            raise HTTPException(400, "Payment amount must be positive")
+        if q2(p.amount) > remaining:
+            raise HTTPException(400, f"That's more than is owed. The balance due is {max(remaining, 0):.2f}.")
+        acc = (await db.execute(select(Account).where(
+            Account.id == p.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
+        if not acc:
+            raise HTTPException(404, "Account not found")
+        _pay, fee = await post_order_payment(db, current.org_id, order, q2(p.amount), acc, p.method,
+                                             actor_id=current.id)
+        from backend.routers.feed import log_system_event
+        await log_system_event(db, current.org_id, "order", order.id,
+                               f"Payment {q2(p.amount)} via {p.method} to {acc.name}")
+        await db.flush()
+        paid = {"amount": q2(p.amount), "method": p.method, "fee": fee, "account": acc.name}
+    # The close commits the payment with it (a part payment that leaves money owed is refused here,
+    # and rolls the payment back).
+    res = await _apply_status_change(db, current, order, target)
+    if paid:
+        try:
+            from backend.services import notification_rules as _nr
+            await _nr.evaluate(db, org_id=current.org_id, order_id=order.id, event="payment_received")
+            await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
+                                         event="payment_received", actor_id=current.id)
+            await db.commit()
+        except Exception:  # noqa: BLE001
+            pass
+    return {"ok": True, "status": target, "payment": paid,
+            "order": res if isinstance(res, dict) else None}
+
+
 class NotifyIn(BaseModel):
     channel: str = "email"          # email|sms
     subject: Optional[str] = None
@@ -1900,7 +2845,7 @@ class NotifyIn(BaseModel):
 async def notify_order_customer(
     order_id: str, data: NotifyIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_send_sms")),
 ):
     """Message button: email/SMS the customer about this order. Delivery goes
     through the configured channel adapter (a real gateway is required to
@@ -1938,6 +2883,72 @@ async def notify_order_customer(
     return {"ok": True, "channel": data.channel, "recipient": recipient, "delivery": delivery}
 
 
+class SendDocIn(BaseModel):
+    channel: Optional[str] = None     # auto (default) | email | sms
+
+
+async def _estimate_pdf(db, org_id: str, order) -> bytes:
+    """The estimate as a PDF (lines, totals), for the Send estimate email."""
+    from backend.routers.printing import _org_lang, _org_name
+    from backend.services import printing
+    lines = (await db.execute(select(OrderLine).where(OrderLine.order_id == order.id))).scalars().all()
+    rows = [[l.description or "", f"{float(l.qty or 0):g}", f"{float(l.unit_price or 0):.2f}",
+             f"{float(l.total or 0):.2f}"] for l in lines]
+    client = (await db.execute(select(Client).where(Client.id == order.client_id))).scalar_one_or_none() \
+        if order.client_id else None
+    meta = [("For", client.name if client else None),
+            ("Date", order.created_at.strftime("%Y-%m-%d") if order.created_at else None)]
+    return printing.render_document(
+        title="Estimate", org_name=await _org_name(db, org_id), lang=await _org_lang(db, org_id),
+        number=order.order_number, meta=[m for m in meta if m[1]],
+        headers=["Description", "Qty", "Unit", "Total"], rows=rows,
+        totals=["", "", "Total", f"{float(order.total or 0):.2f}"])
+
+
+@router.post("/{order_id}/send-estimate")
+async def send_estimate(
+    order_id: str,
+    data: SendDocIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_reply_customer")),
+):
+    """I6 — "Send estimate": text or email the customer the link to approve it online. Email
+    also carries the estimate as a PDF. Says honestly whether it went out."""
+    from backend.services.customer_messages import send_to_customer, track_link
+    o = (await db.execute(select(Order).where(
+        Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+    if not o:
+        raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, o)
+    if not o.is_estimate:
+        raise HTTPException(400, "This is a work order, not an estimate")
+    from backend.routers.public import _already_decided
+    if await _already_decided(db, o):
+        raise HTTPException(409, "The customer already answered this estimate, so the link can't be used again.")
+    if data.channel and data.channel not in ("auto", "email", "sms"):
+        raise HTTPException(422, "channel must be auto, email or sms")
+    if not o.public_token:
+        o.public_token = await unique_public_token(db)
+    client = (await db.execute(select(Client).where(
+        Client.id == o.client_id, Client.org_id == current.org_id))).scalar_one_or_none() if o.client_id else None
+    org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
+    shop = org.name if org else "Your repair shop"
+    body = (f"{shop}: your estimate {o.order_number} for {float(o.total or 0):.2f} is ready. "
+            f"Review and approve it here: {track_link(o)}")
+    from backend.services.customer_messages import pick_channel
+    attachment = None
+    if await pick_channel(db, current.org_id, client, data.channel) == "email":
+        attachment = (f"estimate-{o.order_number}.pdf", await _estimate_pdf(db, current.org_id, o), "application/pdf")
+    delivery = await send_to_customer(db, org_id=current.org_id, client=client, body=body,
+                                      subject=f"Estimate {o.order_number} from {shop}", channel=data.channel,
+                                      order_id=o.id, trigger_event="estimate_sent", attachment=attachment,
+                                      saved=False)
+    from backend.routers.feed import log_system_event
+    await log_system_event(db, current.org_id, "order", o.id, f"Estimate sent to customer: {delivery['message']}")
+    await db.commit()
+    return {"ok": delivery["status"] == "sent", "delivery": delivery}
+
+
 class DuplicateOrderIn(BaseModel):
     # Optional scheduling for the new copy. "Schedule from" / "Schedule to" map to
     # the order's scheduled_for / scheduled_to columns. Omit both to create an
@@ -1960,8 +2971,8 @@ async def duplicate_order(
     pass ``scheduled_for`` / ``scheduled_to`` to book the copy straight onto the
     calendar, or omit them for an unscheduled draft. Stock is not deducted here
     (that happens when the copy is actually worked)."""
-    sched_for = parse_dt(data.scheduled_for, "scheduled_for") if data.scheduled_for else None
-    sched_to = parse_dt(data.scheduled_to, "scheduled_to") if data.scheduled_to else None
+    sched_for = await parse_wall_dt(db, current.org_id, None, data.scheduled_for, "scheduled_for") if data.scheduled_for else None
+    sched_to = await parse_wall_dt(db, current.org_id, None, data.scheduled_to, "scheduled_to") if data.scheduled_to else None
     if sched_for and sched_to and sched_to < sched_for:
         raise HTTPException(400, "Schedule to must be on or after schedule from")
     src = (await db.execute(
@@ -1969,6 +2980,10 @@ async def duplicate_order(
         .options(selectinload(Order.lines)))).scalar_one_or_none()
     if not src:
         raise HTTPException(404, "Order not found")
+    await assert_perm(db, current, "can_create_estimates" if src.is_estimate else "can_create_tickets")
+    if not src.is_estimate:
+        from backend.services.billing import assert_can_add_job
+        await assert_can_add_job(db, current.org_id)
 
     number = await next_number(db, current.org_id, "order")
     if src.is_estimate:
@@ -1976,14 +2991,24 @@ async def duplicate_order(
 
     new_lines = []
     labour = parts = 0.0
+    import uuid as _uuid
+    _groups: dict = {}   # each kit on the copy gets its own group id
     for l in src.lines:
+        _gid = (_groups.setdefault(l.bundle_group_id, str(_uuid.uuid4())) if l.bundle_group_id else None)
         nl = OrderLine(
+            bundle_group_id=_gid, bundle_name=l.bundle_name, bundle_print_mode=l.bundle_print_mode,
+            bundle_price_locked=l.bundle_price_locked, bundle_qty=l.bundle_qty,
+            bundle_std_price=l.bundle_std_price,
             line_type=l.line_type, ref_id=l.ref_id, description=l.description,
             qty=l.qty, unit_price=l.unit_price, cost_price=l.cost_price, kind=l.kind,
             technician_id=l.technician_id, work_share=l.work_share,
             warranty_days=l.warranty_days, discount=l.discount, discount_type=l.discount_type,
             discount_paid_by=l.discount_paid_by, tax_id=l.tax_id, tax_rate=l.tax_rate,
-            tax_mode=l.tax_mode, total=l.total, pending_stock=0.0)
+            tax_mode=l.tax_mode, total=l.total,
+            # The copy takes no stock: its products are owed (pending) until written off, so
+            # removing one later can't "return" units it never held.
+            pending_stock=float(l.qty or 0) if (l.kind == "product" and l.ref_id and not src.is_estimate) else 0.0,
+            discount_by_id=l.discount_by_id)   # a copied discount stays with whoever gave it
         new_lines.append(nl)
         if l.line_type == "labour":
             labour += l.total
@@ -2094,7 +3119,7 @@ async def create_po_from_order(
     in stock. Product lines with no catalog part are turned into real products
     first (so stock can be tracked), the PO is linked back to this work order, and
     — with auto_send — it's marked ordered and the supplier is notified."""
-    from backend.models import Part, POLine, PurchaseOrder, StockLevel, Supplier
+    from backend.models import Part, POLine, PurchaseOrder, Supplier
 
     order = (await db.execute(
         select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
@@ -2116,9 +3141,8 @@ async def create_po_from_order(
         if l.pending_stock and l.pending_stock > 0:
             short = l.pending_stock
         elif data.only_shortfall and l.ref_id:
-            sl = (await db.execute(select(StockLevel).where(
-                StockLevel.part_id == l.ref_id, StockLevel.location_id == order.location_id))).scalar_one_or_none()
-            avail = (sl.qty_available if sl else 0) or 0
+            from backend.services import stock_rows
+            avail, _held = await stock_rows.totals(db, l.ref_id, order.location_id)
             short = max(l.qty - max(avail, 0), 0)
         else:
             short = l.qty
@@ -2133,6 +3157,8 @@ async def create_po_from_order(
             await db.flush()
             part_id = part.id
             l.ref_id = part_id            # link the line so future deductions work
+            if not order.is_estimate:
+                l.pending_stock = short   # nothing was taken from stock for it yet: owed on arrival
             created_parts.append({"id": part.id, "name": part.name})
         needed.append((part_id, short, l.cost_price or 0.0, l.description))
 
@@ -2142,10 +3168,10 @@ async def create_po_from_order(
     total = sum(qty * cost for _, qty, cost, _ in needed)
     po = PurchaseOrder(
         supplier_id=supplier.id, location_id=order.location_id,
-        po_number=await next_number(db, current.org_id, "po"),
+        org_id=current.org_id, po_number=await next_number(db, current.org_id, "po"),
         source_order_id=order.id,
         status="ordered" if data.auto_send else "draft",
-        total=total, ordered_at=datetime.utcnow() if data.auto_send else None)
+        total=total, ordered_at=now_utc() if data.auto_send else None)
     db.add(po)
     await db.flush()
     for part_id, qty, cost, _desc in needed:
@@ -2160,8 +3186,9 @@ async def create_po_from_order(
                            f"Purchase order {po.po_number} raised ({len(needed)} part(s)) for {supplier.name}")
     if data.auto_send:
         # simulate sending the PO to the supplier (real transport wired in integrations)
-        print(f"[po:send:simulated] -> {supplier.email or supplier.name}: {po.po_number} "
-              f"({len(needed)} line(s), total {total})")
+        import logging
+        logging.getLogger(__name__).info("PO %s marked sent to supplier %s (%d line(s), simulated)",
+                                         po.po_number, supplier.id, len(needed))
     await db.commit()
     return {"ok": True, "po_id": po.id, "po_number": po.po_number, "status": po.status,
             "supplier": supplier.name, "line_count": len(needed), "total": total,
@@ -2188,7 +3215,7 @@ async def reserve_stock_for_order(
     the quantity each product line still needs that isn't already held for this job, and never
     more than is free at the order's location. Returns what was held and what was short."""
     from datetime import timedelta
-    from backend.models import Part, StockLevel, StockReservation
+    from backend.models import Part, StockReservation
 
     order = (await db.execute(
         select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
@@ -2203,7 +3230,7 @@ async def reserve_stock_for_order(
     existing = (await db.execute(select(StockReservation).where(
         StockReservation.org_id == current.org_id, StockReservation.order_id == order_id,
         StockReservation.released == False))).scalars().all()  # noqa: E712
-    now = datetime.utcnow()
+    now = now_utc()
     for r in existing:
         if r.expires_at and r.expires_at < now:
             continue
@@ -2217,20 +3244,19 @@ async def reserve_stock_for_order(
         need[l.ref_id] = need.get(l.ref_id, 0) + (l.qty or 0)
 
     reserved, short = [], []
-    part_names = {p.id: p.name for p in (await db.execute(
-        select(Part).where(Part.org_id == current.org_id))).scalars().all()}
+    part_names = await names_by_id(db, Part.id, Part.name, list(need),
+                                   org_col=Part.org_id, org_id=current.org_id)
     for part_id, qty_needed in need.items():
         want = qty_needed - held.get(part_id, 0)      # still to hold for this job
         if want <= 0:
             continue
-        sl = (await db.execute(select(StockLevel).where(
-            StockLevel.part_id == part_id, StockLevel.location_id == order.location_id))).scalar_one_or_none()
-        free = ((sl.qty_available or 0) - (sl.qty_reserved or 0)) if sl else 0
+        from backend.services import stock_rows
+        free = await stock_rows.free(db, part_id, order.location_id)
         take = min(want, max(free, 0))
         if take <= 0:
             short.append({"part": part_names.get(part_id, part_id), "needed": want, "free": max(free, 0)})
             continue
-        sl.qty_reserved = (sl.qty_reserved or 0) + take
+        await stock_rows.reserve(db, part_id, order.location_id, take)
         db.add(StockReservation(org_id=current.org_id, part_id=part_id, location_id=order.location_id,
                                 order_id=order_id, qty=take,
                                 expires_at=now + timedelta(days=hold_days)))
@@ -2259,12 +3285,12 @@ async def order_reservations(
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, order)
-    now = datetime.utcnow()
+    now = now_utc()
     rows = (await db.execute(select(StockReservation).where(
         StockReservation.org_id == current.org_id, StockReservation.order_id == order_id,
         StockReservation.released == False))).scalars().all()  # noqa: E712
-    part_names = {p.id: p.name for p in (await db.execute(
-        select(Part).where(Part.org_id == current.org_id))).scalars().all()}
+    part_names = await names_by_id(db, Part.id, Part.name, [r.part_id for r in rows],
+                                   org_col=Part.org_id, org_id=current.org_id)
     out = []
     for r in rows:
         if r.expires_at and r.expires_at < now:
@@ -2275,14 +3301,39 @@ async def order_reservations(
 
 
 async def _archive_order(db, current, order_id, reason, do_refund):
+    # Row lock (B1): two archive-with-refund requests at once both saw the same unrefunded
+    # balance and refunded it twice.
     order = (await db.execute(
-        select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+        select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
+        .with_for_update())).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)
     if order.archived:
         raise HTTPException(400, "Order is already archived")
 
     from backend.models import Account, Payment, Refund
+
+    # Issued credit notes on this order's invoices put credit on the client's ledger; archiving
+    # zeroes the order's charge, so leaving them would hand the client phantom credit. They are
+    # canceled first, the same rule as deleting an invoice.
+    from backend.models import CreditNote, Invoice as _Inv, InvoiceOrder as _IO
+    _inv_ids = select(_Inv.id).where(_Inv.org_id == current.org_id, (_Inv.order_id == order_id) | _Inv.id.in_(
+        select(_IO.invoice_id).where(_IO.order_id == order_id)))
+    _notes = (await db.execute(select(CreditNote.number).where(
+        CreditNote.invoice_id.in_(_inv_ids), CreditNote.status == "issued"))).scalars().all()
+    if _notes:
+        raise HTTPException(409, f"This order's invoice has issued credit notes ({', '.join(sorted(_notes))}). "
+                                 "Cancel them first, then archive the order.")
+    # Card money taken on a reader goes back on the reader (Card reader payments › Refund), not as
+    # a cash refund here — booking it here too would let the reader refund it a second time.
+    from backend.services.order_money import reader_charge_in_flight, unrefunded_reader_money
+    if await reader_charge_in_flight(db, order_id):
+        raise HTTPException(409, "A card reader charge for this order is still in progress. "
+                                 "Finish or cancel it on the reader first.")
+    if do_refund and await unrefunded_reader_money(db, order_id) > 0:
+        raise HTTPException(409, "This order was paid on a card reader. Refund the card payment on the "
+                                 "reader first (Card reader payments › Refund), then archive the order.")
 
     # A3: deletion dependency chain — never orphan money. Compute net unrefunded
     # payments first; if there is money on the order and the caller did not ask to
@@ -2303,7 +3354,6 @@ async def _archive_order(db, current, order_id, reason, do_refund):
     refunded = 0.0
     if do_refund:
         pays = _pays
-        already = _refunded_already
         net_paid = _net
         if net_paid > 0:
             acct = None
@@ -2318,9 +3368,22 @@ async def _archive_order(db, current, order_id, reason, do_refund):
                             account_id=acct.id if acct else None, amount=net_paid, reason=reason)
             db.add(refund)
             await db.flush()
-            db.add(Payment(order_id=order_id, client_id=order.client_id, method="refund",
-                           kind="refund", amount=net_paid, account_id=acct.id if acct else None,
-                           received_by_id=current.id, reference=f"Archive refund: {reason}"[:200]))
+            from backend.routers.cash import open_drawer_shift
+            _rp = Payment(order_id=order_id, client_id=order.client_id, method="refund",
+                          kind="refund", amount=net_paid, account_id=acct.id if acct else None,
+                          # cash handed back from a till comes out of that drawer's count (B10)
+                          shift_id=await open_drawer_shift(db, current.org_id, acct),
+                          received_by_id=current.id, reference=f"Archive refund: {reason}"[:200])
+            db.add(_rp)
+            await db.flush()
+            refund.payment_id = _rp.id
+            if order.client_id:
+                # The cash goes back, so the client's ledger must show it — otherwise the reversed
+                # charge leaves them with phantom store credit equal to what they were refunded.
+                from backend.services.ledger import post_contact_ledger
+                await post_contact_ledger(db, current.org_id, order.client_id, "refund", abs(net_paid),
+                                          note=f"Refund on archived order {order.order_number}",
+                                          ref_type="refund", ref_id=refund.id, created_by_id=current.id)
             if acct:
                 from backend.routers.cash import post_transaction
                 await post_transaction(db, current.org_id, acct.id, "refund", -net_paid,
@@ -2330,7 +3393,7 @@ async def _archive_order(db, current, order_id, reason, do_refund):
 
     order.archived = True
     order.archive_reason = reason
-    order.archived_at = datetime.utcnow()
+    order.archived_at = now_utc()
     order.archived_by_id = current.id
     # Zero out any outstanding charge this order posted to the client ledger — an archived order
     # must not leave a phantom receivable (mirrors the reopen path: target charge = 0).
@@ -2353,6 +3416,9 @@ async def _archive_order(db, current, order_id, reason, do_refund):
                 _ded = (_l.qty or 0) - (_l.pending_stock or 0)
                 if _ded > 0:
                     await _reverse_fulfillment(db, order, _l.ref_id, _ded)
+                    # The parts are back on the shelf: the line no longer holds stock. Without this,
+                    # restore -> archive (or delete the line) returned the same parts again.
+                    _l.pending_stock = _l.qty or 0
     if not order.is_estimate:
         from backend.services.payroll import CommissionEngine
         await CommissionEngine(db, current.org_id).reverse_for_deletion(order)
@@ -2398,6 +3464,7 @@ async def _restore_order(db, current, order_id):
         select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)
     if not order.archived:
         raise HTTPException(400, "Order is not archived")
     order.archived = False
@@ -2434,6 +3501,7 @@ async def delete_order(
     """Deleting a work order archives it (soft-delete) rather than destroying it,
     so finance/audit history is preserved and the owner can see why it was removed.
     Refunds any payments by default."""
+    await assert_perm(db, current, "can_delete_tickets")
     return await _archive_order(db, current, order_id, (reason or "Deleted").strip(), refund)
 
 
@@ -2459,7 +3527,7 @@ async def transfer_order(
     order_id: str,
     data: TransferOrderIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_transfer_tickets")),
 ):
     """Build 75 — move a work order to another of the org's locations."""
     order = (await db.execute(select(Order).where(
@@ -2622,8 +3690,8 @@ async def scheduler_day(
         _Bk.status.in_(["booked", "done"]))
     appointments = (await db.execute(bq)).scalars().all()
     if appointments:
-        cnames = {c.id: c.name for c in (await db.execute(select(_Cl).where(
-            _Cl.org_id == current.org_id))).scalars().all()}
+        cnames = await names_by_id(db, _Cl.id, _Cl.name, [b.client_id for b in appointments],
+                                   org_col=_Cl.org_id, org_id=current.org_id)
         enames = {e.id: e.name for e in (await db.execute(select(_Emp).where(
             _Emp.org_id == current.org_id))).scalars().all()}
         for b in appointments:
@@ -2736,6 +3804,43 @@ async def set_order_code(
     return {"ok": True, "barcode": order.barcode, "order_number": order.order_number}
 
 
+class CustomDataIn(BaseModel):
+    custom_data: dict = {}
+
+
+@router.patch("/{order_id}/custom-data")
+async def save_custom_data(
+    order_id: str,
+    data: CustomDataIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Edit the work order's own form fields (Passcode, Accessories…) after intake — the job
+    card is where "Before closing" fields get filled. Only this type's fields are kept; fields
+    locked after create keep their first value."""
+    order = (await db.execute(select(Order).where(
+        Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)
+    from backend.models import CustomField
+    fields = (await db.execute(select(CustomField).where(
+        CustomField.org_id == current.org_id, CustomField.type_id == order.type_id,
+        CustomField.entity_type == "order"))).scalars().all() if order.type_id else []
+    cur = dict(order.custom_data or {})
+    for f in fields:
+        if f.field_type == "header" or f.field_key not in data.custom_data:
+            continue
+        if f.lock_after_create and cur.get(f.field_key) not in (None, "", []):
+            continue
+        cur[f.field_key] = data.custom_data[f.field_key]
+    order.custom_data = cur
+    from backend.routers.forms import sync_order_field_upsells
+    await sync_order_field_upsells(db, current.org_id, order, actor=current)
+    await db.commit()
+    return {"ok": True, "custom_data": cur}
+
+
 class NotesIn(BaseModel):
     tech_notes: Optional[str] = None
     conclusion: Optional[str] = None
@@ -2774,13 +3879,15 @@ async def reschedule(
     # reschedule dialog can clear a schedule by sending scheduled_for: null.
     sent = data.model_fields_set
     if "scheduled_for" in sent:
-        order.scheduled_for = parse_dt(data.scheduled_for, "scheduled_for") if data.scheduled_for else None
+        order.scheduled_for = (await parse_wall_dt(db, current.org_id, order.location_id, data.scheduled_for, "scheduled_for")
+                               if data.scheduled_for else None)
     elif data.scheduled_for is not None:
-        order.scheduled_for = parse_dt(data.scheduled_for, "scheduled_for")
+        order.scheduled_for = await parse_wall_dt(db, current.org_id, order.location_id, data.scheduled_for, "scheduled_for")
     if "scheduled_to" in sent:
-        order.scheduled_to = parse_dt(data.scheduled_to, "scheduled_to") if data.scheduled_to else None
+        order.scheduled_to = (await parse_wall_dt(db, current.org_id, order.location_id, data.scheduled_to, "scheduled_to")
+                              if data.scheduled_to else None)
     elif data.scheduled_to is not None:
-        order.scheduled_to = parse_dt(data.scheduled_to, "scheduled_to")
+        order.scheduled_to = await parse_wall_dt(db, current.org_id, order.location_id, data.scheduled_to, "scheduled_to")
     if data.duration_min is not None:
         order.duration_min = data.duration_min
     if data.assigned_to_id is not None:
@@ -2801,7 +3908,7 @@ async def assign_people(
     order_id: str,
     data: AssignIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_assign_staff")),
 ):
     """144cp — set the WO manager and/or assigned specialist. Only the fields
     present in the request are changed; empty string clears the field."""
@@ -2810,6 +3917,10 @@ async def assign_people(
     if not order:
         raise HTTPException(404, "Order not found")
     sent = data.model_fields_set
+    if "manager_id" in sent:
+        await _assert_listed(db, current.org_id, data.manager_id, "display_in_managers", "Managers")
+    if "assigned_to_id" in sent:
+        await _assert_listed(db, current.org_id, data.assigned_to_id, "display_in_assignees", "Assignee")
     notify_id = None
     if "assigned_to_id" in sent:
         new_assignee = data.assigned_to_id or None
@@ -2821,10 +3932,11 @@ async def assign_people(
     await db.commit()
     if notify_id and notify_id != current.id:
         try:
+            from backend.services.push import notify   # was never imported: assignees got no alert
             await notify(db, org_id=current.org_id, employee_id=notify_id,
-                         kind="order_assigned",
+                         kind="job.assigned", title=f"New job {order.order_number}",
                          body=f"You were assigned to {order.order_number}",
-                         link=f"/orders/{order.id}")
+                         deep_link=f"/tech#/order/{order.id}")
         except Exception:
             pass
     return {"ok": True}
@@ -2849,24 +3961,24 @@ async def receive_pending_stock(
     )).scalar_one_or_none()
     if not line:
         raise HTTPException(404, "Line not found")
+    if order.archived:
+        raise HTTPException(409, "This job is archived. Restore it before writing off stock.")
+    await _guard_order_access(db, current, order)
+    await _guard_editable(db, order, current)
+    if (await _order_perms(db, current)).get("can_add_products") is False:
+        raise HTTPException(403, "You don't have permission to add products")
+    if order.is_estimate or line.kind != "product" or not line.ref_id:
+        raise HTTPException(400, "Only a product line on a work order holds stock")
     if (line.pending_stock or 0) <= 0:
         return {"ok": True, "pending": 0}
 
-    sl = (await db.execute(
-        select(StockLevel).where(StockLevel.part_id == line.ref_id, StockLevel.location_id == order.location_id).with_for_update()
-    )).scalar_one_or_none()
-    available = sl.qty_available if sl else 0
-    deduct = min(line.pending_stock, max(available, 0))
+    # Same deduction as adding the line: free stock (+ this job's holds) only, row-locked, cost
+    # layers and serials drawn. What still can't be taken stays pending.
+    pend = line.pending_stock or 0
+    line.pending_stock = 0
+    deduct = await _maybe_deduct(db, order, line, pend, {}, current, lenient=True)
     if deduct <= 0:
         raise HTTPException(409, "No stock available to write off yet")
-    sl.qty_available -= deduct
-    line.pending_stock -= deduct
-    db.add(StockMovement(
-        part_id=line.ref_id, location_id=order.location_id,
-        movement_type="use", qty=-deduct, ref_type="order", ref_id=order.id,
-    ))
-    from backend.services import inventory_alerts as _alerts  # 144bo: low-stock alert
-    await _alerts.maybe_low_stock_by_id(db, current.org_id, line.ref_id)
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "order", order.id,
                            f"Pending stock written off: {deduct:g} unit(s)")
@@ -2888,37 +4000,85 @@ async def _log_amount_change(db, org_id, order, prev_total):
                            f"Amount changed: {prev_total:.2f} → {new_total:.2f}")
 
 
+async def _stop_job_timers(db, order, bill: bool = True) -> None:
+    """Stop every timer still running on this job, the same way the Stop button does (and bill it
+    as labour where the shop bills tracked time, unless `bill` is off — a cancelled job)."""
+    from backend.models import TimeEntry
+    from backend.routers.timeclock import _apply_labour_billing, _maybe_emit_stop, _stop
+    running = (await db.execute(select(TimeEntry).where(
+        TimeEntry.org_id == order.org_id, TimeEntry.order_id == order.id,
+        TimeEntry.state == "running", TimeEntry.ended_at.is_(None)))).scalars().all()
+    for e in running:
+        _stop(e)
+        e.note = ((e.note + " · ") if e.note else "") + "Stopped when the job closed"
+        await _maybe_emit_stop(db, e)
+        if bill:
+            await _apply_labour_billing(db, e)
+    if running:
+        await db.refresh(order, ["lines"])      # billed time may have added a labour line
+        from backend.routers.feed import log_system_event
+        await log_system_event(db, order.org_id, "order", order.id,
+                               f"{len(running)} running timer{'s' if len(running) != 1 else ''} stopped (job closed)")
+
+
 async def _recalc_order(db, order):
-    """Recompute an order's labour/parts/total from its lines."""
+    """Recompute an order's labour/parts/total from its lines, and its unsent invoices with it."""
+    prev_total = float(order.total or 0)
     lines = (await db.execute(select(OrderLine).where(OrderLine.order_id == order.id))).scalars().all()
-    labour = sum(l.total for l in lines if l.line_type == "labour")
-    parts = sum(l.total for l in lines if l.line_type == "part")
-    fees = sum(l.total for l in lines if l.line_type == "fee")
-    order.labour_total = labour + fees
+    labour = msum(l.total for l in lines if l.line_type == "labour")
+    parts = msum(l.total for l in lines if l.line_type == "part")
+    fees = msum(l.total for l in lines if l.line_type == "fee")
+    order.labour_total = msum([labour, fees])
     order.parts_total = parts
-    total = labour + parts + fees
+    total = msum([labour, parts, fees])
+    if total < 0:
+        # Discounts left behind after the work they paid for was removed: the job is worth 0, and
+        # labour + parts still add up to it (discount lines sit in labour_total).
+        order.labour_total = labour + fees - total
     # Item 3: optional whole-document rounding (nearest 0.05). Off by default.
     _org = (await db.execute(select(Organisation).where(Organisation.id == order.org_id))).scalar_one_or_none()
     if _org and getattr(_org, "rounding_enabled", False):
-        total = q2(round(total / 0.05) * 0.05)
-    order.total = total
+        total = round_to_step(total, 0.05)
+    # Never below zero: discount lines (gift card, coupon, loyalty) left behind after the lines
+    # they paid for were removed made the total negative, which then read as an "overpayment" and
+    # could be refunded in cash (audit 2026-10-29, H5).
+    order.total = max(total, 0)
+    order.tax = order_tax(lines)
+    from backend.services.invoice_money import sync_order_invoices
+    await sync_order_invoices(db, order, prev_total)
+
+
+def _all_codes():
+    from backend.services.permissions import ALL_CODES
+    return ALL_CODES
 
 
 async def _order_perms(db, current):
+    """The role's effective permissions ({code: bool} for every catalogue code); {} = owner."""
     perms = {}
-    if current.role_id:
+    if not current.role_id:
+        from backend.services.auth import is_shop_owner
+        if not await is_shop_owner(db, current):
+            return {c: False for c in _all_codes()}   # roleless, not the owner: nothing
+    else:
         from backend.models import Role
+        from backend.services.permissions import effective_permissions
         role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
-        perms = (role.permissions or {}) if role else {}
+        perms = effective_permissions(role) if role else {c: False for c in _all_codes()}
     return perms
 
 
-async def _guard_discount_approval(db, org_id, perms, discount, discount_type, is_owner=False):
-    """144hd — a percent discount above the org threshold needs approval rights.
+async def _guard_discount_approval(db, org_id, perms, discount, discount_type, is_owner=False,
+                                   base: float | None = None):
+    """144hd — a discount above the org threshold needs approval rights.
     Default-allow (matching the app's RBAC): blocked only when a role explicitly
-    sets can_approve_discount to False. Owners (no role) always pass."""
-    if is_owner or (discount_type or "pct") != "pct" or (discount or 0) <= 0:
+    sets can_approve_discount to False. Owners (no role) always pass. A fixed-amount
+    discount is judged as its percentage of the line (base = qty x unit price): skipping
+    fixed discounts let any role give a 100% discount without approval."""
+    if is_owner or (discount or 0) <= 0:
         return
+    if (discount_type or "pct") == "fixed":
+        discount = 100.0 if not base or base <= 0 else min(100.0, float(discount) / float(base) * 100)
     if perms.get("can_approve_discount") is not False:
         return
     org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
@@ -2929,11 +4089,50 @@ async def _guard_discount_approval(db, org_id, perms, discount, discount_type, i
 
 
 async def _guard_editable(db, order, current):
-    """Block edits if the order's current status locks edits (e.g. closed)."""
+    """Block edits if the order's current status locks edits (e.g. closed). A closed order
+    that doesn't lock edits can still only be changed by roles with "Edit the closed ticket"."""
     st = (await db.execute(select(OrderStatus).where(
-        OrderStatus.org_id == current.org_id, OrderStatus.key == order.status))).scalar_one_or_none()
+        OrderStatus.org_id == current.org_id, OrderStatus.key == order.status))).scalars().first()
     if st and st.locks_edits:
         raise HTTPException(409, "This order is closed/locked and can't be edited. Reopen it to make changes.")
+    if await _is_closed(db, current.org_id, order):
+        await assert_perm(db, current, "can_edit_closed_ticket")
+
+
+async def _is_closed(db, org_id, order) -> bool:
+    """Is the order sitting in a closed (terminal) status right now?"""
+    st = (await db.execute(select(OrderStatus).where(
+        OrderStatus.org_id == org_id, OrderStatus.key == order.status,
+        OrderStatus.is_estimate == bool(order.is_estimate)))).scalars().first()
+    if st:
+        return st.status_group == "closed" or bool(st.is_terminal)
+    return bool(order.closed_at)
+
+
+async def _assert_listed(db, org_id, employee_id, code, list_name) -> None:
+    """Only people whose role shows them in the Managers / Assignee list can be picked there."""
+    if not employee_id:
+        return
+    emp = (await db.execute(select(Employee).where(
+        Employee.id == employee_id, Employee.org_id == org_id))).scalar_one_or_none()
+    # Being listed is a display setting, not access: someone with no role is listed, as in the
+    # Team screen's pickers (staff._picker_lists), even though they have no permissions.
+    if emp and emp.role_id and not await has_perm(db, emp, code):
+        raise HTTPException(422, f"{emp.name} isn't in the {list_name} list.")
+
+
+async def _assert_line_rights(db, current, li) -> None:
+    """Rights a new line needs on top of adding it: an item from outside the catalog, and a
+    discount type other than the default percentage."""
+    if not li.ref_id and li.line_type != "fee" and li.kind != "bundle":
+        product = li.line_type == "part" or li.kind == "product" or li.catalog_kind == "product"
+        await assert_perm(db, current, "can_add_custom_product" if product else "can_add_custom_service")
+    if (li.discount or 0) > 0 and (li.discount_type or "pct") != "pct":
+        await assert_perm(db, current, "can_set_discount_type")
+
+
+# What "View prices of labors, services, products" hides on a work order's lines.
+LINE_PRICE_KEYS = ("unit_price", "total", "discount", "discount_type")
 
 
 async def _validate_line_assignment(db, org_id, *, technician_id=None, co_technicians=None):
@@ -2956,6 +4155,37 @@ async def _validate_line_assignment(db, org_id, *, technician_id=None, co_techni
             raise HTTPException(422, "A selected technician doesn't belong to this organization.")
 
 
+
+async def _catalog_cost(db, org_id, kind, ref_id) -> float:
+    """The catalog cost of the service/product a line points at (0 when it points at nothing)."""
+    if not ref_id or kind not in ("service", "product"):
+        return 0.0
+    from backend.models import Part, Service as _Svc
+    model = _Svc if kind == "service" else Part
+    row = (await db.execute(select(model.cost_price).where(model.id == ref_id, model.org_id == org_id))).scalar_one_or_none()
+    return float(row or 0)
+
+async def _catalog_price(db, org_id, kind, ref_id) -> float:
+    """What the catalog charges for a service/product on a work order."""
+    from backend.models import Part, Service as _Svc
+    if kind == "service":
+        row = (await db.execute(select(_Svc.price).where(_Svc.id == ref_id, _Svc.org_id == org_id))).scalar_one_or_none()
+        return float(row or 0)
+    p = (await db.execute(select(Part).where(Part.id == ref_id, Part.org_id == org_id))).scalar_one_or_none()
+    return float(((p.repair_price or 0) or p.sell_price or 0) if p else 0)
+
+async def _catalog_warranty(db, org_id, kind, ref_id) -> int:
+    """G2 — a picked product/service carries its catalog warranty onto the job line, so the
+    warranty starts when the job closes. Custom lines have none unless typed in."""
+    if not ref_id or kind not in ("service", "product"):
+        return 0
+    from backend.models import Part, Service as _Svc
+    model = _Svc if kind == "service" else Part
+    row = (await db.execute(select(model.warranty_days).where(
+        model.id == ref_id, model.org_id == org_id))).scalar_one_or_none()
+    return int(row or 0)
+
+
 @router.post("/{order_id}/lines", status_code=201)
 async def add_line(
     order_id: str,
@@ -2968,7 +4198,14 @@ async def add_line(
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_editable(db, order, current)
+    if (data.discount or 0) > 0:
+        await assert_perm(db, current, "can_set_discount")
+    await _assert_line_rights(db, current, data)
     await _validate_line_assignment(db, current.org_id, technician_id=data.technician_id, co_technicians=data.co_technicians)
+    if data.order_item_id:
+        from backend.services import multi_asset as _ma
+        await _ma.require_enabled(db, current.org_id)
+        await _ma.item_for_order(db, current.org_id, order.id, data.order_item_id)
     # 144ax G1 — snapshot the catalog service's standard duration as the line's booked hours
     # (minutes → hours), so booked-vs-actual has a baseline without the tech hand-typing it.
     # Snapshot, not a live link: editing the catalog service later won't rewrite this line.
@@ -2985,17 +4222,36 @@ async def add_line(
                 data.qty = data.booked_hours
 
     perms = await _order_perms(db, current)
+    # Someone who can't see costs never saw the catalog cost, so whatever they sent is ignored
+    # and the line takes the catalog's cost (0 for a custom line).
+    if current.role_id and not perms.get("can_view_purchase_price"):
+        data.cost_price = await _catalog_cost(db, current.org_id, data.kind, data.ref_id)
+    elif not await has_perm(db, current, "can_set_cost_price"):
+        data.cost_price = await _catalog_cost(db, current.org_id, data.kind, data.ref_id)   # not theirs to set
+    # Someone who can't see item prices picked without one: a catalog item is billed at its price.
+    if data.ref_id and data.kind in ("service", "product") and not await has_perm(db, current, "can_view_item_prices"):
+        data.unit_price = await _catalog_price(db, current.org_id, data.kind, data.ref_id)
 
     # Build 126 (Orderry parity): a custom line can be saved to the catalog as a reusable
     # service or product, or kept as a one-off for this order only. When saving, we create
     # the catalog record and re-point this line at it so it behaves like a picked item.
     if data.save_to_catalog and (data.kind in (None, "custom", "fee") or data.line_type == "fee"):
         ckind = data.catalog_kind or "service"
+        # Adding a line to a job doesn't by itself let someone grow the shop's catalog.
+        await assert_perm(db, current, "can_create_products" if ckind == "product" else "can_edit_labors")
         if ckind == "product":
             from backend.models import Part
+            sku = (data.catalog_sku or "").strip() or None
+            if sku:
+                dup = (await db.execute(select(Part.name, Part.sku).where(
+                    Part.org_id == current.org_id, Part.active == True,  # noqa: E712
+                    func.lower(Part.sku) == sku.lower()).limit(1))).first()
+                if dup:
+                    raise HTTPException(409, f"“{dup[0]}” already uses SKU {dup[1]}. Pick it from the catalog instead.")
             part = Part(org_id=current.org_id, name=data.description,
                         sell_price=data.unit_price or 0, cost_price=data.cost_price or 0,
-                        warranty_days=data.warranty_days or 0)
+                        warranty_days=data.warranty_days or 0, sku=sku,
+                        barcode=(data.catalog_barcode or "").strip() or None)
             db.add(part)
             await db.flush()
             data.kind, data.line_type, data.ref_id = "product", "part", part.id
@@ -3046,31 +4302,66 @@ async def add_line(
             else:
                 item = (await db.execute(select(_Svc).where(_Svc.id == c.ref_id, _Svc.org_id == current.org_id))).scalar_one_or_none()
                 std.append((c, c.ref_id, item.name if item else "Service", item.price if item else 0, "labour", "service"))
-        total_std = sum(p * c.qty for c, _eid, _n, p, _lt, _k in std) or 0
-        factor = (bundle.price / total_std) if (bundle.price_mode == "fixed" and total_std > 0) else 1.0
+        # Every line from this kit is tagged with one group id (kit1p01) so customer documents can
+        # print the kit as one line. A fixed-price kit locks its total for the group and spreads it
+        # across the lines with the rounding remainder on one of them, so it adds up exactly.
+        import uuid as _uuid
+
+        from backend.services import kit_print
+        group_id = str(_uuid.uuid4())
+        locked = q2((bundle.price or 0) * data.qty) if bundle.price_mode == "fixed" else None
+        if locked is not None and not kit_print.price_ok(locked):
+            raise HTTPException(400, "That many kits comes to more than one job can hold")
         made = []
         for c, eff_ref_id, name, price, ltype, kind in std:
             li = LineIn(line_type=ltype, kind=kind, ref_id=eff_ref_id,
                         description=f"{name} ({bundle.name})",
-                        qty=c.qty * data.qty, unit_price=q2(price * factor))
+                        qty=c.qty * data.qty, unit_price=q2(price))
+            await _auto_apply_tax(db, current.org_id, li, order.location_id)
             t = _calc_line(li)
+            # The part's catalog cost, like any picked line, so profit reports see the kit's cost.
             nl = OrderLine(order_id=order_id, line_type=li.line_type, kind=li.kind, ref_id=li.ref_id,
                            description=li.description, qty=li.qty, unit_price=li.unit_price,
-                           technician_id=data.technician_id, total=t)
+                           cost_price=await _catalog_cost(db, current.org_id, kind, eff_ref_id),
+                           warranty_days=await _catalog_warranty(db, current.org_id, kind, eff_ref_id),   # G2
+                           tax_id=li.tax_id, tax_rate=li.tax_rate, tax_mode=li.tax_mode,
+                           technician_id=data.technician_id, order_item_id=data.order_item_id, total=t,
+                           bundle_group_id=group_id, bundle_name=bundle.name,
+                           bundle_print_mode=kit_print.norm_mode(bundle.print_mode),
+                           bundle_price_locked=locked, bundle_qty=data.qty, bundle_std_price=q2(price))
             db.add(nl)
             await db.flush()
             if kind == "product" and not order.is_estimate:
                 await _maybe_deduct(db, order, nl, li.qty, perms, current)
             made.append(nl.id)
+        await _respread_kit(db, order_id, group_id)
         await _recalc_order(db, order)
         await db.commit()
-        return {"ok": True, "bundle": bundle.name, "lines_created": len(made)}
+        return {"ok": True, "bundle": bundle.name, "lines_created": len(made), "bundle_group_id": group_id}
+
+    # A line added INSIDE a kit already on this job joins its group: it prints with the kit, and a
+    # fixed kit price is re-spread so the customer's price for the kit doesn't change.
+    kit_group = None
+    if data.bundle_group_id:
+        kit_group = (await db.execute(select(OrderLine).where(
+            OrderLine.order_id == order_id, OrderLine.bundle_group_id == data.bundle_group_id)
+            .limit(1))).scalars().first()
+        if not kit_group:
+            raise HTTPException(404, "That kit isn't on this job")
+        if data.kind not in ("service", "product") or not data.ref_id:
+            raise HTTPException(400, "Only catalog services and products can go inside a kit. Add anything else as an extra.")
+        await _guard_kit_change(db, current, order_id, kit_group.bundle_group_id, adds_value=True)
+        # A line inside a kit takes the kit's item, and its weight is the catalog price, never a
+        # price the client sent (it decides how the kit's locked total is shared out).
+        data.order_item_id = kit_group.order_item_id
 
     # Merge: if the same product already exists on the order, just bump qty (Orderry)
     if data.kind == "product" and data.ref_id:
+        # A kit's lines are never merged into: an extra must stay a line of its own.
         existing = (await db.execute(select(OrderLine).where(
-            OrderLine.order_id == order_id, OrderLine.ref_id == data.ref_id, OrderLine.kind == "product"))).scalar_one_or_none()
-        if existing:
+            OrderLine.order_id == order_id, OrderLine.ref_id == data.ref_id, OrderLine.kind == "product",
+            OrderLine.bundle_group_id.is_(None)).limit(1))).scalars().first()
+        if existing and not kit_group:
             existing.qty += data.qty
             existing.total = q2(existing.qty * existing.unit_price *
                                    (1 - (existing.discount or 0)/100 if existing.discount_type != "fixed" else 1))
@@ -3080,14 +4371,17 @@ async def add_line(
                          discount=existing.discount or 0, discount_type=existing.discount_type or "pct",
                          tax_rate=existing.tax_rate or 0, tax_mode=existing.tax_mode or "imposed")
             existing.total = _calc_line(tmp)
-            await _maybe_deduct(db, order, existing, data.qty, perms, current)
+            if not order.is_estimate:      # estimates never deduct
+                await _maybe_deduct(db, order, existing, data.qty, perms, current,
+                                    bin_id=data.bin_id, serial_number=data.serial_number)
             await _recalc_order(db, order)
             await db.commit()
             return {"ok": True, "line_id": existing.id, "merged": True}
 
     await _apply_client_discount(db, current.org_id, order.client_id, data)
-    await _auto_apply_tax(db, current.org_id, data)
-    await _guard_discount_approval(db, current.org_id, perms, data.discount, data.discount_type, is_owner=not current.role_id)
+    await _auto_apply_tax(db, current.org_id, data, order.location_id)
+    await _guard_discount_approval(db, current.org_id, perms, data.discount, data.discount_type, is_owner=not current.role_id,
+                                   base=(data.qty or 0) * (data.unit_price or 0))
     # 144gy — margin-floor guardrail: block a line discounted below the org's minimum.
     from backend.routers.pricing import evaluate_line_margin
     _mg = await evaluate_line_margin(
@@ -3098,6 +4392,8 @@ async def add_line(
         raise HTTPException(409, f"Margin {_mg['margin_pct']}% is below the {_mg['floor']}% floor. "
                                  f"Lower the discount or raise the price.")
     total = _calc_line(data)
+    if data.warranty_days is None:
+        data.warranty_days = await _catalog_warranty(db, current.org_id, data.kind, data.ref_id)
     line = OrderLine(
         order_id=order_id, line_type=data.line_type, kind=data.kind, ref_id=data.ref_id,
         description=data.description, qty=data.qty, unit_price=data.unit_price,
@@ -3105,13 +4401,35 @@ async def add_line(
         tax_id=data.tax_id, tax_rate=data.tax_rate, tax_mode=data.tax_mode,
         technician_id=data.technician_id, work_share=data.work_share, warranty_days=data.warranty_days,
         booked_hours=data.booked_hours or 0, co_technicians=data.co_technicians or [], total=total,
+        order_item_id=data.order_item_id,
     )
+    if kit_group:
+        line.bundle_group_id, line.bundle_name = kit_group.bundle_group_id, kit_group.bundle_name
+        line.bundle_print_mode, line.bundle_qty = kit_group.bundle_print_mode, kit_group.bundle_qty
+        line.bundle_price_locked = kit_group.bundle_price_locked
+        line.bundle_std_price = q2(await _catalog_price(db, current.org_id, data.kind, data.ref_id))
+        line.tax_id, line.tax_rate, line.tax_mode = kit_group.tax_id, kit_group.tax_rate, kit_group.tax_mode
     db.add(line)
     await db.flush()
     # deduct stock for products (estimates never deduct)
     if data.kind == "product" and data.ref_id and not order.is_estimate:
-        await _maybe_deduct(db, order, line, data.qty, perms, current)
+        await _maybe_deduct(db, order, line, data.qty, perms, current,
+                            bin_id=data.bin_id, serial_number=data.serial_number)
+    # Memberships: a line the asset's plan includes goes to $0 (or gets the plan discount)
+    # straight away, for staff allowed to apply plan benefits (docs/SPEC_memberships.md §7.4).
+    if not order.is_estimate and not (data.discount or 0) \
+            and await has_perm(db, current, "can_apply_membership_benefits"):
+        from backend.services import memberships as _mb
+        _hit = await _mb.coverage_for_line(db, await _mb.memberships_for_line(db, order, line), line)
+        if _hit:
+            _mb._cover(line, *_hit)
+            line.total = _calc_line(line)
+            await db.flush()
     _prev_total = float(order.total or 0)
+    if kit_group:
+        line.total = _calc_line(_line_as_in(line))
+        await _respread_kit(db, order_id, kit_group.bundle_group_id, actor=current,
+                            change=f"Added {data.description}")
     await _recalc_order(db, order)
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "order", order.id, f"Added {data.kind or data.line_type}: {data.description}")
@@ -3132,28 +4450,47 @@ async def _reverse_fulfillment(db, order, part_id, qty):
     # Return stock to the location it was actually deducted from (recorded on the "use"
     # movement), not order.location_id — those differ after a work order is transferred to
     # another location, and returning to the new location would corrupt per-location on-hand.
-    dloc = (await db.execute(select(StockMovement.location_id).where(
-        StockMovement.ref_id == order.id, StockMovement.part_id == part_id,
-        StockMovement.movement_type == "use").order_by(StockMovement.created_at.desc()).limit(1))).scalar_one_or_none()
-    loc_id = dloc or order.location_id
-    sl = (await db.execute(select(StockLevel).where(
-        StockLevel.part_id == part_id, StockLevel.location_id == loc_id))).scalar_one_or_none()
-    if sl:
-        sl.qty_available = (sl.qty_available or 0) + qty
-    else:
-        db.add(StockLevel(part_id=part_id, location_id=loc_id,
-                          qty_available=qty, qty_reserved=0))
-    db.add(StockMovement(part_id=part_id, location_id=loc_id,
-                         movement_type="return", qty=qty, ref_type="order", ref_id=order.id))
+    # ii144c: what the job still holds per (location, bin) — its "use" rows minus what it gave back —
+    # so each bin gets back what was taken from it (latest-taken first), while the bin is in use.
+    from backend.models import StorageBin
+    from backend.services import stock_rows
+    held: dict = {}
+    for m_loc, m_bin, m_qty in (await db.execute(select(
+            StockMovement.location_id, StockMovement.bin_id, StockMovement.qty).where(
+            StockMovement.ref_id == order.id, StockMovement.ref_type == "order", StockMovement.part_id == part_id,
+            StockMovement.movement_type.in_(("use", "return"))).order_by(StockMovement.created_at))).all():
+        held[(m_loc, m_bin)] = held.pop((m_loc, m_bin), 0) - (m_qty or 0)   # latest-touched last
+    plan, left = [], qty
+    for (m_loc, m_bin), h in reversed(list(held.items())):
+        if left <= 1e-9:
+            break
+        take = min(max(h, 0), left)
+        if take > 1e-9:
+            plan.append((m_loc or order.location_id, m_bin, take))
+            left -= take
+    if left > 1e-9:
+        loc0 = plan[0][0] if plan else order.location_id
+        plan.append((loc0, None, left))
+    live = set((await db.execute(select(StorageBin.id).where(
+        StorageBin.id.in_([b for _l, b, _q in plan if b]), StorageBin.org_id == order.org_id,
+        StorageBin.active == True))).scalars().all()) if any(b for _l, b, _q in plan) else set()
+    for loc_id, back_bin, q in plan:
+        back_bin = back_bin if back_bin in live else None
+        await stock_rows.add(db, part_id, loc_id, q, bin_id=back_bin)
+        db.add(StockMovement(part_id=part_id, location_id=loc_id, bin_id=back_bin,
+                             movement_type="return", qty=q, ref_type="order", ref_id=order.id))
     from backend.models import SerializedItem, StockItemBatch
     # Release serialized units (newest allocated first)
     serials = (await db.execute(select(SerializedItem).where(
         SerializedItem.org_id == order.org_id, SerializedItem.part_id == part_id,
         SerializedItem.order_id == order.id, SerializedItem.status == "allocated_to_order")
         .order_by(SerializedItem.created_at.desc()).limit(int(qty)))).scalars().all()
+    from backend.services import serial_log
     for s in serials:
         s.status = "in_stock"
         s.order_id = None
+        serial_log.record(db, s, "returned", ref_type="order", ref_id=order.id,
+                          label=f"Taken off {order.order_number}")
     # Restore cost layers (approximate without a per-line consumption journal:
     # newest layer first, never exceeding what that layer originally received)
     from decimal import Decimal as _D
@@ -3201,65 +4538,284 @@ async def _resolve_variant_part(db, org_id, configured, device):
     return (with_stock or fits)[0]
 
 
-async def _maybe_deduct(db, order, line, qty, perms, current):
-    """Deduct qty of a product line from stock; mark true shortfall as pending.
+async def _maybe_deduct(db, order, line, qty, perms, current, *, bin_id=None, serial_number=None,
+                        lenient: bool = False):
+    """Deduct qty of a product line from stock; mark true shortfall as pending. Returns the units
+    actually drawn. The one way a job takes stock (create, add, merge, qty up, convert, receive
+    pending): estimates never move stock.
     144at — reservation-aware: a job may take only FREE stock + its own reservation. Units
     reserved for a *different* job are blocked (409) unless the actor can override, in which case
-    they're drawn from those holds FIFO and audited."""
+    they're drawn from those holds FIFO and audited.
+    `lenient` (convert, receive pending — nobody picked these units by hand): never override another
+    job's hold and never refuse; whatever can't be taken freely stays pending.
+    ii144c — `bin_id` is the bin to take from first (the job's choice when a product sits in several
+    bins); `serial_number` is the exact unit used. Each bin drawn gets its own "use" movement."""
+    if order.is_estimate or not line.ref_id or qty <= 0:
+        return 0.0
+    from backend.services import stock_rows
+    if bin_id:
+        await stock_rows.check_bin(db, order.org_id, order.location_id, bin_id)
+    if serial_number:     # the named unit must be in stock here before anything moves
+        from backend.models import SerializedItem
+        from backend.services.serial_intake import matches as _sn_matches
+        named = (await db.execute(select(SerializedItem).where(
+                SerializedItem.org_id == order.org_id, SerializedItem.part_id == line.ref_id,
+                SerializedItem.location_id == order.location_id, SerializedItem.status == "in_stock",
+                _sn_matches(SerializedItem.serial_number, serial_number)))).scalars().first()
+        if not named:
+            raise HTTPException(409, f"Serial {serial_number} isn't in stock here for this product")
+        if bin_id and named.bin_id != bin_id:
+            raise HTTPException(409, f"Serial {serial_number} isn't in that bin")
+        bin_id = named.bin_id      # the unit's own bin is where its stock comes from
     from backend.services import reservations as _rsv
-    allow_override = _can_override_reservation(perms, current)
-    g = await _rsv.guard_and_draw(
-        db, org_id=order.org_id, part_id=line.ref_id, location_id=order.location_id,
-        order_id=order.id, qty=qty, actor_id=current.id, allow_override=allow_override,
-        taken_label=order.order_number)
+    from backend.services import stock_consume
+    # Lock the stock rows first so the availability we plan on is the availability we draw from.
+    await stock_consume.lock_rows(db, line.ref_id, order.location_id)
+    want = qty
+    if lenient:
+        allow_override = False
+        p = await _rsv.plan_consumption(db, part_id=line.ref_id, location_id=order.location_id,
+                                        order_id=order.id, qty=qty)
+        want = max(min(qty, max(p["free"], 0) + p["own"]), 0)
+    else:
+        allow_override = _can_override_reservation(perms, current)
+    g = {"take": 0, "pending": 0, "blocked": 0}
+    if want > 0:
+        g = await _rsv.guard_and_draw(
+            db, org_id=order.org_id, part_id=line.ref_id, location_id=order.location_id,
+            order_id=order.id, qty=want, actor_id=current.id, allow_override=allow_override,
+            taken_label=order.order_number)
     if g["blocked"] > 0:
         raise HTTPException(409, f"{g['blocked']:g} unit(s) of this part are reserved for another job. "
                                  f"A manager with override permission must approve using them.")
-    deducted = g["take"]
-    shortfall = g["pending"]
-    sl = (await db.execute(select(StockLevel).where(
-        StockLevel.part_id == line.ref_id, StockLevel.location_id == order.location_id))).scalar_one_or_none()
-    if shortfall > 0 and perms.get("can_add_without_stock") is False:
+    shortfall = g["pending"] + (qty - want)
+    if shortfall > 0 and not lenient and perms.get("can_add_without_stock") is False:
         raise HTTPException(403, "Not enough free stock and you can't add without deduction.")
-    if sl and deducted > 0:
-        sl.qty_available = (sl.qty_available or 0) - deducted
-        if True:
-            db.add(StockMovement(part_id=line.ref_id, location_id=order.location_id,
-                                 movement_type="use", qty=-deducted, ref_type="order", ref_id=order.id))
-            from backend.services import inventory_alerts as _alerts  # 144bo: low-stock alert
-            await _alerts.maybe_low_stock_by_id(db, order.org_id, line.ref_id)
-            # ── FIFO cost layers: if this part has batches, consume them oldest-first
-            #    and stamp the exact weighted COGS onto the line. ──
-            from backend.models import StockItemBatch
-            has_batches = (await db.execute(select(StockItemBatch.id).where(
-                StockItemBatch.org_id == order.org_id, StockItemBatch.part_id == line.ref_id,
-                StockItemBatch.qty_remaining > 0).limit(1))).scalar_one_or_none()
-            if has_batches:
-                from decimal import Decimal as _D
-
-                from backend.services.serialized import consume_fifo_lifo
-                try:
-                    res_cost = await consume_fifo_lifo(
-                        db, org_id=order.org_id, part_id=line.ref_id,
-                        qty=_D(str(deducted)), method="fifo")
-                    # exact unit COGS for the consumed units
-                    line.cost_price = res_cost["avg_unit_cost"]
-                except HTTPException:
-                    pass  # batches short — warehouse qty already handled the deduction
-            # ── Serialized units: allocate in-stock serials onto this order. ──
-            n_serial = int(deducted)
-            if n_serial > 0:
-                from backend.services.serialized import allocate_serialized_item
-                for _ in range(n_serial):
-                    try:
-                        await allocate_serialized_item(
-                            db, org_id=order.org_id, part_id=line.ref_id, order_id=order.id)
-                    except HTTPException:
-                        break  # not a serialized part (or none left) — fine
+    taken = await _consume_from_bins(db, order, line, g["take"], current,
+                                     bin_id=bin_id, serial_number=serial_number)
+    shortfall += g["take"] - taken          # lost the last unit to a concurrent job → pending
     line.pending_stock = (line.pending_stock or 0) + shortfall
+    return taken
+
+
+async def _consume_from_bins(db, order, line, qty, current, *, bin_id=None, serial_number=None) -> float:
+    """stock_consume.consume_for_line, bin-aware (ii144c): draws only what is on the shelf (never
+    below zero, so two jobs racing for the last unit can't both take it), the chosen bin first;
+    one "use" movement per bin it came from; FIFO cost layers folded into the line's unit cost;
+    serial units allocated from the bins the stock came from (the named unit first), each with a
+    passport line. Returns the units actually drawn; the caller books the rest as pending."""
+    from backend.services import stock_consume, stock_rows
+    part_id = line.ref_id
+    if not part_id or qty <= 1e-9:
+        return 0.0
+    try:
+        drawn = await stock_rows.draw(db, part_id, order.location_id, qty, bin_id=bin_id)
+    except stock_rows.NotEnoughStock as e:
+        have = min(max(e.have, 0.0), qty)
+        drawn = []
+        if have > 1e-9:
+            try:
+                drawn = await stock_rows.draw(db, part_id, order.location_id, have, bin_id=bin_id)
+            except stock_rows.NotEnoughStock:
+                drawn = []
+    taken = sum(t_qty for _b, t_qty in drawn)
+    if taken <= 1e-9:
+        return 0.0
+    for t_bin, t_qty in drawn:    # one movement per bin it came from
+        db.add(StockMovement(part_id=part_id, location_id=order.location_id, bin_id=t_bin,
+                             movement_type="use", qty=-t_qty, ref_type="order", ref_id=order.id,
+                             created_by_id=current.id))
+    # FIFO cost layers for the drawn units; the line's other units keep their cost.
+    layered, layer_cost = await stock_consume._consume_layers(db, order.org_id, part_id, taken)
+    if layered > 1e-9:
+        old_cost = float(line.cost_price or 0)
+        new_unit = (layer_cost + (taken - layered) * old_cost) / taken
+        total_units = float(line.qty or 0)
+        if total_units > 1e-9:
+            line.cost_price = round((old_cost * max(total_units - taken, 0) + new_unit * taken)
+                                    / max(total_units, taken), 4)
+        else:
+            line.cost_price = round(new_unit, 4)
+    # Serialized units: the named unit first, then units from the bins the stock came from.
+    n_serial = int(taken)
+    if n_serial > 0:
+        from backend.services import serial_log
+        from backend.services.serialized import allocate_serialized_item
+        picks = [(t_bin, None) for t_bin, t_qty in drawn for _ in range(int(t_qty))]
+        if serial_number:      # the named unit stands in for one unit of its own bin
+            i = next((k for k, (b, _s) in enumerate(picks) if b == bin_id), 0)
+            picks = [(bin_id, serial_number)] + picks[:i] + picks[i + 1:]
+        used = []
+        for p_bin, p_sn in picks[:n_serial]:
+            try:
+                used.append(await allocate_serialized_item(
+                    db, org_id=order.org_id, part_id=part_id, order_id=order.id,
+                    bin_id=p_bin, serial_number=p_sn, location_id=order.location_id,
+                    unbinned=p_bin is None and not p_sn))
+            except HTTPException:
+                if p_sn:
+                    raise HTTPException(409, f"Serial {p_sn} isn't in stock for this product")
+                try:      # nothing left in that bin: any unit in stock
+                    used.append(await allocate_serialized_item(
+                        db, org_id=order.org_id, part_id=part_id, order_id=order.id,
+                        location_id=order.location_id))
+                except HTTPException:
+                    break  # not a serialized part (or none left) — fine
+        for u in used:
+            serial_log.record(db, u, "used", ref_type="order", ref_id=order.id,
+                              label=f"Used on {order.order_number}", actor_id=current.id)
+    from backend.services import inventory_alerts as _alerts  # 144bo: low-stock alert
+    await _alerts.maybe_low_stock_by_id(db, order.org_id, part_id)
+    return taken
+
+
+def _line_as_in(line) -> "LineIn":
+    return LineIn(line_type=line.line_type, description=line.description or "", qty=line.qty,
+                  unit_price=line.unit_price or 0, cost_price=line.cost_price or 0,
+                  discount=line.discount or 0, discount_type=line.discount_type or "pct",
+                  tax_rate=line.tax_rate or 0, tax_mode=line.tax_mode or "imposed")
+
+
+async def _respread_kit(db, order_id, group_id, *, actor=None, change: str = ""):
+    """Fixed-price kit: the customer's price for the kit stays put. Re-divide the locked total
+    across the lines still in the kit, in proportion to their standard price (kit_print.spread).
+    A kit priced as the sum of its parts has no lock and is left alone. When a person's change
+    caused it (actor), the old and new line prices are audited."""
+    from backend.services import kit_print
+    members = (await db.execute(select(OrderLine).where(
+        OrderLine.order_id == order_id, OrderLine.bundle_group_id == group_id)
+        .order_by(OrderLine.id))).scalars().all()
+    locked = next((m.bundle_price_locked for m in members if m.bundle_price_locked is not None), None)
+    if locked is None:
+        return
+    moved = {}
+    for m, unit, adjust in kit_print.spread(locked, list(members)):
+        before = float(m.unit_price or 0)
+        m.unit_price = unit
+        m.bundle_price_locked = locked
+        m.total = q2(_calc_line(_line_as_in(m)) + adjust)
+        if before != unit:
+            moved[m.description or m.id] = [before, unit]
+    if actor is not None and moved:
+        from backend.services.audit import record as _audit
+        await _audit(db, org_id=actor.org_id, actor_id=actor.id, action="order.kit_respread",
+                     entity_type="order", entity_id=order_id,
+                     diff={"kit": members[0].bundle_name if members else None, "group_id": group_id,
+                           "change": change[:300], "kit_price": locked, "unit_prices": moved})
+
+
+async def _kit_invoice_statuses(db, order_id, members) -> list[str]:
+    """Statuses of the live (not cancelled) invoices that bill this kit's lines: a partial invoice
+    listing one of them, or an invoice for the whole job (one that lists no job lines of its own)."""
+    from backend.models import Invoice, InvoiceLine, InvoiceOrder
+    from backend.services.invoicing import VOID_STATUSES
+    ids = [m.id for m in members]
+    out = list((await db.execute(select(Invoice.status).join(InvoiceLine, InvoiceLine.invoice_id == Invoice.id).where(
+        InvoiceLine.order_line_id.in_(ids), Invoice.status.notin_(VOID_STATUSES)))).scalars().all())
+    linked = select(InvoiceOrder.invoice_id).where(InvoiceOrder.order_id == order_id)
+    partial = select(InvoiceLine.invoice_id).where(InvoiceLine.order_line_id.isnot(None))
+    out += list((await db.execute(select(Invoice.status).where(
+        (Invoice.order_id == order_id) | Invoice.id.in_(linked),
+        Invoice.id.notin_(partial), Invoice.status.notin_(VOID_STATUSES)))).scalars().all())
+    return [x or "draft" for x in out]
+
+
+async def _guard_kit_change(db, current, order_id, group_id, *, adds_value: bool):
+    """What may change inside a kit on a job, before anything is written.
+    - Lines billed on a live partial invoice are frozen: re-sharing the kit price would rewrite them.
+    - In a fixed-price kit, more parts (or more of a part) at the same price is a giveaway:
+      it needs the kit-price permission. Fewer parts keeps the customer's price; anyone may.
+    - In a kit priced as the sum of its parts that prints as one line, adding a line puts a charge
+      under the kit's name: it needs the kit print permission."""
+    from backend.services import kit_print
+    members = (await db.execute(select(OrderLine).where(
+        OrderLine.order_id == order_id, OrderLine.bundle_group_id == group_id))).scalars().all()
+    if not members:
+        return
+    if await _kit_invoice_statuses(db, order_id, members):
+        raise HTTPException(409, "Part of this kit is already on an invoice. Cancel that invoice to change the kit.")
+    locked = any(m.bundle_price_locked is not None for m in members)
+    if adds_value and locked and not await has_perm(db, current, "can_change_kit_price"):
+        raise HTTPException(403, "This kit has a fixed price, so adding to it gives parts away. "
+                                 "Add it as an extra, or ask a manager to change the kit.")
+    if (adds_value and not locked and kit_print.norm_mode(members[0].bundle_print_mode) != kit_print.ITEMIZED
+            and not await has_perm(db, current, "can_change_kit_print")):
+        raise HTTPException(403, "This kit prints as one line, so the customer wouldn't see this charge. "
+                                 "Add it as an extra, or ask a manager.")
+
+
+class KitUpdate(BaseModel):
+    print_mode: Optional[str] = None     # itemized | one_line | one_line_includes (this job only)
+    price: Optional[float] = None        # a new fixed total for this kit on this job
+    reason: Optional[str] = None         # required with price; kept in the audit log
+
+
+
+@router.patch("/{order_id}/kits/{group_id}")
+async def update_kit(
+    order_id: str,
+    group_id: str,
+    data: KitUpdate,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """One kit on one job: how it prints for the customer, and (manager) its locked price.
+    Both changes are audited; money stays on the kit's real lines."""
+    from backend.services import kit_print
+    from backend.services.audit import record as _audit
+    order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await _guard_editable(db, order, current)
+    members = (await db.execute(select(OrderLine).where(
+        OrderLine.order_id == order_id, OrderLine.bundle_group_id == group_id))).scalars().all()
+    if not members:
+        raise HTTPException(404, "That kit isn't on this job")
+    name = members[0].bundle_name
+    if data.print_mode is not None:
+        await assert_perm(db, current, "can_change_kit_print")
+        if data.print_mode not in kit_print.PRINT_MODES:
+            raise HTTPException(400, "Choose One line, One line and what's included, or Item by item")
+        before = kit_print.norm_mode(members[0].bundle_print_mode)
+        if before != data.print_mode and any(
+                st != "draft" for st in await _kit_invoice_statuses(db, order_id, members)):
+            raise HTTPException(409, "This kit is on an invoice the customer already has, so it keeps printing "
+                                     "the same way. Print an itemised copy instead.")
+        if before != data.print_mode:
+            for m in members:
+                m.bundle_print_mode = data.print_mode
+            await _audit(db, org_id=current.org_id, actor_id=current.id, action="order.kit_print_mode",
+                         entity_type="order", entity_id=order.id,
+                         diff={"kit": name, "group_id": group_id, "print_mode": [before, data.print_mode]})
+    if data.price is not None:
+        await assert_perm(db, current, "can_change_kit_price")
+        if not kit_print.price_ok(data.price):     # checked here: a NaN can't be echoed in a 422
+            raise HTTPException(400, "Enter a kit price of 0 or more")
+        reason = (data.reason or "").strip()
+        if len(reason) < 3:
+            raise HTTPException(400, "Say why the kit price is changing")
+        await _guard_kit_change(db, current, order_id, group_id, adds_value=False)
+        before = members[0].bundle_price_locked
+        if before is None:
+            before = q2(sum(float(m.qty or 0) * float(m.unit_price or 0) for m in members))
+        new = q2(data.price)
+        for m in members:
+            m.bundle_price_locked = new
+        _prev_total = float(order.total or 0)
+        await db.flush()
+        await _respread_kit(db, order_id, group_id)
+        await _recalc_order(db, order)
+        await _audit(db, org_id=current.org_id, actor_id=current.id, action="order.kit_price_override",
+                     entity_type="order", entity_id=order.id,
+                     diff={"kit": name, "group_id": group_id, "price": [before, new], "reason": reason[:500]})
+        await _log_amount_change(db, current.org_id, order, _prev_total)
+    await db.commit()
+    return {"ok": True, "order_total": order.total, "print_mode": kit_print.norm_mode(members[0].bundle_print_mode),
+            "price": members[0].bundle_price_locked}
 
 
 class LineUpdate(BaseModel):
+    order_item_id: Optional[str] = None              # several items per job ("" / null = whole job)
     qty: Optional[float] = None
     unit_price: Optional[float] = None
     cost_price: Optional[float] = None
@@ -3271,6 +4827,35 @@ class LineUpdate(BaseModel):
     booked_hours: Optional[float] = None             # 144av #2
     co_technicians: Optional[list] = None            # 144av #3
 
+
+    # Security phase 3: negative quantities/prices/discounts and >100% discounts used to
+    # create phantom stock and zero/negative totals that slipped past every guard.
+    @field_validator("qty")
+    @classmethod
+    def _qty_positive(cls, v):
+        if v is not None and v <= 0:
+            raise ValueError("Quantity must be greater than zero")
+        return v
+
+    @field_validator("unit_price", "cost_price", "discount")
+    @classmethod
+    def _non_negative(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("Prices, costs and discounts can't be negative")
+        return v
+
+    @field_validator("discount_type")
+    @classmethod
+    def _known_discount_type(cls, v):
+        if v is not None and v not in ("pct", "fixed"):
+            raise ValueError("discount_type must be 'pct' or 'fixed'")
+        return v
+
+    @model_validator(mode="after")
+    def _pct_at_most_100(self):
+        if (self.discount_type or "pct") == "pct" and (self.discount or 0) > 100:
+            raise ValueError("A percentage discount can't exceed 100%")
+        return self
 
 @router.patch("/{order_id}/lines/{line_id}")
 async def update_line(
@@ -3288,7 +4873,32 @@ async def update_line(
     line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id))).scalar_one_or_none()
     if not line:
         raise HTTPException(404, "Line not found")
+    if line.kind == "membership":
+        # The plan's own price: removing it would make the plan free. Cancel the membership instead.
+        raise HTTPException(409, "This is a membership plan. Cancel it from the customer's membership instead.")
     payload = data.model_dump(exclude_unset=True)
+    if payload.keys() & {"qty", "unit_price", "discount", "discount_type", "tax_rate", "tax_mode"}:
+        from backend.services.invoice_money import assert_line_editable
+        await assert_line_editable(db, line.id)   # not under a sent or paid invoice
+    if current.role_id and not (await _order_perms(db, current)).get("can_view_purchase_price"):
+        payload.pop("cost_price", None)
+    if "cost_price" in payload and float(payload["cost_price"] or 0) != float(line.cost_price or 0):
+        await assert_perm(db, current, "can_set_cost_price")
+    if "discount_type" in payload and (payload["discount_type"] or "pct") != (line.discount_type or "pct"):
+        await assert_perm(db, current, "can_set_discount_type")
+    # Changing what the customer pays needs the matching right (a technician can't zero a job).
+    if "discount" in payload and (payload["discount"] or 0) != (line.discount or 0):
+        await assert_perm(db, current, "can_set_discount")
+    if "unit_price" in payload and payload["unit_price"] is not None and float(payload["unit_price"]) != float(line.unit_price or 0):
+        if line.bundle_group_id and line.bundle_price_locked is not None:
+            raise HTTPException(409, "This line is part of a fixed-price kit. Change the kit's price instead.")
+        await assert_perm(db, current, "can_edit_sale_price")
+    if "order_item_id" in payload:
+        payload["order_item_id"] = payload["order_item_id"] or None
+        if payload["order_item_id"]:
+            from backend.services import multi_asset as _ma
+            await _ma.require_enabled(db, current.org_id)
+            await _ma.item_for_order(db, current.org_id, order.id, payload["order_item_id"])
     # 144aw — validate labour attribution against the org + 100% split before persisting.
     if "co_technicians" in payload or "technician_id" in payload:
         await _validate_line_assignment(
@@ -3296,6 +4906,11 @@ async def update_line(
             technician_id=payload.get("technician_id", line.technician_id),
             co_technicians=payload.get("co_technicians", line.co_technicians))
     old_qty = line.qty or 0
+    if line.bundle_group_id and "qty" in payload and (payload["qty"] or 0) != old_qty:
+        await _guard_kit_change(db, current, order_id, line.bundle_group_id,
+                                adds_value=(payload["qty"] or 0) > old_qty)
+    if line.bundle_group_id and "order_item_id" in payload and payload["order_item_id"] != line.order_item_id:
+        raise HTTPException(409, "A kit's lines stay with the kit. Move the whole kit, or remove this line and add it again.")
     for k, v in payload.items():
         setattr(line, k, v)
     # Stock follows the qty change for product lines on real orders (Orderry).
@@ -3306,8 +4921,9 @@ async def update_line(
             perms = {}
             if current.role_id:
                 from backend.models import Role
+                from backend.services.permissions import effective_permissions as _eff
                 role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
-                perms = (role.permissions or {}) if role else {}
+                perms = _eff(role) if role else {c: False for c in _all_codes()}
             await _maybe_deduct(db, order, line, delta, perms, current)
         else:
             dec = -delta
@@ -3318,7 +4934,8 @@ async def update_line(
                 await _reverse_fulfillment(db, order, line.ref_id, physical)
     # 144hd — discount-approval gate on edit
     await _guard_discount_approval(db, current.org_id, await _order_perms(db, current),
-                                   line.discount, line.discount_type, is_owner=not current.role_id)
+                                   line.discount, line.discount_type, is_owner=not current.role_id,
+                                   base=(line.qty or 0) * (line.unit_price or 0))
     # 144ha — margin-floor guardrail also on edit (can't cheap-add then discount here)
     from backend.routers.pricing import evaluate_line_margin
     _mg = await evaluate_line_margin(
@@ -3328,11 +4945,21 @@ async def update_line(
     if _mg["blocked"]:
         raise HTTPException(409, f"Margin {_mg['margin_pct']}% is below the {_mg['floor']}% floor. "
                                  f"Lower the discount or raise the price.")
+    if (line.discount_type or "pct") == "fixed" and \
+            (line.discount or 0) > q2((line.qty or 0) * (line.unit_price or 0)) + 0.005:
+        raise HTTPException(422, "A discount can't be more than the line's price")
+    if (line.discount_type or "pct") == "pct" and (line.discount or 0) > 100:
+        raise HTTPException(422, "A percentage discount can't exceed 100%")
     tmp = LineIn(line_type=line.line_type, description=line.description or "", qty=line.qty,
                  unit_price=line.unit_price, cost_price=line.cost_price or 0,
                  discount=line.discount or 0, discount_type=line.discount_type or "pct",
                  tax_rate=line.tax_rate or 0, tax_mode=line.tax_mode or "imposed")
     line.total = _calc_line(tmp)
+    if line.bundle_group_id and line.bundle_price_locked is not None:
+        # Any edit re-shares the locked price, so its last-cent correction isn't lost.
+        change = (f"{line.description}: qty {old_qty:g} → {line.qty:g}" if (line.qty or 0) != old_qty
+                  else f"{line.description} edited")
+        await _respread_kit(db, order_id, line.bundle_group_id, actor=current, change=change)
     await _recalc_order(db, order)
     await db.commit()
     resp = {"ok": True, "total": line.total, "order_total": order.total}
@@ -3356,22 +4983,74 @@ async def delete_line(
     line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id))).scalar_one_or_none()
     if not line:
         raise HTTPException(404, "Line not found")
+    # Removing a line takes the same right as adding one (this had no check at all).
+    perms = await _order_perms(db, current)
+    need = "can_add_products" if line.kind == "product" else "can_add_services"
+    if perms.get(need) is False:
+        raise HTTPException(403, "You don't have permission to remove lines from this job")
+    if line.kind == "membership":
+        # The plan's own price: removing it would make the plan free. Cancel the membership instead.
+        raise HTTPException(409, "This is a membership plan. Cancel it from the customer's membership instead.")
+    if line.bundle_group_id:
+        await _guard_kit_change(db, current, order_id, line.bundle_group_id, adds_value=False)
     # return previously-deducted stock for product lines (incl. serials + cost layers)
     if line.kind == "product" and line.ref_id and not order.is_estimate:
         deducted = (line.qty or 0) - (line.pending_stock or 0)
         if deducted > 0:
             await _reverse_fulfillment(db, order, line.ref_id, deducted)
     _prev_total = float(order.total or 0)
+    _kit = line.bundle_group_id
+    from backend.services.invoice_money import release_line
+    await release_line(db, line.id)   # refused on a sent/paid invoice; off any draft that lists it
     await db.delete(line)
     await db.flush()
+    if _kit:
+        await _respread_kit(db, order_id, _kit, actor=current, change=f"Removed {line.description}")
     await _recalc_order(db, order)
     await _log_amount_change(db, current.org_id, order, _prev_total)
     await db.commit()
     return {"ok": True, "order_total": order.total}
+
+
+@router.delete("/{order_id}/kits/{group_id}")
+async def delete_kit(
+    order_id: str,
+    group_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Remove a whole kit from a job in one go: every line goes, or none does (a kit is never left
+    half removed with its price re-spread over what's left). Stock taken for its parts goes back."""
+    order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    await _guard_editable(db, order, current)
+    lines = (await db.execute(select(OrderLine).where(
+        OrderLine.order_id == order_id, OrderLine.bundle_group_id == group_id))).scalars().all()
+    if not lines:
+        raise HTTPException(404, "Kit not found on this job")
+    perms = await _order_perms(db, current)
+    for line in lines:
+        need = "can_add_products" if line.kind == "product" else "can_add_services"
+        if perms.get(need) is False:
+            raise HTTPException(403, "You don't have permission to remove this kit from the job")
+    await _guard_kit_change(db, current, order_id, group_id, adds_value=False)
+    _prev_total = float(order.total or 0)
+    for line in lines:
+        if line.kind == "product" and line.ref_id and not order.is_estimate:
+            deducted = (line.qty or 0) - (line.pending_stock or 0)
+            if deducted > 0:
+                await _reverse_fulfillment(db, order, line.ref_id, deducted)
+        await db.delete(line)
+    await db.flush()
+    await _recalc_order(db, order)
+    await _log_amount_change(db, current.org_id, order, _prev_total)
+    await db.commit()
+    return {"ok": True, "removed": len(lines), "order_total": order.total}
 from sqlalchemy import or_ as _or
 
 from backend.models import SavedFilter
-from backend.services.money import q2, q4
+from backend.services.money import msum, q2, q4, round_to_step
 
 
 class SavedFilterIn(BaseModel):
@@ -3402,6 +5081,8 @@ async def create_saved_filter(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
+    if data.is_shared:
+        await assert_perm(db, current, "can_manage_shared_filters")
     f = SavedFilter(org_id=current.org_id, employee_id=current.id,
                     name=data.name, params=data.params, is_shared=data.is_shared)
     db.add(f)
@@ -3421,6 +5102,8 @@ async def delete_saved_filter(
         raise HTTPException(404, "Filter not found")
     if f.employee_id != current.id and not f.is_shared:
         raise HTTPException(403, "Not allowed")
+    if f.is_shared:
+        await assert_perm(db, current, "can_manage_shared_filters")
     await db.delete(f)
     await db.commit()
     return {"ok": True}
@@ -3490,7 +5173,7 @@ async def comeback_check(
         raise HTTPException(404, "Order not found")
     if not order.device_id:
         return {"is_comeback": False, "count": 0}
-    ref = order.created_at or datetime.utcnow()
+    ref = order.created_at or now_utc()
     window_start = ref - timedelta(days=45)
     priors = (await db.execute(
         select(Order).where(
@@ -3507,6 +5190,7 @@ async def comeback_check(
 
 class ThreadMsgIn(BaseModel):
     body: str
+    channel: Optional[str] = None   # auto (default) | email | sms
 
 
 @router.get("/{order_id}/thread")
@@ -3531,10 +5215,13 @@ async def order_thread(
             names[e.id] = e.name
     msgs = [{"id": c.id, "from": "staff", "who": names.get(c.author_id, "Staff"),
              "body": c.body, "at": c.created_at.isoformat()} for c in comments]
+    # client_message = the customer's replies; staff_reply = older replies from the activity box
     evs = (await db.execute(select(EventFeedItem).where(
         EventFeedItem.org_id == current.org_id, EventFeedItem.entity_type == "order",
-        EventFeedItem.entity_id == order.id, EventFeedItem.item_type == "client_message"))).scalars().all()
-    msgs += [{"id": e.id, "from": "customer", "who": e.author_name or "Customer",
+        EventFeedItem.entity_id == order.id,
+        EventFeedItem.item_type.in_(["client_message", "staff_reply"])))).scalars().all()
+    msgs += [{"id": e.id, "from": "customer" if e.item_type == "client_message" else "staff",
+              "who": e.author_name or ("Customer" if e.item_type == "client_message" else "Staff"),
               "body": e.body, "at": e.created_at.isoformat()} for e in evs]
     msgs.sort(key=lambda m: m["at"])
     if order.client_msg_unread:
@@ -3548,18 +5235,57 @@ async def order_thread_post(
     order_id: str,
     data: ThreadMsgIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_reply_customer")),
 ):
-    """Staff posts a message the customer sees on their status page (a client-visible comment)."""
-    from backend.models import OrderComment
+    """Staff messages the customer from the job (the conversation box)."""
+    return await post_customer_message(db, current, order_id, data.body, data.channel)
+
+
+async def post_customer_message(db, current, order_id: str, body: str, channel: Optional[str] = None) -> dict:
+    """The one "message the customer" path (flow check G3), used by the job's conversation box
+    (/thread) and the activity reply box (/customer-reply). Saves the message where the
+    customer's page and the job thread both read it (a client-visible comment), sends it by
+    text or email as the customer prefers, and says honestly whether it went out."""
+    from backend.services.customer_messages import send_to_customer
     order = (await db.execute(select(Order).where(
         Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
-    body = (data.body or "").strip()
+    await _guard_order_access(db, current, order)
+    org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
+    if org is not None and getattr(org, "oe_allow_staff_reply", True) is False:
+        raise HTTPException(403, "Replying to customers is turned off for this shop")
+    if channel and channel not in ("auto", "email", "sms"):
+        raise HTTPException(422, "channel must be auto, email or sms")
+    body = (body or "").strip()[:2000]
     if not body:
         raise HTTPException(400, "Message is empty")
-    c = OrderComment(order_id=order.id, author_id=current.id, body=body[:2000], visible_to_client=True)
+    c = OrderComment(order_id=order.id, author_id=current.id, body=body, visible_to_client=True)
     db.add(c)
+    await db.flush()
+    client = (await db.execute(select(Client).where(
+        Client.id == order.client_id, Client.org_id == current.org_id))).scalar_one_or_none() if order.client_id else None
+    shop = org.name if org else "the shop"
+    text = f"{body}\n\n{shop} · {order.order_number}"
+    delivery = await send_to_customer(db, org_id=current.org_id, client=client, body=text,
+                                      subject=f"Message about {order.order_number}", channel=channel,
+                                      order_id=order.id, trigger_event="comment_added")
+    from backend.routers.feed import log_system_event
+    await log_system_event(db, current.org_id, "order", order.id,
+                           f"Message to customer: {delivery['message']}")
     await db.commit()
-    return {"id": c.id, "from": "staff", "who": current.name, "body": c.body, "at": c.created_at.isoformat()}
+    # Internal workflows on "comment added" (assignee / manager), as for any customer-visible comment.
+    try:
+        from backend.services import notification_rules as _nr
+        await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
+                                     event="comment_added", actor_id=current.id)
+    except Exception:  # noqa: BLE001
+        import logging
+        logging.getLogger("tekly").exception("comment_added staff rules failed for order %s", order.id)
+    return {"id": c.id, "from": "staff", "who": current.name, "body": c.body,
+            "at": c.created_at.isoformat(), "delivery": delivery}
+
+
+async def _atomic_add(db, obj, attr, delta, *, round_to=None):
+    from backend.services.money import add_to_column
+    return await add_to_column(db, obj, attr, delta, round_to=round_to)

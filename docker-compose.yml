@@ -8,17 +8,17 @@ services:
       POSTGRES_PASSWORD: repairos
       POSTGRES_DB: repairos
     ports:
-      - "5432:5432"
+      - "127.0.0.1:5432:5432"   # this machine only, not the network
     volumes:
       - pgdata:/var/lib/postgresql/data
   pgadmin:
-    image: dpage/pgadmin4:latest
+    image: dpage/pgadmin4:9.19   # pinned: "latest" changes under you
     container_name: repairos_pgadmin
     environment:
       PGADMIN_DEFAULT_EMAIL: admin@admin.com
       PGADMIN_DEFAULT_PASSWORD: admin
     ports:
-      - "5050:80"
+      - "127.0.0.1:5050:80"
     depends_on:
       - postgres
 volumes:

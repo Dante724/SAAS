@@ -1,4 +1,4 @@
-# RepairOS React frontend (Strangler Fig migration — Option B)
+# Tekly React frontend (Strangler Fig migration — Option B)
 
 New React UI that grows **alongside** the existing vanilla app. Backend, schema, and
 data are **unchanged** — this calls the same FastAPI endpoints at `/api`. Nothing here

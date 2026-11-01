@@ -1,0 +1,31 @@
+<!-- ════════ DEMO MODAL ════════ -->
+<div class="modal" id="demoModal" role="dialog" aria-modal="true" aria-labelledby="demoTitle" hidden>
+  <div class="modal-bg" data-close-modal></div>
+  <div class="modal-panel">
+    <button class="modal-x" type="button" aria-label="Close" data-close-modal data-spring="spin"><svg aria-hidden="true"><use href="#x"/></svg></button>
+    <div id="demoBody">
+      <h2 id="demoTitle">See your shop on Tekly in 30 minutes.</h2>
+      <p class="lede">Tell us a little about your shop and we'll email you to find a time.</p>
+      <form class="form" id="demoForm" novalidate>
+        <div><label for="d-name">Full name</label><input class="in" id="d-name" name="name" autocomplete="name" required aria-describedby="d-name-err"><p class="err" id="d-name-err" role="alert">Please add your name.</p></div>
+        <div><label for="d-email">Work email</label><input class="in" id="d-email" name="email" type="email" autocomplete="email" required aria-describedby="d-email-err"><p class="err" id="d-email-err" role="alert">Please enter a valid email.</p></div>
+        <div><label for="d-shop">Shop name</label><input class="in" id="d-shop" name="shop" autocomplete="organization" required aria-describedby="d-shop-err"><p class="err" id="d-shop-err" role="alert">Please add your shop's name.</p></div>
+        <div><label for="d-phone">Phone <span class="opt">optional</span></label><input class="in" id="d-phone" name="phone" type="tel" autocomplete="tel"></div>
+        <div><label for="d-ind">Trade</label><select class="in" id="d-ind" name="industry" required aria-describedby="d-ind-err"><option value="">Choose one</option></select><p class="err" id="d-ind-err" role="alert">Please choose your trade.</p></div>
+        <div><label for="d-loc">Locations</label><select class="in" id="d-loc" name="locations"><option>1</option><option>2–3</option><option>4–10</option><option>10+</option></select></div>
+        <div class="full"><label for="d-now">Using today <span class="opt">optional</span></label><input class="in" id="d-now" name="current" placeholder="Spreadsheets, RepairDesk, Shopmonkey…"></div>
+        <div class="full"><label for="d-msg">Anything we should know? <span class="opt">optional</span></label><input class="in" id="d-msg" name="message" placeholder="Best days, what you'd like to see…"></div>
+        <p class="full mail-note" id="mailNote" hidden>Sending opens your email app with these details filled in — press send there and we'll reply to find a time.</p>
+        <div class="full"><button class="btn btn-solid btn-wide" type="submit">Request a demo</button></div>
+        <p class="full form-note">We use these details only to arrange your demo. See our <a class="link" href="/privacy/">privacy policy</a>.</p>
+      </form>
+    </div>
+    <div class="done" id="demoDone" role="status" aria-live="polite">
+      <span class="tick"><svg aria-hidden="true"><use href="#check"/></svg></span>
+      <h2>Thanks — you're on the list.</h2>
+      <p class="lede" style="margin:0">We'll email you shortly to find a time.</p>
+      <a class="link" data-app="signup" href="#start">Or start a free trial now <svg class="arr" aria-hidden="true"><use href="#arr"/></svg></a>
+    </div>
+  </div>
+</div>
+

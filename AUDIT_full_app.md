@@ -1,4 +1,4 @@
-# RepairOS — Full-App Audit (senior QA + dev + PM team)
+# Tekly — Full-App Audit (senior QA + dev + PM team)
 
 *Six parallel reviewers swept the whole codebase: security/public-surface, money/data-integrity,
 backend correctness, models/migrations/DB, frontend, and PM completeness. ~32k LOC backend (77

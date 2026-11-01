@@ -31,6 +31,6 @@ endpoint.
 (300 → sell 450), validation returns 422 not 405. Suite 126. No schema change.
 
 ## Note on the screenshots
-The RepairOS screenshots showed an older build (pre-nav-cleanup sidebar). The nav
+The Tekly screenshots showed an older build (pre-nav-cleanup sidebar). The nav
 and Work-Order buttons were already delivered; this pass fixes postings and wires
 the richer bulk modal.

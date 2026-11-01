@@ -23,7 +23,13 @@ def upgrade() -> None:
     bind = op.get_bind()
     if bind.dialect.name != "postgresql":
         return
-    op.drop_constraint("notification_logs_rule_id_fkey", "notification_logs", type_="foreignkey")
+    # The FK was created by 3b1a6ec7c56d under the naming-convention name
+    # (fk_notification_logs_rule_id_notification_rules), not Postgres's default
+    # notification_logs_rule_id_fkey — so drop whatever FK actually covers rule_id.
+    import sqlalchemy as sa
+    for fk in sa.inspect(bind).get_foreign_keys("notification_logs"):
+        if fk.get("constrained_columns") == ["rule_id"] and fk.get("name"):
+            op.drop_constraint(fk["name"], "notification_logs", type_="foreignkey")
     op.create_foreign_key("fk_notification_logs_rule_id", "notification_logs", "notification_rules",
                           ["rule_id"], ["id"], ondelete="SET NULL")
 

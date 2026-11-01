@@ -1,4 +1,4 @@
-# RepairOS — Production Checklist
+# Tekly — Production Checklist
 
 Status keys: `[ ]` todo · `[~]` in progress · `[x]` done. Severity: P0 blocks prod.
 

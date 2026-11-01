@@ -1,6 +1,8 @@
 """Build 130 — product Batches tab endpoint."""
 import pytest
 
+from backend.services.dates import now_utc
+
 
 async def _loc(client, h):
     return (await client.get("/api/staff/locations", headers=h)).json()["items"][0]["id"]
@@ -27,7 +29,7 @@ async def test_batch_layer_surfaces_via_endpoint(client, tenant, db):
     org_id = (await client.get("/api/auth/me", headers=tenant)).json()["org_id"]
     db.add(StockItemBatch(org_id=org_id, part_id=pid, location_id=loc,
                           unit_cost=20, qty_received=5, qty_remaining=3,
-                          received_at=datetime.utcnow()))
+                          received_at=now_utc()))
     await db.commit()
 
     d = (await client.get(f"/api/inventory/parts/{pid}/batches", headers=tenant)).json()["items"]

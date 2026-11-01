@@ -3,6 +3,8 @@ from datetime import datetime, timedelta
 
 from sqlalchemy import select
 
+from backend.services.dates import now_utc
+
 
 async def _org_id(client, tenant):
     me = (await client.get("/api/auth/me", headers=tenant)).json()
@@ -53,7 +55,7 @@ async def test_run_due_dispatches_scheduled(client, tenant, db):
     db.add(NotificationLog(
         org_id=oid, scope="client", channel="sms", trigger_event="reminder",
         client_id=cust.id, recipient=cust.phone, subject=None, body="Reminder!",
-        status="scheduled", send_at=datetime.utcnow() - timedelta(minutes=1)))
+        status="scheduled", send_at=now_utc() - timedelta(minutes=1)))
     await db.commit()
 
     from backend.services import notification_rules as nr

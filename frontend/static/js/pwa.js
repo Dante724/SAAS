@@ -1,4 +1,4 @@
-/* RepairOS PWA runtime: SW registration + update handling, install prompt,
+/* Tekly PWA runtime: SW registration + update handling, install prompt,
    connectivity, and an encrypted offline mutation queue with auto-sync.
    Exposes window.RosPWA. Depends on nothing; core.js reads Auth.token. */
 (function () {
@@ -173,9 +173,13 @@
         });
       });
     }).catch(() => {});
+    // Reload only when an existing worker is replaced by an update. On the very first install the
+    // new worker claims the page too (clients.claim) — reloading then wiped the sign-in form while
+    // a technician was typing, so their first sign-in failed with an empty password.
+    const hadController = !!navigator.serviceWorker.controller;
     let reloaded = false;
     navigator.serviceWorker.addEventListener('controllerchange', () => {
-      if (reloaded) return; reloaded = true; location.reload();
+      if (!hadController || reloaded) return; reloaded = true; location.reload();
     });
     navigator.serviceWorker.addEventListener('message', (e) => {
       const m = e.data || {};

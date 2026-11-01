@@ -63,7 +63,7 @@ async def test_send_seam_uses_connection(client, tenant, db, monkeypatch):
 
     sent = {}
 
-    async def _fake_send(c, *, recipient, subject, body):
+    async def _fake_send(c, *, recipient, subject, body, html=False):
         sent.update(provider=c.provider, recipient=recipient)
         return {"status": "sent", "error": None}
     monkeypatch.setattr("backend.services.email_oauth.send_via_connection", _fake_send)
@@ -158,7 +158,7 @@ async def test_notify_prefers_oauth_then_falls_back(client, tenant, db, monkeypa
                            access_token="at", connected=True, is_default=True))
     await db.commit()
 
-    async def _fake_send(c, *, recipient, subject, body):
+    async def _fake_send(c, *, recipient, subject, body, html=False):
         return {"status": "sent", "error": None}
     monkeypatch.setattr("backend.services.email_oauth.send_via_connection", _fake_send)
 

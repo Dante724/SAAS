@@ -3,16 +3,25 @@ UI can show whether a live model or the deterministic fallback produced it."""
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import Employee, Order, EventFeedItem, ChatThread, ChatMessage
-from backend.services.auth import get_current_employee
+from backend.services.auth import get_current_employee, record_scope
 from backend.services import ai
 
-router = APIRouter(prefix="/api/ai", tags=["ai"])
+async def ai_quota(current: Employee = Depends(get_current_employee)) -> None:
+    """Every AI call runs on the platform's Anthropic key, so each person and each shop gets a
+    budget: a burst limit per user and a daily ceiling per shop."""
+    from backend.services.ratelimit import aenforce
+    await aenforce("ai_user", current.id, 20, 60)
+    await aenforce("ai_org", current.org_id, 1000, 86400)
+
+
+router = APIRouter(prefix="/api/ai", tags=["ai"],
+                   dependencies=[Depends(record_scope), Depends(ai_quota)])   # record scope on {order_id}/{client_id}
 
 
 @router.get("/status")
@@ -36,7 +45,7 @@ async def order_summary(order_id: str, db: AsyncSession = Depends(get_db),
 
 
 class DraftIn(BaseModel):
-    complaint: str
+    complaint: str = Field(max_length=4000)
     device: Optional[str] = ""
 
 
@@ -64,10 +73,10 @@ async def chat_suggest(thread_id: str, db: AsyncSession = Depends(get_db),
 
 
 class ProductDescIn(BaseModel):
-    name: str
-    brand: str = ""
-    category: str = ""
-    specs: str = ""
+    name: str = Field(max_length=300)
+    brand: str = Field("", max_length=200)
+    category: str = Field("", max_length=200)
+    specs: str = Field("", max_length=4000)
 
 
 @router.post("/product-description")
@@ -79,7 +88,7 @@ async def product_description(data: ProductDescIn,
 
 
 class RecognizeIn(BaseModel):
-    text: str
+    text: str = Field(max_length=8000)
 
 
 @router.post("/recognize-items")
@@ -91,7 +100,7 @@ async def recognize_items(data: RecognizeIn,
 
 class TranscribeIn(BaseModel):
     audio_present: bool = False
-    hint: str = ""
+    hint: str = Field("", max_length=1000)
 
 
 @router.post("/transcribe")

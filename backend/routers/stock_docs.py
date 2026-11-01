@@ -10,21 +10,18 @@ Orderry models each as a **document**:
   * **Write-off** — deleting the document **restores the stock**. Lines carry comments
     that are internal by default but can be made visible to the client.
 """
-from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
-from sqlalchemy import func, or_, select
+from pydantic import BaseModel, field_validator
+from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import (
     Employee,
     Part,
-    Posting,
-    PostingLine,
     PurchaseReturn,
     PurchaseReturnLine,
     SerializedItem,
@@ -34,9 +31,13 @@ from backend.models import (
     WriteOff,
     WriteOffLine,
 )
+from backend.services import serial_log
 from backend.services import warehouses as wh
+from backend.services import stock_rows
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.money import q2, q4
+from backend.services.batching import names_by_id, rows_by
+from backend.services.money import claim_status, q2
+from backend.services.dates import now_utc, shop_today
 
 router = APIRouter(prefix="/api/stock-docs", tags=["inventory"])
 
@@ -45,35 +46,56 @@ class DocLine(BaseModel):
     part_id: str
     qty: float = 1
     unit_cost: Optional[float] = None
+
+    @field_validator("qty")
+    @classmethod
+    def _qty_positive(cls, v):
+        # a negative qty passed _take_stock's "have < qty" check and ADDED stock
+        if v <= 0:
+            raise ValueError("Quantity must be greater than zero")
+        return v
+
+    @field_validator("unit_cost")
+    @classmethod
+    def _cost_non_negative(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("Cost can't be negative")
+        return v
     serialized_item_id: Optional[str] = None
     bin_id: Optional[str] = None
     comment: Optional[str] = None
     comment_public: bool = False
 
 
-async def _stock_row(db: AsyncSession, part_id: str, warehouse) -> Optional[StockLevel]:
-    # Prefer a warehouse-keyed row; fall back to the location-level row that postings, sales
+async def _stock_rows(db: AsyncSession, part_id: str, warehouse) -> list[StockLevel]:
+    # Prefer warehouse-keyed rows; fall back to the location-level rows that postings, sales
     # and PO receipts actually write (they key StockLevel by location_id, warehouse_id NULL).
     # 144bg: without this, write-offs/transfers read an empty warehouse-only row set and 409.
-    row = (await db.execute(select(StockLevel).where(
+    # ii144a: a product can sit in several rows (one per bin) — return them all.
+    rows = (await db.execute(select(StockLevel).where(
         StockLevel.part_id == part_id,
-        StockLevel.warehouse_id == warehouse.id))).scalar_one_or_none()
-    if row is None:
-        row = (await db.execute(select(StockLevel).where(
-            StockLevel.part_id == part_id,
-            StockLevel.location_id == warehouse.location_id))).scalar_one_or_none()
-    return row
+        StockLevel.warehouse_id == warehouse.id))).scalars().all()
+    if not rows:
+        rows = await stock_rows.rows(db, part_id, warehouse.location_id)
+    return list(rows)
 
 
 async def _take_stock(db: AsyncSession, part_id: str, warehouse, qty: float, *,
-                      doc: str) -> None:
-    sl = await _stock_row(db, part_id, warehouse)
-    have = (sl.qty_available if sl else 0) or 0
-    if have < qty:
+                      doc: str, bin_id: Optional[str] = None) -> None:
+    if bin_id:
+        await stock_rows.check_bin(db, warehouse.org_id, warehouse.location_id, bin_id)
+    rows = await _stock_rows(db, part_id, warehouse)
+    if bin_id and not any(r.bin_id == bin_id for r in rows):
+        # bin rows are never warehouse-tagged: a named bin is always part of what can be drawn
+        brow = await stock_rows.row_for(db, part_id, warehouse.location_id, bin_id)
+        if brow is not None:
+            rows.append(brow)
+    try:      # guarded per-row decrements, the named bin first
+        await stock_rows.draw(db, part_id, warehouse.location_id, qty, bin_id=bin_id, only=rows)
+    except stock_rows.NotEnoughStock as e:
         name = (await db.execute(select(Part.name).where(Part.id == part_id))).scalar_one_or_none()
         raise HTTPException(
-            409, f"Only {have:g} of “{name}” in this warehouse — can't {doc} {qty:g}.")
-    sl.qty_available -= qty
+            409, f"Only {e.have:g} of “{name}” in this warehouse — can't {doc} {qty:g}.")
     await _deplete_batches_fefo(db, part_id, warehouse, qty)
 
 
@@ -110,16 +132,26 @@ async def _deplete_batches_fefo(db: AsyncSession, part_id: str, warehouse, qty: 
 
 
 async def _give_stock(db: AsyncSession, part_id: str, warehouse, qty: float,
-                      location_id: Optional[str]) -> None:
-    sl = await _stock_row(db, part_id, warehouse)
-    if sl:
-        sl.qty_available += qty
+                      location_id: Optional[str], bin_id: Optional[str] = None) -> None:
+    """Into the bin's row when a bin is named; else the warehouse's own unbinned row if it has one,
+    else the location's main row (where postings/sales keep stock)."""
+    loc = location_id or warehouse.location_id
+    if bin_id:
+        await stock_rows.check_bin(db, warehouse.org_id, loc, bin_id)
+        await stock_rows.add(db, part_id, loc, qty, bin_id=bin_id)
+        return
+    own = (await db.execute(select(StockLevel.id).where(
+        StockLevel.part_id == part_id, StockLevel.warehouse_id == warehouse.id,
+        StockLevel.bin_id.is_(None)).limit(1))).scalar_one_or_none()
+    if own or not await stock_rows.rows(db, part_id, loc):
+        await stock_rows.add(db, part_id, loc, qty, warehouse_id=warehouse.id)
     else:
-        db.add(StockLevel(part_id=part_id, location_id=location_id,
-                          warehouse_id=warehouse.id, qty_available=qty, qty_reserved=0))
+        await stock_rows.add(db, part_id, loc, qty)
 
 
 async def _cost(db: AsyncSession, part_id: str, given: Optional[float]) -> Decimal:
+    # An explicit unit_cost is the credit agreed with the supplier (routes require
+    # can_manage_inventory); DocLine rejects negative values.
     if given is not None:
         return Decimal(str(given))
     p = (await db.execute(select(Part).where(Part.id == part_id))).scalar_one_or_none()
@@ -163,12 +195,8 @@ async def list_returns(
     if warehouse_id:
         q = q.where(PurchaseReturn.warehouse_id == warehouse_id)
     rows = (await db.execute(q.order_by(PurchaseReturn.created_at.desc()).limit(200))).scalars().all()
-    out = []
-    for r in rows:
-        lines = (await db.execute(select(PurchaseReturnLine).where(
-            PurchaseReturnLine.return_id == r.id))).scalars().all()
-        out.append(_ser_return(r, lines))
-    return {"items": out}
+    lines = await rows_by(db, PurchaseReturnLine, PurchaseReturnLine.return_id, [r.id for r in rows])
+    return {"items": [_ser_return(r, lines.get(r.id, [])) for r in rows]}
 
 
 @router.post("/returns", status_code=201)
@@ -208,12 +236,15 @@ async def create_return(
     total = Decimal("0")
     for ln in data.lines:
         cost = await _cost(db, ln.part_id, ln.unit_cost)
-        await _take_stock(db, ln.part_id, w, ln.qty, doc="return")
+        await _take_stock(db, ln.part_id, w, ln.qty, doc="return", bin_id=getattr(ln, "bin_id", None))
         if ln.serialized_item_id:
             unit = (await db.execute(select(SerializedItem).where(
-                SerializedItem.id == ln.serialized_item_id))).scalar_one_or_none()
+                SerializedItem.id == ln.serialized_item_id, SerializedItem.org_id == current.org_id,
+                SerializedItem.part_id == ln.part_id))).scalar_one_or_none()
             if unit:
                 unit.status = "written_off"
+                serial_log.record(db, unit, "written_off", ref_type="purchase_return", ref_id=doc.id,
+                                  label="Returned to the supplier", actor_id=current.id)
         line_total = cost * Decimal(str(ln.qty))
         total += line_total
         db.add(PurchaseReturnLine(
@@ -265,22 +296,28 @@ async def delete_return(
     if doc.paid:
         raise HTTPException(
             409, "This return has been paid. Delete the payment first, then the return.")
+    # Claim the delete before giving stock back, so a second identical request does nothing.
+    # `paid` re-checked in the same statement: a payment that lands in between must win.
+    if not await claim_status(db, doc, doc.status, "deleted", where=(PurchaseReturn.paid.isnot(True),)):
+        raise HTTPException(409, "This return just changed (deleted or paid). Refresh and try again.")
 
     w = await wh.resolve(db, current.org_id, warehouse_id=doc.warehouse_id)
     lines = (await db.execute(select(PurchaseReturnLine).where(
         PurchaseReturnLine.return_id == doc.id))).scalars().all()
     for ln in lines:
-        await _give_stock(db, ln.part_id, w, ln.qty, w.location_id if w else None)
+        await _give_stock(db, ln.part_id, w, ln.qty, w.location_id if w else None, bin_id=getattr(ln, "bin_id", None))
         if ln.serialized_item_id:
             unit = (await db.execute(select(SerializedItem).where(
-                SerializedItem.id == ln.serialized_item_id))).scalar_one_or_none()
+                SerializedItem.id == ln.serialized_item_id, SerializedItem.org_id == current.org_id,
+                SerializedItem.part_id == ln.part_id))).scalar_one_or_none()
             if unit:
                 unit.status = "in_stock"
+                serial_log.record(db, unit, "restored", ref_type="purchase_return", ref_id=doc.id,
+                                  label="Supplier return deleted", actor_id=current.id)
         db.add(StockMovement(
             part_id=ln.part_id, location_id=w.location_id if w else None,
             warehouse_id=doc.warehouse_id, movement_type="return_reverted",
             qty=ln.qty, created_by_id=current.id))
-    doc.status = "deleted"
     # 144ax: only a BALANCE-settled return ever moved the AP balance on create, so only that
     # reverses it here. (Previously the column was bumped unconditionally — a cash-settled return,
     # which is paid from the cashbox, had its deletion wrongly inflate the AP balance with no
@@ -328,14 +365,14 @@ async def list_write_offs(
     if warehouse_id:
         q = q.where(WriteOff.warehouse_id == warehouse_id)
     rows = (await db.execute(q.order_by(WriteOff.created_at.desc()).limit(200))).scalars().all()
+    by_doc = await rows_by(db, WriteOffLine, WriteOffLine.write_off_id, [d.id for d in rows])
     # 144bg — resolve part names once so the list view can show a readable summary row.
-    from backend.models import Part
-    pname = dict((await db.execute(select(Part.id, Part.name).where(
-        Part.org_id == current.org_id))).all())
+    pname = await names_by_id(db, Part.id, Part.name,
+                              [ls[0].part_id for ls in by_doc.values() if ls],
+                              org_col=Part.org_id, org_id=current.org_id)
     out = []
     for d in rows:
-        lines = (await db.execute(select(WriteOffLine).where(
-            WriteOffLine.write_off_id == d.id))).scalars().all()
+        lines = by_doc.get(d.id, [])
         row = _ser_wo(d, lines)
         # Summary fields the audit table binds to (part_name, qty).
         row["qty"] = sum((ln.qty or 0) for ln in lines)
@@ -375,12 +412,15 @@ async def create_write_off(
     total = Decimal("0")
     for ln in data.lines:
         cost = await _cost(db, ln.part_id, ln.unit_cost)
-        await _take_stock(db, ln.part_id, w, ln.qty, doc="write off")
+        await _take_stock(db, ln.part_id, w, ln.qty, doc="write off", bin_id=getattr(ln, "bin_id", None))
         if ln.serialized_item_id:
             unit = (await db.execute(select(SerializedItem).where(
-                SerializedItem.id == ln.serialized_item_id))).scalar_one_or_none()
+                SerializedItem.id == ln.serialized_item_id, SerializedItem.org_id == current.org_id,
+                SerializedItem.part_id == ln.part_id))).scalar_one_or_none()
             if unit:
                 unit.status = "written_off"
+                serial_log.record(db, unit, "written_off", ref_type="write_off", ref_id=doc.id,
+                                  label=data.reason or "Written off", actor_id=current.id)
         total += cost * Decimal(str(ln.qty))
         db.add(WriteOffLine(
             write_off_id=doc.id, part_id=ln.part_id, qty=ln.qty, unit_cost=cost,
@@ -400,6 +440,13 @@ async def create_write_off(
 
 class WriteOffLinePatch(BaseModel):
     qty: Optional[float] = None
+
+    @field_validator("qty")
+    @classmethod
+    def _qty_positive(cls, v):
+        if v is not None and v <= 0:
+            raise ValueError("Quantity must be greater than zero")
+        return v
     comment: Optional[str] = None
     comment_public: Optional[bool] = None
 
@@ -429,9 +476,9 @@ async def edit_write_off_line(
             raise HTTPException(400, "Quantity must be positive — delete the document instead")
         delta = data.qty - ln.qty
         if delta > 0:
-            await _take_stock(db, ln.part_id, w, delta, doc="write off")
+            await _take_stock(db, ln.part_id, w, delta, doc="write off", bin_id=getattr(ln, "bin_id", None))
         else:
-            await _give_stock(db, ln.part_id, w, -delta, w.location_id if w else None)
+            await _give_stock(db, ln.part_id, w, -delta, w.location_id if w else None, bin_id=getattr(ln, "bin_id", None))
         db.add(StockMovement(
             part_id=ln.part_id, location_id=w.location_id if w else None,
             warehouse_id=doc.warehouse_id, movement_type="writeoff_adjust",
@@ -464,241 +511,33 @@ async def delete_write_off(
         raise HTTPException(404, "Write-off not found")
     if doc.status == "reverted":
         return {"ok": True, "already_reverted": True}
+    if not await claim_status(db, doc, doc.status, "reverted", reverted_at=now_utc()):
+        return {"ok": True, "already_reverted": True}   # a concurrent request got there first
 
     w = await wh.resolve(db, current.org_id, warehouse_id=doc.warehouse_id)
     lines = (await db.execute(select(WriteOffLine).where(
         WriteOffLine.write_off_id == doc.id))).scalars().all()
     for ln in lines:
-        await _give_stock(db, ln.part_id, w, ln.qty, w.location_id if w else None)
+        await _give_stock(db, ln.part_id, w, ln.qty, w.location_id if w else None, bin_id=getattr(ln, "bin_id", None))
         if ln.serialized_item_id:
             unit = (await db.execute(select(SerializedItem).where(
-                SerializedItem.id == ln.serialized_item_id))).scalar_one_or_none()
+                SerializedItem.id == ln.serialized_item_id, SerializedItem.org_id == current.org_id,
+                SerializedItem.part_id == ln.part_id))).scalar_one_or_none()
             if unit:
                 unit.status = "in_stock"
+                serial_log.record(db, unit, "restored", ref_type="write_off", ref_id=doc.id,
+                                  label="Write-off reverted", actor_id=current.id)
         db.add(StockMovement(
             part_id=ln.part_id, location_id=w.location_id if w else None,
             warehouse_id=doc.warehouse_id, movement_type="writeoff_reverted",
             qty=ln.qty, created_by_id=current.id))
-    doc.status = "reverted"
-    doc.reverted_at = datetime.utcnow()
     await db.commit()
     return {"ok": True, "stock_restored": True}
 
 
-# ══ Build 93: postings as documents ══════════════════════════════════════════
-class PostLine(BaseModel):
-    part_id: str
-    qty: float
-    unit_cost: float = 0.0
-    markup_pct: Optional[float] = None     # sets the sell price at posting time
-    price_type_id: Optional[str] = None    # which price list the markup writes to
-
-
-class PostingIn(BaseModel):
-    warehouse_id: Optional[str] = None
-    location_id: Optional[str] = None      # compatibility shim
-    supplier_id: Optional[str] = None
-    settlement: str = "balance"            # balance|cash
-    account_id: Optional[str] = None
-    reference: Optional[str] = None        # supplier invoice number
-    note: Optional[str] = None
-    lines: list[PostLine]
-
-
-def _ser_posting(d: Posting, lines: list[PostingLine]) -> dict:
-    return {"id": d.id, "number": d.number, "warehouse_id": d.warehouse_id,
-            "supplier_id": d.supplier_id, "settlement": d.settlement,
-            "account_id": d.account_id, "reference": d.reference,
-            "total": float(d.total or 0), "status": d.status, "paid": d.paid,
-            "note": d.note,
-            "created_at": d.created_at.isoformat() if d.created_at else None,
-            "lines": [{"id": ln.id, "part_id": ln.part_id, "qty": ln.qty,
-                       "unit_cost": float(ln.unit_cost or 0),
-                       "markup_pct": ln.markup_pct, "price_type_id": ln.price_type_id,
-                       "total": float(ln.total or 0)} for ln in lines]}
-
-
-async def _apply_posting_line(db: AsyncSession, current: Employee, w, ln, *,
-                              sign: int) -> Decimal:
-    """Move stock and keep the moving-average cost honest.
-
-    Averaging only makes sense on the way *in*. On a reversal we put the quantity back
-    but deliberately leave avg_cost alone: un-averaging isn't a well-defined operation,
-    and pretending otherwise would quietly corrupt the cost basis of everything else.
-    """
-    part = (await db.execute(select(Part).where(
-        Part.id == ln.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
-    if not part:
-        raise HTTPException(404, f"Part {ln.part_id} not found")
-
-    sl = await _stock_row(db, ln.part_id, w)
-    if sign > 0:
-        cost = Decimal(str(ln.unit_cost or 0))
-        prev_qty = float(sl.qty_available or 0) if sl else 0.0
-        prev_cost = float(part.avg_cost or part.cost_price or 0)
-        new_qty = prev_qty + ln.qty
-        if new_qty > 0 and ln.unit_cost:
-            part.avg_cost = q2((prev_qty * prev_cost + ln.qty * float(ln.unit_cost)) / new_qty)
-        if ln.unit_cost:
-            part.cost_price = ln.unit_cost
-        # markup prices the product at the moment it lands, from what it actually cost
-        if ln.markup_pct is not None and ln.unit_cost:
-            new_price = q2(float(ln.unit_cost) * (1 + ln.markup_pct / 100.0))
-            if ln.price_type_id:
-                from backend.models import PriceTypeItem
-                row = (await db.execute(select(PriceTypeItem).where(
-                    PriceTypeItem.org_id == current.org_id,
-                    PriceTypeItem.price_type_id == ln.price_type_id,
-                    PriceTypeItem.item_type == "product",
-                    PriceTypeItem.item_id == part.id))).scalar_one_or_none()
-                if row:
-                    row.price = new_price
-                else:
-                    db.add(PriceTypeItem(
-                        org_id=current.org_id, price_type_id=ln.price_type_id,
-                        item_type="product", item_id=part.id, price=new_price))
-            else:
-                part.sell_price = new_price
-        await _give_stock(db, ln.part_id, w, ln.qty, w.location_id)
-    else:
-        await _take_stock(db, ln.part_id, w, ln.qty, doc="un-post")
-        cost = Decimal(str(ln.unit_cost or 0))
-
-    db.add(StockMovement(
-        part_id=ln.part_id, location_id=w.location_id, warehouse_id=w.id,
-        movement_type="receive" if sign > 0 else "posting_reverted",
-        qty=sign * ln.qty, unit_cost=float(cost), created_by_id=current.id))
-    return cost * Decimal(str(ln.qty))
-
-
-@router.get("/postings")
-async def list_postings(
-    supplier_id: Optional[str] = None,
-    warehouse_id: Optional[str] = None,
-    db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
-):
-    q = select(Posting).where(Posting.org_id == current.org_id, Posting.status != "deleted")
-    if supplier_id:
-        q = q.where(Posting.supplier_id == supplier_id)
-    if warehouse_id:
-        q = q.where(Posting.warehouse_id == warehouse_id)
-    rows = (await db.execute(q.order_by(Posting.created_at.desc()).limit(200))).scalars().all()
-    out = []
-    for d in rows:
-        lines = (await db.execute(select(PostingLine).where(
-            PostingLine.posting_id == d.id))).scalars().all()
-        out.append(_ser_posting(d, lines))
-    return {"items": out}
-
-
-@router.post("/postings", status_code=201)
-async def create_posting(
-    data: PostingIn,
-    db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_manage_inventory")),
-):
-    """Goods-in as a document: stock, moving-average cost, sell price (from markup) and
-    the supplier settlement all move together, and the whole thing stays correctable."""
-    if not data.lines:
-        raise HTTPException(400, "A posting needs at least one line")
-    if data.settlement not in ("balance", "cash"):
-        raise HTTPException(422, "settlement must be balance|cash")
-    for ln in data.lines:
-        if ln.qty <= 0:
-            raise HTTPException(422, "Quantity must be positive")
-    w = await wh.guard_action(db, current, "post",
-                              warehouse_id=data.warehouse_id, location_id=data.location_id)
-    if not w:
-        raise HTTPException(400, "No warehouse resolved — pass warehouse_id")
-
-    from backend.services.numbering import next_number
-    try:
-        number = await next_number(db, current.org_id, "posting")
-    except Exception:
-        number = None
-
-    doc = Posting(org_id=current.org_id, number=number, warehouse_id=w.id,
-                  supplier_id=data.supplier_id, settlement=data.settlement,
-                  account_id=data.account_id, reference=data.reference,
-                  note=data.note, created_by_id=current.id)
-    db.add(doc)
-    await db.flush()
-
-    total = Decimal("0")
-    for ln in data.lines:
-        line_total = await _apply_posting_line(db, current, w, ln, sign=+1)
-        total += line_total
-        db.add(PostingLine(
-            posting_id=doc.id, part_id=ln.part_id, qty=ln.qty,
-            unit_cost=Decimal(str(ln.unit_cost or 0)), markup_pct=ln.markup_pct,
-            price_type_id=ln.price_type_id, total=line_total))
-
-    doc.total = total
-    if data.settlement == "balance" and data.supplier_id:
-        sup = (await db.execute(select(Supplier).where(
-            Supplier.id == data.supplier_id))).scalar_one_or_none()
-        if sup:
-            # 144ax: single write-path — goods received on credit, we now owe +total.
-            from backend.services.ledger import adjust_supplier_ap
-            await adjust_supplier_ap(db, current.org_id, sup, float(total), entry_type="posting",
-                                     note=f"Posting {doc.number or ''}".strip(),
-                                     ref_type="posting", ref_id=doc.id, created_by_id=current.id)
-    await db.commit()
-    await db.refresh(doc)
-    lines = (await db.execute(select(PostingLine).where(
-        PostingLine.posting_id == doc.id))).scalars().all()
-    return _ser_posting(doc, lines)
-
-
-@router.delete("/postings/{doc_id}")
-async def delete_posting(
-    doc_id: str,
-    db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_manage_inventory")),
-):
-    """Take the goods back out and undo what we owed. Refused once paid — the money has
-    already moved, so the posting has to be corrected, not erased."""
-    doc = (await db.execute(select(Posting).where(
-        Posting.id == doc_id, Posting.org_id == current.org_id))).scalar_one_or_none()
-    if not doc or doc.status == "deleted":
-        raise HTTPException(404, "Posting not found")
-    if doc.paid:
-        raise HTTPException(409, "This posting has been paid. Delete the payment first.")
-
-    w = await wh.resolve(db, current.org_id, warehouse_id=doc.warehouse_id)
-    lines = (await db.execute(select(PostingLine).where(
-        PostingLine.posting_id == doc.id))).scalars().all()
-    # A4: posting freeze — once the posted goods have moved downstream (sold, used,
-    # transferred, written off), the on-hand for a line is below what it added, so
-    # reversing it would drive stock negative and desync FEFO. Block and point to
-    # the correcting document instead of silently erasing history.
-    for ln in lines:
-        sl = await _stock_row(db, ln.part_id, w)
-        have = (sl.qty_available if sl else 0) or 0
-        if have < ln.qty:
-            name = (await db.execute(select(Part.name).where(Part.id == ln.part_id))).scalar_one_or_none()
-            raise HTTPException(
-                409, f"“{name}” from this posting has already been used, sold or "
-                     f"transferred (only {have:g} of {ln.qty:g} left on hand). Correct it "
-                     f"with a write-off or supplier return instead of deleting the posting.")
-    for ln in lines:
-        await _apply_posting_line(db, current, w, ln, sign=-1)
-    doc.status = "deleted"
-    if doc.supplier_id:
-        sup = (await db.execute(select(Supplier).where(
-            Supplier.id == doc.supplier_id))).scalar_one_or_none()
-        # Only balance-settled postings ever added to the supplier balance on create, so only
-        # those reverse it here — a cash-settled posting never touched sup.balance (otherwise
-        # deleting one wrongly drove the supplier negative by doc.total).
-        if sup and doc.settlement == "balance":
-            # 144ax: single write-path reverses both column + ledger by −total together.
-            from backend.services.ledger import adjust_supplier_ap
-            await adjust_supplier_ap(db, current.org_id, sup, -float(doc.total or 0), entry_type="posting",
-                                     note=f"Posting {doc.number or ''} deleted".strip(),
-                                     ref_type="posting", ref_id=doc.id, created_by_id=current.id)
-    await db.commit()
-    return {"ok": True, "stock_removed": True}
+# Build 93's postings-as-documents endpoints were removed (audit 29 Oct 2026): the UI posts
+# stock through /api/inventory/postings (services/stock_posting), and the second engine here
+# had drifted from it. Old Posting rows stay in the database.
 
 
 # ══ Build 109: expired-stock suggestions (FEFO clearance) ════════════════════
@@ -714,11 +553,11 @@ async def write_off_suggestions(
     report: instead of just telling you what's going off, it hands you the exact lines,
     earliest-expiry first, to clear in one write-off document.
     """
-    from datetime import date, timedelta
+    from datetime import timedelta
 
     from backend.models import StockItemBatch, Warehouse
 
-    cutoff = date.today() + timedelta(days=max(0, within_days))
+    cutoff = await shop_today(db, current.org_id) + timedelta(days=max(0, within_days))
     q = (select(StockItemBatch, Part)
          .join(Part, StockItemBatch.part_id == Part.id)
          .where(StockItemBatch.org_id == current.org_id,
@@ -731,7 +570,7 @@ async def write_off_suggestions(
 
     wh_names = {w.id: w.name for w in (await db.execute(select(Warehouse).where(
         Warehouse.org_id == current.org_id))).scalars().all()}
-    today = date.today()
+    today = await shop_today(db, current.org_id)
     items = []
     for b, p in rows:
         exp = b.expiry_date.date() if hasattr(b.expiry_date, "date") else b.expiry_date
@@ -747,3 +586,8 @@ async def write_off_suggestions(
         })
     return {"items": items,
             "total_value": q2(sum(i["value_at_risk"] for i in items))}
+
+
+async def _atomic_add(db, obj, attr, delta, *, round_to=None):
+    from backend.services.money import add_to_column
+    return await add_to_column(db, obj, attr, delta, round_to=round_to)

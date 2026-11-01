@@ -4,6 +4,8 @@ from datetime import datetime
 import pytest
 from sqlalchemy import select
 
+from backend.services.dates import now_utc
+
 
 async def _me(client, tenant):
     return (await client.get("/api/auth/me", headers=tenant)).json()
@@ -91,7 +93,7 @@ async def test_appointment_cancelled_notifies_booked_tech(client, tenant, db):
     await db.commit()
     await db.refresh(tech)
     b = Appointment(org_id=me["org_id"], location_id=loc, employee_id=tech.id, status="booked",
-                client_name="Walk in", scheduled_for=datetime.utcnow(), duration_min=30)
+                client_name="Walk in", scheduled_for=now_utc(), duration_min=30)
     db.add(b)
     await db.commit()
     await db.refresh(b)

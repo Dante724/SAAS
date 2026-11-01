@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from backend.models import Order, OrderStatusLog
 from backend.services.cycle_time import compute_dwell_stats, get_order_timing
+from backend.services.dates import now_utc
 
 
 async def _loc(client, H):
@@ -32,7 +33,7 @@ async def test_dwell_stats_and_stall(client, tenant, db):
         ids.append(o["id"])
     stuck = (await client.post("/api/orders", json={"location_id": loc_id, "complaint": "stuck"}, headers=H)).json()
 
-    base = datetime.utcnow() - timedelta(days=1)
+    base = now_utc() - timedelta(days=1)
     org_id = None
     for oid in ids:
         row = (await db.execute(select(Order).where(Order.id == oid))).scalar_one()
@@ -43,7 +44,7 @@ async def test_dwell_stats_and_stall(client, tenant, db):
         db.add(OrderStatusLog(order_id=oid, from_status="new", to_status="in_repair",
                               changed_at=base + timedelta(minutes=30)))
     stuck_row = (await db.execute(select(Order).where(Order.id == stuck["id"]))).scalar_one()
-    stuck_row.status_entered_at = datetime.utcnow() - timedelta(hours=3)
+    stuck_row.status_entered_at = now_utc() - timedelta(hours=3)
     await db.commit()
 
     stats = await compute_dwell_stats(db, org_id, is_estimate=False)

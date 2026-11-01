@@ -55,8 +55,16 @@ async def _run_async() -> None:
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
     )
+    def _do_run(sync_conn):
+        _configure(sync_conn)
+        # Alembic must own the transaction: it commits the run, and migrations that need
+        # op.get_context().autocommit_block() (CREATE INDEX CONCURRENTLY on Postgres) assert
+        # without one.
+        with context.begin_transaction():
+            context.run_migrations()
+
     async with connectable.connect() as connection:
-        await connection.run_sync(lambda c: (_configure(c), context.run_migrations())[1])
+        await connection.run_sync(_do_run)
     await connectable.dispose()
 
 

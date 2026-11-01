@@ -2,11 +2,10 @@
 
 These are the "new channel and governance" features. Where a real deployment would call
 an external service (a speech-to-text model, a Shopify API, an SMTP relay), the boundary
-is stubbed and clearly marked: the value modelled here is the RepairOS-side workflow —
+is stubbed and clearly marked: the value modelled here is the Tekly-side workflow —
 storing the transcript, mapping an external order to an internal one without duplication,
 gating a refund above a role's ceiling — not the third-party call itself.
 """
-from datetime import datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -25,6 +24,7 @@ from backend.models import (
     Role,
 )
 from backend.services.auth import get_current_employee, require_perm
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api", tags=["comms-ai"])
 
@@ -45,7 +45,7 @@ async def attach_ai(
     """Attach AI results (transcript, summary, sentiment) to a call.
 
     The transcription/summarisation model runs at the edge and posts back here; this
-    endpoint is the RepairOS-side record. Keeping sentiment as a small enum makes it
+    endpoint is the Tekly-side record. Keeping sentiment as a small enum makes it
     filterable — “show me this week's negative calls” is the report a manager actually
     wants — without committing to any one model's richer output.
     """
@@ -61,7 +61,7 @@ async def attach_ai(
         call.summary = data.summary
     if data.sentiment is not None:
         call.sentiment = data.sentiment
-    call.ai_processed_at = datetime.utcnow()
+    call.ai_processed_at = now_utc()
     await db.commit()
     return {"ok": True, "call_id": call.id, "sentiment": call.sentiment}
 
@@ -190,7 +190,7 @@ async def sync_order(
     current: Employee = Depends(get_current_employee),
 ):
     """Ingest (or update) one store order. Idempotent on external_order_id via the
-    order map, so a store that re-sends the same order updates the existing RepairOS
+    order map, so a store that re-sends the same order updates the existing Tekly
     order instead of creating a duplicate — the single most important property of any
     sync, and the one most integrations get wrong.
     """
@@ -199,6 +199,8 @@ async def sync_order(
         EcommerceIntegration.org_id == current.org_id))).scalar_one_or_none()
     if not integ:
         raise HTTPException(404, "Integration not found")
+    from backend.services.billing import assert_can_add_job
+    await assert_can_add_job(db, current.org_id)
 
     existing = (await db.execute(select(EcommerceOrderMap).where(
         EcommerceOrderMap.integration_id == integration_id,
@@ -211,7 +213,7 @@ async def sync_order(
     if existing:
         if existing.order_id and data.external_status:
             existing.external_status = data.external_status
-        integ.last_synced_at = datetime.utcnow()
+        integ.last_synced_at = now_utc()
         await db.commit()
         return {"order_id": existing.order_id, "created": False, "updated": True}
 
@@ -241,7 +243,7 @@ async def sync_order(
     db.add(EcommerceOrderMap(org_id=current.org_id, integration_id=integration_id,
                              external_order_id=data.external_order_id, order_id=order.id,
                              external_status=data.external_status))
-    integ.last_synced_at = datetime.utcnow()
+    integ.last_synced_at = now_utc()
     await db.commit()
     return {"order_id": order.id, "created": True, "updated": False}
 
@@ -281,7 +283,7 @@ async def request_approval(
         requested_by_id=current.id,
         status="approved" if auto else "pending",
         decided_by_id=current.id if auto else None,
-        decided_at=datetime.utcnow() if auto else None)
+        decided_at=now_utc() if auto else None)
     db.add(req)
     await db.commit()
     await db.refresh(req)
@@ -330,7 +332,7 @@ async def decide_approval(
         raise HTTPException(422, "decision must be approve|reject")
     req.status = "approved" if data.decision == "approve" else "rejected"
     req.decided_by_id = current.id
-    req.decided_at = datetime.utcnow()
+    req.decided_at = now_utc()
     await db.commit()
     return {"id": req.id, "status": req.status}
 
@@ -353,7 +355,7 @@ async def get_webhook_secret(
         await db.commit()
     return {"webhook_secret": org.webhook_secret,
             "header": "X-Webhook-Token",
-            "endpoints": [f"/api/inbox/webhook/{current.org_id}",
+            "endpoints": [f"/api/chats/webhook/{current.org_id}",
                           f"/api/comms/calls/webhook?org_id={current.org_id}"]}
 
 

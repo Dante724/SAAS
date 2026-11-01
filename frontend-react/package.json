@@ -1,9 +1,9 @@
 {
-  "name": "repairos-react",
+  "name": "tekly-web",
   "private": true,
   "version": "0.1.0",
   "type": "module",
-  "description": "RepairOS React frontend — Strangler Fig migration (Option B). Backend/schema/data unchanged; calls the existing FastAPI at /api.",
+  "description": "Tekly React frontend — Strangler Fig migration (Option B). Backend/schema/data unchanged; calls the existing FastAPI at /api.",
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
@@ -15,11 +15,15 @@
     "test:coverage": "vitest run --coverage"
   },
   "dependencies": {
+    "@fontsource-variable/geist": "5.3.0",
+    "@fontsource-variable/geist-mono": "5.3.0",
+    "@zxing/browser": "0.2.1",
+    "@zxing/library": "0.23.0",
+    "fflate": "0.8.3",
     "lucide-react": "^0.400.0",
     "react": "^18.3.1",
     "react-dom": "^18.3.1",
-    "react-router-dom": "^6.26.0",
-    "xlsx": "^0.18.5"
+    "react-router-dom": "^7.18.4"
   },
   "devDependencies": {
     "@testing-library/jest-dom": "^6.9.1",

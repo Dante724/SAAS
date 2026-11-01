@@ -7,6 +7,7 @@ import pytest
 from sqlalchemy import select
 
 from backend.models import QboConnection
+from backend.services.dates import now_utc
 
 
 async def _configure(monkeypatch):
@@ -67,7 +68,7 @@ async def test_expired_token_refreshes_before_push(client, tenant, db, monkeypat
     from backend.services.crypto import decrypt, encrypt
     conn = QboConnection(org_id=me["org_id"], realm_id="R9", environment="sandbox", connected=True,
                          access_token=encrypt("old-at"), refresh_token=encrypt("old-rt"),
-                         token_expires_at=datetime.utcnow() - timedelta(minutes=5))
+                         token_expires_at=now_utc() - timedelta(minutes=5))
     db.add(conn)
     # a contact to push
     cid = (await client.post("/api/clients", json={"name": "QBO Cust", "phone": "+15"}, headers=tenant)).json()["id"]
@@ -77,7 +78,7 @@ async def test_expired_token_refreshes_before_push(client, tenant, db, monkeypat
     async def _fake_refresh(db_, c):
         refreshed["n"] += 1
         c.access_token = encrypt("new-at")
-        c.token_expires_at = datetime.utcnow() + timedelta(hours=1)
+        c.token_expires_at = now_utc() + timedelta(hours=1)
     async def _fake_push(c, entity_type, payload, remote_id):
         assert decrypt(c.access_token) == "new-at"      # push sees the refreshed token
         return "QB-1"

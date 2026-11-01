@@ -1,5 +1,5 @@
-"""Build 144ay — the Work Orders page bulk-loads /orders?limit=1000 then paginates client-side.
-The list_orders cap must allow that; a tighter cap 422s and the whole page renders the raw error."""
+"""Build 144ay — old Work Orders bundles request /orders?limit=1000. Since batch 2 the page is
+server-paged and the limit is clamped to the page ceiling instead of 422ing the whole page."""
 import pytest
 
 

@@ -2,6 +2,8 @@
 issue → shows in GET /giftcards for that client → redeem on an order drops balance → expired card rejected."""
 from datetime import datetime, timedelta
 
+from backend.services.dates import now_utc
+
 
 async def _client(client, tenant, name="Flow Co"):
     return (await client.post("/api/clients", json={"name": name, "phone": "+15550555"}, headers=tenant)).json()["id"]
@@ -36,7 +38,7 @@ async def test_issue_then_appears_in_list_then_redeem(client, tenant):
 
 async def test_expired_card_is_rejected_on_redeem(client, tenant):
     cid = await _client(client, tenant, name="Expired Co")
-    past = (datetime.utcnow() - timedelta(days=1)).isoformat()
+    past = (now_utc() - timedelta(days=1)).isoformat()
     code = (await client.post("/api/giftcards", json={"value": 50, "client_id": cid, "expires_at": past}, headers=tenant)).json()["code"]
     oid = await _order_with_total(client, tenant, cid)
     r = await client.post(f"/api/orders/{oid}/redeem-giftcard", json={"code": code}, headers=tenant)

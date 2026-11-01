@@ -2,61 +2,49 @@
 <html lang="en"><head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
-<meta name="theme-color" content="#6366f1">
-<title>Pay — RepairOS</title>
+<meta name="theme-color" content="#f6f8fb">
+<meta name="robots" content="noindex">
+<title>Payment request</title>
 <style>
-  html,body{height:100%;margin:0;background:#0f1020;color:#e9e9f2;
-    font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;display:flex;align-items:center;justify-content:center}
-  .card{width:100%;max-width:380px;margin:18px;background:rgba(255,255,255,.05);border:1px solid rgba(255,255,255,.08);border-radius:22px;padding:26px;text-align:center}
-  .logo{width:56px;height:56px;border-radius:16px;margin:0 auto 14px;background:linear-gradient(160deg,#6366f1,#8b5cf6)}
-  h1{font-size:18px;margin:0 0 4px}.sub{color:#9a9ab5;font-size:13px;margin:0 0 18px}
-  .amt{font-size:40px;font-weight:800;margin:8px 0}
-  .ord{color:#9a9ab5;font-size:13px;margin-bottom:18px}
-  button{width:100%;border:0;border-radius:14px;padding:16px;font-size:16px;font-weight:800;color:#fff;background:linear-gradient(160deg,#6366f1,#8b5cf6);min-height:54px}
-  .paid{color:#34d399;font-weight:800;font-size:18px;margin:14px 0}
-  .err{color:#fb7185;font-size:13px;margin-top:10px}
-  .items{text-align:left;margin:0 0 16px;border-top:1px solid rgba(255,255,255,.08);border-bottom:1px solid rgba(255,255,255,.08)}
-  .items .row{display:flex;justify-content:space-between;gap:12px;padding:9px 2px;font-size:13px}
-  .items .row .d{color:#c9c9dc}.items .row .t{color:#e9e9f2;font-weight:700;white-space:nowrap}
+  @font-face { font-family: 'Geist'; font-style: normal; font-display: swap; font-weight: 100 900;
+    src: url(/static/fonts/geist-latin-wght-normal.woff2) format('woff2-variations'); }
+  :root{--bg:#f6f8fb;--card:#fff;--line:#e6e9ef;--ink:#0f172a;--ink2:#475569;--ink3:#64748b;
+    --accent:#1d4ed8;--accent-h:#1e40af;--ok:#047857;--ok-bg:#ecfdf5;--bad:#b91c1c;--warn-bg:#fff7ed;--warn:#9a3412}
+  *{box-sizing:border-box}
+  html,body{margin:0;min-height:100%;background:var(--bg);color:var(--ink);
+    font-family:'Geist',-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;-webkit-font-smoothing:antialiased}
+  body{display:flex;flex-direction:column;align-items:center;padding:40px 16px 24px}
+  .card{width:100%;max-width:420px;background:var(--card);border:1px solid var(--line);border-radius:16px;
+    box-shadow:0 1px 2px rgba(15,23,42,.04),0 8px 24px rgba(15,23,42,.06);overflow:hidden}
+  .shop{display:flex;align-items:center;gap:12px;padding:20px 24px;border-bottom:1px solid var(--line)}
+  .shop img,.mono{width:44px;height:44px;border-radius:10px;flex:none;object-fit:contain;background:#fff;border:1px solid var(--line)}
+  .mono{display:flex;align-items:center;justify-content:center;font-weight:700;font-size:18px;color:var(--accent);background:#eff4ff;border-color:#dbe5ff}
+  .shop .n{font-weight:650;font-size:16px;line-height:1.25}
+  .shop .a{color:var(--ink3);font-size:13px;line-height:1.35;margin-top:2px}
+  .body{padding:24px}
+  .lbl{color:var(--ink3);font-size:13px;font-weight:500}
+  .amt{font-size:36px;font-weight:700;letter-spacing:-.02em;margin:4px 0 2px;font-variant-numeric:tabular-nums}
+  .ref{color:var(--ink2);font-size:14px}
+  .items{margin:20px 0 4px;border-top:1px solid var(--line)}
+  .row{display:flex;justify-content:space-between;gap:12px;padding:10px 0;font-size:14px;border-bottom:1px solid var(--line)}
+  .row .d{color:var(--ink2)}.row .t{font-weight:600;white-space:nowrap;font-variant-numeric:tabular-nums}
+  .row.total{border-bottom:0;font-weight:650}.row.total .d{color:var(--ink)}
+  button{margin-top:20px;width:100%;border:0;border-radius:10px;padding:14px 16px;min-height:50px;font:inherit;
+    font-size:16px;font-weight:600;color:#fff;background:var(--accent);cursor:pointer}
+  button:hover{background:var(--accent-h)}button:disabled{opacity:.6;cursor:default}
+  button:focus-visible{outline:3px solid #93b4ff;outline-offset:2px}
+  .err{color:var(--bad);font-size:13px;margin-top:10px;min-height:1em}
+  .state{text-align:center;padding:8px 0}
+  .badge{width:52px;height:52px;border-radius:50%;margin:0 auto 14px;display:flex;align-items:center;justify-content:center;font-size:24px;font-weight:700}
+  .badge.ok{background:var(--ok-bg);color:var(--ok)}.badge.bad{background:var(--warn-bg);color:var(--warn)}
+  h1{font-size:20px;font-weight:650;margin:0 0 6px;letter-spacing:-.01em}
+  .state p{color:var(--ink2);font-size:14px;line-height:1.5;margin:0}
+  .state a{color:var(--accent);font-weight:600;text-decoration:none}
+  .foot{margin-top:18px;color:var(--ink3);font-size:12px;display:flex;align-items:center;gap:6px}
+  .foot svg{flex:none}
+  .loading{padding:40px 24px;text-align:center;color:var(--ink3);font-size:14px}
 </style></head><body>
-<div class="card" id="card"><div class="sub">Loading…</div></div>
-<script>
-  const id = location.pathname.split('/').pop();
-  const card = document.getElementById('card');
-  const money = (a, c) => new Intl.NumberFormat(undefined, { style: 'currency', currency: (c || 'usd').toUpperCase() }).format(a || 0);
-  async function load() {
-    let d;
-    try { d = await (await fetch('/api/public/pay/' + id)).json(); }
-    catch (e) { card.innerHTML = '<div class="err">Could not load this payment.</div>'; return; }
-    if (d.status === 'succeeded' || d.status === 'paid') { return paid(); }
-    if (d.provider !== 'simulated' && (d.status === 'pending' || d.status === 'created')) {
-      // Live providers: poll once in case the customer already paid on the hosted page.
-      try { const r = await (await fetch('/api/payments/intents/' + id + '/refresh', { method: 'POST' })).json();
-            if (r.status === 'succeeded') return paid(); } catch (e) {}
-    }
-    const items = (d.lines && d.lines.length) ? `<div class="items">${d.lines.map(l =>
-        `<div class="row"><span class="d">${(l.description || '').replace(/[<>&]/g, '')}${l.qty > 1 ? ' × ' + l.qty : ''}</span><span class="t">${money(l.total, d.currency)}</span></div>`).join('')}</div>` : '';
-    const ref = d.invoice_number ? 'Invoice ' + d.invoice_number : (d.order_number ? 'Order ' + d.order_number : '');
-    card.innerHTML = `<div class="logo"></div><h1>Payment request</h1>
-      <div class="sub">RepairOS</div>
-      <div class="amt">${money(d.amount, d.currency)}</div>
-      <div class="ord">${ref}</div>
-      ${items}
-      <button id="pay">Pay ${money(d.amount, d.currency)}</button>
-      <div class="err" id="err"></div>`;
-    document.getElementById('pay').addEventListener('click', () => pay(d));
-  }
-  async function pay(d) {
-    const btn = document.getElementById('pay'); btn.textContent = 'Processing…'; btn.disabled = true;
-    // Live gateway: hand off to its hosted checkout. Simulated: confirm via the public hook.
-    if (d.provider !== 'simulated' && d.checkout_url) { location.href = d.checkout_url; return; }
-    try {
-      const r = await fetch((d.checkout_url || ('/api/payments/intents/' + id + '/simulate-pay')), { method: 'POST' });
-      if (!r.ok) throw new Error('failed');
-      paid();
-    } catch (e) { document.getElementById('err').textContent = 'Payment failed. Please try again.'; btn.textContent = 'Pay'; btn.disabled = false; }
-  }
-  function paid() { card.innerHTML = '<div class="logo"></div><div class="paid">✓ Payment received</div><div class="sub">Thank you. You can close this page.</div>'; }
-  load();
-</script>
+<main class="card" id="card" aria-live="polite"><div class="loading">Loading…</div></main>
+<div class="foot"><svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" aria-hidden="true"><rect x="4" y="10" width="16" height="11" rx="2"/><path d="M8 10V7a4 4 0 0 1 8 0v3"/></svg>Secure payment · powered by Tekly</div>
+<script src="/static/js/pay.js"></script>
 </body></html>

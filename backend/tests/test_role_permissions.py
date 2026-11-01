@@ -39,7 +39,7 @@ async def test_me_reflects_explicit_denies(client, tenant):
     assert me["permissions"]["can_view_client_info"] is False
     # explicitly allowed stays True, and unlisted codes stay absent (= allowed)
     assert me["permissions"]["can_create_tickets"] is True
-    assert "can_create_estimates" not in me["permissions"]
+    assert me["permissions"]["can_create_estimates"] is True    # every code is listed explicitly
 
 
 @pytest.mark.asyncio

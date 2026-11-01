@@ -1,16 +1,21 @@
 from fastapi import APIRouter, Depends, HTTPException, Query, Body
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func, and_
+from sqlalchemy import select, func
 from sqlalchemy.orm import selectinload
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from typing import Optional
-from datetime import datetime, date
+from datetime import date, datetime, timedelta
 from backend.db.database import get_db
 from backend.models import Invoice, Payment, CashShift, CashDrawerMovement, Expense, Order, Employee, Location
-from backend.services.auth import get_current_employee, require_perm
-from backend.services.money import q2, q4, msum  # noqa: F401 — money quantizers used module-wide
+from backend.services.auth import assert_perm, get_current_employee, require_perm, record_scope
+from backend.core import paging as _paging
+from backend.services.money import d2, dec, msum, q2, q4  # noqa: F401 — money quantizers used module-wide
+from backend.core.spreadsheet import safe_row
+from backend.services.invoicing import DISPLAY_MODES, balance_due as _balance_due
+from backend.services.dates import day_end_utc, day_start_utc, now_utc, shop_today, shop_tzname, today_in
 
-router = APIRouter(prefix="/api/finance", tags=["finance"])
+router = APIRouter(prefix="/api/finance", tags=["finance"],
+                   dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 class InvoiceLineIn(BaseModel):
     kind: str = "custom"                            # service|product|labor|custom
@@ -19,13 +24,33 @@ class InvoiceLineIn(BaseModel):
     qty: float = 1.0
     unit_price: float = 0.0
 
+    # B3: a 0 or negative quantity or price made negative invoices.
+    @field_validator("qty")
+    @classmethod
+    def _qty_positive(cls, v):
+        if v is None or v <= 0:
+            raise ValueError("Quantity must be greater than zero")
+        return v
+
+    @field_validator("unit_price")
+    @classmethod
+    def _price_non_negative(cls, v):
+        if v is None or v < 0:
+            raise ValueError("Prices can't be negative")
+        return v
+
 class InvoiceIn(BaseModel):
     order_id: Optional[str] = None
     order_ids: list[str] = []                       # 144ed: bill several orders at create
     client_id: Optional[str] = None
     payer_client_id: Optional[str] = None          # 144dr: bill a different party
-    display_mode: str = "detailed"                  # 144dr: detailed|simplified|one_line
+    display_mode: Optional[str] = None              # 144dr: detailed|simplified|one_line (None → org default)
     subtotal: float = 0.0
+    # Invoices store discount and tax as amounts. A manual invoice sets them as percentages:
+    # discount_pct / tax_pct (tax on the discounted subtotal). Older clients send the
+    # percentages in discount / tax, which are read the same way when the _pct fields are absent.
+    discount_pct: Optional[float] = None
+    tax_pct: Optional[float] = None
     discount: float = 0.0
     tax: float = 0.0
     comment: str = ""                               # 144ed
@@ -33,12 +58,31 @@ class InvoiceIn(BaseModel):
     due_at: Optional[str] = None                    # 144ed: ISO date
     lines: list[InvoiceLineIn] = []                 # 144ed: free-form catalog/manual lines
 
+    # B3: a 150% discount saved an invoice at −50. Percentages are 0–100; money is never negative.
+    @field_validator("discount", "tax")
+    @classmethod
+    def _percent_range(cls, v):
+        if v is None or v < 0 or v > 100:
+            raise ValueError("Discount and tax are percentages between 0 and 100")
+        return v
+
+    @field_validator("subtotal")
+    @classmethod
+    def _subtotal_non_negative(cls, v):
+        if v is None or v < 0:
+            raise ValueError("The subtotal can't be negative")
+        return v
+
 class PaymentIn(BaseModel):
     method: str  # cash|card|transfer|balance|online
     amount: float
     reference: Optional[str] = None
     shift_id: Optional[str] = None
     account_id: Optional[str] = None   # 144av: cashbox the money lands in (non-balance methods)
+    paid_at: Optional[str] = None      # opb: ISO date the money was received (earlier needs can_retroactive_cash)
+    # opb (B3): what to do with money above the balance — keep it as client credit, or hand it back.
+    # Without a choice an amount above the balance is refused, as before.
+    overpay: Optional[str] = None      # keep_balance | refund
 
 class ShiftOpen(BaseModel):
     location_id: str
@@ -63,16 +107,14 @@ class ExpenseIn(BaseModel):
     location_id: Optional[str] = None
     expense_date: Optional[str] = None
 
-def _inv_number(seq: int) -> str:
-    return f"INV-{seq:05d}"
-
 def _ser_invoice(inv: Invoice) -> dict:
     return {
         "id": inv.id, "invoice_number": inv.invoice_number,
         "status": inv.status, "subtotal": inv.subtotal,
         "discount": inv.discount, "tax": inv.tax, "total": inv.total,
         "amount_paid": inv.amount_paid,
-        "balance_due": q2(inv.total - inv.amount_paid),
+        "credited": getattr(inv, "credited", 0) or 0.0,          # opb: issued credit notes
+        "balance_due": _balance_due(inv),
         "issued_at": inv.issued_at.isoformat() if inv.issued_at else None,
         "due_at": inv.due_at.isoformat() if getattr(inv, "due_at", None) else None,
         "comment": getattr(inv, "comment", "") or "",
@@ -85,7 +127,8 @@ def _ser_invoice(inv: Invoice) -> dict:
         "einvoice_number": getattr(inv, "einvoice_number", None),
         "einvoice_format": getattr(inv, "einvoice_format", None),
         "einvoice_issued_at": inv.einvoice_issued_at.isoformat() if getattr(inv, "einvoice_issued_at", None) else None,
-        "payments": [{"method": p.method, "amount": p.amount,
+        "payments": [{"id": p.id, "method": p.method, "kind": p.kind or "payment", "amount": p.amount,
+                      "reference": p.reference,
                       "paid_at": p.paid_at.isoformat()} for p in inv.payments],
     }
 
@@ -99,6 +142,9 @@ async def _invoice_detail(db, inv) -> dict:
     out["orders"] = [{"id": o.id, "order_number": o.order_number,
                       "complaint": getattr(o, "complaint", None),
                       "total": float(o.total or 0)} for o in await invoice_orders(db, inv)]
+    # B2: the pay dialog preselects the till at the job's location.
+    out["location_id"] = (await db.execute(select(Order.location_id).where(
+        Order.id == inv.order_id))).scalar_one_or_none() if inv.order_id else None
     # 144dw — resolve payer + customer names so the UI can show "Bill to"
     for key, cid in (("payer", getattr(inv, "payer_client_id", None)), ("customer", inv.client_id)):
         if cid:
@@ -106,15 +152,24 @@ async def _invoice_detail(db, inv) -> dict:
             out[key] = {"id": c.id, "name": c.name, "email": c.email} if c else None
         else:
             out[key] = None
+    # opb — credit notes raised against this invoice (drafts too, so the desk sees work in progress)
+    from backend.models import CreditNote
+    cns = (await db.execute(select(CreditNote).where(CreditNote.invoice_id == inv.id)
+                            .order_by(CreditNote.created_at))).scalars().all()
+    out["credit_notes"] = [{"id": c.id, "number": c.number, "status": c.status, "total": c.total,
+                            "issued_at": c.issued_at.isoformat() if c.issued_at else None} for c in cns]
     return out
 
 @router.get("/invoices")
 async def list_invoices(
-    status: Optional[str] = None, location_id: Optional[str] = None, skip: int = 0, limit: int = 50,
+    status: Optional[str] = None, location_id: Optional[str] = None,
+    search: Optional[str] = None,     # invoice number, order number or customer name
+    skip: int = _paging.skip_query(), limit: int = _paging.limit_query(50),
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_invoices")),
 ):
     from backend.models import Order
+    limit = _paging.clamp(limit)
     q = (select(Invoice).where(Invoice.org_id == current.org_id)
          .options(selectinload(Invoice.payments))
          .order_by(Invoice.created_at.desc()))
@@ -127,6 +182,17 @@ async def list_invoices(
         _oids = select(Order.id).where(Order.org_id == current.org_id, Order.location_id == location_id)
         q = q.where(Invoice.order_id.in_(_oids))
         cq = cq.where(Invoice.order_id.in_(_oids))
+    if (search or "").strip():
+        from sqlalchemy import or_
+
+        from backend.models import Client as _C
+        s = search.strip()
+        cond = or_(Invoice.invoice_number.icontains(s),
+                   Invoice.order_id.in_(select(Order.id).where(Order.org_id == current.org_id,
+                                                               Order.order_number.icontains(s))),
+                   Invoice.client_id.in_(select(_C.id).where(_C.org_id == current.org_id,
+                                                             _C.name.icontains(s))))
+        q, cq = q.where(cond), cq.where(cond)
     result = await db.execute(q.offset(skip).limit(limit))
     invs = result.scalars().all()
     total = (await db.execute(cq)).scalar()
@@ -137,18 +203,26 @@ async def list_invoices(
     if oids:
         rows = (await db.execute(select(Order.id, Order.order_number).where(Order.id.in_(oids)))).all()
         numbers = {oid: num for oid, num in rows}
+    # Customer name and date for each row (this shop's clients only), so the list tells
+    # invoices apart without opening them.
+    from backend.models import Client
+    cids = {i.client_id for i in invs if i.client_id}
+    names = dict((await db.execute(select(Client.id, Client.name).where(
+        Client.org_id == current.org_id, Client.id.in_(cids)))).all()) if cids else {}
     items = []
     for i in invs:
         d = _ser_invoice(i)
         d["order_number"] = numbers.get(i.order_id)
+        d["client_name"] = names.get(i.client_id)
+        d["created_at"] = i.created_at.isoformat() if getattr(i, "created_at", None) else None
         items.append(d)
-    return {"total": total, "items": items}
+    return {"total": total, "items": items, "skip": skip, "limit": limit}
 
 @router.get("/invoices/{invoice_id}")
 async def get_invoice(
     invoice_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_invoices")),
 ):
     """Build 144dt — single invoice with its lines resolved through the
     Order-display mode (detailed / simplified / one_line). Lines are computed
@@ -196,7 +270,7 @@ async def _next_einvoice_number(db, org_id: str) -> str:
 async def issue_einvoice(
     invoice_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_edit_invoices")),
 ):
     """Generate the UBL 2.1 e-invoice, assign a fiscal number, store the XML, mark issued.
     Idempotent-ish: re-issuing regenerates the XML but keeps the existing fiscal number."""
@@ -204,7 +278,7 @@ async def issue_einvoice(
     inv = await _load_invoice(db, invoice_id, current.org_id)
     if not inv.einvoice_number:
         inv.einvoice_number = await _next_einvoice_number(db, current.org_id)
-    inv.einvoice_issued_at = datetime.utcnow()
+    inv.einvoice_issued_at = now_utc()
     inv.einvoice_format = "ubl2.1"
     inv.einvoice_xml = await build_ubl(db, current.org_id, inv)
     inv.einvoice_status = "issued"
@@ -222,7 +296,7 @@ async def set_einvoice_status(
     invoice_id: str,
     data: EInvoiceStatusIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_edit_invoices")),
 ):
     """Record the clearance outcome manually (no live authority connection in-house)."""
     if data.status not in _EINV_STATUSES:
@@ -241,7 +315,7 @@ async def set_einvoice_status(
 async def download_einvoice(
     invoice_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_invoices")),
 ):
     from fastapi import Response
     inv = await _load_invoice(db, invoice_id, current.org_id)
@@ -252,11 +326,49 @@ async def download_einvoice(
                     headers={"Content-Disposition": f'attachment; filename="{fname}"'})
 
 
+async def _assert_invoice_editable(db, current, inv) -> None:
+    """A draft is anyone's to edit (with Edit invoices); once issued it needs "Edit issued invoices"."""
+    if (inv.status or "draft") != "draft":
+        await assert_perm(db, current, "can_edit_issued_invoices")
+
+
+@router.delete("/invoices/{invoice_id}")
+async def delete_invoice(
+    invoice_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_delete_invoices")),
+):
+    """Cancel an invoice nothing has been paid on. The row stays (numbering has no gaps, the
+    audit trail keeps it) but it no longer counts as owed anywhere."""
+    inv = (await db.execute(select(Invoice).where(
+        Invoice.id == invoice_id, Invoice.org_id == current.org_id))).scalar_one_or_none()
+    if not inv:
+        raise HTTPException(404, "Invoice not found")
+    if inv.status in ("cancelled", "canceled"):
+        return {"ok": True, "status": inv.status}
+    if float(getattr(inv, "credited", 0) or 0) > 0:
+        raise HTTPException(409, "This invoice has issued credit notes. Cancel them first, then delete it.")
+    await _assert_invoice_editable(db, current, inv)
+    if float(inv.amount_paid or 0) > 0:
+        # Money taken for its jobs (a deposit, a till payment) goes back to being held on the job
+        # and lands on the job's next invoice. Money with no job can't, so it must be refunded.
+        from backend.services.invoice_money import release_payments
+        await release_payments(db, inv, float(inv.amount_paid))
+        if float(inv.amount_paid or 0) > 0:
+            raise HTTPException(409, "This invoice has payments on it. Refund them first, then delete it.")
+    inv.status = "cancelled"
+    from backend.services import audit
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="invoice.delete",
+                       entity_type="invoice", entity_id=inv.id, diff={"invoice_number": inv.invoice_number})
+    await db.commit()
+    return {"ok": True, "status": inv.status}
+
+
 @router.patch("/invoices/{invoice_id}")
 async def update_invoice(
     invoice_id: str, data: dict,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_edit_invoices")),
 ):
     """Build 144dt/144dw — change an invoice's Order-display mode and/or its payer
     (bill-to). Lines re-resolve on the next GET; stored line data is never rewritten."""
@@ -267,8 +379,11 @@ async def update_invoice(
     )).scalar_one_or_none()
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    await _assert_invoice_editable(db, current, inv)
     mode = data.get("display_mode")
-    if mode in ("detailed", "simplified", "one_line"):
+    if mode is not None:
+        if mode not in DISPLAY_MODES:
+            raise HTTPException(422, "display_mode must be detailed, simplified or one_line")
         inv.display_mode = mode
     # 144dw — set/clear the payer (must be a client in this org). "" or null clears it.
     if "payer_client_id" in data:
@@ -287,12 +402,9 @@ async def update_invoice(
 async def create_invoice(
     data: InvoiceIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_invoices")),
 ):
-    from backend.models import InvoiceOrder, InvoiceLine, Order
-    count = (await db.execute(
-        select(func.count()).select_from(Invoice).where(Invoice.org_id == current.org_id)
-    )).scalar() or 0
+    from backend.models import Order
 
     # 144ed — the order list: explicit order_ids, with the legacy single order_id
     # folded in first and de-duped while preserving order.
@@ -306,18 +418,10 @@ async def create_invoice(
             Order.id.in_(order_ids), Order.org_id == current.org_id))).scalars().all())
         order_ids = [o for o in order_ids if o in valid]
 
-    # 144ed — free-form line amounts + the orders' own totals feed the subtotal
-    # when the caller didn't pass one explicitly.
-    lines_sum = sum(q2((l.qty or 0) * (l.unit_price or 0)) for l in (data.lines or []))
-    orders_sum = 0.0
-    if order_ids:
-        from backend.services.invoicing import _order_amount
-        rows = (await db.execute(select(Order).where(Order.id.in_(order_ids)))).scalars().all()
-        orders_sum = sum(_order_amount(o) for o in rows)
-    subtotal = data.subtotal if data.subtotal else msum([lines_sum, orders_sum])
-    # H2 Phase 1: money round-half-up (q2), not Python's banker's rounding, so discounted/taxed
-    # invoice totals match what a receipt should show to the penny.
-    total = q2(subtotal * (1 - data.discount / 100) * (1 + data.tax / 100))
+    discount_pct = data.discount_pct if data.discount_pct is not None else data.discount
+    tax_pct = data.tax_pct if data.tax_pct is not None else data.tax
+    if not (0 <= (discount_pct or 0) <= 100) or (tax_pct or 0) < 0:
+        raise HTTPException(422, "Discount must be 0–100% and tax can't be negative")
 
     def _pdate(s):
         if not s:
@@ -327,36 +431,28 @@ async def create_invoice(
         except Exception:
             return None
 
-    inv = Invoice(
-        invoice_number=_inv_number(count + 1),
-        org_id=current.org_id,
-        order_id=order_ids[0] if order_ids else None,
-        client_id=data.client_id,
-        payer_client_id=data.payer_client_id,
-        display_mode=data.display_mode if data.display_mode in ("detailed", "simplified", "one_line") else "detailed",
-        comment=(data.comment or "")[:1000],
-        status="draft",
-        subtotal=subtotal,
-        discount=data.discount,
-        tax=data.tax,
-        total=total,
-        amount_paid=0.0,
-        issued_at=_pdate(data.issued_at) or datetime.utcnow(),
-        due_at=_pdate(data.due_at),
-    )
-    db.add(inv)
-    await db.flush()
-    # 144du/144ed — seed the multi-order link table (every billed order)
-    for i, oid in enumerate(order_ids):
-        db.add(InvoiceOrder(invoice_id=inv.id, order_id=oid, sort_order=i))
-    # 144ed — persist free-form catalog/manual lines
-    for i, l in enumerate(data.lines or []):
-        db.add(InvoiceLine(
-            invoice_id=inv.id, order_line_id=None,
-            kind=(l.kind or "custom")[:16], source_id=l.source_id,
-            sort_order=i, description=(l.description or "")[:500],
-            qty=l.qty or 0, unit_price=l.unit_price or 0,
-            total=q2((l.qty or 0) * (l.unit_price or 0))))
+    mode = data.display_mode
+    if mode is None:
+        from backend.models import Organisation
+        mode = (await db.execute(select(Organisation.default_invoice_display).where(
+            Organisation.id == current.org_id))).scalar_one_or_none() or "detailed"
+    from backend.models import Client
+    for cid in {data.client_id, data.payer_client_id} - {None, ""}:
+        if not (await db.execute(select(Client.id).where(
+                Client.id == cid, Client.org_id == current.org_id))).scalar_one_or_none():
+            raise HTTPException(404, "Client not found")
+    by_id = {o.id: o for o in (await db.execute(select(Order).where(Order.id.in_(order_ids)))).scalars().all()} \
+        if order_ids else {}
+    # One way to make an invoice (services/invoice_money): links every job, subtotal from what it
+    # bills (an explicit subtotal still wins), discount/tax stored as amounts, deposits applied.
+    from backend.services.invoice_money import new_invoice
+    inv = await new_invoice(
+        db, org_id=current.org_id, orders=[by_id[o] for o in order_ids],
+        client_id=data.client_id, free_lines=[l.model_dump() for l in (data.lines or [])],
+        subtotal=data.subtotal or None, discount_pct=discount_pct or 0, tax_pct=tax_pct or 0,
+        display_mode=mode if mode in DISPLAY_MODES else "detailed",
+        issued_at=_pdate(data.issued_at), due_at=_pdate(data.due_at),
+        payer_client_id=data.payer_client_id, comment=(data.comment or "")[:1000])
     await db.commit()
     await db.refresh(inv)
     return {"id": inv.id, "invoice_number": inv.invoice_number, "total": inv.total}
@@ -366,7 +462,7 @@ async def create_invoice(
 async def attach_order(
     invoice_id: str, data: dict,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_edit_invoices")),
 ):
     """Build 144du — bill another work order on this invoice (Orderry parity)."""
     from backend.models import InvoiceOrder, Order
@@ -374,19 +470,19 @@ async def attach_order(
         Invoice.id == invoice_id, Invoice.org_id == current.org_id))).scalar_one_or_none()
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    await _assert_invoice_editable(db, current, inv)
     order_id = data.get("order_id")
     order = (await db.execute(select(Order).where(
         Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    from backend.services import invoice_money
+    if invoice_money.is_locked(inv):
+        raise HTTPException(409, "This invoice has been sent or paid. Bill this job on a new invoice.")
     exists = (await db.execute(select(InvoiceOrder).where(
         InvoiceOrder.invoice_id == invoice_id, InvoiceOrder.order_id == order_id))).scalar_one_or_none()
-    if not exists:
-        n = (await db.execute(select(func.count()).select_from(InvoiceOrder)
-             .where(InvoiceOrder.invoice_id == invoice_id))).scalar() or 0
-        db.add(InvoiceOrder(invoice_id=invoice_id, order_id=order_id, sort_order=n))
-        if not inv.order_id:
-            inv.order_id = order_id
+    if not exists and inv.order_id != order_id:
+        await invoice_money.attach_order(db, inv, order)   # adds its total, applies its deposits
         await db.commit()
     inv = (await db.execute(select(Invoice).where(Invoice.id == invoice_id)
            .options(selectinload(Invoice.payments)))).scalar_one()
@@ -397,105 +493,131 @@ async def attach_order(
 async def detach_order(
     invoice_id: str, order_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_edit_invoices")),
 ):
     """Build 144du — stop billing a work order on this invoice."""
-    from backend.models import InvoiceOrder
     inv = (await db.execute(select(Invoice).where(
         Invoice.id == invoice_id, Invoice.org_id == current.org_id))).scalar_one_or_none()
     if not inv:
         raise HTTPException(404, "Invoice not found")
-    link = (await db.execute(select(InvoiceOrder).where(
-        InvoiceOrder.invoice_id == invoice_id, InvoiceOrder.order_id == order_id))).scalar_one_or_none()
-    if link:
-        await db.delete(link)
-        if inv.order_id == order_id:
-            nxt = (await db.execute(select(InvoiceOrder).where(
-                InvoiceOrder.invoice_id == invoice_id, InvoiceOrder.order_id != order_id)
-                .order_by(InvoiceOrder.sort_order))).scalars().first()
-            inv.order_id = nxt.order_id if nxt else None
+    await _assert_invoice_editable(db, current, inv)
+    from backend.services import invoice_money
+    if invoice_money.is_locked(inv):
+        raise HTTPException(409, "This invoice has been sent or paid, so its jobs can't change.")
+    if await invoice_money.detach_order(db, inv, order_id):   # takes its total off
         await db.commit()
     return {"ok": True}
 
 class SendInvoiceIn(BaseModel):
-    to: Optional[str] = None       # override recipient; defaults to payer/client email
+    to: Optional[str] = None       # override recipient; defaults to payer/client email or phone
     subject: Optional[str] = None
     message: Optional[str] = None
+    channel: Optional[str] = None  # email (default) | sms
 
 @router.post("/invoices/{invoice_id}/send")
 async def send_invoice_email(
     invoice_id: str, data: SendInvoiceIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_finance")),
 ):
-    """Build 144dw — email the invoice PDF to the client (Orderry's envelope button).
-    Uses the org's connected email account; if none is connected the send is
-    'simulated' (logged) rather than failing, matching the app's gated-seam pattern.
-    A record is written to the client's inbox thread either way."""
-    from backend.models import Client, EmailConnection
+    """Build 144dw / I6 — "Send invoice": email the invoice PDF, or text the link, to the client
+    (Orderry's envelope button). Both carry the link to the customer's page, where they can pay.
+    Sends through the shop's connected email, SMTP or Twilio (services/customer_messages) and
+    says honestly whether it went out. A record is written to the client's inbox thread."""
+    from backend.models import Client, Order
     from backend.routers.printing import _org_lang, _org_name
-    from backend.services.email_oauth import send_via_connection
+    from backend.services.customer_messages import send_to_customer, track_link
     from backend.services.invoicing import build_invoice_pdf
 
     inv = (await db.execute(select(Invoice).where(
         Invoice.id == invoice_id, Invoice.org_id == current.org_id))).scalar_one_or_none()
     if not inv:
         raise HTTPException(404, "Invoice not found")
+    channel = (data.channel or "email").lower()
+    if channel not in ("email", "sms"):
+        raise HTTPException(422, "channel must be email or sms")
 
-    # recipient: explicit override, else payer, else customer email
-    recipient = (data.to or "").strip() or None
     bill_to_id = getattr(inv, "payer_client_id", None) or inv.client_id
     client = None
+    order = None
+    if inv.order_id:
+        order = (await db.execute(select(Order).where(
+            Order.id == inv.order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+    bill_to_id = bill_to_id or (order.client_id if order else None)
     if bill_to_id:
-        client = (await db.execute(select(Client).where(Client.id == bill_to_id))).scalar_one_or_none()
-    if not recipient and client:
-        recipient = client.email
-    if not recipient:
-        raise HTTPException(422, "No recipient email — add one to the client or pass 'to'.")
-
-    pdf = await build_invoice_pdf(db, inv, org_name=await _org_name(db, current.org_id),
-                                  lang=await _org_lang(db, current.org_id))
+        client = (await db.execute(select(Client).where(
+            Client.id == bill_to_id, Client.org_id == current.org_id))).scalar_one_or_none()
+    if order:
+        if not order.public_token:
+            from backend.routers.orders import unique_public_token
+            order.public_token = await unique_public_token(db)
+    link = track_link(order) if order else None
+    org_name = await _org_name(db, current.org_id)
     subject = data.subject or f"Invoice {inv.invoice_number}"
-    body = data.message or (f"Please find attached invoice {inv.invoice_number} "
-                            f"for {float(inv.total or 0):.2f}. Thank you.")
+    amount = f"{float(inv.total or 0):.2f}"
+    attachment = None
     fname = f"invoice-{inv.invoice_number or invoice_id[:8]}.pdf"
-
-    conn = (await db.execute(select(EmailConnection).where(
-        EmailConnection.org_id == current.org_id, EmailConnection.connected == True)  # noqa: E712
-        .order_by(EmailConnection.is_default.desc()))).scalars().first()
-    if conn:
-        result = await send_via_connection(conn, recipient=recipient, subject=subject,
-                                           body=body, attachment=(fname, pdf, "application/pdf"))
+    if channel == "email":
+        pdf = await build_invoice_pdf(db, inv, org_name=org_name, lang=await _org_lang(db, current.org_id))
+        attachment = (fname, pdf, "application/pdf")
+        body = data.message or (f"Please find attached invoice {inv.invoice_number} for {amount}. "
+                                + (f"You can view and pay it here: {link} " if link else "") + "Thank you.")
     else:
-        result = {"status": "simulated", "error": None}
+        body = data.message or (f"{org_name}: invoice {inv.invoice_number} for {amount}."
+                                + (f" View and pay: {link}" if link else ""))
+    delivery = await send_to_customer(db, org_id=current.org_id, client=client, body=body, subject=subject,
+                                      channel=channel, to=data.to, order_id=inv.order_id,
+                                      trigger_event="invoice_sent", attachment=attachment, saved=False)
+    recipient = (data.to or "").strip() or (
+        (client.email if channel == "email" else client.phone) if client else None)
+    if delivery["status"] == "no_contact" and not recipient:
+        raise HTTPException(422, "No email address or mobile number for this customer. Add one or type it in.")
 
-    # log to the client's inbox thread so there's a record it went out
+    # log to the client's inbox thread so there's a record of it
     if client:
         from backend.models import InboxMessage, InboxThread
         thread = (await db.execute(select(InboxThread).where(
             InboxThread.org_id == current.org_id, InboxThread.client_id == client.id,
-            InboxThread.channel == "email").order_by(InboxThread.last_message_at.desc()))).scalars().first()
+            InboxThread.channel == channel).order_by(InboxThread.last_message_at.desc()))).scalars().first()
         if not thread:
-            thread = InboxThread(org_id=current.org_id, channel="email", client_id=client.id,
+            thread = InboxThread(org_id=current.org_id, channel=channel, client_id=client.id,
                                  handle=recipient, status="open", unread=False,
-                                 last_message_at=datetime.utcnow())
+                                 last_message_at=now_utc())
             db.add(thread)
             await db.flush()
         db.add(InboxMessage(org_id=current.org_id, thread_id=thread.id, direction="outbound",
-                            body=f"{subject}\n\n{body} (attached {fname})",
-                            author_id=current.id, delivered=result["status"] in ("sent", "simulated")))
-        thread.last_message_at = datetime.utcnow()
-        await db.commit()
+                            body=f"{subject}\n\n{body}" + (f" (attached {fname})" if attachment else ""),
+                            author_id=current.id, delivered=delivery["status"] == "sent"))
+        thread.last_message_at = now_utc()
+    if order:
+        from backend.routers.feed import log_system_event
+        await log_system_event(db, current.org_id, "order", order.id,
+                               f"Invoice {inv.invoice_number} sent: {delivery['message']}")
+    if delivery["status"] in ("sent", "not_set_up"):
+        from backend.services.invoice_money import mark_sent
+        await mark_sent(db, inv)    # draft → issued; it stops following the job
+    await db.commit()
 
-    return {"ok": result["status"] in ("sent", "simulated"), "status": result["status"],
-            "error": result.get("error"), "recipient": recipient}
+    raw = {"sent": "sent", "not_set_up": "simulated"}.get(delivery["status"], delivery["status"])
+    # ok = handled (sent, or simulated because nothing is set up); `delivery` says which.
+    return {"ok": delivery["status"] in ("sent", "not_set_up"), "status": raw,
+            "error": None if delivery["status"] == "sent" else delivery["message"],
+            "recipient": recipient, "delivery": delivery}
 
 @router.post("/invoices/{invoice_id}/pay")
 async def record_payment(
     invoice_id: str, data: PaymentIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_finance")),
 ):
+    """Record money received against an invoice. Partial payments are fine. An amount above the
+    balance needs ``overpay``: ``keep_balance`` books the excess as client credit (a client
+    advance on the contact ledger), ``refund`` records it as handed straight back (needs Create
+    returns). Either way the invoice itself is never paid beyond its total."""
+    from decimal import Decimal
+
+    from backend.models import Account
+    from backend.services.money import d2
     # Lock the invoice row so concurrent payments serialize (Postgres) — prevents a double-click /
     # retry from double-posting. No-op on SQLite, which serializes writes anyway.
     result = await db.execute(
@@ -505,39 +627,144 @@ async def record_payment(
     inv = result.scalar_one_or_none()
     if not inv:
         raise HTTPException(404, "Invoice not found")
-    payment = Payment(
-        invoice_id=invoice_id,
-        client_id=inv.client_id,
-        method=data.method,
-        amount=data.amount,
-        reference=data.reference,
-        shift_id=data.shift_id,
-        account_id=data.account_id,
-        received_by_id=current.id,
-    )
-    db.add(payment)
+    if inv.status in ("cancelled", "canceled"):
+        raise HTTPException(409, "This invoice was deleted and can't take payments")
+    from backend.services.credit_notes import reader_busy
+    if await reader_busy(db, inv):          # the card on the reader would collect it a second time
+        raise HTTPException(409, "A card reader charge for this invoice is still in progress. "
+                                 "Finish or cancel it on the reader first.")
+    # Negative amounts used to post +|amount| into the cashbox while reducing amount_paid.
+    if data.amount is None or data.amount <= 0:
+        raise HTTPException(400, "Payment amount must be positive")
+    if data.overpay not in (None, "keep_balance", "refund"):
+        raise HTTPException(422, "overpay must be keep_balance or refund")
+    amount = d2(data.amount)
+    remaining = d2(_balance_due(inv))
+    excess = max(amount - remaining, Decimal(0))
+    applied = amount - excess
+    if excess > 0:
+        if remaining <= 0:
+            raise HTTPException(409, "This invoice is already settled")
+        if not data.overpay:
+            raise HTTPException(400, f"Payment exceeds the invoice balance ({remaining}). "
+                                     "Keep the difference as client balance or refund it.")
+        if data.method == "balance":
+            raise HTTPException(422, "A payment from client balance can't be more than the invoice balance")
+        if data.overpay == "keep_balance" and not inv.client_id:
+            raise HTTPException(422, "This invoice has no client to keep the difference for. Refund it instead.")
+        if data.overpay == "refund":
+            await assert_perm(db, current, "can_create_returns")    # paying money back out
+    if data.method == "balance":
+        # Paid out of credit the client already holds: no money moves and the ledger already shows
+        # that credit, so nothing is posted to it below. Without credit it used to erase debt (B3).
+        from backend.services.ledger import available_credit
+        credit = await available_credit(db, current.org_id, inv.client_id, inv.order_id)
+        if float(applied) > credit + 0.005:
+            raise HTTPException(400, f"This client has only {credit:.2f} of credit to pay from. "
+                                     "Take the rest in cash or by card.")
+    # When the money came in: today by default; an earlier day is a retroactive cash entry.
+    paid_at, retro = now_utc(), False
+    if data.paid_at:
+        from backend.services.dates import parse_dt
+        day = parse_dt(data.paid_at, "paid_at")
+        today = await shop_today(db, current.org_id)
+        if day.date() > today:
+            raise HTTPException(422, "The payment date can't be in the future")
+        if day.date() < today:
+            await assert_perm(db, current, "can_retroactive_cash")
+            paid_at, retro = day, True
+    acc = None
+    if data.account_id:
+        acc = (await db.execute(select(Account).where(
+            Account.id == data.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
+        if not acc:
+            raise HTTPException(404, "Account not found")
+    # B10: cash taken against an invoice belongs to the open drawer shift, like order payments,
+    # or the till close never counts it. A shift sent by the client must be this shop's.
+    shift_id = data.shift_id
+    if shift_id:
+        await _shift_or_404(db, current.org_id, shift_id)
+    elif data.method == "cash" and acc is not None:
+        from backend.routers.cash import open_drawer_shift
+        shift_id = await open_drawer_shift(db, current.org_id, acc)
+    label = inv.invoice_number or invoice_id
+    moves_cash = acc is not None and data.method != "balance"
+
+    def _pay(amt, **kw) -> Payment:
+        p = Payment(client_id=inv.client_id, method=data.method, amount=float(amt), shift_id=shift_id,
+                    account_id=data.account_id, received_by_id=current.id, paid_at=paid_at, **kw)
+        db.add(p)
+        return p
+
+    from backend.routers.cash import post_transaction
+    from backend.services.ledger import post_contact_ledger
+    # The invoice payment. With a refund it carries everything handed over and a refund row below
+    # gives the change back, so the drawer, the order and the ledger all net to what was applied.
+    received = amount if data.overpay == "refund" and excess > 0 else applied
+    # Split across every job the invoice bills (F3), each up to its balance, so every job's paid
+    # math sees its share. Money handed straight back is booked in and out on the primary job.
+    from backend.services.invoice_money import apply_payment_to_invoice, notify_payment_received
+    parts = await apply_payment_to_invoice(
+        db, inv, float(applied), method=data.method, shift_id=shift_id, account_id=data.account_id,
+        received_by_id=current.id, paid_at=paid_at, reference=data.reference) if applied > 0 else []
+    change_from = None
+    if data.overpay == "refund" and excess > 0:
+        # Everything handed over sits on one payment row; the refund row below gives the change back.
+        change_from = next((p for p in parts if p.order_id == inv.order_id), parts[0])
+        change_from.amount = float(d2(change_from.amount) + excess)
+    payment = parts[0]
     await db.flush()   # need payment.id for the ledger ref
     # 144av: real money (cash/card/transfer) must land in a cashbox account, not just move the
     # client's balance. 'balance' settles on account (no cash moves) → no Transaction.
-    if data.account_id and data.method != "balance":
-        from backend.routers.cash import post_transaction
-        await post_transaction(db, current.org_id, data.account_id, "invoice_payment", abs(data.amount),
-                               comment=f"Payment for invoice {inv.invoice_number or invoice_id}",
-                               ref_type="invoice", ref_id=invoice_id, employee_id=current.id)
-    inv.amount_paid = q2(inv.amount_paid + data.amount)
-    if inv.amount_paid >= inv.total:
-        inv.status = "paid"
-    else:
-        inv.status = "partial"
-    # move the client's balance through the shared ledger, same as the cash.py payment
-    # paths — otherwise the Balance tab and Client.balance drift from what was paid.
-    if inv.client_id:
-        from backend.services.ledger import post_contact_ledger
-        await post_contact_ledger(db, current.org_id, inv.client_id, "income", -abs(data.amount),
-                                  note=f"Payment for invoice {inv.invoice_number or invoice_id}",
-                                  ref_type="payment", ref_id=payment.id, created_by_id=current.id)
+    if moves_cash:
+        await post_transaction(db, current.org_id, acc.id, "invoice_payment", float(received),
+                               comment=f"Payment for invoice {label}", ref_type="invoice", ref_id=invoice_id,
+                               employee_id=current.id, is_retroactive=retro, actual_date=paid_at)
+    if data.method != "balance":
+        await post_contact_ledger(db, current.org_id, inv.client_id, "income", -float(received),
+                                  note=f"Payment for invoice {label}", ref_type="payment",
+                                  ref_id=payment.id, created_by_id=current.id)
+    kept = refunded = Decimal(0)
+    if excess > 0 and data.overpay == "keep_balance":
+        kept = excess
+        credit = _pay(excess, invoice_id=None, order_id=None, kind="prepayment",
+                      reference=f"Overpayment on invoice {label} kept as client balance")
+        await db.flush()
+        if moves_cash:
+            await post_transaction(db, current.org_id, acc.id, "invoice_payment", float(excess),
+                                   comment=f"Overpayment on invoice {label} (client balance)", ref_type="client",
+                                   ref_id=inv.client_id, employee_id=current.id, is_retroactive=retro,
+                                   actual_date=paid_at)
+        await post_contact_ledger(db, current.org_id, inv.client_id, "advance", -float(excess),
+                                  note=f"Overpayment on invoice {label} kept as balance", ref_type="payment",
+                                  ref_id=credit.id, created_by_id=current.id)
+    elif excess > 0:
+        refunded = excess
+        back = _pay(excess, invoice_id=invoice_id, order_id=change_from.order_id, kind="refund",
+                    reference=f"Overpayment on invoice {label} refunded")
+        await db.flush()
+        if moves_cash:
+            change = await post_transaction(db, current.org_id, acc.id, "expense", -float(excess),
+                                            comment=f"Refund overpayment on invoice {label}", ref_type="invoice",
+                                            ref_id=invoice_id, employee_id=current.id, is_retroactive=retro,
+                                            actual_date=paid_at)
+            # The drawer counts the change once, through the refund payment above. Linking this
+            # leg to the shift as "manual cash" too made every close read "over" (B3).
+            change.shift_id = None
+        await post_contact_ledger(db, current.org_id, inv.client_id, "refund", float(excess),
+                                  note=f"Overpayment on invoice {label} refunded", ref_type="payment",
+                                  ref_id=back.id, created_by_id=current.id)
+    from backend.services.order_money import cancel_open_pay_links
+    job_ids = [p.order_id for p in parts if p.order_id]
+    for order in (await db.execute(select(Order).where(Order.id.in_(job_ids)))).scalars().all() if job_ids else []:
+        await db.flush()
+        await cancel_open_pay_links(db, order)
     await db.commit()
-    return {"ok": True, "amount_paid": inv.amount_paid, "status": inv.status}
+    await notify_payment_received(db, current.org_id, job_ids, current.id)
+    return {"ok": True, "amount_paid": inv.amount_paid, "status": inv.status,
+            "balance_due": _balance_due(inv), "applied": float(applied),
+            "kept_as_balance": float(kept), "refunded": float(refunded)}
+
 
 def _denoms_total(d: Optional[dict]) -> float:
     """Sum a {denomination: count} map, e.g. {"100": 2, "20": 5} → 300.0. Ignores junk keys."""
@@ -566,8 +793,11 @@ async def _expected_cash(db, shift: CashShift) -> dict:
     can explain a discrepancy."""
     cash_in = (await db.execute(select(func.coalesce(func.sum(Payment.amount), 0.0)).where(
         Payment.shift_id == shift.id, Payment.method == "cash", Payment.kind != "refund"))).scalar() or 0.0
+    # Refunds paid out of this drawer: cash refunds, and archive refunds (method "refund"),
+    # which carry the shift only when they went back through a cash till (B10).
     cash_refunds = (await db.execute(select(func.coalesce(func.sum(Payment.amount), 0.0)).where(
-        Payment.shift_id == shift.id, Payment.method == "cash", Payment.kind == "refund"))).scalar() or 0.0
+        Payment.shift_id == shift.id, Payment.method.in_(("cash", "refund")),
+        Payment.kind == "refund"))).scalar() or 0.0
     pay_in = (await db.execute(select(func.coalesce(func.sum(CashDrawerMovement.amount), 0.0)).where(
         CashDrawerMovement.shift_id == shift.id, CashDrawerMovement.direction == "in"))).scalar() or 0.0
     pay_out = (await db.execute(select(func.coalesce(func.sum(CashDrawerMovement.amount), 0.0)).where(
@@ -578,7 +808,9 @@ async def _expected_cash(db, shift: CashShift) -> dict:
     manual_cash = (await db.execute(select(func.coalesce(func.sum(Transaction.amount), 0.0)).where(
         Transaction.shift_id == shift.id, Transaction.status == "active",
         Transaction.txn_type.in_(("income", "expense"))))).scalar() or 0.0
-    expected = q2((shift.opening_float or 0.0) + cash_in - abs(cash_refunds) + pay_in - pay_out + manual_cash)
+    # Decimal throughout: opening_float and the drawer movements read back as Decimal (audit R4).
+    expected = d2(dec(shift.opening_float) + dec(cash_in) - abs(dec(cash_refunds))
+                  + dec(pay_in) - dec(pay_out) + dec(manual_cash))
     return {"opening_float": q2(shift.opening_float or 0.0), "cash_in": q2(cash_in),
             "cash_refunds": q2(abs(cash_refunds)), "pay_in": q2(pay_in), "pay_out": q2(pay_out),
             "manual_cash": q2(manual_cash), "expected_cash": expected}
@@ -694,7 +926,7 @@ async def record_payout(
     net = data.net_amount if data.net_amount is not None else (data.gross_amount - data.fee_amount)
     p = ProcessorPayout(
         org_id=current.org_id, provider=data.provider or "manual",
-        payout_date=date.fromisoformat(data.payout_date) if data.payout_date else date.today(),
+        payout_date=date.fromisoformat(data.payout_date) if data.payout_date else await shop_today(db, current.org_id),
         gross_amount=q2(data.gross_amount), fee_amount=q2(data.fee_amount), net_amount=q2(net),
         reference=data.reference, note=data.note, created_by_id=current.id)
     db.add(p)
@@ -721,7 +953,7 @@ async def list_payouts(
 async def open_shift(
     data: ShiftOpen,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_cashbox")),
 ):
     loc = (await db.execute(select(Location).where(
         Location.id == data.location_id, Location.org_id == current.org_id))).scalar_one_or_none()
@@ -785,7 +1017,7 @@ async def list_shifts(
 async def drawer_movement(
     shift_id: str, data: DrawerMoveIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_cashbox")),
 ):
     """Record a manual cash pay-in / pay-out on the open drawer (note required)."""
     shift = await _shift_or_404(db, current.org_id, shift_id)
@@ -793,6 +1025,11 @@ async def drawer_movement(
         raise HTTPException(409, "This drawer is closed")
     if data.direction not in ("in", "out"):
         raise HTTPException(422, "direction must be in|out")
+    if data.direction == "out":
+        # Cash leaving the till is an expense: the same rights as recording one in Cash.
+        # "View the cash drawer" alone let a Specialist pay money out.
+        await assert_perm(db, current, "can_view_finance")
+        await assert_perm(db, current, "can_create_expenses")
     amt = q2(data.amount)
     if amt <= 0:
         raise HTTPException(422, "Amount must be positive")
@@ -811,7 +1048,7 @@ async def close_shift(
     closing_float: Optional[float] = Query(None),   # back-compat; or send a body with denoms
     data: Optional[ShiftCloseIn] = Body(None),
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_cashbox")),
 ):
     shift = await _shift_or_404(db, current.org_id, shift_id)
     if shift.closed_at is not None:
@@ -826,10 +1063,10 @@ async def close_shift(
     shift.expected_cash = parts["expected_cash"]
     shift.closing_float = counted
     shift.close_denoms = denoms
-    shift.closed_at = datetime.utcnow()
+    shift.closed_at = now_utc()
     await db.commit()
 
-    discrepancy = q2(counted - shift.expected_cash)
+    discrepancy = q2(dec(counted) - dec(shift.expected_cash))
     # 144bb blind count: only a finance-permitted user is shown expected + discrepancy.
     show_expected = True
     if current.role_id:
@@ -863,7 +1100,7 @@ async def close_shift(
 async def add_expense(
     data: ExpenseIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_expenses")),
 ):
     expense = Expense(
         org_id=current.org_id,
@@ -872,7 +1109,7 @@ async def add_expense(
         recorded_by_id=current.id,
         description=data.description,
         amount=data.amount,
-        expense_date=date.fromisoformat(data.expense_date) if data.expense_date else date.today(),
+        expense_date=date.fromisoformat(data.expense_date) if data.expense_date else await shop_today(db, current.org_id),
     )
     db.add(expense)
     await db.commit()
@@ -884,23 +1121,26 @@ async def profit_and_loss(
     date_to: Optional[str] = None,
     location_id: Optional[str] = None,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_see_profit")),
 ):
     """Owner P&L: net revenue − parts COGS − operating expenses, org-scoped."""
+    from backend.services.auth import check_location_access
     from backend.services.finance_pnl import compute_pnl
+    await check_location_access(db, current, location_id)
     return await compute_pnl(db, current.org_id, date_from, date_to, location_id)
 
 
 @router.get("/reports/summary")
 async def finance_summary(
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_finance")),
 ):
     total_revenue = (await db.execute(
-        select(func.sum(Invoice.total)).where(Invoice.org_id == current.org_id, Invoice.status == "paid")
+        # credited revenue was never earned: a paid invoice counts what's left after its credit notes
+        select(func.sum(Invoice.total - Invoice.credited)).where(Invoice.org_id == current.org_id, Invoice.status == "paid")
     )).scalar() or 0
     total_outstanding = (await db.execute(
-        select(func.sum(Invoice.total - Invoice.amount_paid))
+        select(func.sum(Invoice.total - Invoice.amount_paid - Invoice.credited))
         .where(Invoice.org_id == current.org_id, Invoice.status.in_(["draft", "partial"]))
     )).scalar() or 0
     total_expenses = (await db.execute(
@@ -913,7 +1153,7 @@ async def finance_summary(
         "total_revenue": q2(total_revenue),
         "total_outstanding": q2(total_outstanding),
         "total_expenses": q2(total_expenses),
-        "gross_profit": q2(total_revenue - total_expenses),
+        "gross_profit": q2(dec(total_revenue) - dec(total_expenses)),
         "invoice_count": invoice_count,
     }
 
@@ -930,13 +1170,18 @@ async def accountant_export(
     file instead of re-keying into QuickBooks. Default period = current month to today."""
     import csv, io
     from backend.models import Transaction, Account, CashFlowItem
-    today = date.today()
-    df = datetime.fromisoformat(date_from) if date_from else datetime(today.year, today.month, 1)
+    tz = await shop_tzname(db, current.org_id)
+    today = today_in(tz)
+    # Default period: this month on the shop's calendar, as naive-UTC instants for actual_date.
+    df = datetime.fromisoformat(date_from) if date_from else day_start_utc(today.replace(day=1), tz)
+    exp_from = df.date() if date_from else today.replace(day=1)       # expense_date is a shop day
     if date_to:
         _dt = datetime.fromisoformat(date_to)
         dt = _dt.replace(hour=23, minute=59, second=59) if _dt.time() == datetime.min.time() else _dt
+        exp_to = dt.date()
     else:
-        dt = datetime(today.year, today.month, today.day, 23, 59, 59)
+        dt = day_end_utc(today, tz) - timedelta(microseconds=1)
+        exp_to = today
     rows = (await db.execute(
         select(Transaction, Account.name, CashFlowItem.name)
         .join(Account, Transaction.account_id == Account.id)
@@ -955,7 +1200,7 @@ async def accountant_export(
                            f"{abs(amt):.2f}" if amt < 0 else "",
                            f"{float(txn.balance_after):.2f}" if txn.balance_after is not None else ""]))
     exps = (await db.execute(select(Expense).where(
-        Expense.org_id == current.org_id, Expense.expense_date >= df.date(), Expense.expense_date <= dt.date()))).scalars().all()
+        Expense.org_id == current.org_id, Expense.expense_date >= exp_from, Expense.expense_date <= exp_to))).scalars().all()
     for e in exps:
         ed = datetime.combine(e.expense_date, datetime.min.time()) if e.expense_date else None
         lines.append((ed, [e.expense_date.strftime("%Y-%m-%d") if e.expense_date else "", "(business expense)",
@@ -965,9 +1210,9 @@ async def accountant_export(
     w = csv.writer(buf)
     w.writerow(["Date", "Account", "Type", "Category", "Comment", "Income", "Expense", "Balance after"])
     for _d, cells in lines:
-        w.writerow(cells)
+        w.writerow(safe_row(cells))
     buf.seek(0)
     from fastapi.responses import StreamingResponse
-    fname = f"accountant_{df.strftime('%Y%m%d')}_{dt.strftime('%Y%m%d')}.csv"
+    fname = f"accountant_{exp_from.strftime('%Y%m%d')}_{exp_to.strftime('%Y%m%d')}.csv"
     return StreamingResponse(iter([buf.getvalue()]), media_type="text/csv",
                              headers={"Content-Disposition": f'attachment; filename="{fname}"'})

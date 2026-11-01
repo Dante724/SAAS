@@ -1,4 +1,4 @@
-# RepairOS — Roadmap to Parity + Beyond Orderry
+# Tekly — Roadmap to Parity + Beyond Orderry
 
 _Compiled from this session's audits: unexposed backend, legacy→React functional gaps,
 and the "beat Orderry" strategy. Priority = value × (1 / effort × risk)._

@@ -14,18 +14,25 @@ async def _owner(client, email="mfa-owner@acme.dev"):
     return r.json(), {"Authorization": f"Bearer {r.json()['access_token']}"}
 
 
+async def _require(client, hdr):
+    """Mandatory 2FA is opt-in (security phase 1): the owner switches it on."""
+    r = await client.put("/api/staff/company", json={"require_mfa": True}, headers=hdr)
+    assert r.status_code == 200, r.text
+
+
 @pytest.mark.asyncio
-async def test_new_org_defaults_to_require_mfa(client):
+async def test_new_org_does_not_require_mfa_by_default(client):
     await _owner(client, "req-default@acme.dev")
     async with AsyncSessionLocal() as db:
         emp = (await db.execute(select(Employee).where(Employee.email == "req-default@acme.dev"))).scalar_one()
         org = (await db.execute(select(Organisation).where(Organisation.id == emp.org_id))).scalar_one()
-        assert org.require_mfa is True
+        assert org.require_mfa is False
 
 
 @pytest.mark.asyncio
 async def test_login_flags_enrollment_when_required_and_not_enrolled(client):
-    await _owner(client, "flag@acme.dev")
+    _, hdr = await _owner(client, "flag@acme.dev")
+    await _require(client, hdr)
     r = await client.post("/api/auth/token", data={"username": "flag@acme.dev", "password": "owner-pass-123"})
     assert r.status_code == 200
     assert r.json()["mfa_enrollment_required"] is True
@@ -38,6 +45,7 @@ async def test_login_flags_enrollment_when_required_and_not_enrolled(client):
 @pytest.mark.asyncio
 async def test_cannot_self_disable_when_org_requires_mfa(client):
     _, hdr = await _owner(client, "nodisable@acme.dev")
+    await _require(client, hdr)
     # even without being enrolled, the disable endpoint must refuse under mandatory policy
     r = await client.post("/api/mfa/disable", json={"password": "owner-pass-123"}, headers=hdr)
     assert r.status_code == 400

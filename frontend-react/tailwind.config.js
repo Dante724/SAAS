@@ -1,4 +1,10 @@
-/** RepairOS — "Liquid Clay Studio" theme, ported verbatim from the Stitch export. */
+/** Tekly — "Liquid Clay Studio" theme, ported verbatim from the Stitch export. */
+import plugin from "tailwindcss/plugin";
+import { cssVars, themeColors } from "./theme.tokens.js";
+
+const T = themeColors();
+const { light, dark } = cssVars();
+
 /** @type {import('tailwindcss').Config} */
 export default {
   content: ["./index.html", "./src/**/*.{ts,tsx}"],
@@ -37,19 +43,40 @@ export default {
         "status-overdue-bg": "rgba(251, 113, 133, 0.15)", "status-overdue-ink": "#be123c",
         "status-draft-bg": "rgba(108, 122, 153, 0.14)", "status-draft-ink": "#435577",
       },
+      // Surfaces, borders, text, primary and soft tints resolve through theme tokens
+      // (theme.tokens.js): `bg-white` is a surface, `text-white` stays white.
+      backgroundColor: T.bg,
+      borderColor: T.border,
+      textColor: T.text,
+      ringColor: T.ring,
       fontFamily: {
-        sans: ["Inter", "system-ui", "sans-serif"],
-        mono: ["JetBrains Mono", "ui-monospace", "monospace"],
+        sans: ["Geist Variable", "Geist", "Inter", "system-ui", "sans-serif"],
+        mono: ["Geist Mono Variable", "Geist Mono", "JetBrains Mono", "ui-monospace", "monospace"],
+      },
+      // Tekly Go's five type steps (size/line-height): large title, title, body, subhead, caption.
+      fontSize: {
+        "go-display": ["28px", { lineHeight: "34px" }],
+        "go-title": ["20px", { lineHeight: "25px" }],
+        "go-body": ["16px", { lineHeight: "22px" }],
+        "go-sub": ["14px", { lineHeight: "19px" }],
+        "go-caption": ["12px", { lineHeight: "16px" }],
       },
       boxShadow: {
-        "clay-sm": "0 2px 8px -1px rgba(20, 33, 63, 0.06), inset 0 1px 0 rgba(255, 255, 255, 0.95)",
-        "clay-card": "0 12px 30px -4px rgba(20, 33, 63, 0.08), inset 0 1px 0 rgba(255, 255, 255, 0.95)",
-        "clay-drawer": "-16px 0 48px -6px rgba(15, 28, 60, 0.18), inset 1px 0 0 rgba(255, 255, 255, 0.9)",
+        // Shadows follow the theme (soft clay in light; quiet in dark, where surfaces carry depth).
+        "clay-sm": "var(--sh-sm)",
+        "clay-card": "var(--sh-card)",
+        "clay-drawer": "var(--sh-drawer)",
+        drawer: "var(--sh-menu)",   // used by menus and popovers
+        menu: "var(--sh-menu)",
         "specular-inset": "inset 0 1px 1.5px rgba(255, 255, 255, 0.9), inset 0 -1px 1px rgba(0, 0, 0, 0.03)",
         "2xs": "0 1px 2px rgba(20,33,63,.06)",
         xs: "0 1px 3px rgba(20,33,63,.08)",
       },
     },
   },
-  plugins: [],
+  plugins: [
+    plugin(({ addBase }) => {
+      addBase({ ":root": light, ".dark": { ...dark, "color-scheme": "dark" } });
+    }),
+  ],
 };

@@ -1,4 +1,4 @@
-"""144ht — RepairOS's own document builder: offline presets + describe. No 3rd-party API."""
+"""144ht — Tekly's own document builder: offline presets + describe. No 3rd-party API."""
 
 
 async def test_presets_listed_and_build(client, tenant):

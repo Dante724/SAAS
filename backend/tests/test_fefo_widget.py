@@ -6,6 +6,7 @@ import pytest
 from sqlalchemy import select
 
 from backend.models import StockItemBatch
+from backend.services.dates import now_utc
 
 
 async def _me(client, H):
@@ -44,13 +45,13 @@ async def test_write_off_consumes_earliest_expiry_first(client, tenant, db):
     # three batches, different expiries
     soon = StockItemBatch(org_id=me["org_id"], part_id=p["id"], warehouse_id=w["id"],
                           location_id=loc, unit_cost=2, qty_received=10, qty_remaining=10,
-                          expiry_date=datetime.utcnow() + timedelta(days=5))
+                          expiry_date=now_utc() + timedelta(days=5))
     mid = StockItemBatch(org_id=me["org_id"], part_id=p["id"], warehouse_id=w["id"],
                          location_id=loc, unit_cost=2, qty_received=10, qty_remaining=10,
-                         expiry_date=datetime.utcnow() + timedelta(days=30))
+                         expiry_date=now_utc() + timedelta(days=30))
     late = StockItemBatch(org_id=me["org_id"], part_id=p["id"], warehouse_id=w["id"],
                           location_id=loc, unit_cost=2, qty_received=10, qty_remaining=10,
-                          expiry_date=datetime.utcnow() + timedelta(days=200))
+                          expiry_date=now_utc() + timedelta(days=200))
     db.add_all([soon, mid, late])
     await db.commit()
 
@@ -88,10 +89,10 @@ async def test_expired_stock_suggestions(client, tenant, db):
     db.add_all([
         StockItemBatch(org_id=me["org_id"], part_id=p["id"], warehouse_id=w["id"],
                        location_id=loc, unit_cost=3, qty_received=8, qty_remaining=8,
-                       expiry_date=datetime.utcnow() - timedelta(days=2)),   # expired
+                       expiry_date=now_utc() - timedelta(days=2)),   # expired
         StockItemBatch(org_id=me["org_id"], part_id=p["id"], warehouse_id=w["id"],
                        location_id=loc, unit_cost=3, qty_received=4, qty_remaining=4,
-                       expiry_date=datetime.utcnow() + timedelta(days=300)),  # fine
+                       expiry_date=now_utc() + timedelta(days=300)),  # fine
     ])
     await db.commit()
 

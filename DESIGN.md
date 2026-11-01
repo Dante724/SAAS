@@ -1,5 +1,5 @@
 ---
-name: RepairOS
+name: Tekly
 source: frontend/static/css/design.css (single source of truth, light + dark)
 colors:
   primary: "#4f8ef7"        # --blue
@@ -35,7 +35,7 @@ components: [card (glass/clay), soft-tint status pill + dot, connected stepper,
 dark_mode: true   # design.css ships a full [data-theme=dark] token set; page must inherit it
 ---
 
-# RepairOS — public page design system
+# Tekly — public page design system
 
 Extracted from the live app's token file (`frontend/static/css/design.css`), which both the
 staff app and the public pages already import. This DESIGN.md is the contract for building any

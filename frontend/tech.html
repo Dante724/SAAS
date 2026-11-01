@@ -7,8 +7,9 @@
 <meta name="mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-capable" content="yes">
 <meta name="apple-mobile-web-app-status-bar-style" content="black-translucent">
-<meta name="apple-mobile-web-app-title" content="RepairOS Tech">
-<title>RepairOS Technician</title>
+<meta name="apple-mobile-web-app-title" content="Tekly Tech">
+<title>Tekly Technician</title>
+<link rel="icon" type="image/svg+xml" href="/static/icons/tekly-mark.svg">
 <link rel="manifest" href="/manifest.webmanifest">
 <link rel="apple-touch-icon" href="/static/icons/apple-touch-icon.png">
 <link rel="stylesheet" href="/static/css/design.css">
@@ -80,10 +81,12 @@
   <div id="login">
     <div class="card">
       <div class="logo" data-icon="wrench" data-size="26"></div>
-      <h1>RepairOS Technician</h1>
+      <h1>Tekly Technician</h1>
       <p>Sign in to your field app</p>
-      <input id="t-email" type="email" inputmode="email" autocomplete="username" placeholder="you@shop.com" value="admin@repairos.dev">
-      <input id="t-pass" type="password" autocomplete="current-password" placeholder="Password" value="admin123">
+      <input id="t-email" type="email" inputmode="email" autocomplete="username" placeholder="you@shop.com">
+      <input id="t-pass" type="password" autocomplete="current-password" placeholder="Password">
+      <p id="t-code-hint" class="hidden">Enter the 6-digit code from your authenticator app, or a recovery code.</p>
+      <input id="t-code" class="hidden" inputmode="numeric" autocomplete="one-time-code" maxlength="32" placeholder="6-digit code" aria-label="Verification code">
       <button class="big-btn" id="t-login">Sign in</button>
     </div>
   </div>
@@ -104,6 +107,8 @@
       <a href="#/notifications" data-tab="notifications"><span data-icon="message" data-size="20"></span>Alerts</a>
     </nav>
   </div>
+
+  <div id="toast-stack"></div>
 
   <script src="/static/js/core.js"></script>
   <script src="/static/js/icons.js"></script>

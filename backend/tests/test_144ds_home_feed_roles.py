@@ -6,6 +6,8 @@ from datetime import datetime, timedelta
 import pytest
 from sqlalchemy import select
 
+from backend.services.dates import now_utc
+
 
 async def _loc(client, h):
     return (await client.get("/api/staff/locations", headers=h)).json()["items"][0]["id"]
@@ -51,7 +53,7 @@ async def test_own_scope_hides_unassigned_overdue(client, tenant, db):
     cid = (await client.post("/api/clients", json={"name": "C"}, headers=tenant)).json()["id"]
     o = (await client.post("/api/orders", json={"client_id": cid, "location_id": loc, "complaint": "x"}, headers=tenant)).json()
     row = (await db.execute(select(Order).where(Order.id == o["id"]))).scalar_one()
-    row.due_at = datetime.utcnow() - timedelta(days=1)   # overdue, but assigned to nobody
+    row.due_at = now_utc() - timedelta(days=1)   # overdue, but assigned to nobody
     await db.commit()
 
     # role scoped to own assigned work

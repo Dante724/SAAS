@@ -6,15 +6,30 @@ from sqlalchemy import select
 from backend.db.database import AsyncSessionLocal
 from backend.models import (
     Organisation, Location, Role, Employee, Client, Device,
-    Order, OrderLine, OrderStatusLog, Part, StockLevel, Task, Invoice,
+    Order, OrderLine, OrderStatusLog, Part, StockLevel, Task, Invoice, Payment,
     WorkOrderType, CustomField, NotificationTemplate, Service, Tax, Account, CashFlowItem
 )
 from backend.services.auth import hash_password
+from scripts.demo_credentials import DEMO_FILE, demo_passwords
+from backend.services.permissions import TEMPLATES
 import uuid
-from datetime import datetime, date, timedelta
+from datetime import timedelta
+from backend.services.dates import now_utc
+
+# The demo technician is a Specialist with no access to money: no finance pages, cash,
+# invoices or payroll.
+TECHNICIAN_FINANCE_DENIALS = (
+    "can_view_finance", "can_view_cashflow", "can_view_cashflow_any_period", "can_view_cashbox",
+    "can_view_balance", "can_create_incomes", "can_create_expenses", "can_transfer_money",
+    "can_retroactive_cash", "can_correct_transactions", "can_delete_transactions",
+    "can_manage_accounts", "can_export_accountant", "can_create_returns", "can_delete_refunds",
+    "can_view_invoices", "can_view_invoices_tab", "can_create_invoices", "can_edit_invoices",
+    "can_delete_invoices", "can_edit_issued_invoices", "can_make_client_payments",
+    "can_view_payroll", "can_accrue_payroll", "can_export_payroll", "can_manage_payroll",
+)
 
 def uid(): return str(uuid.uuid4())
-def now(): return datetime.utcnow()
+def now(): return now_utc()
 
 async def seed_demo_data():
     async with AsyncSessionLocal() as db:
@@ -38,35 +53,38 @@ async def seed_demo_data():
         await db.flush()
 
         # Roles
+        # Real permission codes only: enforcement honours an explicit False on a catalog code
+        # and nothing else (an old-style {"finance": "none"} granted full access).
         admin_role = Role(id=uid(), org_id=org.id, name="admin",
-                          permissions={"orders": "write", "clients": "write",
-                                       "inventory": "write", "finance": "write",
-                                       "staff": "write", "reports": "write"})
+                          permissions=dict(TEMPLATES["Full access"]))
         tech_role = Role(id=uid(), org_id=org.id, name="technician",
-                         permissions={"orders": "write", "clients": "read",
-                                      "inventory": "read", "finance": "none"})
+                         permissions={**TEMPLATES["Specialist"],
+                                      **{code: False for code in TECHNICIAN_FINANCE_DENIALS}})
         db.add(admin_role)
         db.add(tech_role)
         await db.flush()
 
-        # Employees
+        # Employees. Passwords come from the environment or .env.demo, never a published default
+        # (launch QA F10 — see scripts/demo_credentials.py).
+        admin_pw, staff_pw = demo_passwords()
         admin = Employee(id=uid(), org_id=org.id, location_id=loc.id,
                          role_id=admin_role.id, name="Rahul Sharma",
                          email="admin@repairos.dev",
-                         password_hash=hash_password("admin123"),
+                         password_hash=hash_password(admin_pw),
                          wage_type="fixed", wage_value=50000)
         tech1 = Employee(id=uid(), org_id=org.id, location_id=loc.id,
                          role_id=tech_role.id, name="Priya Patel",
                          email="priya@repairos.dev",
-                         password_hash=hash_password("tech123"),
+                         password_hash=hash_password(staff_pw),
                          wage_type="commission", commission_labour=10.0)
         tech2 = Employee(id=uid(), org_id=org.id, location_id=loc.id,
                          role_id=tech_role.id, name="Amit Singh",
                          email="amit@repairos.dev",
-                         password_hash=hash_password("tech123"),
+                         password_hash=hash_password(staff_pw),
                          wage_type="hourly", wage_value=250)
         db.add(admin); db.add(tech1); db.add(tech2)
         await db.flush()
+        org.owner_id = admin.id   # the demo admin is the shop owner (owner-only settings, owner protections)
 
         # Work order types + custom fields
         repair_type = WorkOrderType(id=uid(), org_id=org.id, name="Repair",
@@ -79,8 +97,9 @@ async def seed_demo_data():
         db.add(repair_type); db.add(warranty_type); db.add(rental_type)
         await db.flush()
 
+        # The problem itself is the order's built-in "Complaint / description" field; a second
+        # "Fault reported" field asked the same thing twice (launch QA 2026-10-19).
         repair_fields = [
-            ("Fault reported", "textarea", True, "Describe the issue", []),
             ("Device passcode", "text", False, "If applicable", []),
             ("Accessories received", "select", False, None, ["None", "Charger", "Case", "Charger + Case"]),
             ("Data backup needed", "bool", False, None, []),
@@ -118,11 +137,11 @@ async def seed_demo_data():
 
 
         clients_data = [
-            ("Neha Gupta", "+91-9111222333", "neha@email.com", "Corporate", "walk_in"),
-            ("Vikram Reddy", "+91-9444555666", "vikram@email.com", "Standard", "referral"),
-            ("Ananya Iyer", "+91-9777888999", "ananya@email.com", "VIP", "google_ads"),
-            ("Saurabh Joshi", "+91-9000111222", None, "Standard", "walk_in"),
-            ("Kavya Nair", "+91-9333444555", "kavya@email.com", "Standard", "instagram"),
+            ("Neha Gupta", "+91-9111222333", "neha@email.com", "Corporate", "Walk-in"),
+            ("Vikram Reddy", "+91-9444555666", "vikram@email.com", "Standard", "Referral"),
+            ("Ananya Iyer", "+91-9777888999", "ananya@email.com", "VIP", "Google search"),
+            ("Saurabh Joshi", "+91-9000111222", None, "Standard", "Walk-in"),
+            ("Kavya Nair", "+91-9333444555", "kavya@email.com", "Standard", "Instagram"),
         ]
         clients = []
         for name, phone, email, tier, source in clients_data:
@@ -246,6 +265,13 @@ async def seed_demo_data():
             (clients[3].id, devices[3].id, "Phone not charging at all", statuses[3], tech2.id, 900 + 300, 900, 300),
             (clients[4].id, devices[4].id, "Screen flickering and touch not working", statuses[0], None, 7200 + 800, 7200, 800),
         ]
+        _DEMO_LINES = [
+            ("iPhone 14 Pro display assembly (OEM)", "Screen replacement labour"),
+            ("", "Battery health diagnosis and calibration"),
+            ("MacBook Air keyboard assembly", "Keyboard replacement labour"),
+            ("USB-C charging port flex", "Charging port replacement labour"),
+            ("Samsung S23 AMOLED display", "Display replacement labour"),
+        ]
         orders = []
         _today = now().replace(hour=9, minute=0, second=0, microsecond=0)
         _slots = [
@@ -271,6 +297,15 @@ async def seed_demo_data():
                 closed_at=now() - timedelta(days=1) if status == "delivered" else None,
             )
             db.add(o)
+            # Real lines behind the totals, so invoices, receipts and reports show what was done.
+            part_name, labour_name = _DEMO_LINES[i]
+            if parts_t:
+                db.add(OrderLine(id=uid(), order_id=o.id, line_type="part", kind="product",
+                                 description=part_name, qty=1, unit_price=parts_t, total=parts_t,
+                                 technician_id=tech_id))
+            db.add(OrderLine(id=uid(), order_id=o.id, line_type="labour", kind="service",
+                             description=labour_name, qty=1, unit_price=labour_t, total=labour_t,
+                             technician_id=tech_id))
             db.add(OrderStatusLog(id=uid(), order_id=o.id, from_status=None,
                                   to_status="new", changed_by_id=admin.id))
             if status != "new":
@@ -287,6 +322,9 @@ async def seed_demo_data():
             amount_paid=9400, issued_at=now() - timedelta(days=1),
         )
         db.add(inv)
+        db.add(Payment(id=uid(), invoice_id=inv.id, order_id=orders[0].id, client_id=clients[0].id,
+                       method="card", kind="payment", amount=9400, received_by_id=admin.id,
+                       reference="Paid at pickup", paid_at=now() - timedelta(days=1)))
 
         # Tasks
         tasks_data = [
@@ -383,12 +421,12 @@ async def seed_demo_data():
                      phone="+91 98100 11223", source="whatsapp",
                      inquiry="MacBook Air not charging, asking for diagnostic cost",
                      status="new", manager_id=admin.id,
-                     sla_due_at=datetime.utcnow() + _tdl(minutes=45)))
+                     sla_due_at=now_utc() + _tdl(minutes=45)))
         db.add(_Lead(id=uid(), org_id=org.id, location_id=loc.id, name="Sneha Kulkarni",
                      phone="+91 98220 44556", source="instagram",
                      inquiry="Quote for iPad screen replacement",
                      status="in_progress", manager_id=admin.id,
-                     sla_due_at=datetime.utcnow() - _tdl(minutes=20)))
+                     sla_due_at=now_utc() - _tdl(minutes=20)))
         await db.commit()
 
         # Pricing foundation: price types (markups over cost) + a demo client discount
@@ -396,6 +434,7 @@ async def seed_demo_data():
         pt_retail = _PT(id=uid(), org_id=org.id, name="Retail", markup_pct=100.0, is_default=True)
         pt_whole = _PT(id=uid(), org_id=org.id, name="Wholesale", markup_pct=60.0)
         db.add(pt_retail); db.add(pt_whole)
+        await db.flush()   # price types must exist before a client references one (FK)
         # Neha gets 10% off materials; Vikram buys at Wholesale prices for materials
         clients[0].disc_materials_mode = "percent"; clients[0].disc_materials_value = 10.0
         clients[1].disc_materials_mode = "price_type"; clients[1].disc_materials_price_type_id = pt_whole.id
@@ -412,9 +451,11 @@ async def seed_demo_data():
         db.add(_BC(id=uid(), bundle_id=bdl.id, ref_type="service", ref_id=_first_svc.id, qty=1))
         db.add(_BC(id=uid(), bundle_id=bdl.id, ref_type="product", ref_id=parts[0].id, qty=1))
         th = _CT(id=uid(), org_id=org.id, channel="whatsapp", contact_phone=clients[0].phone,
-                 contact_name=clients[0].name, client_id=clients[0].id, last_message_at=now())
+                 contact_name=clients[0].name, client_id=clients[0].id, last_message_at=now(),
+                 status="replied", last_inbound_at=now(), last_outbound_at=now())
         db.add(th)
+        await db.flush()   # thread row must exist before its messages (FK)
         db.add(_CM(id=uid(), thread_id=th.id, direction="in", body="Hi! My MacBook screen is flickering, can you take a look this week?", status="received"))
         db.add(_CM(id=uid(), thread_id=th.id, direction="out", body="Of course! Bring it in any day before 6pm, diagnostics are free.", status="sent"))
         await db.commit()
-        print("Demo data seeded. Login: admin@repairos.dev / admin123")
+        print(f"Demo data seeded. Login: admin@repairos.dev (passwords: $DEMO_ADMIN_PASSWORD/$DEMO_STAFF_PASSWORD or {DEMO_FILE.name})")

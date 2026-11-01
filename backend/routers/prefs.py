@@ -9,6 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Employee, UserPref
 from backend.services.auth import get_current_employee
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/prefs", tags=["prefs"])
 
@@ -39,14 +40,13 @@ async def put_pref(pref_key: str, data: PrefIn, db: AsyncSession = Depends(get_d
                    current: Employee = Depends(get_current_employee)):
     if not _ok_key(pref_key):
         return {"ok": False, "reason": "unsupported key"}
-    from datetime import datetime
     row = (await db.execute(select(UserPref).where(
         UserPref.employee_id == current.id, UserPref.pref_key == pref_key))).scalar_one_or_none()
     if row:
         row.value = data.value
-        row.updated_at = datetime.utcnow()
+        row.updated_at = now_utc()
     else:
         db.add(UserPref(org_id=current.org_id, employee_id=current.id,
-                        pref_key=pref_key, value=data.value, updated_at=datetime.utcnow()))
+                        pref_key=pref_key, value=data.value, updated_at=now_utc()))
     await db.commit()
     return {"ok": True}

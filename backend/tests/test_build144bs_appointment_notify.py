@@ -4,6 +4,8 @@ change (the evaluate_appointment loop was previously never called)."""
 import uuid
 from datetime import datetime, timedelta
 
+from backend.services.dates import now_utc
+
 
 async def _tenant(client):
     email = f"admin-{uuid.uuid4().hex[:8]}@test.dev"
@@ -24,7 +26,7 @@ async def _logs(client, H):
 
 
 async def _mk_appointment(client, H, emp_id, cid, hhmm="10:00"):
-    day = datetime.utcnow().date().isoformat()
+    day = now_utc().date().isoformat()
     r = await client.post("/api/appointments", json={
         "client_id": cid, "employee_id": emp_id, "scheduled_for": f"{day}T{hhmm}:00",
         "duration_min": 60}, headers=H)
@@ -49,7 +51,7 @@ async def test_reschedule_fires_changed(client):
     cid = (await client.post("/api/clients", json={"name": "Jo", "email": "jo@x.dev"}, headers=H)).json()["id"]
     await _rule(client, H, "changed")
     b = await _mk_appointment(client, H, me["id"], cid, "10:00")
-    day = datetime.utcnow().date().isoformat()
+    day = now_utc().date().isoformat()
     await client.patch(f"/api/appointments/{b['id']}", json={"scheduled_for": f"{day}T14:00:00"}, headers=H)
     logs = await _logs(client, H)
     assert any(x["trigger_event"] == "changed" for x in logs), logs

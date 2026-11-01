@@ -27,16 +27,25 @@ _ORG_COLS = [
 ]
 
 
+
+def _indexes(table: str) -> set:
+    """Index names that exist right now. Checking first (instead of try/except around DDL) matters
+    on Postgres: a failed statement aborts the whole migration transaction, so the except can't
+    recover and the upgrade fails later with a confusing error."""
+    import sqlalchemy as _sa
+    insp = _sa.inspect(op.get_bind())
+    if not insp.has_table(table):
+        return set()
+    return {i["name"] for i in insp.get_indexes(table)}
+
 def upgrade():
     # 1) table rename
     op.rename_table("bookings", "appointments")
 
     # 2) partial-unique index: drop old, recreate under the new name
     #    (status value 'booked' is unchanged — it is an enum, not the term "booking")
-    try:
+    if "uq_booking_emp_slot" in _indexes("appointments"):
         op.drop_index("uq_booking_emp_slot", table_name="appointments")
-    except Exception:
-        pass
     op.create_index(
         "uq_appointment_emp_slot", "appointments",
         ["org_id", "employee_id", "scheduled_for"], unique=True,
@@ -68,10 +77,8 @@ def downgrade():
     with op.batch_alter_table("organisations") as b:
         for old, new in _ORG_COLS:
             b.alter_column(new, new_column_name=old)
-    try:
+    if "uq_appointment_emp_slot" in _indexes("appointments"):
         op.drop_index("uq_appointment_emp_slot", table_name="appointments")
-    except Exception:
-        pass
     op.create_index(
         "uq_booking_emp_slot", "appointments",
         ["org_id", "employee_id", "scheduled_for"], unique=True,

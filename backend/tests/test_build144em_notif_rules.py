@@ -7,6 +7,8 @@ These tests lock the API the frontend Workflows page depends on.
 import pytest
 from sqlalchemy import select
 
+from backend.services.dates import now_utc
+
 
 async def _me(client, tenant):
     return (await client.get("/api/auth/me", headers=tenant)).json()
@@ -140,7 +142,7 @@ async def test_chat_first_routes_to_latest_chat_channel(client, tenant, db):
 
     # client's latest conversation is on whatsapp
     db.add(ChatThread(org_id=me["org_id"], channel="whatsapp", client_id=cid,
-                      contact_phone="+15550001", last_message_at=datetime.utcnow()))
+                      contact_phone="+15550001", last_message_at=now_utc()))
     await db.commit()
 
     # a rule that would normally email, but opts into chat_first

@@ -13,12 +13,22 @@ branch_labels = None
 depends_on = None
 
 
+
+def _indexes(table: str) -> set:
+    """Index names that exist right now. Checking first (instead of try/except around DDL) matters
+    on Postgres: a failed statement aborts the whole migration transaction, so the except can't
+    recover and the upgrade fails later with a confusing error."""
+    import sqlalchemy as _sa
+    insp = _sa.inspect(op.get_bind())
+    if not insp.has_table(table):
+        return set()
+    return {i["name"] for i in insp.get_indexes(table)}
+
 def upgrade() -> None:
+    existing = _indexes("job_kits")
     for ix in ("ix_job_kits_active", "ix_job_kits_org_id"):
-        try:
+        if ix in existing:   # already gone on some DBs
             op.drop_index(ix, table_name="job_kits")
-        except Exception:  # noqa: BLE001 — already gone on some DBs
-            pass
     op.drop_table("job_kits")
 
 

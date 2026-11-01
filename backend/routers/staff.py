@@ -1,14 +1,19 @@
+import asyncio
 from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import Employee, Role, Task
-from backend.services.auth import get_current_employee, hash_password, require_perm
+from backend.services import audit
+from backend.services import multi_asset as _ma
+from backend.services.auth import (get_current_employee, hash_password, is_old_default_password, norm_email,
+                                   require_perm, verify_password)
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/staff", tags=["staff"])
 
@@ -26,7 +31,8 @@ def _parse_date(s: Optional[str]):
 class EmployeeIn(BaseModel):
     name: str
     email: str
-    password: str = "changeme123"
+    # No default: an omitted password means "email them a link to set their own".
+    password: Optional[str] = None
     phone: Optional[str] = None
     role_id: Optional[str] = None
     location_id: Optional[str] = None
@@ -48,6 +54,7 @@ class EmployeeIn(BaseModel):
 class EmployeeUpdate(BaseModel):
     name: Optional[str] = None
     email: Optional[str] = None
+    current_password: Optional[str] = None   # required to change your OWN email
     phone: Optional[str] = None
     role_id: Optional[str] = None
     location_id: Optional[str] = None
@@ -68,6 +75,7 @@ class EmployeeUpdate(BaseModel):
 
 class PasswordReset(BaseModel):
     password: str
+    current_password: Optional[str] = None   # required to change your OWN password
 
 class RoleIn(BaseModel):
     name: str
@@ -79,16 +87,6 @@ class RoleIn(BaseModel):
     warehouse_ids: list[str] = []
     payroll_visibility_days: Optional[int] = None
 
-
-def _apply_role_scope(r: "Role", data: "RoleIn") -> None:
-    for field, value in (("contact_scope", data.contact_scope),
-                         ("order_scope", data.order_scope),
-                         ("warehouse_scope", data.warehouse_scope)):
-        if value not in ("all", "own", "selected"):
-            raise HTTPException(422, f"{field} must be all|own|selected")
-        setattr(r, field, value)
-    r.warehouse_ids = data.warehouse_ids or None
-    r.payroll_visibility_days = data.payroll_visibility_days
 
 class TaskIn(BaseModel):
     title: str
@@ -110,14 +108,131 @@ async def list_employees(
         select(Employee).where(Employee.org_id == current.org_id, Employee.active == True)  # noqa: E712
     )
     employees = result.scalars().all()
+    from backend.services.auth import has_perm
+    # Pay and tax ids are payroll data: only roles allowed to view payroll see colleagues' values.
+    see_pay = await has_perm(db, current, "can_view_payroll")
+    see_own = see_pay or await has_perm(db, current, "can_view_own_compensation")
+    from backend.services.payroll_views import in_scope, payroll_scope_ids
+    scope = await payroll_scope_ids(db, current)   # E3: colleagues' pay only inside the payroll scope
+    listed = await _picker_lists(db, current.org_id, employees)
+
+    def pay(e, v):
+        if e.id == current.id:
+            return v if see_own else None
+        return v if (see_pay and in_scope(scope, e.id)) else None
     return [{"id": e.id, "name": e.name, "email": e.email,
-             "phone": e.phone, "wage_type": e.wage_type, "wage_value": e.wage_value,
-             "commission_labour": e.commission_labour, "commission_parts": e.commission_parts,
+             "phone": e.phone, "wage_type": pay(e, e.wage_type), "wage_value": pay(e, e.wage_value),
+             "commission_labour": pay(e, e.commission_labour), "commission_parts": pay(e, e.commission_parts),
              "weekly_hours": e.weekly_hours, "hourly_basis": e.hourly_basis or "labour",
              "track_job_hours": e.track_job_hours, "track_attendance": e.track_attendance,
              "position": e.position, "hired_at": e.hired_at.isoformat() if e.hired_at else None,
-             "tax_id": e.tax_id, "public_name": e.public_name, "note": e.note,
-             "location_id": e.location_id, "role_id": e.role_id, "active": e.active} for e in employees]
+             "tax_id": pay(e, e.tax_id), "public_name": e.public_name, "note": e.note,
+             "location_id": e.location_id, "role_id": e.role_id, "active": e.active,
+             # whether their role shows them in the work order's Managers / Assignee pickers
+             "in_managers": listed[e.id][0], "in_assignees": listed[e.id][1]} for e in employees]
+
+
+async def _picker_lists(db, org_id, employees) -> dict:
+    """{employee_id: (in Managers list, in Assignee list)} from each person's role."""
+    from backend.models import Organisation, Role
+    from backend.services.permissions import role_allows
+    owner_id = (await db.execute(select(Organisation.owner_id).where(Organisation.id == org_id))).scalar_one_or_none()
+    role_ids = {e.role_id for e in employees if e.role_id}
+    roles = {r.id: r for r in (await db.execute(select(Role).where(Role.id.in_(role_ids)))).scalars().all()} if role_ids else {}
+    out = {}
+    for e in employees:
+        if not e.role_id or e.id == owner_id:
+            out[e.id] = (True, True)
+        else:
+            r = roles.get(e.role_id)
+            out[e.id] = (bool(r) and role_allows(r, "display_in_managers"),
+                         bool(r) and role_allows(r, "display_in_assignees"))
+    return out
+
+PAY_FIELDS = ("wage_type", "wage_value", "commission_labour", "commission_parts", "tax_id")
+# Compensation edits are audited with their old and new values.
+WAGE_AUDIT_FIELDS = ("wage_type", "wage_value", "hourly_basis", "weekly_hours",
+                     "commission_labour", "commission_parts")
+
+
+# ── Privilege guards ──────────────────────────────────────────────
+# require_perm is default-allow, so a role's access is "everything except what it denies"
+# (permissions set to False). No role, and the owner's {"all": "write"} role, deny nothing.
+# An actor may only assign a role, or act on a teammate, whose denied set includes
+# everything the actor is denied — i.e. never hand out or take over more access than they have.
+
+async def _denied_for_role(db: AsyncSession, org_id: str, role_id: Optional[str]) -> set:
+    # No role grants nothing through has_perm, but a few older checks still read "no role" as
+    # the owner (record scope, POS overrides), so handing it out stays an owner-only action.
+    if not role_id:
+        return set()
+    role = (await db.execute(select(Role).where(Role.id == role_id, Role.org_id == org_id))).scalar_one_or_none()
+    if not role:
+        raise HTTPException(400, "Unknown role")
+    from backend.services.permissions import ALL_CODES, role_allows
+    return {c for c in ALL_CODES if not role_allows(role, c)}
+
+
+async def _assert_can_assign_role(db: AsyncSession, current: Employee, role_id: Optional[str]) -> None:
+    owner = await _is_owner(db, current)
+    # "No role" means no limits at all: every permission and no location, record or payroll scope.
+    # Only the owner can hand that out — a manager whose role has every permission but is scoped
+    # to some locations or their own records used to pass the permission comparison below and
+    # widen themselves (audit 2026-10-29, H4).
+    if not role_id and not owner:
+        raise HTTPException(403, "Only the shop owner can give someone unlimited access. Pick a role instead.")
+    mine = set() if owner else await _denied_for_role(db, current.org_id, current.role_id)
+    theirs = await _denied_for_role(db, current.org_id, role_id)
+    if not mine <= theirs:
+        raise HTTPException(403, "You can't assign a role with more access than your own")
+    # Permissions alone aren't the whole story: a role also limits which locations, orders,
+    # contacts and warehouses its holders see. Never hand out wider data scope than you have.
+    if current.role_id and role_id and not await _is_owner(db, current):
+        from backend.routers.rbac import _assert_scope_not_wider
+        editor = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
+        target = (await db.execute(select(Role).where(Role.id == role_id))).scalar_one_or_none()
+        if editor and target:
+            from backend.routers.rbac import PAYROLL_ACCESS
+            from backend.services.permissions import role_allows
+            _assert_scope_not_wider(editor, _ScopeView(target),
+                                    grants_payroll=any(role_allows(target, c) for c in PAYROLL_ACCESS))
+
+
+class _ScopeView:
+    """A role's data-scope fields in the shape rbac._assert_scope_not_wider reads."""
+    def __init__(self, role: Role):
+        import json
+        for f in ("order_scope", "contact_scope", "warehouse_scope", "location_scope", "payroll_scope"):
+            setattr(self, f, getattr(role, f, None) or "all")
+        self.payroll_employee_ids = getattr(role, "payroll_employee_ids", None) or []
+        self.location_ids = json.loads(role.location_ids or "[]") if isinstance(role.location_ids, str) else (role.location_ids or [])
+
+
+async def _is_owner(db: AsyncSession, emp: Employee) -> bool:
+    from backend.services.auth import is_shop_owner
+    return await is_shop_owner(db, emp)
+
+
+async def _assert_current_password(current: Employee, password: Optional[str]) -> None:
+    if not password or not await asyncio.to_thread(verify_password, password, current.password_hash):
+        raise HTTPException(403, "Enter your current password to change this")
+
+
+async def _assert_can_manage(db: AsyncSession, current: Employee, emp: Employee) -> None:
+    if emp.id == current.id:
+        return
+    # The shop owner's account (password, 2-step, email, role, access) is theirs alone:
+    # an equally-privileged teammate must not be able to take it over.
+    if await _is_owner(db, emp):
+        raise HTTPException(403, "Only the shop owner can change the owner's account")
+    mine = set() if await _is_owner(db, current) else await _denied_for_role(db, current.org_id, current.role_id)
+    try:
+        theirs = await _denied_for_role(db, current.org_id, emp.role_id)
+    except HTTPException:
+        theirs = set()   # dangling role → treat as full access (the safe direction)
+    if not mine <= theirs:
+        raise HTTPException(403, "You can't change an account with more access than your own")
+
 
 @router.post("/employees", status_code=201)
 async def create_employee(
@@ -125,13 +240,33 @@ async def create_employee(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_employees")),
 ):
-    existing = await db.execute(select(Employee).where(Employee.email == data.email))
+    import secrets
+
+    data.email = norm_email(data.email)
+    existing = await db.execute(select(Employee).where(func.lower(Employee.email) == data.email))
     if existing.scalar_one_or_none():
         raise HTTPException(400, "Email already in use")
+    if data.password is not None and len(data.password) < MIN_PASSWORD_LEN:
+        raise HTTPException(400, f"Password must be at least {MIN_PASSWORD_LEN} characters")
+    if is_old_default_password(data.password):
+        raise HTTPException(400, "Choose a different password")
+    await _assert_can_assign_role(db, current, data.role_id)
+    from backend.services.billing import assert_can_add
+    await assert_can_add(db, current.org_id, "team_members")
+    from backend.services.auth import has_perm
+    from backend.services.payroll_views import payroll_scope_ids
+    # A role limited to some people's payroll (E3) can't set a newcomer's pay: they're outside it.
+    if not await has_perm(db, current, "can_view_payroll") or await payroll_scope_ids(db, current) is not None:
+        defaults = EmployeeIn.model_fields
+        for k in PAY_FIELDS:
+            if k in defaults:
+                setattr(data, k, defaults[k].default)
     emp = Employee(
         org_id=current.org_id,
         name=data.name, email=data.email,
-        password_hash=hash_password(data.password),
+        # Without a password, store a random one nobody knows; the welcome email lets
+        # the teammate choose their own.
+        password_hash=await asyncio.to_thread(hash_password, data.password or secrets.token_urlsafe(32)),
         phone=data.phone, role_id=data.role_id,
         location_id=data.location_id,
         wage_type=data.wage_type, wage_value=data.wage_value,
@@ -143,9 +278,42 @@ async def create_employee(
         note=data.note, hired_at=_parse_date(data.hired_at),
     )
     db.add(emp)
+    await db.flush()
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="employee.create",
+                       entity_type="employee", entity_id=emp.id,
+                       diff={"email": emp.email, "role_id": emp.role_id,
+                             **{k: getattr(emp, k) for k in WAGE_AUDIT_FIELDS}})
     await db.commit()
     await db.refresh(emp)
-    return {"id": emp.id, "name": emp.name}
+    invite_sent = False
+    if not data.password:
+        await _send_set_password_email(db, emp, current.org_id)
+        invite_sent = True
+    out = {"id": emp.id, "name": emp.name, "invite_sent": invite_sent}
+    from backend.services.billing import sync_seats
+    await sync_seats(db, current.org_id)   # Shop and Pro bill members beyond the included ones as seats
+    return out
+
+
+MIN_PASSWORD_LEN = 8
+SET_PASSWORD_TTL_MIN = 60 * 24 * 7   # same 7 days as teammate invites
+
+
+async def _send_set_password_email(db: AsyncSession, emp: Employee, org_id: str) -> None:
+    """Email a new teammate a single-use link to choose their password (reuses the
+    password-reset token + /reset-password page, with an invite-length expiry)."""
+    from backend.models import Organisation
+    from backend.routers.auth import _link
+    from backend.services import tokens as _tok
+    from backend.services.notifications import send_direct_email
+    raw = await _tok.issue(db, employee_id=emp.id, kind="reset", ttl_min=SET_PASSWORD_TTL_MIN)
+    await db.commit()
+    org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
+    url = _link(f"/reset-password?token={raw}")
+    await send_direct_email(
+        emp.email, f"You've been added to {org.name if org else 'your team'} on Tekly",
+        f"Hi {emp.name},\n\nAn account has been created for you. Choose your password here:\n\n{url}\n\n"
+        f"The link expires in 7 days and can be used once.")
 
 
 @router.patch("/employees/{emp_id}")
@@ -157,18 +325,59 @@ async def update_employee(
     emp = (await db.execute(select(Employee).where(Employee.id == emp_id, Employee.org_id == current.org_id))).scalar_one_or_none()
     if not emp:
         raise HTTPException(404, "Employee not found")
+    await _assert_can_manage(db, current, emp)
     payload = data.model_dump(exclude_unset=True)
-    if "email" in payload and payload["email"] != emp.email:
-        dupe = (await db.execute(select(Employee).where(Employee.email == payload["email"]))).scalar_one_or_none()
+    from backend.services.auth import has_perm
+    from backend.services.payroll_views import in_scope, payroll_scope_ids
+    from backend.services.auth import is_shop_owner
+    own_pay = emp.id == current.id and current.role_id and not await is_shop_owner(db, current)
+    if own_pay or not await has_perm(db, current, "can_view_payroll") \
+            or not in_scope(await payroll_scope_ids(db, current), emp.id):
+        # Pay is hidden from this role in list_employees (no payroll view, or outside its payroll
+        # scope), so a full-form save would send blanks: never let it change compensation it can't see.
+        # Nobody but the owner sets their own pay either (same rule as payroll's assert_not_self).
+        for k in PAY_FIELDS:
+            payload.pop(k, None)
+    if "role_id" in payload and payload["role_id"] != emp.role_id:
+        if emp.id == current.id and not await _is_owner(db, current):
+            raise HTTPException(403, "You can't change your own role. Ask the owner.")
+        await _assert_can_assign_role(db, current, payload["role_id"])
+    current_password = payload.pop("current_password", None)
+    if "email" in payload:
+        payload["email"] = norm_email(payload["email"])
+        if payload["email"] == norm_email(emp.email):
+            payload.pop("email")
+    if "email" in payload:
+        if emp.id == current.id:
+            # Changing your own sign-in email then resetting the password is an account takeover
+            # for anyone holding a session token, so it needs the password too.
+            await _assert_current_password(current, current_password)
+        dupe = (await db.execute(select(Employee).where(
+            func.lower(Employee.email) == payload["email"], Employee.id != emp.id))).scalar_one_or_none()
         if dupe:
             raise HTTPException(400, "Email already in use")
+        emp.email_verified = False   # the new address hasn't been proven yet
     if "hourly_basis" in payload and payload["hourly_basis"] not in ("labour", "attendance"):
         payload["hourly_basis"] = "labour"
+    if payload.get("active") and not emp.active:
+        from backend.services.billing import assert_can_add
+        await assert_can_add(db, current.org_id, "team_members")
     if "hired_at" in payload:
         payload["hired_at"] = _parse_date(payload["hired_at"])
+    changes = {k: {"from": getattr(emp, k), "to": v} for k, v in payload.items()
+               if k in ("role_id", "email", "active", "location_id", *WAGE_AUDIT_FIELDS)
+               and getattr(emp, k) != v}
+    if "tax_id" in payload and payload["tax_id"] != emp.tax_id:
+        changes["tax_id"] = {"changed": True}   # an identifier: record the change, not the value
     for k, v in payload.items():
         setattr(emp, k, v)
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="employee.update",
+                       entity_type="employee", entity_id=emp.id,
+                       diff={"fields": sorted(payload), **changes})
     await db.commit()
+    if "active" in changes:
+        from backend.services.billing import sync_seats
+        await sync_seats(db, current.org_id)
     return {"ok": True}
 
 
@@ -181,9 +390,18 @@ async def reset_password(
     emp = (await db.execute(select(Employee).where(Employee.id == emp_id, Employee.org_id == current.org_id))).scalar_one_or_none()
     if not emp:
         raise HTTPException(404, "Employee not found")
-    if len(data.password) < 6:
-        raise HTTPException(400, "Password must be at least 6 characters")
-    emp.password_hash = hash_password(data.password)
+    await _assert_can_manage(db, current, emp)
+    if emp.id == current.id:
+        await _assert_current_password(current, data.current_password)
+    if len(data.password) < MIN_PASSWORD_LEN:
+        raise HTTPException(400, f"Password must be at least {MIN_PASSWORD_LEN} characters")
+    if is_old_default_password(data.password):
+        raise HTTPException(400, "Choose a different password")
+    emp.password_hash = await asyncio.to_thread(hash_password, data.password)
+    emp.token_version = (emp.token_version or 0) + 1   # sign out existing sessions
+    emp.must_reset_password = False
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="employee.password_set",
+                       entity_type="employee", entity_id=emp.id)
     await db.commit()
     return {"ok": True}
 
@@ -200,15 +418,18 @@ async def send_password_reset(
         Employee.id == emp_id, Employee.org_id == current.org_id))).scalar_one_or_none()
     if not emp:
         raise HTTPException(404, "Employee not found")
+    await _assert_can_manage(db, current, emp)
     from backend.routers.auth import _link
     from backend.services import tokens as _tok
     from backend.services.notifications import send_direct_email
     await _tok.invalidate_all(db, employee_id=emp.id, kind="reset")
     raw = await _tok.issue(db, employee_id=emp.id, kind="reset")
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="employee.password_reset_sent",
+                       entity_type="employee", entity_id=emp.id)
     await db.commit()
     url = _link(f"/reset-password?token={raw}")
     await send_direct_email(
-        emp.email, "Set your RepairOS password",
+        emp.email, "Set your Tekly password",
         f"An administrator asked us to help you set your password. Open this link:\n\n{url}\n\n"
         f"It expires in 1 hour and can be used once.")
     return {"ok": True}
@@ -224,10 +445,13 @@ async def reset_employee_mfa(emp_id: str, db: AsyncSession = Depends(get_db),
         Employee.id == emp_id, Employee.org_id == current.org_id))).scalar_one_or_none()
     if not emp:
         raise HTTPException(404, "Employee not found")
+    await _assert_can_manage(db, current, emp)
     emp.mfa_enabled = False
     emp.mfa_secret = None
     emp.mfa_recovery_codes = None
     emp.token_version = (emp.token_version or 0) + 1   # force re-login
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="employee.mfa_reset",
+                       entity_type="employee", entity_id=emp.id)
     await db.commit()
     return {"ok": True}
 
@@ -237,6 +461,11 @@ class InviteIn(BaseModel):
     email: str
     name: Optional[str] = None
     role_id: Optional[str] = None
+
+    @field_validator("role_id")
+    @classmethod
+    def _blank_is_none(cls, v):
+        return v or None   # the invite form sends "" for "no role"
     location_id: Optional[str] = None
 
 
@@ -248,7 +477,7 @@ async def list_invites(db: AsyncSession = Depends(get_db),
     rows = (await db.execute(select(Invite).where(
         Invite.org_id == current.org_id, Invite.accepted_at.is_(None)
     ).order_by(Invite.created_at.desc()))).scalars().all()
-    now = datetime.utcnow()
+    now = now_utc()
     return {"items": [{
         "id": i.id, "email": i.email, "name": i.name, "role_id": i.role_id,
         "location_id": i.location_id, "expired": i.expires_at < now,
@@ -269,17 +498,23 @@ async def create_invite(data: InviteIn, db: AsyncSession = Depends(get_db),
     email = (data.email or "").strip().lower()
     if not email or "@" not in email:
         raise HTTPException(400, "A valid email is required")
-    dupe = (await db.execute(select(Employee).where(
-        Employee.email == email, Employee.org_id == current.org_id))).scalar_one_or_none()
-    if dupe:
+    await _assert_can_assign_role(db, current, data.role_id)
+    from backend.services.billing import assert_can_add
+    await assert_can_add(db, current.org_id, "team_members")
+    dupe = (await db.execute(select(Employee).where(func.lower(Employee.email) == email))).scalar_one_or_none()
+    if dupe and dupe.org_id == current.org_id:
         raise HTTPException(400, "Someone with that email is already on the team")
+    if dupe:
+        # One email = one Tekly login today; accepting would fail on the unique email.
+        raise HTTPException(409, "That email already has a Tekly account at another shop. "
+                                 "Invite them with a different email address.")
     open_inv = (await db.execute(select(Invite).where(
         Invite.org_id == current.org_id, Invite.email == email,
         Invite.accepted_at.is_(None)))).scalar_one_or_none()
     raw = secrets.token_urlsafe(32)
     if open_inv:
         open_inv.token_hash = hashlib.sha256(raw.encode()).hexdigest()
-        open_inv.expires_at = datetime.utcnow() + timedelta(days=7)
+        open_inv.expires_at = now_utc() + timedelta(days=7)
         open_inv.name, open_inv.role_id, open_inv.location_id = data.name, data.role_id, data.location_id
         inv = open_inv
     else:
@@ -287,8 +522,11 @@ async def create_invite(data: InviteIn, db: AsyncSession = Depends(get_db),
             org_id=current.org_id, email=email, name=data.name, role_id=data.role_id,
             location_id=data.location_id, invited_by=current.id,
             token_hash=hashlib.sha256(raw.encode()).hexdigest(),
-            expires_at=datetime.utcnow() + timedelta(days=7))
+            expires_at=now_utc() + timedelta(days=7))
         db.add(inv)
+    await db.flush()
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="invite.create",
+                       entity_type="invite", entity_id=inv.id, diff={"email": email, "role_id": data.role_id})
     await db.commit()
     from backend.models import Organisation
     from backend.routers.auth import _link
@@ -298,8 +536,8 @@ async def create_invite(data: InviteIn, db: AsyncSession = Depends(get_db),
     org_name = org.name if org else "your team"
     url = _link(f"/accept-invite?token={raw}")
     await send_direct_email(
-        email, f"You're invited to {org_name} on RepairOS",
-        f"{current.name} invited you to join {org_name} on RepairOS.\n\n"
+        email, f"You're invited to {org_name} on Tekly",
+        f"{current.name} invited you to join {org_name} on Tekly.\n\n"
         f"Set your password and get started:\n\n{url}\n\n"
         f"This invitation expires in 7 days.")
     return {"ok": True, "invite_id": inv.id}
@@ -313,6 +551,8 @@ async def revoke_invite(invite_id: str, db: AsyncSession = Depends(get_db),
         Invite.id == invite_id, Invite.org_id == current.org_id))).scalar_one_or_none()
     if not inv:
         raise HTTPException(404, "Invite not found")
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="invite.revoke",
+                       entity_type="invite", entity_id=inv.id, diff={"email": inv.email})
     await db.delete(inv)
     await db.commit()
     return {"ok": True}
@@ -339,18 +579,17 @@ async def list_roles(
                        "employee_count": counts.get(r.id, 0)} for r in roles]}
 
 
+# Role create/update share the role editor's rules (routers/rbac.py): explicit allow-lists,
+# no granting what you don't have, no loosening your own limits, no editing your own role.
 @router.post("/roles", status_code=201)
 async def create_role(
     data: RoleIn,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_roles")),
 ):
-    r = Role(org_id=current.org_id, name=data.name, permissions=data.permissions)
-    _apply_role_scope(r, data)
-    db.add(r)
-    await db.commit()
-    await db.refresh(r)
-    return {"id": r.id, "name": r.name}
+    from backend.routers import rbac as _rbac
+    r = await _rbac.create_role(_rbac.RoleIn(**data.model_dump(exclude_unset=True)), db, current)
+    return {"id": r["id"], "name": r["name"]}
 
 
 @router.put("/roles/{role_id}")
@@ -359,13 +598,8 @@ async def update_role(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_roles")),
 ):
-    r = (await db.execute(select(Role).where(Role.id == role_id, Role.org_id == current.org_id))).scalar_one_or_none()
-    if not r:
-        raise HTTPException(404, "Role not found")
-    r.name = data.name
-    r.permissions = data.permissions
-    _apply_role_scope(r, data)
-    await db.commit()
+    from backend.routers import rbac as _rbac
+    await _rbac.update_role(role_id, _rbac.RoleIn(**data.model_dump(exclude_unset=True)), db, current)
     return {"ok": True}
 
 
@@ -381,6 +615,8 @@ async def delete_role(
     in_use = (await db.execute(select(func.count()).select_from(Employee).where(Employee.role_id == role_id))).scalar() or 0
     if in_use:
         raise HTTPException(400, f"{in_use} employee(s) still use this role")
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="role.delete",
+                       entity_type="role", entity_id=r.id, diff={"name": r.name})
     await db.delete(r)
     await db.commit()
     return {"ok": True}
@@ -395,8 +631,13 @@ async def deactivate_employee(
     emp = result.scalar_one_or_none()
     if not emp:
         raise HTTPException(404, "Employee not found")
+    await _assert_can_manage(db, current, emp)
     emp.active = False
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="employee.deactivate",
+                       entity_type="employee", entity_id=emp.id)
     await db.commit()
+    from backend.services.billing import sync_seats
+    await sync_seats(db, current.org_id)   # Shop and Pro bill members beyond the included ones as seats
     return {"ok": True}
 
 # ── Tasks ─────────────────────────────────────
@@ -452,7 +693,7 @@ async def update_task(
         raise HTTPException(404, "Task not found")
     task.status = data.status
     if data.status == "done":
-        task.completed_at = datetime.utcnow()
+        task.completed_at = now_utc()
     await db.commit()
     return {"ok": True}
 
@@ -496,6 +737,9 @@ async def create_location(
     from backend.models import Location
     if not data.name.strip():
         raise HTTPException(422, "Location name is required")
+    from backend.services import billing
+    if data.active is not False:
+        await billing.assert_can_add(db, current.org_id, "locations")
     ln = Location(org_id=current.org_id, name=data.name.strip(),
                   address=data.address, phone=data.phone,
                   timezone=data.timezone or "UTC",
@@ -503,8 +747,13 @@ async def create_location(
                   receipt_header=data.receipt_header, working_hours=data.working_hours,
                   legal_entity_id=data.legal_entity_id, price_type_id=data.price_type_id)
     db.add(ln)
+    await db.flush()
+    # Launch B2/B6: the shop's timezone (unless one was picked) and a Cash drawer + Card account.
+    from backend.services.shop_setup import setup_location
+    await setup_location(db, ln)
     await db.commit()
     await db.refresh(ln)
+    await billing.sync_quantity(db, current.org_id)   # billed per active location
     return _ser_location(ln)
 
 
@@ -519,10 +768,17 @@ async def update_location(
         Location.id == location_id, Location.org_id == current.org_id))).scalar_one_or_none()
     if not ln:
         raise HTTPException(404, "Location not found")
-    for k, v in data.model_dump(exclude_unset=True).items():
+    from backend.services import billing
+    changes = data.model_dump(exclude_unset=True)
+    reactivating = changes.get("active") and not ln.active
+    if reactivating:
+        await billing.assert_can_add(db, current.org_id, "locations")
+    for k, v in changes.items():
         setattr(ln, k, v)
     await db.commit()
     await db.refresh(ln)
+    if "active" in changes:
+        await billing.sync_quantity(db, current.org_id)
     return _ser_location(ln)
 
 
@@ -545,6 +801,8 @@ async def deactivate_location(
         raise HTTPException(409, "You must keep at least one active location")
     ln.active = False
     await db.commit()
+    from backend.services.billing import sync_quantity
+    await sync_quantity(db, current.org_id)
     return {"ok": True}
 
 
@@ -560,7 +818,8 @@ async def get_company(
     if not org:
         raise HTTPException(404, "Company not found")
     return {
-        "name": org.name, "company_email": org.company_email, "company_phone": org.company_phone,
+        "name": org.name, "account_id": org.account_id,   # read-only; what Tekly support asks for
+        "company_email": org.company_email, "company_phone": org.company_phone,
         "company_address": org.company_address, "company_details": org.company_details,
         "company_note": org.company_note, "website": org.website, "logo_data": org.logo_data,
         "country": org.country,
@@ -576,8 +835,11 @@ async def get_company(
         "default_due_days": org.default_due_days,
         "default_comment_visibility": org.default_comment_visibility,
         "default_file_visibility": org.default_file_visibility,
+        "public_employee_name": getattr(org, "public_employee_name", None) or "full",
         "warranty_count_from": org.warranty_count_from,
         "asset_one_open_ticket": org.asset_one_open_ticket,
+        "multi_asset_jobs": _ma.enabled(org),
+        "multi_asset_available": _ma.available(org),
         "rounding_enabled": org.rounding_enabled,
         "currency_display_style": org.currency_display_style,
         "currency_position": org.currency_position,
@@ -585,7 +847,8 @@ async def get_company(
         "clock_wo_enabled": org.clock_wo_enabled if org.clock_wo_enabled is not None else True,
         "clock_attendance_enabled": org.clock_attendance_enabled if org.clock_attendance_enabled is not None else True,
         "clock_labour_billing": bool(getattr(org, "clock_labour_billing", False)),
-        "require_mfa": bool(getattr(org, "require_mfa", True)),
+        "require_mfa": bool(getattr(org, "require_mfa", False)),
+        "max_sessions_per_login": getattr(org, "max_sessions_per_login", None),
     }
 
 
@@ -614,8 +877,10 @@ class CompanyIn(BaseModel):
     default_due_days: Optional[int] = None
     default_comment_visibility: Optional[str] = None
     default_file_visibility: Optional[str] = None
+    public_employee_name: Optional[str] = None          # full | first | first_initial | custom
     warranty_count_from: Optional[str] = None
     asset_one_open_ticket: Optional[bool] = None
+    multi_asset_jobs: Optional[bool] = None            # several items per job (eligible industries only)
     rounding_enabled: Optional[bool] = None
     currency_display_style: Optional[str] = None
     currency_position: Optional[str] = None
@@ -623,6 +888,7 @@ class CompanyIn(BaseModel):
     clock_attendance_enabled: Optional[bool] = None    # build 144x: shop attendance master switch
     clock_labour_billing: Optional[bool] = None        # build 144y: bill labour from tracked time
     require_mfa: Optional[bool] = None                  # build 144cd: org-wide mandatory 2FA
+    max_sessions_per_login: Optional[int] = None        # devices one login may use at once (null = no limit)
     oe_show_scheduled: Optional[bool] = None            # 144dr: show scheduled date on the track page
     book_show_employee_step: Optional[bool] = None      # 144dr: online appointment employee-pick step
     auto_draft_invoice_on_close: Optional[bool] = None  # 144dr: auto-draft an invoice when a WO closes
@@ -645,15 +911,47 @@ async def update_company(
         valid = set(_ind.TEMPLATE_KEYS) | set(_ind.LEGACY_ALIASES)
         if payload["industry_template"] not in valid:
             raise HTTPException(422, f"Unknown industry_template. Valid: {sorted(valid)}")
+    for k in ("default_comment_visibility", "default_file_visibility"):
+        if k in payload and payload[k] not in ("private", "public"):
+            raise HTTPException(422, "Visibility must be private or public")
+    if "public_employee_name" in payload:
+        from backend.services.public_name import MODES as _name_modes
+        if payload["public_employee_name"] not in _name_modes:
+            raise HTTPException(422, f"public_employee_name must be one of {list(_name_modes)}")
+    if payload.get("max_sessions_per_login") is not None:
+        from backend.services.sessions import LIMIT_CHOICES
+        if payload["max_sessions_per_login"] not in LIMIT_CHOICES:
+            raise HTTPException(422, f"Devices per person must be one of {list(LIMIT_CHOICES)}, or no limit")
     if "payment_provider" in payload:
         valid = ("auto", "stripe", "square", "sumup", "simulated")
         if payload["payment_provider"] not in valid:
             raise HTTPException(422, f"Unknown payment_provider. Valid: {list(valid)}")
+    if payload.get("multi_asset_jobs"):
+        from backend.services import industry as _ind
+        tmpl = payload.get("industry_template", org.industry_template)
+        if _ind.normalize_template_key(tmpl) not in _ma.ELIGIBLE:
+            raise HTTPException(422, "Several items per job is only for tools, equipment, phone and computer shops")
     # Build 121: the API field is 'currencies' but the column is 'currencies_json'
     if "currencies" in payload:
         org.currencies_json = payload.pop("currencies")
+    old_tz = org.timezone
     for k, v in payload.items():
         setattr(org, k, v)
+    # Launch B6: locations that followed the company clock (or never had one) follow the change;
+    # a branch given its own zone keeps it.
+    if payload.get("timezone") and payload["timezone"] != old_tz:
+        from sqlalchemy import or_ as _or
+        from sqlalchemy import update as _update
+
+        from backend.models import Location
+        await db.execute(_update(Location).where(
+            Location.org_id == org.id,
+            _or(Location.timezone.is_(None), Location.timezone.in_(["UTC", old_tz or "UTC"])))
+            .values(timezone=payload["timezone"]).execution_options(synchronize_session=False))
+    # Several items per job is strictly for tools / equipment / phone / computer shops:
+    # moving to any other industry switches it off (moving back needs a fresh opt-in).
+    if "industry_template" in payload and not _ma.available(org):
+        org.multi_asset_jobs = False
     await db.commit()
     return {"ok": True}
 
@@ -676,9 +974,13 @@ async def get_inventory_settings(
         "reservation_max_days": org.inv_reservation_max_days if org.inv_reservation_max_days is not None else 14,
         "product_serial_template": org.inv_product_serial_template or "",
         "asset_serial_template": org.inv_asset_serial_template or "",
+        "sku_template": org.inv_sku_template or "",
+        "bin_template": org.inv_bin_template or "",
+        "barcode_prefix": org.inv_barcode_prefix or "20",
         "default_product_type": org.inv_default_product_type or "default",
         "default_vehicle_type": org.inv_default_vehicle_type or "Car",
         "po_approval_threshold": org.po_approval_threshold or 0,
+        "po_to_job": org.inv_po_to_job or "auto",
     }
 
 
@@ -689,9 +991,13 @@ class InventorySettingsIn(BaseModel):
     reservation_max_days: Optional[int] = None
     product_serial_template: Optional[str] = None
     asset_serial_template: Optional[str] = None
+    sku_template: Optional[str] = None       # ii144a: empty = SKUs stay as typed
+    bin_template: Optional[str] = None
+    barcode_prefix: Optional[str] = None     # GS1 in-store 20–29
     default_product_type: Optional[str] = None
     default_vehicle_type: Optional[str] = None
     po_approval_threshold: Optional[float] = None
+    po_to_job: Optional[str] = None      # auto | manual — parts arriving on a job's PO
 
 
 @router.put("/inventory-settings")
@@ -707,10 +1013,26 @@ async def update_inventory_settings(
     p = data.model_dump(exclude_unset=True)
     if "unique_identifier" in p and p["unique_identifier"] not in ("name", "sku", "barcode", "code"):
         raise HTTPException(422, "unique_identifier must be name|sku|barcode|code")
+    if "po_to_job" in p and p["po_to_job"] not in ("auto", "manual"):
+        raise HTTPException(422, "po_to_job must be auto or manual")
+    from backend.services import numbering
+    for k in ("product_serial_template", "asset_serial_template", "sku_template", "bin_template"):
+        if k in p:
+            p[k] = (p[k] or "").strip() or None
+            why = numbering.template_problem(p[k]) if p[k] else None
+            if why:
+                raise HTTPException(422, why)
+    if "barcode_prefix" in p:
+        p["barcode_prefix"] = (p["barcode_prefix"] or "").strip() or None
+        if p["barcode_prefix"] and p["barcode_prefix"] not in numbering.IN_STORE_PREFIXES:
+            raise HTTPException(422, "Generated barcodes start with 20 to 29 — the range set aside for "
+                                     "a shop's own codes, so they never clash with a manufacturer's.")
     mapping = {
+        "po_to_job": "inv_po_to_job",
         "enable_bins": "inv_enable_bins", "unique_identifier": "inv_unique_identifier",
         "enable_reservations": "inv_enable_reservations", "reservation_max_days": "inv_reservation_max_days",
         "product_serial_template": "inv_product_serial_template", "asset_serial_template": "inv_asset_serial_template",
+        "sku_template": "inv_sku_template", "bin_template": "inv_bin_template", "barcode_prefix": "inv_barcode_prefix",
         "default_product_type": "inv_default_product_type", "default_vehicle_type": "inv_default_vehicle_type",
         "po_approval_threshold": "po_approval_threshold",
     }
@@ -761,10 +1083,13 @@ async def get_public_pages(
         "oe_show_zero_price_products": org.oe_show_zero_price_products,
         "oe_show_zero_price_services": org.oe_show_zero_price_services,
         "oe_allow_approval": getattr(org, "oe_allow_approval", True),
+        "oe_estimate_line_choice": getattr(org, "oe_estimate_line_choice", True),
         "oe_allow_messages": getattr(org, "oe_allow_messages", True),
+        "oe_msg_days_after_close": getattr(org, "oe_msg_days_after_close", None) if getattr(org, "oe_msg_days_after_close", None) is not None else 14,
         "oe_allow_recommend": getattr(org, "oe_allow_recommend", True),
         "oe_show_scheduled": getattr(org, "oe_show_scheduled", False),
         "book_show_employee_step": getattr(org, "book_show_employee_step", True),
+        "public_employee_name": getattr(org, "public_employee_name", None) or "full",
         "auto_draft_invoice_on_close": getattr(org, "auto_draft_invoice_on_close", False),
         "default_invoice_display": getattr(org, "default_invoice_display", "detailed"),
         "oe_allow_staff_reply": getattr(org, "oe_allow_staff_reply", True),
@@ -773,6 +1098,7 @@ async def get_public_pages(
         "oe_wo_approval_statuses": getattr(org, "oe_wo_approval_statuses", None) or "",
         "oe_estimate_require_signature": getattr(org, "oe_estimate_require_signature", False),
         "oe_wo_require_signature": getattr(org, "oe_wo_require_signature", False),
+        "dropoff_terms": getattr(org, "dropoff_terms", None) or "",
         "oe_estimate_accept_status": getattr(org, "oe_estimate_accept_status", None) or "",
         "oe_estimate_decline_status": getattr(org, "oe_estimate_decline_status", None) or "",
         "oe_wo_accept_status": getattr(org, "oe_wo_accept_status", None) or "",
@@ -797,16 +1123,20 @@ class PublicPagesIn(BaseModel):
     oe_show_zero_price_products: Optional[bool] = None
     oe_show_zero_price_services: Optional[bool] = None
     oe_allow_approval: Optional[bool] = None
+    oe_estimate_line_choice: Optional[bool] = None      # E5: customers may untick estimate lines
     oe_allow_messages: Optional[bool] = None
+    oe_msg_days_after_close: Optional[int] = Field(default=None, ge=0, le=365)
     oe_allow_recommend: Optional[bool] = None
     oe_allow_staff_reply: Optional[bool] = None
     oe_show_scheduled: Optional[bool] = None            # 144dr
     book_show_employee_step: Optional[bool] = None      # 144dr
+    public_employee_name: Optional[str] = None          # full | first | first_initial | custom
     oe_wo_allow_approval: Optional[bool] = None         # 144ih
     oe_approval_statuses: Optional[str] = None          # 144ih comma-separated status keys
     oe_wo_approval_statuses: Optional[str] = None       # 144ih
     oe_estimate_require_signature: Optional[bool] = None  # 144ii
     oe_wo_require_signature: Optional[bool] = None
+    dropoff_terms: Optional[str] = Field(default=None, max_length=4000)   # gc144g3 — signed at drop-off
     oe_estimate_accept_status: Optional[str] = None
     oe_estimate_decline_status: Optional[str] = None
     oe_wo_accept_status: Optional[str] = None
@@ -829,7 +1159,12 @@ async def update_public_pages(
     org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
     if not org:
         raise HTTPException(404, "Company not found")
-    for k, v in data.model_dump(exclude_unset=True).items():
+    payload = data.model_dump(exclude_unset=True)
+    if "public_employee_name" in payload:
+        from backend.services.public_name import MODES
+        if payload["public_employee_name"] not in MODES:
+            raise HTTPException(422, f"public_employee_name must be one of {list(MODES)}")
+    for k, v in payload.items():
         setattr(org, k, v)
     await db.commit()
     return {"ok": True}

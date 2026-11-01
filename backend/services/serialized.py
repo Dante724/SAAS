@@ -61,7 +61,9 @@ async def consume_fifo_lifo(db: AsyncSession, *, org_id: str, part_id: str,
 
 async def allocate_serialized_item(db: AsyncSession, *, org_id: str, part_id: str,
                                    order_id: str, bin_id: Optional[str] = None,
-                                   serial_number: Optional[str] = None) -> SerializedItem:
+                                   serial_number: Optional[str] = None,
+                                   location_id: Optional[str] = None,
+                                   unbinned: bool = False) -> SerializedItem:
     """Atomically allocate one in-stock serialized unit onto an order.
 
     Uses with_for_update() to lock the candidate row(s); the first matching
@@ -73,8 +75,13 @@ async def allocate_serialized_item(db: AsyncSession, *, org_id: str, part_id: st
              SerializedItem.status == "in_stock"]
     if bin_id:
         conds.append(SerializedItem.bin_id == bin_id)
+    elif unbinned:       # ii144c: stock taken from unbinned rows uses an unbinned unit
+        conds.append(SerializedItem.bin_id.is_(None))
+    if location_id:      # ii144c: a job only takes units at its own location
+        conds.append(SerializedItem.location_id == location_id)
     if serial_number:
-        conds.append(SerializedItem.serial_number == serial_number)
+        from backend.services.serial_intake import matches as _sn_matches
+        conds.append(_sn_matches(SerializedItem.serial_number, serial_number))
 
     stmt = (select(SerializedItem).where(*conds)
             .order_by(SerializedItem.created_at.asc())

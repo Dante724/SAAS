@@ -44,14 +44,14 @@ export default function BayChecklist({ orderId, onChange }: { orderId: string; o
     <div className="space-y-2.5">
       {lists.map((cl) => (
         <div key={cl.id} className="space-y-1.5">
-          {cl.title && <div className="text-[10px] font-bold uppercase tracking-wide text-ink-tertiary">{cl.title}</div>}
+          {cl.title && <div className="text-[11px] font-bold text-ink-tertiary">{cl.title}</div>}
           {cl.items.map((it) => (
             <div key={it.id} className="flex items-center justify-between gap-2 rounded-lg bg-white border border-slate-200/80 px-2.5 py-1.5">
               <div className="min-w-0">
                 <div className="text-[11px] font-semibold text-ink-primary truncate">
                   {it.done && <span className="text-emerald-600 mr-1">✓</span>}{it.label}{it.required ? "" : <span className="text-ink-tertiary font-normal"> · optional</span>}
                 </div>
-                {it.section_title && <div className="text-[9px] text-ink-tertiary">{it.section_title}</div>}
+                {it.section_title && <div className="text-[11px] text-ink-tertiary">{it.section_title}</div>}
               </div>
               {it.field_kind === "check_result" ? (
                 <div className="flex-none flex items-center gap-1">
@@ -59,14 +59,14 @@ export default function BayChecklist({ orderId, onChange }: { orderId: string; o
                     const active = String(it.value).toLowerCase() === s.k;
                     return (
                       <button key={s.k} disabled={busy === it.id} onClick={() => setValue(cl.id, it, s.k)}
-                        className={`px-2 py-0.5 rounded-md text-[10px] font-bold border ${active ? s.on : s.cls + " bg-white hover:bg-slate-50"} disabled:opacity-50`}>
+                        className={`px-2 py-0.5 rounded-md text-[11px] font-bold border ${active ? s.on : s.cls + " bg-white hover:bg-slate-50"} disabled:opacity-50`}>
                         {s.label}
                       </button>
                     );
                   })}
                 </div>
               ) : (
-                <span className="flex-none text-[10px] text-ink-tertiary italic">{it.value != null && it.value !== "" ? "filled · open to edit" : "open job to fill"}</span>
+                <span className="flex-none text-[11px] text-ink-tertiary italic">{it.value != null && it.value !== "" ? "filled · open to edit" : "open job to fill"}</span>
               )}
             </div>
           ))}

@@ -204,7 +204,7 @@ so muting silences both channels.
 - `estimate.approved` — fired from the public/portal estimate accept path.
 - `booking.cancelled` — fired when a booking is set to `canceled`, to the booked tech.
 
-`chat.message` fires on an **inbound** customer message (`POST /api/chats/threads/{id}/inbound` and the Twilio webhook): RepairOS notifies the technician assigned to that client's most recent open order, deep-linking to it. No such tech ⇒ no-op.
+`chat.message` fires on an **inbound** customer message (`POST /api/chats/threads/{id}/inbound` and the Twilio webhook): Tekly notifies the technician assigned to that client's most recent open order, deep-linking to it. No such tech ⇒ no-op.
 
 **Real push:** with `VAPID_PUBLIC_KEY`/`VAPID_PRIVATE_KEY` set and `pywebpush`
 installed (now in `requirements.txt`), `_dispatch_push` sends a real encrypted

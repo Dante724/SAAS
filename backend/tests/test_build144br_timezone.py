@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone
 from zoneinfo import ZoneInfo
 
 from backend.routers.public import _local_now
+from backend.services.dates import now_utc
 
 WK = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"]
 
@@ -50,7 +51,7 @@ async def test_slots_under_nonutc_location(client):
                      json={"name": "Main", "timezone": "Asia/Kolkata", "working_hours": wh}, headers=H)
     await client.put("/api/staff/public-pages", json={"appointment_time_slot": 60}, headers=H)
 
-    day = (datetime.utcnow().date() + timedelta(days=7)).isoformat()
+    day = (now_utc().date() + timedelta(days=7)).isoformat()
     r = await client.get(f"/api/public/appointment/{slug}/slots", params={"date": day})
     assert r.status_code == 200, r.text
     assert r.json()["slots"] == ["10:00", "11:00"], r.json()

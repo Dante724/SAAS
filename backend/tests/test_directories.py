@@ -6,8 +6,10 @@ import pytest
 async def test_seed_and_system_directories(client, tenant):
     dirs = (await client.get("/api/directories", headers=tenant)).json()["items"]
     keys = {d["key"] for d in dirs}
-    assert {"asset_type", "manufacturer", "cancel_reason", "lead_source"} <= keys
-    assert all(d["is_system"] for d in dirs if d["key"] == "asset_type")
+    # only lists that feed a real field are seeded (asset types / manufacturers / payment methods
+    # live in Industry & assets and Finance)
+    assert {"cancel_reason", "lead_source"} <= keys
+    assert all(d["is_system"] for d in dirs if d["key"] in ("cancel_reason", "lead_source"))
     # system directories can't be deleted
     sysdir = next(d for d in dirs if d["is_system"])
     r = await client.delete(f"/api/directories/{sysdir['id']}", headers=tenant)
@@ -30,8 +32,8 @@ async def test_custom_directory_crud(client, tenant):
 
 @pytest.mark.asyncio
 async def test_items_add_list_delete_and_by_key(client, tenant):
-    dirs = (await client.get("/api/directories", headers=tenant)).json()["items"]
-    manuf = next(d for d in dirs if d["key"] == "manufacturer")
+    manuf = (await client.post("/api/directories", json={"key": "manufacturer", "name": "Manufacturers"},
+                               headers=tenant)).json()
     for v in ("Bosch", "Makita", "DeWalt"):
         r = await client.post(f"/api/directories/{manuf['id']}/items", json={"value": v}, headers=tenant)
         assert r.status_code == 201

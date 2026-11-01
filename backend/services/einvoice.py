@@ -1,6 +1,6 @@
 """144if / 144js — in-house e-invoicing (region-aware).
 
-Generates a standards-based UBL 2.1 Invoice XML from a RepairOS invoice. For EU
+Generates a standards-based UBL 2.1 Invoice XML from a Tekly invoice. For EU
 orgs the output targets **EN 16931 / Peppol BIS Billing 3.0** (the profile the EU
 e-invoicing mandates build on): correct CustomizationID + ProfileID, party country
 codes and legal entity, a real TaxTotal→TaxSubtotal with category + percent, and a
@@ -16,7 +16,6 @@ Point / accountant / customer.
 The XML assembly (`render_ubl`) is a pure function over a plain dict so it can be
 unit-tested without a database.
 """
-from datetime import datetime
 from xml.sax.saxutils import escape
 
 from sqlalchemy import select
@@ -24,11 +23,12 @@ from sqlalchemy import select
 from backend.models import Client, Invoice, LegalEntity, Organisation
 from backend.services import regions
 from backend.services.invoicing import display_lines
-from backend.services.money import q2, q4
+from backend.services.money import q2
+from backend.services.dates import now_utc
 
 
 def _d(dt) -> str:
-    return (dt or datetime.utcnow()).strftime("%Y-%m-%d")
+    return (dt or now_utc()).strftime("%Y-%m-%d")
 
 
 def _money(n) -> str:

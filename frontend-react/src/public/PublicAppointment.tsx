@@ -14,7 +14,8 @@ type Svc = { id: string; name: string; price?: number; duration_min?: number; ca
 type Staff = { id: string; name: string };
 type Loc = { id: string; name: string; address?: string | null; phone?: string | null; working_hours?: Record<string, { open?: string; close?: string; closed?: boolean }> };
 type Cfg = {
-  shop_name: string; logo_data?: string | null; color?: string | null;
+  shop_name: string; logo_data?: string | null; color?: string | null; currency?: string;
+  asset_label?: string; identifier?: { kind: "vin" | "hin" | "serial"; label: string; hint: string };
   show_employee_step?: boolean; time_slot?: number; window_days?: number;
   services: Svc[]; staff: Staff[]; locations: Loc[];
 };
@@ -24,15 +25,24 @@ type StepK = "loc" | "svc" | "emp" | "time" | "you";
 const slug = location.pathname.split("/book/")[1]?.replace(/\/$/, "") || "";
 const WEEK = ["mon", "tue", "wed", "thu", "fri", "sat", "sun"];
 
+let CUR = "$";   // the shop's currency symbol, set once the page config loads
 function money(n?: number) {
   if (n == null || n === 0) return "Free";
-  return "₹" + Number(n).toLocaleString("en-IN", { maximumFractionDigits: 0 });
+  return CUR + Number(n).toLocaleString(undefined, { maximumFractionDigits: 2 });
+}
+// "09:00" → "9 AM", "17:30" → "5:30 PM" — the same clock the rest of the app shows.
+function clock(hhmm: string) {
+  const [h, m] = hhmm.split(":").map(Number);
+  if (Number.isNaN(h)) return hhmm;
+  return new Date(2000, 0, 1, h, m || 0).toLocaleTimeString([], { hour: "numeric", minute: m ? "2-digit" : undefined });
 }
 function todayHours(l?: Loc | null) {
-  const h = l?.working_hours; if (!h) return null;
+  const h = l?.working_hours;
+  // No hours saved yet: the server books 09:00–18:00 every day, so say that rather than "Closed".
+  if (!h || !Object.keys(h).length) return `Open today ${clock("09:00")}–${clock("18:00")}`;
   const d = h[WEEK[(new Date().getDay() + 6) % 7]];
   if (!d || d.closed) return "Closed today";
-  return d.open && d.close ? `Open today ${d.open}–${d.close}` : null;
+  return d.open && d.close ? `Open today ${clock(d.open)}–${clock(d.close)}` : null;
 }
 function fmtDay(iso: string) {
   const d = new Date(iso + "T00:00:00");
@@ -44,7 +54,7 @@ function icsFor(shop: string, svc: string, date: string, time: string, durMin: n
   const start = (date + "T" + time).replace(/[-:]/g, "") + "00";
   const end = new Date(new Date(`${date}T${time}`).getTime() + durMin * 60000);
   const endS = `${end.getFullYear()}${pad(end.getMonth() + 1)}${pad(end.getDate())}T${pad(end.getHours())}${pad(end.getMinutes())}00`;
-  return ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//RepairOS//appointment//EN", "BEGIN:VEVENT",
+  return ["BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Tekly//appointment//EN", "BEGIN:VEVENT",
     `DTSTART:${start}`, `DTEND:${endS}`, `SUMMARY:${svc} — ${shop}`,
     address ? `LOCATION:${address.replace(/,/g, "\\,")}` : "", "END:VEVENT", "END:VCALENDAR"].filter(Boolean).join("\r\n");
 }
@@ -66,6 +76,7 @@ export default function PublicAppointment() {
   // details
   const [phone, setPhone] = useState(""); const [name, setName] = useState("");
   const [email, setEmail] = useState(""); const [note, setNote] = useState("");
+  const [ident, setIdent] = useState("");
   const [hello, setHello] = useState<string | null>(null);
   const helloAsked = useRef("");
   // flow — navigate by KEY: the employee step comes and goes per service,
@@ -85,7 +96,7 @@ export default function PublicAppointment() {
     fetch("/api/public/appointment/" + slug).then(async (r) => {
       if (!r.ok) throw new Error();
       const c: Cfg = await r.json();
-      setCfg(c);
+      CUR = c.currency || "$"; setCfg(c);
       setLocId(c.locations?.[0]?.id || null);
       setStepK((c.locations || []).length > 1 ? "loc" : "svc");
     }).catch(() => setErr("This appointment page is unavailable."));
@@ -171,7 +182,7 @@ export default function PublicAppointment() {
         method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ phone }),
       });
       const d = await r.json();
-      if (d.known) { setHello(d.name || "there"); if (d.name && !name) setName(d.name); }
+      if (d.known) setHello("");   // recognised; the server never sends the name back
       else setHello(null);
     } catch { /* silent */ }
   }
@@ -188,7 +199,7 @@ export default function PublicAppointment() {
         body: JSON.stringify({
           name: name.trim(), phone: phone.trim() || null, email: email.trim() || null,
           service_id: svc?.id || null, employee_id: empId, location_id: locId,
-          date, time, note: fullNote || null,
+          date, time, note: fullNote || null, identifier: ident.trim() || null,
         }),
       });
       const d = await r.json();
@@ -209,7 +220,7 @@ export default function PublicAppointment() {
         method: "POST", headers: { "Content-Type": "application/json" },
         body: JSON.stringify({
           name: name.trim(), phone: phone.trim() || null, email: email.trim() || null,
-          issue: (issue || note).trim() || null, service_name: svc?.name || null,
+          issue: (issue || note).trim() || null, service_name: svc?.name || null, identifier: ident.trim() || null,
         }),
       });
       if (!r.ok) throw new Error((await r.json()).detail || "Could not send your request");
@@ -228,7 +239,7 @@ export default function PublicAppointment() {
   }
 
   if (err) return <Shell accent="#0059ba"><div className="py-14 text-center text-ink-secondary">{err}</div></Shell>;
-  if (!cfg) return <div className="min-h-screen bg-surface" />;
+  if (!cfg) return <div className="min-h-screen bg-canvas" />;
 
   const noAvailability = days !== null && !days.some((d) => d.open && d.free > 0);
   const grouped: Record<string, string[]> = {};
@@ -247,7 +258,7 @@ export default function PublicAppointment() {
           <div className="mx-auto grid h-14 w-14 place-items-center rounded-full" style={{ background: `${accent}1f` }}>
             <Check size={28} style={{ color: accent }} />
           </div>
-          <h1 className="mt-4 text-xl font-extrabold text-ink-primary">
+          <h1 className="mt-4 text-xl font-bold text-ink-primary">
             {done.kind === "booked" ? "You're booked!" : "Request received"}
           </h1>
           <p className="mt-1.5 text-sm text-ink-secondary">
@@ -262,7 +273,7 @@ export default function PublicAppointment() {
           )}
           {(loc?.address || loc?.phone) && (
             <div className="mt-6 rounded-xl border border-slate-200 bg-white p-4 text-left">
-              <div className="flex items-center gap-1.5 text-[11px] font-extrabold uppercase tracking-[.07em] text-ink-tertiary"><MapPin size={13} /> {loc?.name || "Find us"}</div>
+              <div className="flex items-center gap-1.5 text-[11px] font-bold text-ink-tertiary"><MapPin size={13} /> {loc?.name || "Find us"}</div>
               {loc?.address && <div className="mt-1.5 text-[13px] text-ink-secondary">{loc.address}</div>}
               {todayHours(loc) && <div className="mt-1 flex items-center gap-1.5 text-xs text-ink-tertiary"><Clock size={12} /> {todayHours(loc)}</div>}
               <div className="mt-3 flex gap-2">
@@ -280,10 +291,17 @@ export default function PublicAppointment() {
   if (reqMode) {
     return (
       <Shell accent={accent} cfg={cfg} onBack={() => { setReqMode(false); setFlash(null); }}>
-        <h2 className="text-lg font-extrabold text-ink-primary">Leave a request</h2>
+        <h2 className="text-lg font-bold text-ink-primary">Leave a request</h2>
         <p className="mt-1 text-[13px] text-ink-tertiary">Tell us what you need and {cfg.shop_name} will call you back.</p>
         <label className={lbl}>What's the problem?</label>
-        <textarea value={issue} onChange={(e) => setIssue(e.target.value)} rows={3} className={input + " resize-y"} placeholder="e.g. Screen cracked on an iPhone 14, flickers when touched…" />
+        <textarea value={issue} onChange={(e) => setIssue(e.target.value)} rows={3} className={input + " resize-y"} placeholder={cfg.identifier?.kind === "vin" ? "e.g. Brakes squeal when stopping, check engine light on…" : cfg.identifier?.kind === "hin" ? "e.g. Outboard won't start after winter storage…" : "e.g. Screen cracked on an iPhone 14, flickers when touched…"} />
+        {cfg.identifier && (<>
+          <label className={lbl}>{cfg.asset_label ? `${cfg.asset_label} ` : ""}{cfg.identifier.label} <span className="font-normal text-ink-tertiary">(optional)</span></label>
+          <input value={ident} onChange={(e) => setIdent(cfg.identifier!.kind === "serial" ? e.target.value : e.target.value.toUpperCase())} maxLength={40}
+            autoCapitalize="characters" autoCorrect="off" spellCheck={false} className={input + " tabular-nums "}
+            placeholder={cfg.identifier.kind === "vin" ? "1HGCM82633A004352" : cfg.identifier.kind === "hin" ? "ABC12345D404" : ""} />
+          <div className="mt-1 text-[12px] text-ink-tertiary">{cfg.identifier.hint}{ident.trim() && cfg.identifier.kind === "vin" && ident.replace(/[\s-]/g, "").length !== 17 ? ` You've entered ${ident.replace(/[\s-]/g, "").length}.` : ""}{ident.trim() && cfg.identifier.kind === "hin" && ident.replace(/[\s-]/g, "").length !== 12 ? ` You've entered ${ident.replace(/[\s-]/g, "").length}.` : ""}</div>
+        </>)}
         <label className={lbl}>Your name</label>
         <input value={name} onChange={(e) => setName(e.target.value)} className={input} />
         <label className={lbl}>Phone</label>
@@ -302,7 +320,7 @@ export default function PublicAppointment() {
       {/* ── location ── */}
       {stepK === "loc" && (
         <>
-          <h2 className="text-lg font-extrabold text-ink-primary">Where would you like to go?</h2>
+          <h2 className="text-lg font-bold text-ink-primary">Where would you like to go?</h2>
           <div className="mt-4 flex flex-col gap-2.5">
             {locs.map((l) => (
               <button key={l.id} onClick={() => { setLocId(l.id); setStepK("svc"); }}
@@ -319,13 +337,13 @@ export default function PublicAppointment() {
       {/* ── service + catch-all ── */}
       {stepK === "svc" && (
         <>
-          <h2 className="text-lg font-extrabold text-ink-primary">What can we help with?</h2>
+          <h2 className="text-lg font-bold text-ink-primary">What can we help with?</h2>
           {cats.length > 0 && (
             <div className="mt-3 flex flex-wrap gap-2">
               {[null, ...cats].map((c) => (
                 <button key={c ?? "all"} onClick={() => setCat(c)}
                   className="rounded-full border px-3.5 py-1.5 text-[13px] font-bold"
-                  style={cat === c ? { background: accent, borderColor: accent, color: "#fff" } : { borderColor: "#c2c6d5", color: "#435577" }}>
+                  style={cat === c ? { background: accent, borderColor: accent, color: "#fff" } : { borderColor: "rgb(var(--c-line-300))", color: "rgb(var(--c-ink-secondary))" }}>
                   {c ?? "All"}
                 </button>
               ))}
@@ -339,7 +357,7 @@ export default function PublicAppointment() {
                   <span className="flex items-center gap-2 font-bold text-ink-primary"><Wrench size={15} style={{ color: accent }} /> {s.name}</span>
                   <span className="mt-0.5 block text-[13px] text-ink-tertiary">{[s.category, s.duration_min ? `${s.duration_min} min` : null].filter(Boolean).join(" · ")}</span>
                 </span>
-                <span className="whitespace-nowrap text-sm font-extrabold text-ink-primary">{money(s.price)}</span>
+                <span className="whitespace-nowrap text-sm font-bold text-ink-primary">{money(s.price)}</span>
               </button>
             ))}
             <div className={"rounded-xl border p-4 " + (catchAll ? "border-2" : "border-dashed border-slate-300")} style={catchAll ? { borderColor: accent } : undefined}>
@@ -367,7 +385,7 @@ export default function PublicAppointment() {
       {/* ── specialist ── */}
       {stepK === "emp" && (
         <>
-          <h2 className="text-lg font-extrabold text-ink-primary">Anyone in particular?</h2>
+          <h2 className="text-lg font-bold text-ink-primary">Anyone in particular?</h2>
           <div className="mt-4 flex flex-col gap-2.5">
             <button onClick={() => { setEmpId(null); goTime(svc, null); }} className={cardBtn + " border-slate-200 flex items-center gap-3"}>
               <span className="grid h-9 w-9 place-items-center rounded-full" style={{ background: `${accent}1f`, color: accent }}><Sparkles size={16} /></span>
@@ -376,7 +394,7 @@ export default function PublicAppointment() {
             </button>
             {staffFor.map((e) => (
               <button key={e.id} onClick={() => { setEmpId(e.id); goTime(svc, e.id); }} className={cardBtn + " border-slate-200 flex items-center gap-3"}>
-                <span className="grid h-9 w-9 place-items-center rounded-full text-sm font-extrabold text-white" style={{ background: accent }}>{e.name.slice(0, 1).toUpperCase()}</span>
+                <span className="grid h-9 w-9 place-items-center rounded-full text-sm font-bold text-white" style={{ background: accent }}>{e.name.slice(0, 1).toUpperCase()}</span>
                 <span className="flex items-center gap-2 font-bold text-ink-primary"><User size={14} className="text-ink-tertiary" /> {e.name}</span>
               </button>
             ))}
@@ -387,7 +405,7 @@ export default function PublicAppointment() {
       {/* ── time ── */}
       {stepK === "time" && (
         <>
-          <h2 className="text-lg font-extrabold text-ink-primary">Pick a time</h2>
+          <h2 className="text-lg font-bold text-ink-primary">Pick a time</h2>
           <div className="mt-1 text-[13px] text-ink-tertiary">
             {svc ? <>{svc.name} · {svc.duration_min || cfg.time_slot || 60} min · {money(svc.price)}</> : "We'll confirm the details when you arrive"}
           </div>
@@ -408,9 +426,9 @@ export default function PublicAppointment() {
                     <button key={d.date} disabled={off} onClick={() => pickDay(d.date)}
                       className={"min-w-[64px] rounded-xl border px-2 py-2 text-center " + (off ? "opacity-40 " : "") + "border-slate-200"}
                       style={sel ? { background: accent, borderColor: accent, color: "#fff" } : undefined}>
-                      <div className={"text-[10px] font-bold uppercase " + (sel ? "" : "text-ink-tertiary")}>{f.dow}</div>
-                      <div className="text-lg font-extrabold leading-tight">{f.num}</div>
-                      <div className={"text-[10px] font-semibold " + (sel ? "" : "text-ink-tertiary")}>{off ? "—" : `${d.free} free`}</div>
+                      <div className={"text-[11px] font-bold  " + (sel ? "" : "text-ink-tertiary")}>{f.dow}</div>
+                      <div className="text-lg font-bold leading-tight">{f.num}</div>
+                      <div className={"text-[11px] font-semibold " + (sel ? "" : "text-ink-tertiary")}>{off ? "—" : `${d.free} free`}</div>
                     </button>
                   );
                 })}
@@ -419,11 +437,11 @@ export default function PublicAppointment() {
               {slots !== null && slots.length === 0 && <div className="mt-4 text-sm text-ink-tertiary">No times left this day — try another.</div>}
               {Object.entries(grouped).map(([g, list]) => (
                 <div key={g} className="mt-4">
-                  <div className="text-[11px] font-extrabold uppercase tracking-[.07em] text-ink-tertiary">{g}</div>
+                  <div className="text-[11px] font-bold text-ink-tertiary">{g}</div>
                   <div className="mt-2 flex flex-wrap gap-2">
                     {list.map((t) => (
                       <button key={t} onClick={() => setTime(t)} className="rounded-lg border px-4 py-2 text-sm font-bold"
-                        style={time === t ? { background: accent, borderColor: accent, color: "#fff" } : { borderColor: "#c2c6d5", color: "#14213f" }}>
+                        style={time === t ? { background: accent, borderColor: accent, color: "#fff" } : { borderColor: "rgb(var(--c-line-300))", color: "rgb(var(--c-ink-primary))" }}>
                         {t}
                       </button>
                     ))}
@@ -440,17 +458,24 @@ export default function PublicAppointment() {
       {/* ── details ── */}
       {stepK === "you" && (
         <>
-          <h2 className="text-lg font-extrabold text-ink-primary">Almost done</h2>
+          <h2 className="text-lg font-bold text-ink-primary">Almost done</h2>
           <div className="mt-1 text-[13px] text-ink-tertiary">
             {[svc?.name || (catchAll ? "Repair visit" : null), date && time ? `${date} at ${time}` : null].filter(Boolean).join(" · ")}
           </div>
           <label className={lbl}>Phone</label>
           <input value={phone} onChange={(e) => setPhone(e.target.value)} onBlur={checkHello} inputMode="tel" className={input} placeholder="So we can confirm your appointment" autoFocus />
-          {hello && <div className="mt-2 rounded-lg px-3 py-2 text-[13px] font-semibold" style={{ background: `${accent}14`, color: accent }}>Welcome back, {hello}!</div>}
+          {hello !== null && <div className="mt-2 rounded-lg px-3 py-2 text-[13px] font-semibold" style={{ background: `${accent}14`, color: accent }}>Welcome back!</div>}
           <label className={lbl}>Your name</label>
           <input value={name} onChange={(e) => setName(e.target.value)} className={input} />
           <label className={lbl}>Email <span className="font-normal text-ink-tertiary">(optional)</span></label>
           <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" className={input} />
+          {cfg.identifier && (<>
+            <label className={lbl}>{cfg.asset_label ? `${cfg.asset_label} ` : ""}{cfg.identifier.label} <span className="font-normal text-ink-tertiary">(optional)</span></label>
+            <input value={ident} onChange={(e) => setIdent(cfg.identifier!.kind === "serial" ? e.target.value : e.target.value.toUpperCase())} maxLength={40}
+              autoCapitalize="characters" autoCorrect="off" spellCheck={false} className={input + " tabular-nums "}
+              placeholder={cfg.identifier.kind === "vin" ? "1HGCM82633A004352" : cfg.identifier.kind === "hin" ? "ABC12345D404" : ""} />
+            <div className="mt-1 text-[12px] text-ink-tertiary">{cfg.identifier.hint}{ident.trim() && cfg.identifier.kind === "vin" && ident.replace(/[\s-]/g, "").length !== 17 ? ` You've entered ${ident.replace(/[\s-]/g, "").length}.` : ""}{ident.trim() && cfg.identifier.kind === "hin" && ident.replace(/[\s-]/g, "").length !== 12 ? ` You've entered ${ident.replace(/[\s-]/g, "").length}.` : ""}</div>
+          </>)}
           <label className={lbl}>Anything we should know? <span className="font-normal text-ink-tertiary">(optional)</span></label>
           <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} className={input + " resize-y"} />
           {flash && <div className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-[13px] font-semibold text-rose-600">{flash}</div>}
@@ -469,7 +494,7 @@ function Shell({ accent, cfg, steps, at, onBack, children }: {
   onBack?: () => void; children: ReactNode;
 }) {
   return (
-    <div className="min-h-screen bg-surface font-sans text-ink-primary">
+    <div className="min-h-screen bg-canvas font-sans text-ink-primary">
       <div className="mx-auto max-w-md px-4 py-7">
         <div className="mb-5 flex items-center gap-3">
           {onBack && (
@@ -479,23 +504,23 @@ function Shell({ accent, cfg, steps, at, onBack, children }: {
           )}
           {cfg?.logo_data
             ? <img src={cfg.logo_data} alt={cfg.shop_name} className="h-10 w-10 shrink-0 rounded-xl object-contain" style={{ background: "#fff" }} />
-            : <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-[15px] font-extrabold text-white" style={{ background: accent }}>
+            : <div className="grid h-10 w-10 shrink-0 place-items-center rounded-xl text-[15px] font-bold text-white" style={{ background: accent }}>
                 {(cfg?.shop_name || "R").trim().split(/\s+/).slice(0, 2).map((w) => w[0]).join("").toUpperCase()}
               </div>}
           <div className="min-w-0">
-            <div className="truncate text-[15px] font-extrabold text-ink-primary">{cfg?.shop_name || "Book an appointment"}</div>
+            <div className="truncate text-[15px] font-bold text-ink-primary">{cfg?.shop_name || "Book an appointment"}</div>
             <div className="text-xs font-semibold text-ink-tertiary">Book an appointment</div>
           </div>
         </div>
         {steps != null && at != null && (
           <div className="mb-5 flex gap-1.5">
             {Array.from({ length: steps }, (_, i) => (
-              <div key={i} className="h-1 flex-1 rounded-full" style={{ background: i <= at ? accent : "#dde2ee" }} />
+              <div key={i} className="h-1 flex-1 rounded-full" style={{ background: i <= at ? accent : "rgb(var(--c-slate-200))" }} />
             ))}
           </div>
         )}
         <div className="rounded-2xl border border-slate-200 bg-white p-5 sm:p-6">{children}</div>
-        <div className="mt-6 text-center text-[11.5px] text-ink-tertiary">Powered by RepairOS</div>
+        <div className="mt-6 text-center text-[11.5px] text-ink-tertiary">Powered by Tekly</div>
       </div>
     </div>
   );

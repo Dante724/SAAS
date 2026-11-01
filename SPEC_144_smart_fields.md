@@ -1,7 +1,7 @@
 # Spec — Smart Fields: forms that think (beyond Orderry)
 
 Status: Draft · Owner: Chomu · Target build: 144gp+
-Scope: make RepairOS custom fields *do work*, not just store values — conditional
+Scope: make Tekly custom fields *do work*, not just store values — conditional
 visibility, a single field-rule surface shared with the checklist/status engines,
 and self-filling fields. Built on the existing `CustomField` + `FormLayout` models
 and the WorkOrder forms editor; reuses the recommendation and status-gate engines

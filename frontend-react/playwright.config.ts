@@ -16,7 +16,8 @@ export default defineConfig({
     screenshot: "only-on-failure",
   },
   projects: [
-    { name: "setup", testMatch: /auth\.setup\.ts/ },
+    // The sign-in step starts logged out; it is what writes e2e/.auth/state.json.
+    { name: "setup", testMatch: /auth\.setup\.ts/, use: { storageState: { cookies: [], origins: [] } } },
     { name: "chromium", use: { ...devices["Desktop Chrome"] }, dependencies: ["setup"] },
   ],
 });

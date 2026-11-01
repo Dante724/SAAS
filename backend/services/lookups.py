@@ -17,7 +17,7 @@ import logging
 
 from backend.config import settings
 
-log = logging.getLogger("repairos.lookups")
+log = logging.getLogger("tekly.lookups")
 
 
 # ── VIN ──────────────────────────────────────────────────────────────────────

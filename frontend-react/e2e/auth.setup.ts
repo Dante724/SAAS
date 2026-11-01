@@ -9,8 +9,10 @@ setup("authenticate", async ({ page }) => {
     throw new Error("Set E2E_EMAIL and E2E_PASSWORD to run the E2E suite (see e2e/README.md).");
   }
   await page.goto("/login");
+  // Two-step sign-in: email → Continue → password → Sign in.
   await page.getByLabel(/email/i).fill(email);
-  await page.getByLabel(/password/i).fill(password);
+  await page.getByRole("button", { name: /continue/i }).click();
+  await page.getByLabel(/^password/i).fill(password);
   await page.getByRole("button", { name: /sign in|log in/i }).click();
   await expect(page).not.toHaveURL(/\/login/);   // landed somewhere inside the app
   await page.context().storageState({ path: "e2e/.auth/state.json" });

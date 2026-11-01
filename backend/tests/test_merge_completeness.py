@@ -31,6 +31,8 @@ def test_fk_target_set_is_complete():
         for col in mapper.columns:
             if any(fk.column.table.name == "clients" for fk in col.foreign_keys):
                 expected.add((cls.__name__, col.key))
+    # Portal links are revoked on merge/delete, never moved to another contact.
+    expected.discard(("ClientPortalLink", "client_id"))
     assert discovered == expected and len(expected) >= 20, (discovered ^ expected)
     # The two FKs the old 6-table list missed must be present.
     assert ("Coupon", "client_id") in discovered

@@ -1,6 +1,6 @@
 """144jr — RegionPack: the pluggable localization spine.
 
-One place that says, per country/region, how RepairOS should behave: which tax
+One place that says, per country/region, how Tekly should behave: which tax
 model, currency, e-invoice standard, accountant exports, dunning channel, and
 number formatting are correct there. The finance core reads a pack; adding a
 market is data here (+ an e-invoice adapter later), not a rewrite.

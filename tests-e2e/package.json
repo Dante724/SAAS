@@ -1,11 +1,10 @@
 {
-  "name": "repairos-e2e",
+  "name": "tekly-e2e",
   "private": true,
   "version": "1.0.0",
-  "description": "Playwright + Lighthouse e2e for the RepairOS technician PWA",
+  "description": "Playwright + Lighthouse e2e for the Tekly technician PWA",
   "scripts": {
     "test": "playwright test",
-    "test:frontend": "node ../frontend/tests/industry_modal.test.js",
     "install-browsers": "playwright install --with-deps chromium"
   },
   "devDependencies": {

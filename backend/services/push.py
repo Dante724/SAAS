@@ -5,13 +5,12 @@ StaffNotification (which powers the in-app unread count and the technician
 dashboard) and then best-effort delivers a Web Push message to that employee's
 subscribed devices.
 
-Delivery is gated like every other provider in RepairOS: without VAPID keys it
+Delivery is gated like every other provider in Tekly: without VAPID keys it
 is logged/simulated, never failing the caller. With keys + the `pywebpush`
 package installed it sends a real encrypted push.
 """
 import json
 import logging
-from datetime import datetime
 from typing import Optional
 
 from sqlalchemy import select
@@ -19,13 +18,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
 from backend.models import PushSubscription, StaffNotification
+from backend.services.dates import now_utc
 
-log = logging.getLogger("repairos.push")
+log = logging.getLogger("tekly.push")
 
 VALID_KINDS = {
     "job.assigned", "schedule.changed", "chat.message",
     "estimate.approved", "appointment.cancelled", "payment.received",
-    "inventory.reorder",
+    "inventory.reorder", "membership.alert",
 }
 
 
@@ -80,7 +80,7 @@ async def _dispatch_push(db: AsyncSession, employee_id: str, payload: dict) -> N
     except Exception:
         log.warning("pywebpush not installed; push not sent (employee=%s)", employee_id)
         return
-    claims = {"sub": f"mailto:{getattr(settings, 'VAPID_CLAIMS_EMAIL', 'admin@repairos.dev')}"}
+    claims = {"sub": f"mailto:{settings.VAPID_CLAIMS_EMAIL}"}
     for s in subs:
         try:
             webpush(
@@ -90,7 +90,7 @@ async def _dispatch_push(db: AsyncSession, employee_id: str, payload: dict) -> N
                 vapid_private_key=settings.VAPID_PRIVATE_KEY,
                 vapid_claims=dict(claims),
             )
-            s.last_used_at = datetime.utcnow()
+            s.last_used_at = now_utc()
         except Exception as e:  # pragma: no cover - needs live endpoint
             code = getattr(getattr(e, "response", None), "status_code", None)
             if code in (404, 410):  # gone -> prune dead subscription

@@ -128,7 +128,7 @@ inventory/ledger suites (currently 32 green) so nothing regresses.
 
 ## 5. "Better than Orderry" scorecard
 
-| Capability | Orderry | RepairOS today | After P0–P1 |
+| Capability | Orderry | Tekly today | After P0–P1 |
 |---|---|---|---|
 | Post PO to stock | ✅ one click | ❌ unreachable | ✅ + per‑line/partial |
 | Cost method | Moving average | WAC (2 inconsistent) | **WAC + FIFO layers, one basis** |

@@ -1,11 +1,11 @@
-.PHONY: install dev run test test-pg lint fmt migrate revision seed ci ci-backend ci-frontend
+.PHONY: install dev run test test-pg lint fmt migrate revision seed ci ci-backend ci-frontend ci-security
 # Same env CI uses (see .github/workflows/ci.yml) so local results match CI.
 CI_ENV = ENVIRONMENT=test SEED_DEMO=false DATABASE_URL=sqlite+aiosqlite:///./ci_test.db
 
 install:        ## install runtime + dev deps (pinned — same versions as CI)
 	pip install -r requirements-dev.txt
 run:            ## run the API (dev)
-	uvicorn main:app --reload
+	ENVIRONMENT=$${ENVIRONMENT:-development} uvicorn main:app --reload
 test:           ## run the backend test suite (parallel)
 	pytest -q -n auto
 test-pg:        ## run the suite against Postgres: make test-pg PG=postgresql+asyncpg://user:pass@localhost:5432/repairos_test
@@ -21,7 +21,7 @@ revision:       ## autogenerate a migration: make revision m="add x"
 seed:           ## seed demo data (dev)
 	SEED_DEMO=true python -c "import asyncio; from scripts.seed import seed_demo_data; asyncio.run(seed_demo_data())"
 
-ci: ci-backend ci-frontend   ## run EVERY CI gate locally, in CI order. Green here == green in CI.
+ci: ci-backend ci-frontend ci-security   ## run the CI gates locally for free (Postgres: make test-pg). Green here == green in CI.
 	@echo "✓ all CI gates passed"
 
 ci-backend:     ## backend gates: lint → migrations from scratch → tests
@@ -32,3 +32,9 @@ ci-backend:     ## backend gates: lint → migrations from scratch → tests
 
 ci-frontend:    ## frontend gates: typecheck → ui-text lint → unit tests → build
 	cd frontend-react && npx tsc --noEmit && npm run lint:uitext && npm run test:coverage && npm run build
+
+ci-security:    ## security gates: ruff correctness on all backend code, npm audit, plus pip-audit / gitleaks when installed
+	ruff check backend main.py scripts --select F,E9
+	cd frontend-react && npm audit --omit=dev --audit-level=moderate
+	@if command -v pip-audit >/dev/null; then pip-audit -r requirements.lock --disable-pip --strict; else echo "skip pip-audit (pip install pip-audit==2.9.0)"; fi
+	@if command -v gitleaks >/dev/null; then gitleaks detect --source . --redact --no-banner --exit-code 1; else echo "skip gitleaks (brew install gitleaks)"; fi

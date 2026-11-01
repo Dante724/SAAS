@@ -11,11 +11,10 @@ CRUD, plus the two things a shop actually does with a supplier:
     that's waiting on the part, so when the goods land they're already spoken for
     rather than being sold to whoever walks in first.
 """
-from datetime import date, datetime
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy import update as sa_update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -27,11 +26,12 @@ from backend.models import (
     Part,
     POLine,
     PurchaseOrder,
-    StockReservation,
     Supplier,
 )
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.money import q2, q4
+from backend.services.money import q2
+from backend.services.dates import shop_today
+from backend.core.spreadsheet import MAX_IMPORT_ROWS
 
 router = APIRouter(prefix="/api/suppliers", tags=["inventory"])
 
@@ -63,7 +63,7 @@ async def list_suppliers(
 async def supplier_ledger(
     supplier_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_finance")),
 ):
     """Build 124 — the supplier's Balance tab: the unified contact ledger for the
     contact this supplier mirrors (``Supplier.client_id``). Postings we owe show as
@@ -120,7 +120,7 @@ async def pay_supplier(
     owe (single source in services/ledger). A payment therefore subtracts from
     Supplier.balance and posts a positive contact row that moves the contact toward zero.
     """
-    from backend.models import Account, Client
+    from backend.models import Account
     s = await _load(db, current, supplier_id)
     amount = q2(float(data.amount or 0))
     if amount <= 0:
@@ -183,8 +183,9 @@ async def supplier_performance(
         by_part: dict = {}
         for l in lines:
             by_part.setdefault(l.part_id, []).append((po_time.get(l.po_id), l.unit_cost or 0))
-        part_names = {p.id: p.name for p in (await db.execute(
-            select(Part).where(Part.org_id == current.org_id))).scalars().all()}
+        from backend.services.batching import names_by_id
+        part_names = await names_by_id(db, Part.id, Part.name, by_part,
+                                       org_col=Part.org_id, org_id=current.org_id)
         for pid, seq in by_part.items():
             seq = [x for x in seq if x[0] is not None]
             if len(seq) < 2:
@@ -285,7 +286,7 @@ async def delete_supplier(
 
 # ── price-list import ────────────────────────────────────────────────────────
 class PriceListIn(BaseModel):
-    rows: list[dict]
+    rows: list[dict] = Field(max_length=MAX_IMPORT_ROWS)
     mapping: dict[str, str]        # {source_column: field}  field ∈ IMPORTABLE
     match_on: str = "sku"          # sku|barcode
     create_missing: bool = False   # add products the price list has and we don't
@@ -340,9 +341,14 @@ async def import_price_list(
                     errors.append({"row": i + 1, "error": f"{money} isn't a number"})
                     rec.pop(money)
 
-        col = Part.sku if data.match_on == "sku" else Part.barcode
-        part = (await db.execute(select(Part).where(
-            Part.org_id == current.org_id, col == str(key)))).scalars().first()
+        if data.match_on == "sku":
+            part = (await db.execute(select(Part).where(
+                Part.org_id == current.org_id, Part.sku == str(key)))).scalars().first()
+        else:       # ii144b: any form of the barcode (UPC-A / EAN-13 / extra barcodes)
+            from backend.services import product_codes
+            part = (await db.execute(select(Part).where(Part.org_id == current.org_id, or_(
+                Part.barcode == str(key), Part.id.in_(product_codes.barcode_part_ids(current.org_id, str(key)))))
+            )).scalars().first()
 
         if not part:
             if not data.create_missing:
@@ -455,29 +461,29 @@ async def incoming_stock(
          .where(Supplier.org_id == current.org_id,
                 PurchaseOrder.status.notin_(["received", "canceled", "cancelled"])))
     pos = (await db.execute(q)).scalars().all()
-    today = date.today()
+    today = await shop_today(db, current.org_id)
 
+    from backend.services.batching import names_by_id, rows_by
+    lines_by = await rows_by(db, POLine, POLine.po_id, [po.id for po in pos])
+    order_no = await names_by_id(db, Order.id, Order.order_number,
+                                 [ln.reserved_order_id for ls in lines_by.values() for ln in ls],
+                                 org_col=Order.org_id, org_id=current.org_id)
     items = []
     for po in pos:
-        lines = (await db.execute(select(POLine).where(POLine.po_id == po.id))).scalars().all()
-        for ln in lines:
+        for ln in lines_by.get(po.id, []):
             if part_id and ln.part_id != part_id:
                 continue
             outstanding = (ln.qty_ordered or 0) - (ln.qty_received or 0)
             if outstanding <= 0:
                 continue
             expected = po.expected_at.date() if po.expected_at else None
-            order_no = None
-            if ln.reserved_order_id:
-                order_no = (await db.execute(select(Order.order_number).where(
-                    Order.id == ln.reserved_order_id))).scalar_one_or_none()
             items.append({
                 "po_id": po.id, "po_number": po.po_number, "line_id": ln.id,
                 "part_id": ln.part_id, "qty_incoming": outstanding,
                 "expected_at": expected.isoformat() if expected else None,
                 "delayed": bool(expected and expected < today),
                 "reserved_order_id": ln.reserved_order_id,
-                "reserved_for": order_no,
+                "reserved_for": order_no.get(ln.reserved_order_id),
             })
     return {"items": items}
 

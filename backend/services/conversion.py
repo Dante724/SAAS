@@ -15,7 +15,6 @@ Rules (Orderry):
   * Conversion documents are never deleted. Reversal = the opposite conversion,
     which writes a second document and links the two.
 """
-from datetime import datetime
 from typing import Optional
 
 from fastapi import HTTPException
@@ -26,11 +25,9 @@ from backend.models import (
     AssetProductConversion,
     Device,
     Order,
-    OrderLine,
     OrderStatus,
     Part,
     SerializedItem,
-    StockLevel,
 )
 
 OPEN_UNIT_STATUSES = ("allocated_to_order",)
@@ -44,7 +41,7 @@ async def _is_on_open_order(db: AsyncSession, org_id: str, unit: SerializedItem)
     if not order or order.archived:
         return False
     terminal = (await db.execute(select(OrderStatus.is_terminal).where(
-        OrderStatus.org_id == org_id, OrderStatus.key == order.status))).scalar_one_or_none()
+        OrderStatus.org_id == org_id, OrderStatus.key == order.status))).scalars().first()
     return not bool(terminal)
 
 
@@ -132,13 +129,17 @@ async def product_to_asset(db: AsyncSession, org_id: str, employee_id: str, *,
     # ── inventory effect: a company unit leaves available stock ───────────────
     owner_before = "company"
     if unit.location_id:
-        sl = (await db.execute(select(StockLevel).where(
-            StockLevel.part_id == part.id,
-            StockLevel.location_id == unit.location_id))).scalar_one_or_none()
-        if sl and sl.qty_available > 0:
-            sl.qty_available -= 1
+        from backend.services import stock_rows
+        have, _held = await stock_rows.totals(db, part.id, unit.location_id)
+        if have > 0:      # out of the unit's own bin first
+            try:
+                await stock_rows.draw(db, part.id, unit.location_id, min(1, have), bin_id=unit.bin_id)
+            except stock_rows.NotEnoughStock:
+                pass      # taken concurrently — never below zero, as before
     unit.status = "converted_to_asset"
     unit.converted_asset_id = device.id
+    from backend.services import serial_log
+    serial_log.record(db, unit, "converted", ref_type="asset", ref_id=device.id, label="Turned into an asset")
 
     conv = AssetProductConversion(
         org_id=org_id, direction="product_to_asset", part_id=part.id,
@@ -198,12 +199,14 @@ async def _load_device(db: AsyncSession, org_id: str, device_id: str) -> Device:
     device = (await db.execute(select(Device).where(Device.id == device_id))).scalar_one_or_none()
     if not device:
         raise HTTPException(404, "Asset not found")
-    # tenant check: company-owned assets carry no client, so verify via the client
-    if device.client_id:
+    # tenant check: assets carry org_id; rows not yet backfilled fall back to the owning
+    # client's org. A row with neither can't be proven ours, so it is not found.
+    owner_org = device.org_id
+    if not owner_org and device.client_id:
         owner_org = (await db.execute(select(Client.org_id).where(
             Client.id == device.client_id))).scalar_one_or_none()
-        if owner_org != org_id:
-            raise HTTPException(404, "Asset not found")
+    if owner_org != org_id:
+        raise HTTPException(404, "Asset not found")
     return device
 
 
@@ -225,7 +228,7 @@ async def asset_to_product(db: AsyncSession, org_id: str, employee_id: str, *,
         Order.archived == False))).scalars().all()  # noqa: E712
     for o in open_order:
         terminal = (await db.execute(select(OrderStatus.is_terminal).where(
-            OrderStatus.org_id == org_id, OrderStatus.key == o.status))).scalar_one_or_none()
+            OrderStatus.org_id == org_id, OrderStatus.key == o.status))).scalars().first()
         if not terminal:
             raise HTTPException(
                 409, f"This asset is on open work order {o.order_number}. Close it first.")
@@ -287,14 +290,12 @@ async def asset_to_product(db: AsyncSession, org_id: str, employee_id: str, *,
             status="in_stock")
         db.add(unit)
         await db.flush()
+        from backend.services import serial_log
+        serial_log.record(db, unit, "received", ref_type="asset", ref_id=device.id, label="From an asset")
         loc = unit.location_id
         if loc:
-            sl = (await db.execute(select(StockLevel).where(
-                StockLevel.part_id == part.id, StockLevel.location_id == loc))).scalar_one_or_none()
-            if sl:
-                sl.qty_available += 1
-            else:
-                db.add(StockLevel(part_id=part.id, location_id=loc, qty_available=1, qty_reserved=0))
+            from backend.services import stock_rows
+            await stock_rows.add(db, part.id, loc, 1, bin_id=unit.bin_id)
 
     device.converted_to_part_id = part.id
     device.asset_status = "for_sale" if create_stock_unit else device.asset_status
@@ -354,3 +355,8 @@ def serialize(c: AssetProductConversion) -> dict:
         "created_at": c.created_at.isoformat() if c.created_at else None,
         "metadata": c.metadata_json or {},
     }
+
+
+async def _atomic_add(db, obj, attr, delta, *, round_to=None):
+    from backend.services.money import add_to_column
+    return await add_to_column(db, obj, attr, delta, round_to=round_to)

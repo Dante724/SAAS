@@ -54,3 +54,26 @@ async def test_board_renders_partial_device_name(client, tenant):
     cards = [c for col in b.json()["columns"] for c in col["cards"]]
     assert any((c["device"] or "").strip() == "Apple" for c in cards), \
         [c["device"] for c in cards]
+
+
+@pytest.mark.asyncio
+async def test_board_cards_carry_complaint_due_and_age(client, tenant):
+    """Tekly Go's Today rows read "Device · Problem" and the promised time off board cards."""
+    loc = await _loc(client, tenant)
+    cid = (await client.post("/api/clients", json={"name": "Cy", "phone": "+15550003"},
+                             headers=tenant)).json()["id"]
+    o = await client.post("/api/orders", json={
+        "client_id": cid, "location_id": loc, "complaint": "Cracked screen",
+        "asset_brand": "Apple", "asset_model": "iPhone 14 Pro",
+        "due_at": "2030-01-02T15:30:00"}, headers=tenant)
+    assert o.status_code == 201, o.text
+
+    b = await client.get("/api/orders/board?is_estimate=false", headers=tenant)
+    assert b.status_code == 200, b.text
+    card = [c for col in b.json()["columns"] for c in col["cards"]][0]
+    assert card["device"] == "Apple iPhone 14 Pro"
+    assert card["complaint"] == "Cracked screen"
+    assert card["due_at"].startswith("2030-01-02T15:30")
+    assert card["created_at"]
+    assert card["age_days"] == 0
+    assert card["overdue"] is False

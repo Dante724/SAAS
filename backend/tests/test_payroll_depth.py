@@ -205,7 +205,8 @@ async def test_coefficient_upsert_not_duplicated(client, tenant):
 @pytest.mark.asyncio
 async def test_current_month_accrual_rejected_draft_allowed(client, tenant):
     me = (await client.get("/api/auth/me", headers=tenant)).json()
-    today = date.today()
+    from backend.services.dates import today_in
+    today = today_in("Asia/Kolkata")   # the test shop's day: "current month" is the shop's
     ps, pe = today.replace(day=1).isoformat(), today.isoformat()
     r = await client.post("/api/payroll/run", json={
         "employee_id": me["id"], "period_start": ps, "period_end": pe, "base_salary": 1000}, headers=tenant)
@@ -229,7 +230,8 @@ async def test_past_month_accrual_and_duplicate_guard(client, tenant):
         "employee_id": me["id"], "period_start": ps, "period_end": pe, "base_salary": 1000}, headers=tenant)
     assert r2.status_code == 409         # one accrual per employee per period
 
-    paid = await client.post(f"/api/payroll/runs/{r1.json()['id']}/pay", headers=tenant)
+    till = (await client.post("/api/cash/accounts", json={"name": "Till"}, headers=tenant)).json()["id"]
+    paid = await client.post(f"/api/payroll/runs/{r1.json()['id']}/pay", json={"account_id": till}, headers=tenant)
     assert paid.status_code == 200
     assert await _balance(client, tenant, me["id"]) == pytest.approx(0.0)   # payout drew it down
 

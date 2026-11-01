@@ -4,6 +4,7 @@ from sqlalchemy import select
 
 from backend.models import Client, Employee, Feedback, Order, Role
 from backend.services.auth import hash_password
+from backend.services.dates import now_utc
 
 
 async def _me(client, H):
@@ -39,7 +40,7 @@ async def test_feedback_report_average_and_distribution(client, tenant, db):
     from datetime import datetime
     for rating in (5, 4, 5):
         db.add(Feedback(org_id=me["org_id"], order_id=o["id"], system="five_point",
-                        rating=rating, submitted_at=datetime.utcnow()))
+                        rating=rating, submitted_at=now_utc()))
     db.add(Feedback(org_id=me["org_id"], order_id=o["id"], system="five_point"))  # not submitted
     await db.commit()
 
@@ -60,7 +61,7 @@ async def test_feedback_report_computes_real_nps(client, tenant, db):
                            headers=tenant)).json()
     for rating in (10, 9, 8, 3):     # 2 promoters, 1 passive, 1 detractor
         db.add(Feedback(org_id=me["org_id"], order_id=o["id"], system="nps",
-                        rating=rating, submitted_at=datetime.utcnow()))
+                        rating=rating, submitted_at=now_utc()))
     await db.commit()
     r = (await client.get("/api/feedback/report", headers=tenant)).json()
     assert r["promoters"] == 2 and r["passives"] == 1 and r["detractors"] == 1

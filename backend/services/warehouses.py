@@ -223,7 +223,7 @@ async def on_order_status(db: AsyncSession, org_id: str, order, status_key: str,
 
     from backend.models import OrderStatus
     st = (await db.execute(select(OrderStatus).where(
-        OrderStatus.org_id == org_id, OrderStatus.key == status_key))).scalar_one_or_none()
+        OrderStatus.org_id == org_id, OrderStatus.key == status_key))).scalars().first()
     group = (st.status_group if st else "") or ""
 
     if group == "new":

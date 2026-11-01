@@ -58,3 +58,10 @@ describe("searchSections", () => {
     expect(searchSections("zzzznotathing")).toEqual([]);
   });
 });
+
+describe("integrations that aren't real yet stay hidden", () => {
+  it("E-commerce isn't in the nav or search without the beta flag", () => {
+    expect(NAV.some((n) => n.id === "ecommerce")).toBe(false);
+    expect(searchSections("shopify")).toEqual([]);
+  });
+});

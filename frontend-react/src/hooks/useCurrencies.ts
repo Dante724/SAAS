@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
+import { loadFailed } from "../lib/notice";
 
 export type CurBase = { code: string; symbol: string; position?: string };
 export type CurItem = { code: string; symbol: string; position?: string; rate: number };
@@ -13,7 +14,7 @@ export function useCurrencies() {
   useEffect(() => {
     api.get<{ base: CurBase; items: CurItem[] }>("/finance/currencies")
       .then((r) => { setBase(r.base); setItems(r.items || []); })
-      .catch(() => {});
+      .catch(loadFailed("currencies"));
   }, []);
   const opts: [string, string][] = base
     ? [[base.code, `${base.code} — ${base.symbol} (base)`],

@@ -14,7 +14,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import or_, select
+from sqlalchemy import and_, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
@@ -31,6 +31,7 @@ from backend.models import (
 from backend.services import industry as I
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.lookups import decode_hin, decode_imei, decode_vin
+from backend.core.spreadsheet import MAX_IMPORT_ROWS, too_many_rows
 
 router = APIRouter(prefix="/api/settings", tags=["settings"])
 scan_router = APIRouter(prefix="/api/assets", tags=["assets"])
@@ -119,6 +120,9 @@ async def set_industry_template(
         raise HTTPException(422, f"Unknown template. Valid: {I.TEMPLATE_KEYS}")
     o = await _org(db, current.org_id)
     o.industry_template = data.template_key
+    from backend.services import multi_asset as _ma
+    if not _ma.available(o):       # several items per job: tools / equipment / phone / computer only
+        o.multi_asset_jobs = False
     await db.commit()
     created = await I.ensure_industry_seed(db, current.org_id, only_template=data.template_key)
     return {"ok": True, "current": data.template_key, "seeded": created,
@@ -243,7 +247,7 @@ async def create_brand(
     # app-level dedupe (nullable group makes the DB UNIQUE NULL-distinct)
     dup = (await db.execute(select(AssetBrand).where(
         AssetBrand.org_id == current.org_id, AssetBrand.template_key == tk,
-        AssetBrand.name.ilike(name),
+        func.lower(AssetBrand.name) == name.lower(),
         (AssetBrand.asset_group_id == data.asset_group_id) if data.asset_group_id
         else AssetBrand.asset_group_id.is_(None)))).scalar_one_or_none()
     if dup:
@@ -348,7 +352,7 @@ async def create_model(
     await _group(db, current.org_id, data.asset_group_id)
     dup = (await db.execute(select(AssetModel).where(
         AssetModel.org_id == current.org_id, AssetModel.template_key == tk,
-        AssetModel.brand_id == data.brand_id, AssetModel.name.ilike(name)))).scalar_one_or_none()
+        AssetModel.brand_id == data.brand_id, func.lower(AssetModel.name) == name.lower()))).scalar_one_or_none()
     if dup:
         raise HTTPException(409, "That model already exists for this brand")
     m = AssetModel(org_id=current.org_id, template_key=tk, brand_id=data.brand_id,
@@ -447,7 +451,11 @@ async def import_directory_csv(
 
     made = {"brands": 0, "models": 0}
     brand_cache: dict[tuple, AssetBrand] = {}
-    for raw in reader:
+    import itertools
+    rows = list(itertools.islice(reader, MAX_IMPORT_ROWS + 1))
+    if len(rows) > MAX_IMPORT_ROWS:
+        raise HTTPException(413, too_many_rows(len(rows)))
+    for raw in rows:
         row = {(k or "").strip().lower(): (v or "").strip() for k, v in raw.items()}
         bname = row.get("brand")
         if not bname:
@@ -458,7 +466,7 @@ async def import_directory_csv(
         if not brand:
             brand = (await db.execute(select(AssetBrand).where(
                 AssetBrand.org_id == current.org_id, AssetBrand.template_key == tk,
-                AssetBrand.name.ilike(bname),
+                func.lower(AssetBrand.name) == bname.lower(),
                 (AssetBrand.asset_group_id == gid) if gid else AssetBrand.asset_group_id.is_(None)
             ))).scalar_one_or_none()
             if not brand:
@@ -471,7 +479,7 @@ async def import_directory_csv(
         if mname:
             exists = (await db.execute(select(AssetModel).where(
                 AssetModel.org_id == current.org_id, AssetModel.template_key == tk,
-                AssetModel.brand_id == brand.id, AssetModel.name.ilike(mname)))).scalar_one_or_none()
+                AssetModel.brand_id == brand.id, func.lower(AssetModel.name) == mname.lower()))).scalar_one_or_none()
             if not exists:
                 db.add(AssetModel(org_id=current.org_id, template_key=tk, brand_id=brand.id,
                                   asset_group_id=gid, name=mname))
@@ -486,10 +494,16 @@ _DECODE_FIELD = {"vin": "vin", "hin": "hin", "imei": "imei"}  # kinds with a Dev
 
 async def _match_existing(db, org_id, kind, value) -> Optional[Device]:
     """Find an existing asset by identifier, scoped to this org's assets."""
-    client_ids = (await db.execute(select(Client.id).where(Client.org_id == org_id))).scalars().all()
-    base = or_(Device.client_id.in_(client_ids), Device.owner_type == "company")
+    # Devices carry org_id; legacy rows without it are matched through the owning client. The old
+    # `owner_type == "company"` arm had no org filter, so a scan could return another shop's
+    # company-owned asset.
+    client_ids = select(Client.id).where(Client.org_id == org_id)
+    base = or_(Device.org_id == org_id,
+               and_(Device.org_id.is_(None), Device.client_id.in_(client_ids)))
+    from backend.services import identifiers as _ids
     col = {"vin": Device.vin, "hin": Device.hin, "imei": Device.imei}.get(kind, Device.serial)
-    return (await db.execute(select(Device).where(base, col == value))).scalars().first()
+    k = kind if kind in _ids.KINDS else "serial"
+    return (await db.execute(select(Device).where(base, col == _ids.normalize(k, value)))).scalars().first()
 
 
 class ScanIn(BaseModel):

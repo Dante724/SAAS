@@ -47,17 +47,28 @@ async def test_inbound_meta_creates_thread_and_reply_dispatches(client, tenant):
     org = (await client.get("/api/auth/me", headers=tenant)).json()["org_id"]
     payload = {"object": "page", "entry": [
         {"messaging": [{"sender": {"id": "fbuser1"}, "message": {"mid": "mm1", "text": "my phone won't charge"}}]}]}
-    r = (await client.post(f"/api/inbox/webhook/meta/{org}", json=payload)).json()
+    r = (await client.post(f"/api/chats/webhook/meta/{org}", json=payload)).json()
     assert r["ingested"] == 1
-    # de-dupe on repeat
+    # de-dupe on repeat, also through the old (forwarding) URL
     assert (await client.post(f"/api/inbox/webhook/meta/{org}", json=payload)).json()["ingested"] == 0
 
-    threads = (await client.get("/api/inbox/threads?channel=facebook", headers=tenant)).json()["items"]
-    assert threads and threads[0]["handle"] == "fbuser1"
-    tid = threads[0]["id"]
+    threads = (await client.get("/api/chats/threads", headers=tenant)).json()["items"]
+    fb = [t for t in threads if t["channel"] == "facebook"]
+    assert fb and fb[0]["contact_phone"] == "fbuser1" and fb[0]["status"] == "new"
+    tid = fb[0]["id"]
 
-    # replying dispatches through the (simulated) provider and records outbound
-    res = (await client.post(f"/api/inbox/threads/{tid}/reply", json={"body": "We can fix that today."}, headers=tenant)).json()
-    assert res["status"] == "simulated" and res["dispatched"] is True
-    msgs = (await client.get(f"/api/inbox/threads/{tid}", headers=tenant)).json()["messages"]
-    assert any(m["direction"] == "outbound" and "fix that today" in m["body"] for m in msgs)
+    # replying dispatches through the (simulated) Meta provider and records outbound
+    res = (await client.post(f"/api/chats/threads/{tid}/send", json={"body": "We can fix that today."},
+                             headers=tenant)).json()
+    assert res["simulated"] is True and res["status"] == "sent" and res["thread_status"] == "replied"
+    msgs = (await client.get(f"/api/chats/threads/{tid}/messages", headers=tenant)).json()["items"]
+    assert any(m["direction"] == "out" and "fix that today" in m["body"] for m in msgs)
+
+
+@pytest.mark.asyncio
+async def test_meta_webhook_verify_on_chats_url(client, tenant, monkeypatch):
+    org = (await client.get("/api/auth/me", headers=tenant)).json()["org_id"]
+    monkeypatch.setattr(settings, "META_VERIFY_TOKEN", "s3cret")
+    ok = await client.get(f"/api/chats/webhook/meta/{org}",
+                          params={"hub.mode": "subscribe", "hub.verify_token": "s3cret", "hub.challenge": "7"})
+    assert ok.status_code == 200 and ok.text == "7"

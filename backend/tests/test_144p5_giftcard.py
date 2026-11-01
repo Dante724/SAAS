@@ -1,6 +1,8 @@
 """144p5 — gift cards: always server-generate a unique code, require a client, optional expiry."""
 from datetime import datetime, timedelta
 
+from backend.services.dates import now_utc
+
 
 async def _client(client, tenant, name="GC Co"):
     return (await client.post("/api/clients", json={"name": name, "phone": "+15550444"}, headers=tenant)).json()["id"]
@@ -24,7 +26,7 @@ async def test_giftcard_requires_client(client, tenant):
 
 async def test_giftcard_optional_expiry_roundtrips(client, tenant):
     cid = await _client(client, tenant, name="Expiry Co")
-    exp = (datetime.utcnow() + timedelta(days=30)).isoformat()
+    exp = (now_utc() + timedelta(days=30)).isoformat()
     r = await client.post("/api/giftcards", json={"value": 40, "client_id": cid, "expires_at": exp}, headers=tenant)
     assert r.status_code == 201, r.text
     assert r.json()["expires_at"] is not None

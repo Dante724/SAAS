@@ -71,4 +71,4 @@ async def test_suspended_org_is_blocked_on_existing_token(client, db):
     # the SAME token is now rejected per-request (not just at next login)
     r = await client.get("/api/auth/me", headers=H)
     assert r.status_code == 403
-    assert "suspend" in r.json()["detail"].lower()
+    assert "can't sign in" in r.json()["detail"].lower()

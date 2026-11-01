@@ -14,7 +14,7 @@ import logging
 from collections.abc import Awaitable, Callable
 from dataclasses import dataclass, field
 
-log = logging.getLogger("repairos.jobs")
+log = logging.getLogger("tekly.jobs")
 
 
 @dataclass
@@ -67,7 +67,7 @@ class JobRunner:
     async def _periodic_loop(self, p: _Periodic):
         while self._running:
             try:
-                await p.fn()
+                await run_exclusive(p.name, p.fn)
             except asyncio.CancelledError:
                 raise
             except Exception:  # noqa: BLE001
@@ -91,6 +91,39 @@ class JobRunner:
         await asyncio.gather(*self._periodic_handles, *self._tasks, return_exceptions=True)
         self._periodic_handles.clear()
         self._tasks.clear()
+
+
+def _lock_key(name: str) -> int:
+    """Stable signed 64-bit key for pg advisory locks (Python's hash() is per-process)."""
+    import hashlib
+    return int.from_bytes(hashlib.sha256(f"repairos:{name}".encode()).digest()[:8], "big", signed=True)
+
+
+async def run_exclusive(name: str, fn: Callable[[], Awaitable[None]]) -> bool:
+    """Run `fn` only if no other process is running the job of the same name.
+
+    Every uvicorn worker / replica starts its own JobRunner, so without this each periodic sweep
+    ran N times concurrently — sending scheduled SMS/e-mails and retrying webhooks once per
+    worker. On Postgres a session-level advisory lock (held on a dedicated connection for the
+    duration of the run) elects one runner; the others skip this tick. SQLite deployments are
+    single-process, so the job just runs. Returns whether the job ran."""
+    from sqlalchemy import text
+
+    from backend.db.database import engine
+    if engine.dialect.name != "postgresql":
+        await fn()
+        return True
+    key = _lock_key(name)
+    async with engine.connect() as conn:
+        got = (await conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": key})).scalar()
+        if not got:
+            log.debug("periodic job '%s' already running elsewhere; skipping this tick", name)
+            return False
+        try:
+            await fn()
+            return True
+        finally:
+            await conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})
 
 
 # Module-level singleton imported by main.py and call sites.

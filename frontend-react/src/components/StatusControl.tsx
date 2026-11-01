@@ -1,5 +1,8 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { useId, useMemo, useState } from "react";
+import { nextStep } from "../lib/nextStatus";
+import { tint } from "../lib/tint";
 import { M } from "./Shell";
+import FloatingMenu from "./FloatingMenu";
 
 // 144ik/il — status UI, split into two pieces so neither is cramped:
 //   <StatusStepper>  — full-width lifecycle band that sits on its own row
@@ -37,7 +40,6 @@ function hint(s: FullStatus, isEstimate?: boolean): string {
   if (s.converts_to_order) parts.push("converts to work order");
   if (s.triggers_invoice) parts.push("invoices");
   if (s.triggers_payment) parts.push("needs payment");
-  if (s.triggers_notification) parts.push("notifies client");
   if (s.shows_accept) parts.push(isEstimate ? "client sign-off" : "client accept");
   if (s.moves_asset_to) parts.push("moves asset");
   if (s.locks_edits) parts.push("locks edits");
@@ -74,11 +76,11 @@ export function StatusStepper({ statuses, currentKey }: { statuses: FullStatus[]
                 style={{ width: "50%", background: gi < curGroupIdx ? groupColor(GROUP_ORDER[gi + 1] || g) : "#e2e8f0" }} />}
               <span className="relative z-10 rounded-full flex items-center justify-center transition-all"
                 style={current
-                  ? { width: 18, height: 18, background: `${col}26`, border: `2px solid ${col}` }
+                  ? { width: 18, height: 18, background: tint(col, 15), border: `2px solid ${col}` }
                   : done
                   ? { width: 16, height: 16, background: col, color: "#fff" }
                   : { width: 12, height: 12, background: "var(--surface-2, #fff)", border: "1.5px solid #cbd5e1" }}>
-                {done && <M n="check" c="text-[10px] leading-none" />}
+                {done && <M n="check" c="text-[11px] leading-none" />}
                 {current && <span className="rounded-full" style={{ width: 6, height: 6, background: col }} />}
               </span>
             </div>
@@ -102,22 +104,16 @@ export default function StatusControl({
 }) {
   const [open, setOpen] = useState(false);
   const [q, setQ] = useState("");
-  const wrap = useRef<HTMLDivElement>(null);
-
-  useEffect(() => {
-    if (!open) return;
-    const h = (e: MouseEvent) => { if (wrap.current && !wrap.current.contains(e.target as Node)) setOpen(false); };
-    document.addEventListener("mousedown", h);
-    return () => document.removeEventListener("mousedown", h);
-  }, [open]);
+  // The picker is a FloatingMenu (portal + fixed), so the drawer header can't clip it.
+  const anchorId = useId();
+  const close = () => { setOpen(false); setQ(""); };
 
   const ordered = useMemo(
     () => [...statuses].sort((a, b) => (a.sort_order ?? 0) - (b.sort_order ?? 0)),
     [statuses],
   );
   const cur = ordered.find((s) => s.key === currentKey) || ordered.find((s) => s.is_default) || ordered[0];
-  const curIdx = ordered.findIndex((s) => s.id === cur?.id);
-  const nextRec = ordered.slice(curIdx + 1).find((s) => !["closed", "dropped"].includes(s.status_group || ""));
+  const nextRec = nextStep(ordered, cur?.key);
 
   const overdue = cur?.time_limit_min && elapsedMin != null && elapsedMin > cur.time_limit_min;
   const nearing = cur?.time_limit_min && elapsedMin != null && !overdue && elapsedMin > cur.time_limit_min * 0.75;
@@ -131,24 +127,25 @@ export default function StatusControl({
     const h = hint(s, isEstimate);
     return (
       <button
-        onClick={() => { onChange(s.key); setOpen(false); setQ(""); }}
+        type="button" onClick={() => { onChange(s.key); close(); }}
         className={`w-full flex items-center justify-between gap-2 px-2.5 py-1.5 rounded-lg text-left transition-colors ${recommended ? "" : "hover:bg-slate-50"}`}
         style={recommended ? { background: tintBg(s.color), border: `0.5px solid ${tintBorder(s.color)}` } : undefined}
       >
         <span className="flex items-center gap-2 min-w-0">
           <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: s.color || DEFAULT_COLOR }} />
           <span className="text-xs font-semibold text-ink-primary truncate">{s.name}</span>
-          {recommended && <span className="text-[10px] font-bold uppercase tracking-wide" style={{ color: s.color || DEFAULT_COLOR }}>next</span>}
+          {recommended && <span className="text-[11px] font-bold " style={{ color: s.color || DEFAULT_COLOR }}>next</span>}
         </span>
-        {h && <span className="text-[10px] text-ink-tertiary whitespace-nowrap flex-shrink-0">{h}</span>}
+        {h && <span className="text-[11px] text-ink-tertiary whitespace-nowrap flex-shrink-0">{h}</span>}
       </button>
     );
   };
 
   return (
-    <div className="relative flex items-center gap-2" ref={wrap}>
+    <div className="relative flex items-center gap-2">
       <button
-        onClick={() => setOpen((o) => !o)}
+        type="button" data-status-anchor={anchorId} aria-haspopup="menu" aria-expanded={open}
+        onClick={() => (open ? close() : setOpen(true))}
         className="inline-flex items-center gap-1.5 text-xs font-semibold py-1 pl-2.5 pr-2 rounded-full border shadow-2xs cursor-pointer focus:outline-none"
         style={{ background: tintBg(cur?.color), borderColor: tintBorder(cur?.color), color: cur?.color || DEFAULT_COLOR }}
       >
@@ -159,29 +156,28 @@ export default function StatusControl({
 
       {cur?.time_limit_min ? (
         <span className={`inline-flex items-center gap-1 text-[11px] font-semibold ${overdue ? "text-rose-700" : nearing ? "text-amber-700" : "text-ink-tertiary"}`}>
-          <M n="schedule" c="text-xs" />{fmtDur(elapsedMin)} · SLA {fmtDur(cur.time_limit_min)}
+          <M n="timer" c="text-xs" />{fmtDur(elapsedMin)} · SLA {fmtDur(cur.time_limit_min)}
         </span>
       ) : null}
 
       {open && (
-        <div className="absolute z-30 top-8 left-0 w-72 bg-white rounded-xl border border-slate-200 shadow-clay-drawer p-2 animate-[fadeIn_.12s_ease]">
-          <style>{`@keyframes fadeIn{from{opacity:0;transform:translateY(-4px)}to{opacity:1;transform:none}}`}</style>
+        <FloatingMenu anchorSel={`[data-status-anchor="${anchorId}"]`} onClose={close} width={288}>
           <div className="relative mb-1.5">
             <M n="search" c="absolute left-2 top-1.5 text-sm text-ink-tertiary" />
-            <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter statuses"
+            <input value={q} aria-label="Filter statuses" onChange={(e) => setQ(e.target.value)} placeholder="Filter statuses"
               className="w-full text-xs pl-7 pr-2 py-1.5 rounded-lg border border-slate-200 focus:outline-none focus:border-primary/50" />
           </div>
           <div className="max-h-72 overflow-y-auto space-y-0.5">
             {nextRec && !q && <Row s={nextRec} recommended />}
             {grouped.map(({ g, items }) => (
               <div key={g}>
-                <p className="text-[10px] font-bold uppercase tracking-wide text-ink-tertiary px-2.5 pt-2 pb-0.5">{GROUP_LABEL[g]}</p>
+                <p className="text-[11px] font-bold text-ink-tertiary px-2.5 pt-2 pb-0.5">{GROUP_LABEL[g]}</p>
                 {items.map((s) => <Row key={s.id} s={s} />)}
               </div>
             ))}
             {!filtered.length && <p className="text-xs text-ink-tertiary px-2.5 py-3 text-center">No match</p>}
           </div>
-        </div>
+        </FloatingMenu>
       )}
     </div>
   );

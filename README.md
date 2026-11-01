@@ -1,4 +1,4 @@
-# RepairOS — Orderry-style Repair Shop Manager
+# Tekly — Orderry-style Repair Shop Manager
 
 Full-stack repair shop management app. Python/FastAPI backend + Liquid-Glass × Claymorphism frontend (no build step).
 
@@ -22,13 +22,17 @@ uvicorn main:app --reload --port 8000
 Open **http://localhost:8000**
 
 ### Demo logins
-- Admin:  `admin@repairos.dev` / `admin123`
-- Tech:   `priya@repairos.dev` / `tech123`
+- Admin:  `admin@repairos.dev`
+- Tech:   `priya@repairos.dev`, `amit@repairos.dev`
+
+Passwords are not published. Set `DEMO_ADMIN_PASSWORD` / `DEMO_STAFF_PASSWORD` before the first
+seed for fixed ones; otherwise the seed generates a pair and writes them to `.env.demo` at the repo
+root (gitignored). `python reset_admin.py` resets the admin to the same password.
 
 The database (`repairos.db`) auto-creates and seeds demo data on first launch.
 
 ## VS Code
-Open the folder, press **F5**, choose "Run RepairOS". Install the Python extension if prompted.
+Open the folder, press **F5**, choose "Run Tekly". Install the Python extension if prompted.
 
 ## API docs
 Interactive Swagger UI at **http://localhost:8000/docs**

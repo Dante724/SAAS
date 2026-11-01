@@ -2,9 +2,9 @@
 /*
  * End-to-end: create work order + add asset, template-aware.
  *
- * Runs in a real browser against a running RepairOS instance (that's why it lives
+ * Runs in a real browser against a running Tekly instance (that's why it lives
  * in tests-e2e/ and can't run in the sandbox). Assumes the dev server on
- * http://127.0.0.1:8000 seeded with admin@repairos.dev / admin123.
+ * http://127.0.0.1:8000 seeded with admin@repairos.dev (password: DEMO_ADMIN_PASSWORD or .env.demo).
  *
  *   npx playwright test industry.spec.js
  *
@@ -14,10 +14,11 @@
  * and an asset can be added to a client with the template-driven fields.
  */
 const { test, expect } = require('@playwright/test');
+const { demoAdminPassword } = require('./demo-credentials');
 
-const BASE = process.env.REPAIROS_BASE || 'http://127.0.0.1:8000';
+const BASE = process.env.TEKLY_BASE || process.env.REPAIROS_BASE || 'http://127.0.0.1:8000';
 const EMAIL = 'admin@repairos.dev';
-const PASSWORD = 'admin123';
+const PASSWORD = demoAdminPassword();
 
 /** Set the org's industry template through the API, using the app's stored token. */
 async function setTemplate(page, key) {

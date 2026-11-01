@@ -31,7 +31,7 @@ terminal status is entered and cleared on reopen.
 
 Statuses are per-org, configurable, and ordered. `OrderStatus` fields:
 `status_group`, `is_terminal`, `is_default`, `is_estimate`, `triggers_invoice`,
-`triggers_notification`, `triggers_payment`, `locks_edits`, `shows_accept`,
+`triggers_notification` (retired, see §3), `triggers_payment`, `locks_edits`, `shows_accept`,
 `converts_to_order`, `time_limit_min`, `moves_asset_to`, `sort_order`, `color`.
 
 | Method | Path | Notes |
@@ -51,9 +51,17 @@ A single status change can fan out to several side-effects, all in
 `PATCH /api/orders/{id}/status`:
 
 - `triggers_invoice` → auto-creates an invoice for the order.
-- `triggers_notification` (default on) → renders the status's
-  `NotificationTemplate` and dispatches via the client's channel, logging to
-  `NotificationLog` (simulated unless provider keys are set).
+- Customer messages come **only** from the notification rules (Settings ›
+  Notifications; `services/notification_rules.evaluate`, event `status_changed`, or
+  `closed` for a terminal status). `triggers_notification` is retired: it used to drive
+  a legacy template send that only ran when no rule matched, so with the seeded
+  "every status change" rule it was nearly always ignored. Flagged statuses were
+  converted to equivalent per-status rules (`services/legacy_status_notifs.py`,
+  migration `nt144p4`, startup self-heal) and the flag cleared; an old client posting
+  `triggers_notification: true` gets the same conversion. A status's own rule replaces
+  the "every status change" / "job finished" rule on the same channel
+  (`_status_overrides`), so the customer gets one message per channel. The status editor
+  shows what the rules send and toggles the status's own rule.
 - `triggers_payment` → exposes a payment context.
 - `locks_edits` → subsequent line add/edit/delete return **409**.
 - `is_terminal` → sets `closed_at` and **activates warranty** (§8).
