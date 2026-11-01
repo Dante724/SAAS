@@ -9,6 +9,7 @@ Logic and rules: backend/services/tax_backfill.py.
 Revision ID: taxbf01
 Revises: mdec01
 """
+import sqlalchemy as sa
 from alembic import op
 
 revision = "taxbf01"
@@ -19,13 +20,20 @@ depends_on = None
 
 def upgrade() -> None:
     from backend.services import tax_backfill
-    conn = op.get_bind()
-    tax_backfill.LOG.create(conn, checkfirst=True)
-    tax_backfill.backfill(conn)
+    op.create_table(
+        "tax_stack_backfill_log",
+        sa.Column("id", sa.String(), primary_key=True),
+        sa.Column("org_id", sa.String(), nullable=False),
+        sa.Column("previous_tax_ids", sa.Text(), nullable=False),
+        sa.Column("tax_id", sa.String(), nullable=False),
+        sa.Column("created_at", sa.DateTime(), nullable=False),
+    )
+    op.create_index("ix_tax_stack_backfill_log_org_id", "tax_stack_backfill_log", ["org_id"])
+    tax_backfill.backfill(op.get_bind())
 
 
 def downgrade() -> None:
     from backend.services import tax_backfill
-    conn = op.get_bind()
-    tax_backfill.restore(conn)
-    tax_backfill.LOG.drop(conn, checkfirst=True)
+    tax_backfill.restore(op.get_bind())
+    op.drop_index("ix_tax_stack_backfill_log_org_id", table_name="tax_stack_backfill_log")
+    op.drop_table("tax_stack_backfill_log")

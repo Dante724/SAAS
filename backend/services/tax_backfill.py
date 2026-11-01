@@ -15,17 +15,10 @@ from datetime import datetime, timezone
 
 import sqlalchemy as sa
 
-FAMILY = "tickets_sales"
+from backend.models import TaxStackBackfillLog
 
-_meta = sa.MetaData()
-LOG = sa.Table(
-    "tax_stack_backfill_log", _meta,
-    sa.Column("id", sa.String, primary_key=True),
-    sa.Column("org_id", sa.String, nullable=False, index=True),
-    sa.Column("previous_tax_ids", sa.Text, nullable=False),     # JSON list, in priority order
-    sa.Column("tax_id", sa.String, nullable=False),             # the tax the stack was set to
-    sa.Column("created_at", sa.DateTime, nullable=False),
-)
+FAMILY = "tickets_sales"
+LOG = TaxStackBackfillLog.__table__
 
 
 def _stack(conn, org_id: str) -> list[str]:

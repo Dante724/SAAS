@@ -2,7 +2,6 @@
 their job tax stack. Shops that chose a real tax are untouched; existing jobs aren't recomputed;
 re-running changes nothing; downgrade puts the old stacks back."""
 import pytest
-import pytest_asyncio
 from sqlalchemy import update
 
 from backend.db.database import AsyncSessionLocal, engine
@@ -11,19 +10,8 @@ from backend.services import tax_backfill
 from backend.tests.test_qa_b_tax_default import _line_tax, _shop, _stack, _taxes
 
 
-@pytest_asyncio.fixture(autouse=True)
-async def _fresh_log():
-    """The log table lives outside the app metadata, so the per-test schema reset misses it."""
-    async with engine.begin() as conn:
-        await conn.run_sync(lambda c: tax_backfill.LOG.drop(c, checkfirst=True))
-    yield
-    async with engine.begin() as conn:
-        await conn.run_sync(lambda c: tax_backfill.LOG.drop(c, checkfirst=True))
-
-
 async def _run(fn):
     async with engine.begin() as conn:
-        await conn.run_sync(lambda c: tax_backfill.LOG.create(c, checkfirst=True))
         return await conn.run_sync(lambda c: fn(c, log=lambda _m: None))
 
 
