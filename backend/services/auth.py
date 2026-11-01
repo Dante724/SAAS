@@ -90,7 +90,7 @@ def account_off_message() -> str:
 
 
 def subscription_ended_message() -> str:
-    return f"Your subscription has ended. Please contact Tekly support ({settings.SUPPORT_EMAIL}) to renew."
+    return f"Your Tekly subscription has ended. Please contact Tekly support ({settings.SUPPORT_EMAIL}) to renew."
 
 
 def assert_org_active(org, today=None) -> None:

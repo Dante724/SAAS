@@ -1,6 +1,7 @@
 import { Component, type ReactNode } from "react";
 import { useLocation } from "react-router-dom";
 import { useMe } from "../context/Me";
+import { t } from "../i18n";
 import { reportError } from "../lib/sentry";
 import { supportContact } from "../lib/support";
 
@@ -62,9 +63,10 @@ function SupportLine() {
   const s = supportContact(useMe().me);
   return (
     <div className="text-[11px] text-ink-tertiary mt-3">
-      Keeps happening?{" "}
+      {t("Keeps happening?")}{" "}
       <a href={s.href} {...(s.external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
-        className="font-semibold text-primary hover:underline">Contact support</a>
+        className="font-semibold text-primary hover:underline">{t("Contact support")}</a>
+      {!s.external && <> · <span className="select-all">{s.email}</span></>}
     </div>
   );
 }

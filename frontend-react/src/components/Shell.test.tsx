@@ -57,7 +57,12 @@ describe("Shell — Help & support", () => {
     const u = userEvent.setup();
     renderShell();
     await u.click(screen.getByRole("button", { name: "Account menu" }));
-    const link = screen.getByRole("link", { name: /Help & support/ });
+    const link = screen.getAllByRole("link", { name: /Help & support/ }).find((a) => a.textContent?.includes("hello@tekly.app"))!;
     expect(link).toHaveAttribute("href", "mailto:hello@tekly.app");
+  });
+
+  it("keeps a Help & support button in the top bar", () => {
+    renderShell();
+    expect(screen.getByRole("link", { name: "Help & support" })).toHaveAttribute("href", "mailto:hello@tekly.app");
   });
 });

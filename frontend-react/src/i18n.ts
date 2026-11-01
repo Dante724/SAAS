@@ -25,7 +25,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "Grow": "Crecimiento", "Admin": "Administración",
     "Home": "Inicio", "My work": "Mi trabajo", "Catalog": "Catálogo",
     "Collapse": "Contraer", "Light mode": "Modo claro", "Dark mode": "Modo oscuro",
-    "Clock in": "Fichar entrada", "Security & sign-in": "Seguridad e inicio de sesión", "Help & support": "Ayuda y soporte", "Sign out": "Cerrar sesión", "My earnings": "Mis ganancias",
+    "Clock in": "Fichar entrada", "Security & sign-in": "Seguridad e inicio de sesión", "Help & support": "Ayuda y soporte", "Keeps happening?": "¿Sigue pasando?", "Contact support": "Contacta con soporte", "Sign out": "Cerrar sesión", "My earnings": "Mis ganancias",
   },
   ar: {
     "My company": "شركتي", "Inquiries": "الاستفسارات", "Tasks": "المهام",
@@ -37,7 +37,7 @@ const DICT: Record<Lang, Record<string, string>> = {
     "Grow": "النمو", "Admin": "الإدارة", "Collapse": "طيّ",
     "Notifications": "الإشعارات", "Language": "اللغة",
     "Light mode": "الوضع الفاتح", "Dark mode": "الوضع الداكن",
-    "Clock in": "تسجيل الدخول", "Security & sign-in": "الأمان وتسجيل الدخول", "Help & support": "المساعدة والدعم", "Sign out": "تسجيل الخروج", "My earnings": "أرباحي",
+    "Clock in": "تسجيل الدخول", "Security & sign-in": "الأمان وتسجيل الدخول", "Help & support": "المساعدة والدعم", "Keeps happening?": "تتكرر المشكلة؟", "Contact support": "تواصل مع الدعم", "Sign out": "تسجيل الخروج", "My earnings": "أرباحي",
   },
 };
 
