@@ -12,7 +12,7 @@ from backend.models import (
     ClientReturn, ClientReturnLine, Refund, Order, StockMovement,
     Account, Employee, Part, Payment,
 )
-from backend.services.auth import assert_perm, get_current_employee, require_perm
+from backend.services.auth import assert_perm, get_current_employee, has_perm, require_perm
 from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/returns", tags=["returns"])
@@ -129,15 +129,20 @@ class RefundIn(BaseModel):
 async def create_refund(
     data: RefundIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_view_finance")),
+    current: Employee = Depends(require_perm("can_create_returns")),
 ):
-    await assert_perm(db, current, "can_create_returns")   # paying money back, not just seeing it
+    # Giving money back is a payments action (as closing a job with money owed is, #74): the front
+    # desk that takes payments can refund without seeing the shop's finances (QA A-5).
+    if not (await has_perm(db, current, "can_make_client_payments") or await has_perm(db, current, "can_view_finance")):
+        raise HTTPException(403, "Your role can't give money back to customers. Ask someone who takes payments.")
     if data.amount <= 0:
         raise HTTPException(400, "Refund amount must be positive")
     acct = (await db.execute(select(Account).where(
         Account.id == data.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
     if not acct:
         raise HTTPException(404, "Cashbox not found")
+    if (acct.payment_option or "") == "card" and not await has_perm(db, current, "can_refund_card_payments"):
+        raise HTTPException(403, "Your role can't refund card payments. Refund in cash, or ask a manager.")
     # Every refund belongs to an order (directly or via its goods return) and is capped at what that
     # order actually received net of ALL prior refunds — refunds from this endpoint, archive refunds
     # and overpayment refunds all record a refund Payment, which order_money counts. Previously the

@@ -399,3 +399,41 @@ async def test_same_coupon_applied_twice_at_once_discounts_once(client, tenant):
     assert sum(ln["total"] for ln in coupon_lines) == pytest.approx(-10, abs=0.02)
     assert len([r for r in rs if r.status_code == 200]) == 1
 
+
+
+# ── A-5: the front desk that takes payments can give money back ────────────────────────────────
+async def _staff(client, h, perms):
+    import uuid
+    rid = (await client.post("/api/settings/rbac/roles", json={"name": f"R-{uuid.uuid4().hex[:4]}",
+                                                               "permissions": perms}, headers=h)).json()["id"]
+    email = f"tm-{uuid.uuid4().hex[:8]}@t.dev"
+    r = await client.post("/api/staff/employees", json={"name": "Tm", "email": email, "password": "pw-test-12345",
+                                                        "role_id": rid}, headers=h)
+    assert r.status_code == 201, r.text
+    tok = await client.post("/api/auth/token", data={"username": email, "password": "pw-test-12345"})
+    return {"Authorization": f"Bearer {tok.json()['access_token']}"}
+
+
+@pytest.mark.asyncio
+async def test_desk_refunds_cash_without_finance_and_a_technician_cant(client, tenant):
+    oid, _, _, till, _ = await _paid_closed_job(client, tenant)
+    desk = await _staff(client, tenant, {"can_make_client_payments": True, "can_create_invoices": True,
+                                         "can_create_returns": True, "can_view_finance": False})
+    r = await client.post("/api/returns/refunds", json={"account_id": till, "amount": 10, "order_id": oid}, headers=desk)
+    assert r.status_code == 201, r.text
+    tech = await _staff(client, tenant, {"can_make_client_payments": False, "can_view_finance": False,
+                                         "can_create_returns": True})
+    r = await client.post("/api/returns/refunds", json={"account_id": till, "amount": 10, "order_id": oid}, headers=tech)
+    assert r.status_code == 403, r.text
+    assert "can_" not in r.json()["detail"]
+
+
+@pytest.mark.asyncio
+async def test_card_refund_needs_the_card_refund_right(client, tenant):
+    oid, _, _, till, _ = await _paid_closed_job(client, tenant)
+    card = (await client.post("/api/cash/accounts", json={"name": "Card", "payment_option": "card"},
+                              headers=tenant)).json()["id"]
+    desk = await _staff(client, tenant, {"can_make_client_payments": True, "can_create_returns": True,
+                                         "can_view_finance": False, "can_refund_card_payments": False})
+    r = await client.post("/api/returns/refunds", json={"account_id": card, "amount": 10, "order_id": oid}, headers=desk)
+    assert r.status_code == 403 and "card" in r.json()["detail"], r.text
