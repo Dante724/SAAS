@@ -269,6 +269,13 @@ async def delete_sale(
         raise HTTPException(409, "This sale was paid on a card reader. Refund the card payment first "
                                  "(Recent sales › Card reader payments), then delete the sale.")
     reason = (reason or "Deleted").strip()[:300]
+    # QA F2: claim the void before anything moves. A double click read the sale as not voided in
+    # both requests (FOR UPDATE is a no-op on SQLite; the session's copy can be stale on Postgres)
+    # and put the stock and the takings back twice.
+    won = await db.execute(sa_update(Sale).where(Sale.id == sale.id, Sale.voided_at.is_(None))
+                           .values(voided_at=now_utc()).execution_options(synchronize_session=False))
+    if won.rowcount != 1:
+        raise HTTPException(409, "This sale was already deleted")
 
     lines = (await db.execute(select(SaleLine).where(SaleLine.sale_id == sale.id))).scalars().all()
     for ln in lines:

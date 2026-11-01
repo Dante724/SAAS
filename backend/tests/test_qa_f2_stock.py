@@ -328,3 +328,34 @@ async def test_catalog_write_off_only_takes_a_unit_at_that_location(client, tena
                           json={"location_id": other, "serials": [sns[0]]})
     assert r.status_code == 404, r.text
     assert await _units(db, p["id"]) == {sns[0]: ("in_stock", here)}
+
+
+# ── 1 (roadmap). a counter sale taken back twice at once puts stock and money back once ──────────
+# POS returns (/sales/{id}/returns) aren't on this branch yet (release/1.0, PR #76); here the till
+# takes a sale back by voiding it, and the void had the same stale-read gap.
+@pytest.mark.asyncio
+async def test_sale_voided_twice_at_once_restocks_and_refunds_once(client, tenant, db):
+    from fastapi import HTTPException
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from backend.models import Account, Employee, Sale
+    from backend.routers.sales import delete_sale
+    till = (await client.post("/api/cash/accounts", json={"name": "Till", "payment_option": "cash"},
+                              headers=tenant)).json()["id"]
+    p = await _part(client, tenant, sku="VOID-1", barcode="VOID-1")
+    await _stock(client, tenant, p["id"], 5)
+    s = (await client.post("/api/sales", headers=tenant, json={"account_id": till, "lines": [
+        {"kind": "product", "ref_id": p["id"], "description": "Cable", "qty": 2, "unit_price": 10}]})).json()
+    emp = (await db.execute(select(Employee))).scalars().first()
+    stale = (await db.execute(select(Sale).where(Sale.id == s["id"]))).scalar_one()    # A: not voided yet
+    async with async_sessionmaker(db.bind, expire_on_commit=False)() as b:              # B: the other click
+        emp_b = (await b.execute(select(Employee).where(Employee.id == emp.id))).scalar_one()
+        assert (await delete_sale(s["id"], "Wrong item", b, emp_b))["ok"]
+    with pytest.raises(HTTPException) as e:
+        await delete_sale(s["id"], "Wrong item", db, emp)
+    assert e.value.status_code == 409 and stale is not None
+    await db.rollback()
+    assert await _on_hand(db, p["id"]) == 5                               # 3 after the sale, +2 once
+    bal = (await db.execute(select(Account.balance).where(Account.id == till))).scalar_one()
+    assert float(bal) == 0                                                # +20 taken, −20 once
+    await _ledger_matches(db, p["id"])
