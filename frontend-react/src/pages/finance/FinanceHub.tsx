@@ -125,7 +125,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
   // Each KPI jumps to the Finance tab that explains it; Outstanding opens the Invoices page.
   const kpiStats: SummaryStat[] = [
     { label: "Cash and bank now", value: money(cash?.total_cash), onClick: () => setTab(can("can_view_cashbox") ? "cashboxes" : "balances") },
-    { label: "Sales (ex tax)", value: money(fin?.total_revenue), onClick: () => setTab("pnl") },
+    { label: "Sales (ex tax)", value: money(fin?.total_revenue), hint: "Sales after returns, without tax. Money collected is under Paid on Home.", onClick: () => setTab("pnl") },
     { label: "Still owed to you", value: money(fin?.total_outstanding), onClick: () => navigate("/invoices") },
     { label: "Expenses", value: money(fin?.total_expenses), onClick: () => setTab("pnl") },
     { label: "Profit before tax", value: money(fin?.gross_profit), tone: (fin?.gross_profit || 0) < 0 ? "bad" : undefined, onClick: () => setTab("pnl") },

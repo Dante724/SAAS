@@ -61,6 +61,41 @@ async def balance_due(db: AsyncSession, order: Order) -> float:
     return q2(max(0.0, float(order.total or 0) - await net_paid(db, order.id) - await credited(db, order.id)))
 
 
+def balances_due(org_id: str):
+    """`balance_due` for every order of a shop in one query: a subquery of (order_id, owed). Same
+    rules (total − payments net of refunds − credit notes, an invoice billing several orders
+    sharing its credit by order total, never below 0), so reports agree with the job screen."""
+    from sqlalchemy import case, union
+    from backend.models import InvoiceOrder
+    void = ("void", "voided", "cancelled", "canceled")
+    inv_jobs = union(
+        select(InvoiceOrder.invoice_id.label("invoice_id"), InvoiceOrder.order_id.label("order_id")),
+        select(Invoice.id.label("invoice_id"), Invoice.order_id.label("order_id"))
+        .where(Invoice.order_id.isnot(None))).subquery()
+    whole = (select(inv_jobs.c.invoice_id, func.sum(func.coalesce(Order.total, 0)).label("whole"),
+                    func.count().label("n"))
+             .join(Order, Order.id == inv_jobs.c.order_id).group_by(inv_jobs.c.invoice_id).subquery())
+    share = case((whole.c.n <= 1, Invoice.credited),
+                 (whole.c.whole != 0, Invoice.credited * func.coalesce(Order.total, 0) / whole.c.whole),
+                 else_=Invoice.credited / whole.c.n)
+    credit = (select(inv_jobs.c.order_id, func.sum(share).label("credited"))
+              .join(Invoice, Invoice.id == inv_jobs.c.invoice_id)
+              .join(whole, whole.c.invoice_id == inv_jobs.c.invoice_id)
+              .join(Order, Order.id == inv_jobs.c.order_id)
+              .where(Invoice.org_id == org_id, Invoice.credited > 0, Invoice.status.notin_(void))
+              .group_by(inv_jobs.c.order_id).subquery())
+    paid = (select(Payment.order_id,
+                   func.sum(case((Payment.kind.in_(("payment", "prepayment")), Payment.amount),
+                                 (Payment.kind == "refund", -func.abs(Payment.amount)), else_=0)).label("net"))
+            .join(Order, Order.id == Payment.order_id).where(Order.org_id == org_id)
+            .group_by(Payment.order_id).subquery())
+    owed = func.coalesce(Order.total, 0) - func.coalesce(paid.c.net, 0) - func.coalesce(credit.c.credited, 0)
+    return (select(Order.id.label("order_id"), case((owed > 0, owed), else_=0).label("owed"))
+            .outerjoin(paid, paid.c.order_id == Order.id)
+            .outerjoin(credit, credit.c.order_id == Order.id)
+            .where(Order.org_id == org_id).subquery())
+
+
 async def overpaid(db: AsyncSession, order: Order) -> float:
     """Amount received beyond the order total (refundable as overpayment)."""
     # A negative total (older data, before the floor in _recalc_order) never counts as money owed back.

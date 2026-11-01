@@ -5,9 +5,10 @@ job totals with tax inside), receivables four ways, and an order refund showed u
 
 **Revenue (net sales)**: what the shop earned, ex tax, after returns and refunds.
   + earned work orders: the ex-tax value of their lines, on the day the job was closed or first
-    billed on an issued (not draft) invoice, whichever came first — a job paid but still open has
-    been sold; a deposit alone has not. A line's total always carries its tax (added on top or already in the price), so its net is
-    total / (1 + rate). Estimates and dropped jobs never count.
+    billed on an invoice staff issued (sent to the customer), whichever came first. A payment on
+    an open job doesn't earn it: the invoice a payment makes for itself was never issued. A line's
+    total always carries its tax (added on top or already in the price), so its net is
+    total / (1 + rate). Estimates and dropped jobs never count. Job profitability uses this date too.
   + counter sales (POS), on the day of the sale. Deleted (voided) sales never count.
   + invoices that bill no work order (manual invoices): subtotal − discount, on their issue date.
   − credit notes, ex tax, on the day they are issued.
@@ -24,9 +25,9 @@ counter sales' cost, and the costed lines of manual invoices.
 counter sales) minus money handed back, on the day it moved. Paying from a client's balance
 moves no new money and isn't counted.
 
-**Receivables (owed to you)**: what customers still owe on work orders (total − credit notes −
-refunds that gave back part of the bill − money paid net of refunds, never below 0; estimates and
-dropped jobs excluded) plus the balance of issued manual invoices. Client balances (`ar`) come from the contact ledger: a different measure.
+**Receivables (owed to you)**: what customers still owe on work orders, by the job screen's own
+rule (order_money.balance_due: total − money paid net of refunds − credit notes, never below 0;
+estimates and dropped jobs excluded), plus the balance of issued manual invoices. Client balances (`ar`) come from the contact ledger: a different measure.
 
 **Operating expenses**: expense records plus expense cash transactions. A refund to a customer
 is never an expense, even where a path posts it as one against an order, invoice or sale.
@@ -36,7 +37,7 @@ is never an expense, even where a path posts it as one against an order, invoice
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import case, func, or_, select
+from sqlalchemy import Select, case, func, or_, select, union
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import (
@@ -92,45 +93,61 @@ def _in(col, df, dt):
     return conds
 
 
-async def job_figures(db: AsyncSession, orders: list) -> dict:
+def _ids_cond(col, orders):
+    """`col IN (...)` for a list of orders/ids or an id SELECT (kept in SQL, so no parameter limit)."""
+    if isinstance(orders, Select):
+        return col.in_(orders)
+    return col.in_([getattr(o, "id", o) for o in orders])
+
+
+async def job_figures(db: AsyncSession, orders) -> dict:
     """Per job: gross, net and tax of its lines; parts cost (less returned, restocked parts); and
-    what credit notes and revenue refunds took off it (ex tax, all time)."""
-    ids = [o.id for o in orders]
-    out = {o.id: {"gross": 0.0, "net": 0.0, "parts_cost": 0.0, "credit_net": 0.0, "refund_gross": 0.0,
-                  "refund_net": 0.0, "credited_gross": 0.0, "paid": 0.0, "refunded": 0.0} for o in orders}
-    if not ids:
+    what credit notes and revenue refunds took off it (ex tax, all time). `orders` is a list of
+    orders or a SELECT of order ids; the sums run in the database, one row per job comes back."""
+    blank = {"gross": 0.0, "net": 0.0, "parts_cost": 0.0, "credit_net": 0.0, "refund_gross": 0.0,
+             "refund_net": 0.0, "credited_gross": 0.0, "paid": 0.0, "refunded": 0.0}
+    out: dict = {} if isinstance(orders, Select) else {getattr(o, "id", o): dict(blank) for o in orders}
+    if not isinstance(orders, Select) and not out:
         return out
-    lines = (await db.execute(select(OrderLine).where(OrderLine.order_id.in_(ids)))).scalars().all()
-    unit_cost: dict = {}
-    for ln in lines:
-        f = out[ln.order_id]
-        f["gross"] += float(ln.total or 0)
-        f["net"] += line_net(ln.total, ln.tax_rate)
-        if ln.line_type == "part" or ln.kind == "product":
-            f["parts_cost"] += float(ln.cost_price or 0) * float(ln.qty or 0)
-            if ln.ref_id:
-                unit_cost.setdefault((ln.order_id, ln.ref_id), float(ln.cost_price or 0))
-    # goods that came back to the shelf are no longer a cost of the job
-    for oid, part_id, qty in (await db.execute(
-            select(ClientReturn.order_id, ClientReturnLine.part_id, ClientReturnLine.qty)
+
+    def fig(oid):
+        return out.setdefault(oid, dict(blank))
+
+    is_part = (OrderLine.line_type == "part") | (OrderLine.kind == "product")
+    rate = func.coalesce(OrderLine.tax_rate, 0)
+    for oid, gross, net, cost in (await db.execute(
+            select(OrderLine.order_id, func.sum(OrderLine.total),
+                   func.sum(OrderLine.total / (1 + rate / 100.0)),
+                   func.sum(case((is_part, func.coalesce(OrderLine.cost_price, 0) * OrderLine.qty), else_=0)))
+            .where(_ids_cond(OrderLine.order_id, orders)).group_by(OrderLine.order_id))).all():
+        f = fig(oid)
+        f["gross"], f["net"], f["parts_cost"] = float(gross or 0), float(net or 0), float(cost or 0)
+    # goods that came back to the shelf are no longer a cost of the job (at the job's cost for that item)
+    unit = (select(OrderLine.order_id, OrderLine.ref_id, func.min(OrderLine.cost_price).label("cost"))
+            .where(is_part, OrderLine.ref_id.isnot(None), _ids_cond(OrderLine.order_id, orders))
+            .group_by(OrderLine.order_id, OrderLine.ref_id).subquery())
+    for oid, back in (await db.execute(
+            select(ClientReturn.order_id, func.sum(func.coalesce(unit.c.cost, 0) * ClientReturnLine.qty))
             .join(ClientReturnLine, ClientReturnLine.return_id == ClientReturn.id)
-            .where(ClientReturn.order_id.in_(ids), ClientReturnLine.restock == True))).all():  # noqa: E712
-        out[oid]["parts_cost"] -= unit_cost.get((oid, part_id), 0.0) * float(qty or 0)
+            .join(unit, (unit.c.order_id == ClientReturn.order_id) & (unit.c.ref_id == ClientReturnLine.part_id))
+            .where(ClientReturnLine.restock == True)  # noqa: E712
+            .group_by(ClientReturn.order_id))).all():
+        fig(oid)["parts_cost"] -= float(back or 0)
     # credit notes on the job's invoices (primary order); ex tax and with tax
     for oid, sub, tot in (await db.execute(
             select(Invoice.order_id, func.sum(CreditNote.subtotal), func.sum(CreditNote.total))
             .join(Invoice, Invoice.id == CreditNote.invoice_id)
-            .where(Invoice.order_id.in_(ids), CreditNote.status == "issued")
+            .where(_ids_cond(Invoice.order_id, orders), CreditNote.status == "issued")
             .group_by(Invoice.order_id))).all():
-        out[oid]["credit_net"] = float(sub or 0)
-        out[oid]["credited_gross"] = float(tot or 0)
-    for oid, kind, amt in (await db.execute(
-            select(Payment.order_id, Payment.kind, func.sum(Payment.amount))
-            .where(Payment.order_id.in_(ids)).group_by(Payment.order_id, Payment.kind))).all():
-        if kind == "refund":
-            out[oid]["refunded"] += abs(float(amt or 0))
-        elif kind in MONEY_IN:
-            out[oid]["paid"] += float(amt or 0)
+        f = fig(oid)
+        f["credit_net"], f["credited_gross"] = float(sub or 0), float(tot or 0)
+    for oid, paid, back in (await db.execute(
+            select(Payment.order_id,
+                   func.sum(case((Payment.kind.in_(MONEY_IN), Payment.amount), else_=0)),
+                   func.sum(case((Payment.kind == "refund", func.abs(Payment.amount)), else_=0)))
+            .where(_ids_cond(Payment.order_id, orders)).group_by(Payment.order_id))).all():
+        f = fig(oid)
+        f["paid"], f["refunded"] = float(paid or 0), float(back or 0)
     for f in out.values():
         billed = f["gross"] - f["credited_gross"]
         overpaid = max(0.0, f["paid"] - max(billed, 0.0))
@@ -140,37 +157,43 @@ async def job_figures(db: AsyncSession, orders: list) -> dict:
     return out
 
 
-async def _billed_on(db, org_id) -> dict:
-    """Each job's first issued (not draft, not cancelled) invoice date, as primary or linked job."""
-    inv_date = func.min(func.coalesce(Invoice.issued_at, Invoice.created_at))
-    live = [Invoice.org_id == org_id, Invoice.status.notin_(_NOT_ISSUED)]
-    first: dict = {}
-    for q in (select(Invoice.order_id, inv_date).where(*live, Invoice.order_id.isnot(None))
-              .group_by(Invoice.order_id),
-              select(InvoiceOrder.order_id, inv_date).join(Invoice, Invoice.id == InvoiceOrder.invoice_id)
-              .where(*live).group_by(InvoiceOrder.order_id)):
-        for oid, d in (await db.execute(q)).all():
-            if d is not None and (oid not in first or d < first[oid]):
-                first[oid] = d
-    return first
+def _billed_on(org_id):
+    """Each job's first invoice staff actually issued (sent to the customer, not cancelled), as
+    primary or linked job: (order_id, billed_at). The invoice a payment makes on its own is a
+    draft that only turns partial/paid; it was never issued, so it doesn't bill the job."""
+    live = [Invoice.org_id == org_id, Invoice.sent_at.isnot(None), Invoice.status.notin_(VOID_STATUSES)]
+    jobs = union(
+        select(Invoice.order_id.label("order_id"), Invoice.sent_at.label("at"))
+        .where(*live, Invoice.order_id.isnot(None)),
+        select(InvoiceOrder.order_id.label("order_id"), Invoice.sent_at.label("at"))
+        .join(Invoice, Invoice.id == InvoiceOrder.invoice_id).where(*live)).subquery()
+    return select(jobs.c.order_id, func.min(jobs.c.at).label("billed_at")).group_by(jobs.c.order_id).subquery()
 
 
-async def earned_jobs(db, org_id, df=None, dt=None, location_id=None) -> list:
-    """Work orders earned in the period: closed or first billed then, whichever came first."""
+async def earned_jobs_query(db, org_id, df=None, dt=None, location_id=None, cols=None):
+    """SELECT of the work orders earned in the period — closed, or first billed on an issued
+    invoice, whichever came first — with the date filter applied in the database. The one date
+    rule for every report that counts a job's revenue."""
     dropped = await _dropped_keys(db, org_id)
-    billed = await _billed_on(db, org_id)
-    q = select(Order).where(Order.org_id == org_id, Order.is_estimate == False,  # noqa: E712
-                            Order.closed_at.isnot(None) | Order.id.in_(list(billed) or ["_"]))
+    billed = _billed_on(org_id)
+    earned_at = case((Order.closed_at.is_(None), billed.c.billed_at),
+                     (billed.c.billed_at.is_(None), Order.closed_at),
+                     (billed.c.billed_at < Order.closed_at, billed.c.billed_at),
+                     else_=Order.closed_at)
+    q = (select(*(cols if cols is not None else (Order,))).select_from(Order)
+         .outerjoin(billed, billed.c.order_id == Order.id)
+         .where(Order.org_id == org_id, Order.is_estimate == False,  # noqa: E712
+                Order.closed_at.isnot(None) | billed.c.billed_at.isnot(None), *_in(earned_at, df, dt)))
     if dropped:
         q = q.where(Order.status.notin_(dropped))
     if location_id:
         q = q.where(Order.location_id == location_id)
-    out = []
-    for o in (await db.execute(q)).scalars().all():
-        when = min(d for d in (o.closed_at, billed.get(o.id)) if d is not None)
-        if (df is None or when >= df) and (dt is None or when <= dt):
-            out.append(o)
-    return out
+    return q
+
+
+async def earned_jobs(db, org_id, df=None, dt=None, location_id=None) -> list:
+    """Work orders earned in the period (see earned_jobs_query)."""
+    return list((await db.execute(await earned_jobs_query(db, org_id, df, dt, location_id))).scalars().all())
 
 
 def _manual_invoice():
@@ -181,8 +204,7 @@ def _manual_invoice():
 async def net_sales(db: AsyncSession, org_id: str, df: Optional[datetime] = None,
                     dt: Optional[datetime] = None, location_id: Optional[str] = None) -> dict:
     """Revenue, tax and COGS for a period (None = open-ended), per the definition above."""
-    jobs = await earned_jobs(db, org_id, df, dt, location_id)
-    jf = await job_figures(db, jobs)
+    jf = await job_figures(db, await earned_jobs_query(db, org_id, df, dt, location_id, cols=(Order.id,)))
     job_net = sum(f["net"] for f in jf.values())
     job_tax = sum(f["gross"] - f["net"] for f in jf.values())
     job_cost = sum(f["parts_cost"] for f in jf.values())
@@ -196,9 +218,9 @@ async def net_sales(db: AsyncSession, org_id: str, df: Optional[datetime] = None
     in_period = {oid: abs(float(a or 0)) for oid, a in (await db.execute(rq)).all()}
     refund_net = refund_tax = 0.0
     if in_period:
-        ro = list((await db.execute(select(Order).where(Order.id.in_(list(in_period))))).scalars().all())
-        for oid, f in (await job_figures(db, ro)).items():
-            if not f["refunded"]:
+        for oid, f in (await job_figures(db, rq.with_only_columns(Payment.order_id).group_by(None)
+                                                .distinct())).items():
+            if oid not in in_period or not f["refunded"]:
                 continue
             share = in_period[oid] / f["refunded"]
             refund_net += f["refund_net"] * share
@@ -256,7 +278,7 @@ async def net_sales(db: AsyncSession, org_id: str, df: Optional[datetime] = None
         "revenue": q2(revenue), "tax": q2(tax), "gross": q2(revenue + tax),
         "jobs": q2(job_net), "counter_sales": q2(sales), "manual_invoices": q2(man_net),
         "credit_notes": q2(cn_net), "refunds": q2(refund_net + sale_refunds + counter_returns),
-        "cogs": q2(job_cost + sales_cost + man_cost), "jobs_count": len(jobs),
+        "cogs": q2(job_cost + sales_cost + man_cost), "jobs_count": len(jf),
     }
 
 
@@ -288,39 +310,19 @@ async def cash_collected(db: AsyncSession, org_id: str, df: Optional[datetime] =
 
 async def receivables(db: AsyncSession, org_id: str, location_id: Optional[str] = None,
                       open_only: bool = False) -> float:
-    """What customers still owe (see the definition above)."""
+    """What customers still owe (see the definition above), summed in the database."""
+    from backend.services.order_money import balances_due
     dropped = await _dropped_keys(db, org_id)
-    q = select(Order).where(Order.org_id == org_id, Order.is_estimate == False)  # noqa: E712
+    due = balances_due(org_id)
+    q = select(func.coalesce(func.sum(due.c.owed), 0)).select_from(due).join(Order, Order.id == due.c.order_id).where(
+        Order.org_id == org_id, Order.is_estimate == False)  # noqa: E712
     if dropped:
         q = q.where(Order.status.notin_(dropped))
     if location_id:
         q = q.where(Order.location_id == location_id)
     if open_only:
         q = q.where(Order.closed_at.is_(None))
-    orders = list((await db.execute(q)).scalars().all())
-    owed = 0.0
-    if orders:
-        ids = [o.id for o in orders]
-        paid: dict = {}
-        for oid, kind, amt in (await db.execute(
-                select(Payment.order_id, Payment.kind, func.sum(Payment.amount))
-                .where(Payment.order_id.in_(ids)).group_by(Payment.order_id, Payment.kind))).all():
-            p, back = paid.get(oid, (0.0, 0.0))
-            if kind == "refund":
-                back += abs(float(amt or 0))
-            elif kind in MONEY_IN:
-                p += float(amt or 0)
-            paid[oid] = (p, back)
-        credited = dict((await db.execute(
-            select(Invoice.order_id, func.sum(Invoice.credited))
-            .where(Invoice.order_id.in_(ids), Invoice.status.notin_(VOID_STATUSES))
-            .group_by(Invoice.order_id))).all())
-        for o in orders:
-            p, back = paid.get(o.id, (0.0, 0.0))
-            billed = float(o.total or 0) - float(credited.get(o.id) or 0)
-            # a refund beyond any overpayment gives back part of the bill (a return, goodwill)
-            refund_off_bill = max(0.0, back - max(0.0, p - max(billed, 0.0)))
-            owed += max(0.0, billed - refund_off_bill - (p - back))
+    owed = float((await db.execute(q)).scalar() or 0)
     if not location_id and not open_only:
         owed += float((await db.execute(select(func.coalesce(func.sum(
             Invoice.total - Invoice.amount_paid - Invoice.credited), 0)).where(

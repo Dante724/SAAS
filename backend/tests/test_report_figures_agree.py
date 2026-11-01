@@ -7,9 +7,10 @@ different measure on purpose (cash collected, jobs only), that figure is checked
 """
 import uuid
 
-from sqlalchemy import select
+from sqlalchemy import event, select
 
-from backend.models import OrderLine, Part, Sale
+from backend.models import Order, OrderLine, Part, Sale
+from backend.services.order_money import balance_due
 
 
 async def _setup(client):
@@ -122,11 +123,28 @@ async def _known_day(client, db):
     return H, oid, job_cost, sale_cost
 
 
+async def _org_of(db, order_id) -> str:
+    return (await db.execute(select(Order.org_id).where(Order.id == order_id))).scalar_one()
+
+
+async def _job_screen_owed(db, org_id) -> float:
+    """What the shop's job screens say is owed, added up."""
+    total = 0.0
+    for o in (await db.execute(select(Order).where(Order.org_id == org_id)
+                               .execution_options(populate_existing=True))).scalars().all():
+        total += await balance_due(db, o)
+    return round(total, 2)
+
+
 async def test_every_report_reads_the_known_day_the_same(client, db):
     H, oid, job_cost, sale_cost = await _known_day(client, db)
     REVENUE = 200.0          # job 170 ex tax − returned protector 20 ex tax + small job 20 + counter sale 30
     JOBS = 170.0
-    OWED = 34.0
+    # What's owed is what each job screen says is owed (order_money.balance_due): 34 on the open
+    # job, and 22 on the first job, whose refunded return doesn't lower the job total yet (a job-
+    # screen issue, session F) — the reports follow the job screen rather than a rule of their own.
+    OWED = await _job_screen_owed(db, await _org_of(db, oid))
+    assert OWED == 56.0, OWED
     COGS = round(job_cost + sale_cost, 2)   # the returned, restocked protector is no cost
 
     dash = (await client.get("/api/reports/dashboard", headers=H)).json()["stats"]
@@ -202,3 +220,106 @@ async def test_a_completed_job_counts_before_it_is_fully_paid(client, db):
     summ = (await client.get("/api/finance/reports/summary", headers=H)).json()
     assert dash["revenue"] == summ["total_revenue"] == 80.0
     assert dash["outstanding"] == summ["total_outstanding"] == 50.0
+
+
+async def _job(client, H, loc, cid, amount, close=False):
+    o = (await client.post("/api/orders", json={"client_id": cid, "location_id": loc, "complaint": "x"},
+                           headers=H)).json()
+    r = await client.post(f"/api/orders/{o['id']}/lines", json={
+        "kind": "service", "line_type": "labour", "description": "Repair", "qty": 1, "unit_price": amount},
+        headers=H)
+    assert r.status_code in (200, 201), r.text
+    if close:
+        r = await client.patch(f"/api/orders/{o['id']}/status",
+                               json={"status": await _status(client, H, "closed")}, headers=H)
+        assert r.status_code == 200, r.text
+    return o["id"]
+
+
+async def test_a_payment_on_an_open_job_earns_nothing_until_the_invoice_is_sent(client, db):
+    """Council review: the invoice a payment makes for itself turned partial, so 10 paid on an open
+    500 job booked 500 of revenue. A job is earned when it closes or staff send its invoice — and
+    job profitability dates it the same way."""
+    H, loc, acc = await _setup(client)
+    cid = (await client.post("/api/clients", json={"name": "Ari", "email": "ari@example.com"},
+                             headers=H)).json()["id"]
+    oid = await _job(client, H, loc, cid, 500)
+    r = await client.post(f"/api/cash/orders/{oid}/pay", json={"method": "cash", "account_id": acc, "amount": 10},
+                          headers=H)
+    assert r.status_code in (200, 201), r.text
+
+    async def figures():
+        from backend.routers.reports import _dash_cache
+        _dash_cache.clear()                       # the tiles are cached for a few seconds
+        dash = (await client.get("/api/reports/dashboard", headers=H)).json()["stats"]
+        summ = (await client.get("/api/finance/reports/summary", headers=H)).json()
+        prof = (await client.get("/api/reports/job-profitability", headers=H)).json()["totals"]
+        return dash["revenue"], summ["total_revenue"], prof["revenue"]
+
+    assert await figures() == (0.0, 0.0, 0)
+
+    iid = (await client.post("/api/finance/invoices", json={"order_id": oid}, headers=H)).json()["id"]
+    assert await figures() == (0.0, 0.0, 0)       # a draft isn't issued either
+    r = await client.post(f"/api/finance/invoices/{iid}/send", json={"channel": "email"}, headers=H)
+    assert r.status_code == 200, r.text
+    assert await figures() == (500.0, 500.0, 500.0)
+
+
+async def test_receivables_are_what_the_job_screens_say_is_owed(client, db):
+    """Council review: one rule for what a job owes. A credit note on an invoice billing two jobs
+    is shared between them by job total, exactly as the job screen and close gate share it."""
+    H, loc, acc = await _setup(client)
+    cid = (await client.post("/api/clients", json={"name": "Bo"}, headers=H)).json()["id"]
+    a = await _job(client, H, loc, cid, 60)
+    b = await _job(client, H, loc, cid, 40)
+    r = await client.post(f"/api/cash/orders/{a}/prepay", json={"amount": 10, "account_id": acc}, headers=H)
+    assert r.status_code == 201, r.text
+    r = await client.post("/api/finance/invoices", json={"order_ids": [a, b]}, headers=H)
+    assert r.status_code == 201, r.text
+    iid = r.json()["id"]
+    cn = (await client.post("/api/finance/credit-notes", headers=H, json={
+        "client_id": cid, "invoice_id": iid, "reason": "Goodwill",
+        "lines": [{"description": "Goodwill", "qty": 1, "unit_price": 30}]})).json()
+    r = await client.post(f"/api/finance/credit-notes/{cn['id']}/issue", headers=H)
+    assert r.status_code == 200, r.text
+
+    owed = await _job_screen_owed(db, await _org_of(db, a))
+    assert owed == 60.0, owed                     # 60 − 10 − 18 of the credit, and 40 − 12
+    dash = (await client.get("/api/reports/dashboard", headers=H)).json()["stats"]
+    summ = (await client.get("/api/finance/reports/summary", headers=H)).json()
+    comp = (await client.get("/api/reports/company-dashboard", headers=H)).json()["kpis"]
+    assert dash["outstanding"] == summ["total_outstanding"] == comp["receivables"] == owed
+
+
+async def test_revenue_and_receivables_are_summed_in_the_database(client, db):
+    """Council review: no list of every job id sent as query parameters (asyncpg stops at 32,767)
+    — the date filter and the sums stay in SQL however many jobs a shop has."""
+    from backend.services.revenue import net_sales, receivables
+    H, loc, acc = await _setup(client)
+    cid = (await client.post("/api/clients", json={"name": "Cy"}, headers=H)).json()["id"]
+    org_id = await _org_of(db, await _job(client, H, loc, cid, 0))
+    engine = db.bind.sync_engine
+
+    async def widest_query() -> int:
+        widest = []
+
+        def count(conn, cursor, statement, params, context, executemany):
+            widest.append(len(params) if isinstance(params, (list, tuple, dict)) else 0)
+
+        event.listen(engine, "before_cursor_execute", count)
+        try:
+            sales = await net_sales(db, org_id)
+            owed = await receivables(db, org_id)
+        finally:
+            event.remove(engine, "before_cursor_execute", count)
+        return max(widest), sales["revenue"], owed
+
+    for _ in range(3):
+        await _job(client, H, loc, cid, 10, close=True)
+    few, sales, owed = await widest_query()
+    assert sales == owed == 30.0
+    for _ in range(22):
+        await _job(client, H, loc, cid, 10, close=True)
+    many, sales, owed = await widest_query()
+    assert sales == owed == 250.0
+    assert many == few, (few, many)               # no parameter per job

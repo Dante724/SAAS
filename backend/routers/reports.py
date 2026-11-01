@@ -1204,7 +1204,7 @@ async def job_profitability(
     from backend.models import Location, Role, TimeEntry
     oid = current.org_id
 
-    # date window (default: trailing 30 days), on closed_at
+    # date window (default: trailing 30 days), on the day each job was earned
     end = datetime.fromisoformat(to) if to else now_utc()
     if to and end.time() == datetime.min.time():
         end = end + timedelta(days=1) - timedelta(seconds=1)   # a date-only "to" includes that day
@@ -1216,17 +1216,9 @@ async def job_profitability(
         role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
     allow = _allowed_location_ids(role)
 
-    # completed jobs only: estimates and dropped jobs earn nothing (services/revenue)
-    dropped = [k for (k,) in (await db.execute(select(OrderStatus.key).where(
-        OrderStatus.org_id == oid, OrderStatus.status_group == "dropped"))).all()]
-    q = select(Order).where(
-        Order.org_id == oid, Order.closed_at.isnot(None), Order.is_estimate == False,  # noqa: E712
-        Order.closed_at >= start, Order.closed_at <= end)
-    if dropped:
-        q = q.where(Order.status.notin_(dropped))
-    if location_id:
-        q = q.where(Order.location_id == location_id)
-    orders = (await db.execute(q)).scalars().all()
+    # jobs earned in the window — closed or first billed on an issued invoice, the date rule net
+    # sales uses; estimates and dropped jobs earn nothing (services/revenue)
+    orders = await money_rules.earned_jobs(db, oid, start, end, location_id)
     orders = [o for o in orders if allow is None or o.location_id in allow]
     if not orders:
         return {"rows": [], "by_location": [], "totals": {
