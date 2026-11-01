@@ -162,6 +162,10 @@ async def test_technician_cost_edit_is_refused_not_ignored(client):
     # a qty change that doesn't touch cost still works
     r = await client.patch(f"/api/orders/{o['id']}/lines/{line['id']}", json={"qty": 2}, headers=T)
     assert r.status_code == 200, r.text
+    # sending the cost it already has is no change, so it isn't refused (the line editor never
+    # sends cost on an edit; the add-line form only sends it to people who may set it)
+    r = await client.patch(f"/api/orders/{o['id']}/lines/{line['id']}", json={"cost_price": 40, "qty": 1}, headers=T)
+    assert r.status_code == 200, r.text
 
 
 @pytest.mark.asyncio
@@ -172,7 +176,16 @@ async def test_closing_an_unpaid_job_needs_the_payments_right(client):
     assert (await client.patch(f"/api/orders/{o['id']}/status", json={"status": "ready"}, headers=T)).status_code == 200
     r = await client.patch(f"/api/orders/{o['id']}/status", json={"status": "done"}, headers=T)
     assert r.status_code == 403, r.text
+    msg = r.json()["detail"]
+    assert msg.startswith(f"{o['order_number']} still has ") and "100.00 to pay. Take the payment first, " \
+        "or ask someone who takes payments to close it." in msg and "can_" not in msg, msg
     assert (await client.get(f"/api/orders/{o['id']}", headers=H)).json()["status"] == "ready"
+    # the right to take client payments is what lets someone close it unpaid (no finance needed)
+    C = await _person(client, H, (await _role(client, H, {"name": "Closer", "permissions": {
+        "can_create_tickets": True, "can_make_client_payments": True}}))["id"], "Cleo")
+    o2, _ = await _shop_job(client, H)
+    r = await client.patch(f"/api/orders/{o2['id']}/status", json={"status": "done"}, headers=C)
+    assert r.status_code == 200, r.text
     # paid up, the technician can close it
     r = await client.post(f"/api/cash/orders/{o['id']}/pay", json={"method": "cash", "account_id": acc}, headers=H)
     assert r.status_code == 200, r.text

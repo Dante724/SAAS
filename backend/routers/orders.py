@@ -1461,14 +1461,18 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     if data.status != order.status and await _is_closed(db, current.org_id, order) \
             and not (target and target.status_group == "closed"):
         await assert_perm(db, current, "can_edit_closed_ticket")
-    # Closing a job the customer still owes on is a money decision: it needs the payments right
-    # (a technician could close an unpaid job — QA 31 Oct 2026). "Not collected" isn't a close.
+    # Closing a job the customer still owes on is a money decision: it needs the right to take
+    # client payments, as in Orderry's close dialog (a technician could close an unpaid job —
+    # QA 31 Oct 2026). "Not collected" isn't a close.
     if target and target.status_group == "closed" and data.status != order.status \
-            and not order.is_estimate and not await has_perm(db, current, "can_view_finance"):
+            and not order.is_estimate and not await has_perm(db, current, "can_make_client_payments"):
         from backend.services.order_money import balance_due as _due_now
-        if await _due_now(db, order) > 0:
-            raise HTTPException(403, "This job still has money owing. Someone who takes payments "
-                                     "needs to close it (permission: can_view_finance).")
+        due = await _due_now(db, order)
+        if due > 0:
+            from backend.services.currency import org_money
+            fmt = await org_money(db, current.org_id)
+            raise HTTPException(403, f"{order.order_number} still has {fmt(due)} to pay. Take the payment "
+                                     "first, or ask someone who takes payments to close it.")
 
     # Phase B.7: enforce status transfer rules (allowed from->to for this role)
     from backend.routers.statuses import is_transition_allowed
