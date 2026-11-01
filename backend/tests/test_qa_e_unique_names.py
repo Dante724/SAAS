@@ -95,7 +95,7 @@ async def test_warehouse_names_are_per_location(client, tenant):
     a = (await client.post("/api/staff/locations", json={"name": "Second shop"}, headers=tenant)).json()
     locs = (await client.get("/api/staff/locations", headers=tenant)).json()
     locs = locs["items"] if isinstance(locs, dict) else locs
-    first = next(l["id"] for l in locs if l["id"] != a["id"])
+    first = next(loc["id"] for loc in locs if loc["id"] != a["id"])
     for loc in (first, a["id"]):
         r = await client.post("/api/settings/warehouses", json={"name": "Back room", "location_id": loc},
                               headers=tenant)
