@@ -105,7 +105,7 @@ async def test_checks_set_on_the_dropped_status_itself_still_apply(client, tenan
     r = await client.patch(f"/api/orders/{oid}/status",
                            json={"status": "dropped", "reason": "Too expensive"}, headers=tenant)
     assert r.status_code == 409
-    assert "comment" in r.json()["detail"]
+    assert r.json()["detail"]["code"] == "comment_required" and "comment" in r.json()["detail"]["message"]
 
 
 async def test_reopening_a_dropped_job_restores_the_balance(client, tenant, db):

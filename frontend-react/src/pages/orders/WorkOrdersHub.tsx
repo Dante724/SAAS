@@ -157,7 +157,9 @@ export default function WorkOrdersHub() {
     let reason: string | null = null;
     { const ds = droppedStatus(statuses, key); if (ds) { reason = await askCancelReason(ds.name); if (reason === null) return; } }
     setOrders((cur) => (cur || []).map((x) => x.id === id ? { ...x, status: key } : x)); // optimistic
-    try { await api.patch(`/orders/${id}/status`, { status: key, reason: reason || undefined }); } catch { refetch(); }
+    // A refused move (a comment or payment still needed…) says why instead of snapping back silently.
+    try { await api.patch(`/orders/${id}/status`, { status: key, reason: reason || undefined }); }
+    catch (e: any) { refetch(); alertDialog(`${e?.message || "The status didn't change."} Open the job to finish it there.`, `${o.order_number || "This job"} can't move yet`); }
   }
 
   // Filters go to the server: the table fetches one page plus facet counts; the board fetches

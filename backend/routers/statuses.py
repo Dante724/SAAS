@@ -136,9 +136,11 @@ async def ensure_seeded(db: AsyncSession, org_id: str):
         select(OrderStatus.record_type).where(OrderStatus.org_id == org_id).distinct()))}
     rows: list[dict] = []
     if "work_order" not in have:
+        # B11: a device can't be handed back with money owed unless a manager says so. "Done" stays
+        # closable unpaid, so a finished job can still be invoiced and paid later.
         rows += [dict(key=key, name=name, status_group=grp, color=color, sort_order=i, is_default=dflt,
                       triggers_invoice=t_inv, triggers_notification=False, triggers_payment=t_pay,
-                      is_terminal=term, record_type="work_order")
+                      is_terminal=term, record_type="work_order", require_payment=key == "delivered")
                  for i, (key, name, grp, color, dflt, t_inv, t_not, t_pay, term) in enumerate(DEFAULT_STATUSES)]
     if "estimate" not in have:
         rows += [dict(key=key, name=name, status_group=grp, color=color, sort_order=i, is_estimate=True,
