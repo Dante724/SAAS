@@ -6,13 +6,13 @@ received_serial_ids: the ones that arrived when a short delivery is recorded. Nu
 transfers simply have none.
 
 Revision ID: f2tr01
-Revises: rt144a1
+Revises: qad01
 """
 import sqlalchemy as sa
 from alembic import op
 
 revision = "f2tr01"
-down_revision = "rt144a1"
+down_revision = "qad01"
 branch_labels = None
 depends_on = None
 
