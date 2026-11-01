@@ -25,7 +25,7 @@ async def _register(client):
 
 async def _denying(client, H, *codes):
     """A role with every permission on except `codes`."""
-    r = await client.post("/api/settings/rbac/roles", json={
+    r = await client.post("/api/settings/rbac/roles", json={"template": "Full access", 
         "name": f"No {codes[0]} {uuid.uuid4().hex[:4]}", "permissions": {c: False for c in codes}}, headers=H)
     assert r.status_code in (200, 201), r.text
     return r.json()["id"]

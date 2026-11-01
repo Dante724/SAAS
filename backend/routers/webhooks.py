@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Employee, WebhookEndpoint, WebhookDelivery
 from backend.services.audit import record as audit_record
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import require_perm
 from backend.services.webhooks import EVENTS, valid_events
 
 router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
@@ -122,7 +122,7 @@ async def delete_endpoint(
 async def list_deliveries(
     limit: int = 50,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     rows = (await db.execute(select(WebhookDelivery).where(
         WebhookDelivery.org_id == current.org_id)

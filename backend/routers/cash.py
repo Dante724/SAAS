@@ -843,7 +843,8 @@ async def create_sub_invoice(
     data: SubInvoiceIn,
     response: Response,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_view_finance")),
+    # the same right as POST /finance/invoices: invoicing isn't taking money
+    current: Employee = Depends(require_perm("can_create_invoices")),
 ):
     """Create an invoice billing a SUBSET of the order's lines (multi-invoice per order)."""
     from backend.models import OrderLine
@@ -879,9 +880,12 @@ async def create_sub_invoice(
 async def list_order_invoices(
     order_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_view_finance")),
+    current: Employee = Depends(require_perm("can_view_invoices")),   # as GET /finance/invoices
 ):
     await assert_perm(db, current, "can_view_invoices_tab")   # the work order's Invoices and payments tab
+    if not (await db.execute(select(Order.id).where(
+            Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none():
+        raise HTTPException(404, "Order not found")   # payments below aren't org-filtered
     linked = select(InvoiceOrder.invoice_id).where(InvoiceOrder.order_id == order_id)   # shared invoices too
     invs = (await db.execute(select(Invoice).where(
         (Invoice.order_id == order_id) | Invoice.id.in_(linked), Invoice.org_id == current.org_id)
