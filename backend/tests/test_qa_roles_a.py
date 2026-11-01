@@ -283,3 +283,17 @@ async def test_technician_cannot_read_admin_settings_or_a_contacts_payments(clie
         assert (await client.get(url, headers=T)).status_code == 403, url
         assert (await client.get(url, headers=H)).status_code == 200, url
 
+
+@pytest.mark.asyncio
+async def test_a_full_discount_needs_approval_even_without_a_threshold(client):
+    H = await _owner(client)
+    o, _ = await _shop_job(client, H)
+    line = o["lines"][0]
+    perms = {**_DESK, "can_set_discount": True}               # may discount, may not approve
+    D = await _person(client, H, (await _role(client, H, {"name": "Desk", "permissions": perms}))["id"], "Desk")
+    r = await client.patch(f"/api/orders/{o['id']}/lines/{line['id']}", json={"discount": 100}, headers=D)
+    assert r.status_code == 403, r.text
+    r = await client.patch(f"/api/orders/{o['id']}/lines/{line['id']}", json={"discount": 20}, headers=D)
+    assert r.status_code == 200, r.text
+    r = await client.patch(f"/api/orders/{o['id']}/lines/{line['id']}", json={"discount": 100}, headers=H)
+    assert r.status_code == 200, r.text                        # the owner can

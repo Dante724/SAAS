@@ -3734,6 +3734,10 @@ async def _guard_discount_approval(db, org_id, perms, discount, discount_type, i
         discount = 100.0 if not base or base <= 0 else min(100.0, float(discount) / float(base) * 100)
     if perms.get("can_approve_discount") is not False:
         return
+    # Giving the whole line away is always an approval, threshold or not (with no threshold set,
+    # a role denied approval could still make a job free — QA 31 Oct 2026).
+    if (discount or 0) >= 100:
+        raise HTTPException(403, "A 100% discount needs manager approval.")
     org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
     thr = float(getattr(org, "discount_approval_pct", 0) or 0)
     if thr <= 0 or (discount or 0) <= thr:
