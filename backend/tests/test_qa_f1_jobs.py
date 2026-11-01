@@ -52,3 +52,56 @@ async def test_allowed_statuses_list_only_the_jobs_pipeline(client, tenant):
     assert "in_repair" in keys
     assert not [k for k in keys if k.startswith(("inv_", "po_", "est_", "tr_", "inq_"))], keys
 
+
+# ── 3. a job line only points at this shop's catalog ───────────────────────────────────────────
+async def _other_shop(client):
+    import uuid
+    r = await client.post("/api/auth/register", json={
+        "org_name": "Other Co", "name": "Other", "email": f"o-{uuid.uuid4().hex[:8]}@test.dev",
+        "password": "pw-test-12345"})
+    h = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    loc = await K.loc(client, h)
+    pid = await K.part(client, h, loc, "Their screen", 50, 10, qty=5)
+    sid = await K.service(client, h, "Their labour", 40)
+    tax = (await client.post("/api/catalog/taxes", json={"name": "Their VAT", "rate": 20}, headers=h)).json()["id"]
+    return h, pid, sid, tax
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("which", ["product", "service", "tax"])
+async def test_job_line_refuses_another_shops_ids(client, tenant, which):
+    oh, pid, sid, tax = await _other_shop(client)
+    oid, _ = await K.job(client, tenant, await K.loc(client, tenant))
+    body = {"product": {**P, "ref_id": pid},
+            "service": {"line_type": "labour", "kind": "service", "description": "S", "ref_id": sid},
+            "tax": {**P, "tax_id": tax}}[which]
+    r = await client.post(f"/api/orders/{oid}/lines", json=body, headers=tenant)
+    assert r.status_code == 404, r.text
+    assert await K.lines(client, tenant, oid) == []
+    assert await K.stock(client, oh, pid) == 5                         # their stock untouched
+
+
+@pytest.mark.asyncio
+async def test_new_job_refuses_another_shops_product(client, tenant):
+    _, pid, _, _ = await _other_shop(client)
+    cid = (await client.post("/api/clients", json={"name": "C"}, headers=tenant)).json()["id"]
+    r = await client.post("/api/orders", headers=tenant, json={
+        "client_id": cid, "location_id": await K.loc(client, tenant), "complaint": "x",
+        "lines": [{**P, "ref_id": pid}]})
+    assert r.status_code == 404, r.text
+
+
+@pytest.mark.asyncio
+async def test_recommendation_refuses_another_shops_product(client, tenant):
+    _, pid, _, _ = await _other_shop(client)
+    oid, _ = await K.job(client, tenant, await K.loc(client, tenant))
+    r = await client.post(f"/api/orders/{oid}/recommendations", headers=tenant, json={
+        "title": "Screen", "kind": "product", "ref_id": pid, "unit_price": 50})
+    assert r.status_code == 404, r.text
+    ok = await client.post(f"/api/orders/{oid}/recommendations", headers=tenant, json={
+        "title": "Screen", "kind": "custom", "unit_price": 50})
+    assert ok.status_code in (200, 201), ok.text
+    p = await client.patch(f"/api/orders/{oid}/recommendations/{ok.json()['id']}", headers=tenant,
+                           json={"kind": "product", "ref_id": pid})
+    assert p.status_code == 404, p.text
+

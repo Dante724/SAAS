@@ -55,19 +55,25 @@ def _org_fks(mapper: Mapper) -> tuple:
     return tuple(out)
 
 
-# Plain-string catalog references: table -> attribute holding a Part / Service / Bundle id.
-_SOFT_REFS = {"order_lines": "ref_id", "sale_lines": "ref_id"}
+# Plain-string references with no FK: table -> attributes holding a Part / Service / Bundle id
+# (``ref_id``) or a Tax id (``tax_id``). A job's upsell recommendations carry a catalog ref_id too.
+_SOFT_REFS = {"order_lines": ("ref_id", "tax_id"), "sale_lines": ("ref_id",),
+              "recommendations": ("ref_id",)}
 
 
 @cache
 def _soft_tables() -> dict:
-    from backend.models import Bundle, Part, Service
-    return {"part": Part.__table__, "service": Service.__table__, "bundle": Bundle.__table__}
+    from backend.models import Bundle, Part, Service, Tax
+    return {"part": Part.__table__, "service": Service.__table__, "bundle": Bundle.__table__,
+            "tax": Tax.__table__}
 
 
-def _soft_targets(obj) -> tuple:
-    """Which catalog table(s) a line's ref_id can point at, from the line's own kind."""
+def _soft_targets(obj, attr: str = "ref_id") -> tuple:
+    """Which table(s) a line's soft reference can point at: a tax for tax_id, else the catalog
+    table from the line's own kind."""
     t = _soft_tables()
+    if attr == "tax_id":
+        return (t["tax"],)
     kind = (getattr(obj, "kind", None) or "").lower()
     ltype = (getattr(obj, "line_type", None) or "").lower()
     if kind == "product" or ltype == "part":
@@ -76,7 +82,7 @@ def _soft_targets(obj) -> tuple:
         return (t["service"],)
     if kind == "bundle":
         return (t["bundle"],)
-    return tuple(t.values())
+    return (t["part"], t["service"], t["bundle"])
 
 
 @event.listens_for(Session, "before_flush")
@@ -101,11 +107,10 @@ def _guard_cross_tenant_references(session: Session, flush_context, instances) -
         state = inspect(obj)
         is_new = obj in session.new
         table = state.mapper.local_table.name
-        soft = _SOFT_REFS.get(table)
-        if soft and tenant:
+        for soft in (_SOFT_REFS.get(table, ()) if tenant else ()):
             val = getattr(obj, soft, None)
             if val and (is_new or state.attrs[soft].history.added):
-                for target in _soft_targets(obj):
+                for target in _soft_targets(obj, soft):
                     wanted.setdefault((target, target.c.id), {}).setdefault(val, set()).add((org, f"{table}.{soft}"))
         fks = _org_fks(state.mapper)
         if not fks:
