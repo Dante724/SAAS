@@ -359,3 +359,17 @@ async def test_sale_voided_twice_at_once_restocks_and_refunds_once(client, tenan
     bal = (await db.execute(select(Account.balance).where(Account.id == till))).scalar_one()
     assert float(bal) == 0                                                # +20 taken, −20 once
     await _ledger_matches(db, p["id"])
+
+
+@pytest.mark.asyncio
+async def test_client_return_sent_twice_with_one_key_restocks_once(client, tenant, db):
+    p = await _part(client, tenant, sku="RET-1", barcode="RET-1")
+    await _stock(client, tenant, p["id"], 1)
+    body = {"reason": "Wrong colour", "lines": [{"part_id": p["id"], "qty": 1}]}
+    h = {**tenant, "Idempotency-Key": "ret-click-1"}
+    a = await client.post("/api/returns", json=body, headers=h)
+    b = await client.post("/api/returns", json=body, headers=h)
+    assert a.status_code == 201 and b.status_code in (200, 201), b.text
+    assert b.json()["id"] == a.json()["id"]
+    assert await _on_hand(db, p["id"]) == 2
+    await _ledger_matches(db, p["id"])

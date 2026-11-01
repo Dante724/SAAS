@@ -3,7 +3,7 @@ import { useEffect, useState, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
 import ScanStockPanel from "../../components/ScanStockPanel";
-import { api, openAuthedDoc } from "../../api/client";
+import { api, idempotencyKey, openAuthedDoc } from "../../api/client";
 import { downloadSheet } from "../../lib/downloadSheet";
 import { isoDate } from "../../lib/localDate";
 import { missingBarcodesMessage } from "../../lib/barcodes";
@@ -730,6 +730,7 @@ function ActionModal({ kind, products, preselected, onClose, onDone }:
   const [lines, setLines] = useState<{ part_id: string; qty: number; serials?: string[] }[]>(
     preselected.length ? preselected.map((id) => ({ part_id: id, qty: 1 })) : [{ part_id: "", qty: 1 }]);
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
+  const saveKey = useRef(idempotencyKey());
 
   useEffect(() => {
     api.get<any>("/staff/locations").then((r) => {
@@ -758,7 +759,7 @@ function ActionModal({ kind, products, preselected, onClose, onDone }:
         if (fromLoc === toLoc) { setErr("Source and destination must differ."); setBusy(false); return; }
         await api.post("/transfers", { from_location_id: fromLoc, to_location_id: toLoc, note, lines: body });
       } else if (kind === "return") {
-        await api.post("/returns", { reason, lines: body.map((l: any) => ({ ...l, restock: true })) });
+        await api.postOnce("/returns", { reason, lines: body.map((l: any) => ({ ...l, restock: true })) }, saveKey.current);   // a double click restocks once
       } else {
         // a write-off document takes one line per serialized unit, naming it
         const out: any[] = [];
