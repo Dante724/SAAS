@@ -142,8 +142,9 @@ async def test_write_off_is_audited(client, tenant, db):
 
 async def _staff(client, H, perms):
     import uuid
-    role = (await client.post("/api/staff/roles", json={"name": f"R{uuid.uuid4().hex[:4]}", "permissions": perms},
-                              headers=H)).json()
+    # "everything but": since QA fix A a role without a template starts with nothing
+    role = (await client.post("/api/settings/rbac/roles", json={"name": f"R{uuid.uuid4().hex[:4]}", "permissions": perms,
+                                                                "template": "Full access"}, headers=H)).json()
     em = f"s-{uuid.uuid4().hex[:6]}@t.dev"
     await client.post("/api/staff/employees", json={"name": "Staff", "email": em, "password": "pw-test-12345",
                                                      "role_id": role["id"]}, headers=H)

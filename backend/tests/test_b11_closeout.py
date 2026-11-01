@@ -25,8 +25,9 @@ async def _order(client, H, price=0):
 
 
 async def _emp_with_role(client, H, perms):
-    role = (await client.post("/api/staff/roles", json={"name": f"R{uuid.uuid4().hex[:4]}", "permissions": perms},
-                              headers=H)).json()
+    # "everything but": since QA fix A a role without a template starts with nothing
+    role = (await client.post("/api/settings/rbac/roles", json={"name": f"R{uuid.uuid4().hex[:4]}", "permissions": perms,
+                                                                "template": "Full access"}, headers=H)).json()
     email = f"e-{uuid.uuid4().hex[:6]}@t.dev"
     await client.post("/api/staff/employees", json={
         "name": "Emp", "email": email, "password": "pw-test-12345", "role_id": role["id"]}, headers=H)
