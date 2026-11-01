@@ -115,7 +115,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
     { const ds = droppedStatus(statuses as any[], key); if (ds) { reason = await askCancelReason(ds.name); if (reason === null) return; } }
     const prev = d.status; setD({ ...d, status: key });
     try { await api.patch(`/orders/${order.id}/status`, { status: key, reason: reason || undefined }); flash("Status updated"); onChanged?.(); }
-    catch (e: any) { setD({ ...d, status: prev }); flash(`Failed: ${e.message}`); }
+    // The server says why in a sentence ("WO-12 still has $40 to pay…"): show it as it is.
+    catch (e: any) { setD({ ...d, status: prev }); flash(e.message || "Couldn't change the status"); }
   }
   async function saveNotes(tech_notes: string, conclusion: string) {
     try { await api.patch(`/orders/${order.id}/notes`, { tech_notes, conclusion }); setD({ ...d, tech_notes, conclusion }); flash("Notes saved"); }
