@@ -64,13 +64,13 @@ describe("InvoicesTab payments carry an Idempotency-Key", () => {
       const onFlash = vi.fn();
       render(<InvoicesTab orderId="o1" total={100} onFlash={onFlash} />);
       const open = async () => {
-        await u.click(await screen.findByRole("button", { name: kind === "pay" ? /Take Payment/ : /Take Prepayment/ }));
+        await u.click(await screen.findByRole("button", { name: kind === "pay" ? /Take payment/ : /Take prepayment/ }));
         const submit = await screen.findByRole("button", { name: kind === "pay" ? "Record payment" : "Record prepayment" });
         if (kind === "prepay") await u.type(screen.getAllByRole("spinbutton").at(-1)!, "30");
         return submit;
       };
       await u.click(await open());
-      await vi.waitFor(() => expect(onFlash).toHaveBeenCalledWith(expect.stringMatching(/^Failed/)));
+      await vi.waitFor(() => expect(onFlash).toHaveBeenCalledTimes(1));   // main shows the server's reason, not "Failed: …"
       await u.click(screen.getByRole("button", { name: kind === "pay" ? "Record payment" : "Record prepayment" }));
       await vi.waitFor(() => expect(onFlash).toHaveBeenCalledWith("Payment recorded"));
       expect(sent).toHaveLength(2);

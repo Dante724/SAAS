@@ -280,6 +280,8 @@ describe("SalesPOS charge", () => {
     render(<SalesPOS />);
     await act(async () => wedge("0123456789012"));
     await vi.waitFor(() => expect(cartLines()).toHaveLength(1));
+    // main prices the cart on the server first: the button reads "Pricing…" until the quote is back
+    await vi.waitFor(() => expect(screen.getByRole("button", { name: /^Charge [^o]/ })).toBeEnabled());
     await u.click(screen.getByRole("button", { name: /^Charge [^o]/ }));
     await vi.waitFor(() => expect(keys).toHaveLength(1));
     await vi.waitFor(() => expect(screen.getByRole("button", { name: /^Charge [^o]/ })).toBeEnabled());
