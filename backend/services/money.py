@@ -159,3 +159,37 @@ async def claim_status(db, obj, expected, new, *, attr: str = "status", where=()
         return False
     await db.refresh(obj, attribute_names=[attr, *values])
     return True
+
+
+MAX_MONEY = 1e9      # a single price/amount above this is a typo, not a repair-shop price
+
+
+def check_money(v, *, allow_negative: bool = False):
+    """Pydantic-validator helper: a finite money amount, not negative, below MAX_MONEY."""
+    if v is None:
+        return v
+    import math
+    if not math.isfinite(v) or abs(v) >= MAX_MONEY:
+        raise ValueError("Amount is too large")
+    if v < 0 and not allow_negative:
+        raise ValueError("Amount can't be negative")
+    return v
+
+
+def round_price(x, decimals=2) -> float:
+    """A price as the shop writes it: round-half-up to the shop's price_decimals (QA 2026-10-31 B).
+
+    Prices live in 2-decimal columns, so more than 2 decimals can't be stored and 2 is the most
+    this rounds to; 0 or 1 round further (whole-number shops). None/garbage → 2."""
+    try:
+        d = max(0, min(int(decimals), 2))
+    except (TypeError, ValueError):
+        d = 2
+    return float(dec(x).quantize(Decimal(1).scaleb(-d), rounding=ROUND_HALF_UP))
+
+
+async def org_price_decimals(db, org_id: str) -> int:
+    from sqlalchemy import select
+    from backend.models import Organisation
+    v = (await db.execute(select(Organisation.price_decimals).where(Organisation.id == org_id))).scalar_one_or_none()
+    return 2 if v is None else v

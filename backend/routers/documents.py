@@ -551,7 +551,8 @@ def _line_numbers(line: OrderLine) -> dict:
         disc = gross_no_disc * float(line.discount or 0) / 100.0
     else:
         disc = float(line.discount or 0)
-    base = max(gross_no_disc - disc, 0)                 # taxable base, after discount
+    # taxable base, after discount; a coupon line is negative and takes its tax back off
+    base = (gross_no_disc - disc) if gross_no_disc < 0 else max(gross_no_disc - disc, 0)
     tax = base * rate
     amount = float(line.total) if line.total is not None else base + tax
     return {"qty": qty, "unit_ex": unit_ex, "unit_inc": unit_inc, "rate": rate, "disc": disc,

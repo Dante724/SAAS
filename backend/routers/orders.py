@@ -2402,8 +2402,11 @@ async def invoice_preview(
     )).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    # QA 2026-10-31 B: the stored line total (after its discount and tax), so lines add up.
     lines = [{"description": l.description, "qty": l.qty, "unit_price": l.unit_price,
-              "line_type": l.line_type, "total": q2((l.qty or 0) * (l.unit_price or 0))}
+              "discount": l.discount or 0, "discount_type": l.discount_type,
+              "line_type": l.line_type,
+              "total": q2(l.total if l.total is not None else (l.qty or 0) * (l.unit_price or 0))}
              for l in order.lines]
     from backend.services.order_money import balance_due
     balance = await balance_due(db, order)

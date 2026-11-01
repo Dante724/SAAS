@@ -10,11 +10,14 @@ Returns a list of applied taxes with the computed amount for the line's net.
 """
 import json
 
+from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import Tax, TaxException, TaxRule
 from backend.services.money import q2
+
+JOB_FAMILY = "tickets_sales"
 
 
 def _in_scope(tax: Tax, location_id: str | None) -> bool:
@@ -76,3 +79,38 @@ async def resolve_taxes(db: AsyncSession, org_id: str, *, doc_family: str,
                         "rate": tax.rate, "mode": tax.mode, "amount": amount})
         total += amount
     return {"taxes": applied, "tax_total": q2(total), "exempt": False}
+
+
+
+async def job_stack(db: AsyncSession, org_id: str) -> list[str]:
+    """The taxes jobs and sales charge, in order. The one source of truth for "the default tax":
+    it is the first one here (it has priority, as in Orderry)."""
+    return await _default_stack(db, org_id, JOB_FAMILY)
+
+
+async def set_default_tax(db: AsyncSession, org_id: str, tax: Tax, is_default: bool) -> None:
+    """Tick/untick "default" on a tax by editing the job tax stack (QA 2026-10-31 B).
+
+    Ticking puts the tax first, in place of the old default; other stacked taxes stay.
+    Unticking the default takes it out, and the next tax becomes the default; the last tax
+    can't be removed this way, so jobs never silently stop charging tax. Caller commits."""
+    rules = (await db.execute(select(TaxRule).where(
+        TaxRule.org_id == org_id, TaxRule.doc_family == JOB_FAMILY)
+        .order_by(TaxRule.priority.asc()))).scalars().all()
+    stack = [r.tax_id for r in rules]
+    if is_default:
+        new = [tax.id] + [tid for tid in stack[1:] if tid != tax.id]
+    else:
+        if not stack or stack[0] != tax.id:
+            return                                  # it isn't the default: nothing to change
+        if len(stack) == 1:
+            raise HTTPException(422, f"{tax.name} is the only tax charged on jobs. Make another "
+                                     "tax the default instead, or clear the list under Tax rules.")
+        new = stack[1:]
+    if new == stack:
+        return
+    for r in rules:
+        await db.delete(r)
+    await db.flush()
+    for i, tid in enumerate(new):
+        db.add(TaxRule(org_id=org_id, doc_family=JOB_FAMILY, tax_id=tid, priority=i))
