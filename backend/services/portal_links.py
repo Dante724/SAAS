@@ -2,8 +2,8 @@
 
 Only the SHA-256 of a token is stored and every link expires after LINK_DAYS, so a database
 leak or an old forwarded email doesn't open a customer's history for good. Each message that
-carries {portal_link} mints its own link (the raw token is never kept to reuse); issuing one
-from the client page replaces every earlier link.
+carries {portal_link} mints its own link (the raw token is never kept to reuse). Issuing one from
+the client page leaves earlier links working; rotating (replace=True) or revoking stops them.
 """
 from __future__ import annotations
 

@@ -258,6 +258,14 @@ class CommissionEngine:
             idempotency_key=key if accruals == 0 else f"{key}@{accruals}",
             accrual_key=key, note=note)
 
+    async def gross_total(self, order: Order) -> Decimal:
+        """The order's total before refunds took their share off it (a refund through Returns adds
+        a negative "refund" line), so commission shares aren't taken off twice."""
+        from backend.models import OrderLine
+        taken = (await self.db.execute(select(func.coalesce(func.sum(OrderLine.total), 0)).where(
+            OrderLine.order_id == order.id, OrderLine.kind == "refund"))).scalar()
+        return _money(order.total) - _money(taken)
+
     async def refunded_fraction(self, order: Order, *, exclude_refund_id: Optional[str] = None) -> Decimal:
         """Share of the order's total that has been refunded (0–1)."""
         q = select(func.coalesce(func.sum(Refund.amount), 0)).where(
@@ -265,7 +273,7 @@ class CommissionEngine:
         if exclude_refund_id:
             q = q.where(Refund.id != exclude_refund_id)
         refunded = _money((await self.db.execute(q)).scalar())
-        total = _money(order.total)
+        total = await self.gross_total(order)
         if refunded <= 0:
             return Decimal("0")
         if total <= 0:
@@ -291,7 +299,7 @@ class CommissionEngine:
             await self.db.commit()
             return
         if order.assigned_to_id:
-            order_total = _money(order.total)
+            order_total = await self.gross_total(order)     # `keep` already takes refunds off
             # Build 144ds — commission by close outcome. The general `order_closed`
             # event still fires for any close; additionally, `order_closed_success`
             # fires when the terminal status is in the "closed" group and
@@ -398,7 +406,7 @@ class CommissionEngine:
         is of what was not refunded before, so successive partial refunds add up to the whole
         commission when the whole order is refunded."""
         prior = await self.refunded_fraction(order, exclude_refund_id=refund_id)
-        total = _money(order.total)
+        total = await self.gross_total(order)
         remaining = total * (Decimal("1") - prior)
         share = Decimal("1") if remaining <= 0 else min(Decimal("1"), _money(amount) / remaining)
         await self._reverse(order, tag="refund", key_prefix=f"refund:{refund_id}", share=share,

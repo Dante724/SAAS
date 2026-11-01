@@ -37,6 +37,12 @@ STAGE_LABEL = {
     "delivered": "Completed",
 }
 
+# An estimate's own steps for the customer (it is never "In repair"), placed by status group.
+EST_STAGES = [{"key": "prepared", "label": "Being prepared"},
+              {"key": "sent", "label": "Waiting for your approval"},
+              {"key": "accepted", "label": "Approved"}]
+EST_STAGE_BY_GROUP = {"new": 0, "in_progress": 0, "pending": 1, "ready": 1, "closed": 2}
+
 
 class AcceptIn(BaseModel):
     decision: str          # accept | decline
@@ -335,10 +341,15 @@ async def _track_payload(db: AsyncSession, order: "Order") -> dict:
     _cur_st = _sts.get(order.status)
     _group = getattr(_cur_st, "status_group", None)
     stopped = _group == "dropped"
-    try:
-        stage_index = STAGE_FLOW.index(order.status)
-    except ValueError:
-        stage_index = {"new": 0, "pending": 2, "in_progress": 3, "ready": 4, "closed": 5}.get(_group or "", 0)
+    if getattr(order, "is_estimate", False):
+        stages = EST_STAGES
+        stage_index = EST_STAGE_BY_GROUP.get(_group or "", 0)
+    else:
+        stages = [{"key": s, "label": STAGE_LABEL[s]} for s in STAGE_FLOW]
+        try:
+            stage_index = STAGE_FLOW.index(order.status)
+        except ValueError:
+            stage_index = {"new": 0, "pending": 2, "in_progress": 3, "ready": 4, "closed": 5}.get(_group or "", 0)
 
     def _label(key):
         return STAGE_LABEL.get(key) or (_sts[key].name if key in _sts else (key or "").replace("_", " ").capitalize())
@@ -428,7 +439,7 @@ async def _track_payload(db: AsyncSession, order: "Order") -> dict:
         "stage_label": _label(order.status),
         "stage_index": stage_index,
         "stopped": stopped,
-        "stages": [{"key": s, "label": STAGE_LABEL[s]} for s in STAGE_FLOW],
+        "stages": stages,
         "shop_name": org.name if org else "Repair shop",
         "shop_phone": shop_phone,
         "client_name": client.name if client else None,

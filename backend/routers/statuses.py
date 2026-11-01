@@ -470,8 +470,11 @@ async def allowed_next(
     o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
+    # Only this record's own pipeline: a job never moves to an invoice / PO / estimate status.
     statuses = (await db.execute(select(OrderStatus).where(
-        OrderStatus.org_id == current.org_id, OrderStatus.active == True))).scalars().all()  # noqa: E712
+        OrderStatus.org_id == current.org_id, OrderStatus.active == True,  # noqa: E712
+        OrderStatus.record_type == ("estimate" if o.is_estimate else "work_order"))
+        .order_by(OrderStatus.sort_order))).scalars().all()
     cur = next((s for s in statuses if s.key == o.status), None)
     if not cur:
         return {"items": [s.key for s in statuses]}

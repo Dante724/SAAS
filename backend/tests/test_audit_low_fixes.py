@@ -58,10 +58,10 @@ async def test_portal_link_expires(client, tenant, db):
 
 
 @pytest.mark.asyncio
-async def test_reissuing_a_portal_link_stops_the_old_one(client, tenant):
+async def test_rotating_a_portal_link_stops_the_old_one(client, tenant):
     cid = await _client_id(client, tenant)
     old = (await client.post(f"/api/clients/{cid}/portal-link", headers=tenant)).json()["portal_token"]
-    new = (await client.post(f"/api/clients/{cid}/portal-link", headers=tenant)).json()["portal_token"]
+    new = (await client.post(f"/api/clients/{cid}/portal-link?replace=true", headers=tenant)).json()["portal_token"]
     assert old != new
     assert (await client.get(f"/api/public/portal/{old}")).status_code == 404
     assert (await client.get(f"/api/public/portal/{new}")).status_code == 200
