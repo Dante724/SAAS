@@ -56,7 +56,17 @@ async def test_known_industry_words_map(client, given, stored):
 
 @pytest.mark.asyncio
 async def test_unknown_industry_never_blocks_sign_up(client, caplog):
-    r = await client.post("/api/auth/register", json=_reg(industry_template="spaceships"))
+    import logging
+    # Alembic's fileConfig (run by the Postgres test jobs) disables loggers that already exist, and
+    # the app's logging setup clears root handlers — so listen on this logger directly.
+    log = logging.getLogger("tekly.signup")
+    was_disabled, log.disabled = log.disabled, False
+    log.addHandler(caplog.handler)
+    try:
+        r = await client.post("/api/auth/register", json=_reg(industry_template="spaceships"))
+    finally:
+        log.removeHandler(caplog.handler)
+        log.disabled = was_disabled
     assert r.status_code == 201, r.text
     co, _ = await _company_and_taxes(client, r)
     assert co["industry_template"] == "general"
