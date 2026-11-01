@@ -72,8 +72,9 @@ async def test_text_that_mentions_nan_is_still_fine(client, tenant):
 
 def test_every_request_model_refuses_non_finite_numbers():
     """The rule is global, so a model added later is covered without anyone remembering it."""
-    import main  # noqa: F401 — imports every router
     from pydantic import BaseModel
+
+    import main  # noqa: F401 — imports every router
 
     def _all(cls):
         for sub in cls.__subclasses__():
