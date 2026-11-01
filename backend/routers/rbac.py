@@ -209,7 +209,7 @@ async def update_role(role_id: str, data: RoleIn, db: AsyncSession = Depends(get
     if not r:
         raise HTTPException(404, "Role not found")
     _validate(data.permissions)
-    await require_unique_name(db, Role, current.org_id, data.name, "role", exclude_id=r.id)
+    await require_unique_name(db, Role, current.org_id, data.name, "role", exclude_id=r.id, current_name=r.name)
     # A field the client didn't send keeps its current value. Defaulting it to "all" would quietly
     # widen a restricted role (the old role editor never sent location or account limits).
     current_vals = _ser_role(r)

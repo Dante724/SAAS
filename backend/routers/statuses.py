@@ -310,6 +310,7 @@ async def update_status(
     if not s:
         raise HTTPException(404, "Status not found")
     await require_unique_name(db, OrderStatus, current.org_id, data.name, "status", exclude_id=s.id,
+                              current_name=s.name,
                               extra=(OrderStatus.record_type == s.record_type, OrderStatus.active == True))  # noqa: E712
     if data.is_default and not s.is_default:
         for o in (await db.execute(select(OrderStatus).where(OrderStatus.org_id == current.org_id, OrderStatus.is_default == True, OrderStatus.record_type == s.record_type))).scalars().all():  # noqa: E712

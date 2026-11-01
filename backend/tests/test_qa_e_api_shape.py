@@ -35,11 +35,12 @@ async def test_contact_marked_supplier_on_po_names_the_supplier_id(client, tenan
                                                      "lines": [{"part_id": part, "qty_ordered": 1}]}, headers=tenant)
     assert r.status_code == 404, r.text
     detail = r.json()["detail"]
-    assert "/api/suppliers" in detail and "is a contact" in detail
+    assert detail["message"] == "Pick Wholesale Co from the supplier list."
+    assert "/api/suppliers" in detail["hint"]
     sups = (await client.get("/api/suppliers", headers=tenant)).json()
     sups = sups.get("items", sups) if isinstance(sups, dict) else sups
     mirror = next(s for s in sups if s["name"] == "Wholesale Co")
-    assert mirror["id"] in detail
+    assert detail["supplier_id"] == mirror["id"]
 
 
 @pytest.mark.asyncio

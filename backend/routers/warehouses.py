@@ -38,6 +38,11 @@ async def _asset_label(db: AsyncSession, org_id: str) -> str:
         return "Assets"
 
 
+def _same_place(location_id):
+    return (Warehouse.deleted_at.is_(None),
+            Warehouse.location_id == location_id if location_id else Warehouse.location_id.is_(None))
+
+
 @router.get("")
 async def list_warehouses(
     kind: Optional[str] = None,          # product|asset
@@ -81,8 +86,9 @@ async def create_warehouse(
         raise HTTPException(422, "A location warehouse needs a location_id")
     if data.scope == "location":
         await require_location(db, current.org_id, data.location_id)
+    # unique within a location (each location has its own "Main stock"); company-wide among themselves
     await require_unique_name(db, Warehouse, current.org_id, data.name, "warehouse",
-                              extra=(Warehouse.deleted_at.is_(None),))
+                              extra=_same_place(data.location_id if data.scope == "location" else None))
     bad = set(data.allowed_actions or []) - set(wh.ACTIONS)
     if bad:
         raise HTTPException(422, f"Unknown actions: {sorted(bad)}")
@@ -109,8 +115,10 @@ async def update_warehouse(
         Warehouse.id == warehouse_id, Warehouse.org_id == current.org_id))).scalar_one_or_none()
     if not w:
         raise HTTPException(404, "Warehouse not found")
+    new_loc = w.location_id if w.is_default else (data.location_id if data.scope == "location" else None)
     await require_unique_name(db, Warehouse, current.org_id, data.name, "warehouse", exclude_id=w.id,
-                              extra=(Warehouse.deleted_at.is_(None),))
+                              current_name=w.name if new_loc == w.location_id else None,
+                              extra=_same_place(new_loc))
     bad = set(data.allowed_actions or []) - set(wh.ACTIONS)
     if bad:
         raise HTTPException(422, f"Unknown actions: {sorted(bad)}")

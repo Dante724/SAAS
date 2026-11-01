@@ -1,7 +1,8 @@
-"""QA fix E5 — Australia at sign-up, and an unknown industry is refused instead of becoming "general".
+"""QA fix E5 — Australia at sign-up, and industry words map to a template.
 
-Found in the 5-shop QA run (31 Oct 2026): an AU shop got no GST and "$" instead of "A$";
-industry_template "computer_repair" / "electronics" silently became "general".
+Found in the 5-shop QA run (31 Oct 2026): an AU shop got no GST; industry_template
+"computer_repair" / "electronics" silently became "general". Council: sign-up never fails on the
+industry (unknown → general, logged), and AUD prints "$" like CAD.
 """
 import uuid
 
@@ -34,11 +35,11 @@ async def test_signup_options_offer_australia(client):
     {"region": "au", "currency_code": "AUD", "currency": "AUD"},           # what the sign-up form sends
     {"region": "other", "country": "AU", "currency_code": "AUD", "currency": "A$"},  # the QA script
 ])
-async def test_au_signup_gets_gst_and_a_dollar(client, body):
+async def test_au_signup_gets_gst_and_aud(client, body):
     r = await client.post("/api/auth/register", json=_reg(**body))
     assert r.status_code == 201, r.text
     co, taxes = await _company_and_taxes(client, r)
-    assert co["currency_code"] == "AUD" and co["currency"] == "A$"
+    assert co["currency_code"] == "AUD" and co["currency"] == "$"     # printed like CA/US; the code says AUD
     gst = [t for t in taxes if t["name"] == "GST"]
     assert gst and gst[0]["rate"] == 10 and gst[0]["mode"] == "included" and gst[0]["is_default"]
 
@@ -54,7 +55,17 @@ async def test_known_industry_words_map(client, given, stored):
 
 
 @pytest.mark.asyncio
-async def test_unknown_industry_is_refused(client):
+async def test_unknown_industry_never_blocks_sign_up(client, caplog):
     r = await client.post("/api/auth/register", json=_reg(industry_template="spaceships"))
-    assert r.status_code == 422, r.text
-    assert "general" in r.json()["detail"]
+    assert r.status_code == 201, r.text
+    co, _ = await _company_and_taxes(client, r)
+    assert co["industry_template"] == "general"
+    assert "spaceships" in caplog.text
+
+
+def test_one_country_tax_table():
+    from backend.routers import auth
+    from backend.services import regions
+    assert auth.COUNTRY_VAT is regions.COUNTRY_TAX
+    assert regions.COUNTRY_TAX["AU"] == ("GST", 10.0, "included")
+    assert regions.COUNTRY_TAX["AE"] == ("VAT", 5.0, "included")

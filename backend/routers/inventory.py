@@ -18,7 +18,7 @@ from backend.services.batching import names_by_id
 from backend.services.numbering import next_number
 from backend.services.redact import can_see_costs, drop_cost_fields
 from backend.services.dates import now_utc
-from backend.services.owned import get_owned_or_404, require_location
+from backend.services.owned import get_owned_or_404, problem, require_location
 
 router = APIRouter(prefix="/api/inventory", tags=["inventory"])
 
@@ -1295,9 +1295,11 @@ async def create_po(
         mirror = (await db.execute(select(Supplier).where(
             Supplier.org_id == current.org_id, Supplier.client_id == data.supplier_id))).scalars().first()
         if mirror:
-            raise HTTPException(404, f"Supplier not found: {data.supplier_id} is a contact. Use its supplier "
-                                     f"id {mirror.id} (listed at /api/suppliers)")
-        raise HTTPException(404, "Supplier not found — pick one from /api/suppliers")
+            raise problem(404, f"Pick {mirror.name} from the supplier list.",
+                          f"supplier_id {data.supplier_id!r} is a contact; its supplier id is {mirror.id!r} "
+                          f"(GET /api/suppliers)", supplier_id=mirror.id)
+        raise problem(404, "That supplier doesn't exist any more. Pick another.",
+                      f"No supplier with id {data.supplier_id!r} (GET /api/suppliers lists them)")
     await require_location(db, current.org_id, data.location_id)
     total = sum(l.qty_ordered * l.unit_cost for l in data.lines)
     po = PurchaseOrder(supplier_id=data.supplier_id, location_id=data.location_id,
@@ -2578,7 +2580,7 @@ async def bulk_update_parts(
     if data.action == "set_category":
         if data.value:
             from backend.models import Category
-            await get_owned_or_404(db, Category, data.value, current.org_id, "Category")
+            await get_owned_or_404(db, Category, data.value, current.org_id, "category")
         for p in parts:
             p.category_id = data.value
             changed += 1

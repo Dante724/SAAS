@@ -164,20 +164,27 @@ async def _guard_duplicates(db: AsyncSession, org, client_type: Optional[str], *
     organisation — a company may share its owner's number) with this phone or email. Numbers are
     compared as numbers ("(647) 555-0199" is "+1 647 555 0199"), emails without case, and the
     duplicates that existed before the switch was turned on don't break the check."""
+    from backend.services.owned import problem
     ctype = client_type or "person"
     if org.prohibit_dup_phone and phone:
         from backend.services.call_contacts import find_client
-        if await find_client(db, org.id, phone, client_type=ctype, exclude_id=exclude_id):
-            raise HTTPException(409, "A contact with this phone number already exists")
+        dup = await find_client(db, org.id, phone, client_type=ctype, exclude_id=exclude_id)
+        if dup:
+            raise problem(409, f"{dup.name} already has this number.",
+                          "Settings › Contacts › No duplicate phone numbers is on", existing_id=dup.id,
+                          existing_name=dup.name)
     if org.prohibit_dup_email and email and email.strip():
         same_type = Client.client_type == ctype if ctype != "person" else \
             or_(Client.client_type == "person", Client.client_type.is_(None))
-        q = select(Client.id).where(Client.org_id == org.id, same_type,
-                                    func.lower(func.trim(Client.email)) == email.strip().lower())
+        q = select(Client.id, Client.name).where(Client.org_id == org.id, same_type,
+                                                 func.lower(func.trim(Client.email)) == email.strip().lower())
         if exclude_id:
             q = q.where(Client.id != exclude_id)
-        if (await db.execute(q.limit(1))).scalar_one_or_none() is not None:
-            raise HTTPException(409, "A contact with this email already exists")
+        dup = (await db.execute(q.limit(1))).first()
+        if dup is not None:
+            raise problem(409, f"{dup.name} already has this email.",
+                          "Settings › Contacts › No duplicate emails is on", existing_id=dup.id,
+                          existing_name=dup.name)
 
 
 async def _guard_edit(db: AsyncSession, current: Employee, client: Client, *, phone, email, client_type) -> None:

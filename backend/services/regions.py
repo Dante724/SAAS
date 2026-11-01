@@ -12,7 +12,7 @@ are staged, so the pack advertises the standard + status without implying it's l
 """
 from typing import Optional
 
-# ── Tax defaults (superset of routers.auth COUNTRY_VAT, +LATAM) ───────────────
+# ── Tax defaults — the one country table (sign-up seeds the shop's first tax from it) ──
 # (name, rate %, mode) — mode: "included" (VAT-style, tax in the price) or
 # "imposed" (US sales-tax style, added on top).
 COUNTRY_TAX: dict[str, tuple[str, float, str]] = {
@@ -25,6 +25,8 @@ COUNTRY_TAX: dict[str, tuple[str, float, str]] = {
     "ES": ("IVA", 21.0, "included"), "IT": ("IVA", 22.0, "included"), "NL": ("BTW", 21.0, "included"),
     "IE": ("VAT", 23.0, "included"), "PT": ("IVA", 23.0, "included"), "PL": ("VAT", 23.0, "included"),
     "BE": ("VAT", 21.0, "included"), "SE": ("VAT", 25.0, "included"), "AT": ("VAT", 20.0, "included"),
+    # Middle East
+    "AE": ("VAT", 5.0, "included"), "SA": ("VAT", 15.0, "included"), "QA": ("VAT", 0.0, "included"),
     # LATAM
     "MX": ("IVA", 16.0, "included"), "BR": ("ICMS", 17.0, "included"), "AR": ("IVA", 21.0, "included"),
     "CL": ("IVA", 19.0, "included"), "CO": ("IVA", 19.0, "included"), "PE": ("IGV", 18.0, "included"),
@@ -52,7 +54,7 @@ EINVOICE: dict[str, dict] = {
 
 # ── Currency + formatting per country ─────────────────────────────────────────
 COUNTRY_CURRENCY: dict[str, tuple[str, str]] = {  # ISO4217, symbol
-    "US": ("USD", "$"), "CA": ("CAD", "$"), "AU": ("AUD", "A$"), "NZ": ("NZD", "NZ$"),
+    "US": ("USD", "$"), "CA": ("CAD", "$"), "AU": ("AUD", "$"), "NZ": ("NZD", "$"),
     "GB": ("GBP", "£"), "DE": ("EUR", "€"), "FR": ("EUR", "€"), "ES": ("EUR", "€"), "IT": ("EUR", "€"),
     "NL": ("EUR", "€"), "IE": ("EUR", "€"), "PT": ("EUR", "€"), "PL": ("PLN", "zł"), "BE": ("EUR", "€"),
     "SE": ("SEK", "kr"), "AT": ("EUR", "€"),

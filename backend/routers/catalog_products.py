@@ -117,7 +117,7 @@ async def create_category(data: CategoryIn, db: AsyncSession = Depends(get_db),
     if not name:
         raise HTTPException(400, "Category name is required")
     if data.parent_id:
-        await get_owned_or_404(db, Category, data.parent_id, current.org_id, "Parent category")
+        await get_owned_or_404(db, Category, data.parent_id, current.org_id, "parent category")
     await require_unique_name(db, Category, current.org_id, name, "category", extra=(
         Category.entity_type == data.entity_type, Category.parent_id.is_(None) if not data.parent_id
         else Category.parent_id == data.parent_id))
@@ -143,11 +143,14 @@ async def update_category(cid: str, data: CategoryPatch, db: AsyncSession = Depe
     if not c:
         raise HTTPException(404, "Category not found")
     sent = data.model_fields_set
+    new_name = data.name.strip() if data.name is not None and data.name.strip() else c.name
+    parent = (data.parent_id or None) if "parent_id" in sent else c.parent_id
+    # a rename or a move must not land next to a sibling of the same name; re-saving as-is is fine
+    await require_unique_name(db, Category, current.org_id, new_name, "category", exclude_id=c.id,
+                              current_name=c.name if parent == c.parent_id else None, extra=(
+        Category.entity_type == c.entity_type,
+        Category.parent_id.is_(None) if not parent else Category.parent_id == parent))
     if data.name is not None and data.name.strip():
-        parent = data.parent_id if "parent_id" in sent else c.parent_id
-        await require_unique_name(db, Category, current.org_id, data.name, "category", exclude_id=c.id, extra=(
-            Category.entity_type == c.entity_type,
-            Category.parent_id.is_(None) if not parent else Category.parent_id == parent))
         old = c.name
         c.name = data.name.strip()
         # keep product name-mirrors in sync after a rename
@@ -160,7 +163,7 @@ async def update_category(cid: str, data: CategoryPatch, db: AsyncSession = Depe
             raise HTTPException(400, "A category can't be its own parent")
         # 144bc security: block moving a node under one of its own descendants (would orphan a subtree)
         if data.parent_id:
-            await get_owned_or_404(db, Category, data.parent_id, current.org_id, "Parent category")
+            await get_owned_or_404(db, Category, data.parent_id, current.org_id, "parent category")
             all_cats = (await db.execute(select(Category).where(Category.org_id == current.org_id))).scalars().all()
             kids: dict = {}
             for x in all_cats:
@@ -368,7 +371,7 @@ async def create_product(data: ProductIn, db: AsyncSession = Depends(get_db),
     from backend.routers.forms import check_entity_required
     await check_entity_required(db, current.org_id, "product", data)   # built-ins the product form requires
     if data.category_id:
-        await get_owned_or_404(db, Category, data.category_id, current.org_id, "Category")
+        await get_owned_or_404(db, Category, data.category_id, current.org_id, "category")
     payload = data.model_dump()
     payload["mpn"] = await _checked_mpn(db, current.org_id, data.mpn)
     if not await can_see_costs(db, current):
@@ -401,7 +404,7 @@ async def bulk_products(data: BulkProductsIn, db: AsyncSession = Depends(get_db)
     if data.action == "delete":
         await assert_perm(db, current, "can_delete_products")
     if data.action == "category" and data.category_id:
-        await get_owned_or_404(db, Category, data.category_id, current.org_id, "Category")
+        await get_owned_or_404(db, Category, data.category_id, current.org_id, "category")
     parts = (await db.execute(select(Part).where(
         Part.id.in_(data.ids), Part.org_id == current.org_id))).scalars().all()
     n = 0
@@ -568,7 +571,7 @@ async def update_product(pid: str, data: ProductIn, db: AsyncSession = Depends(g
     payload = data.model_dump(exclude_unset=True)
     payload["name"] = data.name
     if payload.get("category_id"):
-        await get_owned_or_404(db, Category, payload["category_id"], current.org_id, "Category")
+        await get_owned_or_404(db, Category, payload["category_id"], current.org_id, "category")
     if "mpn" in payload:
         payload["mpn"] = await _checked_mpn(db, current.org_id, data.mpn, exclude_id=p.id)
     if ("barcode" in payload or "barcode_type" in payload) and (

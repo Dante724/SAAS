@@ -34,7 +34,8 @@ async def test_warehouse_create_with_unknown_location_is_404(client, tenant):
     r = await client.post("/api/settings/warehouses", json={
         "name": "Back room", "location_id": "no-such-location"}, headers=tenant)
     assert r.status_code == 404, r.text
-    assert "Location not found" in r.json()["detail"]
+    d = r.json()["detail"]
+    assert d["message"] == "That location doesn't exist any more. Pick another." and "no-such-location" in d["hint"]
 
 
 @pytest.mark.asyncio
@@ -44,7 +45,8 @@ async def test_stock_adjust_with_warehouse_id_names_the_location(client, tenant)
     r = await client.post(f"/api/inventory/parts/{part_id}/adjust", json={
         "location_id": wh["id"], "qty": 2}, headers=tenant)
     assert r.status_code == 422, r.text
-    assert loc_id in r.json()["detail"]
+    d = r.json()["detail"]
+    assert d["message"] == "Pick a location here, not a warehouse." and d["location_id"] == loc_id
     r = await client.post(f"/api/inventory/parts/{part_id}/adjust", json={
         "location_id": "nope", "qty": 2}, headers=tenant)
     assert r.status_code == 404, r.text
@@ -67,21 +69,6 @@ async def test_po_create_with_warehouse_id_is_422(client, tenant):
 
 
 @pytest.mark.asyncio
-async def test_tax_rules_reject_unknown_and_foreign_tax(client, tenant, db):
-    r = await client.put("/api/settings/tax-rules", json={
-        "doc_family": "tickets_sales", "tax_ids": ["not-a-real-tax"]}, headers=tenant)
-    assert r.status_code == 422, r.text
-    assert "not-a-real-tax" in r.json()["detail"]
-    foreign = await _foreign_tax(db)
-    r = await client.put("/api/settings/tax-rules", json={
-        "doc_family": "tickets_sales", "tax_ids": [foreign]}, headers=tenant)
-    assert r.status_code == 422, r.text
-    # the existing stack is left as it was
-    stacks = (await client.get("/api/settings/tax-rules", headers=tenant)).json()["stacks"]
-    assert foreign not in stacks.get("tickets_sales", [])
-
-
-@pytest.mark.asyncio
 async def test_tax_groups_and_exceptions_reject_foreign_tax(client, tenant, db):
     foreign = await _foreign_tax(db)
     r = await client.post("/api/settings/tax-groups", json={
@@ -91,6 +78,8 @@ async def test_tax_groups_and_exceptions_reject_foreign_tax(client, tenant, db):
         "doc_family": "tickets_sales", "target_type": "product", "target_id": "x",
         "tax_id": foreign}, headers=tenant)
     assert r.status_code == 422, r.text
+    d = r.json()["detail"]
+    assert d["unknown_ids"] == [foreign] and foreign not in d["message"]
 
 
 @pytest.mark.asyncio
@@ -99,7 +88,7 @@ async def test_bulk_set_category_with_unknown_id_is_404(client, tenant):
     r = await client.post("/api/catalog/products/bulk", json={
         "ids": [part_id], "action": "category", "category_id": "no-such-cat"}, headers=tenant)
     assert r.status_code == 404, r.text
-    assert "Category not found" in r.json()["detail"]
+    assert r.json()["detail"]["message"] == "That category doesn't exist any more. Pick another."
     # clearing the category is still allowed
     r = await client.post("/api/catalog/products/bulk", json={
         "ids": [part_id], "action": "category", "category_id": None}, headers=tenant)

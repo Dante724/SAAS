@@ -33,6 +33,8 @@ async def test_dup_guard_ignores_formatting(client, tenant):
     assert r.status_code == 201, r.text
     r = await client.post("/api/clients", json={"name": "B", "phone": "+1 647 555 0199"}, headers=tenant)
     assert r.status_code == 409, r.text
+    d = r.json()["detail"]
+    assert d["message"] == "A already has this number." and d["existing_id"]
     # a genuinely different number still goes through
     r = await client.post("/api/clients", json={"name": "C", "phone": "+1 647 555 0198"}, headers=tenant)
     assert r.status_code == 201, r.text

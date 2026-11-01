@@ -53,13 +53,17 @@ def phone_key(number: Optional[str], country: Optional[str] = None) -> str:
     their full digits, national ones with the trunk 0 dropped and the shop country's calling
     code put in front ("(647) 555-0199" and "+1 647 555 0199" both give 16475550199)."""
     d = digits(number)
+    code = CALLING_CODES.get((country or "").upper())
+    if not code:
+        # No shop country: like same_number, compare the last 10 digits (national part).
+        nat = d[1:] if d.startswith("0") and not _intl(number) else d
+        return nat[-10:]
     if not d or _intl(number):
         return d
-    code = CALLING_CODES.get((country or "").upper())
     if code == "1" and len(d) == 11 and d.startswith("1"):
         return d                   # NANP numbers are often typed with the 1 but no +
     nat = d[1:] if d.startswith("0") else d
-    return f"{code}{nat}" if code else nat
+    return f"{code}{nat}"
 
 
 def format_phone(number: str) -> str:

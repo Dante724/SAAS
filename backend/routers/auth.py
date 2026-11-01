@@ -83,13 +83,8 @@ REGION_TAX = {
     "au":   {"name": "GST",       "rate": 10.0, "mode": "included"},
     "other": None,
 }
-COUNTRY_VAT = {  # ISO alpha-2 → (name, rate, mode)
-    "DE": ("VAT", 19.0, "included"), "FR": ("VAT", 20.0, "included"), "ES": ("IVA", 21.0, "included"),
-    "IT": ("IVA", 22.0, "included"), "NL": ("BTW", 21.0, "included"), "IE": ("VAT", 23.0, "included"),
-    "GB": ("VAT", 20.0, "included"), "AE": ("VAT", 5.0, "included"), "SA": ("VAT", 15.0, "included"),
-    "QA": ("VAT", 0.0, "included"), "US": ("Sales tax", 0.0, "imposed"), "CA": ("GST", 5.0, "imposed"),
-    "AU": ("GST", 10.0, "included"), "NZ": ("GST", 15.0, "included"),
-}
+# Country rates live in one table, services.regions.COUNTRY_TAX; the old name stays importable.
+from backend.services.regions import COUNTRY_TAX as COUNTRY_VAT  # noqa: E402  ISO alpha-2 → (name, rate, mode)
 
 
 def _default_tax_for(region, country):
@@ -105,7 +100,7 @@ REGION_DEFAULTS = {
     "ca":   {"currency": "$", "currency_code": "CAD", "timezone": "America/Toronto", "language": "en"},
     "eu":   {"currency": "€", "currency_code": "EUR", "timezone": "Europe/Berlin", "language": "en"},
     "mena": {"currency": "AED", "currency_code": "AED", "timezone": "Asia/Dubai", "language": "en"},
-    "au":   {"currency": "A$", "currency_code": "AUD", "timezone": "Australia/Sydney", "language": "en"},
+    "au":   {"currency": "$", "currency_code": "AUD", "timezone": "Australia/Sydney", "language": "en"},
     "other": {"currency": "$", "currency_code": "USD", "timezone": "UTC", "language": "en"},
 }
 
@@ -212,14 +207,17 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
         raise HTTPException(400, "We couldn't create an account with these details. If you already "
                                  "have one, sign in or reset your password.")
 
-    # An unknown industry used to become "general" without a word; known synonyms still map.
+    # Sign-up never fails on the industry: known words map ("electronics", "computer_repair"…), and
+    # anything else starts as "general" (changeable in Settings), logged so new words can be added.
     _industry_key = None
     if data.industry_template:
         from backend.services import industry as _ind
         _industry_key = _ind.resolve_template_key(data.industry_template)
         if _industry_key is None:
-            raise HTTPException(422, f"Unknown industry_template '{data.industry_template}'. "
-                                     f"Valid: {', '.join(_ind.TEMPLATE_KEYS)}")
+            import logging
+            logging.getLogger("tekly.signup").warning(
+                "unknown industry_template at sign-up: %r → general", data.industry_template[:60])
+            _industry_key = _ind.DEFAULT_TEMPLATE
 
     import secrets as _sec
     org = Organisation(name=data.org_name, webhook_secret=_sec.token_urlsafe(24),
