@@ -2083,7 +2083,7 @@ class SerializedItem(Base):
     batch_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("stock_item_batches.id"))
     po_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("purchase_orders.id"))
     unit_cost: Mapped[Numeric] = mapped_column(Numeric(12, 4), default=0)
-    status: Mapped[str] = mapped_column(String(20), default="in_stock")  # in_stock|allocated_to_order|sold|written_off|converted_to_asset
+    status: Mapped[str] = mapped_column(String(20), default="in_stock")  # in_stock|allocated_to_order|sold|written_off|converted_to_asset|in_transit
     order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     converted_asset_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("devices.id"))  # Build 76
     # ii144c: the unit passport — who supplied it and until when they cover it
@@ -2483,6 +2483,9 @@ class StockTransferLine(Base):
 
 # ════════ Phase E — Customer Feedback ════════
     qty_received: Mapped[Optional[float]] = mapped_column(Float)  # Build 93: what actually turned up
+    # QA F2: the serialized units in the box (SerializedItem ids) — they travel with the transfer
+    serial_ids: Mapped[Optional[list]] = mapped_column(JSON)
+    received_serial_ids: Mapped[Optional[list]] = mapped_column(JSON)   # the ones that arrived (short delivery)
 
 class FeedbackSettings(Base):
     """Per-org feedback config: which rating system + per-band answer messages.

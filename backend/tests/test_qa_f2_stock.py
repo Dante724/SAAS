@@ -204,3 +204,68 @@ async def test_till_costs_from_this_shops_layers_and_a_void_puts_them_back(clien
     assert (await client.delete(f"/api/sales/{s.json()['id']}", headers=tenant)).status_code == 200
     assert await layers() == {branch_id: 4, here: 2}
     await _ledger_matches(db, p["id"])
+
+
+# ── serialized units travel with a transfer ───────────────────────────────────────────────────
+async def _units(db, part_id):
+    from backend.models import SerializedItem
+    db.expire_all()
+    return {u.serial_number: (u.status, u.location_id) for u in (await db.execute(
+        select(SerializedItem).where(SerializedItem.part_id == part_id))).scalars()}
+
+
+async def _branch(client, tenant, db, name):
+    from backend.models import Location
+    from backend.tests.test_stocktake_postings_print import _me
+    me = await _me(client, tenant)
+    b = Location(org_id=me["org_id"], name=name)
+    db.add(b)
+    await db.flush()
+    bid = b.id
+    await db.commit()
+    return bid
+
+
+@pytest.mark.asyncio
+async def test_phones_move_with_the_transfer_and_sell_at_the_branch(client, tenant, db):
+    p, here, sns = await _phone(client, tenant, n=3)
+    dest = await _branch(client, tenant, db, "Branch phones")
+    body = {"from_location_id": here, "to_location_id": dest}
+    # a serialized line needs the units' serials (which phones are in the box)
+    r = await client.post("/api/transfers", headers=tenant, json={**body, "lines": [{"part_id": p["id"], "qty": 2}]})
+    assert r.status_code == 422, r.text
+    tid = (await client.post("/api/transfers", headers=tenant, json={**body, "lines": [
+        {"part_id": p["id"], "qty": 1, "serials": [sns[0]]}]})).json()["id"]
+    # scanning a phone's IMEI into the box adds that unit; its plain barcode can't say which one
+    r = await client.post(f"/api/transfers/{tid}/scan", json={"code": sns[1]}, headers=tenant)
+    assert r.status_code == 200 and r.json()["qty"] == 2 and r.json()["serials"] == sns[:2], r.text
+    assert (await client.post(f"/api/transfers/{tid}/scan", json={"code": sns[1]},
+                              headers=tenant)).status_code == 409                    # already in the box
+    for s in ("ready", "in_transit"):
+        assert (await client.patch(f"/api/transfers/{tid}/status", json={"status": s}, headers=tenant)).status_code == 200
+    u = await _units(db, p["id"])
+    assert u[sns[0]][0] == u[sns[1]][0] == "in_transit" and u[sns[2]] == ("in_stock", here)
+    # one phone didn't arrive: the received serials say which
+    r = await client.post(f"/api/transfers/{tid}/receive", headers=tenant,
+                          json={"lines": [{"part_id": p["id"], "qty_received": 1, "serials": [sns[1]]}]})
+    assert r.status_code == 200, r.text
+    assert (await client.patch(f"/api/transfers/{tid}/status", json={"status": "completed"},
+                               headers=tenant)).status_code == 200
+    u = await _units(db, p["id"])
+    assert u[sns[1]] == ("in_stock", dest) and u[sns[0]][0] == "written_off" and u[sns[2]] == ("in_stock", here)
+    await _ledger_matches(db, p["id"])
+
+
+@pytest.mark.asyncio
+async def test_canceled_transfer_puts_the_phones_back(client, tenant, db):
+    p, here, sns = await _phone(client, tenant, n=2)
+    dest = await _branch(client, tenant, db, "Branch cancel")
+    tid = (await client.post("/api/transfers", headers=tenant, json={
+        "from_location_id": here, "to_location_id": dest,
+        "lines": [{"part_id": p["id"], "qty": 2, "serials": sns}]})).json()["id"]
+    for s in ("ready", "in_transit"):
+        assert (await client.patch(f"/api/transfers/{tid}/status", json={"status": s}, headers=tenant)).status_code == 200
+    assert (await client.patch(f"/api/transfers/{tid}/status", headers=tenant, json={
+        "status": "canceled", "return_location_id": here})).status_code == 200
+    assert await _units(db, p["id"]) == {sns[0]: ("in_stock", here), sns[1]: ("in_stock", here)}
+    await _ledger_matches(db, p["id"])
