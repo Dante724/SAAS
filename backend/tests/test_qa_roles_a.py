@@ -310,3 +310,49 @@ async def test_a_full_discount_needs_approval_even_without_a_threshold(client):
     assert r.status_code == 200, r.text
     r = await client.patch(f"/api/orders/{o['id']}/lines/{line['id']}", json={"discount": 100}, headers=H)
     assert r.status_code == 200, r.text                        # the owner can
+
+
+# ── rt144a1: existing technician roles that are still the template get the same tightening ──
+
+def test_migration_tightens_only_untouched_technician_roles(tmp_path, caplog):
+    import importlib.util
+    import json as _json
+    import logging
+
+    import sqlalchemy as sa
+    from alembic.migration import MigrationContext
+    from alembic.operations import Operations
+    spec = importlib.util.spec_from_file_location(
+        "rt144a1", "backend/migrations/versions/rt144a1_tighten_technician_roles.py")
+    mig = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mig)
+    old_tech = {c: mig._old_template_value(c) for c in P.ALL_CODES}     # what the old template saved
+    custom = {**old_tech, "can_view_finance": True}                     # owner granted finance on purpose
+    admin = P.full_access_permissions()
+    eng = sa.create_engine(f"sqlite:///{tmp_path}/r.db")
+
+    def run(fn):
+        with eng.begin() as conn, Operations.context(MigrationContext.configure(conn)):
+            fn()
+
+    def perms():
+        with eng.begin() as conn:
+            return {i: _json.loads(p) for i, p in conn.execute(sa.text("SELECT id, permissions FROM roles"))}
+
+    with eng.begin() as conn:
+        conn.execute(sa.text("CREATE TABLE roles (id TEXT PRIMARY KEY, org_id TEXT, name TEXT, "
+                             "permissions JSON, perms_explicit BOOLEAN)"))
+        for rid, name, p in (("tech", "Bench tech", old_tech), ("custom", "Senior tech", custom), ("admin", "admin", admin)):
+            conn.execute(sa.text("INSERT INTO roles VALUES (:i, 'o1', :n, :p, 1)"), {"i": rid, "n": name, "p": _json.dumps(p)})
+    with caplog.at_level(logging.INFO, logger="alembic.runtime.migration"):
+        run(mig.upgrade)
+    after = perms()
+    assert all(after["tech"][c] is False for c in mig.TIGHTEN)
+    assert {c for c, v in after["tech"].items() if v} == {c for c, v in old_tech.items() if v} - mig.TIGHTEN
+    assert after["custom"] == custom and after["admin"] == admin
+    assert [r.getMessage() for r in caplog.records if "rt144a1" in r.getMessage()] == [
+        "rt144a1: technician role tightened (org o1, role 'Bench tech')"]
+    run(mig.upgrade)                                                    # idempotent
+    assert perms() == after
+    run(mig.downgrade)                                                  # restores exactly
+    assert perms() == {"tech": old_tech, "custom": custom, "admin": admin}
