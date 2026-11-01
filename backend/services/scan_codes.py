@@ -43,6 +43,17 @@ def valid_gtin(v: str) -> bool:
     return is_digits(v) and len(v) in (8, 12, 13, 14) and gtin_check(v[:-1]) == v[-1]
 
 
+def gtin_warning(value: Optional[str]) -> Optional[str]:
+    """A note when a barcode has the length of a GTIN (EAN-8, UPC-A, EAN-13, ITF-14) but its check
+    digit is wrong — usually a typo. Not an error: internal codes can be any digits."""
+    v = (value or "").strip()
+    if not is_digits(v) or len(v) not in (8, 12, 13, 14) or valid_gtin(v):
+        return None
+    name = {8: "EAN-8", 12: "UPC-A", 13: "EAN-13", 14: "ITF-14"}[len(v)]
+    return (f"Barcode {v} looks like an {name} but its check digit is wrong "
+            f"(it should end in {gtin_check(v[:-1])}). Scanners may not read it.")
+
+
 def upce_to_upca(v: str) -> Optional[str]:
     """An 8-digit UPC-E (number system 0/1, six data digits, check) → its 12-digit UPC-A, or None.
     A 7-digit body gets its check digit computed; a 6-digit one is assumed number system 0."""

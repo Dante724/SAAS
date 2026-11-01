@@ -25,6 +25,8 @@ router = APIRouter(prefix="/api/orders", tags=["recommendations"],
 MAX_MEDIA_CHARS = 8_000_000
 VALID_KIND = {"service", "product", "custom"}
 VALID_URGENCY = {"now", "soon"}     # None = no urgency label
+URGENCY_ALIASES = {"later": "soon"}  # "later" reads the same as "can wait until next visit"
+_URGENCY_MSG = "urgency must be one of: now, soon, later (same as soon), or empty for no label"
 
 
 class RecIn(BaseModel):
@@ -132,8 +134,9 @@ async def add_recommendation(
         raise HTTPException(422, "kind must be service|product|custom")
     if data.media_data and len(data.media_data) > MAX_MEDIA_CHARS:
         raise HTTPException(413, "Photo too large")
+    data.urgency = URGENCY_ALIASES.get(data.urgency, data.urgency)
     if data.urgency and data.urgency not in VALID_URGENCY:
-        raise HTTPException(422, "urgency must be now|soon")
+        raise HTTPException(422, _URGENCY_MSG)
     r = Recommendation(
         org_id=current.org_id, order_id=order_id, title=data.title.strip(),
         note=data.note, kind=data.kind, ref_id=data.ref_id,
@@ -164,9 +167,9 @@ async def update_recommendation(
     if fields.get("media_data") and len(fields["media_data"]) > MAX_MEDIA_CHARS:
         raise HTTPException(413, "Photo too large")
     if "urgency" in fields:
-        fields["urgency"] = fields["urgency"] or None
+        fields["urgency"] = URGENCY_ALIASES.get(fields["urgency"], fields["urgency"]) or None
         if fields["urgency"] and fields["urgency"] not in VALID_URGENCY:
-            raise HTTPException(422, "urgency must be now|soon")
+            raise HTTPException(422, _URGENCY_MSG)
     if "order_item_id" in fields:
         fields["order_item_id"] = await _check_item(db, current.org_id, order_id, fields["order_item_id"])
     for k, v in fields.items():

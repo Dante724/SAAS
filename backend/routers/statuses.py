@@ -14,6 +14,7 @@ from backend.db.database import get_db
 from backend.models import OrderStatus, Employee, NotificationRule
 from backend.services.auth import get_current_employee, require_perm, record_scope
 from backend.services.dates import now_utc
+from backend.services.owned import require_unique_name
 
 router = APIRouter(prefix="/api/statuses", tags=["statuses"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -268,6 +269,8 @@ async def create_status(
     if data.status_group not in GROUPS:
         raise HTTPException(400, f"Group must be one of {GROUPS}")
     rt = _resolve_rt(data)
+    await require_unique_name(db, OrderStatus, current.org_id, data.name, "status",
+                              extra=(OrderStatus.record_type == rt, OrderStatus.active == True))  # noqa: E712
     key = data.key or _slugify(data.name)
     # ensure unique key within org (keys are org-global; suffix on collision). Inactive statuses
     # still hold their key (uq_order_statuses_org_rt_key), so they count as taken too.
@@ -308,6 +311,9 @@ async def update_status(
     s = (await db.execute(select(OrderStatus).where(OrderStatus.id == status_id, OrderStatus.org_id == current.org_id))).scalar_one_or_none()
     if not s:
         raise HTTPException(404, "Status not found")
+    await require_unique_name(db, OrderStatus, current.org_id, data.name, "status", exclude_id=s.id,
+                              current_name=s.name,
+                              extra=(OrderStatus.record_type == s.record_type, OrderStatus.active == True))  # noqa: E712
     if data.is_default and not s.is_default:
         for o in (await db.execute(select(OrderStatus).where(OrderStatus.org_id == current.org_id, OrderStatus.is_default == True, OrderStatus.record_type == s.record_type))).scalars().all():  # noqa: E712
             o.is_default = False

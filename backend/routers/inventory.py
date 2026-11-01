@@ -18,6 +18,7 @@ from backend.services.batching import names_by_id
 from backend.services.numbering import next_number
 from backend.services.redact import can_see_costs, drop_cost_fields
 from backend.services.dates import now_utc
+from backend.services.owned import get_owned_or_404, problem, require_location
 
 router = APIRouter(prefix="/api/inventory", tags=["inventory"])
 
@@ -92,9 +93,11 @@ async def list_parts(
     device_id: Optional[str] = None,          # 144jt: flag/limit parts that fit this device
     compatible_only: bool = False,
     low_stock: bool = False, skip: int = 0, limit: int = Query(100, ge=1, le=500),
+    q_: Optional[str] = Query(None, alias="q"),   # QA E6: `q` accepted as another name for `search`
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
+    search = search or q_
     q = select(Part).where(Part.org_id == current.org_id, Part.active == True)
     if search:
         # Build 144an — POS findability: match name, SKU, barcode, or internal code.
@@ -193,7 +196,9 @@ async def create_part(
     db.add(part)
     await db.commit()
     await db.refresh(part)
-    return {"id": part.id, "name": part.name, "sku": part.sku}
+    from backend.services.scan_codes import gtin_warning
+    _bw = gtin_warning(part.barcode)
+    return {"id": part.id, "name": part.name, "sku": part.sku, **({"warnings": [_bw]} if _bw else {})}
 
 @router.get("/parts/{part_id}")
 async def get_part(
@@ -255,6 +260,7 @@ async def adjust_stock(
     from backend.services import warehouses as _wh
     _action = "writeoff" if data.movement_type == "writeoff" else \
               "transfer" if data.movement_type == "transfer" else "post"
+    await require_location(db, current.org_id, data.location_id)
     _w = await _wh.guard_action(db, current, _action, location_id=data.location_id)
 
     if data.movement_type in ("receive", "adjust"):
@@ -1308,7 +1314,16 @@ async def create_po(
     sup = (await db.execute(select(Supplier).where(
         Supplier.id == data.supplier_id, Supplier.org_id == current.org_id))).scalar_one_or_none()
     if not sup:
-        raise HTTPException(404, "Supplier not found")
+        # A contact ticked "is supplier" has its own supplier record — name it instead of a bare 404.
+        mirror = (await db.execute(select(Supplier).where(
+            Supplier.org_id == current.org_id, Supplier.client_id == data.supplier_id))).scalars().first()
+        if mirror:
+            raise problem(404, f"Pick {mirror.name} from the supplier list.",
+                          f"supplier_id {data.supplier_id!r} is a contact; its supplier id is {mirror.id!r} "
+                          f"(GET /api/suppliers)", supplier_id=mirror.id)
+        raise problem(404, "That supplier doesn't exist any more. Pick another.",
+                      f"No supplier with id {data.supplier_id!r} (GET /api/suppliers lists them)")
+    await require_location(db, current.org_id, data.location_id)
     total = sum(l.qty_ordered * l.unit_cost for l in data.lines)
     po = PurchaseOrder(supplier_id=data.supplier_id, location_id=data.location_id,
                        org_id=current.org_id, po_number=await next_number(db, current.org_id, "po"),
@@ -1323,7 +1338,7 @@ async def create_po(
         db.add(POLine(po_id=po.id, part_id=l.part_id, qty_ordered=l.qty_ordered, unit_cost=l.unit_cost))
     await db.commit()
     await db.refresh(po)
-    return {"ok": True, "po_id": po.id, "po_number": po.po_number}
+    return {"ok": True, "po_id": po.id, "id": po.id, "po_number": po.po_number}
 
 
 async def _load_po_scoped(db, org_id, po_id):
@@ -2585,6 +2600,9 @@ async def bulk_update_parts(
 
     changed = 0
     if data.action == "set_category":
+        if data.value:
+            from backend.models import Category
+            await get_owned_or_404(db, Category, data.value, current.org_id, "category")
         for p in parts:
             p.category_id = data.value
             changed += 1

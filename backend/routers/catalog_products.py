@@ -29,6 +29,7 @@ from backend.services.auth import assert_perm, get_current_employee, require_per
 from backend.routers.forms import resolve_custom_data
 from backend.services import product_codes, stock_rows
 from backend.services.money import q2
+from backend.services.owned import get_owned_or_404, require_unique_name
 from backend.services.redact import can_see_costs, drop_cost_fields
 from backend.core.likes import contains as _contains
 from backend.core.spreadsheet import (
@@ -119,6 +120,11 @@ async def create_category(data: CategoryIn, db: AsyncSession = Depends(get_db),
     name = (data.name or "").strip()
     if not name:
         raise HTTPException(400, "Category name is required")
+    if data.parent_id:
+        await get_owned_or_404(db, Category, data.parent_id, current.org_id, "parent category")
+    await require_unique_name(db, Category, current.org_id, name, "category", extra=(
+        Category.entity_type == data.entity_type, Category.parent_id.is_(None) if not data.parent_id
+        else Category.parent_id == data.parent_id))
     c = Category(org_id=current.org_id, entity_type=data.entity_type, name=name,
                  parent_id=data.parent_id or None, auto_deduct=data.auto_deduct,
                  template_key=(data.template_key or None))
@@ -141,6 +147,13 @@ async def update_category(cid: str, data: CategoryPatch, db: AsyncSession = Depe
     if not c:
         raise HTTPException(404, "Category not found")
     sent = data.model_fields_set
+    new_name = data.name.strip() if data.name is not None and data.name.strip() else c.name
+    parent = (data.parent_id or None) if "parent_id" in sent else c.parent_id
+    # a rename or a move must not land next to a sibling of the same name; re-saving as-is is fine
+    await require_unique_name(db, Category, current.org_id, new_name, "category", exclude_id=c.id,
+                              current_name=c.name if parent == c.parent_id else None, extra=(
+        Category.entity_type == c.entity_type,
+        Category.parent_id.is_(None) if not parent else Category.parent_id == parent))
     if data.name is not None and data.name.strip():
         old = c.name
         c.name = data.name.strip()
@@ -154,6 +167,7 @@ async def update_category(cid: str, data: CategoryPatch, db: AsyncSession = Depe
             raise HTTPException(400, "A category can't be its own parent")
         # 144bc security: block moving a node under one of its own descendants (would orphan a subtree)
         if data.parent_id:
+            await get_owned_or_404(db, Category, data.parent_id, current.org_id, "parent category")
             all_cats = (await db.execute(select(Category).where(Category.org_id == current.org_id))).scalars().all()
             kids: dict = {}
             for x in all_cats:
@@ -251,7 +265,9 @@ async def _stock_for(db, part_id, warehouse_id=None, wh_location_id=None):
 @router.get("/products")
 async def list_products(search: Optional[str] = None, category_id: Optional[str] = None,
                         warehouse_id: Optional[str] = None, include_variants: bool = False,
+                        q_: Optional[str] = Query(None, alias="q"),     # QA E6: `q` is the usual name
                         db: AsyncSession = Depends(get_db), current: Employee = Depends(get_current_employee)):
+    search = search or q_
     q = select(Part).where(Part.org_id == current.org_id, Part.active == True)  # noqa: E712
     if not include_variants:
         q = q.where(Part.parent_id.is_(None))  # base products only
@@ -447,6 +463,8 @@ async def create_product(data: ProductIn, db: AsyncSession = Depends(get_db),
                                              barcode=data.barcode, code=data.code, barcode_type=data.barcode_type)
     from backend.routers.forms import check_entity_required
     await check_entity_required(db, current.org_id, "product", data)   # built-ins the product form requires
+    if data.category_id:
+        await get_owned_or_404(db, Category, data.category_id, current.org_id, "category")
     payload = data.model_dump()
     payload["mpn"] = await _checked_mpn(db, current.org_id, data.mpn)
     payload["image_data"] = _checked_image(data.image_data)
@@ -460,7 +478,7 @@ async def create_product(data: ProductIn, db: AsyncSession = Depends(get_db),
     await _sync_part_category_name(db, current.org_id, p)
     await product_codes.fill_new_product(db, p)
     db.add(p); await commit_mpn_safe(db); await db.refresh(p)
-    return _ser_product(p)
+    return _with_barcode_warning(_ser_product(p), p.barcode)
 
 
 class BulkProductsIn(BaseModel):
@@ -480,6 +498,8 @@ async def bulk_products(data: BulkProductsIn, db: AsyncSession = Depends(get_db)
         raise HTTPException(422, "No products selected")
     if data.action == "delete":
         await assert_perm(db, current, "can_delete_products")
+    if data.action == "category" and data.category_id:
+        await get_owned_or_404(db, Category, data.category_id, current.org_id, "category")
     parts = (await db.execute(select(Part).where(
         Part.id.in_(data.ids), Part.org_id == current.org_id))).scalars().all()
     n = 0
@@ -765,6 +785,8 @@ async def update_product(pid: str, data: ProductIn, db: AsyncSession = Depends(g
         payload["image_data"] = _checked_image(payload["image_data"])
     if "repair_price" in payload:
         payload["repair_price"] = q2(payload["repair_price"] or 0)
+    if payload.get("category_id"):
+        await get_owned_or_404(db, Category, payload["category_id"], current.org_id, "category")
     if "mpn" in payload:
         payload["mpn"] = await _checked_mpn(db, current.org_id, data.mpn, exclude_id=p.id)
     if ("barcode" in payload or "barcode_type" in payload) and (
@@ -796,7 +818,7 @@ async def update_product(pid: str, data: ProductIn, db: AsyncSession = Depends(g
     if "category_id" in payload:
         await _sync_part_category_name(db, current.org_id, p)
     await commit_mpn_safe(db); await db.refresh(p)
-    return _ser_product(p)
+    return _with_barcode_warning(_ser_product(p), p.barcode if "barcode" in payload else None)
 
 
 # ── Variants ─────────────────────────────────────────────────────────────────
@@ -858,6 +880,15 @@ from backend.services import barcode_types as _bt  # noqa: E402
 
 BARCODE_TYPES = tuple(_bt.TYPES)
 _TYPES_MSG = "type must be one of " + "|".join(BARCODE_TYPES)
+
+
+def _with_barcode_warning(out: dict, barcode) -> dict:
+    """QA E5: a GTIN-length barcode with a bad check digit is saved, with a `warnings` note."""
+    from backend.services.scan_codes import gtin_warning
+    w = gtin_warning(barcode)
+    if w:
+        out = {**out, "warnings": [w]}
+    return out
 
 
 def _checked_barcode(kind, value):

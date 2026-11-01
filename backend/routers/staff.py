@@ -918,6 +918,26 @@ async def update_company(
         valid = set(_ind.TEMPLATE_KEYS) | set(_ind.LEGACY_ALIASES)
         if payload["industry_template"] not in valid:
             raise HTTPException(422, f"Unknown industry_template. Valid: {sorted(valid)}")
+    # QA E3: a made-up currency or timezone breaks every amount and date that follows.
+    from backend.services.currency import is_currency_code
+    from backend.services.owned import problem
+    if payload.get("currency_code"):
+        payload["currency_code"] = payload["currency_code"].strip().upper()
+        if not is_currency_code(payload["currency_code"]):
+            raise problem(422, f"{payload['currency_code']} isn't a currency we know. Pick one like USD, EUR or GBP.",
+                          "currency_code must be an ISO 4217 code", field="currency_code")
+    for cur in payload.get("currencies") or []:
+        code = cur.get("code") if isinstance(cur, dict) else None
+        if code and not is_currency_code(code):
+            raise problem(422, f"{code} isn't a currency we know. Pick one like USD, EUR or GBP.",
+                          "currencies[].code must be an ISO 4217 code", field="currencies")
+    if payload.get("timezone"):
+        from zoneinfo import ZoneInfo
+        try:
+            ZoneInfo(payload["timezone"])
+        except (KeyError, ValueError):
+            raise problem(422, f"{payload['timezone']} isn't a time zone we know. Pick one from the list.",
+                          "timezone must be an IANA name like Europe/London", field="timezone")
     for k in ("default_comment_visibility", "default_file_visibility"):
         if k in payload and payload[k] not in ("private", "public"):
             raise HTTPException(422, "Visibility must be private or public")
