@@ -61,12 +61,17 @@ async def test_unknown_industry_never_blocks_sign_up(client, caplog):
     # the app's logging setup clears root handlers — so listen on this logger directly.
     log = logging.getLogger("tekly.signup")
     was_disabled, log.disabled = log.disabled, False
+    # An earlier test can leave this logger (or the handler) above WARNING: set both, put them back.
+    was_level = log.level
+    log.setLevel(logging.WARNING)
+    caplog.handler.setLevel(logging.WARNING)
     log.addHandler(caplog.handler)
     try:
         r = await client.post("/api/auth/register", json=_reg(industry_template="spaceships"))
     finally:
         log.removeHandler(caplog.handler)
         log.disabled = was_disabled
+        log.setLevel(was_level)
     assert r.status_code == 201, r.text
     co, _ = await _company_and_taxes(client, r)
     assert co["industry_template"] == "general"
