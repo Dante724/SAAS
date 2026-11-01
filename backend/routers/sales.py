@@ -682,11 +682,18 @@ async def return_sale_items(
     if not data.lines:
         raise HTTPException(400, "Pick at least one item to return")
     sale = await _load_sale(db, current, sale_id, lock=True)
+    # QA F2: a double-clicked return refunded and restocked twice. FOR UPDATE is a no-op on SQLite,
+    # so a write on the sale takes the lock on both databases (the second click waits for the first
+    # to commit), and the lines are then read fresh: the second click sees what is already back.
+    await db.execute(sa_update(Sale).where(Sale.id == sale.id).values(paid=Sale.paid)
+                     .execution_options(synchronize_session=False))
+    await db.refresh(sale)
     if sale.voided_at:
         raise HTTPException(409, "This sale was deleted")
     if not sale.paid:
         raise HTTPException(409, "This sale isn't paid. Take payment or delete it instead.")
-    lines = {ln.id: ln for ln in (await db.execute(select(SaleLine).where(SaleLine.sale_id == sale.id))).scalars()}
+    lines = {ln.id: ln for ln in (await db.execute(select(SaleLine).where(SaleLine.sale_id == sale.id)
+                                                   .execution_options(populate_existing=True))).scalars()}
     base = q2(sum(float(ln.total or 0) for ln in lines.values()))
     value = 0.0
     for r in data.lines:
