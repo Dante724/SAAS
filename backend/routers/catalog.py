@@ -432,7 +432,7 @@ async def catalog_search(
 # ── Taxes (named, reusable rates) ────────────────────
 from backend.models import Tax
 from backend.services.money import q2
-from backend.services.tax import set_default_tax
+from backend.services.tax import job_stack, set_default_tax
 
 
 class TaxIn(BaseModel):
@@ -467,13 +467,14 @@ class TaxIn(BaseModel):
             raise ValueError("location_scope must be all or selected")
         return v
 
-def _ser_tax(t: Tax) -> dict:
+def _ser_tax(t: Tax, default_id: Optional[str]) -> dict:
+    """is_default comes from the job tax stack (its first tax), never the stored flag."""
     import json as _j
     return {"id": t.id, "name": t.name, "rate": t.rate, "mode": t.mode,
             "code": t.code, "name_for_document": t.name_for_document,
             "location_scope": t.location_scope,
             "location_ids": _j.loads(t.location_ids or "[]"),
-            "is_default": t.is_default, "active": t.active}
+            "is_default": t.id == default_id, "active": t.active}
 
 @router.get("/taxes")
 async def list_taxes(
@@ -484,7 +485,8 @@ async def list_taxes(
         select(Tax).where(Tax.org_id == current.org_id, Tax.active == True)  # noqa: E712
         .order_by(Tax.name)
     )).scalars().all()
-    return {"items": [_ser_tax(t) for t in rows]}
+    stack = await job_stack(db, current.org_id)
+    return {"items": [_ser_tax(t, stack[0] if stack else None) for t in rows]}
 
 @router.post("/taxes", status_code=201)
 async def create_tax(
@@ -502,11 +504,12 @@ async def create_tax(
             is_default=False)
     db.add(t)
     await db.flush()
-    if data.is_default:      # the default is what jobs charge: the job tax stack moves with it
+    if data.is_default:      # the default is the first tax in the job tax stack
         await set_default_tax(db, current.org_id, t, True)
     await db.commit()
     await db.refresh(t)
-    return _ser_tax(t)
+    stack = await job_stack(db, current.org_id)
+    return _ser_tax(t, stack[0] if stack else None)
 
 @router.put("/taxes/{tax_id}")
 async def update_tax(
@@ -519,7 +522,7 @@ async def update_tax(
         raise HTTPException(404, "Tax not found")
     # A1: write only what was sent, so a partial body can't reset the rate, code or locations.
     sent = data.model_fields_set
-    if "is_default" in sent and data.is_default != bool(t.is_default):
+    if "is_default" in sent:
         await set_default_tax(db, current.org_id, t, data.is_default)
     import json as _j3
     t.name = data.name
@@ -529,7 +532,8 @@ async def update_tax(
     if "location_ids" in sent:
         t.location_ids = _j3.dumps(data.location_ids) if data.location_ids else None
     await db.commit()
-    return _ser_tax(t)
+    stack = await job_stack(db, current.org_id)
+    return _ser_tax(t, stack[0] if stack else None)
 
 @router.delete("/taxes/{tax_id}")
 async def delete_tax(

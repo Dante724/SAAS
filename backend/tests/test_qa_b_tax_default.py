@@ -63,12 +63,48 @@ async def test_put_default_moves_the_stack_too(client):
 
 
 @pytest.mark.asyncio
-async def test_unsetting_default_stops_charging_it(client):
+async def test_unticking_the_only_tax_is_refused(client):
+    """Unticking "default" never silently empties the job tax list."""
     h = await _shop(client, "ca-off@qa.dev", region="ca", country="CA")
     gst = (await _taxes(client, h))["GST"]
-    await client.put(f"/api/catalog/taxes/{gst['id']}", headers=h, json={"name": "GST", "is_default": False})
+    r = await client.put(f"/api/catalog/taxes/{gst['id']}", headers=h, json={"name": "GST", "is_default": False})
+    assert r.status_code == 422, r.text
+    assert "only tax" in r.json()["detail"]
+    assert await _stack(client, h) == [gst["id"]]
+
+
+@pytest.mark.asyncio
+async def test_unticking_the_default_hands_over_to_the_next_tax(client):
+    h = await _shop(client, "ca-next@qa.dev", region="ca", country="CA")
+    gst = (await _taxes(client, h))["GST"]
+    pst = (await client.post("/api/catalog/taxes", headers=h, json={"name": "PST", "rate": 7})).json()
+    await client.put("/api/settings/tax-rules", headers=h,
+                     json={"doc_family": "tickets_sales", "tax_ids": [gst["id"], pst["id"]]})
+    r = await client.put(f"/api/catalog/taxes/{gst['id']}", headers=h, json={"name": "GST", "is_default": False})
+    assert r.status_code == 200, r.text
+    assert await _stack(client, h) == [pst["id"]]
+    assert (await _taxes(client, h))["PST"]["is_default"]
+
+
+@pytest.mark.asyncio
+async def test_existing_shop_without_a_stack_is_not_backfilled(client):
+    """Shops from before this change have a default flag but no job stack (they charge 0%).
+    Nothing fills the stack in for them; only the owner making a tax the default does."""
+    h = await _shop(client, "old@qa.dev", region="ca", country="CA")
+    await client.put("/api/settings/tax-rules", headers=h, json={"doc_family": "tickets_sales", "tax_ids": []})
+    await client.post("/api/catalog/taxes", headers=h, json={"name": "PST", "rate": 7})
     assert await _stack(client, h) == []
     assert await _line_tax(client, h) == (0.0, 100.0)
+
+
+@pytest.mark.asyncio
+async def test_switched_off_tax_cant_go_in_the_stack(client, tenant):
+    t = (await client.post("/api/catalog/taxes", headers=tenant, json={"name": "Old VAT", "rate": 5})).json()
+    await client.delete(f"/api/catalog/taxes/{t['id']}", headers=tenant)
+    r = await client.put("/api/settings/tax-rules", headers=tenant,
+                         json={"doc_family": "tickets_sales", "tax_ids": [t["id"]]})
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"] == "Old VAT is switched off. Remove it from the list or switch it back on."
 
 
 @pytest.mark.asyncio
