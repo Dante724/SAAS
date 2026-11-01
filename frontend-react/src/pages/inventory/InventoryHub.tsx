@@ -28,6 +28,7 @@ import AssetStateTabs, { AssetCounts, useAssetState } from "../../components/Ass
 import { useDebounced, useServerPage } from "../../hooks/useServerPage";
 import { useMe, hasFeature } from "../../context/Me";
 import { alertDialog, confirmDialog, promptDialog } from "../../lib/dialog";
+import { type BlockedItem, keptMessage, splitBlocked, writeOffPrompt } from "./archiveBlocked";
 import { printHtmlInFrame } from "../../lib/safeHtml";
 import { MoreMenu, inputCls } from "../invoices/billing";
 import { humanize } from "../../lib/humanize";
@@ -305,11 +306,22 @@ export default function InventoryHub() {
   async function pBulk(act: "delete" | "price", extra: any = {}) {
     setPBusy(true);
     try {
-      const r = await api.post<{ count?: number; blocked?: string[]; blocked_items?: { id: string; name: string; reason: string }[] }>("/catalog/products/bulk", { ids: [...psel], action: act, ...extra });
-      pClear(); loadProducts();
+      type BulkOut = { count?: number; blocked?: string[]; blocked_items?: BlockedItem[] };
+      const r = await api.post<BulkOut>("/catalog/products/bulk", { ids: [...psel], action: act, ...extra });
+      pClear();
+      let { stocked, other } = splitBlocked(r?.blocked_items || []);
+      // still in stock: one step — write it off and archive
+      if (stocked.length && await confirmDialog(writeOffPrompt(stocked), { danger: true, confirmLabel: "Write off and archive" })) {
+        const r2 = await api.post<BulkOut>("/catalog/products/bulk",
+          { ids: stocked.map((i) => i.id), action: "delete", write_off_remaining: true });
+        other = [...other, ...(r2?.blocked_items || [])];
+        stocked = [];
+      }
+      loadProducts();
       // The server says why each one was kept: in stock, on an open job or estimate, on an open PO, or in a kit.
-      const kept = r?.blocked_items?.length ? r.blocked_items.map((b) => `${b.name}: ${b.reason}`) : (r?.blocked || []);
-      if (kept.length) await alertDialog(`${kept.length === 1 ? "This product was" : `${kept.length} products were`} kept:\n${kept.join("\n")}`, "Some products weren't archived");
+      const kept = [...other, ...stocked];
+      if (kept.length) await alertDialog(keptMessage(kept), "Some products weren't archived");
+      else if (!r?.blocked_items && r?.blocked?.length) await alertDialog(`${r.blocked.length} item(s) were kept: ${r.blocked.join(", ")}.`, "Some products weren't archived");
     }
     catch (e: any) { await alertDialog(e.message || "Couldn't update the selected products. Try again."); }
     finally { setPBusy(false); }

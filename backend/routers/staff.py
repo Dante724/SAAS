@@ -758,6 +758,8 @@ async def create_location(
     # Launch B2/B6: the shop's timezone (unless one was picked) and a Cash drawer + Card account.
     from backend.services.shop_setup import setup_location
     await setup_location(db, ln)
+    from backend.services.warehouses import provision_default
+    await provision_default(db, ln)      # QA fix D: its stock has a warehouse from day one
     await db.commit()
     await db.refresh(ln)
     await billing.sync_quantity(db, current.org_id)   # billed per active location
