@@ -38,6 +38,7 @@ uv pip compile requirements-dev.txt --universal --python-version 3.11 --generate
 | `MEDIA_BACKEND` | recommended | `s3` in production (see §5). |
 | `SENTRY_DSN` | recommended | Sends unhandled errors to Sentry/GlitchTip (headers, cookies, bodies and query strings are scrubbed). Optional `SENTRY_TRACES_SAMPLE_RATE` (default 0) and `RELEASE` (git SHA). |
 | `SUPPORT_EMAIL` / `SUPPORT_URL` | no | Where the in-app Help & support menu and "contact support" errors point (default `hello@tekly.app`; a `SUPPORT_URL` help page wins over the email). |
+| `VITE_SENTRY_DSN` | recommended (build arg) | Browser error tracking: pass with `docker build --build-arg VITE_SENTRY_DSN=…` (optional `VITE_RELEASE`). Unset, the Sentry SDK is never downloaded. Events carry only the user id; bodies, cookies, headers, query strings are dropped and emails masked. |
 | `METRICS_TOKEN` | to scrape `/metrics` | Prometheus bearer token. Without it a deployed instance returns 404 at `/metrics`. |
 | `MAX_REQUEST_BYTES` | no | Request body cap (default 16 MB). Raise it only together with `MEDIA_MAX_BYTES`. |
 | `REFRESH_TOKEN_EXPIRE_MINUTES` | no | Absolute session length (default 30 days). Refreshing a token never extends a sign-in past this. |

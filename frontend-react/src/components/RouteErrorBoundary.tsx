@@ -1,6 +1,7 @@
 import { Component, type ReactNode } from "react";
 import { useLocation } from "react-router-dom";
 import { useMe } from "../context/Me";
+import { reportError } from "../lib/sentry";
 import { supportContact } from "../lib/support";
 
 // One screen crashing (a render error, or a chunk that failed to download after a deploy) used to
@@ -19,6 +20,7 @@ export class ErrorBoundary extends Component<Props, State> {
 
   componentDidCatch(error: Error, info: { componentStack?: string | null }) {
     console.error("Screen crashed:", error, info?.componentStack);
+    reportError(error, info?.componentStack);
   }
 
   componentDidUpdate(prev: Props) {

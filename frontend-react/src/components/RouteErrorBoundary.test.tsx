@@ -2,6 +2,9 @@ import { describe, expect, it, vi } from "vitest";
 import { render, screen, fireEvent } from "@testing-library/react";
 import { MemoryRouter, Routes, Route, Link } from "react-router-dom";
 import RouteErrorBoundary from "./RouteErrorBoundary";
+import { reportError } from "../lib/sentry";
+
+vi.mock("../lib/sentry", () => ({ reportError: vi.fn() }));
 
 function Boom({ msg = "kaboom" }: { msg?: string }): JSX.Element {
   throw new Error(msg);
@@ -29,6 +32,7 @@ describe("RouteErrorBoundary", () => {
     expect(screen.getByText("kaboom")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
     expect(screen.getByRole("link", { name: /Contact support/ })).toHaveAttribute("href", "mailto:hello@tekly.app");
+    expect(reportError).toHaveBeenCalledWith(expect.objectContaining({ message: "kaboom" }), expect.anything());
     expect(screen.getByRole("button", { name: "Go back" })).toBeInTheDocument();
     expect(screen.getByText("to fine")).toBeInTheDocument();
     spy.mockRestore();
