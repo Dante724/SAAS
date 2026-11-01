@@ -13,7 +13,7 @@ Each changed role's previous permissions are kept in role_permission_backups, so
 restores them exactly. Re-running changes nothing: a tightened role no longer matches.
 
 Revision ID: rt144a1
-Revises: mdec01
+Revises: idem01
 """
 import json
 import logging
@@ -22,7 +22,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "rt144a1"
-down_revision = "mdec01"
+down_revision = "idem01"
 branch_labels = None
 depends_on = None
 
