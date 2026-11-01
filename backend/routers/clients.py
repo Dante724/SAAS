@@ -1204,6 +1204,7 @@ async def suggest_client_reply(
             InboxMessage.thread_id.in_(tids), InboxMessage.direction == "inbound")
             .order_by(InboxMessage.created_at.desc()))).scalars().first()
     customer_message = (last_in.body if last_in else "") or "Hi, checking in on my repair."
+    await ai.enforce_quota(current)
     out = await ai.suggest_reply(customer_message=customer_message,
                                  context=f"Customer {c.name}")
     return {"provider": out.get("provider", "stub"), "reply": out.get("reply", ""),

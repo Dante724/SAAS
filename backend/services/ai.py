@@ -12,6 +12,31 @@ from typing import Optional
 from backend.config import settings
 
 
+# Every AI call runs on the platform's Anthropic key, so each person and each shop gets a budget:
+# a burst limit per user and a daily ceiling per shop. Shared by every route that can reach the model.
+AI_USER_PER_MIN = 20
+AI_ORG_PER_DAY = 1000
+MAX_TEXT_CHARS = 20000            # pasted text sent to the model
+MAX_IMAGE_BYTES = 5 * 1024 * 1024  # the model's per-image ceiling
+
+
+async def enforce_quota(employee) -> None:
+    """Raise 429 (with Retry-After) once this person or their shop is over the AI budget."""
+    from fastapi import HTTPException
+
+    from backend.services.ratelimit import aenforce
+    try:
+        await aenforce("ai_user", employee.id, AI_USER_PER_MIN, 60)
+    except HTTPException as e:
+        raise HTTPException(429, f"You've reached the AI limit of {AI_USER_PER_MIN} requests a "
+                                 "minute. Please wait a moment and try again.", headers=e.headers)
+    try:
+        await aenforce("ai_org", employee.org_id, AI_ORG_PER_DAY, 86400)
+    except HTTPException as e:
+        raise HTTPException(429, "Your shop has used today's AI allowance. It resets within 24 "
+                                 "hours — contact support if you need more.", headers=e.headers)
+
+
 def is_live() -> bool:
     return bool(settings.ANTHROPIC_API_KEY)
 
@@ -33,7 +58,8 @@ async def _complete(system: str, user: str, max_tokens: int = 700) -> Optional[s
                          "anthropic-version": "2023-06-01",
                          "content-type": "application/json"},
                 json={"model": settings.AI_MODEL, "max_tokens": max_tokens,
-                      "system": system, "messages": [{"role": "user", "content": user}]})
+                      "system": system,
+                      "messages": [{"role": "user", "content": user[:MAX_TEXT_CHARS]}]})
         if resp.status_code != 200:
             return None
         blocks = resp.json().get("content", [])

@@ -1252,9 +1252,9 @@ async def preview_template(
 
 
 class AiGenIn(BaseModel):
-    prompt: str = ""
-    doc_type: str = "estimate"
-    preset: str = ""
+    prompt: str = Field("", max_length=4000)   # offline builder, but bound the keyword scan
+    doc_type: str = Field("estimate", max_length=40)
+    preset: str = Field("", max_length=80)
 
 
 @router.get("/smart-presets")
