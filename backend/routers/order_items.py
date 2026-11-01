@@ -261,9 +261,8 @@ async def split_item(order_id: str, item_id: str, db: AsyncSession = Depends(get
     """Move one item and the lines tagged to it onto a new job for the same customer, linked
     back to this one. Its recommendations and logged time on those lines go with it."""
     from backend.routers.feed import log_system_event
-    from backend.routers.orders import _guard_editable, _recalc_order, unique_public_token
+    from backend.routers.orders import _guard_editable, _recalc_order, job_number, unique_public_token
     from backend.services.audit import record as _audit
-    from backend.services.numbering import next_number
     await ma.require_enabled(db, current.org_id)
     order = await _order(db, current, order_id)
     await _guard_editable(db, order, current)
@@ -279,9 +278,7 @@ async def split_item(order_id: str, item_id: str, db: AsyncSession = Depends(get
     if set(line_ids) & await ma.invoiced_line_ids(db, current.org_id, order.id):
         raise HTTPException(409, "That item's work is already on an invoice")
 
-    number = await next_number(db, current.org_id, "order")
-    if order.is_estimate:
-        number = "E" + number[3:]
+    number = await job_number(db, current.org_id, bool(order.is_estimate))
     status = "draft" if order.is_estimate else "new"
     name = (await ma.item_names(db, current.org_id, [it.id])).get(it.id, ("Item", 0))[0]
     new = Order(order_number=number, org_id=current.org_id, public_token=await unique_public_token(db),

@@ -21,6 +21,7 @@ from backend.services.dates import now_utc
 # Built-in defaults mirror the pre-Phase-1 hardcoded formats exactly.
 DEFAULT_TEMPLATES = {
     "order": "WO-{C:5}",
+    "estimate": "E-{C:5}",     # own counter: estimates no longer use up work-order numbers
     "invoice": "INV-{C:5}",
     "inquiry": "INQ-{C:5}",
     "sale": "S-{C:5}",
@@ -88,13 +89,15 @@ async def _existing_count(db, org_id, doc_type) -> int:
     import backend.models as M
     name = {"order": "Order", "invoice": "Invoice", "sale": "Sale",
             "po": "PurchaseOrder", "transfer": "StockTransfer", "inquiry": "Order",
-            "credit_note": "CreditNote"}.get(doc_type)
+            "credit_note": "CreditNote", "estimate": "Order"}.get(doc_type)
     model = getattr(M, name, None) if name else None
     if model is None or not hasattr(model, "org_id"):
         return 0
     q = _sel(func.count()).select_from(model).where(model.org_id == org_id)
     if doc_type == "credit_note":
         q = q.where(model.number.isnot(None))     # drafts carry no number until issued
+    if doc_type == "estimate":
+        q = q.where(model.is_estimate == True)  # noqa: E712
     try:
         return (await db.execute(q)).scalar() or 0
     except Exception:
@@ -143,9 +146,10 @@ async def next_number(
 
 
 async def _number_taken(db: AsyncSession, org_id: str, doc_type: str, number: str) -> bool:
-    from backend.models import CreditNote, Invoice, PurchaseOrder
+    from backend.models import CreditNote, Invoice, Order, PurchaseOrder
     col = {"invoice": (Invoice, Invoice.invoice_number), "po": (PurchaseOrder, PurchaseOrder.po_number),
-           "credit_note": (CreditNote, CreditNote.number)}.get(doc_type)
+           "credit_note": (CreditNote, CreditNote.number),
+           "estimate": (Order, Order.order_number)}.get(doc_type)
     if col is None:
         return False
     model, number_col = col

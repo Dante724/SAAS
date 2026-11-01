@@ -297,14 +297,17 @@ async def get_client(
 @router.post("/{client_id}/portal-link")
 async def issue_portal_link(
     client_id: str,
+    replace: bool = False,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_client_info")),
 ):
-    """Issue (or rotate) a customer-portal magic link for this client.
+    """Issue a customer-portal magic link for this client.
 
     The relative URL `/portal/{token}` lets the customer see all their work orders, estimates
-    and invoices and approve estimates without a login. The link expires (services/portal_links)
-    and replaces every earlier one; the token is shown once and only its hash is kept.
+    and invoices and approve estimates without a login. The link expires (services/portal_links);
+    the token is shown once and only its hash is kept. Links the customer already has keep working
+    (QA F1: a new link silently killed the one in their inbox) unless ``replace=true`` rotates them,
+    or ``/portal-link/revoke`` stops them all.
     """
     from backend.services import portal_links
     client = (await db.execute(
@@ -312,11 +315,29 @@ async def issue_portal_link(
     )).scalar_one_or_none()
     if not client:
         raise HTTPException(404, "Client not found")
-    raw = await portal_links.issue(db, client, replace=True)
+    raw = await portal_links.issue(db, client, replace=replace)
     await db.commit()
     # `token` mirrors the track link's field name; `portal_token` stays for existing callers.
     return {"portal_token": raw, "token": raw, "portal_url": f"/portal/{raw}",
             "expires_in_days": portal_links.LINK_DAYS}
+
+
+@router.post("/{client_id}/portal-link/revoke")
+async def revoke_portal_links(
+    client_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_view_client_info")),
+):
+    """Stop every portal link this client has (a lost phone, a forwarded email)."""
+    from backend.services import portal_links
+    client = (await db.execute(
+        select(Client).where(Client.id == client_id, Client.org_id == current.org_id)
+    )).scalar_one_or_none()
+    if not client:
+        raise HTTPException(404, "Client not found")
+    await portal_links.revoke_all(db, client.id)
+    await db.commit()
+    return {"ok": True}
 
 
 @router.put("/{client_id}")

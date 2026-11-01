@@ -187,6 +187,12 @@ class CommentIn(BaseModel):
 
 # ── Helpers ──────────────────────────────────
 
+async def job_number(db, org_id: str, is_estimate: bool) -> str:
+    """The next number for a new job or estimate. Estimates count on their own sequence (E-00001,
+    Settings > Numbering), so creating one never makes the work-order numbers skip (QA F1)."""
+    return await next_number(db, org_id, "estimate" if is_estimate else "order")
+
+
 def _order_number(org_id: str, seq: int, is_estimate: bool = False) -> str:
     return f"{'E' if is_estimate else 'WO-'}{seq:05d}"
 
@@ -1031,7 +1037,7 @@ async def create_order(
     _intake = await _clean_intake_photos(db, current.org_id, data.intake_photos)
 
     order = Order(
-        order_number=("E" + (await next_number(db, current.org_id, "order"))[3:]) if data.is_estimate else await next_number(db, current.org_id, "order"),
+        order_number=await job_number(db, current.org_id, bool(data.is_estimate)),
         barcode=await unique_order_code(db),   # 144ei — globally-unique scannable code from birth
         public_token=await unique_public_token(db),   # 144cu — globally-unique track link from birth
         org_id=current.org_id,
@@ -1951,6 +1957,7 @@ async def change_order_currency(
         Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    await _guard_editable(db, order, current)   # a closed job changes only with "Edit the closed ticket"
     from backend.services import currency as _cur
     info = await _cur.resolve_for_client(db, current.org_id, order.client_id, data.currency_code)
     order.currency_code = info["code"]
@@ -2057,6 +2064,7 @@ async def set_deposit(
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, order)
+    await _guard_editable(db, order, current)   # a closed job changes only with "Edit the closed ticket"
     if data.percent is not None:
         if data.percent < 0 or data.percent > 100:
             raise HTTPException(400, "percent must be 0–100")
@@ -2067,6 +2075,10 @@ async def set_deposit(
         raise HTTPException(400, "Provide amount or percent")
     if amount < 0:
         raise HTTPException(400, "deposit cannot be negative")
+    if amount > q2(order.total or 0):
+        from backend.services.currency import org_money
+        fmt = await org_money(db, current.org_id)
+        raise HTTPException(422, f"The deposit can't be more than the job total ({fmt(order.total or 0)}).")
     order.deposit_amount = amount
     await db.commit()
     return {"ok": True, "deposit_amount": amount}
@@ -2086,6 +2098,7 @@ async def switch_type(
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, order)
+    await _guard_editable(db, order, current)   # a closed job changes only with "Edit the closed ticket"
     wot = (await db.execute(select(WorkOrderType).where(WorkOrderType.id == data.type_id, WorkOrderType.org_id == current.org_id))).scalar_one_or_none()
     if not wot:
         raise HTTPException(404, "Type not found")
@@ -2763,9 +2776,7 @@ async def duplicate_order(
         raise HTTPException(404, "Order not found")
     await assert_perm(db, current, "can_create_estimates" if src.is_estimate else "can_create_tickets")
 
-    number = await next_number(db, current.org_id, "order")
-    if src.is_estimate:
-        number = "E" + number[3:]
+    number = await job_number(db, current.org_id, bool(src.is_estimate))
 
     new_lines = []
     labour = parts = 0.0
@@ -3597,6 +3608,7 @@ async def save_custom_data(
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, order)
+    await _guard_editable(db, order, current)   # a closed job changes only with "Edit the closed ticket"
     from backend.models import CustomField
     fields = (await db.execute(select(CustomField).where(
         CustomField.org_id == current.org_id, CustomField.type_id == order.type_id,
@@ -3690,6 +3702,7 @@ async def assign_people(
     order = result.scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    await _guard_editable(db, order, current)   # a closed job changes only with "Edit the closed ticket"
     sent = data.model_fields_set
     if "manager_id" in sent:
         await _assert_listed(db, current.org_id, data.manager_id, "display_in_managers", "Managers")

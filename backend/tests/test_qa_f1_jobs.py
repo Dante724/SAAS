@@ -240,3 +240,106 @@ async def test_deleting_a_refund_puts_the_job_total_back(client, tenant):
     assert all(ln["total"] >= 0 for ln in o["lines"])
     assert (await client.get(f"/api/clients/{cid}", headers=tenant)).json()["balance"] == pytest.approx(0)
 
+
+# ── 6. small things a shop notices ─────────────────────────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_estimates_have_their_own_counter(client, tenant):
+    loc = await K.loc(client, tenant)
+    nums = []
+    for est in (False, True, False, True, False):
+        oid, _ = await K.job(client, tenant, loc, estimate=est)
+        nums.append((await K.order(client, tenant, oid))["order_number"])
+    assert nums[0::2] == ["WO-00001", "WO-00002", "WO-00003"]          # no gaps for the estimates
+    assert nums[1::2] == ["E-00001", "E-00002"]
+
+
+@pytest.mark.asyncio
+async def test_estimate_numbering_follows_its_own_setting(client, tenant):
+    r = await client.put("/api/settings/numbering", headers=tenant, json={
+        "doc_type": "estimate", "template": "QUOTE/{C:3}", "begins_from": 7, "scope_key": "org"})
+    assert r.status_code == 200, r.text
+    await client.put("/api/settings/numbering", headers=tenant, json={
+        "doc_type": "order", "template": "JOB{C:4}", "begins_from": 1, "scope_key": "org"})
+    loc = await K.loc(client, tenant)
+    est, _ = await K.job(client, tenant, loc, estimate=True)
+    assert (await K.order(client, tenant, est))["order_number"] == "QUOTE/007"
+    copy = (await client.post(f"/api/orders/{est}/duplicate", headers=tenant)).json()
+    assert copy["order_number"] == "QUOTE/008", copy
+    await client.get("/api/statuses?is_estimate=true", headers=tenant)
+    assert (await client.post(f"/api/orders/{est}/convert", headers=tenant)).status_code == 200
+    assert (await K.order(client, tenant, est))["order_number"] == "JOB0001"
+
+
+@pytest.mark.asyncio
+async def test_deposit_is_capped_at_the_job_total(client, tenant):
+    oid, _ = await K.job(client, tenant, await K.loc(client, tenant))
+    await K.add_line(client, tenant, oid, **{**P, "unit_price": 830})
+    total = (await K.order(client, tenant, oid))["total"]
+    r = await client.patch(f"/api/orders/{oid}/deposit", json={"amount": total + 70}, headers=tenant)
+    assert r.status_code == 422, r.text
+    assert "job total" in r.json()["detail"]
+    ok = await client.patch(f"/api/orders/{oid}/deposit", json={"amount": total}, headers=tenant)
+    assert ok.status_code == 200 and ok.json()["deposit_amount"] == total
+
+
+@pytest.mark.asyncio
+async def test_a_locked_closed_job_refuses_every_edit(client, tenant):
+    r = await client.post("/api/statuses", headers=tenant, json={
+        "name": "Picked up", "key": "picked_up", "status_group": "closed", "locks_edits": True})
+    assert r.status_code == 201, r.text
+    oid, _ = await K.job(client, tenant, await K.loc(client, tenant))
+    await K.add_line(client, tenant, oid, **P)
+    assert (await client.patch(f"/api/orders/{oid}/status", json={"status": "picked_up"},
+                               headers=tenant)).status_code == 200
+    me = (await client.get("/api/auth/me", headers=tenant)).json()
+    edits = [("deposit", {"amount": 5}), ("assign", {"assigned_to_id": me.get("id")}),
+             ("custom-data", {"custom_data": {"x": "1"}})]
+    for path, body in edits:
+        r = await client.patch(f"/api/orders/{oid}/{path}", json=body, headers=tenant)
+        assert r.status_code == 409, (path, r.text)
+    assert (await client.post(f"/api/orders/{oid}/lines", json=P, headers=tenant)).status_code == 409
+    # reopening is how the shop unlocks it
+    assert (await client.patch(f"/api/orders/{oid}/status", json={"status": "in_repair"},
+                               headers=tenant)).status_code == 200
+    assert (await client.patch(f"/api/orders/{oid}/deposit", json={"amount": 5}, headers=tenant)).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_estimate_public_page_shows_estimate_steps(client, tenant, db):
+    await client.get("/api/statuses?is_estimate=true", headers=tenant)
+    loc = await K.loc(client, tenant)
+    est, _ = await K.job(client, tenant, loc, estimate=True)
+    page = await K.track(client, db, est)
+    labels = [s["label"] for s in page["stages"]]
+    assert "In repair" not in labels and labels[-1] == "Approved"
+    assert page["stage_index"] == 0
+    await client.patch(f"/api/orders/{est}/status", json={"status": "est_sent"}, headers=tenant)
+    assert (await K.track(client, db, est))["stage_index"] == 1
+    job, _ = await K.job(client, tenant, loc)
+    assert "In repair" in [s["label"] for s in (await K.track(client, db, job))["stages"]]
+
+
+@pytest.mark.asyncio
+async def test_a_new_portal_link_keeps_the_old_one_until_revoked(client, tenant):
+    cid = (await client.post("/api/clients", json={"name": "Pat"}, headers=tenant)).json()["id"]
+    old = (await client.post(f"/api/clients/{cid}/portal-link", headers=tenant)).json()["portal_token"]
+    new = (await client.post(f"/api/clients/{cid}/portal-link", headers=tenant)).json()["portal_token"]
+    assert (await client.get(f"/api/public/portal/{old}")).status_code == 200      # still in their inbox
+    assert (await client.get(f"/api/public/portal/{new}")).status_code == 200
+    assert (await client.post(f"/api/clients/{cid}/portal-link/revoke", headers=tenant)).status_code == 200
+    assert (await client.get(f"/api/public/portal/{old}")).status_code == 404
+    assert (await client.get(f"/api/public/portal/{new}")).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_two_quick_adds_of_one_part_make_one_line(client, tenant):
+    import asyncio
+    loc = await K.loc(client, tenant)
+    pid = await K.part(client, tenant, loc, "Battery", 30, 10, qty=10)
+    oid, _ = await K.job(client, tenant, loc)
+    rs = await asyncio.gather(*[client.post(f"/api/orders/{oid}/lines", headers=tenant,
+                                            json={**P, "ref_id": pid, "qty": 1}) for _ in range(2)])
+    assert all(r.status_code == 201 for r in rs), [r.text for r in rs]
+    lines = await K.lines(client, tenant, oid)
+    assert len(lines) == 1 and lines[0]["qty"] == 2
+    assert await K.stock(client, tenant, pid) == 8
