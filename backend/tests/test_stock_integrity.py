@@ -203,8 +203,13 @@ async def test_adjust_rejects_negative_or_unknown(client, tenant):
 async def test_writeoff_logs_negative_of_what_was_drawn(client, tenant, db):
     from backend.models import StockMovement
     loc, pid = await _setup(client, tenant, qty=2)
+    # QA fix D: more than is on hand is refused (it used to be cut down to what was there)
     r = await client.post(f"/api/inventory/parts/{pid}/adjust", headers=tenant,
                           json={"location_id": loc, "qty": 5, "movement_type": "writeoff"})
+    assert r.status_code == 409, r.text
+    assert await K.stock(client, tenant, pid) == 2
+    r = await client.post(f"/api/inventory/parts/{pid}/adjust", headers=tenant,
+                          json={"location_id": loc, "qty": 2, "movement_type": "writeoff"})
     assert r.status_code == 200, r.text
     assert await K.stock(client, tenant, pid) == 0
     mv = (await db.execute(select(StockMovement.qty).where(
@@ -348,6 +353,8 @@ async def test_pos_sale_marks_serials_sold_and_void_restores(client, tenant, db)
     org = await _org(db, pid)
     db.add_all([SerializedItem(org_id=org, part_id=pid, serial_number=f"SN-{i}", location_id=loc,
                                status="in_stock") for i in range(2)])
+    from backend.models import Part
+    (await db.get(Part, pid)).serialized = True      # QA F2: the till names the unit it sells
     await db.commit()
 
     async def statuses():
@@ -356,7 +363,8 @@ async def test_pos_sale_marks_serials_sold_and_void_restores(client, tenant, db)
             SerializedItem.part_id == pid))).scalars().all())
 
     r = await client.post("/api/sales", headers=tenant, json={"lines": [
-        {"kind": "product", "ref_id": pid, "description": "Screen", "qty": 1, "unit_price": 50}]})
+        {"kind": "product", "ref_id": pid, "description": "Screen", "qty": 1, "unit_price": 50,
+         "serials": ["SN-1"]}]})
     assert r.status_code == 201, r.text
     assert await statuses() == ["in_stock", "sold"]
     r = await client.delete(f"/api/sales/{r.json()['id']}?reason=oops", headers=tenant)
