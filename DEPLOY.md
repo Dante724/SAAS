@@ -78,7 +78,8 @@ is your real recovery time.
 ## 5. Media (photos, signatures, attachments)
 
 `MEDIA_BACKEND=db` (default) stores files in Postgres — simple, but it bloats the database and
-its backups. `local` writes to `MEDIA_LOCAL_DIR` (default `/tmp`, **not durable** in containers).
+its backups. `local` writes to `MEDIA_LOCAL_DIR` (default `/tmp`, **not durable** in containers;
+production/staging refuse to boot with `local` under `/tmp` — mount a volume or use S3).
 For production use S3 (or any S3-compatible store):
 
 ```

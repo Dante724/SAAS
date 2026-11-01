@@ -29,6 +29,15 @@ def _valid_fernet_keys(raw: str) -> bool:
     return True
 
 
+def _is_temp_dir(path: str) -> bool:
+    """True for /tmp, /var/tmp and the OS temp dir (and anything under them), symlinks resolved."""
+    import os
+    import tempfile
+    real = os.path.realpath(path or "")
+    roots = {os.path.realpath(p) for p in ("/tmp", "/var/tmp", tempfile.gettempdir())}
+    return any(real == r or real.startswith(r.rstrip("/") + "/") for r in roots)
+
+
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
@@ -300,9 +309,13 @@ class Settings(BaseSettings):
         import logging
         import os
         _log = logging.getLogger(__name__)
-        if self.MEDIA_BACKEND == "local" and self.MEDIA_LOCAL_DIR.startswith("/tmp"):
-            _log.warning("MEDIA_BACKEND=local with MEDIA_LOCAL_DIR under /tmp: uploaded photos and "
-                         "files are lost when the container restarts. Use MEDIA_BACKEND=s3 or a volume.")
+        # Uploads written under /tmp vanish on the next container restart (photos, signatures,
+        # attachments). The db and s3 backends never touch MEDIA_LOCAL_DIR.
+        if (self.MEDIA_BACKEND or "").lower() == "local" and _is_temp_dir(self.MEDIA_LOCAL_DIR):
+            raise ValueError(
+                f"MEDIA_LOCAL_DIR={self.MEDIA_LOCAL_DIR} is a temporary folder: uploaded photos and "
+                "files would be lost on every restart. Use MEDIA_BACKEND=s3 with MEDIA_S3_BUCKET "
+                "(recommended), or point MEDIA_LOCAL_DIR at a persistent volume.")
         # Behind a load balancer with neither setting changed, every anonymous request looks
         # like it comes from the balancer, so they all share one rate-limit bucket.
         if self.TRUSTED_PROXY_HOPS == 0 and os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1") == "127.0.0.1":
