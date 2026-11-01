@@ -15,7 +15,7 @@ Only NULL tags are touched, so running it again changes nothing. Downgrade is a 
 a row can't be told apart from one written with its warehouse, and NULL only meant "the default".
 
 Revision ID: qad01
-Revises: mdec01
+Revises: ds144a1
 """
 import uuid
 from datetime import datetime, timezone
@@ -24,7 +24,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "qad01"
-down_revision = "mdec01"
+down_revision = "ds144a1"
 branch_labels = None
 depends_on = None
 
