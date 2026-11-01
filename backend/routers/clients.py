@@ -1,4 +1,5 @@
 from datetime import datetime
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -223,7 +224,8 @@ async def duplicate_phones(
     for c in (await db.execute(select(Client.id, Client.name, Client.phone, Client.created_at).where(
             Client.org_id == current.org_id, Client.phone.isnot(None), Client.phone != "")
             .order_by(Client.created_at, Client.id))).all():
-        key = phone_key(c.phone, country)
+        # A value with letters in it isn't a phone number: only an identical value matches it.
+        key = c.phone.strip().lower() if re.search(r"[A-Za-z]", c.phone) else phone_key(c.phone, country)
         if len(key) >= 4:
             by_key.setdefault(key, []).append(c)
     clusters = []
