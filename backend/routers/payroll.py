@@ -4,7 +4,7 @@ from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -28,6 +28,7 @@ from backend.services.payroll_views import (
     payroll_scope_ids,
 )
 from backend.services.money import q2
+from backend.services.commission_input import check_commission_basis, check_commission_calc_type
 
 router = APIRouter(prefix="/api/payroll", tags=["payroll"])
 
@@ -96,6 +97,17 @@ class RuleIn(BaseModel):
     rule_level: str = "generic"
     product_id: Optional[str] = None
     service_id: Optional[str] = None
+
+    # QA 2026-10-31 B: "fixed" (the discount word) used to be paid as a percentage.
+    @field_validator("calc_type")
+    @classmethod
+    def _calc(cls, v):
+        return check_commission_calc_type(v)
+
+    @field_validator("percent_basis")
+    @classmethod
+    def _basis(cls, v):
+        return check_commission_basis(v)
 
 
 def _apply_rule(r: CommissionRule, data: RuleIn) -> None:

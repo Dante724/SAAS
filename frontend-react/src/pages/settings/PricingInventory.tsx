@@ -187,7 +187,7 @@ export function PricingPage({ types, currency, onAdd, onEdit, onDelete, tiers }:
               </Field>
               <Field label="Decimals on prices">
                 <select value={d.price_decimals ?? 2} onChange={(e) => set("price_decimals", Number(e.target.value))} className={inp}>
-                  {[0, 1, 2, 3, 4].map((n) => <option key={n} value={n}>{n === 0 ? "None (whole numbers)" : `${n} (${(1.5).toFixed(n)})`}</option>)}
+                  {[0, 1, 2].map((n) => <option key={n} value={n}>{n === 0 ? "None (whole numbers)" : `${n} (${(1.5).toFixed(n)})`}</option>)}
                 </select>
               </Field>
             </div>

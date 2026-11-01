@@ -155,7 +155,9 @@ async def _price_sale(db, org_id, data: SaleIn, *, location_id, sale: Optional[S
         if err:
             refuse("coupon", err)
         else:
-            coupon = min(q2(gross * c.value / 100.0) if c.kind == "pct" else q2(c.value), q2(remaining))
+            # QA 2026-10-31 B: the percentage is of what's left after the sale discount.
+            from backend.services.coupons import coupon_amount
+            coupon = coupon_amount(c.kind, c.value, remaining)
             if sale is not None:
                 # guarded atomic increment: refuse if a concurrent redemption hit max_uses meanwhile
                 res = await db.execute(sa_update(Coupon)

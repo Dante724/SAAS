@@ -3285,6 +3285,17 @@ class TaxRule(Base):
     priority: Mapped[int] = mapped_column(Integer, default=0)
 
 
+class TaxStackBackfillLog(Base):
+    """Migration taxbf01: one row per shop whose job tax stack was set to its default tax, with
+    the stack it had before, so the migration's downgrade can put it back."""
+    __tablename__ = "tax_stack_backfill_log"
+    id: Mapped[str] = mapped_column(String, primary_key=True)
+    org_id: Mapped[str] = mapped_column(String, nullable=False, index=True)
+    previous_tax_ids: Mapped[str] = mapped_column(Text, nullable=False)   # JSON list, priority order
+    tax_id: Mapped[str] = mapped_column(String, nullable=False)
+    created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
+
+
 class TaxException(Base):
     """Override the default stack for a specific labor/service/product/category."""
     __tablename__ = "tax_exceptions"
@@ -3597,7 +3608,7 @@ all_models = [
     StaffNotification, PushSubscription,
     ChecklistTemplate, ChecklistTemplateItem, OrderChecklistItem,
     GiftCard, GiftCardLedger, Coupon, LoyaltyLedger,
-    NumberSequence, LegalEntity, TaxGroup, TaxRule, TaxException,
+    NumberSequence, LegalEntity, TaxGroup, TaxRule, TaxStackBackfillLog, TaxException,
     XeroConnection,
     Directory, DirectoryItem,
     AssetGroup, AssetBrand, AssetModel, AssetIdentifierRule,

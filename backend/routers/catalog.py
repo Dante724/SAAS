@@ -5,7 +5,7 @@ work-order line editor uses to pick either a service or a product (part).
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Response
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
@@ -16,6 +16,9 @@ from backend.services.auth import get_current_employee, has_perm, require_perm
 from backend.core import paging as _paging
 from backend.core.likes import contains as _contains
 from backend.services.redact import can_see_costs
+from backend.services.money import check_money, org_price_decimals, round_price
+from backend.services.commission_input import (
+    check_commission_amount, check_commission_basis, check_commission_calc_type)
 
 router = APIRouter(prefix="/api/catalog", tags=["catalog"])
 
@@ -63,6 +66,33 @@ class ServiceIn(BaseModel):
     bookable: bool = True              # 144ee: show on public appointment page
     allowed_employee_ids: list = []   # 144ek: who can perform (empty = all)
     required_resource_types: list = []# 144ek: resource types this service needs
+
+    # QA 2026-10-31 B: negative / absurd numbers used to be stored (or silently clamped).
+    @field_validator("price")
+    @classmethod
+    def _price(cls, v):
+        if v is not None and v < 0:
+            raise ValueError("A service price can't be negative. Use a discount on the job instead.")
+        return check_money(v)
+
+    @field_validator("cost_price")
+    @classmethod
+    def _cost(cls, v):
+        return check_money(v)
+
+    @field_validator("duration_min")
+    @classmethod
+    def _duration(cls, v):
+        if v is not None and not 0 <= v <= 7 * 24 * 60:
+            raise ValueError("Duration must be between 0 and 10080 minutes")
+        return v
+
+    @field_validator("warranty_days")
+    @classmethod
+    def _warranty(cls, v):
+        if v is not None and not 0 <= v <= 36500:
+            raise ValueError("Warranty days must be between 0 and 36500")
+        return v
 
 
 def _ser(s: Service, cat_names: Optional[dict] = None) -> dict:
@@ -147,11 +177,12 @@ async def create_service(
 ):
     if not data.name.strip():
         raise HTTPException(400, "Name is required")
+    dp = await org_price_decimals(db, current.org_id)     # QA 2026-10-31 B: round at write time
     s = Service(
         org_id=current.org_id, name=data.name, description=(data.description or "")[:2000],
         category=data.category, category_id=data.category_id,
         is_labor=data.is_labor, unit=(data.unit or "pc")[:24],
-        price=data.price, cost_price=data.cost_price if await can_see_costs(db, current) else 0,
+        price=round_price(data.price, dp), cost_price=round_price(data.cost_price, dp) if await can_see_costs(db, current) else 0,
         duration_min=max(0, data.duration_min or 0), flat_rate=data.flat_rate,
         warranty_days=max(0, data.warranty_days or 0), barcode=(data.barcode or "").strip() or None,
         bookable=data.bookable,
@@ -189,10 +220,11 @@ async def update_service(
         s.is_labor = data.is_labor
     if "unit" in sent:
         s.unit = (data.unit or "pc")[:24]
+    dp = await org_price_decimals(db, current.org_id)     # QA 2026-10-31 B: round at write time
     if "price" in sent:
-        s.price = data.price
+        s.price = round_price(data.price, dp)
     if "cost_price" in sent and await can_see_costs(db, current):
-        s.cost_price = data.cost_price
+        s.cost_price = round_price(data.cost_price, dp)
     if "duration_min" in sent:
         s.duration_min = max(0, data.duration_min or 0)
     if "flat_rate" in sent:
@@ -238,9 +270,26 @@ async def delete_service(
 
 class ServiceCommissionIn(BaseModel):
     employee_id: Optional[str] = None      # None = applies to all staff
-    calc_type: str = "percent"             # percent|flat
+    calc_type: str = "percent"             # percent|flat ("fixed" = flat, as on discounts)
     amount: float = 0                       # % (0-100) or flat money
     percent_basis: str = "total"           # total|margin
+
+    # QA 2026-10-31 B: "fixed" was saved as percent, 150% accepted and an unknown basis
+    # silently became "total". One shared check (also used by payroll rules).
+    @field_validator("calc_type")
+    @classmethod
+    def _calc(cls, v):
+        return check_commission_calc_type(v)
+
+    @field_validator("percent_basis")
+    @classmethod
+    def _basis(cls, v):
+        return check_commission_basis(v)
+
+    @field_validator("amount")
+    @classmethod
+    def _amount(cls, v, info):
+        return check_commission_amount(info.data.get("calc_type"), v)
 
 
 def _ser_svc_comm(r) -> dict:
@@ -276,8 +325,7 @@ async def add_service_commission(
     r = CommissionRule(
         org_id=current.org_id, name=f"{s.name} commission", event="labor_performed",
         rule_level="service", service_id=service_id, employee_id=data.employee_id,
-        calc_type=("flat" if data.calc_type == "flat" else "percent"),
-        percent_basis=("margin" if data.percent_basis == "margin" else "total"),
+        calc_type=data.calc_type, percent_basis=data.percent_basis,
         amount=Decimal(str(data.amount or 0)), calc_timing="on_close")
     db.add(r)
     await db.commit()
@@ -396,6 +444,7 @@ async def catalog_search(
 # ── Taxes (named, reusable rates) ────────────────────
 from backend.models import Tax
 from backend.services.money import q2
+from backend.services.tax import job_stack, set_default_tax
 
 
 class TaxIn(BaseModel):
@@ -408,13 +457,46 @@ class TaxIn(BaseModel):
     location_scope: str = "all"
     location_ids: list[str] = []
 
-def _ser_tax(t: Tax) -> dict:
+    # QA 2026-10-31 B: a 150% / -7% rate or mode "sideways" used to be stored as sent.
+    @field_validator("rate")
+    @classmethod
+    def _rate(cls, v):
+        if v is None or not 0 <= v <= 100:
+            raise ValueError("Tax rate must be between 0 and 100%")
+        return v
+
+    @field_validator("mode")
+    @classmethod
+    def _mode(cls, v):
+        if v not in ("included", "imposed"):
+            raise ValueError("Tax mode must be included or imposed")
+        return v
+
+    @field_validator("location_scope")
+    @classmethod
+    def _scope(cls, v):
+        if v not in ("all", "selected"):
+            raise ValueError("location_scope must be all or selected")
+        return v
+
+def _ser_tax(t: Tax, default_id: Optional[str]) -> dict:
+    """is_default comes from the job tax stack (its first tax), never the stored flag."""
     import json as _j
     return {"id": t.id, "name": t.name, "rate": t.rate, "mode": t.mode,
             "code": t.code, "name_for_document": t.name_for_document,
             "location_scope": t.location_scope,
             "location_ids": _j.loads(t.location_ids or "[]"),
-            "is_default": t.is_default, "active": t.active}
+            "is_default": t.id == default_id, "active": t.active}
+
+async def _sync_default_flags(db: AsyncSession, org_id: str) -> None:
+    """The stored is_default flag follows the job tax stack (its first tax is the default), so
+    code that still reads the flag (shop_setup.ensure_default_on_stack, the backfill) agrees."""
+    await db.flush()
+    stack = await job_stack(db, org_id)
+    first = stack[0] if stack else None
+    for row in (await db.execute(select(Tax).where(Tax.org_id == org_id))).scalars().all():
+        row.is_default = row.id == first
+
 
 @router.get("/taxes")
 async def list_taxes(
@@ -425,7 +507,8 @@ async def list_taxes(
         select(Tax).where(Tax.org_id == current.org_id, Tax.active == True)  # noqa: E712
         .order_by(Tax.name)
     )).scalars().all()
-    return {"items": [_ser_tax(t) for t in rows]}
+    stack = await job_stack(db, current.org_id)
+    return {"items": [_ser_tax(t, stack[0] if stack else None) for t in rows]}
 
 @router.post("/taxes", status_code=201)
 async def create_tax(
@@ -435,24 +518,21 @@ async def create_tax(
 ):
     if not data.name.strip():
         raise HTTPException(400, "Name is required")
-    if data.is_default:
-        # clear other defaults
-        existing = (await db.execute(select(Tax).where(Tax.org_id == current.org_id, Tax.is_default == True))).scalars().all()  # noqa: E712
-        for e in existing:
-            e.is_default = False
     import json as _j2
     t = Tax(org_id=current.org_id, name=data.name, rate=data.rate, mode=data.mode,
             code=data.code, name_for_document=data.name_for_document,
             location_scope=data.location_scope,
             location_ids=_j2.dumps(data.location_ids) if data.location_ids else None,
-            is_default=data.is_default)
+            is_default=False)
     db.add(t)
     await db.flush()
-    from backend.services.shop_setup import ensure_default_on_stack
-    await ensure_default_on_stack(db, current.org_id, t)   # launch B4: a default tax is charged
+    if data.is_default:      # the default is the first tax in the job tax stack
+        await set_default_tax(db, current.org_id, t, True)
+        await _sync_default_flags(db, current.org_id)
     await db.commit()
     await db.refresh(t)
-    return _ser_tax(t)
+    stack = await job_stack(db, current.org_id)
+    return _ser_tax(t, stack[0] if stack else None)
 
 @router.put("/taxes/{tax_id}")
 async def update_tax(
@@ -465,13 +545,12 @@ async def update_tax(
         raise HTTPException(404, "Tax not found")
     # A1: write only what was sent, so a partial body can't reset the rate, code or locations.
     sent = data.model_fields_set
-    if "is_default" in sent and data.is_default and not t.is_default:
-        existing = (await db.execute(select(Tax).where(Tax.org_id == current.org_id, Tax.is_default == True))).scalars().all()  # noqa: E712
-        for e in existing:
-            e.is_default = False
+    if "is_default" in sent:
+        await set_default_tax(db, current.org_id, t, data.is_default)
+        await _sync_default_flags(db, current.org_id)
     import json as _j3
     t.name = data.name
-    for k in ("rate", "mode", "is_default", "code", "name_for_document", "location_scope"):
+    for k in ("rate", "mode", "code", "name_for_document", "location_scope"):
         if k in sent:
             setattr(t, k, getattr(data, k))
     if "location_ids" in sent:
@@ -479,7 +558,8 @@ async def update_tax(
     from backend.services.shop_setup import ensure_default_on_stack
     await ensure_default_on_stack(db, current.org_id, t)
     await db.commit()
-    return _ser_tax(t)
+    stack = await job_stack(db, current.org_id)
+    return _ser_tax(t, stack[0] if stack else None)
 
 @router.delete("/taxes/{tax_id}")
 async def delete_tax(
