@@ -1433,6 +1433,34 @@ async def change_status(
     return await _apply_status_change(db, current, order, data.status, note=data.note, reason=data.reason)
 
 
+# A bare "closed" predates the configurable statuses; API clients still send it to close a job.
+_LEGACY_CLOSE_KEYS = {"closed"}
+
+
+async def _pipeline_status(db, org_id: str, record_type: str, key: str):
+    """The org's active status ``key`` in this record type's pipeline, or None. Seeds the default
+    pipelines first when the shop has none yet (a job can move before the board was ever opened).
+    .first() (not scalar_one_or_none) so legacy duplicate keys can never crash a status change."""
+    from backend.models import OrderStatus
+
+    async def _find():
+        return (await db.execute(
+            select(OrderStatus).where(OrderStatus.org_id == org_id,
+                                      OrderStatus.key == key,
+                                      OrderStatus.active == True,  # noqa: E712
+                                      OrderStatus.record_type == record_type)
+            .order_by(OrderStatus.sort_order)
+        )).scalars().first()
+
+    found = await _find()
+    if found is None and not (await db.execute(select(OrderStatus.id).where(
+            OrderStatus.org_id == org_id, OrderStatus.record_type == record_type).limit(1))).first():
+        from backend.routers.statuses import ensure_seeded
+        await ensure_seeded(db, org_id)
+        found = await _find()
+    return found
+
+
 async def _apply_status_change(db, current, order, new_status, note=None, reason=None):
     """Shared gate + side-effect flow for a single-step status change, used by the
     single-order PATCH endpoint and the bulk set_status path so both enforce the same
@@ -1444,17 +1472,16 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     await _guard_order_access(db, current, order)
 
     # Resolve the target status from the configurable status table, scoped to this
-    # record's pipeline. .first() (not scalar_one_or_none) so legacy duplicate keys
-    # across record types can never crash the status change.
+    # record's pipeline.
     from backend.models import OrderStatus
     _rt = "estimate" if order.is_estimate else "work_order"
-    target = (await db.execute(
-        select(OrderStatus).where(OrderStatus.org_id == current.org_id,
-                                  OrderStatus.key == data.status,
-                                  OrderStatus.active == True,  # noqa: E712
-                                  OrderStatus.record_type == _rt)
-        .order_by(OrderStatus.sort_order)
-    )).scalars().first()
+    target = await _pipeline_status(db, current.org_id, _rt, data.status)
+    if target is None and data.status != order.status and data.status not in _LEGACY_CLOSE_KEYS:
+        # QA F1: any text (or an invoice / PO / estimate key such as inv_paid) used to be saved and
+        # could lock the job closed. Only the record's own, switched-on pipeline is accepted.
+        kind = "an estimate" if order.is_estimate else "a job"
+        raise HTTPException(422, f"'{data.status}' isn't a status for {kind}. "
+                                 "Pick one from the list (Settings > Statuses).")
     is_closing = target.is_terminal if target else (data.status in ("done", "closed", "delivered"))
     # Reopening a closed job counts as editing it. Moving it on between closed statuses
     # (done -> delivered) doesn't: the desk hands the device over without "Edit the closed ticket".
