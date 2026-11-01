@@ -156,3 +156,87 @@ async def test_two_drops_at_once_return_the_parts_once(client, tenant):
                                              headers=tenant) for _ in range(2)])
     assert all(r.status_code == 200 for r in rs), [r.text for r in rs]
     assert await K.stock(client, tenant, pid) == 10
+
+
+# ── 5. money given back lowers what the customer is charged ────────────────────────────────────
+async def _till(client, h):
+    r = await client.post("/api/cash/accounts", json={"name": "Till", "payment_option": "cash"}, headers=h)
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+async def _paid_closed_job(client, h, price=100.0, part=False):
+    loc = await K.loc(client, h)
+    oid, cid = await K.job(client, h, loc)
+    pid = None
+    if part:
+        pid = await K.part(client, h, loc, "Charger", price, 10, qty=5)
+        await K.add_line(client, h, oid, ref_id=pid, qty=1, **{**P, "unit_price": price})
+    else:
+        await K.add_line(client, h, oid, **{**P, "unit_price": price})
+    till = await _till(client, h)
+    total = (await K.order(client, h, oid))["total"]
+    r = await client.post(f"/api/cash/orders/{oid}/pay", json={"method": "cash", "account_id": till, "amount": total},
+                          headers=h)
+    assert r.status_code in (200, 201), r.text
+    r = await client.patch(f"/api/orders/{oid}/status", json={"status": "done"}, headers=h)
+    assert r.status_code == 200, r.text
+    return oid, cid, pid, till, total
+
+
+@pytest.mark.asyncio
+async def test_goodwill_refund_on_a_paid_job_leaves_nothing_owed(client, tenant, db):
+    from backend.services.order_money import balance_due
+    oid, cid, _, till, total = await _paid_closed_job(client, tenant)
+    r = await client.post("/api/returns/refunds", json={
+        "account_id": till, "amount": 25, "order_id": oid, "reason": "Sorry for the wait"}, headers=tenant)
+    assert r.status_code == 201, r.text
+    o = await K.order(client, tenant, oid)
+    assert o["total"] == pytest.approx(total - 25)
+    assert any(ln["total"] == -25 and "Sorry for the wait" in ln["description"] for ln in o["lines"])
+    bal = (await client.get(f"/api/clients/{cid}", headers=tenant)).json()["balance"]
+    assert bal == pytest.approx(0)                              # no debt on the customer's account
+    from backend.models import Order
+    assert await balance_due(db, await db.get(Order, oid)) == 0
+
+
+@pytest.mark.asyncio
+async def test_return_and_refund_take_the_item_off_the_job(client, tenant):
+    oid, cid, pid, till, total = await _paid_closed_job(client, tenant, price=89.95, part=True)
+    ret = await client.post("/api/returns", json={"order_id": oid, "client_id": cid, "reason": "faulty",
+                                                  "lines": [{"part_id": pid, "qty": 1}]}, headers=tenant)
+    assert ret.status_code == 201, ret.text
+    r = await client.post("/api/returns/refunds", json={
+        "account_id": till, "amount": total, "order_id": oid, "return_id": ret.json()["id"]}, headers=tenant)
+    assert r.status_code == 201, r.text
+    o = await K.order(client, tenant, oid)
+    assert o["total"] == pytest.approx(0)
+    assert any("Charger" in ln["description"] and ln["total"] < 0 for ln in o["lines"]), o["lines"]
+    assert (await client.get(f"/api/clients/{cid}", headers=tenant)).json()["balance"] == pytest.approx(0)
+
+
+@pytest.mark.asyncio
+async def test_refunding_an_overpayment_leaves_the_job_total(client, tenant, db):
+    oid, cid, _, till, total = await _paid_closed_job(client, tenant)
+    # 20 more came in than the job costs (paid again by mistake at the counter)
+    from backend.models import Payment
+    db.add(Payment(order_id=oid, client_id=cid, method="cash", kind="payment", amount=20, account_id=till))
+    await db.commit()
+    r = await client.post("/api/returns/refunds", json={"account_id": till, "amount": 30, "order_id": oid},
+                          headers=tenant)
+    assert r.status_code == 201, r.text
+    assert (await K.order(client, tenant, oid))["total"] == pytest.approx(total - 10)   # 20 was theirs anyway
+
+
+@pytest.mark.asyncio
+async def test_deleting_a_refund_puts_the_job_total_back(client, tenant):
+    oid, cid, _, till, total = await _paid_closed_job(client, tenant)
+    rid = (await client.post("/api/returns/refunds", json={"account_id": till, "amount": 25, "order_id": oid},
+                             headers=tenant)).json()["id"]
+    r = await client.delete(f"/api/returns/refunds/{rid}", headers=tenant)
+    assert r.status_code == 200, r.text
+    o = await K.order(client, tenant, oid)
+    assert o["total"] == pytest.approx(total)
+    assert all(ln["total"] >= 0 for ln in o["lines"])
+    assert (await client.get(f"/api/clients/{cid}", headers=tenant)).json()["balance"] == pytest.approx(0)
+

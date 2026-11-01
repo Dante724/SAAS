@@ -153,10 +153,17 @@ async def create_refund(
         Order.id == order_id, Order.org_id == current.org_id).with_for_update())).scalar_one_or_none()
     if not locked:
         raise HTTPException(404, "Order not found")
+    from backend.services.invoice_money import lock_order
+    await lock_order(db, order_id)          # SQLite ignores FOR UPDATE: two refunds queue up here
+    await db.refresh(locked, ["total"])
     from backend.services.order_money import net_paid as _net_paid
     net_paid = await _net_paid(db, order_id)
     if data.amount > net_paid + 1e-6:
         raise HTTPException(400, f"Cannot refund more than was paid ({net_paid:g})")
+    # Money handed back beyond an overpayment is money the customer is no longer charged: the
+    # job's total goes down with it, so a goodwill refund or a returned item never shows the
+    # customer as owing (QA F1). Handing back an overpayment leaves the total alone.
+    take_off = round(data.amount - min(data.amount, max(0.0, net_paid - float(locked.total or 0))), 2)
     data.order_id = order_id
     refund = Refund(org_id=current.org_id, order_id=data.order_id, return_id=data.return_id,
                     account_id=data.account_id, amount=data.amount, reason=data.reason)
@@ -171,6 +178,8 @@ async def create_refund(
     db.add(pay)
     await db.flush()
     refund.payment_id = pay.id
+    if take_off > 0:
+        await _take_off_job(db, current, locked, refund, take_off)
     # Money out of the cashbox (signed ledger)
     from backend.routers.cash import post_transaction
     await post_transaction(db, current.org_id, data.account_id, "refund", -data.amount,
@@ -310,6 +319,8 @@ async def delete_refund(
         await post_contact_ledger(db, current.org_id, e.client_id, "refund_void", -float(e.amount or 0),
                                   note=f"Refund deleted: {reason}", ref_type="refund_void", ref_id=refund.id,
                                   created_by_id=current.id)
+    if order is not None:
+        await _put_back_on_job(db, current, order, refund)
     refund.voided_at = now_utc()
     refund.voided_by_id = current.id
     refund.void_reason = reason
@@ -326,6 +337,65 @@ async def delete_refund(
     await log_system_event(db, current.org_id, "refund", refund.id, f"Refund {float(refund.amount or 0):g} deleted: {reason}")
     await db.commit()
     return {"ok": True, "id": refund.id, "voided_at": refund.voided_at.isoformat()}
+
+
+async def _refund_line_label(db, refund) -> str:
+    """What the job line says: the returned items, else the refund's reason."""
+    if refund.return_id:
+        from backend.models import Part
+        names = (await db.execute(select(Part.name).join(ClientReturnLine, ClientReturnLine.part_id == Part.id)
+                                  .where(ClientReturnLine.return_id == refund.return_id))).scalars().all()
+        if names:
+            return f"Returned: {', '.join(names)}"[:255]
+    return f"Refund: {refund.reason}"[:255] if (refund.reason or "").strip() else "Refund"
+
+
+def _job_tax(lines) -> tuple[float, str]:
+    """The tax a refund line carries inside its amount: the job's one rate when all its lines share
+    it (the refund is money incl. tax), else none."""
+    rates = {float(ln.tax_rate or 0) for ln in lines if (ln.total or 0) > 0}
+    return (rates.pop(), "included") if len(rates) == 1 else (0.0, "included")
+
+
+async def _sync_charge(db, current, order) -> None:
+    """A billed (closed) job's charge on the customer's ledger follows its new total."""
+    if not order.client_id:
+        return
+    from backend.services.ledger import order_charge_net, post_contact_ledger
+    from backend.services.money import q2
+    net = await order_charge_net(db, order.client_id, order.id)
+    if net and q2(float(order.total or 0) - net):
+        await post_contact_ledger(db, current.org_id, order.client_id, "charge", q2(float(order.total or 0) - net),
+                                  note=f"Order {order.order_number} refund", ref_type="order", ref_id=order.id,
+                                  created_by_id=current.id)
+
+
+async def _take_off_job(db, current, order, refund, amount: float) -> None:
+    """A negative line for the refunded amount (ref_id = the refund), then the job's totals."""
+    from backend.models import OrderLine
+    from backend.routers.orders import _recalc_order
+    lines = (await db.execute(select(OrderLine).where(OrderLine.order_id == order.id))).scalars().all()
+    rate, mode = _job_tax(lines)
+    db.add(OrderLine(order_id=order.id, line_type="fee", kind="custom", ref_id=refund.id,
+                     description=await _refund_line_label(db, refund), qty=1, unit_price=-amount,
+                     tax_rate=rate, tax_mode=mode, total=-amount))
+    await db.flush()
+    await _recalc_order(db, order)
+    await _sync_charge(db, current, order)
+
+
+async def _put_back_on_job(db, current, order, refund) -> None:
+    """Deleting the refund puts back what it took off the job."""
+    from sqlalchemy import delete
+
+    from backend.models import OrderLine
+    from backend.routers.orders import _recalc_order
+    gone = await db.execute(delete(OrderLine).where(OrderLine.order_id == order.id, OrderLine.ref_id == refund.id,
+                                                    OrderLine.kind == "custom", OrderLine.line_type == "fee"))
+    if gone.rowcount:
+        await db.flush()
+        await _recalc_order(db, order)
+        await _sync_charge(db, current, order)
 
 
 async def _atomic_add(db, obj, attr, delta, *, round_to=None):
