@@ -32,6 +32,7 @@ from backend.services.batching import names_by_id, rows_by
 from backend.services.numbering import next_number
 from backend.services.money import claim_status, q2
 from backend.services.dates import now_utc
+from backend.services.owned import require_location, require_owned_ids
 
 router = APIRouter(prefix="/api/transfers", tags=["transfers"])
 
@@ -139,6 +140,10 @@ async def create_transfer(
         raise HTTPException(400, "Source and destination must differ")
     if not data.lines:
         raise HTTPException(400, "A transfer needs at least one line")
+    # Unknown ids used to fail on the foreign key (500), and another shop's were accepted.
+    await require_location(db, current.org_id, data.from_location_id)
+    await require_location(db, current.org_id, data.to_location_id)
+    await require_owned_ids(db, Part, [li.part_id for li in data.lines], current.org_id, "product", status=404)
     t = StockTransfer(org_id=current.org_id, transfer_number=await next_number(db, current.org_id, "transfer"),
                       from_location_id=data.from_location_id, to_location_id=data.to_location_id,
                       note=data.note, created_by_id=current.id)
@@ -180,6 +185,8 @@ async def change_status(
     if new == "canceled" and prev in ("in_transit", "received") and not data.return_location_id:
         # goods already left the source — caller names the receiving warehouse
         raise HTTPException(400, "Goods already shipped: pass return_location_id to choose the warehouse taking them back")
+    if new == "canceled" and data.return_location_id:
+        await require_location(db, current.org_id, data.return_location_id)
     # Claim the move before touching stock: a second identical request (double click, retry)
     # read the same old status, and must not reserve, ship, credit or un-reserve a second time.
     if not await claim_status(db, t, prev, new):

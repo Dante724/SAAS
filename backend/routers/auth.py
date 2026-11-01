@@ -1,4 +1,5 @@
 import asyncio
+import logging
 from datetime import datetime as _datetime
 from typing import Optional
 
@@ -72,6 +73,9 @@ class RegisterRequest(BaseModel):
     document_language: Optional[str] = None
     company_phone: Optional[str] = None
     employee_count: Optional[str] = None
+
+
+_signup_log = logging.getLogger("tekly.signup")
 
 
 # Build 144cl — seed a sensible default tax so a new shop isn't starting blank.
@@ -216,9 +220,8 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
         from backend.services import industry as _ind
         _industry_key = _ind.resolve_template_key(data.industry_template)
         if _industry_key is None:
-            import logging
-            logging.getLogger("tekly.signup").warning(
-                "unknown industry_template at sign-up: %r → general", data.industry_template[:60])
+            _signup_log.warning("unknown industry_template at sign-up: %r → general",
+                                data.industry_template[:60])
             _industry_key = _ind.DEFAULT_TEMPLATE
 
     import secrets as _sec
