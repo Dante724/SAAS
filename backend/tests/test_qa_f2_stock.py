@@ -149,3 +149,25 @@ async def test_till_needs_the_imei_of_a_serialized_phone_and_shows_it(client, te
     assert rc["lines"][0]["serials"] == [sns[1]] and sns[1] in rc["text"]
     assert await _on_hand(db, p["id"]) == 1
     await _ledger_matches(db, p["id"])
+
+
+@pytest.mark.asyncio
+async def test_serialized_stock_only_rises_with_a_serial_per_unit(client, tenant, db):
+    from backend.models import SerializedItem
+    from backend.tests.test_inventory_bins_passport_stocktake import SN
+    p, loc, _ = await _phone(client, tenant, n=1)
+    url = f"/api/inventory/parts/{p['id']}/adjust"
+    r = await client.post(url, json={"location_id": loc, "qty": 2, "movement_type": "receive"}, headers=tenant)
+    assert r.status_code == 422 and "serial" in r.json()["detail"], r.text      # was 200: +2, no units
+    r = await client.post(url, json={"location_id": loc, "qty": 2, "movement_type": "adjust",
+                                     "serials": [SN[8]]}, headers=tenant)
+    assert r.status_code == 422, r.text                                         # one short
+    r = await client.post(url, json={"location_id": loc, "qty": 2, "movement_type": "receive",
+                                     "serials": SN[8:10]}, headers=tenant)
+    assert r.status_code == 200, r.text
+    db.expire_all()
+    units = (await db.execute(select(SerializedItem).where(SerializedItem.part_id == p["id"],
+                                                           SerializedItem.status == "in_stock"))).scalars().all()
+    assert len(units) == 3 and await _on_hand(db, p["id"]) == 3                # every unit has its serial
+    await _ledger_matches(db, p["id"])
+

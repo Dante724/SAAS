@@ -48,6 +48,8 @@ class StockAdjust(BaseModel):
     # What stock coming in cost (opening stock, a count-up). Omitted → the current average cost,
     # else the catalog cost — never 0 by accident, which made COGS 0 and margins nonsense.
     unit_cost: Optional[float] = Field(None, ge=0)
+    # QA F2: a serialized product's stock only rises with one serial / IMEI per unit coming in
+    serials: Optional[list[SerialStr]] = Field(None, max_length=500)
 
 
 # A stock quantity above this is almost certainly a barcode/serial typed into the
@@ -279,11 +281,13 @@ async def adjust_stock(
         # Stock coming in is a receipt like any other: quantity, movement, FIFO layer and moving
         # average through the one inflow path, at a real cost.
         cost = data.unit_cost if data.unit_cost is not None else (part.avg_cost or part.cost_price or 0)
+        from backend.services import serial_intake
+        serials = await serial_intake.validate_intake(db, current.org_id, part, data.qty, data.serials)
         await stock_posting.apply_receipt_line(
             db, org_id=current.org_id, part=part, location_id=data.location_id, qty=data.qty,
             unit_cost=float(cost), created_by_id=current.id, ref_type=data.movement_type,
             movement_type=data.movement_type, warehouse_id=_w.id if _w else None,
-            cost_known=data.unit_cost is not None)
+            cost_known=data.unit_cost is not None, serials=serials or None)
         await db.commit()
         return {"ok": True, "qty_available": (await stock_rows.totals(db, part_id, data.location_id))[0]}
     if data.movement_type == "writeoff" or (data.movement_type in ("receive", "adjust") and data.qty < 0):
@@ -316,6 +320,7 @@ class ScanAdjust(BaseModel):
     qty: float
     movement_type: str = "receive"    # receive|writeoff|adjust
     note: Optional[str] = None
+    serials: Optional[list[SerialStr]] = Field(None, max_length=500)   # QA F2: serialized products
 
 
 @router.post("/scan-adjust")
@@ -335,7 +340,7 @@ async def scan_adjust(
         raise HTTPException(404, "No part matches that code")
     out = await adjust_stock(part.id, StockAdjust(
         location_id=data.location_id, qty=data.qty,
-        movement_type=data.movement_type, note=data.note), db, current)
+        movement_type=data.movement_type, note=data.note, serials=data.serials), db, current)
     return {**out, "part_id": part.id, "part_name": part.name, "sku": part.sku}
 
 
