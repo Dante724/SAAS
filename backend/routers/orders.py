@@ -1433,6 +1433,54 @@ async def change_status(
     return await _apply_status_change(db, current, order, data.status, note=data.note, reason=data.reason)
 
 
+async def _in_dropped_group(db, org_id: str, record_type: str, key) -> bool:
+    from backend.models import OrderStatus
+    grp = (await db.execute(select(OrderStatus.status_group).where(
+        OrderStatus.org_id == org_id, OrderStatus.key == key,
+        OrderStatus.record_type == record_type))).scalars().first()
+    return grp == "dropped"
+
+
+async def _job_product_lines(db, order) -> list:
+    return (await db.execute(select(OrderLine).where(
+        OrderLine.order_id == order.id, OrderLine.kind == "product", OrderLine.ref_id.isnot(None))
+        .execution_options(populate_existing=True))).scalars().all()
+
+
+async def _return_parts_on_drop(db, current, order) -> None:
+    """Every part the job took goes back where it came from (stock, bin, serials, cost layers), with
+    a "return" movement. The line then holds nothing (its qty shows as pending), so removing it or
+    dropping the job again can't return the same parts twice. Same reversal as archiving a job."""
+    from backend.routers.feed import log_system_event
+    back = 0.0
+    for line in await _job_product_lines(db, order):
+        taken = (line.qty or 0) - (line.pending_stock or 0)
+        if taken > 0:
+            await _reverse_fulfillment(db, order, line.ref_id, taken)
+            line.pending_stock = line.qty or 0
+            back += taken
+    if back:
+        await log_system_event(db, current.org_id, "order", order.id,
+                               f"Job dropped: {back:g} part(s) returned to stock")
+
+
+async def _retake_parts_on_reopen(db, current, order) -> None:
+    """A dropped job taken up again uses its parts again: whatever is free now is taken off the
+    shelf and the rest stays pending, exactly like adding the line. Parts held for another job stay
+    pending rather than blocking the reopen."""
+    perms = {**(await _order_perms(db, current)), "can_add_without_stock": True}
+    for line in await _job_product_lines(db, order):
+        want = line.pending_stock or 0
+        if want <= 0:
+            continue
+        try:
+            async with db.begin_nested():
+                line.pending_stock = 0
+                await _maybe_deduct(db, order, line, want, perms, current)
+        except HTTPException:
+            line.pending_stock = want         # reserved for another job: leave it pending
+
+
 # A bare "closed" predates the configurable statuses; API clients still send it to close a job.
 _LEGACY_CLOSE_KEYS = {"closed"}
 
@@ -1470,6 +1518,11 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     arguments so both callers share one code path."""
     data = StatusChange(status=new_status, note=note, reason=reason)
     await _guard_order_access(db, current, order)
+    # Two status changes on one job queue up: the second sees the first one's status, so a
+    # double-tapped "Drop" returns the parts once (QA F1). Then re-read what the gates use.
+    from backend.services.invoice_money import lock_order
+    await lock_order(db, order.id)
+    await db.refresh(order, ["status", "closed_at", "total"])
 
     # Resolve the target status from the configurable status table, scoped to this
     # record's pipeline.
@@ -1563,8 +1616,16 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
             if _missing:
                 raise HTTPException(409, f"Fill in before closing: {', '.join(_missing)}.")
 
+    # Stock follows a drop: a job closed unsuccessfully gives its parts back, and taking it up
+    # again takes them again (QA F1, as Orderry). Moves between two dropped statuses do neither.
+    _drop_rt = not order.is_estimate and order.status != data.status
+    _was_dropped = await _in_dropped_group(db, current.org_id, _rt, order.status)
+    entering_drop = _drop_rt and bool(target) and (target.status_group or "") == "dropped" and not _was_dropped
+    leaving_drop = _drop_rt and _was_dropped and not (target and (target.status_group or "") == "dropped")
+
     # Orderry rule: cannot close an order with products not yet written off from stock
-    if is_closing:
+    # (a dropped job writes nothing off: its parts go back to the shelf below).
+    if is_closing and not entering_drop:
         pending = sum((l.pending_stock or 0) for l in order.lines)
         if pending > 0:
             raise HTTPException(
@@ -1580,6 +1641,10 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     order.status = data.status
     if target and (target.status_group or "") == "dropped" and (data.reason or "").strip():
         order.cancel_reason = data.reason.strip()[:120]
+    if entering_drop:
+        await _return_parts_on_drop(db, current, order)
+    elif leaving_drop:
+        await _retake_parts_on_reopen(db, current, order)
     order.status_entered_at = now_utc()
     from backend.services.audit import record as _audit_sc
     await _audit_sc(db, org_id=current.org_id, actor_id=current.id, action="order.status_change",

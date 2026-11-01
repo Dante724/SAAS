@@ -105,3 +105,54 @@ async def test_recommendation_refuses_another_shops_product(client, tenant):
                            json={"kind": "product", "ref_id": pid})
     assert p.status_code == 404, p.text
 
+
+# ── 4. dropping a job puts its parts back on the shelf, once ───────────────────────────────────
+async def _job_with_part(client, h, qty=2, stock=10):
+    loc = await K.loc(client, h)
+    pid = await K.part(client, h, loc, "Screen", 50, 10, qty=stock)
+    oid, cid = await K.job(client, h, loc)
+    await K.add_line(client, h, oid, ref_id=pid, qty=qty, **P)
+    return oid, pid, cid
+
+
+@pytest.mark.asyncio
+async def test_dropping_a_job_returns_its_parts_once(client, tenant, db):
+    from sqlalchemy import select
+
+    from backend.models import StockMovement
+    oid, pid, _ = await _job_with_part(client, tenant)
+    assert await K.stock(client, tenant, pid) == 8
+    r = await client.patch(f"/api/orders/{oid}/status", json={"status": "dropped", "reason": "Customer declined"},
+                           headers=tenant)
+    assert r.status_code == 200, r.text
+    assert await K.stock(client, tenant, pid) == 10
+    moves = (await db.execute(select(StockMovement.movement_type, StockMovement.qty).where(
+        StockMovement.ref_id == oid, StockMovement.part_id == pid))).all()
+    assert sorted(moves) == [("return", 2), ("use", -2)]
+    # dropped again, or the line removed afterwards: nothing comes back twice
+    await client.patch(f"/api/orders/{oid}/status", json={"status": "dropped"}, headers=tenant)
+    line = (await K.lines(client, tenant, oid))[0]
+    await client.delete(f"/api/orders/{oid}/lines/{line['id']}", headers=tenant)
+    assert await K.stock(client, tenant, pid) == 10
+
+
+@pytest.mark.asyncio
+async def test_dropping_waits_for_nothing_and_reopening_takes_the_parts_again(client, tenant):
+    oid, pid, _ = await _job_with_part(client, tenant, qty=3, stock=2)     # 1 unit still on order
+    r = await client.patch(f"/api/orders/{oid}/status", json={"status": "dropped"}, headers=tenant)
+    assert r.status_code == 200, r.text                                   # pending stock doesn't block a drop
+    assert await K.stock(client, tenant, pid) == 2
+    r = await client.patch(f"/api/orders/{oid}/status", json={"status": "in_repair"}, headers=tenant)
+    assert r.status_code == 200, r.text
+    assert await K.stock(client, tenant, pid) == 0                        # back on the job
+    assert (await K.lines(client, tenant, oid))[0]["pending_stock"] == 1
+
+
+@pytest.mark.asyncio
+async def test_two_drops_at_once_return_the_parts_once(client, tenant):
+    import asyncio
+    oid, pid, _ = await _job_with_part(client, tenant)
+    rs = await asyncio.gather(*[client.patch(f"/api/orders/{oid}/status", json={"status": "dropped"},
+                                             headers=tenant) for _ in range(2)])
+    assert all(r.status_code == 200 for r in rs), [r.text for r in rs]
+    assert await K.stock(client, tenant, pid) == 10
