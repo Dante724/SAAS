@@ -210,4 +210,17 @@ describe("SalesPOS serialized items", () => {
     await vi.waitFor(() => expect(bodies).toHaveLength(1));
     expect(bodies[0].lines[0].serials).toEqual([IMEI]);
   });
+
+  it("tapping the phone, then scanning its IMEI, fills the line instead of adding a second phone", async () => {
+    products = [PHONE];
+    lookupItems[IMEI] = [{ ...PHONE, matched_on: "serial", serial: IMEI }];
+    catchSales();
+    const u = userEvent.setup();
+    render(<SalesPOS />);
+    await u.click(await screen.findByRole("button", { name: /iPhone 13/ }));
+    await vi.waitFor(() => expect(cartLines()).toHaveLength(1));
+    await act(async () => wedge(IMEI));
+    await vi.waitFor(() => expect(within(cartLines()[0]).getByText(IMEI)).toBeInTheDocument());
+    expect(within(cartLines()[0]).getByText("1")).toBeInTheDocument();
+  });
 });

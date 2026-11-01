@@ -132,7 +132,9 @@ export default function SalesPOS() {
     setCart((c) => {
       const ex = c.find((l) => l.ref_id === id && l.kind === kind);
       if (ex && serial && (ex.serials || []).includes(serial)) return c;      // the same phone scanned twice
-      if (ex) return c.map((l) => l === ex ? { ...l, qty: l.qty + 1, serials: serial ? [...(l.serials || []), serial] : l.serials } : l);
+      // a scanned IMEI first fills a unit still waiting for one (tile tapped, then the phone scanned)
+      const fills = !!serial && (ex?.serials || []).length < (ex?.qty || 0);
+      if (ex) return c.map((l) => l === ex ? { ...l, qty: fills ? l.qty : l.qty + 1, serials: serial ? [...(l.serials || []), serial] : l.serials } : l);
       return [...c, { key: Math.random().toString(36).slice(2), kind, ref_id: id, description: name, unit_price: price, qty: 1, discount: 0, stock,
         serialized: !!unit?.serialized, serials: serial ? [serial] : [] }];
     });
