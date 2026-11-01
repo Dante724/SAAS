@@ -795,10 +795,19 @@ async def post_stocktake(
         for l in (await db.execute(select(StocktakeLine).where(
                 StocktakeLine.stocktake_id == st_id, StocktakeLine.counted_qty.is_(None)))).scalars().all():
             l.counted_qty = 0
-            l.variance = round(-(l.system_qty or 0), 3)
     lines = (await db.execute(select(StocktakeLine).where(
         StocktakeLine.stocktake_id == st_id,
         StocktakeLine.counted_qty.is_not(None)))).scalars().all()
+    # QA F2: the count is what's on the shelf now, so it's compared with the books now, not with the
+    # snapshot taken at the start — stock sold or written off during the count isn't taken twice.
+    # The product's rows are locked first so a sale can't land between reading and adjusting.
+    for pid in sorted({l.part_id for l in lines}):
+        await stock_rows.rows(db, pid, st.location_id, lock=True)
+    for l in lines:
+        line_bin = l.bin_id or st.bin_id
+        book = await _st_stock_row(db, l.part_id, st, line_bin, unbinned=bool(st.by_bin and not line_bin))
+        l.system_qty = book or 0
+        l.variance = round(l.counted_qty - l.system_qty, 3)
     adjusted = 0
     for l in lines:
         if not l.variance:
