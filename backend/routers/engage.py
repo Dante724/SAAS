@@ -307,6 +307,10 @@ async def apply_coupon(
     current: Employee = Depends(require_perm("can_set_discount")),
 ):
     order = await _order_or_404(db, current.org_id, order_id, lock=True)
+    # The coupon reads the job's lines and balance, then adds lines and recomputes the total:
+    # hold the job's write lock (SQLite ignores FOR UPDATE) so concurrent edits wait for it.
+    from backend.services.invoice_money import lock_order
+    await lock_order(db, order.id)
     c = (await db.execute(select(Coupon).where(
         Coupon.org_id == current.org_id, Coupon.code == data.code.strip().upper()))).scalar_one_or_none()
     now = now_utc()

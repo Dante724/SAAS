@@ -36,12 +36,12 @@ def order_coupon_lines(lines, kind: str, value: float, owed: float) -> list[dict
     (rate, mode) group, whose totals add up to what the customer saves (capped at `owed`).
     Lines that are already reductions (gift card, loyalty, earlier coupons) are not discounted."""
     groups: dict = {}
-    for l in lines:
-        total = float(l.total or 0)
-        if total <= 0 or float(l.unit_price or 0) < 0:
+    for ln in lines:
+        total = float(ln.total or 0)
+        if total <= 0 or float(ln.unit_price or 0) < 0:
             continue
-        rate = float(l.tax_rate or 0)
-        mode = "included" if (l.tax_mode or "imposed") == "included" else "imposed"
+        rate = float(ln.tax_rate or 0)
+        mode = "included" if (ln.tax_mode or "imposed") == "included" else "imposed"
         price = total if (mode == "included" or not rate) else total / (1 + rate / 100)
         key = (rate, mode)
         groups[key] = groups.get(key, 0.0) + price
