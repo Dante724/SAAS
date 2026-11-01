@@ -1,5 +1,7 @@
 import { Component, type ReactNode } from "react";
 import { useLocation } from "react-router-dom";
+import { useMe } from "../context/Me";
+import { supportContact } from "../lib/support";
 
 // One screen crashing (a render error, or a chunk that failed to download after a deploy) used to
 // unmount the whole tree and leave a blank page. This catches it at the route, shows what happened
@@ -47,10 +49,22 @@ export class ErrorBoundary extends Component<Props, State> {
               className="px-3.5 py-2 rounded-lg border border-slate-200 bg-white text-ink-secondary text-xs font-semibold hover:bg-slate-50">Go back</button>
             <a href="/" className="px-3.5 py-2 rounded-lg text-ink-secondary text-xs font-semibold hover:bg-slate-50">Home</a>
           </div>
+          {!stale && <SupportLine />}
         </div>
       </div>
     );
   }
+}
+
+function SupportLine() {
+  const s = supportContact(useMe().me);
+  return (
+    <div className="text-[11px] text-ink-tertiary mt-3">
+      Keeps happening?{" "}
+      <a href={s.href} {...(s.external ? { target: "_blank", rel: "noopener noreferrer" } : {})}
+        className="font-semibold text-primary hover:underline">Contact support</a>
+    </div>
+  );
 }
 
 /** Route-level boundary: resets whenever the path changes. */

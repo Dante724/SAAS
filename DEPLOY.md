@@ -37,6 +37,7 @@ uv pip compile requirements-dev.txt --universal --python-version 3.11 --generate
 | `DB_STATEMENT_TIMEOUT_MS` | no | Postgres cancels any single statement that runs longer (default 15000). `DB_IDLE_IN_TX_TIMEOUT_MS` (default 60000) ends sessions left idle inside a transaction. Set to 0 behind a PgBouncer that rejects startup parameters, and set them on the database role instead. |
 | `MEDIA_BACKEND` | recommended | `s3` in production (see §5). |
 | `SENTRY_DSN` | recommended | Sends unhandled errors to Sentry/GlitchTip (headers, cookies, bodies and query strings are scrubbed). Optional `SENTRY_TRACES_SAMPLE_RATE` (default 0) and `RELEASE` (git SHA). |
+| `SUPPORT_EMAIL` / `SUPPORT_URL` | no | Where the in-app Help & support menu and "contact support" errors point (default `hello@tekly.app`; a `SUPPORT_URL` help page wins over the email). |
 | `METRICS_TOKEN` | to scrape `/metrics` | Prometheus bearer token. Without it a deployed instance returns 404 at `/metrics`. |
 | `MAX_REQUEST_BYTES` | no | Request body cap (default 16 MB). Raise it only together with `MEDIA_MAX_BYTES`. |
 | `REFRESH_TOKEN_EXPIRE_MINUTES` | no | Absolute session length (default 30 days). Refreshing a token never extends a sign-in past this. |

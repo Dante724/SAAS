@@ -34,7 +34,8 @@ async def enforce_quota(employee) -> None:
         await aenforce("ai_org", employee.org_id, AI_ORG_PER_DAY, 86400)
     except HTTPException as e:
         raise HTTPException(429, "Your shop has used today's AI allowance. It resets within 24 "
-                                 "hours — contact support if you need more.", headers=e.headers)
+                                 f"hours — contact support ({settings.SUPPORT_EMAIL}) if you need "
+                                 "more.", headers=e.headers)
 
 
 def is_live() -> bool:

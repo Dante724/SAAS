@@ -51,3 +51,13 @@ describe("Shell — narrow-screen navigation", () => {
     expect(drawer().closest("[aria-hidden]")).toHaveAttribute("aria-hidden", "true");
   });
 });
+
+describe("Shell — Help & support", () => {
+  it("links to support from the account menu", async () => {
+    const u = userEvent.setup();
+    renderShell();
+    await u.click(screen.getByRole("button", { name: "Account menu" }));
+    const link = screen.getByRole("link", { name: /Help & support/ });
+    expect(link).toHaveAttribute("href", "mailto:hello@tekly.app");
+  });
+});

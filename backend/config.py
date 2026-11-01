@@ -136,6 +136,10 @@ class Settings(BaseSettings):
     ANTHROPIC_API_KEY: str = ""
     AI_MODEL: str = "claude-sonnet-4-6"
 
+    # -- Where users reach Tekly support (Help & support menu, "contact support" errors) --
+    SUPPORT_EMAIL: str = "hello@tekly.app"
+    SUPPORT_URL: str = ""              # help centre / contact page; empty = mailto SUPPORT_EMAIL
+
     # ── B3: media storage ─────────────────────────────────────────────────
     MEDIA_BACKEND: str = "db"          # db | local | s3  (db = legacy inline; local/s3 = offloaded)
     MEDIA_MAX_BYTES: int = 8 * 1024 * 1024   # Build 144cq: hard cap on any single upload (8 MB)

@@ -28,6 +28,7 @@ describe("RouteErrorBoundary", () => {
     expect(screen.getByRole("alert")).toHaveTextContent("This screen hit a problem");
     expect(screen.getByText("kaboom")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Reload" })).toBeInTheDocument();
+    expect(screen.getByRole("link", { name: /Contact support/ })).toHaveAttribute("href", "mailto:hello@tekly.app");
     expect(screen.getByRole("button", { name: "Go back" })).toBeInTheDocument();
     expect(screen.getByText("to fine")).toBeInTheDocument();
     spy.mockRestore();

@@ -33,6 +33,7 @@ import {
   LogOut, Menu as MenuIcon, PackageOpen, Info,
 } from "lucide-react";
 import { loadFailed } from "../lib/notice";
+import { supportContact } from "../lib/support";
 
 // Map the old Material-Symbols ligature names to bundled Lucide icons (no web font,
 // works under the app's Content-Security-Policy, and needs no server restart).
@@ -145,6 +146,7 @@ const NAV: NavItem[] = NAV_GROUPS.flatMap((g) => g.items);
 
 export default function Shell({ title, children }: { title: string; children: ReactNode }) {
   const { can, me, refresh } = useMe();
+  const support = supportContact(me);
   const initials = ((me?.name || "").trim().split(/\s+/).map((w) => w[0]).slice(0, 2).join("") || "?").toUpperCase();
   const [palette, setPalette] = useState(false);
   const [notifOpen, setNotifOpen] = useState(false);
@@ -318,6 +320,9 @@ export default function Shell({ title, children }: { title: string; children: Re
                         <span className="flex items-center gap-2.5"><M n="lock" c="text-base" />{t("Security & sign-in")}</span>
                         {me?.mfa_required && !me?.mfa_enabled && <span className="w-2 h-2 rounded-full bg-amber-400" />}
                       </button>
+                      <a href={support.href} {...(support.external ? { target: "_blank", rel: "noopener noreferrer" } : {})} onClick={() => setAvatarOpen(false)} className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-ink-secondary hover:bg-slate-100 hover:text-ink-primary">
+                        <M n="contact_support" c="text-base" />{t("Help & support")}
+                      </a>
                       <div className="my-1 border-t border-slate-100" />
                       <button onClick={() => { setAvatarOpen(false); signOut(); }} className="w-full flex items-center gap-2.5 px-2.5 py-1.5 rounded-lg text-ink-secondary hover:bg-slate-100 hover:text-ink-primary">
                         <M n="logout" c="text-base" />{t("Sign out")}
