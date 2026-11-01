@@ -1,5 +1,7 @@
 """Beta blocker — every route that can call the AI model shares the /api/ai budget
 (20/min per user, 1000/day per shop) and caps its input size."""
+import base64
+
 import pytest
 
 
@@ -58,7 +60,9 @@ async def test_extract_text_size_capped(client, tenant):
 
 
 async def test_extract_image_size_capped(client, tenant):
-    big = b"\xff\xd8" + b"0" * (5 * 1024 * 1024)
+    from backend.services.ai import MAX_IMAGE_BYTES
+    assert len(base64.b64encode(b"0" * MAX_IMAGE_BYTES)) <= 5 * 1024 * 1024
+    big = b"\xff\xd8" + b"0" * MAX_IMAGE_BYTES
     r = await client.post("/api/inventory/postings/extract",
                           files={"file": ("inv.jpg", big, "image/jpeg")}, headers=tenant)
     assert r.status_code == 413

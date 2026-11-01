@@ -17,7 +17,8 @@ from backend.config import settings
 AI_USER_PER_MIN = 20
 AI_ORG_PER_DAY = 1000
 MAX_TEXT_CHARS = 20000            # pasted text sent to the model
-MAX_IMAGE_BYTES = 5 * 1024 * 1024  # the model's per-image ceiling
+# The model's 5 MB per-image ceiling applies to the base64 payload, ~4/3 of the raw file.
+MAX_IMAGE_BYTES = 5 * 1024 * 1024 * 3 // 4
 
 
 async def enforce_quota(employee) -> None:
@@ -28,14 +29,14 @@ async def enforce_quota(employee) -> None:
     try:
         await aenforce("ai_user", employee.id, AI_USER_PER_MIN, 60)
     except HTTPException as e:
-        raise HTTPException(429, f"You've reached the AI limit of {AI_USER_PER_MIN} requests a "
-                                 "minute. Please wait a moment and try again.", headers=e.headers)
+        raise HTTPException(429, "You've used the AI helper a lot in the last minute — please "
+                                 "wait a moment and try again.", headers=e.headers)
     try:
         await aenforce("ai_org", employee.org_id, AI_ORG_PER_DAY, 86400)
     except HTTPException as e:
-        raise HTTPException(429, "Your shop has used today's AI allowance. It resets within 24 "
-                                 f"hours — contact support ({settings.SUPPORT_EMAIL}) if you need "
-                                 "more.", headers=e.headers)
+        raise HTTPException(429, "Your shop has reached today's limit for the AI helper. It resets "
+                                 f"within 24 hours. Need more? Email {settings.SUPPORT_EMAIL}.",
+                            headers=e.headers)
 
 
 def is_live() -> bool:
