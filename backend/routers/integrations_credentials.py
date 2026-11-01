@@ -12,7 +12,7 @@ from backend.db.database import get_db
 from backend.models import Employee
 from backend.services import org_creds
 from backend.services.audit import record as audit_record
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import require_perm
 
 router = APIRouter(prefix="/api/integrations/credentials", tags=["integrations"])
 

@@ -7,7 +7,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Employee, WebhookEndpoint, WebhookDelivery
 from backend.services.audit import record as audit_record
-from backend.services.auth import get_current_employee, require_perm
+from backend.services.auth import require_perm
 from backend.services.webhooks import EVENTS, valid_events
 
 router = APIRouter(prefix="/api/webhooks", tags=["webhooks"])
