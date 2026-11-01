@@ -435,20 +435,20 @@ async def _create_sale(data: SaleIn, db: AsyncSession, current: Employee):
             draws["bins"] = [[b, q] for b, q in taken]
             if units:
                 draws["serials"] = [u.id for u in units]
-            unit_cost = part.avg_cost or part.cost_price or 0
-            # FIFO cost layers → exact COGS when layers exist
-            has_batch = (await db.execute(select(StockItemBatch.id).where(
-                StockItemBatch.org_id == current.org_id, StockItemBatch.part_id == li.ref_id,
-                StockItemBatch.qty_remaining > 0).limit(1))).scalar_one_or_none()
-            if has_batch:
-                from backend.services.serialized import consume_fifo_lifo
-                try:
-                    rc = await consume_fifo_lifo(db, org_id=current.org_id, part_id=li.ref_id,
-                                                 qty=Decimal(str(li.qty)), method="fifo")
-                    unit_cost = rc["avg_unit_cost"]
-                    draws["layers"] = [{"batch_id": x["batch_id"], "qty": x["qty"]} for x in rc["layers"]]
-                except HTTPException:
-                    pass
+            # QA F2: cost from this location's layers (each sold unit's own layer first); units no layer
+            # covers are valued at the average. The old org-wide draw emptied another branch's layers,
+            # and when the layers fell short it had already drawn them before giving up (COGS at average).
+            from backend.services.stock_writeoff import consume_layers
+            taken_layers: list = []
+            spent = 0.0
+            for u in units:
+                spent += await consume_layers(db, part=part, location_id=loc_id, qty=1,
+                                              batch_id=u.batch_id, taken=taken_layers)
+            if li.qty - len(units) > 1e-9:
+                spent += await consume_layers(db, part=part, location_id=loc_id,
+                                              qty=li.qty - len(units), taken=taken_layers)
+            draws["layers"] = taken_layers
+            unit_cost = q4(spent / li.qty) if li.qty else 0
             cost = q4(unit_cost * li.qty)
             db.add(StockMovement(part_id=li.ref_id, location_id=loc_id,
                                  movement_type="use", qty=-li.qty, unit_cost=unit_cost,

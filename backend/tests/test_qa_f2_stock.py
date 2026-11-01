@@ -171,3 +171,36 @@ async def test_serialized_stock_only_rises_with_a_serial_per_unit(client, tenant
     assert len(units) == 3 and await _on_hand(db, p["id"]) == 3                # every unit has its serial
     await _ledger_matches(db, p["id"])
 
+
+@pytest.mark.asyncio
+async def test_till_costs_from_this_shops_layers_and_a_void_puts_them_back(client, tenant, db):
+    from backend.models import Location, StockItemBatch
+    from backend.tests.test_stocktake_postings_print import _me
+    me = await _me(client, tenant)
+    branch = Location(org_id=me["org_id"], name="Branch")
+    db.add(branch)
+    await db.flush()
+    branch_id = branch.id
+    await db.commit()
+    here = await _loc(client, tenant)
+    p = await _part(client, tenant, sku="CELL-1", barcode="CELL-1", cost=5)
+    adj = f"/api/inventory/parts/{p['id']}/adjust"
+    # the branch's (older, cheaper) layer must not be what a sale here costs or empties
+    for loc, qty, cost in ((branch_id, 4, 3), (here, 2, 7)):
+        r = await client.post(adj, json={"location_id": loc, "qty": qty, "movement_type": "receive",
+                                         "unit_cost": cost}, headers=tenant)
+        assert r.status_code == 200, r.text
+    s = await client.post("/api/sales", json={"lines": [
+        {"kind": "product", "ref_id": p["id"], "description": "Cell", "qty": 1, "unit_price": 20}]}, headers=tenant)
+    assert s.status_code == 201, s.text
+    assert s.json()["total_cost"] == pytest.approx(7)                              # was 3: the branch's layer
+
+    async def layers():
+        db.expire_all()
+        return {loc: float(q) for loc, q in (await db.execute(
+            select(StockItemBatch.location_id, StockItemBatch.qty_remaining)
+            .where(StockItemBatch.part_id == p["id"]))).all()}
+    assert await layers() == {branch_id: 4, here: 1}
+    assert (await client.delete(f"/api/sales/{s.json()['id']}", headers=tenant)).status_code == 200
+    assert await layers() == {branch_id: 4, here: 2}
+    await _ledger_matches(db, p["id"])

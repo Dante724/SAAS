@@ -26,10 +26,11 @@ _EPS = 1e-9
 
 
 async def consume_layers(db, *, part: Part, location_id: str, qty: float,
-                         batch_id: Optional[str] = None) -> float:
+                         batch_id: Optional[str] = None, taken: Optional[list] = None) -> float:
     """Take `qty` out of the part's cost layers at the location; returns what those units cost.
     `batch_id` (a serialized unit's own layer) goes first. Units no layer covers — stock that
-    predates cost layers — are valued at the average cost."""
+    predates cost layers — are valued at the average cost. `taken`, when given, collects
+    {"batch_id", "qty"} per layer drawn (so a voided sale can put them back)."""
     q = select(StockItemBatch).where(StockItemBatch.part_id == part.id,
                                      StockItemBatch.location_id == location_id,
                                      StockItemBatch.qty_remaining > 0)
@@ -50,6 +51,8 @@ async def consume_layers(db, *, part: Part, location_id: str, qty: float,
         if take <= _EPS:
             continue
         b.qty_remaining = Decimal(str(b.qty_remaining or 0)) - Decimal(str(take))
+        if taken is not None:
+            taken.append({"batch_id": b.id, "qty": take})
         cost += take * float(b.unit_cost or 0)
         left -= take
     if left > _EPS:
