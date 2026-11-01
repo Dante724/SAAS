@@ -14,7 +14,7 @@ an existing match always wins, so the automation never creates a duplicate.
 import re
 from typing import Optional
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import AutomationSetting, Call, Client, Employee, Organisation, Tag, Taggable
@@ -128,7 +128,8 @@ def destination_allowed(number: str, prefixes: list[str]) -> bool:
 
 
 async def find_client(db: AsyncSession, org_id: str, number: Optional[str], *,
-                      newest: bool = False) -> Optional[Client]:
+                      newest: bool = False, client_type: Optional[str] = None,
+                      exclude_id: Optional[str] = None) -> Optional[Client]:
     d = digits(number)
     if len(d) < 4:
         return None
@@ -138,8 +139,13 @@ async def find_client(db: AsyncSession, org_id: str, number: Optional[str], *,
     stored = Client.phone
     for ch in (" ", "-", "(", ")", ".", "/", "+"):
         stored = func.replace(stored, ch, "")
-    rows = (await db.execute(select(Client).where(
-        Client.org_id == org_id, Client.phone.isnot(None), stored.like(f"%{d[-7:]}%"))
+    q = select(Client).where(Client.org_id == org_id, Client.phone.isnot(None), stored.like(f"%{d[-7:]}%"))
+    if client_type:     # rows saved before the type existed count as people
+        q = q.where(Client.client_type == client_type if client_type != "person"
+                    else or_(Client.client_type == "person", Client.client_type.is_(None)))
+    if exclude_id:
+        q = q.where(Client.id != exclude_id)
+    rows = (await db.execute(q
         .order_by(*((Client.created_at.desc(), Client.id.desc()) if newest
                     else (Client.created_at, Client.id))))).scalars().all()
     return next((c for c in rows if same_number(c.phone, number)), None)

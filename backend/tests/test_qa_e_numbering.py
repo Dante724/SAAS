@@ -66,3 +66,15 @@ async def test_begins_from_below_one_is_refused(client, tenant):
     r = await client.put("/api/settings/numbering", json={
         "doc_type": "invoice", "template": "INV-{C:5}", "begins_from": 0}, headers=tenant)
     assert r.status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_preview_without_start_shows_the_real_next_number(client, tenant):
+    await client.put("/api/settings/numbering", json={
+        "doc_type": "order", "template": "WO-{C:5}", "begins_from": 15}, headers=tenant)
+    p = await client.post("/api/settings/numbering/preview", json={
+        "doc_type": "order", "template": "RESPAWN-{C:5}"}, headers=tenant)
+    assert p.json()["example"] == "RESPAWN-00015", p.text
+    g = await client.get("/api/settings/numbering/preview",
+                         params={"template": "R-{C:3}", "doc_type": "order"}, headers=tenant)
+    assert g.json()["example"] == "R-015", g.text

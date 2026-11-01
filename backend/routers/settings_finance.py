@@ -94,17 +94,34 @@ async def set_numbering(
     return {"ok": True, "example": await peek_example(data.template, seq.next_value)}
 
 
+async def _next_value(db: AsyncSession, org_id: str, doc_type: Optional[str], scope_key: str) -> int:
+    """Where this doc type's counter really is — what a save without begins_from keeps."""
+    if not doc_type:
+        return 1
+    seq = (await db.execute(select(NumberSequence.next_value).where(
+        NumberSequence.org_id == org_id, NumberSequence.doc_type == doc_type,
+        NumberSequence.scope_key == scope_key))).scalar_one_or_none()
+    return seq if seq is not None else await _existing_count(db, org_id, doc_type) + 1
+
+
 @router.post("/numbering/preview")
-async def preview_numbering(data: NumberingIn, current: Employee = Depends(get_current_employee)):
+async def preview_numbering(data: NumberingIn, db: AsyncSession = Depends(get_db),
+                            current: Employee = Depends(get_current_employee)):
     _check_template(data.template, data.begins_from)
-    return {"example": await peek_example(data.template, data.begins_from)}
+    start = data.begins_from if data.begins_from is not None else \
+        await _next_value(db, current.org_id, data.doc_type, data.scope_key)
+    return {"example": await peek_example(data.template, start)}
 
 
 @router.get("/numbering/preview")
 async def preview_numbering_get(template: str, begins_from: Optional[int] = None,
+                                doc_type: Optional[str] = None, scope_key: str = "org",
+                                db: AsyncSession = Depends(get_db),
                                 current: Employee = Depends(get_current_employee)):
     _check_template(template, begins_from)
-    return {"example": await peek_example(template, begins_from)}
+    start = begins_from if begins_from is not None else \
+        await _next_value(db, current.org_id, doc_type, scope_key)
+    return {"example": await peek_example(template, start)}
 
 
 # ── Legal entities ───────────────────────────────────────────────────────────

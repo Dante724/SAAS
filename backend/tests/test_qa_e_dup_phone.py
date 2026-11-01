@@ -53,3 +53,38 @@ async def test_duplicates_report_groups_formatting_variants(client, tenant):
     assert names == [["A", "B", "C"]], names
     cl = clusters[0]
     assert cl["count"] == 3 and cl["phone"] and cl["keep_hint_id"]
+
+
+@pytest.mark.asyncio
+async def test_person_and_company_may_share_a_number(client, tenant):
+    """Orderry applies the rule within one contact type: a company can have its owner's number."""
+    await client.put("/api/staff/company", json={"prohibit_dup_phone": True, "prohibit_dup_email": True,
+                                                 "country": "CA"}, headers=tenant)
+    r = await client.post("/api/clients", json={"name": "Sam", "phone": "(647) 555-0199",
+                                                "email": "sam@shop.test"}, headers=tenant)
+    assert r.status_code == 201, r.text
+    r = await client.post("/api/clients", json={"name": "Sam's Shop Ltd", "client_type": "organization",
+                                                "phone": "+1 647 555 0199", "email": "SAM@shop.test"},
+                          headers=tenant)
+    assert r.status_code == 201, r.text
+    # but a second person with the same email (any case) is refused
+    r = await client.post("/api/clients", json={"name": "Sam 2", "email": " Sam@Shop.test "}, headers=tenant)
+    assert r.status_code == 409, r.text
+    # and the duplicates list doesn't offer to merge a person into a company
+    dups = (await client.get("/api/clients/duplicates", headers=tenant)).json()["items"]
+    assert dups == []
+
+
+@pytest.mark.asyncio
+async def test_guard_applies_on_edit(client, tenant):
+    await client.put("/api/staff/company", json={"prohibit_dup_phone": True, "country": "CA"}, headers=tenant)
+    a = (await client.post("/api/clients", json={"name": "A", "phone": "6475550199"}, headers=tenant)).json()
+    b = (await client.post("/api/clients", json={"name": "B", "phone": "6475550100"}, headers=tenant)).json()
+    r = await client.patch(f"/api/clients/{b['id']}", json={"phone": "+1 (647) 555-0199"}, headers=tenant)
+    assert r.status_code == 409, r.text
+    r = await client.put(f"/api/clients/{b['id']}", json={"name": "B", "phone": "647-555-0199"}, headers=tenant)
+    assert r.status_code == 409, r.text
+    # saving a contact with its own number, or changing something else, is fine
+    assert (await client.put(f"/api/clients/{a['id']}", json={"name": "A2", "phone": "6475550199"},
+                             headers=tenant)).status_code == 200
+    assert (await client.patch(f"/api/clients/{b['id']}", json={"name": "B2"}, headers=tenant)).status_code == 200

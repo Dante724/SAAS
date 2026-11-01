@@ -158,6 +158,40 @@ async def list_clients(
     return {"total": total, "items": [_ser_client(c, order_count=counts.get(c.id, 0)) for c in clients],
             "skip": skip, "limit": limit}
 
+async def _guard_duplicates(db: AsyncSession, org, client_type: Optional[str], *, phone=None,
+                           email=None, exclude_id: Optional[str] = None) -> None:
+    """Orderry's "prohibit duplicate phone / email": no second contact of the same type (person or
+    organisation — a company may share its owner's number) with this phone or email. Numbers are
+    compared as numbers ("(647) 555-0199" is "+1 647 555 0199"), emails without case, and the
+    duplicates that existed before the switch was turned on don't break the check."""
+    ctype = client_type or "person"
+    if org.prohibit_dup_phone and phone:
+        from backend.services.call_contacts import find_client
+        if await find_client(db, org.id, phone, client_type=ctype, exclude_id=exclude_id):
+            raise HTTPException(409, "A contact with this phone number already exists")
+    if org.prohibit_dup_email and email and email.strip():
+        same_type = Client.client_type == ctype if ctype != "person" else \
+            or_(Client.client_type == "person", Client.client_type.is_(None))
+        q = select(Client.id).where(Client.org_id == org.id, same_type,
+                                    func.lower(func.trim(Client.email)) == email.strip().lower())
+        if exclude_id:
+            q = q.where(Client.id != exclude_id)
+        if (await db.execute(q.limit(1))).scalar_one_or_none() is not None:
+            raise HTTPException(409, "A contact with this email already exists")
+
+
+async def _guard_edit(db: AsyncSession, current: Employee, client: Client, *, phone, email, client_type) -> None:
+    """The duplicate guard on edit: only when the phone, email or contact type actually changes."""
+    if (phone == client.phone and email == client.email and client_type == client.client_type):
+        return
+    from backend.models import Organisation
+    org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one()
+    await _guard_duplicates(db, org, client_type,
+                            phone=phone if (phone != client.phone or client_type != client.client_type) else None,
+                            email=email if (email != client.email or client_type != client.client_type) else None,
+                            exclude_id=client.id)
+
+
 @router.post("", status_code=201)
 async def create_client(
     data: ClientIn,
@@ -167,18 +201,7 @@ async def create_client(
     from backend.models import Organisation
     org = (await db.execute(select(Organisation).where(
         Organisation.id == current.org_id))).scalar_one()
-    # Duplicate guards (Orderry: prohibit creating a contact with an existing phone/email)
-    if org.prohibit_dup_phone and data.phone:
-        # Compare numbers, not strings ("(647) 555-0199" is "+1 647 555 0199"), and tolerate
-        # the duplicates that existed before the switch was turned on.
-        from backend.services.call_contacts import find_client
-        if await find_client(db, current.org_id, data.phone):
-            raise HTTPException(409, "A contact with this phone number already exists")
-    if org.prohibit_dup_email and data.email:
-        dup = (await db.execute(select(Client).where(
-            Client.org_id == current.org_id, Client.email == data.email))).scalar_one_or_none()
-        if dup:
-            raise HTTPException(409, "A contact with this email already exists")
+    await _guard_duplicates(db, org, data.client_type, phone=data.phone, email=data.email)
     payload = data.model_dump()
     # drop None consent so org-policy setdefault applies
     for k in ("consent_phone", "consent_email"):
@@ -221,12 +244,13 @@ async def duplicate_phones(
         Organisation.id == current.org_id))).scalar_one_or_none()
     # Group on the normalised number so formatting variants of one phone land together.
     by_key: dict = {}
-    for c in (await db.execute(select(Client.id, Client.name, Client.phone, Client.created_at).where(
+    for c in (await db.execute(select(Client.id, Client.name, Client.phone, Client.client_type, Client.created_at).where(
             Client.org_id == current.org_id, Client.phone.isnot(None), Client.phone != "")
             .order_by(Client.created_at, Client.id))).all():
         # A value with letters in it isn't a phone number: only an identical value matches it.
         key = c.phone.strip().lower() if re.search(r"[A-Za-z]", c.phone) else phone_key(c.phone, country)
-        if len(key) >= 4:
+        key = (c.client_type or "person", key)     # a company may share its owner's number
+        if len(key[1]) >= 4:
             by_key.setdefault(key, []).append(c)
     clusters = []
     for members in by_key.values():
@@ -298,6 +322,7 @@ async def update_client(
     client = result.scalar_one_or_none()
     if not client:
         raise HTTPException(404, "Client not found")
+    await _guard_edit(db, current, client, phone=data.phone, email=data.email, client_type=data.client_type)
     if "address" in data.model_fields_set and not any(k in data.model_fields_set for k in _addr.PARTS):
         _addr.typed_line(client, data.address)
     for k, v in data.model_dump().items():
@@ -365,6 +390,9 @@ async def patch_client(
     if not client:
         raise HTTPException(404, "Client not found")
     fields = data.model_dump(exclude_unset=True)
+    await _guard_edit(db, current, client, phone=fields.get("phone", client.phone),
+                      email=fields.get("email", client.email),
+                      client_type=fields.get("client_type") or client.client_type)
     cd = fields.pop("custom_data", None)
     addr = {k: fields.pop(k) for k in _addr.PARTS if k in fields}
     if "address" in fields and not addr:
