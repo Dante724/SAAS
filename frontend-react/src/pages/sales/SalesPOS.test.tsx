@@ -157,3 +157,70 @@ describe("SalesPOS charge", () => {
     await vi.waitFor(() => expect(cartLines()).toHaveLength(0));   // the sale went through once
   });
 });
+
+// QA F2: a serialized phone needs its IMEI before the till charges, and the sale carries it.
+describe("SalesPOS serialized items", () => {
+  const PHONE = { id: "ph", name: "iPhone 13", sku: "IP13", barcode: "1900000000001", sell_price: 400, qty_available: 2, serialized: true };
+  const IMEI = "352841012345067";
+  function catchSales() {
+    const bodies: any[] = [];
+    const base = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (url: any, init?: RequestInit) => {
+      const path = new URL(url, "http://x").pathname;
+      if (init?.method === "POST" && path === "/api/sales") {
+        bodies.push(JSON.parse(String(init.body)));
+        return reply({ id: "s1", sale_number: "S-1", total: 400, paid: true, redeemed: {} }, 201);
+      }
+      if (path === "/api/serials") return reply({ items: [{ serial_number: IMEI, status: "in_stock" }] });
+      return base(url, init);
+    });
+    return bodies;
+  }
+
+  it("asks for the IMEI before charging, then sends it with the line", async () => {
+    lookupItems["1900000000001"] = [PHONE];
+    const bodies = catchSales();
+    const u = userEvent.setup();
+    render(<SalesPOS />);
+    await act(async () => wedge("1900000000001"));
+    await vi.waitFor(() => expect(cartLines()).toHaveLength(1));
+    await u.click(screen.getByRole("button", { name: /^Charge [^o]/ }));
+    await vi.waitFor(() => expect(screen.getByText(/Scan the IMEI \/ serial of each iPhone 13/)).toBeInTheDocument());
+    expect(bodies).toHaveLength(0);                              // nothing sold without the unit
+    const box = screen.getByLabelText("IMEI or serial for iPhone 13");
+    await u.type(box, `${IMEI}{Enter}`);
+    expect(within(cartLines()[0]).getByText(IMEI)).toBeInTheDocument();
+    await u.click(screen.getByRole("button", { name: /^Charge [^o]/ }));
+    await vi.waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0].lines[0]).toMatchObject({ ref_id: "ph", qty: 1, serials: [IMEI] });
+  });
+
+  it("scanning the phone's IMEI puts that unit on the line", async () => {
+    lookupItems[IMEI] = [{ ...PHONE, matched_on: "serial", serial: IMEI }];
+    const bodies = catchSales();
+    const u = userEvent.setup();
+    render(<SalesPOS />);
+    await act(async () => wedge(IMEI));
+    await vi.waitFor(() => expect(cartLines()).toHaveLength(1));
+    expect(within(cartLines()[0]).getByText(IMEI)).toBeInTheDocument();
+    expect(screen.queryByLabelText("IMEI or serial for iPhone 13")).toBeNull();
+    await act(async () => wedge(IMEI));                       // the same phone scanned again: still one
+    expect(within(cartLines()[0]).getByText("1")).toBeInTheDocument();
+    await u.click(screen.getByRole("button", { name: /^Charge [^o]/ }));
+    await vi.waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0].lines[0].serials).toEqual([IMEI]);
+  });
+
+  it("tapping the phone, then scanning its IMEI, fills the line instead of adding a second phone", async () => {
+    products = [PHONE];
+    lookupItems[IMEI] = [{ ...PHONE, matched_on: "serial", serial: IMEI }];
+    catchSales();
+    const u = userEvent.setup();
+    render(<SalesPOS />);
+    await u.click(await screen.findByRole("button", { name: /iPhone 13/ }));
+    await vi.waitFor(() => expect(cartLines()).toHaveLength(1));
+    await act(async () => wedge(IMEI));
+    await vi.waitFor(() => expect(within(cartLines()[0]).getByText(IMEI)).toBeInTheDocument());
+    expect(within(cartLines()[0]).getByText("1")).toBeInTheDocument();
+  });
+});

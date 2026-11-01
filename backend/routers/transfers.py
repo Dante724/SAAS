@@ -13,7 +13,7 @@ can_manage_inventory."""
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -22,15 +22,16 @@ from backend.models import (
     Employee,
     Location,
     Part,
+    SerializedItem,
     StockMovement,
     StockTransfer,
     StockTransferLine,
 )
 from backend.services.auth import get_current_employee, require_perm
-from backend.services import stock_rows
+from backend.services import serial_log, stock_rows
 from backend.services.batching import names_by_id, rows_by
 from backend.services.numbering import next_number
-from backend.services.money import claim_status, q2
+from backend.services.money import add_to_column, claim_status, q2
 from backend.services.dates import now_utc
 from backend.services.owned import require_location, require_owned_ids
 
@@ -42,6 +43,53 @@ ORDERED = ["draft", "ready", "in_transit", "received", "completed"]
 async def _lines(db, tid):
     return (await db.execute(select(StockTransferLine).where(
         StockTransferLine.transfer_id == tid))).scalars().all()
+
+
+# ── QA F2: serialized units travel with the box ─────────────────────────────────────────────────
+# A serialized line names its units (serial_ids). Ready: they leave the shelf ("in_transit", drawn
+# from their own bins). Completed: the ones that arrived are in stock at the destination, a missing
+# one is written off. Canceled: they go back in stock where the goods go back.
+
+async def _box_units(db, org_id: str, ids, *, lock: bool = False) -> list:
+    if not ids:
+        return []
+    q = select(SerializedItem).where(SerializedItem.org_id == org_id, SerializedItem.id.in_(list(ids)))
+    if lock:
+        q = q.with_for_update().execution_options(populate_existing=True)
+    return list((await db.execute(q)).scalars().all())
+
+
+async def _pick_units(db, org_id: str, part: Part, location_id: str, serials, qty: float) -> list:
+    """The in-stock units at the source a new serialized line names (one per unit)."""
+    from backend.services.serial_intake import matches as _sn_matches
+    named = list(dict.fromkeys(x.strip() for x in (serials or []) if x and x.strip()))
+    if not part.serialized:
+        if named:
+            raise HTTPException(422, f"“{part.name}” isn't tracked by serial number")
+        return []
+    if abs(qty - round(qty)) > 1e-9 or len(named) != int(round(qty)):
+        raise HTTPException(422, f"Scan the IMEI / serial of each “{part.name}” in the box "
+                                 f"({len(named)} of {qty:g} entered)")
+    units = []
+    for sn in named:
+        u = (await db.execute(select(SerializedItem).where(
+            SerializedItem.org_id == org_id, SerializedItem.part_id == part.id,
+            SerializedItem.status == "in_stock", SerializedItem.location_id == location_id,
+            _sn_matches(SerializedItem.serial_number, sn)))).scalars().first()
+        if u is None:
+            raise HTTPException(409, f"{sn} isn't in stock at the source")
+        units.append(u)
+    return units
+
+
+def _place(u, location_id, warehouse_id, status="in_stock"):
+    u.location_id, u.warehouse_id, u.bin_id, u.status = location_id, warehouse_id, None, status
+
+
+async def _serials_by_line(db, org_id: str, lines) -> dict:
+    ids = {i for ln in lines for i in (ln.serial_ids or [])}
+    sn = {u.id: u.serial_number for u in await _box_units(db, org_id, ids)}
+    return {ln.id: [sn[i] for i in (ln.serial_ids or []) if i in sn] for ln in lines}
 
 
 
@@ -68,10 +116,12 @@ async def list_transfers(
                                    [l.part_id for ls in lines_by.values() for l in ls],
                                    org_col=Part.org_id, org_id=current.org_id)
     out = []
+    sns = await _serials_by_line(db, current.org_id, [l for ls in lines_by.values() for l in ls])
     for t in rows:
         ls = lines_by.get(t.id, [])
         out.append(_ser(t, loc_names,
-                        [{"part_id": l.part_id, "part_name": part_names.get(l.part_id), "qty": l.qty} for l in ls]))
+                        [{"id": l.id, "line_id": l.id, "part_id": l.part_id, "part_name": part_names.get(l.part_id),
+                          "qty": l.qty, "qty_received": l.qty_received, "serials": sns.get(l.id, [])} for l in ls]))
     return {"items": out}
 
 
@@ -94,12 +144,15 @@ async def transfer_detail(
         Part.org_id == current.org_id, Part.id.in_({l.part_id for l in ls})))).scalars().all()} if ls else {}
     line_data = []
     total_qty = total_val = 0.0
+    sns = await _serials_by_line(db, current.org_id, ls)
     for l in ls:
         p = parts.get(l.part_id)
         cost = (p.avg_cost or p.cost_price or 0) if p else 0
         total_qty += l.qty
         total_val += cost * l.qty
         line_data.append({
+            "id": l.id, "line_id": l.id, "qty_received": l.qty_received,   # QA F2: what /receive takes
+            "serials": sns.get(l.id, []),
             "part_id": l.part_id, "part_name": p.name if p else l.part_id,
             "sku": p.sku if p else None, "uom": p.uom if p else None,
             "qty": l.qty, "unit_cost": cost, "line_value": q2(cost * l.qty)})
@@ -121,6 +174,7 @@ async def transfer_detail(
 class TransferLineIn(BaseModel):
     part_id: str
     qty: float = 1
+    serials: Optional[list[str]] = Field(None, max_length=500)   # QA F2: a serialized product's units
 
 
 class TransferIn(BaseModel):
@@ -149,10 +203,20 @@ async def create_transfer(
                       note=data.note, created_by_id=current.id)
     db.add(t)
     await db.flush()
+    seen: set = set()
     for li in data.lines:
         if li.qty <= 0:
             raise HTTPException(400, "Quantities must be positive")
-        db.add(StockTransferLine(transfer_id=t.id, part_id=li.part_id, qty=li.qty))
+        part = (await db.execute(select(Part).where(
+            Part.id == li.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
+        if not part:
+            raise HTTPException(404, "Product not found")
+        units = await _pick_units(db, current.org_id, part, data.from_location_id, li.serials, li.qty)
+        if seen & {u.id for u in units}:
+            raise HTTPException(409, "The same unit is on two lines")
+        seen |= {u.id for u in units}
+        db.add(StockTransferLine(transfer_id=t.id, part_id=li.part_id, qty=li.qty,
+                                 serial_ids=[u.id for u in units] or None))
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "transfer", t.id,
                            f"Transfer {t.transfer_number} drafted ({len(data.lines)} line(s))")
@@ -198,9 +262,17 @@ async def change_status(
             for l in lines:
                 await stock_rows.reserve(db, l.part_id, t.from_location_id, -l.qty)
                 await stock_rows.add(db, l.part_id, t.from_location_id, l.qty)
+                for u in await _box_units(db, current.org_id, l.serial_ids, lock=True):
+                    _place(u, t.from_location_id, t.from_warehouse_id)
+                    serial_log.record(db, u, "restored", ref_type="transfer", ref_id=t.id,
+                                      label=f"Transfer {t.transfer_number} canceled", actor_id=current.id)
         elif prev in ("in_transit", "received"):
             back = data.return_location_id
             for l in lines:
+                for u in await _box_units(db, current.org_id, l.serial_ids, lock=True):
+                    _place(u, back, None)
+                    serial_log.record(db, u, "returned", ref_type="transfer", ref_id=t.id,
+                                      label=f"Transfer {t.transfer_number} canceled", actor_id=current.id)
                 await stock_rows.add(db, l.part_id, back, l.qty)
                 db.add(StockMovement(part_id=l.part_id, location_id=back,
                                      movement_type="receive", qty=l.qty,
@@ -218,8 +290,18 @@ async def change_status(
             if avail < l.qty:
                 part = (await db.execute(select(Part).where(Part.id == l.part_id))).scalar_one_or_none()
                 raise HTTPException(409, f"Only {avail:g} of '{part.name if part else l.part_id}' at the source warehouse")
-            try:      # ii144a: guarded per-bin decrements, then held on the location
-                await stock_rows.draw(db, l.part_id, t.from_location_id, l.qty)
+            units = await _box_units(db, current.org_id, l.serial_ids, lock=True)
+            if any(u.status != "in_stock" or u.location_id != t.from_location_id for u in units):
+                gone = next(u for u in units if u.status != "in_stock" or u.location_id != t.from_location_id)
+                raise HTTPException(409, f"{gone.serial_number} isn't in stock at the source any more")
+            try:      # ii144a: guarded per-bin decrements (a unit from its own bin), then held on the location
+                for u in units:
+                    await stock_rows.draw(db, l.part_id, t.from_location_id, 1, bin_id=u.bin_id)
+                    u.status = "in_transit"
+                    serial_log.record(db, u, "moved", ref_type="transfer", ref_id=t.id,
+                                      label=f"Packed for transfer {t.transfer_number}", actor_id=current.id)
+                if l.qty - len(units) > 1e-9:
+                    await stock_rows.draw(db, l.part_id, t.from_location_id, l.qty - len(units))
             except stock_rows.NotEnoughStock:
                 raise HTTPException(409, "Stock changed while reserving — retry")
             await stock_rows.reserve(db, l.part_id, t.from_location_id, l.qty)
@@ -238,18 +320,30 @@ async def change_status(
         # confirmed shortage must not silently reappear as stock at the far end.
         for l in lines:
             qty_in = l.qty_received if l.qty_received is not None else l.qty
-            if not qty_in:
-                continue
-            await stock_rows.add(db, l.part_id, t.to_location_id, qty_in)
-            db.add(StockMovement(part_id=l.part_id, location_id=t.to_location_id,
-                                 warehouse_id=t.to_warehouse_id,
-                                 movement_type="transfer_in", qty=qty_in,
-                                 ref_type="transfer", ref_id=t.id))
+            if qty_in:
+                await stock_rows.add(db, l.part_id, t.to_location_id, qty_in)
+            # QA F2: what shipped comes in, and the shortfall is booked as a loss where it was found.
+            # The source already logged the whole shipment out, so a second loss there counted it twice
+            # (movements no longer summed to the stock on the shelf).
+            if l.qty:
+                db.add(StockMovement(part_id=l.part_id, location_id=t.to_location_id,
+                                     warehouse_id=t.to_warehouse_id,
+                                     movement_type="transfer_in", qty=l.qty,
+                                     ref_type="transfer", ref_id=t.id))
+            arrived = set(l.received_serial_ids if l.received_serial_ids is not None else (l.serial_ids or []))
+            for u in await _box_units(db, current.org_id, l.serial_ids, lock=True):
+                if u.id in arrived:
+                    _place(u, t.to_location_id, t.to_warehouse_id)
+                    serial_log.record(db, u, "moved", ref_type="transfer", ref_id=t.id,
+                                      label=f"Arrived on transfer {t.transfer_number}", actor_id=current.id)
+                else:
+                    u.status = "written_off"
+                    serial_log.record(db, u, "written_off", ref_type="transfer", ref_id=t.id,
+                                      label=f"Missing from transfer {t.transfer_number}", actor_id=current.id)
             missing = (l.qty or 0) - qty_in
             if missing > 0:
-                # the shortfall is a real loss and is recorded as one, at the source
-                db.add(StockMovement(part_id=l.part_id, location_id=t.from_location_id,
-                                     warehouse_id=t.from_warehouse_id,
+                db.add(StockMovement(part_id=l.part_id, location_id=t.to_location_id,
+                                     warehouse_id=t.to_warehouse_id,
                                      movement_type="transfer_shortage", qty=-missing,
                                      ref_type="transfer", ref_id=t.id))
         t.completed_at = now_utc()
@@ -263,8 +357,11 @@ async def change_status(
 
 # ── Build 93: verify what arrived, and scan lines in ─────────────────────────
 class ReceiveLine(BaseModel):
-    line_id: str
+    line_id: Optional[str] = None
+    part_id: Optional[str] = None     # QA F2: or name the product, as the person holding the box knows it
+    code: Optional[str] = None        # … by its barcode / SKU
     qty_received: float
+    serials: Optional[list[str]] = None   # a serialized line: the IMEIs / serials that arrived
 
 
 class ReceiveIn(BaseModel):
@@ -282,7 +379,7 @@ async def receive_lines(
     This is the step that catches a box that left with ten and arrived with nine. Until
     it's done, completing the transfer assumes everything arrived; once it's done, the
     destination is credited with the verified count and the difference is booked as a
-    loss against the source rather than quietly vanishing.
+    loss on arrival rather than quietly vanishing.
     """
     t = (await db.execute(select(StockTransfer).where(
         StockTransfer.id == tid, StockTransfer.org_id == current.org_id))).scalar_one_or_none()
@@ -293,11 +390,7 @@ async def receive_lines(
 
     discrepancies = 0
     for r in data.lines:
-        ln = (await db.execute(select(StockTransferLine).where(
-            StockTransferLine.id == r.line_id,
-            StockTransferLine.transfer_id == tid))).scalar_one_or_none()
-        if not ln:
-            raise HTTPException(404, f"Line {r.line_id} not found on this transfer")
+        ln = await _receive_line(db, current.org_id, tid, r)
         if r.qty_received < 0:
             raise HTTPException(422, "Received quantity can't be negative")
         if r.qty_received > (ln.qty or 0):
@@ -305,6 +398,8 @@ async def receive_lines(
                 409, f"Received {r.qty_received:g} but only {ln.qty:g} was shipped — "
                      f"check the line before confirming.")
         ln.qty_received = r.qty_received
+        if ln.serial_ids:
+            ln.received_serial_ids = await _arrived_units(db, current.org_id, ln, r)
         if r.qty_received != ln.qty:
             discrepancies += 1
 
@@ -313,6 +408,48 @@ async def receive_lines(
         t.received_at = now_utc()
     await db.commit()
     return {"ok": True, "status": t.status, "discrepancies": discrepancies}
+
+
+async def _receive_line(db, org_id: str, tid: str, r: ReceiveLine) -> StockTransferLine:
+    """The transfer line a received row means: its line id, else the one line for the product."""
+    q = select(StockTransferLine).where(StockTransferLine.transfer_id == tid)
+    if r.line_id:
+        ln = (await db.execute(q.where(StockTransferLine.id == r.line_id))).scalar_one_or_none()
+        if not ln:
+            raise HTTPException(404, f"Line {r.line_id} not found on this transfer")
+        return ln
+    part_id = r.part_id
+    if not part_id and r.code:
+        from backend.services import product_codes
+        part_id = (await db.execute(select(Part.id).where(
+            Part.org_id == org_id, product_codes.matches_code(org_id, r.code.strip())))).scalars().first()
+    if not part_id:
+        raise HTTPException(422, "Say which line arrived: line_id, part_id or code")
+    found = (await db.execute(q.where(StockTransferLine.part_id == part_id))).scalars().all()
+    if not found:
+        raise HTTPException(404, "That product isn't on this transfer")
+    if len(found) > 1:
+        raise HTTPException(409, "That product is on more than one line — send the line_id")
+    return found[0]
+
+
+async def _arrived_units(db, org_id: str, ln: StockTransferLine, r: ReceiveLine) -> list:
+    """Which of a serialized line's units arrived: the serials named, or all of them when none is
+    short. A short serialized line has to say which phones are missing."""
+    from backend.services.serial_intake import normalize as _sn_norm
+    units = await _box_units(db, org_id, ln.serial_ids)
+    if not r.serials:
+        if abs(r.qty_received - len(units)) > 1e-9:
+            raise HTTPException(422, "Scan the IMEI / serial of each unit that arrived")
+        return [u.id for u in units]
+    key = lambda v: _sn_norm(v)[0] or v.strip()   # noqa: E731
+    by_sn = {key(u.serial_number): u.id for u in units}
+    got = list(dict.fromkeys(by_sn.get(key(x)) for x in r.serials if x and x.strip()))
+    if None in got:
+        raise HTTPException(409, "A serial that arrived isn't on this transfer")
+    if len(got) != r.qty_received:
+        raise HTTPException(422, f"{len(got)} serials for {r.qty_received:g} received")
+    return got
 
 
 class TransferScanIn(BaseModel):
@@ -335,21 +472,44 @@ async def scan_transfer_line(
     if t.status != "draft":
         raise HTTPException(409, "Lines can only be added while the transfer is a draft")
 
+    if data.qty <= 0:
+        raise HTTPException(422, "Scan a quantity above zero — remove a line by editing the transfer")
     code = data.code.strip()
     from backend.services import product_codes
     part = (await db.execute(select(Part).where(
         Part.org_id == current.org_id, product_codes.matches_code(current.org_id, code)))).scalars().first()
+    unit = None
+    if not part:      # QA F2: a phone's IMEI says which unit goes in the box
+        from backend.services.serial_intake import matches as _sn_matches
+        unit = (await db.execute(select(SerializedItem).where(
+            SerializedItem.org_id == current.org_id, SerializedItem.status == "in_stock",
+            SerializedItem.location_id == t.from_location_id,
+            _sn_matches(SerializedItem.serial_number, code)))).scalars().first()
+        if unit:
+            part = (await db.execute(select(Part).where(
+                Part.id == unit.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
     if not part:
         raise HTTPException(404, f"Nothing matches “{code}”")
+    if part.serialized and not unit:
+        raise HTTPException(422, f"Scan the IMEI / serial of the “{part.name}” going in the box")
+    qty = 1 if unit else data.qty
 
     ln = (await db.execute(select(StockTransferLine).where(
         StockTransferLine.transfer_id == tid,
-        StockTransferLine.part_id == part.id))).scalar_one_or_none()
+        StockTransferLine.part_id == part.id))).scalars().first()
     if ln:
-        ln.qty = (ln.qty or 0) + data.qty
+        await add_to_column(db, ln, "qty", qty, round_to=None)   # two scanners on one box both count
+        if unit:      # the row is locked by the increment: the unit list can't lose a concurrent scan
+            await db.refresh(ln, attribute_names=["serial_ids"])
+            if unit.id in (ln.serial_ids or []):
+                raise HTTPException(409, f"{unit.serial_number} is already in the box")
+            ln.serial_ids = [*(ln.serial_ids or []), unit.id]
     else:
-        ln = StockTransferLine(transfer_id=tid, part_id=part.id, qty=data.qty)
+        ln = StockTransferLine(transfer_id=tid, part_id=part.id, qty=qty,
+                               serial_ids=[unit.id] if unit else None)
         db.add(ln)
     await db.commit()
     await db.refresh(ln)
-    return {"ok": True, "part_id": part.id, "part_name": part.name, "qty": ln.qty}
+    serials = (await _serials_by_line(db, current.org_id, [ln])).get(ln.id, [])
+    return {"ok": True, "line_id": ln.id, "part_id": part.id, "part_name": part.name, "qty": ln.qty,
+            "serials": serials}

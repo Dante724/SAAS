@@ -48,6 +48,8 @@ class StockAdjust(BaseModel):
     # What stock coming in cost (opening stock, a count-up). Omitted → the current average cost,
     # else the catalog cost — never 0 by accident, which made COGS 0 and margins nonsense.
     unit_cost: Optional[float] = Field(None, ge=0)
+    # QA F2: a serialized product's stock only rises with one serial / IMEI per unit coming in
+    serials: Optional[list[SerialStr]] = Field(None, max_length=500)
 
 
 # A stock quantity above this is almost certainly a barcode/serial typed into the
@@ -279,11 +281,13 @@ async def adjust_stock(
         # Stock coming in is a receipt like any other: quantity, movement, FIFO layer and moving
         # average through the one inflow path, at a real cost.
         cost = data.unit_cost if data.unit_cost is not None else (part.avg_cost or part.cost_price or 0)
+        from backend.services import serial_intake
+        serials = await serial_intake.validate_intake(db, current.org_id, part, data.qty, data.serials)
         await stock_posting.apply_receipt_line(
             db, org_id=current.org_id, part=part, location_id=data.location_id, qty=data.qty,
             unit_cost=float(cost), created_by_id=current.id, ref_type=data.movement_type,
             movement_type=data.movement_type, warehouse_id=_w.id if _w else None,
-            cost_known=data.unit_cost is not None)
+            cost_known=data.unit_cost is not None, serials=serials or None)
         await db.commit()
         return {"ok": True, "qty_available": (await stock_rows.totals(db, part_id, data.location_id))[0]}
     if data.movement_type == "writeoff" or (data.movement_type in ("receive", "adjust") and data.qty < 0):
@@ -292,10 +296,20 @@ async def adjust_stock(
         if data.movement_type == "writeoff" and data.qty < 0:
             raise HTTPException(422, "Send the quantity to write off as a positive number")
         from backend.services import stock_writeoff
-        out = await stock_writeoff.write_off(
-            db, part=part, location_id=data.location_id, qty=abs(data.qty), created_by_id=current.id,
-            movement_type=data.movement_type, ref_type=data.movement_type,
-            warehouse_id=_w.id if _w else None)
+        if part.serialized:     # QA F2: which units left, so the units match the count
+            stock_rows.check_whole(part, data.qty)
+            if len(data.serials or []) != int(abs(data.qty)):
+                raise HTTPException(422, f"Scan the IMEI / serial of each “{part.name}” to write off "
+                                         f"({len(data.serials or [])} of {abs(data.qty):g} entered)")
+            out = await stock_writeoff.write_off_units(
+                db, part=part, location_id=data.location_id, serials=data.serials, created_by_id=current.id,
+                movement_type=data.movement_type, ref_type=data.movement_type,
+                warehouse_id=_w.id if _w else None, label=data.note)
+        else:
+            out = await stock_writeoff.write_off(
+                db, part=part, location_id=data.location_id, qty=abs(data.qty), created_by_id=current.id,
+                movement_type=data.movement_type, ref_type=data.movement_type,
+                warehouse_id=_w.id if _w else None)
         await db.commit()
         return {"ok": True, "qty_available": out["qty_available"]}
 
@@ -316,6 +330,7 @@ class ScanAdjust(BaseModel):
     qty: float
     movement_type: str = "receive"    # receive|writeoff|adjust
     note: Optional[str] = None
+    serials: Optional[list[SerialStr]] = Field(None, max_length=500)   # QA F2: serialized products
 
 
 @router.post("/scan-adjust")
@@ -331,11 +346,21 @@ async def scan_adjust(
     if not code:
         raise HTTPException(422, "code required")
     part = await product_codes.find_by_code(db, current.org_id, code, active_only=False)
+    serials, qty = data.serials, data.qty
+    if not part:      # QA F2: a phone's IMEI names the product and the unit (writing one off, say)
+        from backend.services.serial_intake import matches as _sn_matches
+        unit = (await db.execute(select(SerializedItem).where(
+            SerializedItem.org_id == current.org_id, _sn_matches(SerializedItem.serial_number, code))
+            .order_by(SerializedItem.status != "in_stock"))).scalars().first()
+        if unit:
+            part = (await db.execute(select(Part).where(
+                Part.id == unit.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
+            serials, qty = [unit.serial_number], 1.0
     if not part:
         raise HTTPException(404, "No part matches that code")
     out = await adjust_stock(part.id, StockAdjust(
-        location_id=data.location_id, qty=data.qty,
-        movement_type=data.movement_type, note=data.note), db, current)
+        location_id=data.location_id, qty=qty,
+        movement_type=data.movement_type, note=data.note, serials=serials), db, current)
     return {**out, "part_id": part.id, "part_name": part.name, "sku": part.sku}
 
 

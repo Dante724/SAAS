@@ -26,10 +26,11 @@ _EPS = 1e-9
 
 
 async def consume_layers(db, *, part: Part, location_id: str, qty: float,
-                         batch_id: Optional[str] = None) -> float:
+                         batch_id: Optional[str] = None, taken: Optional[list] = None) -> float:
     """Take `qty` out of the part's cost layers at the location; returns what those units cost.
     `batch_id` (a serialized unit's own layer) goes first. Units no layer covers — stock that
-    predates cost layers — are valued at the average cost."""
+    predates cost layers — are valued at the average cost. `taken`, when given, collects
+    {"batch_id", "qty"} per layer drawn (so a voided sale can put them back)."""
     q = select(StockItemBatch).where(StockItemBatch.part_id == part.id,
                                      StockItemBatch.location_id == location_id,
                                      StockItemBatch.qty_remaining > 0)
@@ -50,6 +51,8 @@ async def consume_layers(db, *, part: Part, location_id: str, qty: float,
         if take <= _EPS:
             continue
         b.qty_remaining = Decimal(str(b.qty_remaining or 0)) - Decimal(str(take))
+        if taken is not None:
+            taken.append({"batch_id": b.id, "qty": take})
         cost += take * float(b.unit_cost or 0)
         left -= take
     if left > _EPS:
@@ -84,3 +87,38 @@ async def write_off(db, *, part: Part, location_id: str, qty: float, created_by_
                              created_by_id=created_by_id))
     return {"qty": qty, "cost": round(cost, 2),
             "qty_available": (await stock_rows.totals(db, part.id, location_id))[0]}
+
+
+async def write_off_units(db, *, part: Part, location_id: str, serials, created_by_id: Optional[str] = None,
+                          movement_type: str = "writeoff", ref_type: Optional[str] = "writeoff",
+                          ref_id: Optional[str] = None, warehouse_id: Optional[str] = None,
+                          label: Optional[str] = None) -> dict:
+    """QA F2 — write off named units of a serialized product at `location_id`: each comes out of its
+    own bin and cost layer and is marked written off, so the units always match the stock count."""
+    from backend.models import SerializedItem
+    from backend.services import serial_log
+    from backend.services.serial_intake import matches as _sn_matches
+    named = list(dict.fromkeys(x.strip() for x in (serials or []) if x and str(x).strip()))
+    if not named:
+        raise HTTPException(422, f"Scan the IMEI / serial of each “{part.name}” to write off")
+    units = []
+    for sn in named:
+        u = (await db.execute(select(SerializedItem).where(
+            SerializedItem.org_id == part.org_id, SerializedItem.part_id == part.id,
+            SerializedItem.status == "in_stock", SerializedItem.location_id == location_id,
+            _sn_matches(SerializedItem.serial_number, sn)).with_for_update())).scalars().first()
+        if u is None:
+            raise HTTPException(409, f"{sn} isn't in stock here")
+        units.append(u)
+    cost, out = 0.0, None
+    for u in units:
+        out = await write_off(db, part=part, location_id=location_id, qty=1, created_by_id=created_by_id,
+                              movement_type=movement_type, ref_type=ref_type, ref_id=ref_id,
+                              warehouse_id=warehouse_id, bin_id=u.bin_id, batch_id=u.batch_id)
+        cost += out["cost"]
+        u.status = "written_off"
+        serial_log.record(db, u, "written_off", ref_type=ref_type, ref_id=ref_id,
+                          label=label or "Written off", actor_id=created_by_id)
+    return {"qty": float(len(units)), "cost": round(cost, 2), "qty_available": out["qty_available"],
+            "serials": [u.serial_number for u in units]}
+

@@ -395,12 +395,12 @@ async def test_counter_sale_marks_the_unit_sold_and_a_void_puts_it_back(client):
     pp = (await client.get(f"/api/serials/{units[SN[3]]['id']}", headers=H)).json()
     assert pp["history"][-1]["kind"] == "sold" and pp["history"][-1]["ref_id"] == sale_id
 
-    # without a serial, the oldest unit in stock goes
+    # without a serial the till asks for one (QA F2: the oldest unit went, with the wrong IMEI)
     r = await client.post("/api/sales", json={"lines": [
         {"kind": "product", "ref_id": p["id"], "description": "Pixel", "qty": 1, "unit_price": 100}]}, headers=H)
-    assert r.status_code == 201, r.text
+    assert r.status_code == 422, r.text
     units = {u["serial_number"]: u for u in await _units(client, H, p["id"])}
-    assert units[SN[2]]["status"] == "sold"
+    assert units[SN[2]]["status"] == "in_stock"
 
     # a serial that isn't in stock is refused (nothing sold)
     r = await client.post("/api/sales", json={"lines": [

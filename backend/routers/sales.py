@@ -195,6 +195,7 @@ async def lookup_code(
     parts = (await db.execute(base.where(or_(*[func.lower(c) == low for c in fields.values()], Part.id.in_(extra)))
                               .order_by(Part.name).limit(20))).scalars().all()
     matched = {p.id: next((k for k in fields if (getattr(p, k, None) or "").lower() == low), "barcode") for p in parts}
+    unit_serial = None
     if not parts:
         from backend.models import SerializedItem
         from backend.services.serial_intake import matches as _sn_matches
@@ -205,6 +206,7 @@ async def lookup_code(
         if si:
             parts = (await db.execute(base.where(Part.id == si.part_id))).scalars().all()
             matched = {p.id: "serial" for p in parts}
+            unit_serial = si.serial_number
     loc_id = current.location_id
     stock = {}
     if parts:
@@ -217,6 +219,8 @@ async def lookup_code(
         "id": p.id, "name": p.name, "sku": p.sku, "barcode": p.barcode, "code": p.code,
         "mpn": getattr(p, "mpn", None), "sell_price": p.sell_price or 0,
         "qty_available": stock.get(p.id, 0.0), "image_data": p.image_data, "matched_on": matched.get(p.id),
+        # QA F2: a serialized product needs its unit's serial at the till; a scanned IMEI already says which
+        "serialized": bool(p.serialized), "serial": unit_serial if matched.get(p.id) == "serial" else None,
     } for p in parts]}
 
 
@@ -265,6 +269,13 @@ async def delete_sale(
         raise HTTPException(409, "This sale was paid on a card reader. Refund the card payment first "
                                  "(Recent sales › Card reader payments), then delete the sale.")
     reason = (reason or "Deleted").strip()[:300]
+    # QA F2: claim the void before anything moves. A double click read the sale as not voided in
+    # both requests (FOR UPDATE is a no-op on SQLite; the session's copy can be stale on Postgres)
+    # and put the stock and the takings back twice.
+    won = await db.execute(sa_update(Sale).where(Sale.id == sale.id, Sale.voided_at.is_(None))
+                           .values(voided_at=now_utc()).execution_options(synchronize_session=False))
+    if won.rowcount != 1:
+        raise HTTPException(409, "This sale was already deleted")
 
     lines = (await db.execute(select(SaleLine).where(SaleLine.sale_id == sale.id))).scalars().all()
     for ln in lines:
@@ -431,20 +442,20 @@ async def _create_sale(data: SaleIn, db: AsyncSession, current: Employee):
             draws["bins"] = [[b, q] for b, q in taken]
             if units:
                 draws["serials"] = [u.id for u in units]
-            unit_cost = part.avg_cost or part.cost_price or 0
-            # FIFO cost layers → exact COGS when layers exist
-            has_batch = (await db.execute(select(StockItemBatch.id).where(
-                StockItemBatch.org_id == current.org_id, StockItemBatch.part_id == li.ref_id,
-                StockItemBatch.qty_remaining > 0).limit(1))).scalar_one_or_none()
-            if has_batch:
-                from backend.services.serialized import consume_fifo_lifo
-                try:
-                    rc = await consume_fifo_lifo(db, org_id=current.org_id, part_id=li.ref_id,
-                                                 qty=Decimal(str(li.qty)), method="fifo")
-                    unit_cost = rc["avg_unit_cost"]
-                    draws["layers"] = [{"batch_id": x["batch_id"], "qty": x["qty"]} for x in rc["layers"]]
-                except HTTPException:
-                    pass
+            # QA F2: cost from this location's layers (each sold unit's own layer first); units no layer
+            # covers are valued at the average. The old org-wide draw emptied another branch's layers,
+            # and when the layers fell short it had already drawn them before giving up (COGS at average).
+            from backend.services.stock_writeoff import consume_layers
+            taken_layers: list = []
+            spent = 0.0
+            for u in units:
+                spent += await consume_layers(db, part=part, location_id=loc_id, qty=1,
+                                              batch_id=u.batch_id, taken=taken_layers)
+            if li.qty - len(units) > 1e-9:
+                spent += await consume_layers(db, part=part, location_id=loc_id,
+                                              qty=li.qty - len(units), taken=taken_layers)
+            draws["layers"] = taken_layers
+            unit_cost = q4(spent / li.qty) if li.qty else 0
             cost = q4(unit_cost * li.qty)
             db.add(StockMovement(part_id=li.ref_id, location_id=loc_id,
                                  movement_type="use", qty=-li.qty, unit_cost=unit_cost,
@@ -483,9 +494,9 @@ async def _create_sale(data: SaleIn, db: AsyncSession, current: Employee):
 
 
 async def _sell_units(db, current, sale, part, loc_id, li) -> list:
-    """ii144c — a serialized product sold at the counter: the units named on the line (each must be in
-    stock here), else the oldest units in stock. They become `sold` with a passport line; returns the
-    units, whose bins the stock is drawn from."""
+    """ii144c — a serialized product sold at the counter: the units named on the line, each in stock
+    here and one per unit sold (QA F2: no longer the oldest units when none are named). They become
+    `sold` with a passport line; returns the units, whose bins the stock is drawn from."""
     from backend.models import SerializedItem
     from backend.services import serial_log
     from backend.services.serial_intake import matches as _sn_matches
@@ -504,12 +515,11 @@ async def _sell_units(db, current, sale, part, loc_id, li) -> list:
         units.append(u)
     if len(units) > n:
         raise HTTPException(422, f"{len(units)} serials named for {n:g} of '{part.name}'")
-    if len(units) < n:
-        q = base.where(SerializedItem.id.not_in([u.id for u in units])) if units else base
-        more = (await db.execute(q
-                                 .order_by(SerializedItem.created_at).limit(n - len(units))
-                                 .with_for_update(skip_locked=True))).scalars().all()
-        units.extend(more)
+    if part.serialized and (len(units) < n or abs(li.qty - n) > 1e-9):
+        # QA F2: the till records which phone left — picking the oldest unit put the wrong IMEI on
+        # the sale (warranty, theft checks). The serial is asked for wherever a serialized unit moves.
+        raise HTTPException(422, f"Scan the IMEI / serial of each '{part.name}' sold "
+                                 f"({len(units)} of {li.qty:g} entered)")
     for u in units:
         u.status = "sold"
         serial_log.record(db, u, "sold", ref_type="sale", ref_id=sale.id,
@@ -522,7 +532,8 @@ class ReceiptEmailIn(BaseModel):
     email: Optional[str] = Field(default=None, max_length=254)   # blank → the sale's client's email
 
 
-def receipt_text(org_name: str, sale: Sale, lines: list, sym: str, tz: Optional[str] = None) -> str:
+def receipt_text(org_name: str, sale: Sale, lines: list, sym: str, tz: Optional[str] = None,
+                 serials: Optional[dict] = None) -> str:
     """The customer's receipt in plain words — what was bought and what was paid. Never cost
     or profit (that's the shop's business, not the customer's)."""
     def m(v):
@@ -543,6 +554,8 @@ def receipt_text(org_name: str, sale: Sale, lines: list, sym: str, tz: Optional[
         qty = ln.qty or 1
         qty_s = f"{qty:g} × " if qty != 1 else ""
         out.append(f"{qty_s}{ln.description or ln.kind}  {m(ln.total)}")
+        for sn in (serials or {}).get(ln.id, []):
+            out.append(f"  IMEI / SN {sn}")
     if float(sale.discount or 0):
         out.append(f"Discount  −{m(sale.discount)}")
     out += ["", f"Total  {m(sale.total)}", "Paid" if sale.paid else "Not paid yet", "", "Thank you!"]
@@ -566,14 +579,28 @@ async def sale_receipt(
         Client.id == sale.client_id, Client.org_id == current.org_id))).scalar_one_or_none() if sale.client_id else None
     from backend.services.currency import _base
     sym = _base(org)["symbol"]
+    serials = await _line_serials(db, current.org_id, lines)
     return {
         "sale_number": sale.sale_number, "shop_name": org.name if org else "",
         "total": sale.total, "discount": sale.discount, "paid": sale.paid,
         "created_at": sale.created_at.isoformat() if sale.created_at else None,
-        "lines": [{"description": ln.description, "qty": ln.qty, "total": ln.total} for ln in lines],
+        "lines": [{"description": ln.description, "qty": ln.qty, "total": ln.total,
+                   "serials": serials.get(ln.id, [])} for ln in lines],
         "client_email": client.email if client else None, "client_phone": client.phone if client else None,
-        "text": receipt_text(org.name if org else "", sale, lines, sym, getattr(org, "timezone", None)),
+        "text": receipt_text(org.name if org else "", sale, lines, sym, getattr(org, "timezone", None), serials),
     }
+
+
+async def _line_serials(db, org_id: str, lines: list) -> dict:
+    """QA F2: line id → the serials / IMEIs that line sold, for the receipt (warranty claims)."""
+    from backend.models import SerializedItem
+    ids = {ln.id: list((ln.stock_draws or {}).get("serials") or []) for ln in lines}
+    wanted = {u for v in ids.values() for u in v}
+    if not wanted:
+        return {}
+    sn = dict((await db.execute(select(SerializedItem.id, SerializedItem.serial_number).where(
+        SerializedItem.org_id == org_id, SerializedItem.id.in_(wanted)))).all())
+    return {lid: [sn[u] for u in us if u in sn] for lid, us in ids.items() if us}
 
 
 @router.post("/{sale_id}/receipt/email")
@@ -795,10 +822,19 @@ async def post_stocktake(
         for l in (await db.execute(select(StocktakeLine).where(
                 StocktakeLine.stocktake_id == st_id, StocktakeLine.counted_qty.is_(None)))).scalars().all():
             l.counted_qty = 0
-            l.variance = round(-(l.system_qty or 0), 3)
     lines = (await db.execute(select(StocktakeLine).where(
         StocktakeLine.stocktake_id == st_id,
         StocktakeLine.counted_qty.is_not(None)))).scalars().all()
+    # QA F2: the count is what's on the shelf now, so it's compared with the books now, not with the
+    # snapshot taken at the start — stock sold or written off during the count isn't taken twice.
+    # The product's rows are locked first so a sale can't land between reading and adjusting.
+    for pid in sorted({l.part_id for l in lines}):
+        await stock_rows.rows(db, pid, st.location_id, lock=True)
+    for l in lines:
+        line_bin = l.bin_id or st.bin_id
+        book = await _st_stock_row(db, l.part_id, st, line_bin, unbinned=bool(st.by_bin and not line_bin))
+        l.system_qty = book or 0
+        l.variance = round(l.counted_qty - l.system_qty, 3)
     adjusted = 0
     for l in lines:
         if not l.variance:

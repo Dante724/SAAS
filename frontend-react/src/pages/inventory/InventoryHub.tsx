@@ -3,7 +3,7 @@ import { useEffect, useState, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
 import ScanStockPanel from "../../components/ScanStockPanel";
-import { api, openAuthedDoc } from "../../api/client";
+import { api, idempotencyKey, openAuthedDoc } from "../../api/client";
 import { downloadSheet } from "../../lib/downloadSheet";
 import { isoDate } from "../../lib/localDate";
 import { missingBarcodesMessage } from "../../lib/barcodes";
@@ -24,6 +24,7 @@ import { assetStatusTone } from "./statusTone";
 import { cachedPref, loadPref, savePref } from "../../lib/userPref";
 import Pager from "../../components/Pager";
 import SerialEntry from "../../components/SerialEntry";
+import UnitSerials, { unnamedUnits } from "../../components/UnitSerials";
 import DateField from "../../components/DateField";
 import AssetStateTabs, { AssetCounts, useAssetState } from "../../components/AssetStateTabs";
 import { useDebounced, useServerPage } from "../../hooks/useServerPage";
@@ -726,9 +727,10 @@ function ActionModal({ kind, products, preselected, onClose, onDone }:
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [fromLoc, setFromLoc] = useState(""); const [toLoc, setToLoc] = useState("");
   const [reason, setReason] = useState(""); const [note, setNote] = useState("");
-  const [lines, setLines] = useState<{ part_id: string; qty: number }[]>(
+  const [lines, setLines] = useState<{ part_id: string; qty: number; serials?: string[] }[]>(
     preselected.length ? preselected.map((id) => ({ part_id: id, qty: 1 })) : [{ part_id: "", qty: 1 }]);
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
+  const saveKey = useRef(idempotencyKey());
 
   useEffect(() => {
     api.get<any>("/staff/locations").then((r) => {
@@ -742,18 +744,35 @@ function ActionModal({ kind, products, preselected, onClose, onDone }:
   const addLine = () => setLines([...lines, { part_id: "", qty: 1 }]);
   const rmLine = (i: number) => setLines(lines.filter((_, j) => j !== i));
 
+  // QA F2: a serialized product's line names the IMEI / serial of each unit that moves
+  const isSerialized = (pid: string) => !!products.find((p) => p.id === pid)?.serialized;
   async function save() {
-    const clean = lines.filter((l) => l.part_id && l.qty > 0);
+    const clean = lines.filter((l) => l.part_id && l.qty > 0)
+      .map((l) => isSerialized(l.part_id) ? { ...l, serialized: true, serials: l.serials || [] } : { part_id: l.part_id, qty: l.qty });
     if (!clean.length) { setErr("Add at least one product line."); return; }
+    const unnamed = unnamedUnits(clean as any[]);
+    if (unnamed.length) { setErr("Scan the IMEI / serial of each serialized unit."); return; }
+    const body = clean.map(({ serialized: _s, ...l }: any) => l);
     setBusy(true); setErr(null);
     try {
       if (kind === "transfer") {
         if (fromLoc === toLoc) { setErr("Source and destination must differ."); setBusy(false); return; }
-        await api.post("/transfers", { from_location_id: fromLoc, to_location_id: toLoc, note, lines: clean });
+        await api.post("/transfers", { from_location_id: fromLoc, to_location_id: toLoc, note, lines: body });
       } else if (kind === "return") {
-        await api.post("/returns", { reason, lines: clean.map((l) => ({ ...l, restock: true })) });
+        await api.postOnce("/returns", { reason, lines: body.map((l: any) => ({ ...l, restock: true })) }, saveKey.current);   // a double click restocks once
       } else {
-        await api.post("/stock-docs/write-offs", { location_id: fromLoc, reason, note, lines: clean });
+        // a write-off document takes one line per serialized unit, naming it
+        const out: any[] = [];
+        for (const l of body) {
+          if (!l.serials) { out.push(l); continue; }
+          const r = await api.get<{ items: { id: string; serial_number: string; status: string }[] }>(`/serials?part_id=${encodeURIComponent(l.part_id)}&status=in_stock`);
+          for (const sn of l.serials) {
+            const u = (r.items || []).find((x) => x.serial_number === sn && x.status === "in_stock");
+            if (!u) { setErr(`${sn} isn't in stock.`); setBusy(false); return; }
+            out.push({ part_id: l.part_id, qty: 1, serialized_item_id: u.id });
+          }
+        }
+        await api.post("/stock-docs/write-offs", { location_id: fromLoc, reason, note, lines: out });
       }
       onDone();
     } catch (e: any) { setErr(e.message || "Could not save"); setBusy(false); }
@@ -792,13 +811,21 @@ function ActionModal({ kind, products, preselected, onClose, onDone }:
               <button onClick={addLine} className="text-primary text-xs font-semibold flex items-center gap-1"><M n="add" c="text-sm" />Add line</button></div>
             <div className="space-y-2">
               {lines.map((l, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <select value={l.part_id} onChange={(e) => setLine(i, "part_id", e.target.value)} className="flex-1 bg-white border border-slate-200 rounded-lg text-sm px-2 py-2">
+                <div key={i}>
+                <div className="flex items-center gap-2">
+                  <select value={l.part_id} onChange={(e) => setLines(lines.map((x, j) => j === i ? { ...x, part_id: e.target.value, serials: [] } : x))} className="flex-1 bg-white border border-slate-200 rounded-lg text-sm px-2 py-2">
                     <option value="">Select product…</option>
                     {products.map((p) => <option key={p.id} value={p.id}>{p.name}{p.sku ? ` (${p.sku})` : ""}</option>)}
                   </select>
                   <input type="number" min={0} value={l.qty} onChange={(e) => setLine(i, "qty", Number(e.target.value))} className="w-20 bg-white border border-slate-200 rounded-lg text-sm px-2 py-2 text-right" />
                   <button aria-label="Delete" onClick={() => rmLine(i)} className="w-8 h-8 rounded-lg hover:bg-rose-50 text-ink-tertiary hover:text-rose-600 flex items-center justify-center"><M n="delete" c="text-sm" /></button>
+                </div>
+                {l.part_id && isSerialized(l.part_id) && (
+                  <UnitSerials partId={l.part_id} need={Math.max(0, Math.floor(l.qty))} value={l.serials || []}
+                    status={kind === "return" ? "sold" : "in_stock"}
+                    label={products.find((p) => p.id === l.part_id)?.name || "this product"}
+                    onChange={(v) => setLine(i, "serials", v)} />
+                )}
                 </div>
               ))}
             </div>

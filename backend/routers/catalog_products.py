@@ -867,9 +867,10 @@ async def write_off(pid: str, data: WriteOffIn, db: AsyncSession = Depends(get_d
             from backend.services.serial_intake import matches as _sn_matches
             si = (await db.execute(select(SerializedItem).where(
                 SerializedItem.part_id == pid, _sn_matches(SerializedItem.serial_number, sn),
-                SerializedItem.status == "in_stock"))).scalars().first()
+                SerializedItem.status == "in_stock",
+                SerializedItem.location_id == data.location_id))).scalars().first()   # QA F2: here, not elsewhere
             if not si:
-                raise HTTPException(404, f"Serial '{sn}' not in stock")
+                raise HTTPException(404, f"Serial '{sn}' not in stock here")
             si.status = "written_off"
             from backend.services import serial_log
             serial_log.record(db, si, "written_off", ref_type="product_write_off",

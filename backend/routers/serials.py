@@ -23,7 +23,8 @@ from backend.services.redact import can_see_costs
 router = APIRouter(prefix="/api/serials", tags=["serials"])
 
 STATUS_LABELS = {"in_stock": "In stock", "allocated_to_order": "On a job", "sold": "Sold",
-                 "written_off": "Written off", "converted_to_asset": "Became an asset"}
+                 "written_off": "Written off", "converted_to_asset": "Became an asset",
+                 "in_transit": "In transit"}   # QA F2: packed on a transfer to another branch
 
 
 async def _unit(db, org_id: str, unit_id: str) -> SerializedItem:
