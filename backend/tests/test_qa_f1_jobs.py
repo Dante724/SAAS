@@ -130,7 +130,7 @@ async def test_dropping_a_job_returns_its_parts_once(client, tenant, db):
         StockMovement.ref_id == oid, StockMovement.part_id == pid))).all()
     assert sorted(moves) == [("return", 2), ("use", -2)]
     # dropped again, or the line removed afterwards: nothing comes back twice
-    await client.patch(f"/api/orders/{oid}/status", json={"status": "dropped"}, headers=tenant)
+    await client.patch(f"/api/orders/{oid}/status", json={"status": "dropped", "reason": "Customer declined"}, headers=tenant)
     line = (await K.lines(client, tenant, oid))[0]
     await client.delete(f"/api/orders/{oid}/lines/{line['id']}", headers=tenant)
     assert await K.stock(client, tenant, pid) == 10
@@ -139,7 +139,7 @@ async def test_dropping_a_job_returns_its_parts_once(client, tenant, db):
 @pytest.mark.asyncio
 async def test_dropping_waits_for_nothing_and_reopening_takes_the_parts_again(client, tenant):
     oid, pid, _ = await _job_with_part(client, tenant, qty=3, stock=2)     # 1 unit still on order
-    r = await client.patch(f"/api/orders/{oid}/status", json={"status": "dropped"}, headers=tenant)
+    r = await client.patch(f"/api/orders/{oid}/status", json={"status": "dropped", "reason": "Customer declined"}, headers=tenant)
     assert r.status_code == 200, r.text                                   # pending stock doesn't block a drop
     assert await K.stock(client, tenant, pid) == 2
     r = await client.patch(f"/api/orders/{oid}/status", json={"status": "in_repair"}, headers=tenant)
@@ -152,7 +152,7 @@ async def test_dropping_waits_for_nothing_and_reopening_takes_the_parts_again(cl
 async def test_two_drops_at_once_return_the_parts_once(client, tenant):
     import asyncio
     oid, pid, _ = await _job_with_part(client, tenant)
-    rs = await asyncio.gather(*[client.patch(f"/api/orders/{oid}/status", json={"status": "dropped"},
+    rs = await asyncio.gather(*[client.patch(f"/api/orders/{oid}/status", json={"status": "dropped", "reason": "Customer declined"},
                                              headers=tenant) for _ in range(2)])
     assert all(r.status_code == 200 for r in rs), [r.text for r in rs]
     assert await K.stock(client, tenant, pid) == 10
@@ -361,9 +361,9 @@ async def test_refund_line_belongs_to_the_refund(client, tenant):
 @pytest.mark.asyncio
 async def test_dropping_a_finished_job_returns_nothing(client, tenant):
     oid, pid, _ = await _job_with_part(client, tenant)
-    assert (await client.patch(f"/api/orders/{oid}/status", json={"status": "delivered"},
-                               headers=tenant)).status_code == 200
-    assert (await client.patch(f"/api/orders/{oid}/status", json={"status": "dropped"},
+    assert (await client.patch(f"/api/orders/{oid}/status", json={"status": "delivered", "allow_unpaid": True},
+                               headers=tenant)).status_code == 200      # main B11: Delivered needs payment
+    assert (await client.patch(f"/api/orders/{oid}/status", json={"status": "dropped", "reason": "Customer declined"},
                                headers=tenant)).status_code == 200
     assert await K.stock(client, tenant, pid) == 8          # the parts left inside the device
 
@@ -371,7 +371,7 @@ async def test_dropping_a_finished_job_returns_nothing(client, tenant):
 @pytest.mark.asyncio
 async def test_a_dropped_job_can_be_closed_straight_away_again(client, tenant):
     oid, pid, _ = await _job_with_part(client, tenant)
-    await client.patch(f"/api/orders/{oid}/status", json={"status": "dropped"}, headers=tenant)
+    await client.patch(f"/api/orders/{oid}/status", json={"status": "dropped", "reason": "Customer declined"}, headers=tenant)
     r = await client.patch(f"/api/orders/{oid}/status", json={"status": "done"}, headers=tenant)
     assert r.status_code == 200, r.text
     assert await K.stock(client, tenant, pid) == 8

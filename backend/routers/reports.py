@@ -293,9 +293,13 @@ async def _rep_wo_profit(db, org, df, dt, **kw):
     (parts + labour + commission), profit, markup %. Same maths as every profit screen
     (services/profit.job_figures)."""
     from backend.services.profit import job_figures
+    # Dropped jobs earned nothing to profit from: they're listed on the Dropped jobs report, and
+    # what they kept counts in Total profit (main 28989ec6; test_dropped_jobs).
+    dropped = await money_rules.dropped_keys(db, org)
     _q = _loc_filter(select(Order).where(
         Order.org_id == org, Order.is_estimate == False, Order.archived == False,  # noqa: E712
-        Order.created_at >= df, Order.created_at <= dt), kw)
+        Order.created_at >= df, Order.created_at <= dt,
+        *([Order.status.notin_(dropped)] if dropped else [])), kw)
     orders = (await db.execute(_q.order_by(Order.created_at.desc()))).scalars().all()
     figs = await job_figures(db, org, _q.with_only_columns(Order.id))   # sums in SQL, no id list
     cols = ["Order #", "Revenue", "Cost", "Gross profit", "Markup %"]
