@@ -96,7 +96,8 @@ def check_whole(part, *qtys) -> None:
         if q is not None and abs(float(q) - round(float(q))) > _EPS:
             from fastapi import HTTPException
             raise HTTPException(422, f"“{part.name}” is counted in whole {part.uom or 'pcs'} — "
-                                     f"{float(q):g} isn't a whole number")
+                                     f"{float(q):g} isn't a whole number. Use a whole number, "
+                                     f"or change its unit on the product.")
 
 
 async def warehouse_for(db, location_id: str, bin_id: Optional[str] = None) -> Optional[str]:

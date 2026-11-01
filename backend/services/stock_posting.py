@@ -122,7 +122,8 @@ async def apply_cost_adjustment(
         return {"applied": 0.0, "on_hand": 0.0, "expensed": q2(add_cost_total)}   # nothing on hand to revalue
     loc_id = next((r.location_id for r in rows if (r.qty_available or 0) > 0), rows[0].location_id if rows else None)
 
-    layers_q = select(StockItemBatch).where(StockItemBatch.part_id == part.id, StockItemBatch.qty_remaining > 0)
+    layers_q = (select(StockItemBatch).where(StockItemBatch.part_id == part.id, StockItemBatch.qty_remaining > 0)
+                .with_for_update().execution_options(populate_existing=True))   # unit_cost += …: locked, fresh
     if po_id and received_qty and received_qty > 0:
         add_per_unit = add_cost_total / received_qty
         po_layers = (await db.execute(layers_q.where(StockItemBatch.po_id == po_id))).scalars().all()

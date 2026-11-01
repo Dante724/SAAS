@@ -408,3 +408,90 @@ async def test_fractional_quantity_refused_for_counted_items(client, tenant, db)
         "location_id": loc, "qty": 2.5, "movement_type": "receive", "unit_cost": 1})
     assert r.status_code == 200, r.text
     await _assert_books(db, cable)
+
+
+# ── council review of #73 ──────────────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_writeoff_reads_layers_fresh_no_lost_update(client, tenant, db):
+    """Two write-offs racing: the second must decrement what the first left, not what it read
+    before (on Postgres the layer select is FOR UPDATE; here a stale session stands in)."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from backend.services import stock_writeoff
+    TestSession = async_sessionmaker(db.bind, expire_on_commit=False)
+    loc, pid = await _two_layers(client, tenant, "QD-R1")
+    async with TestSession() as stale, TestSession() as other:
+        held = (await stale.execute(select(StockItemBatch).where(StockItemBatch.part_id == pid))).scalars().all()
+        assert sum(float(b.qty_remaining) for b in held) == 10      # stale copies, kept alive
+        part_b = (await other.execute(select(Part).where(Part.id == pid))).scalar_one()
+        await stock_writeoff.write_off(other, part=part_b, location_id=loc, qty=3)
+        await other.commit()
+        part_a = (await stale.execute(select(Part).where(Part.id == pid))).scalar_one()
+        await stock_writeoff.write_off(stale, part=part_a, location_id=loc, qty=2)
+        await stale.commit()
+    on_hand, value = await _assert_books(db, pid)
+    assert on_hand == 5 and value == pytest.approx(5 * 4)
+
+
+@pytest.mark.asyncio
+async def test_recost_share_of_used_units_is_posted_as_cogs_expense(client, tenant, db):
+    from backend.models import Expense
+    loc = await _loc(client, tenant)
+    pid = await _part(client, tenant, "QD-R2")
+    po_id, line = await _po(client, tenant, pid, 10, 2)
+    await client.post(f"/api/inventory/po/{po_id}/receive", headers=tenant,
+                      json={"lines": [{"po_line_id": line, "qty": 10}]})
+    await client.post(f"/api/inventory/parts/{pid}/adjust", headers=tenant, json={
+        "location_id": loc, "qty": 6, "movement_type": "writeoff"})
+    out = await _recost(client, tenant, po_id, 20)
+    assert out["expensed"] == pytest.approx(12.0)
+    await db.commit()
+    exps = (await db.execute(select(Expense).where(Expense.category == "Cost of goods sold"))).scalars().all()
+    assert [float(e.amount) for e in exps] == [12.0]
+    await _recost(client, tenant, po_id, 20)                 # same bill again: no second expense
+    await db.commit()
+    assert len((await db.execute(select(Expense).where(Expense.category == "Cost of goods sold"))).scalars().all()) == 1
+
+
+@pytest.mark.asyncio
+async def test_archive_with_write_off_remaining_in_one_step(client, tenant, db):
+    _l1, a = await _stocked(client, tenant, "QD-R3A")
+    _l2, b = await _stocked(client, tenant, "QD-R3B")
+    _l3, c = await _stocked(client, tenant, "QD-R3C")
+    r = await client.post("/api/catalog/products/bulk", headers=tenant,
+                          json={"ids": [a], "action": "delete", "write_off_remaining": True})
+    assert r.status_code == 200 and r.json()["count"] == 1, r.text
+    r = await client.put(f"/api/inventory/parts/{b}", headers=tenant,
+                         json={"name": "Part QD-R3B", "active": False, "write_off_remaining": True})
+    assert r.status_code == 200, r.text
+    r = await client.post("/api/inventory/parts/bulk", headers=tenant, json={
+        "part_ids": [c], "action": "set_active", "number": 0, "write_off_remaining": True})
+    assert r.status_code == 200 and r.json()["changed"] == 1, r.text
+    await db.commit()
+    for pid in (a, b, c):
+        assert (await db.execute(select(Part.active).where(Part.id == pid))).scalar_one() is False
+        on_hand, value = await _assert_books(db, pid)
+        assert on_hand == 0 and value == 0
+        mv = (await db.execute(select(StockMovement.qty).where(
+            StockMovement.part_id == pid, StockMovement.movement_type == "writeoff"))).scalars().all()
+        assert mv == [-3]
+
+
+@pytest.mark.asyncio
+async def test_catalog_bulk_delete_says_why_per_item(client, tenant):
+    _loc_id, stocked = await _stocked(client, tenant, "QD-R5")
+    r = await client.post("/api/catalog/products/bulk", headers=tenant,
+                          json={"ids": [stocked], "action": "delete"})
+    item = r.json()["blocked_items"][0]
+    assert item["id"] == stocked and item["in_stock"] == 3 and "still in stock" in item["reason"]
+
+
+@pytest.mark.asyncio
+async def test_refusals_name_the_next_step(client, tenant):
+    loc, pid = await _two_layers(client, tenant, "QD-R4")
+    r = await client.post(f"/api/inventory/parts/{pid}/adjust", headers=tenant, json={
+        "location_id": loc, "qty": 25, "movement_type": "writeoff"})
+    assert "count it first (Stocktake)" in r.json()["detail"]
+    r = await client.post(f"/api/inventory/parts/{pid}/adjust", headers=tenant, json={
+        "location_id": loc, "qty": 1.5, "movement_type": "receive"})
+    assert "change its unit on the product" in r.json()["detail"]

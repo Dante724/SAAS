@@ -38,6 +38,7 @@ class PartIn(BaseModel):
     weight: Optional[float] = None       # kg — used for weight-basis freight allocation (144ar)
     dimensions: Optional[str] = None     # "LxWxH" cm
     active: Optional[bool] = None        # false archives (refused while the product still has stock)
+    write_off_remaining: Optional[bool] = None   # with active=false: write the stock off, then archive
 
 class StockAdjust(BaseModel):
     location_id: str
@@ -186,6 +187,7 @@ async def create_part(
     current: Employee = Depends(require_perm("can_create_products")),
 ):
     payload = data.model_dump()
+    payload.pop("write_off_remaining", None)
     if payload.get("active") is None:
         payload.pop("active", None)
     if not await can_see_costs(db, current):
@@ -228,16 +230,20 @@ async def update_part(
     # exclude_unset so a client that omits a field (e.g. an older bundle without weight)
     # leaves it untouched instead of nulling it.
     payload = data.model_dump(exclude_unset=True)
+    write_off = bool(payload.pop("write_off_remaining", None))
     if not await can_see_costs(db, current):
         drop_cost_fields(payload)
     if "active" in payload:
         if payload["active"] is None:
             payload.pop("active")
         elif payload["active"] is False and part.active:
-            from backend.services.stock_archive import archive_blocker
-            why = await archive_blocker(db, current.org_id, part)
+            from backend.services import stock_archive
+            if write_off:      # one step: what's left on the shelf is written off, then archived
+                await stock_archive.write_off_remaining(db, current, part)
+            why = await stock_archive.archive_blocker(db, current.org_id, part)
             if why:
-                raise HTTPException(409, f"Can't archive “{part.name}”: {why}")
+                raise HTTPException(409, f"Can't archive “{part.name}”: {why}, "
+                                         "or archive with write_off_remaining.")
     checks = set(payload)
     if payload.get("active") and not part.active:
         checks |= {"name", "sku", "barcode", "code"}     # coming back: its identity must be free again
@@ -1877,6 +1883,15 @@ async def recost_po(
         applied += res["applied"]
         expensed += res["expensed"]
     po.freight_capitalised = q2((po.freight_capitalised or 0) + delta_total)
+    if abs(expensed) >= 0.005:
+        # The freight on units already sold or used can't go into stock any more — it's cost of goods
+        # sold now. Record it as a (non-cash) business expense so it reaches profit instead of vanishing.
+        from backend.models import Expense
+        from backend.services.dates import shop_today
+        db.add(Expense(org_id=current.org_id, location_id=po.location_id, category="Cost of goods sold",
+                       recorded_by_id=current.id, amount=q2(expensed),
+                       description=f"Freight on PO {po.po_number}: share of units already sold or used",
+                       expense_date=await shop_today(db, current.org_id)))
     await db.commit()
     return {"ok": True, "applied": q2(applied), "expensed": q2(expensed), "delta_total": delta_total}
 
@@ -2595,6 +2610,7 @@ class BulkAction(BaseModel):
     action: str          # set_category|set_min_stock|adjust_price_pct|set_active|set_supplier
     value: Optional[str] = None      # category id / supplier id
     number: Optional[float] = None   # min stock / percent / 0|1
+    write_off_remaining: bool = False   # set_active=0: write off what's still in stock, then archive
 
 
 @router.post("/parts/bulk")
@@ -2648,10 +2664,16 @@ async def bulk_update_parts(
     elif data.action == "set_active":
         if data.number not in (0, 1):
             raise HTTPException(422, "set_active expects 0 or 1")
-        from backend.services.stock_archive import archive_blocker
+        from backend.services import stock_archive
         for p in parts:
             if not data.number and p.active:
-                why = await archive_blocker(db, current.org_id, p)     # still stocked → not archived
+                if data.write_off_remaining:
+                    try:
+                        await stock_archive.write_off_remaining(db, current, p)
+                    except HTTPException as e:
+                        blocked.append({"id": p.id, "name": p.name, "reason": e.detail})
+                        continue
+                why = await stock_archive.archive_blocker(db, current.org_id, p)   # still stocked → not archived
                 if why:
                     blocked.append({"id": p.id, "name": p.name, "reason": why})
                     continue

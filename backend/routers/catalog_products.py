@@ -392,6 +392,7 @@ class BulkProductsIn(BaseModel):
     category_id: Optional[str] = None
     price_pct: Optional[float] = None  # adjust by +/- percent
     price_set: Optional[float] = None  # set absolute price
+    write_off_remaining: bool = False  # delete: write off what's still in stock, then archive
 
 
 @router.post("/products/bulk")
@@ -409,6 +410,11 @@ async def bulk_products(data: BulkProductsIn, db: AsyncSession = Depends(get_db)
         Part.id.in_(data.ids), Part.org_id == current.org_id))).scalars().all()
     n = 0
     blocked: list[str] = []
+    blocked_items: list[dict] = []    # why each was kept: {id, name, reason, in_stock}
+
+    def _keep(p, reason, in_stock=0.0):
+        blocked.append(p.name)
+        blocked_items.append({"id": p.id, "name": p.name, "reason": reason, "in_stock": in_stock})
     for p in parts:
         if data.action == "category":
             p.category_id = data.category_id or None
@@ -422,18 +428,26 @@ async def bulk_products(data: BulkProductsIn, db: AsyncSession = Depends(get_db)
             # 144co: never silently orphan a job kit — skip parts still in use, report them.
             from backend.services.catalog_links import catalog_usage
             if await catalog_usage(db, current.org_id, "product", p.id):
-                blocked.append(p.name)
+                _keep(p, "Used in a bundle or job kit. Remove it there first")
                 continue
-            from backend.services.stock_archive import archive_blocker
-            if await archive_blocker(db, current.org_id, p):      # still in stock: same rule as inventory
-                blocked.append(p.name)
+            from backend.services import stock_archive        # still in stock: same rule as inventory
+            if data.write_off_remaining:
+                try:
+                    await stock_archive.write_off_remaining(db, current, p)
+                except HTTPException as e:
+                    _keep(p, e.detail)
+                    continue
+            if await stock_archive.archive_blocker(db, current.org_id, p):
+                have = float((await db.execute(select(func.coalesce(func.sum(StockLevel.qty_available), 0))
+                                                .where(StockLevel.part_id == p.id))).scalar() or 0)
+                _keep(p, f"{have:g} still in stock", in_stock=have)
                 continue
             p.active = False
         else:
             raise HTTPException(400, "Unknown action")
         n += 1
     await db.commit()
-    return {"ok": True, "count": n, "blocked": blocked}
+    return {"ok": True, "count": n, "blocked": blocked, "blocked_items": blocked_items}
 
 
 # ── Excel export / import ────────────────────────────────────────────────────

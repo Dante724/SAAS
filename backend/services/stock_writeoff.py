@@ -35,6 +35,10 @@ async def consume_layers(db, *, part: Part, location_id: str, qty: float,
                                      StockItemBatch.qty_remaining > 0)
     q = q.order_by(StockItemBatch.expiry_date.asc().nullslast() if part.expiry_tracking
                    else StockItemBatch.received_at.asc())
+    # Lock the layers and read them fresh: two write-offs at once each set qty_remaining from what
+    # they read, so without the lock (Postgres) or the refresh (a layer this session already holds)
+    # one decrement was lost.
+    q = q.with_for_update().execution_options(populate_existing=True)
     layers = list((await db.execute(q)).scalars().all())
     if batch_id:
         layers.sort(key=lambda b: b.id != batch_id)
@@ -56,17 +60,20 @@ async def consume_layers(db, *, part: Part, location_id: str, qty: float,
 async def write_off(db, *, part: Part, location_id: str, qty: float, created_by_id: Optional[str] = None,
                     movement_type: str = "writeoff", ref_type: Optional[str] = "writeoff",
                     ref_id: Optional[str] = None, warehouse_id: Optional[str] = None,
-                    bin_id: Optional[str] = None, batch_id: Optional[str] = None) -> dict:
-    """Write `qty` (> 0) of `part` off at `location_id`. Returns {qty, cost, qty_available}."""
+                    bin_id: Optional[str] = None, batch_id: Optional[str] = None,
+                    whole_check: bool = True) -> dict:
+    """Write `qty` (> 0) of `part` off at `location_id`. Returns {qty, cost, qty_available}.
+    `whole_check=False` lets an archive clear out a fractional count left by older data."""
     qty = float(qty)
     if qty <= _EPS:
         raise HTTPException(422, "Provide a positive quantity to write off")
-    stock_rows.check_whole(part, qty)
+    if whole_check:
+        stock_rows.check_whole(part, qty)
     try:
         taken = await stock_rows.draw(db, part.id, location_id, qty, bin_id=bin_id)
     except stock_rows.NotEnoughStock as e:
         raise HTTPException(409, f"Only {e.have:g} of “{part.name}” in stock at this location — "
-                                 f"can't write off {qty:g}")
+                                 f"can't write off {qty:g}. If the shelf has more, count it first (Stocktake).")
     cost = await consume_layers(db, part=part, location_id=location_id, qty=qty, batch_id=batch_id)
     unit = cost / qty
     warehouse_id = warehouse_id or await stock_rows.warehouse_for(db, location_id)
