@@ -411,12 +411,25 @@ async def create_write_off(
 
     total = Decimal("0")
     for ln in data.lines:
-        cost = await _cost(db, ln.part_id, ln.unit_cost)
-        await _take_stock(db, ln.part_id, w, ln.qty, doc="write off", bin_id=getattr(ln, "bin_id", None))
-        if ln.serialized_item_id:
+        part = (await db.execute(select(Part).where(
+            Part.id == ln.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
+        if not part:
+            raise HTTPException(404, "Product not found")
+        unit = None
+        if ln.serialized_item_id or part.serialized:
+            # QA F2: a serialized product's line names its unit, which must be in stock here
             unit = (await db.execute(select(SerializedItem).where(
                 SerializedItem.id == ln.serialized_item_id, SerializedItem.org_id == current.org_id,
-                SerializedItem.part_id == ln.part_id))).scalar_one_or_none()
+                SerializedItem.part_id == ln.part_id).with_for_update())).scalar_one_or_none() \
+                if ln.serialized_item_id else None
+            if part.serialized and (unit is None or ln.qty != 1):
+                raise HTTPException(422, f"Write off “{part.name}” one unit per line, naming its IMEI / serial")
+            if unit is not None and (unit.status != "in_stock" or unit.location_id != w.location_id):
+                raise HTTPException(409, f"{unit.serial_number} isn't in stock here")
+        cost = await _cost(db, ln.part_id, ln.unit_cost)
+        await _take_stock(db, ln.part_id, w, ln.qty, doc="write off",
+                          bin_id=getattr(ln, "bin_id", None) or (unit.bin_id if unit else None))
+        if ln.serialized_item_id:
             if unit:
                 unit.status = "written_off"
                 serial_log.record(db, unit, "written_off", ref_type="write_off", ref_id=doc.id,

@@ -87,3 +87,38 @@ async def write_off(db, *, part: Part, location_id: str, qty: float, created_by_
                              created_by_id=created_by_id))
     return {"qty": qty, "cost": round(cost, 2),
             "qty_available": (await stock_rows.totals(db, part.id, location_id))[0]}
+
+
+async def write_off_units(db, *, part: Part, location_id: str, serials, created_by_id: Optional[str] = None,
+                          movement_type: str = "writeoff", ref_type: Optional[str] = "writeoff",
+                          ref_id: Optional[str] = None, warehouse_id: Optional[str] = None,
+                          label: Optional[str] = None) -> dict:
+    """QA F2 — write off named units of a serialized product at `location_id`: each comes out of its
+    own bin and cost layer and is marked written off, so the units always match the stock count."""
+    from backend.models import SerializedItem
+    from backend.services import serial_log
+    from backend.services.serial_intake import matches as _sn_matches
+    named = list(dict.fromkeys(x.strip() for x in (serials or []) if x and str(x).strip()))
+    if not named:
+        raise HTTPException(422, f"Scan the IMEI / serial of each “{part.name}” to write off")
+    units = []
+    for sn in named:
+        u = (await db.execute(select(SerializedItem).where(
+            SerializedItem.org_id == part.org_id, SerializedItem.part_id == part.id,
+            SerializedItem.status == "in_stock", SerializedItem.location_id == location_id,
+            _sn_matches(SerializedItem.serial_number, sn)).with_for_update())).scalars().first()
+        if u is None:
+            raise HTTPException(409, f"{sn} isn't in stock here")
+        units.append(u)
+    cost, out = 0.0, None
+    for u in units:
+        out = await write_off(db, part=part, location_id=location_id, qty=1, created_by_id=created_by_id,
+                              movement_type=movement_type, ref_type=ref_type, ref_id=ref_id,
+                              warehouse_id=warehouse_id, bin_id=u.bin_id, batch_id=u.batch_id)
+        cost += out["cost"]
+        u.status = "written_off"
+        serial_log.record(db, u, "written_off", ref_type=ref_type, ref_id=ref_id,
+                          label=label or "Written off", actor_id=created_by_id)
+    return {"qty": float(len(units)), "cost": round(cost, 2), "qty_available": out["qty_available"],
+            "serials": [u.serial_number for u in units]}
+

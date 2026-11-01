@@ -269,3 +269,52 @@ async def test_canceled_transfer_puts_the_phones_back(client, tenant, db):
         "status": "canceled", "return_location_id": here})).status_code == 200
     assert await _units(db, p["id"]) == {sns[0]: ("in_stock", here), sns[1]: ("in_stock", here)}
     await _ledger_matches(db, p["id"])
+
+
+@pytest.mark.asyncio
+async def test_writing_off_a_phone_names_which_one(client, tenant, db):
+    p, here, sns = await _phone(client, tenant, n=2)
+    url = f"/api/inventory/parts/{p['id']}/adjust"
+    r = await client.post(url, json={"location_id": here, "qty": 1, "movement_type": "writeoff"}, headers=tenant)
+    assert r.status_code == 422, r.text                     # was: stock −1, both units still "in stock"
+    r = await client.post(url, json={"location_id": here, "qty": 1, "movement_type": "writeoff",
+                                     "serials": [sns[1]]}, headers=tenant)
+    assert r.status_code == 200, r.text
+    assert await _units(db, p["id"]) == {sns[0]: ("in_stock", here), sns[1]: ("written_off", here)}
+    # the write-off document needs the unit too
+    w = await _wh(client, tenant)
+    r = await client.post("/api/stock-docs/write-offs", headers=tenant, json={
+        "warehouse_id": w["id"], "reason": "Cracked", "lines": [{"part_id": p["id"], "qty": 1}]})
+    assert r.status_code == 422, r.text
+    assert await _on_hand(db, p["id"]) == 1
+    await _ledger_matches(db, p["id"])
+
+
+@pytest.mark.asyncio
+async def test_customer_return_of_a_phone_puts_that_unit_back(client, tenant, db):
+    p, here, sns = await _phone(client, tenant, n=2)
+    line = {"kind": "product", "ref_id": p["id"], "description": "iPhone 13", "qty": 1, "unit_price": 400,
+            "serials": [sns[0]]}
+    assert (await client.post("/api/sales", json={"lines": [line]}, headers=tenant)).status_code == 201
+    r = await client.post("/api/returns", headers=tenant, json={"reason": "Changed mind",
+                          "lines": [{"part_id": p["id"], "qty": 1}]})
+    assert r.status_code == 422, r.text                     # which phone came back?
+    r = await client.post("/api/returns", headers=tenant, json={"reason": "Changed mind",
+                          "lines": [{"part_id": p["id"], "qty": 1, "serials": [sns[1]]}]})
+    assert r.status_code == 409, r.text                     # that one never left the shop
+    r = await client.post("/api/returns", headers=tenant, json={"reason": "Changed mind",
+                          "lines": [{"part_id": p["id"], "qty": 1, "serials": [sns[0]]}]})
+    assert r.status_code == 201, r.text
+    assert await _units(db, p["id"]) == {sns[0]: ("in_stock", here), sns[1]: ("in_stock", here)}
+    assert await _on_hand(db, p["id"]) == 2
+    await _ledger_matches(db, p["id"])
+
+
+@pytest.mark.asyncio
+async def test_scan_to_stock_writes_off_the_phone_whose_imei_was_scanned(client, tenant, db):
+    p, here, sns = await _phone(client, tenant, n=2)
+    r = await client.post("/api/inventory/scan-adjust", headers=tenant, json={
+        "code": sns[0], "location_id": here, "qty": 1, "movement_type": "writeoff"})
+    assert r.status_code == 200 and r.json()["part_id"] == p["id"], r.text
+    assert await _units(db, p["id"]) == {sns[0]: ("written_off", here), sns[1]: ("in_stock", here)}
+    await _ledger_matches(db, p["id"])

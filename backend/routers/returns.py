@@ -10,7 +10,7 @@ from sqlalchemy.orm import selectinload
 from backend.db.database import get_db
 from backend.models import (
     ClientReturn, ClientReturnLine, Refund, Order, StockMovement,
-    Account, Employee, Payment,
+    Account, Employee, Part, Payment,
 )
 from backend.services.auth import assert_perm, get_current_employee, require_perm
 from backend.services.dates import now_utc
@@ -22,6 +22,7 @@ class ReturnLineIn(BaseModel):
     part_id: str
     qty: float = 1
     restock: bool = True
+    serials: Optional[list[str]] = None   # QA F2: a serialized product — which units came back
 
 
 class ReturnIn(BaseModel):
@@ -39,27 +40,64 @@ async def create_return(
 ):
     if not data.lines:
         raise HTTPException(400, "A return needs at least one line")
+    loc_id = current.location_id
+    if not loc_id:      # an owner without a home location: the shop's first location (as the till does)
+        from backend.models import Location
+        loc_id = (await db.execute(select(Location.id).where(
+            Location.org_id == current.org_id).order_by(Location.created_at).limit(1))).scalar_one_or_none()
     ret = ClientReturn(org_id=current.org_id, order_id=data.order_id,
-                       client_id=data.client_id, location_id=current.location_id,
+                       client_id=data.client_id, location_id=loc_id,
                        reason=data.reason, created_by_id=current.id)
     db.add(ret)
     await db.flush()
     restocked = 0
     for li in data.lines:
+        part = (await db.execute(select(Part).where(
+            Part.id == li.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
+        if not part:
+            raise HTTPException(404, "Product not found")
+        units = await _returned_units(db, current, part, li) if li.restock and li.qty > 0 else []
         db.add(ClientReturnLine(return_id=ret.id, part_id=li.part_id,
                                 qty=li.qty, restock=li.restock))
         if li.restock and li.qty > 0:
-            from backend.services import stock_rows
-            await stock_rows.add(db, li.part_id, current.location_id, li.qty)
-            db.add(StockMovement(part_id=li.part_id, location_id=current.location_id,
+            from backend.services import serial_log, stock_rows
+            await stock_rows.add(db, li.part_id, loc_id, li.qty)
+            db.add(StockMovement(part_id=li.part_id, location_id=loc_id,
                                  movement_type="return", qty=li.qty,
                                  ref_type="client_return", ref_id=ret.id))
+            for u in units:
+                u.status, u.location_id, u.bin_id, u.warehouse_id, u.order_id = "in_stock", loc_id, None, None, None
+                serial_log.record(db, u, "returned", ref_type="client_return", ref_id=ret.id,
+                                  label=data.reason or "Customer return", actor_id=current.id)
             restocked += 1
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "return", ret.id,
                            f"Client return: {len(data.lines)} line(s), {restocked} restocked")
     await db.commit()
     return {"id": ret.id, "restocked": restocked}
+
+
+async def _returned_units(db, current, part, li) -> list:
+    """QA F2 — the units of a serialized product that came back: one serial per unit, each one this
+    shop sold or used on a job (a unit still in stock can't come back)."""
+    from backend.models import SerializedItem
+    from backend.services.serial_intake import matches as _sn_matches
+    named = list(dict.fromkeys(x.strip() for x in (li.serials or []) if x and x.strip()))
+    if not part.serialized:
+        return []
+    if abs(li.qty - round(li.qty)) > 1e-9 or len(named) != int(round(li.qty)):
+        raise HTTPException(422, f"Scan the IMEI / serial of each “{part.name}” coming back "
+                                 f"({len(named)} of {li.qty:g} entered)")
+    units = []
+    for sn in named:
+        u = (await db.execute(select(SerializedItem).where(
+            SerializedItem.org_id == current.org_id, SerializedItem.part_id == part.id,
+            SerializedItem.status.in_(("sold", "allocated_to_order")),
+            _sn_matches(SerializedItem.serial_number, sn)).with_for_update())).scalars().first()
+        if u is None:
+            raise HTTPException(409, f"{sn} isn't a “{part.name}” this shop sold")
+        units.append(u)
+    return units
 
 
 class RefundIn(BaseModel):
