@@ -117,3 +117,35 @@ async def test_short_delivery_recorded_with_ids_the_api_returns(client, tenant, 
         StockLevel.part_id == p["id"], StockLevel.location_id == dest))).scalar_one()
     assert float(at_dest) == 3 and await _on_hand(db, p["id"]) == 9      # 1 booked as lost
     await _ledger_matches(db, p["id"])
+
+
+# ── 4. serialized (IMEI) items: the serial is asked for wherever stock moves ──────────────────
+async def _phone(client, tenant, n=2):
+    from backend.tests.test_inventory_bins_passport_stocktake import SN, _product, _receive
+    loc = await _loc(client, tenant)
+    p = await _product(client, tenant, name="iPhone 13", serialized=True)
+    await _receive(client, tenant, loc, p["id"], n, serials=SN[5:5 + n])
+    return p, loc, SN[5:5 + n]
+
+
+@pytest.mark.asyncio
+async def test_till_needs_the_imei_of_a_serialized_phone_and_shows_it(client, tenant, db):
+    from backend.models import SerializedItem
+    p, _, sns = await _phone(client, tenant)
+    line = {"kind": "product", "ref_id": p["id"], "description": "iPhone 13", "qty": 1, "unit_price": 400}
+    r = await client.post("/api/sales", json={"lines": [line]}, headers=tenant)
+    assert r.status_code == 422 and "IMEI" in r.json()["detail"], r.text          # was: oldest unit, silently
+    assert await _on_hand(db, p["id"]) == 2
+    # scanning the phone's IMEI at the till says which product and which unit
+    hit = (await client.get(f"/api/sales/lookup?code={sns[1]}", headers=tenant)).json()["items"][0]
+    assert hit["id"] == p["id"] and hit["serialized"] and hit["serial"] == sns[1]
+    r = await client.post("/api/sales", json={"lines": [{**line, "serials": [sns[1]]}]}, headers=tenant)
+    assert r.status_code == 201, r.text
+    db.expire_all()
+    status = {u.serial_number: u.status for u in (await db.execute(select(SerializedItem).where(
+        SerializedItem.part_id == p["id"]))).scalars()}
+    assert status == {sns[0]: "in_stock", sns[1]: "sold"}
+    rc = (await client.get(f"/api/sales/{r.json()['id']}/receipt", headers=tenant)).json()
+    assert rc["lines"][0]["serials"] == [sns[1]] and sns[1] in rc["text"]
+    assert await _on_hand(db, p["id"]) == 1
+    await _ledger_matches(db, p["id"])

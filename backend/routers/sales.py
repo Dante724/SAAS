@@ -195,6 +195,7 @@ async def lookup_code(
     parts = (await db.execute(base.where(or_(*[func.lower(c) == low for c in fields.values()], Part.id.in_(extra)))
                               .order_by(Part.name).limit(20))).scalars().all()
     matched = {p.id: next((k for k in fields if (getattr(p, k, None) or "").lower() == low), "barcode") for p in parts}
+    unit_serial = None
     if not parts:
         from backend.models import SerializedItem
         from backend.services.serial_intake import matches as _sn_matches
@@ -205,6 +206,7 @@ async def lookup_code(
         if si:
             parts = (await db.execute(base.where(Part.id == si.part_id))).scalars().all()
             matched = {p.id: "serial" for p in parts}
+            unit_serial = si.serial_number
     loc_id = current.location_id
     stock = {}
     if parts:
@@ -217,6 +219,8 @@ async def lookup_code(
         "id": p.id, "name": p.name, "sku": p.sku, "barcode": p.barcode, "code": p.code,
         "mpn": getattr(p, "mpn", None), "sell_price": p.sell_price or 0,
         "qty_available": stock.get(p.id, 0.0), "image_data": p.image_data, "matched_on": matched.get(p.id),
+        # QA F2: a serialized product needs its unit's serial at the till; a scanned IMEI already says which
+        "serialized": bool(p.serialized), "serial": unit_serial if matched.get(p.id) == "serial" else None,
     } for p in parts]}
 
 
@@ -483,9 +487,9 @@ async def _create_sale(data: SaleIn, db: AsyncSession, current: Employee):
 
 
 async def _sell_units(db, current, sale, part, loc_id, li) -> list:
-    """ii144c — a serialized product sold at the counter: the units named on the line (each must be in
-    stock here), else the oldest units in stock. They become `sold` with a passport line; returns the
-    units, whose bins the stock is drawn from."""
+    """ii144c — a serialized product sold at the counter: the units named on the line, each in stock
+    here and one per unit sold (QA F2: no longer the oldest units when none are named). They become
+    `sold` with a passport line; returns the units, whose bins the stock is drawn from."""
     from backend.models import SerializedItem
     from backend.services import serial_log
     from backend.services.serial_intake import matches as _sn_matches
@@ -504,12 +508,11 @@ async def _sell_units(db, current, sale, part, loc_id, li) -> list:
         units.append(u)
     if len(units) > n:
         raise HTTPException(422, f"{len(units)} serials named for {n:g} of '{part.name}'")
-    if len(units) < n:
-        q = base.where(SerializedItem.id.not_in([u.id for u in units])) if units else base
-        more = (await db.execute(q
-                                 .order_by(SerializedItem.created_at).limit(n - len(units))
-                                 .with_for_update(skip_locked=True))).scalars().all()
-        units.extend(more)
+    if part.serialized and (len(units) < n or abs(li.qty - n) > 1e-9):
+        # QA F2: the till records which phone left — picking the oldest unit put the wrong IMEI on
+        # the sale (warranty, theft checks). The serial is asked for wherever a serialized unit moves.
+        raise HTTPException(422, f"Scan the IMEI / serial of each '{part.name}' sold "
+                                 f"({len(units)} of {li.qty:g} entered)")
     for u in units:
         u.status = "sold"
         serial_log.record(db, u, "sold", ref_type="sale", ref_id=sale.id,
@@ -522,7 +525,8 @@ class ReceiptEmailIn(BaseModel):
     email: Optional[str] = Field(default=None, max_length=254)   # blank → the sale's client's email
 
 
-def receipt_text(org_name: str, sale: Sale, lines: list, sym: str, tz: Optional[str] = None) -> str:
+def receipt_text(org_name: str, sale: Sale, lines: list, sym: str, tz: Optional[str] = None,
+                 serials: Optional[dict] = None) -> str:
     """The customer's receipt in plain words — what was bought and what was paid. Never cost
     or profit (that's the shop's business, not the customer's)."""
     def m(v):
@@ -543,6 +547,8 @@ def receipt_text(org_name: str, sale: Sale, lines: list, sym: str, tz: Optional[
         qty = ln.qty or 1
         qty_s = f"{qty:g} × " if qty != 1 else ""
         out.append(f"{qty_s}{ln.description or ln.kind}  {m(ln.total)}")
+        for sn in (serials or {}).get(ln.id, []):
+            out.append(f"  IMEI / SN {sn}")
     if float(sale.discount or 0):
         out.append(f"Discount  −{m(sale.discount)}")
     out += ["", f"Total  {m(sale.total)}", "Paid" if sale.paid else "Not paid yet", "", "Thank you!"]
@@ -566,14 +572,28 @@ async def sale_receipt(
         Client.id == sale.client_id, Client.org_id == current.org_id))).scalar_one_or_none() if sale.client_id else None
     from backend.services.currency import _base
     sym = _base(org)["symbol"]
+    serials = await _line_serials(db, current.org_id, lines)
     return {
         "sale_number": sale.sale_number, "shop_name": org.name if org else "",
         "total": sale.total, "discount": sale.discount, "paid": sale.paid,
         "created_at": sale.created_at.isoformat() if sale.created_at else None,
-        "lines": [{"description": ln.description, "qty": ln.qty, "total": ln.total} for ln in lines],
+        "lines": [{"description": ln.description, "qty": ln.qty, "total": ln.total,
+                   "serials": serials.get(ln.id, [])} for ln in lines],
         "client_email": client.email if client else None, "client_phone": client.phone if client else None,
-        "text": receipt_text(org.name if org else "", sale, lines, sym, getattr(org, "timezone", None)),
+        "text": receipt_text(org.name if org else "", sale, lines, sym, getattr(org, "timezone", None), serials),
     }
+
+
+async def _line_serials(db, org_id: str, lines: list) -> dict:
+    """QA F2: line id → the serials / IMEIs that line sold, for the receipt (warranty claims)."""
+    from backend.models import SerializedItem
+    ids = {ln.id: list((ln.stock_draws or {}).get("serials") or []) for ln in lines}
+    wanted = {u for v in ids.values() for u in v}
+    if not wanted:
+        return {}
+    sn = dict((await db.execute(select(SerializedItem.id, SerializedItem.serial_number).where(
+        SerializedItem.org_id == org_id, SerializedItem.id.in_(wanted)))).all())
+    return {lid: [sn[u] for u in us if u in sn] for lid, us in ids.items() if us}
 
 
 @router.post("/{sale_id}/receipt/email")

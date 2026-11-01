@@ -15,15 +15,16 @@ import { inputCls } from "../invoices/billing";
 import { Avatar, deviceIcon } from "../orders/look";
 import { loadFailed } from "../../lib/notice";
 
-type Product = { id: string; name?: string; sku?: string; sell_price?: number; qty_available?: number; image_data?: string | null; low_stock?: boolean };
+type Product = { id: string; name?: string; sku?: string; sell_price?: number; qty_available?: number; image_data?: string | null; low_stock?: boolean; serialized?: boolean };
 type Service = { id: string; name?: string; price?: number; duration_min?: number };
 type ClientLite = { id: string; name?: string; phone?: string };
 type Account = { id: string; name?: string; payment_option?: string };
 // F1: what GET /sales/lookup returns for a scanned code.
-type Match = { id: string; name: string; sku?: string | null; barcode?: string | null; code?: string | null; mpn?: string | null; sell_price: number; qty_available: number; matched_on?: string | null };
+type Match = { id: string; name: string; sku?: string | null; barcode?: string | null; code?: string | null; mpn?: string | null; sell_price: number; qty_available: number; matched_on?: string | null;
+  serialized?: boolean; serial?: string | null };   // QA F2: a scanned IMEI names the unit
 type Receipt = {
   sale_number: string; shop_name: string; total: number; discount?: number; paid: boolean; created_at?: string | null;
-  lines: { description: string; qty: number; total: number }[];
+  lines: { description: string; qty: number; total: number; serials?: string[] }[];
   client_email?: string | null; client_phone?: string | null; text: string;
 };
 
@@ -53,7 +54,13 @@ export function stockChip(qty?: number | null, low?: boolean) {
   return { label: `${q} in stock`, warn: false };
 }
 
-type CartLine = { key: string; kind: "product" | "service"; ref_id: string; description: string; unit_price: number; qty: number; discount: number; stock?: number };
+type CartLine = { key: string; kind: "product" | "service"; ref_id: string; description: string; unit_price: number; qty: number; discount: number; stock?: number;
+  serialized?: boolean; serials?: string[] };   // QA F2: one IMEI / serial per unit of a serialized product
+
+/** Serialized lines still missing an IMEI / serial (the till won't charge until each unit is named). */
+export function missingSerials(cart: CartLine[]): CartLine[] {
+  return cart.filter((l) => l.serialized && (l.serials || []).length < l.qty);
+}
 
 export default function SalesPOS() {
   const [mode, setMode] = useState<"products" | "services">("products");
@@ -98,7 +105,7 @@ export default function SalesPOS() {
   const [miss, setMiss] = useState(false);
   const litTimer = useRef<ReturnType<typeof setTimeout>>();
   const addMatch = useCallback((m: Match) => {
-    add("product", m.id, m.name, m.sell_price || 0, m.qty_available);
+    add("product", m.id, m.name, m.sell_price || 0, m.qty_available, { serialized: m.serialized, serial: m.serial });
     scanBeep(true);
     setLit((x) => ({ id: m.id, n: (x?.n || 0) + 1 }));
     clearTimeout(litTimer.current);
@@ -119,14 +126,23 @@ export default function SalesPOS() {
     } catch (e: any) { scanBeep(false); flash(e.message || "Couldn't look up that code"); }
   }, [addMatch]);
 
-  function add(kind: "product" | "service", id: string, name: string, price: number, stock?: number) {
+  function add(kind: "product" | "service", id: string, name: string, price: number, stock?: number,
+               unit?: { serialized?: boolean; serial?: string | null }) {
+    const serial = unit?.serial || null;
     setCart((c) => {
       const ex = c.find((l) => l.ref_id === id && l.kind === kind);
-      if (ex) return c.map((l) => l === ex ? { ...l, qty: l.qty + 1 } : l);
-      return [...c, { key: Math.random().toString(36).slice(2), kind, ref_id: id, description: name, unit_price: price, qty: 1, discount: 0, stock }];
+      if (ex && serial && (ex.serials || []).includes(serial)) return c;      // the same phone scanned twice
+      if (ex) return c.map((l) => l === ex ? { ...l, qty: l.qty + 1, serials: serial ? [...(l.serials || []), serial] : l.serials } : l);
+      return [...c, { key: Math.random().toString(36).slice(2), kind, ref_id: id, description: name, unit_price: price, qty: 1, discount: 0, stock,
+        serialized: !!unit?.serialized, serials: serial ? [serial] : [] }];
     });
   }
-  const setQty = (key: string, d: number) => setCart((c) => c.map((l) => l.key === key ? { ...l, qty: Math.max(1, l.qty + d) } : l));
+  const setQty = (key: string, d: number) => setCart((c) => c.map((l) => {
+    if (l.key !== key) return l;
+    const qty = Math.max(1, l.qty + d);
+    return { ...l, qty, serials: (l.serials || []).slice(0, qty) };
+  }));
+  const setSerials = (key: string, serials: string[]) => setCart((c) => c.map((l) => l.key === key ? { ...l, serials } : l));
   const remove = (key: string) => setCart((c) => c.filter((l) => l.key !== key));
 
   const subtotal = cart.reduce((s, l) => s + l.unit_price * l.qty * (1 - l.discount / 100), 0);
@@ -145,12 +161,15 @@ export default function SalesPOS() {
   const saleKey = useRef(idempotencyKey());   // a double click on Charge makes one sale (server: Idempotency-Key)
   async function charge(onReader = false) {
     if (cart.length === 0) { flash("Cart is empty"); return; }
+    const unnamed = missingSerials(cart);
+    if (unnamed.length) { flash(`Scan the IMEI / serial of each ${unnamed[0].description}`); return; }
     setBusy(true);
     try {
       const r = await api.postOnce<any>("/sales", {
         client_id: client?.id || null, account_id: onReader ? null : (accountId || null), discount,
         coupon_code: coupon.trim() || null, gift_card_code: giftCard.trim() || null, redeem_points: redeemPts || 0,
-        lines: cart.map((l) => ({ kind: l.kind, ref_id: l.ref_id, description: l.description, qty: l.qty, unit_price: l.unit_price, discount: l.discount })),
+        lines: cart.map((l) => ({ kind: l.kind, ref_id: l.ref_id, description: l.description, qty: l.qty, unit_price: l.unit_price, discount: l.discount,
+          ...(l.serialized ? { serials: l.serials || [] } : {}) })),
       }, saleKey.current);
       saleKey.current = idempotencyKey();
       const red = r.redeemed && Object.keys(r.redeemed).length
@@ -196,7 +215,7 @@ export default function SalesPOS() {
               {mode === "products" && grid.map((p: any) => {
                 const chip = stockChip(p.qty_available, p.low_stock);
                 return (
-                  <button key={p.id} onClick={() => add("product", p.id, p.name, p.sell_price || 0, p.qty_available)} className={tileCls}>
+                  <button key={p.id} onClick={() => add("product", p.id, p.name, p.sell_price || 0, p.qty_available, { serialized: p.serialized })} className={tileCls}>
                     <div className="flex items-start gap-2 mb-2.5">
                       {p.image_data ? <img src={p.image_data} alt="" className="w-9 h-9 rounded-lg object-cover border border-slate-200" /> : <span className="w-9 h-9 rounded-lg bg-slate-100 text-ink-tertiary flex items-center justify-center flex-shrink-0"><M n={productGlyph(p.name, p.brand)} c="text-base" /></span>}
                       <span data-testid="stock-chip" data-warn={chip.warn ? "true" : "false"}
@@ -281,6 +300,7 @@ export default function SalesPOS() {
                   </div>
                   <span className="text-sm font-semibold tabular-nums text-ink-primary">{money(l.unit_price * l.qty * (1 - l.discount / 100))}</span>
                 </div>
+                {l.serialized && <LineSerials line={l} onChange={(v) => setSerials(l.key, v)} />}
               </div>
             ))}
           </div>
@@ -325,6 +345,49 @@ export default function SalesPOS() {
       {receiptFor && <ReceiptSheet saleId={receiptFor} onClose={() => setReceiptFor(null)} onFlash={flash} />}
       {newClient && <NewClientDrawer prefillName={clientQ.trim()} onClose={() => setNewClient(false)} onCreated={(c) => { setClient(c); setNewClient(false); setClientQ(""); flash(`Client "${c.name}" created & attached`); }} />}
     </Shell>
+  );
+}
+
+// QA F2: a serialized product (a phone) needs the IMEI / serial of each unit sold, so the sale records
+// which one left. Scanning the IMEI at the till fills it in; otherwise type or scan it here, or pick
+// from the units in stock.
+function LineSerials({ line, onChange }: { line: CartLine; onChange: (v: string[]) => void }) {
+  const [text, setText] = useState("");
+  const [units, setUnits] = useState<string[]>([]);
+  const serials = line.serials || [];
+  useEffect(() => {
+    api.get<{ items: { serial_number: string; status: string }[] }>(`/serials?part_id=${encodeURIComponent(line.ref_id)}&status=in_stock`)
+      .then((r) => setUnits((r.items || []).filter((u) => u.status === "in_stock").map((u) => u.serial_number)))
+      .catch(() => setUnits([]));
+  }, [line.ref_id]);
+  const add = (raw: string) => {
+    const sn = raw.trim();
+    if (!sn || serials.includes(sn) || serials.length >= line.qty) { setText(""); return; }
+    onChange([...serials, sn]); setText("");
+  };
+  const left = line.qty - serials.length;
+  const listId = `sn-${line.key}`;
+  return (
+    <div className="mt-2 space-y-1.5">
+      {serials.length > 0 && (
+        <div className="flex flex-wrap gap-1">
+          {serials.map((sn) => (
+            <span key={sn} className="inline-flex items-center gap-1 h-6 pl-2 pr-1 rounded-md border border-slate-200 bg-slate-50 text-[11px] font-mono text-ink-primary">
+              {sn}<button aria-label={`Remove ${sn}`} onClick={() => onChange(serials.filter((x) => x !== sn))} className="w-5 h-5 grid place-items-center rounded text-ink-tertiary hover:text-rose-600"><M n="close" c="text-xs" /></button>
+            </span>
+          ))}
+        </div>
+      )}
+      {left > 0 && (
+        <>
+          <input value={text} onChange={(e) => setText(e.target.value)} list={listId} aria-label={`IMEI or serial for ${line.description}`}
+            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(text); } }}
+            onBlur={() => { if (units.includes(text.trim())) add(text); }}
+            className={`${inputCls} h-8 text-xs font-mono !border-amber-300`} placeholder={left === 1 ? "Scan or type the IMEI / serial" : `Scan or type ${left} more IMEIs / serials`} />
+          <datalist id={listId}>{units.filter((u) => !serials.includes(u)).map((u) => <option key={u} value={u} />)}</datalist>
+        </>
+      )}
+    </div>
   );
 }
 
@@ -377,7 +440,7 @@ function ReceiptSheet({ saleId, onClose, onFlash }: { saleId: string; onClose: (
   function print() {
     if (!rc) return;
     const w = window.open("", "_blank", "width=380,height=600"); if (!w) { onFlash("Allow pop-ups to print the receipt"); return; }
-    const rows = rc.lines.map((l) => `<tr><td>${l.qty !== 1 ? `${l.qty} × ` : ""}${escapeHtml(l.description)}</td><td class="r">${escapeHtml(money(l.total))}</td></tr>`).join("");
+    const rows = rc.lines.map((l) => `<tr><td>${l.qty !== 1 ? `${l.qty} × ` : ""}${escapeHtml(l.description)}${(l.serials || []).map((sn) => `<br><small>IMEI / SN ${escapeHtml(sn)}</small>`).join("")}</td><td class="r">${escapeHtml(money(l.total))}</td></tr>`).join("");
     const css = "body{font-family:Inter,system-ui,sans-serif;margin:0;padding:18px;color:#14213f;font-size:13px}h1{font-size:15px;margin:0}p{margin:2px 0 12px;color:#5b6b8c}table{width:100%;border-collapse:collapse}td{padding:4px 0}.r{text-align:right}.t td{border-top:1px dashed #c9d3ea;padding-top:8px;font-weight:700;font-size:15px}";
     w.document.write(`<html><head><title>${escapeHtml(rc.sale_number)}</title><style>${css}</style></head><body><h1>${escapeHtml(rc.shop_name)}</h1>`
       + `<p>Receipt ${escapeHtml(rc.sale_number)}${rc.created_at ? " · " + escapeHtml(new Date(rc.created_at + (rc.created_at.endsWith("Z") ? "" : "Z")).toLocaleString()) : ""}</p>`
