@@ -30,7 +30,7 @@ from backend.services.auth import get_current_employee, require_perm
 from backend.services import stock_rows
 from backend.services.batching import names_by_id, rows_by
 from backend.services.numbering import next_number
-from backend.services.money import claim_status, q2
+from backend.services.money import add_to_column, claim_status, q2
 from backend.services.dates import now_utc
 from backend.services.owned import require_location, require_owned_ids
 
@@ -71,7 +71,8 @@ async def list_transfers(
     for t in rows:
         ls = lines_by.get(t.id, [])
         out.append(_ser(t, loc_names,
-                        [{"part_id": l.part_id, "part_name": part_names.get(l.part_id), "qty": l.qty} for l in ls]))
+                        [{"id": l.id, "line_id": l.id, "part_id": l.part_id, "part_name": part_names.get(l.part_id),
+                          "qty": l.qty, "qty_received": l.qty_received} for l in ls]))
     return {"items": out}
 
 
@@ -100,6 +101,7 @@ async def transfer_detail(
         total_qty += l.qty
         total_val += cost * l.qty
         line_data.append({
+            "id": l.id, "line_id": l.id, "qty_received": l.qty_received,   # QA F2: what /receive takes
             "part_id": l.part_id, "part_name": p.name if p else l.part_id,
             "sku": p.sku if p else None, "uom": p.uom if p else None,
             "qty": l.qty, "unit_cost": cost, "line_value": q2(cost * l.qty)})
@@ -238,18 +240,20 @@ async def change_status(
         # confirmed shortage must not silently reappear as stock at the far end.
         for l in lines:
             qty_in = l.qty_received if l.qty_received is not None else l.qty
-            if not qty_in:
-                continue
-            await stock_rows.add(db, l.part_id, t.to_location_id, qty_in)
-            db.add(StockMovement(part_id=l.part_id, location_id=t.to_location_id,
-                                 warehouse_id=t.to_warehouse_id,
-                                 movement_type="transfer_in", qty=qty_in,
-                                 ref_type="transfer", ref_id=t.id))
+            if qty_in:
+                await stock_rows.add(db, l.part_id, t.to_location_id, qty_in)
+            # QA F2: what shipped comes in, and the shortfall is booked as a loss where it was found.
+            # The source already logged the whole shipment out, so a second loss there counted it twice
+            # (movements no longer summed to the stock on the shelf).
+            if l.qty:
+                db.add(StockMovement(part_id=l.part_id, location_id=t.to_location_id,
+                                     warehouse_id=t.to_warehouse_id,
+                                     movement_type="transfer_in", qty=l.qty,
+                                     ref_type="transfer", ref_id=t.id))
             missing = (l.qty or 0) - qty_in
             if missing > 0:
-                # the shortfall is a real loss and is recorded as one, at the source
-                db.add(StockMovement(part_id=l.part_id, location_id=t.from_location_id,
-                                     warehouse_id=t.from_warehouse_id,
+                db.add(StockMovement(part_id=l.part_id, location_id=t.to_location_id,
+                                     warehouse_id=t.to_warehouse_id,
                                      movement_type="transfer_shortage", qty=-missing,
                                      ref_type="transfer", ref_id=t.id))
         t.completed_at = now_utc()
@@ -263,7 +267,9 @@ async def change_status(
 
 # ── Build 93: verify what arrived, and scan lines in ─────────────────────────
 class ReceiveLine(BaseModel):
-    line_id: str
+    line_id: Optional[str] = None
+    part_id: Optional[str] = None     # QA F2: or name the product, as the person holding the box knows it
+    code: Optional[str] = None        # … by its barcode / SKU
     qty_received: float
 
 
@@ -282,7 +288,7 @@ async def receive_lines(
     This is the step that catches a box that left with ten and arrived with nine. Until
     it's done, completing the transfer assumes everything arrived; once it's done, the
     destination is credited with the verified count and the difference is booked as a
-    loss against the source rather than quietly vanishing.
+    loss on arrival rather than quietly vanishing.
     """
     t = (await db.execute(select(StockTransfer).where(
         StockTransfer.id == tid, StockTransfer.org_id == current.org_id))).scalar_one_or_none()
@@ -293,11 +299,7 @@ async def receive_lines(
 
     discrepancies = 0
     for r in data.lines:
-        ln = (await db.execute(select(StockTransferLine).where(
-            StockTransferLine.id == r.line_id,
-            StockTransferLine.transfer_id == tid))).scalar_one_or_none()
-        if not ln:
-            raise HTTPException(404, f"Line {r.line_id} not found on this transfer")
+        ln = await _receive_line(db, current.org_id, tid, r)
         if r.qty_received < 0:
             raise HTTPException(422, "Received quantity can't be negative")
         if r.qty_received > (ln.qty or 0):
@@ -313,6 +315,29 @@ async def receive_lines(
         t.received_at = now_utc()
     await db.commit()
     return {"ok": True, "status": t.status, "discrepancies": discrepancies}
+
+
+async def _receive_line(db, org_id: str, tid: str, r: ReceiveLine) -> StockTransferLine:
+    """The transfer line a received row means: its line id, else the one line for the product."""
+    q = select(StockTransferLine).where(StockTransferLine.transfer_id == tid)
+    if r.line_id:
+        ln = (await db.execute(q.where(StockTransferLine.id == r.line_id))).scalar_one_or_none()
+        if not ln:
+            raise HTTPException(404, f"Line {r.line_id} not found on this transfer")
+        return ln
+    part_id = r.part_id
+    if not part_id and r.code:
+        from backend.services import product_codes
+        part_id = (await db.execute(select(Part.id).where(
+            Part.org_id == org_id, product_codes.matches_code(org_id, r.code.strip())))).scalars().first()
+    if not part_id:
+        raise HTTPException(422, "Say which line arrived: line_id, part_id or code")
+    found = (await db.execute(q.where(StockTransferLine.part_id == part_id))).scalars().all()
+    if not found:
+        raise HTTPException(404, "That product isn't on this transfer")
+    if len(found) > 1:
+        raise HTTPException(409, "That product is on more than one line — send the line_id")
+    return found[0]
 
 
 class TransferScanIn(BaseModel):
@@ -335,6 +360,8 @@ async def scan_transfer_line(
     if t.status != "draft":
         raise HTTPException(409, "Lines can only be added while the transfer is a draft")
 
+    if data.qty <= 0:
+        raise HTTPException(422, "Scan a quantity above zero — remove a line by editing the transfer")
     code = data.code.strip()
     from backend.services import product_codes
     part = (await db.execute(select(Part).where(
@@ -346,10 +373,10 @@ async def scan_transfer_line(
         StockTransferLine.transfer_id == tid,
         StockTransferLine.part_id == part.id))).scalar_one_or_none()
     if ln:
-        ln.qty = (ln.qty or 0) + data.qty
+        await add_to_column(db, ln, "qty", data.qty, round_to=None)   # two scanners on one box both count
     else:
         ln = StockTransferLine(transfer_id=tid, part_id=part.id, qty=data.qty)
         db.add(ln)
     await db.commit()
     await db.refresh(ln)
-    return {"ok": True, "part_id": part.id, "part_name": part.name, "qty": ln.qty}
+    return {"ok": True, "line_id": ln.id, "part_id": part.id, "part_name": part.name, "qty": ln.qty}

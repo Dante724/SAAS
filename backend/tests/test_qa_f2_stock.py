@@ -59,3 +59,61 @@ async def test_posted_count_cant_be_edited_and_negative_is_refused(client, tenan
     assert (await client.post(f"/api/stocktake/{st['id']}/post", headers=tenant)).status_code == 200
     assert (await client.patch(url, json={"counted_qty": 99}, headers=tenant)).status_code == 409
 
+
+# ── 3. transfers: scan only adds, and a short delivery can be recorded from what the API returns ─
+async def _draft_transfer(client, tenant, db, sku, stock=10):
+    from backend.models import Location
+    from backend.tests.test_stocktake_postings_print import _me
+    me = await _me(client, tenant)
+    dest = Location(org_id=me["org_id"], name=f"Back store {sku}")
+    db.add(dest)
+    await db.commit()
+    p = await _part(client, tenant, sku=sku, barcode=sku)
+    await _stock(client, tenant, p["id"], stock)
+    t = (await client.post("/api/transfers", headers=tenant, json={
+        "from_location_id": await _loc(client, tenant), "to_location_id": dest.id,
+        "lines": [{"part_id": p["id"], "qty": 1}]})).json()
+    return t["id"], p, dest.id
+
+
+@pytest.mark.asyncio
+async def test_transfer_scan_refuses_zero_and_negative_qty(client, tenant, db):
+    tid, p, _ = await _draft_transfer(client, tenant, db, "BC-1700")
+    ok = await client.post(f"/api/transfers/{tid}/scan", json={"code": "BC-1700", "qty": 3}, headers=tenant)
+    assert ok.status_code == 200 and ok.json()["line_id"] and ok.json()["qty"] == 4
+    for bad in (-5, 0):
+        r = await client.post(f"/api/transfers/{tid}/scan", json={"code": "BC-1700", "qty": bad}, headers=tenant)
+        assert r.status_code == 422, r.text
+    lines = (await client.get(f"/api/transfers/{tid}", headers=tenant)).json()["lines"]
+    assert [ln["qty"] for ln in lines] == [4]
+
+
+@pytest.mark.asyncio
+async def test_short_delivery_recorded_with_ids_the_api_returns(client, tenant, db):
+    tid, p, dest = await _draft_transfer(client, tenant, db, "TUBE-1")
+    await client.post(f"/api/transfers/{tid}/scan", json={"code": "TUBE-1", "qty": 3}, headers=tenant)
+    for s in ("ready", "in_transit"):
+        assert (await client.patch(f"/api/transfers/{tid}/status", json={"status": s}, headers=tenant)).status_code == 200
+    detail = (await client.get(f"/api/transfers/{tid}", headers=tenant)).json()["lines"][0]
+    listed = next(t for t in (await client.get("/api/transfers", headers=tenant)).json()["items"] if t["id"] == tid)
+    assert detail["id"] == detail["line_id"] == listed["lines"][0]["line_id"]
+    # by line id (from the detail) …
+    r = await client.post(f"/api/transfers/{tid}/receive", headers=tenant,
+                          json={"lines": [{"line_id": detail["line_id"], "qty_received": 3}]})
+    assert r.status_code == 200 and r.json()["discrepancies"] == 1, r.text
+    # … or by the product, as the person holding the box knows it
+    r = await client.post(f"/api/transfers/{tid}/receive", headers=tenant,
+                          json={"lines": [{"part_id": p["id"], "qty_received": 3}]})
+    assert r.status_code == 200, r.text
+    r = await client.post(f"/api/transfers/{tid}/receive", headers=tenant,
+                          json={"lines": [{"code": "TUBE-1", "qty_received": 3}]})
+    assert r.status_code == 200, r.text
+    assert (await client.post(f"/api/transfers/{tid}/receive", headers=tenant,
+                              json={"lines": [{"qty_received": 3}]})).status_code == 422
+    assert (await client.patch(f"/api/transfers/{tid}/status", json={"status": "completed"},
+                               headers=tenant)).status_code == 200
+    db.expire_all()
+    at_dest = (await db.execute(select(func.coalesce(func.sum(StockLevel.qty_available), 0)).where(
+        StockLevel.part_id == p["id"], StockLevel.location_id == dest))).scalar_one()
+    assert float(at_dest) == 3 and await _on_hand(db, p["id"]) == 9      # 1 booked as lost
+    await _ledger_matches(db, p["id"])
