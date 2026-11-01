@@ -275,13 +275,23 @@ async def test_no_technician_response_carries_stock_cost(client):
     await client.post("/api/pricing/types", json={"name": "Trade", "markup_pct": 50}, headers=H)
     urls = [f"/api/transfers/{tr['id']}", f"/api/inventory/parts/{part['id']}/batches",
             f"/api/pricing/parts/{part['id']}/prices", f"/api/suppliers/{sup['id']}/performance"]
+    def costs(body):
+        """Numbers in the response equal to the unit cost or a multiple of it (not substrings:
+        an id or timestamp can contain "289")."""
+        if isinstance(body, dict):
+            return [x for v in body.values() for x in costs(v)]
+        if isinstance(body, list):
+            return [x for v in body for x in costs(v)]
+        ok = isinstance(body, (int, float)) and not isinstance(body, bool)
+        return [body] if ok and any(abs(body - n) < 0.006 for n in (289, 578)) else []
+
     for url in urls:
         owner = await client.get(url, headers=H)
         assert owner.status_code == 200, (url, owner.text)
-        assert any(n in owner.text for n in ("289", "578")), url           # the owner sees the cost
+        assert costs(owner.json()), url                                     # the owner sees the cost
         tech = await client.get(url, headers=T)
         assert tech.status_code == 200, (url, tech.text)
-        assert "289" not in tech.text and "578" not in tech.text, (url, tech.text)
+        assert not costs(tech.json()), (url, tech.text)
     prices = (await client.get(f"/api/pricing/parts/{part['id']}/prices", headers=T)).json()
     assert "basis" not in prices and all("markup_pct" not in p for p in prices["prices"])
 
