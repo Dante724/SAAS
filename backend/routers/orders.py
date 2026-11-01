@@ -663,7 +663,8 @@ async def bulk_action(
         # (or one of the built-in terminal keys the single path also accepts).
         from backend.models import OrderStatus as _OS
         _valid = set((await db.execute(select(_OS.key).where(
-            _OS.org_id == current.org_id, _OS.active == True))).scalars().all())  # noqa: E712
+            _OS.org_id == current.org_id, _OS.active == True,  # noqa: E712
+            _OS.record_type.in_(("work_order", "estimate"))))).scalars().all())
         _valid |= {"new", "done", "closed", "delivered"}
         if data.value not in _valid:
             raise HTTPException(400, f"Unknown status '{data.value}'")
@@ -705,6 +706,10 @@ async def bulk_action(
         if data.action == "group_invoice":
             continue                       # handled in a batch after the loop
         if data.action == "assign":
+            try:
+                await _guard_editable(db, o, current)    # same rule as assigning one closed job
+            except HTTPException:
+                continue
             o.assigned_to_id = data.value or None
         elif data.action == "set_priority":
             try:
@@ -1439,12 +1444,11 @@ async def change_status(
     return await _apply_status_change(db, current, order, data.status, note=data.note, reason=data.reason)
 
 
-async def _in_dropped_group(db, org_id: str, record_type: str, key) -> bool:
+async def _status_group(db, org_id: str, record_type: str, key):
     from backend.models import OrderStatus
-    grp = (await db.execute(select(OrderStatus.status_group).where(
+    return (await db.execute(select(OrderStatus.status_group).where(
         OrderStatus.org_id == org_id, OrderStatus.key == key,
         OrderStatus.record_type == record_type))).scalars().first()
-    return grp == "dropped"
 
 
 async def _job_product_lines(db, order) -> list:
@@ -1524,17 +1528,16 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     arguments so both callers share one code path."""
     data = StatusChange(status=new_status, note=note, reason=reason)
     await _guard_order_access(db, current, order)
+    # Resolve the target status from the configurable status table, scoped to this
+    # record's pipeline (first: seeding a shop's empty pipeline commits).
+    from backend.models import OrderStatus
+    _rt = "estimate" if order.is_estimate else "work_order"
+    target = await _pipeline_status(db, current.org_id, _rt, data.status)
     # Two status changes on one job queue up: the second sees the first one's status, so a
     # double-tapped "Drop" returns the parts once (QA F1). Then re-read what the gates use.
     from backend.services.invoice_money import lock_order
     await lock_order(db, order.id)
     await db.refresh(order, ["status", "closed_at", "total"])
-
-    # Resolve the target status from the configurable status table, scoped to this
-    # record's pipeline.
-    from backend.models import OrderStatus
-    _rt = "estimate" if order.is_estimate else "work_order"
-    target = await _pipeline_status(db, current.org_id, _rt, data.status)
     if target is None and data.status != order.status and data.status not in _LEGACY_CLOSE_KEYS:
         # QA F1: any text (or an invoice / PO / estimate key such as inv_paid) used to be saved and
         # could lock the job closed. Only the record's own, switched-on pipeline is accepted.
@@ -1624,10 +1627,16 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
 
     # Stock follows a drop: a job closed unsuccessfully gives its parts back, and taking it up
     # again takes them again (QA F1, as Orderry). Moves between two dropped statuses do neither.
+    # A job that was already finished (Done, Delivered) left with its parts inside the device, so
+    # dropping it afterwards returns nothing (a goods return puts back what the customer brings).
     _drop_rt = not order.is_estimate and order.status != data.status
-    _was_dropped = await _in_dropped_group(db, current.org_id, _rt, order.status)
+    _prev_group = await _status_group(db, current.org_id, _rt, order.status)
+    _was_dropped = _prev_group == "dropped"
     entering_drop = _drop_rt and bool(target) and (target.status_group or "") == "dropped" and not _was_dropped
     leaving_drop = _drop_rt and _was_dropped and not (target and (target.status_group or "") == "dropped")
+    if leaving_drop:     # before the pending-stock gate: closing it straight away needs them back
+        await _retake_parts_on_reopen(db, current, order)
+        await db.refresh(order, ["lines"])
 
     # Orderry rule: cannot close an order with products not yet written off from stock
     # (a dropped job writes nothing off: its parts go back to the shelf below).
@@ -1647,10 +1656,8 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     order.status = data.status
     if target and (target.status_group or "") == "dropped" and (data.reason or "").strip():
         order.cancel_reason = data.reason.strip()[:120]
-    if entering_drop:
+    if entering_drop and _prev_group != "closed":
         await _return_parts_on_drop(db, current, order)
-    elif leaving_drop:
-        await _retake_parts_on_reopen(db, current, order)
     order.status_entered_at = now_utc()
     from backend.services.audit import record as _audit_sc
     await _audit_sc(db, org_id=current.org_id, actor_id=current.id, action="order.status_change",
@@ -2075,10 +2082,10 @@ async def set_deposit(
         raise HTTPException(400, "Provide amount or percent")
     if amount < 0:
         raise HTTPException(400, "deposit cannot be negative")
-    if amount > q2(order.total or 0):
-        from backend.services.currency import org_money
+    if (order.total or 0) > 0 and amount > q2(order.total):   # a deposit at check-in, before any lines, is fine
+        from backend.services.currency import org_money     # deposit and total are both base currency
         fmt = await org_money(db, current.org_id)
-        raise HTTPException(422, f"The deposit can't be more than the job total ({fmt(order.total or 0)}).")
+        raise HTTPException(422, f"The deposit can't be more than the job total ({fmt(order.total)}).")
     order.deposit_amount = amount
     await db.commit()
     return {"ok": True, "deposit_amount": amount}
@@ -2783,6 +2790,8 @@ async def duplicate_order(
     import uuid as _uuid
     _groups: dict = {}   # each kit on the copy gets its own group id
     for l in src.lines:
+        if l.kind == "refund":
+            continue            # money given back on the old job isn't a discount on the copy
         _gid = (_groups.setdefault(l.bundle_group_id, str(_uuid.uuid4())) if l.bundle_group_id else None)
         nl = OrderLine(
             bundle_group_id=_gid, bundle_name=l.bundle_name, bundle_print_mode=l.bundle_print_mode,
@@ -4620,6 +4629,8 @@ async def update_line(
                              .execution_options(populate_existing=True))).scalar_one_or_none()
     if not line:
         raise HTTPException(404, "Line not found")
+    if line.kind == "refund":
+        raise HTTPException(409, "This line is a refund. Delete the refund (Finance > Refunds) to undo it.")
     payload = data.model_dump(exclude_unset=True)
     if payload.keys() & {"qty", "unit_price", "discount", "discount_type", "tax_rate", "tax_mode"}:
         from backend.services.invoice_money import assert_line_editable
@@ -4726,6 +4737,8 @@ async def delete_line(
                              .execution_options(populate_existing=True))).scalar_one_or_none()
     if not line:
         raise HTTPException(404, "Line not found")
+    if line.kind == "refund":
+        raise HTTPException(409, "This line is a refund. Delete the refund (Finance > Refunds) to undo it.")
     if line.bundle_group_id:
         await _guard_kit_change(db, current, order_id, line.bundle_group_id, adds_value=False)
     # return previously-deducted stock for product lines (incl. serials + cost layers)

@@ -311,3 +311,17 @@ async def test_payroll_actions_and_wage_edits_are_audited(client, db):
         assert a in actions, (a, actions)
     edit = next(r for r in rows if r.action == "employee.update" and r.entity_id == emp)
     assert edit.diff["wage_value"] == {"from": 20, "to": 25}          # was field names only
+
+
+@pytest.mark.asyncio
+async def test_close_commission_after_a_refund_counts_the_refund_once(client, db):
+    H, org, _ = await _register(client)
+    tech = await _employee(client, H)
+    till = await _till(client, H)
+    await _rule(db, org, name="Labour 10", event="labor_performed", calc_type="percent", amount=10)
+    done = await _closed_status(client, H)
+    o = await _labour_order(client, H, tech)
+    await _pay_order(client, H, o["id"], till, 500)
+    await _status(client, H, o["id"], done)
+    await client.post("/api/returns/refunds", json={"account_id": till, "amount": 125, "order_id": o["id"]}, headers=H)
+    assert await _commission(db, org, tech) == 37.5         # a quarter refunded, not a third

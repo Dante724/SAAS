@@ -326,7 +326,7 @@ async def issue_portal_link(
 async def revoke_portal_links(
     client_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_view_client_info")),
+    current: Employee = Depends(require_perm("can_view_client_info")),   # same right as issuing one
 ):
     """Stop every portal link this client has (a lost phone, a forwarded email)."""
     from backend.services import portal_links

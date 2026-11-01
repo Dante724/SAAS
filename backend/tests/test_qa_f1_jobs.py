@@ -343,3 +343,42 @@ async def test_two_quick_adds_of_one_part_make_one_line(client, tenant):
     lines = await K.lines(client, tenant, oid)
     assert len(lines) == 1 and lines[0]["qty"] == 2
     assert await K.stock(client, tenant, pid) == 8
+
+
+# ── review follow-ups ──────────────────────────────────────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_refund_line_belongs_to_the_refund(client, tenant):
+    oid, _, _, till, _ = await _paid_closed_job(client, tenant)
+    await client.post("/api/returns/refunds", json={"account_id": till, "amount": 25, "order_id": oid}, headers=tenant)
+    line = next(ln for ln in (await K.order(client, tenant, oid))["lines"] if ln["total"] < 0)
+    assert (await client.delete(f"/api/orders/{oid}/lines/{line['id']}", headers=tenant)).status_code in (403, 409)
+    assert (await client.patch(f"/api/orders/{oid}/lines/{line['id']}", json={"qty": 2},
+                               headers=tenant)).status_code in (403, 409)
+    copy = (await client.post(f"/api/orders/{oid}/duplicate", headers=tenant)).json()
+    assert all(ln["total"] >= 0 for ln in (await K.order(client, tenant, copy["id"]))["lines"])
+
+
+@pytest.mark.asyncio
+async def test_dropping_a_finished_job_returns_nothing(client, tenant):
+    oid, pid, _ = await _job_with_part(client, tenant)
+    assert (await client.patch(f"/api/orders/{oid}/status", json={"status": "delivered"},
+                               headers=tenant)).status_code == 200
+    assert (await client.patch(f"/api/orders/{oid}/status", json={"status": "dropped"},
+                               headers=tenant)).status_code == 200
+    assert await K.stock(client, tenant, pid) == 8          # the parts left inside the device
+
+
+@pytest.mark.asyncio
+async def test_a_dropped_job_can_be_closed_straight_away_again(client, tenant):
+    oid, pid, _ = await _job_with_part(client, tenant)
+    await client.patch(f"/api/orders/{oid}/status", json={"status": "dropped"}, headers=tenant)
+    r = await client.patch(f"/api/orders/{oid}/status", json={"status": "done"}, headers=tenant)
+    assert r.status_code == 200, r.text
+    assert await K.stock(client, tenant, pid) == 8
+
+
+@pytest.mark.asyncio
+async def test_a_deposit_can_be_asked_at_check_in(client, tenant):
+    oid, _ = await K.job(client, tenant, await K.loc(client, tenant))
+    r = await client.patch(f"/api/orders/{oid}/deposit", json={"amount": 50}, headers=tenant)
+    assert r.status_code == 200, r.text

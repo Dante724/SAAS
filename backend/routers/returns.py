@@ -293,6 +293,9 @@ async def delete_refund(
         raise HTTPException(404, "Refund not found")
     if refund.voided_at:
         raise HTTPException(409, "This refund was already deleted")
+    if refund.order_id:
+        from backend.services.invoice_money import lock_order
+        await lock_order(db, refund.order_id)    # the job's lines and total change below
     order = (await db.execute(select(Order).where(
         Order.id == refund.order_id, Order.org_id == current.org_id)
         .options(selectinload(Order.lines)))).scalar_one_or_none() if refund.order_id else None
@@ -339,6 +342,11 @@ async def delete_refund(
     return {"ok": True, "id": refund.id, "voided_at": refund.voided_at.isoformat()}
 
 
+# A job line a refund put there: it belongs to the refund (delete the refund to undo it), so the
+# line routes refuse to edit or remove it and a copied job leaves it behind.
+REFUND_LINE_KIND = "refund"
+
+
 async def _refund_line_label(db, refund) -> str:
     """What the job line says: the returned items, else the refund's reason."""
     if refund.return_id:
@@ -376,7 +384,7 @@ async def _take_off_job(db, current, order, refund, amount: float) -> None:
     from backend.routers.orders import _recalc_order
     lines = (await db.execute(select(OrderLine).where(OrderLine.order_id == order.id))).scalars().all()
     rate, mode = _job_tax(lines)
-    db.add(OrderLine(order_id=order.id, line_type="fee", kind="custom", ref_id=refund.id,
+    db.add(OrderLine(order_id=order.id, line_type="fee", kind=REFUND_LINE_KIND, ref_id=refund.id,
                      description=await _refund_line_label(db, refund), qty=1, unit_price=-amount,
                      tax_rate=rate, tax_mode=mode, total=-amount))
     await db.flush()
@@ -391,7 +399,7 @@ async def _put_back_on_job(db, current, order, refund) -> None:
     from backend.models import OrderLine
     from backend.routers.orders import _recalc_order
     gone = await db.execute(delete(OrderLine).where(OrderLine.order_id == order.id, OrderLine.ref_id == refund.id,
-                                                    OrderLine.kind == "custom", OrderLine.line_type == "fee"))
+                                                    OrderLine.kind == REFUND_LINE_KIND))
     if gone.rowcount:
         await db.flush()
         await _recalc_order(db, order)
