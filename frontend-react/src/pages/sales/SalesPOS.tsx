@@ -8,6 +8,7 @@ import NewClientDrawer from "../../components/NewClientDrawer";
 import { currencySymbol, money } from "../orders/types";
 import { escapeHtml } from "../../lib/safeHtml";
 import ScanButton from "../../components/ScanButton";
+import UnitSerials, { unnamedUnits } from "../../components/UnitSerials";
 import ReaderCharge from "../../components/ReaderCharge";
 import CardPaymentsList from "../../components/CardPaymentsList";
 import { scanBeep, useWedgeScanner } from "../../lib/scanner";
@@ -58,9 +59,7 @@ type CartLine = { key: string; kind: "product" | "service"; ref_id: string; desc
   serialized?: boolean; serials?: string[] };   // QA F2: one IMEI / serial per unit of a serialized product
 
 /** Serialized lines still missing an IMEI / serial (the till won't charge until each unit is named). */
-export function missingSerials(cart: CartLine[]): CartLine[] {
-  return cart.filter((l) => l.serialized && (l.serials || []).length < l.qty);
-}
+export const missingSerials = (cart: CartLine[]) => unnamedUnits(cart);
 
 export default function SalesPOS() {
   const [mode, setMode] = useState<"products" | "services">("products");
@@ -302,7 +301,7 @@ export default function SalesPOS() {
                   </div>
                   <span className="text-sm font-semibold tabular-nums text-ink-primary">{money(l.unit_price * l.qty * (1 - l.discount / 100))}</span>
                 </div>
-                {l.serialized && <LineSerials line={l} onChange={(v) => setSerials(l.key, v)} />}
+                {l.serialized && <UnitSerials partId={l.ref_id} need={l.qty} value={l.serials || []} label={l.description} onChange={(v) => setSerials(l.key, v)} />}
               </div>
             ))}
           </div>
@@ -347,49 +346,6 @@ export default function SalesPOS() {
       {receiptFor && <ReceiptSheet saleId={receiptFor} onClose={() => setReceiptFor(null)} onFlash={flash} />}
       {newClient && <NewClientDrawer prefillName={clientQ.trim()} onClose={() => setNewClient(false)} onCreated={(c) => { setClient(c); setNewClient(false); setClientQ(""); flash(`Client "${c.name}" created & attached`); }} />}
     </Shell>
-  );
-}
-
-// QA F2: a serialized product (a phone) needs the IMEI / serial of each unit sold, so the sale records
-// which one left. Scanning the IMEI at the till fills it in; otherwise type or scan it here, or pick
-// from the units in stock.
-function LineSerials({ line, onChange }: { line: CartLine; onChange: (v: string[]) => void }) {
-  const [text, setText] = useState("");
-  const [units, setUnits] = useState<string[]>([]);
-  const serials = line.serials || [];
-  useEffect(() => {
-    api.get<{ items: { serial_number: string; status: string }[] }>(`/serials?part_id=${encodeURIComponent(line.ref_id)}&status=in_stock`)
-      .then((r) => setUnits((r.items || []).filter((u) => u.status === "in_stock").map((u) => u.serial_number)))
-      .catch(() => setUnits([]));
-  }, [line.ref_id]);
-  const add = (raw: string) => {
-    const sn = raw.trim();
-    if (!sn || serials.includes(sn) || serials.length >= line.qty) { setText(""); return; }
-    onChange([...serials, sn]); setText("");
-  };
-  const left = line.qty - serials.length;
-  const listId = `sn-${line.key}`;
-  return (
-    <div className="mt-2 space-y-1.5">
-      {serials.length > 0 && (
-        <div className="flex flex-wrap gap-1">
-          {serials.map((sn) => (
-            <span key={sn} className="inline-flex items-center gap-1 h-6 pl-2 pr-1 rounded-md border border-slate-200 bg-slate-50 text-[11px] font-mono text-ink-primary">
-              {sn}<button aria-label={`Remove ${sn}`} onClick={() => onChange(serials.filter((x) => x !== sn))} className="w-5 h-5 grid place-items-center rounded text-ink-tertiary hover:text-rose-600"><M n="close" c="text-xs" /></button>
-            </span>
-          ))}
-        </div>
-      )}
-      {left > 0 && (
-        <>
-          <input value={text} onChange={(e) => setText(e.target.value)} list={listId} aria-label={`IMEI or serial for ${line.description}`}
-            onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); add(text); } }}
-            onBlur={() => { if (units.includes(text.trim())) add(text); }}
-            className={`${inputCls} h-8 text-xs font-mono !border-amber-300`} placeholder={left === 1 ? "Scan or type the IMEI / serial" : `Scan or type ${left} more IMEIs / serials`} />
-          <datalist id={listId}>{units.filter((u) => !serials.includes(u)).map((u) => <option key={u} value={u} />)}</datalist>
-        </>
-      )}
-    </div>
   );
 }
 
