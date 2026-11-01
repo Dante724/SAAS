@@ -2750,6 +2750,12 @@ class ClientReturn(Base):
     reason: Mapped[Optional[str]] = mapped_column(Text)
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # A till return (POST /sales/{id}/returns): its sale and what came back, for net sales (ret01).
+    # amount = the items' worth to the customer, tax included (cash refund + gift-card part).
+    sale_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("sales.id"), index=True)
+    amount: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
+    tax: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
+    cost: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
 
 
 class ClientReturnLine(Base):

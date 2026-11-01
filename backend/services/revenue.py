@@ -321,13 +321,25 @@ async def net_sales(db: AsyncSession, org_id: str, df: Optional[datetime] = None
         sq = sq.where(Sale.location_id == location_id)
     sales, sales_cost, sales_tax = (float(x or 0) for x in (await db.execute(sq)).one())
     sales -= sales_tax
-    # goods brought back to the counter and refunded: a refund tied to no job
-    cr = select(func.coalesce(func.sum(Refund.amount), 0)).where(
+    # goods brought back to the counter and refunded: a refund tied to no job. A till return
+    # (ClientReturn.sale_id, ret01) knows what came back (cash and gift card, tax inside it, cost),
+    # so it comes off revenue ex tax, tax and cost of goods; an older one only has its cash refund.
+    cr = select(func.coalesce(func.sum(Refund.amount), 0)).outerjoin(
+        ClientReturn, ClientReturn.id == Refund.return_id).where(
         Refund.org_id == org_id, Refund.order_id.is_(None), Refund.voided_at.is_(None),
-        *_in(Refund.created_at, df, dt))
+        ClientReturn.sale_id.is_(None), *_in(Refund.created_at, df, dt))
     if location_id:
-        cr = cr.join(ClientReturn, ClientReturn.id == Refund.return_id).where(ClientReturn.location_id == location_id)
+        cr = cr.where(ClientReturn.location_id == location_id)
     counter_returns = float((await db.execute(cr)).scalar() or 0)
+    tq = select(func.coalesce(func.sum(ClientReturn.amount), 0), func.coalesce(func.sum(ClientReturn.tax), 0),
+                func.coalesce(func.sum(ClientReturn.cost), 0)).where(
+        ClientReturn.org_id == org_id, ClientReturn.sale_id.isnot(None), *_in(ClientReturn.created_at, df, dt))
+    if location_id:
+        tq = tq.where(ClientReturn.location_id == location_id)
+    till_back, till_back_tax, till_back_cost = (float(x or 0) for x in (await db.execute(tq)).one())
+    counter_returns += till_back - till_back_tax
+    sales_tax -= till_back_tax
+    sales_cost -= till_back_cost
     srq = select(func.coalesce(func.sum(func.abs(Transaction.amount)), 0)).where(
         Transaction.org_id == org_id, Transaction.status == "active", Transaction.ref_type == "sale",
         Transaction.txn_type.in_(("expense", "refund")), *_in(Transaction.actual_date, df, dt))

@@ -1,4 +1,5 @@
 """Sales (over-the-counter POS) + Stocktake (count → variance → adjust)."""
+from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
@@ -762,8 +763,9 @@ async def return_sale_items(
     claim = await idem_begin(db, current.org_id, request, "sales.return") if request is not None else None
     if claim is not None and claim.replay is not None:
         return claim.replay
+    keyed = bool(request is not None and (request.headers.get("Idempotency-Key") or "").strip())
     try:
-        result = await _return_sale_items(sale_id, data, db, current)
+        result = await _return_sale_items(sale_id, data, db, current, keyed=keyed)
     except BaseException:
         if claim is not None:
             await claim.release(db)
@@ -773,7 +775,14 @@ async def return_sale_items(
     return result
 
 
-async def _return_sale_items(sale_id: str, data: SaleReturnIn, db: AsyncSession, current: Employee):
+# Two identical returns of a sale this close together, without an Idempotency-Key, are one click
+# sent twice (QA final gate F-3): the second is refused. A deliberate second return a moment later
+# comes from the return screen with its own key, so it goes through.
+_DOUBLE_CLICK_S = 10
+
+
+async def _return_sale_items(sale_id: str, data: SaleReturnIn, db: AsyncSession, current: Employee,
+                             *, keyed: bool = False):
     """B5 — the customer brings items back. Products go back on the shelf (a client return), and
     the customer gets the items' share of what they paid: discounts and tax included, the cash part
     as a refund out of the chosen cashbox and any gift-card part back onto the card."""
@@ -799,7 +808,9 @@ async def _return_sale_items(sale_id: str, data: SaleReturnIn, db: AsyncSession,
     lines = {ln.id: ln for ln in (await db.execute(select(SaleLine).where(SaleLine.sale_id == sale.id)
                                                    .execution_options(populate_existing=True))).scalars()}
     base = q2(sum(float(ln.total or 0) for ln in lines.values()))
+    now = now_utc()
     value = 0.0
+    cost_back = 0.0
     for r in data.lines:
         ln = lines.get(r.line_id)
         if not ln:
@@ -809,6 +820,23 @@ async def _return_sale_items(sale_id: str, data: SaleReturnIn, db: AsyncSession,
             raise HTTPException(400, f"Only {left:g} of '{ln.description}' can still be returned")
         await _units_coming_back(db, current.org_id, ln, r)
         value += float(ln.total or 0) * r.qty / ln.qty
+        if ln.kind == "product" and ln.ref_id:
+            cost_back += float(ln.cost_price or 0) * r.qty
+    # (after the checks above: a click on a line with nothing left gets their 400 first)
+    if not keyed:
+        def _same_just_now(ln, qty):
+            for rec in (ln.stock_draws or {}).get("returns") or []:
+                try:
+                    at = datetime.fromisoformat(rec.get("at") or "")
+                except ValueError:
+                    continue
+                if abs(float(rec.get("qty") or 0) - qty) < 1e-9 and abs((now - at).total_seconds()) < _DOUBLE_CLICK_S:
+                    return True
+            return False
+        if data.lines and all(lines.get(r.line_id) is not None and _same_just_now(lines[r.line_id], r.qty)
+                              for r in data.lines):
+            raise HTTPException(409, "These items were just returned. If more came back, return them again "
+                                     "in a moment.")
     value = q2(value * float(sale.total or 0) / base) if base else 0.0
     gift_paid = await sale_gift_card_paid(db, sale.id)
     gift_back = q2(value * gift_paid / float(sale.total)) if sale.total else 0.0
@@ -823,8 +851,11 @@ async def _return_sale_items(sale_id: str, data: SaleReturnIn, db: AsyncSession,
             raise HTTPException(404, "Cashbox not found")
     reason = (data.reason or "").strip()
 
+    # C-6: what came back, so net sales takes it off revenue, tax and cost of goods (revenue.py)
+    tax_back = q2(value * float(sale.tax or 0) / float(sale.total)) if sale.total else 0.0
     ret = ClientReturn(org_id=current.org_id, client_id=sale.client_id, location_id=sale.location_id,
-                       reason=f"Sale {sale.sale_number}" + (f": {reason}" if reason else ""), created_by_id=current.id)
+                       reason=f"Sale {sale.sale_number}" + (f": {reason}" if reason else ""), created_by_id=current.id,
+                       sale_id=sale.id, amount=value, tax=tax_back, cost=q2(cost_back))
     db.add(ret)
     await db.flush()
     for r in data.lines:
@@ -833,6 +864,7 @@ async def _return_sale_items(sale_id: str, data: SaleReturnIn, db: AsyncSession,
         units = await _units_coming_back(db, current.org_id, ln, r)
         back_ids = {u.id for u in units}
         draws["returned"] = q4(_returned(ln) + r.qty)
+        draws["returns"] = [*(draws.get("returns") or [])[-9:], {"qty": r.qty, "at": now.isoformat()}]
         draws["serials"] = [u for u in (draws.get("serials") or []) if u not in back_ids]
         if ln.kind == "product" and ln.ref_id:
             # QA F2 / fix D: the units go back in stock with a passport line, and into the cost layers
