@@ -55,22 +55,17 @@ async def test_known_industry_words_map(client, given, stored):
 
 
 @pytest.mark.asyncio
-async def test_unknown_industry_never_blocks_sign_up(client, caplog):
-    import logging
-    # Alembic's fileConfig (run by the Postgres test jobs) disables loggers that already exist, and
-    # the app's logging setup clears root handlers — so listen on this logger directly.
-    log = logging.getLogger("tekly.signup")
-    was_disabled, log.disabled = log.disabled, False
-    log.addHandler(caplog.handler)
-    try:
-        r = await client.post("/api/auth/register", json=_reg(industry_template="spaceships"))
-    finally:
-        log.removeHandler(caplog.handler)
-        log.disabled = was_disabled
+async def test_unknown_industry_never_blocks_sign_up(client, monkeypatch):
+    # Record the warning on the module's logger itself: global logging state (Alembic's fileConfig
+    # in other tests, the app's own setup) varies by test order and made caplog unreliable on CI.
+    from backend.routers import auth
+    seen = []
+    monkeypatch.setattr(auth._signup_log, "warning", lambda msg, *a: seen.append(msg % a))
+    r = await client.post("/api/auth/register", json=_reg(industry_template="spaceships"))
     assert r.status_code == 201, r.text
     co, _ = await _company_and_taxes(client, r)
     assert co["industry_template"] == "general"
-    assert "spaceships" in caplog.text
+    assert any("spaceships" in m for m in seen), seen
 
 
 def test_one_country_tax_table():
