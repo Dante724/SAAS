@@ -36,9 +36,9 @@ async def test_home_money_totals_only_count_this_shop(client, db):
                 Payment(account_id=acc.id, method="cash", kind="refund", amount=40, paid_at=now_utc())])
     await db.commit()
     da = (await client.get("/api/reports/company-dashboard", headers=a)).json()
-    assert da["monthly"]["revenue"] == 0 and da["today"]["refunds"] == 0 and da["today"]["revenue"] == 0
+    assert da["monthly"]["paid"] == 0 and da["today"]["refunds"] == 0 and da["today"]["paid"] == 0
     dbb = (await client.get("/api/reports/company-dashboard", headers=b)).json()
-    assert dbb["monthly"]["revenue"] == 500 and dbb["today"]["refunds"] == 40
+    assert dbb["monthly"]["paid"] == 500 and dbb["today"]["refunds"] == 40
 
 
 @pytest.mark.asyncio
