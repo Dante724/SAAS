@@ -1,12 +1,14 @@
 // Take payment on a job. Online only and never queued: money must fail closed. Every attempt carries
 // an Idempotency-Key, so a retried tap can't post twice; the amount can go down (part payment) but
 // not above what's owed. Cash shows change due; card records a terminal charge; a pay link shows a
-// QR the customer scans, and we watch for the balance to reach zero.
+// QR the customer scans, and we watch for the balance to reach zero. With `finishTo` it's the
+// "Finish & take" sheet: the full balance is taken and the job finished in one server call (B11).
 import { useCallback, useEffect, useRef, useState } from "react";
 import { Banknote, CheckCircle2, CreditCard, Loader2, QrCode, Share2 } from "lucide-react";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
 import { PrimaryButton, Sheet } from "./ui";
+import { finishWithPayment } from "../lib/finish";
 import { changeDue, clampAmount, money, quickTender } from "../lib/pay";
 import { newKey } from "../lib/photos";
 import { haptic } from "../lib/scanner";
@@ -21,9 +23,10 @@ const allAccounts = (c: Ctx | null): PayAccount[] =>
   c ? Object.entries(c.accounts_by_method || {}).flatMap(([k, list]) => (list || []).map((a) => ({ ...a, payment_option: a.payment_option || k }))) : [];
 type Method = "cash" | "card" | "link";
 
-export default function PaySheet({ open, onClose, orderId, orderNumber, customer, onPaid }: {
+export default function PaySheet({ open, onClose, orderId, orderNumber, customer, onPaid, finishTo, onFinished }: {
   open: boolean; onClose: () => void; orderId: string; orderNumber: string; customer?: string | null;
   onPaid: (remaining: number) => void;
+  finishTo?: { key: string; name: string } | null; onFinished?: () => void;
 }) {
   const { me, can } = useMe();
   const fmt = (n?: number | null) => money(me?.currency, n);
@@ -65,7 +68,8 @@ export default function PaySheet({ open, onClose, orderId, orderNumber, customer
   }, [open, method, link, loadCtx, onPaid, onClose, toast]);
 
   const remaining = ctx?.remaining ?? 0;
-  const amount = clampAmount(amountRaw, remaining);
+  // Finishing takes the whole balance: a job can't close with money still owed.
+  const amount = finishTo ? (remaining > 0 ? remaining : null) : clampAmount(amountRaw, remaining);
   const all = allAccounts(ctx);
   const accounts = method === "cash" || method === "card" ? accountsFor(all, OPTIONS[method]) : [];
   // Preselect the cashbox at the job's location (else a company-wide one) so the button is ready.
@@ -80,6 +84,20 @@ export default function PaySheet({ open, onClose, orderId, orderNumber, customer
     if (!confirming) { setConfirming(true); return; }
     if (!(await confirmMoney(`Take ${fmt(amount)}`))) return;
     setBusy(true);
+    const payMethod = method === "card" ? (ctx?.accounts_by_method.card?.some((a) => a.id === accountId) ? "card" : "cashless") : "cash";
+    if (finishTo) {
+      try {
+        await finishWithPayment(api.postOnce, orderId, finishTo.key, { method: payMethod, account_id: accountId, amount }, key.current);
+        haptic();
+        toast({ title: `${fmt(amount)} taken`, body: `${orderNumber} finished · ${finishTo.name}` });
+        key.current = newKey();
+        onFinished?.(); onClose();   // not onPaid: the job is already finished
+      } catch (e: any) {
+        toast({ title: "Not finished. No money taken", body: e?.message, tone: "error" });
+        setConfirming(false);
+      } finally { setBusy(false); }
+      return;
+    }
     try {
       await api.postOnce(`/cash/orders/${encodeURIComponent(orderId)}/pay`, { method: method === "card" ? (ctx?.accounts_by_method.card?.some((a) => a.id === accountId) ? "card" : "cashless") : "cash", account_id: accountId, amount }, key.current);
       haptic();
@@ -121,7 +139,7 @@ export default function PaySheet({ open, onClose, orderId, orderNumber, customer
           <>
             <div className="text-center">
               <p className="text-go-sub font-semibold text-ink-tertiary">{customer || "Customer"} pays</p>
-              <input value={amountRaw} onChange={(e) => setAmountRaw(e.target.value)} inputMode="decimal" aria-label="Amount"
+              <input value={finishTo ? String(remaining) : amountRaw} readOnly={!!finishTo} onChange={(e) => setAmountRaw(e.target.value)} inputMode="decimal" aria-label="Amount"
                 className="mt-1 w-full bg-transparent text-center text-go-display font-bold tabular-nums tracking-tight text-ink-primary focus:outline-none" />
               <p className="text-go-sub text-ink-secondary">{amount && amount < remaining ? `Part payment · ${fmt(remaining)} owed` : `Balance due ${fmt(remaining)}`}</p>
             </div>
