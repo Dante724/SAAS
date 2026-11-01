@@ -4,7 +4,7 @@ const init = vi.fn();
 const captureException = vi.fn();
 vi.mock("@sentry/react", () => ({ init, captureException }));
 
-import { initSentry, reportError, scrubEvent, _resetForTests } from "./sentry";
+import { initSentry, reportError, scrubBreadcrumb, scrubEvent, _resetForTests } from "./sentry";
 
 afterEach(() => { init.mockClear(); captureException.mockClear(); _resetForTests(); });
 
@@ -24,6 +24,7 @@ describe("initSentry", () => {
     expect(opts.dsn).toBe("https://k@o1.ingest.sentry.io/1");
     expect(opts.sendDefaultPii).toBe(false);
     expect(opts.beforeSend).toBe(scrubEvent);
+    expect(opts.beforeBreadcrumb).toBe(scrubBreadcrumb);
     reportError(new Error("boom"));
     expect(captureException).toHaveBeenCalledTimes(1);
   });
@@ -53,6 +54,22 @@ describe("scrubEvent", () => {
     expect(e.message).toBe("no client [email]");
     expect(e.exception.values[0].value).toBe("Invite for [email] failed");
     expect(e.breadcrumbs[0].message).toBe("typed [email]");
-    expect(e.breadcrumbs[0].data.url).toBe("/api/clients?q=[email]");
+    expect(e.breadcrumbs[0].data.url).toBe("/api/clients");
+  });
+
+  it("strips link tokens from the page URL and from navigation/fetch breadcrumbs", () => {
+    const tok = "Xk3_9aQ-LmZt72hPq0sWv4";
+    const e: any = scrubEvent({
+      request: { url: `https://app.tekly.app/portal/${tok}` },
+      breadcrumbs: [{ category: "navigation", data: { from: "/login", to: `/reset-password?token=${tok}` } },
+                    { category: "fetch", data: { url: `/api/public/track/${tok}/approve`, method: "POST" } }],
+    } as any);
+    expect(e.request.url).toBe("https://app.tekly.app/portal/[token]");
+    expect(e.breadcrumbs[0].data.to).toBe("/reset-password");
+    expect(e.breadcrumbs[1].data.url).toBe("/api/public/track/[token]/approve");
+    expect(JSON.stringify(e)).not.toContain(tok);
+    const c: any = scrubBreadcrumb({ category: "fetch", data: { url: `/api/public/portal/${tok}#x` } });
+    expect(c.data.url).toBe("/api/public/portal/[token]");
+    expect(scrubBreadcrumb({ category: "navigation", data: { to: "/orders/42?tab=parts" } }).data!.to).toBe("/orders/42");
   });
 });

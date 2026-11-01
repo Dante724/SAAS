@@ -3,7 +3,9 @@ import type { ErrorEvent } from "@sentry/react";
 // Frontend error tracking. Only when VITE_SENTRY_DSN is set at build time do we download the
 // Sentry SDK (its own lazy chunk) and start it; unset, nothing loads and reportError is a no-op.
 // No PII leaves the browser: no request bodies, cookies, headers or query strings, only the user
-// id, and every email address in the event is masked.
+// id, every email address in the event is masked, and URLs (page, navigation and fetch
+// breadcrumbs) lose their query string, fragment and any link token: /track/<token>,
+// /portal/<token> and reset/verify/invite ?token= links are bearer credentials.
 
 type SentryModule = typeof import("@sentry/react");
 let sentry: SentryModule | null = null;
@@ -22,6 +24,24 @@ function mask<T>(v: T): T {
   return v;
 }
 
+// Long opaque path segments (link tokens, and ids along with them) become [token].
+const TOKEN_SEGMENT = /\/[A-Za-z0-9_-]{20,}(?=\/|$)/g;
+
+export function scrubUrl(url: string): string {
+  return url.split(/[?#]/)[0].replace(TOKEN_SEGMENT, "/[token]");
+}
+
+function scrubCrumbData(data?: Record<string, unknown>) {
+  if (!data) return;
+  for (const k of ["url", "from", "to"]) if (typeof data[k] === "string") data[k] = scrubUrl(data[k] as string);
+}
+
+export function scrubBreadcrumb<T extends { data?: Record<string, unknown>; message?: string }>(crumb: T): T {
+  const c = mask(crumb);
+  scrubCrumbData(c.data);
+  return c;
+}
+
 export function scrubEvent(event: ErrorEvent): ErrorEvent {
   const e = mask(event);
   if (e.request) {
@@ -29,8 +49,9 @@ export function scrubEvent(event: ErrorEvent): ErrorEvent {
     delete e.request.cookies;
     delete e.request.headers;
     delete e.request.query_string;
-    if (e.request.url) e.request.url = e.request.url.split("?")[0];
+    if (e.request.url) e.request.url = scrubUrl(e.request.url);
   }
+  e.breadcrumbs?.forEach((b) => scrubCrumbData(b.data));
   if (e.user) e.user = e.user.id ? { id: e.user.id } : {};
   return e;
 }
@@ -46,6 +67,7 @@ export function initSentry(dsn: string | undefined = import.meta.env.VITE_SENTRY
         sendDefaultPii: false,
         tracesSampleRate: 0,
         beforeSend: scrubEvent,
+        beforeBreadcrumb: scrubBreadcrumb,
       });
       sentry = mod;
       return true;
