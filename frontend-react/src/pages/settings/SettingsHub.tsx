@@ -196,7 +196,7 @@ export default function SettingsHub() {
   }, [sec]);
 
   // ── Inline editors for config entities (create / edit / delete) ──
-  type Field = { k: string; label: string; type: "text" | "number" | "select" | "color" | "checkbox" | "textarea" | "date"; opts?: string[]; def?: any; req?: boolean; vars?: boolean; counter?: boolean };
+  type Field = { k: string; label: string; type: "text" | "number" | "select" | "color" | "checkbox" | "textarea" | "date"; opts?: string[]; choices?: { value: string; label: string }[]; def?: any; req?: boolean; vars?: boolean; counter?: boolean };
   const EDITORS: Record<string, { create: string; upd?: (id: string) => string; updMethod?: "put" | "patch"; del?: (id: string) => string; fields: Field[]; reload: () => void }> = {
     automation: { create: "/automations", upd: (id) => `/automations/${id}`, del: (id) => `/automations/${id}`, reload: () => reloadSec("automation"), fields: [
       { k: "name", label: "Rule name", type: "text", req: true }, { k: "event", label: "Event", type: "select", opts: ["status_change", "order_created", "order_closed", "payment_received", "appointment_created"], def: "status_change" },
@@ -213,7 +213,9 @@ export default function SettingsHub() {
       { k: "trigger_event", label: "Trigger event", type: "select", opts: ["status_change", "created", "closed", "reminder"], def: "status_change" }, { k: "trigger_status", label: "When status (key)", type: "text" },
       { k: "subject", label: "Subject (email)", type: "text" }, { k: "body_template", label: "Message body", type: "textarea", req: true, vars: true, counter: true }, { k: "active", label: "Active", type: "checkbox", def: true } ] },
     invites: { create: "/staff/invites", del: (id) => `/staff/invites/${id}`, reload: () => reloadInvites(), fields: [
-      { k: "email", label: "Email", type: "text", req: true }, { k: "name", label: "Name", type: "text" } ] },
+      { k: "email", label: "Email", type: "text", req: true }, { k: "name", label: "Name", type: "text" },
+      // Required: a teammate with no role can do nothing (only the shop owner has every right).
+      { k: "role_id", label: "Role", type: "select", req: true, choices: (roles || []).map((r: any) => ({ value: r.id, label: r.name })) } ] },
     forms: { create: "/forms/types", upd: (id) => `/forms/types/${id}`, del: (id) => `/forms/types/${id}`, reload: () => reloadSec("forms"), fields: [
       { k: "name", label: "Form name", type: "text", req: true }, { k: "color", label: "Colour", type: "color", def: "#4f8ef7" }, { k: "initial_status", label: "Initial status (key)", type: "text", def: "new" }, { k: "is_default", label: "Default", type: "checkbox" } ] },
     warehouses: { create: "/settings/warehouses", upd: (id) => `/settings/warehouses/${id}`, del: (id) => `/settings/warehouses/${id}`, reload: () => reloadSec("warehouses"), fields: [
@@ -1376,7 +1378,7 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div><label className={lblc}>Role</label>
-                <select value={f.role_id || ""} onChange={(e) => set("role_id", e.target.value)} className={`${fld} appearance-none`}><option value="">— No role —</option>{roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
+                <select value={f.role_id || ""} onChange={(e) => set("role_id", e.target.value)} className={`${fld} appearance-none`}><option value="">No role (no access)</option>{roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
               <div><label className={lblc}>Home location</label>
                 <select value={f.location_id || ""} onChange={(e) => set("location_id", e.target.value)} className={`${fld} appearance-none`}><option value="">All locations</option>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
             </div>
@@ -1796,6 +1798,8 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
               <label className="block text-[11px] font-semibold text-ink-tertiary mb-1">{f.label}{f.req ? " *" : ""}</label>
               {f.type === "checkbox" ? (
                 <button type="button" onClick={() => setV({ ...v, [f.k]: !v[f.k] })} className={`w-10 h-6 rounded-full transition-colors ${v[f.k] ? "bg-primary" : "bg-slate-300"} relative`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${v[f.k] ? "left-[18px]" : "left-0.5"}`} /></button>
+              ) : f.type === "select" && f.choices ? (
+                <select value={v[f.k]} onChange={set(f.k)} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary"><option value="">Choose…</option>{f.choices.map((o: { value: string; label: string }) => <option key={o.value} value={o.value}>{o.label}</option>)}</select>
               ) : f.type === "select" ? (
                 <select value={v[f.k]} onChange={set(f.k)} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary capitalize">{f.opts.map((o: string) => <option key={o} value={o}>{o.replace(/_/g, " ")}</option>)}</select>
               ) : f.type === "color" ? (

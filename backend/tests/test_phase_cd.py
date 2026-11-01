@@ -223,7 +223,14 @@ async def test_approval_decision_by_manager(client, tenant, db):
     req = (await client.post("/api/approvals", json={
         "kind": "refund", "amount": 800, "reason": "x"}, headers=tenant)).json()
 
-    other = Employee(org_id=me["org_id"], name="Mgr", email="mgr@x.dev",
+    # A manager holds a role: someone with no role has no rights unless they own the shop.
+    from backend.models import Role
+    from backend.services.permissions import new_role_permissions
+    mgr_role = Role(org_id=me["org_id"], name="Manager", permissions=new_role_permissions("Manager"),
+                    perms_explicit=True)
+    db.add(mgr_role)
+    await db.flush()
+    other = Employee(org_id=me["org_id"], name="Mgr", email="mgr@x.dev", role_id=mgr_role.id,
                      password_hash=hash_password("pw-123456789"), active=True)
     db.add(other)
     await db.commit()
