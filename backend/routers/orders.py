@@ -1733,8 +1733,18 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
 async def _convert_estimate(db, current, estimate):
     """Convert an estimate into a work order IN PLACE (Build 144di, Orderry-style):
     the same record flips ``is_estimate`` off, gets a fresh WO number, keeps its
-    lines and history, and now deducts stock. Irreversible. Returns the id."""
+    lines and history, and now deducts stock. Irreversible. Returns the id, or None when another
+    request converted it first (double tap, accept + staff convert): the flip below is a
+    conditional UPDATE, so only one caller wins and stock / the WO number move once."""
+    from sqlalchemy import update as _update
+
     from backend.models import OrderLine, OrderStatus, StockMovement, WorkOrderType
+    won = await db.execute(_update(Order).where(
+        Order.id == estimate.id, Order.is_estimate == True)  # noqa: E712
+        .values(is_estimate=False).execution_options(synchronize_session=False))
+    if won.rowcount != 1:
+        await db.refresh(estimate)
+        return None
     old_number = estimate.order_number
     # initial work-order status: the job type's own starting status (E3), else the org default, else "new"
     init = "new"
@@ -1801,11 +1811,15 @@ async def convert_estimate_endpoint(
     if not est:
         raise HTTPException(404, "Estimate not found")
     await _guard_order_access(db, current, est)
+    # A second click (or the customer accepting at the same moment) gets the work order back
+    # instead of an error: the screen just opens it. Nothing converts twice.
     if not est.is_estimate:
-        raise HTTPException(400, "This is already a work order")
+        return {"ok": True, "order_id": est.id, "already_converted": True}
     if est.converted_order_id:
-        raise HTTPException(400, "Already converted")
+        return {"ok": True, "order_id": est.converted_order_id, "already_converted": True}
     new_id = await _convert_estimate(db, current, est)
+    if new_id is None:
+        return {"ok": True, "order_id": est.id, "already_converted": True}
     return {"ok": True, "order_id": new_id}
 
 
@@ -3837,6 +3851,7 @@ async def add_line(
     order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    await _lock_for_lines(db, order)
     await _guard_editable(db, order, current)
     if (data.discount or 0) > 0:
         await assert_perm(db, current, "can_set_discount")
@@ -3998,7 +4013,8 @@ async def add_line(
         # A kit's lines are never merged into: an extra must stay a line of its own.
         existing = (await db.execute(select(OrderLine).where(
             OrderLine.order_id == order_id, OrderLine.ref_id == data.ref_id, OrderLine.kind == "product",
-            OrderLine.bundle_group_id.is_(None)).limit(1))).scalars().first()
+            OrderLine.bundle_group_id.is_(None)).limit(1)
+            .execution_options(populate_existing=True))).scalars().first()
         if existing and not kit_group:
             existing.qty += data.qty
             existing.total = q2(existing.qty * existing.unit_price *
@@ -4261,6 +4277,16 @@ async def _maybe_deduct(db, order, line, qty, perms, current, *, bin_id=None, se
     line.pending_stock = (line.pending_stock or 0) + shortfall
 
 
+async def _lock_for_lines(db, order) -> None:
+    """Every change to a job's lines (add, edit, remove, merge) takes the job's lock first and
+    re-reads it, so two people on one job queue up: neither loses the other's edit, stock moves
+    for what is saved now (not a stale qty), a line removed twice returns its stock once, and the
+    order total is recomputed from every line. Lines are read after this with populate_existing."""
+    from backend.services.invoice_money import lock_order
+    await lock_order(db, order.id)
+    await db.refresh(order)
+
+
 def _line_as_in(line) -> "LineIn":
     return LineIn(line_type=line.line_type, description=line.description or "", qty=line.qty,
                   unit_price=line.unit_price or 0, cost_price=line.cost_price or 0,
@@ -4461,8 +4487,10 @@ async def update_line(
     order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    await _lock_for_lines(db, order)
     await _guard_editable(db, order, current)
-    line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id))).scalar_one_or_none()
+    line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id)
+                             .execution_options(populate_existing=True))).scalar_one_or_none()
     if not line:
         raise HTTPException(404, "Line not found")
     payload = data.model_dump(exclude_unset=True)
@@ -4563,8 +4591,10 @@ async def delete_line(
     order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    await _lock_for_lines(db, order)
     await _guard_editable(db, order, current)
-    line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id))).scalar_one_or_none()
+    line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id)
+                             .execution_options(populate_existing=True))).scalar_one_or_none()
     if not line:
         raise HTTPException(404, "Line not found")
     if line.bundle_group_id:
