@@ -14,7 +14,7 @@ an existing match always wins, so the automation never creates a duplicate.
 import re
 from typing import Optional
 
-from sqlalchemy import func, select, text
+from sqlalchemy import func, or_, select, text
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import AutomationSetting, Call, Client, Employee, Organisation, Tag, Taggable
@@ -46,6 +46,24 @@ def same_number(a: Optional[str], b: Optional[str]) -> bool:
         nat = nat[1:] if nat.startswith("0") else nat      # national trunk prefix
         return len(nat) >= 7 and full.endswith(nat) and len(full) - len(nat) <= 3
     return len(da) >= 10 and len(db_) >= 10 and da[-10:] == db_[-10:]
+
+
+def phone_key(number: Optional[str], country: Optional[str] = None) -> str:
+    """One comparable form of a phone number for grouping duplicates: international numbers as
+    their full digits, national ones with the trunk 0 dropped and the shop country's calling
+    code put in front ("(647) 555-0199" and "+1 647 555 0199" both give 16475550199)."""
+    d = digits(number)
+    code = CALLING_CODES.get((country or "").upper())
+    if not code:
+        # No shop country: like same_number, compare the last 10 digits (national part).
+        nat = d[1:] if d.startswith("0") and not _intl(number) else d
+        return nat[-10:]
+    if not d or _intl(number):
+        return d
+    if code == "1" and len(d) == 11 and d.startswith("1"):
+        return d                   # NANP numbers are often typed with the 1 but no +
+    nat = d[1:] if d.startswith("0") else d
+    return f"{code}{nat}"
 
 
 def format_phone(number: str) -> str:
@@ -114,7 +132,8 @@ def destination_allowed(number: str, prefixes: list[str]) -> bool:
 
 
 async def find_client(db: AsyncSession, org_id: str, number: Optional[str], *,
-                      newest: bool = False) -> Optional[Client]:
+                      newest: bool = False, client_type: Optional[str] = None,
+                      exclude_id: Optional[str] = None) -> Optional[Client]:
     d = digits(number)
     if len(d) < 4:
         return None
@@ -124,8 +143,13 @@ async def find_client(db: AsyncSession, org_id: str, number: Optional[str], *,
     stored = Client.phone
     for ch in (" ", "-", "(", ")", ".", "/", "+"):
         stored = func.replace(stored, ch, "")
-    rows = (await db.execute(select(Client).where(
-        Client.org_id == org_id, Client.phone.isnot(None), stored.like(f"%{d[-7:]}%"))
+    q = select(Client).where(Client.org_id == org_id, Client.phone.isnot(None), stored.like(f"%{d[-7:]}%"))
+    if client_type:     # rows saved before the type existed count as people
+        q = q.where(Client.client_type == client_type if client_type != "person"
+                    else or_(Client.client_type == "person", Client.client_type.is_(None)))
+    if exclude_id:
+        q = q.where(Client.id != exclude_id)
+    rows = (await db.execute(q
         .order_by(*((Client.created_at.desc(), Client.id.desc()) if newest
                     else (Client.created_at, Client.id))))).scalars().all()
     return next((c for c in rows if same_number(c.phone, number)), None)

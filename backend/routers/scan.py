@@ -59,6 +59,19 @@ async def resolve(data: ScanIn, db: AsyncSession = Depends(get_db),
     if b:
         return _bin_hit(b)
 
+    # 3b) a serialized unit in stock (an IMEI / serial on the shelf) — the till already finds these
+    from backend.models import SerializedItem
+    from backend.services.serial_intake import matches as _sn_matches
+    si = (await db.execute(select(SerializedItem).where(
+        SerializedItem.org_id == org, SerializedItem.status.notin_(("sold", "written_off", "converted_to_asset")),
+        or_(*[_sn_matches(SerializedItem.serial_number, t) for t in {scan.serial, code} if t])))).scalars().first()
+    if si:
+        p = (await db.execute(select(Part).where(Part.id == si.part_id, Part.org_id == org))).scalar_one_or_none()
+        if p:
+            return {"matched": True, "type": "product", "id": p.id, "route": "/inventory", "label": p.name,
+                    "serial_id": si.id, "serial": si.serial_number, "serial_status": si.status,
+                    "scan": scan.as_dict()}
+
     # 4) asset — serial / imei / vin(upper) / hin(upper)
     from backend.services import identifiers as _ids
     conds = [col == v for col, v in ((Device.serial, _ids.normalize("serial", code)),

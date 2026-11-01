@@ -230,6 +230,15 @@ LEGACY_ALIASES = {
     "powersports": "powersports",
     "marine": "marine",
     "small_engine": "small_engine",
+    # common words people (and integrations) send for a template — QA E5
+    "electronics": "general", "consumer_electronics": "general", "watch": "general",
+    "watch_repair": "general", "jewellery": "general", "jewelry": "general",
+    "phone": "mobile_phone", "phones": "mobile_phone", "mobile": "mobile_phone",
+    "phone_repair": "mobile_phone", "cell_phone": "mobile_phone",
+    "computers": "computer", "computer_repair": "computer", "laptop": "computer", "pc": "computer",
+    "pc_repair": "computer", "bicycle": "bike", "bicycles": "bike", "cycle": "bike", "ebike": "bike",
+    "car": "auto", "automotive": "auto", "boat": "marine", "motorcycle": "powersports",
+    "truck": "fleet_truck", "fleet": "fleet_truck", "lawn_mower": "small_engine",
 }
 
 # Starter brand/model data (system rows), focused on what US/CA shops see every day so the
@@ -319,6 +328,15 @@ def normalize_template_key(key: Optional[str]) -> str:
     if k in TEMPLATES:
         return k
     return LEGACY_ALIASES.get(k, DEFAULT_TEMPLATE)
+
+
+def resolve_template_key(key: Optional[str]) -> Optional[str]:
+    """Like normalize_template_key, but None for a value that isn't a template or known alias
+    (normalize falls back to "general", which is right for stored data but hides a typo on input)."""
+    k = (key or "").strip().lower().replace("-", "_").replace(" ", "_")
+    if k in TEMPLATES:
+        return k
+    return LEGACY_ALIASES.get(k)
 
 
 def template(key: Optional[str]) -> dict:

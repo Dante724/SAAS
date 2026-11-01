@@ -153,6 +153,27 @@ async def _number_taken(db: AsyncSession, org_id: str, doc_type: str, number: st
         model.org_id == org_id, number_col == number).limit(1))).scalar_one_or_none() is not None
 
 
+_DOC_TOKEN = re.compile(r"\{(D|M|Y|C(?::\d+)?)\}")
+_ANY_BRACE = re.compile(r"\{[^{}]*\}")
+_TOKEN_HINTS = {"YYYY": "Y", "YY": "Y", "MM": "M", "DD": "D", "N": "C:5", "COUNTER": "C:5"}
+DOC_TOKENS_HELP = "{C} or {C:n} (counter, n digits), {D} (day), {M} (month), {Y} (year)"
+
+
+def doc_template_problem(template: str) -> str | None:
+    """A plain reason a document-number template can't be used, or None. Anything in braces
+    that isn't a supported token would be printed literally on every document."""
+    t = template or ""
+    for m in _ANY_BRACE.finditer(t):
+        if not _DOC_TOKEN.fullmatch(m.group(0)):
+            inner = m.group(0)[1:-1]
+            hint = _TOKEN_HINTS.get(inner.upper())
+            tip = f" — use {{{hint}}}" if hint else ""
+            return f"{m.group(0)} isn't a numbering token{tip}. Supported: {DOC_TOKENS_HELP}"
+    if not re.search(r"\{C(?::\d+)?\}", t):
+        return f"Template must contain a {{C}} counter token. Supported: {DOC_TOKENS_HELP}"
+    return None
+
+
 async def peek_example(template: str, begins_from: int | None = None) -> str:
     """Render a sample number for the Settings UI without touching any counter."""
     return render(template or "", begins_from or 1)
