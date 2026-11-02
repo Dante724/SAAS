@@ -6,7 +6,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -76,6 +76,16 @@ class RegisterRequest(BaseModel):
     company_phone: Optional[str] = None
     employee_count: Optional[str] = None
     plan: Optional[str] = None            # solo | shop | pro, from the pricing page (default pro)
+    province: Optional[str] = None        # Canada: two-letter province code, picks GST / HST
+
+    @field_validator("province")
+    @classmethod
+    def _province_known(cls, v):
+        from backend.services.regions import CA_PROVINCES
+        v = (v or "").strip().upper() or None
+        if v and v not in CA_PROVINCES:
+            raise ValueError(f"Unknown province. Use one of: {', '.join(sorted(CA_PROVINCES))}")
+        return v
 
 
 _signup_log = logging.getLogger("tekly.signup")
@@ -93,6 +103,7 @@ REGION_TAX = {
     "other": None,
 }
 # Country rates live in one table, services.regions.COUNTRY_TAX; the old name stays importable.
+from backend.services.regions import CA_PROVINCES as _CA_PROV  # noqa: E402
 from backend.services.regions import COUNTRY_TAX as COUNTRY_VAT  # noqa: E402  ISO alpha-2 → (name, rate, mode)
 
 
@@ -169,6 +180,9 @@ async def signup_options(request: Request):
         "countries": _shop_setup.country_options(),
         "country_hint": (country or "").strip().upper() or None,
         "employee_brackets": ["1", "2-5", "6-20", "21-50", "50+"],
+        # QA wave 3: Canada's tax depends on the province (send it back as `province`).
+        "provinces": {"CA": [{"code": c, "label": lbl, "tax_name": n, "tax_rate": r}
+                             for c, (lbl, n, r) in sorted(_CA_PROV.items(), key=lambda kv: kv[1][0])]},
     }
 
 
@@ -303,7 +317,11 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
 
     # Build 144cl: seed a region-appropriate default tax rate (owner can edit/disable it).
     # Launch B4: the tax goes on the sales stack too, or it is never charged.
-    if cdef:
+    if (data.country or "").upper() == "CA" or (not data.country and data.region == "ca"):
+        from backend.services.regions import ca_province_tax
+        _n, _r, _m = ca_province_tax(data.province, org.timezone)
+        _tax = {"name": _n, "rate": _r, "mode": _m}
+    elif cdef:
         _n, _r, _m = cdef["tax"]
         _tax = {"name": _n, "rate": _r, "mode": _m}
     else:

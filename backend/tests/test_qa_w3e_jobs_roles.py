@@ -417,5 +417,5 @@ async def test_employee_commission_percent_isnt_taken_when_it_wouldnt_be_paid(cl
     assert "commission" in r.text.lower()
     ok = await client.post("/api/staff/employees", json={**body, field: 0}, headers=tenant)
     assert ok.status_code == 201, ok.text
-    r = await client.put(f"/api/staff/employees/{ok.json()['id']}", json={field: 5}, headers=tenant)
+    r = await client.patch(f"/api/staff/employees/{ok.json()['id']}", json={field: 5}, headers=tenant)
     assert r.status_code == 422, r.text

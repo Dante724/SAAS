@@ -51,6 +51,16 @@ class EmployeeIn(BaseModel):
     public_name: Optional[str] = None     # name on public documents
     note: Optional[str] = None
 
+    # QA wave 3: a per-person commission % was stored but payroll never paid it (a 10% came out
+    # as 0). Commission is set as commission rules (per service / product), which payroll pays.
+    @field_validator("commission_labour", "commission_parts")
+    @classmethod
+    def _no_person_commission(cls, v):
+        if v:
+            raise ValueError("A commission % on the person isn't paid. Set commission as a commission rule "
+                             "in Payroll instead (per service or product).")
+        return v
+
 class EmployeeUpdate(BaseModel):
     name: Optional[str] = None
     email: Optional[str] = None
@@ -73,6 +83,16 @@ class EmployeeUpdate(BaseModel):
     note: Optional[str] = None
     active: Optional[bool] = None
 
+    # QA wave 3: a per-person commission % was stored but payroll never paid it (a 10% came out
+    # as 0). Commission is set as commission rules (per service / product), which payroll pays.
+    @field_validator("commission_labour", "commission_parts")
+    @classmethod
+    def _no_person_commission(cls, v):
+        if v:
+            raise ValueError("A commission % on the person isn't paid. Set commission as a commission rule "
+                             "in Payroll instead (per service or product).")
+        return v
+
 class PasswordReset(BaseModel):
     password: str
     current_password: Optional[str] = None   # required to change your OWN password
@@ -80,6 +100,7 @@ class PasswordReset(BaseModel):
 class RoleIn(BaseModel):
     name: str
     permissions: dict = {}
+    template: Optional[str] = None   # start from a template, as in the role editor (QA wave 3)
     # Build 83 — record-level access conditions
     contact_scope: str = "all"       # all|own
     order_scope: str = "all"         # all|own
@@ -112,8 +133,9 @@ async def list_employees(
     # Pay and tax ids are payroll data: only roles allowed to view payroll see colleagues' values.
     see_pay = await has_perm(db, current, "can_view_payroll")
     see_own = see_pay or await has_perm(db, current, "can_view_own_compensation")
-    # Everyone needs the team's names (assignee pickers, schedules); their email, phone and the
-    # manager's note are for whoever manages staff (a technician read them all — QA 31 Oct 2026).
+    # Everyone needs the team's names (assignee pickers, schedules); their email, phone, the
+    # manager's note and HR details (hours, hire date, time tracking) are for whoever manages staff
+    # (a technician read them all — QA 31 Oct 2026, wave 3).
     see_contact = await has_perm(db, current, "can_manage_employees")
     from backend.services.payroll_views import in_scope, payroll_scope_ids
     scope = await payroll_scope_ids(db, current)   # E3: colleagues' pay only inside the payroll scope
@@ -125,12 +147,15 @@ async def list_employees(
         return v if (see_pay and in_scope(scope, e.id)) else None
     def contact(e, v):
         return v if (see_contact or e.id == current.id) else None
+    def hr(e, v):        # payroll works from hours and time tracking too
+        return v if (see_contact or see_pay or e.id == current.id) else None
     return [{"id": e.id, "name": e.name, "email": contact(e, e.email),
              "phone": contact(e, e.phone), "wage_type": pay(e, e.wage_type), "wage_value": pay(e, e.wage_value),
              "commission_labour": pay(e, e.commission_labour), "commission_parts": pay(e, e.commission_parts),
-             "weekly_hours": e.weekly_hours, "hourly_basis": e.hourly_basis or "labour",
-             "track_job_hours": e.track_job_hours, "track_attendance": e.track_attendance,
-             "position": e.position, "hired_at": e.hired_at.isoformat() if e.hired_at else None,
+             "weekly_hours": hr(e, e.weekly_hours), "hourly_basis": hr(e, e.hourly_basis or "labour"),
+             "track_job_hours": hr(e, e.track_job_hours), "track_attendance": hr(e, e.track_attendance),
+             "position": e.position,
+             "hired_at": hr(e, e.hired_at.isoformat() if e.hired_at else None),
              "tax_id": pay(e, e.tax_id), "public_name": e.public_name, "note": contact(e, e.note),
              "location_id": e.location_id, "role_id": e.role_id, "active": e.active,
              # whether their role shows them in the work order's Managers / Assignee pickers
@@ -826,7 +851,12 @@ async def get_company(
     org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
     if not org:
         raise HTTPException(404, "Company not found")
-    return {
+    # Shop admin details (the account id support asks for, the device limit, payment set-up,
+    # the documents' footer note) are for whoever runs the settings; everyone else gets what the
+    # app needs to show prices, dates and the shop's name (QA wave 3: a technician read it all).
+    from backend.services.auth import has_perm
+    admin = await has_perm(db, current, "can_manage_settings")
+    out = {
         "name": org.name, "account_id": org.account_id,   # read-only; what Tekly support asks for
         "company_email": org.company_email, "company_phone": org.company_phone,
         "company_address": org.company_address, "company_details": org.company_details,
@@ -859,6 +889,10 @@ async def get_company(
         "require_mfa": bool(getattr(org, "require_mfa", False)),
         "max_sessions_per_login": getattr(org, "max_sessions_per_login", None),
     }
+    if not admin:
+        for k in ("account_id", "company_note", "payment_provider", "require_mfa", "max_sessions_per_login"):
+            out[k] = None
+    return out
 
 
 class CompanyIn(BaseModel):
@@ -1017,7 +1051,7 @@ class InventorySettingsIn(BaseModel):
     enable_bins: Optional[bool] = None
     unique_identifier: Optional[str] = None
     enable_reservations: Optional[bool] = None
-    reservation_max_days: Optional[int] = None
+    reservation_max_days: Optional[int] = Field(None, ge=0, le=3650)
     product_serial_template: Optional[str] = None
     asset_serial_template: Optional[str] = None
     sku_template: Optional[str] = None       # ii144a: empty = SKUs stay as typed

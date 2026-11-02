@@ -165,13 +165,43 @@ def serialize(row: AuthSession, current_sid: Optional[str] = None, *, show_ip: b
 
 
 # ── At the limit ────────────────────────────────────────────────────────────────
-def limit_token(emp: Employee, mfa: bool) -> str:
-    """Good for LIMIT_TOKEN_MIN minutes and for one thing only: POST /api/auth/session-limit/continue.
-    get_current_employee refuses any token with a `typ`, so it can't be used as a session."""
+LIMIT_TOKEN_KIND = "session_limit"
+
+
+def _jti_hash(jti: str) -> str:
+    import hashlib
+    return hashlib.sha256(jti.encode()).hexdigest()
+
+
+async def limit_token(db: AsyncSession, emp: Employee, mfa: bool) -> str:
+    """Good for LIMIT_TOKEN_MIN minutes, once, and for one thing only: POST
+    /api/auth/session-limit/continue. get_current_employee refuses any token with a `typ`, so it
+    can't be used as a session. Its id is kept (hashed) as an AuthToken so a second use is refused:
+    a replayed token signed out another device and made another session (QA wave 3)."""
+    from backend.models import AuthToken
     now = int(time.time())
+    jti = secrets.token_urlsafe(16)
+    db.add(AuthToken(kind=LIMIT_TOKEN_KIND, employee_id=emp.id, token_hash=_jti_hash(jti),
+                     expires_at=datetime.utcnow() + timedelta(minutes=LIMIT_TOKEN_MIN)))
     return jwt.encode({"sub": emp.id, "typ": "session_limit", "tv": int(emp.token_version or 0), "mfa": mfa,
-                       "iat": now, "exp": now + LIMIT_TOKEN_MIN * 60}, settings.SECRET_KEY,
+                       "jti": jti, "iat": now, "exp": now + LIMIT_TOKEN_MIN * 60}, settings.SECRET_KEY,
                       algorithm=settings.ALGORITHM)
+
+
+async def use_limit_token(db: AsyncSession, claims: dict) -> None:
+    """Spend the limit token. Two requests with one token race on one conditional UPDATE: one
+    wins, the other gets 401. Caller commits."""
+    from backend.models import AuthToken
+    jti = claims.get("jti")
+    won = 0
+    if jti:
+        won = (await db.execute(update(AuthToken).where(
+            AuthToken.kind == LIMIT_TOKEN_KIND, AuthToken.token_hash == _jti_hash(jti),
+            AuthToken.employee_id == claims.get("sub"), AuthToken.used_at.is_(None),
+            AuthToken.expires_at > datetime.utcnow()).values(used_at=datetime.utcnow())
+            .execution_options(synchronize_session=False))).rowcount
+    if won != 1:
+        raise HTTPException(401, "That sign-in was already used. Please sign in again.")
 
 
 def read_limit_token(raw: str) -> dict:
@@ -197,11 +227,12 @@ async def limit_reached(db: AsyncSession, emp: Employee, mfa: bool) -> None:
         return
     await _audit(db, org_id=emp.org_id, actor_id=emp.id, action="auth.session_limit_hit",
                  entity_type="employee", entity_id=emp.id, diff={"limit": limit, "active": len(live)})
+    token = await limit_token(db, emp, mfa)
     await db.commit()
     raise HTTPException(status_code=409, headers={"X-Session-Limit": "1"}, detail={
         "message": f"You're signed in on {len(live)} devices, the most your shop allows. "
                    f"Sign out of one to continue here.",
         "limit": limit,
         "sessions": [serialize(s, show_ip=False) for s in live],
-        "limit_token": limit_token(emp, mfa),
+        "limit_token": token,
     })

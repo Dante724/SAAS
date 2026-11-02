@@ -977,6 +977,7 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
     _fixed_cost = not _hide_cost and not await has_perm(db, current, "can_set_cost_price")
     for li in data.lines:
         await _assert_line_rights(db, current, li)
+        await _assert_line_ref(db, current.org_id, li)
         if _hide_cost or _fixed_cost:
             li.cost_price = await _catalog_cost(db, current.org_id, li.kind, li.ref_id)
         await _apply_client_discount(db, current.org_id, data.client_id, li)
@@ -4294,6 +4295,20 @@ async def _assert_line_rights(db, current, li) -> None:
         await assert_perm(db, current, "can_set_discount_type")
 
 
+async def _assert_line_ref(db, org_id, li) -> None:
+    """A picked line points at one of this shop's products or services, as at the till. An id
+    that is nobody's, or isn't that kind of item (a client's id sent as a product), used to make a
+    line pointing at nothing (QA wave 3)."""
+    if not li.ref_id or li.kind not in ("product", "service"):
+        return
+    from backend.models import Part, Service as _Svc
+    model = Part if li.kind == "product" else _Svc
+    found = (await db.execute(select(model.id).where(model.id == li.ref_id, model.org_id == org_id))).scalar_one_or_none()
+    if not found:
+        raise HTTPException(404, "That product isn't in your catalog" if li.kind == "product"
+                            else "That service isn't in your catalog")
+
+
 # What "View prices of labors, services, products" hides on a work order's lines.
 LINE_PRICE_KEYS = ("unit_price", "total", "discount", "discount_type")
 
@@ -4365,6 +4380,7 @@ async def add_line(
     if (data.discount or 0) > 0:
         await assert_perm(db, current, "can_set_discount")
     await _assert_line_rights(db, current, data)
+    await _assert_line_ref(db, current.org_id, data)
     await _validate_line_assignment(db, current.org_id, technician_id=data.technician_id, co_technicians=data.co_technicians)
     if data.order_item_id:
         from backend.services import multi_asset as _ma
@@ -4519,13 +4535,17 @@ async def add_line(
         # price the client sent (it decides how the kit's locked total is shared out).
         data.order_item_id = kit_group.order_item_id
 
-    # Merge: if the same product already exists on the order, just bump qty (Orderry)
+    # Merge: the same line added again (a double click) just bumps qty (Orderry). Only an
+    # identical line: the same product at the same price with the same description. A second
+    # line for the product with its own description ("stick R" next to "stick L") stays its own
+    # line (QA wave 3).
     if data.kind == "product" and data.ref_id:
         # A kit's lines are never merged into: an extra must stay a line of its own.
-        existing = (await db.execute(select(OrderLine).where(
+        same = (await db.execute(select(OrderLine).where(
             OrderLine.order_id == order_id, OrderLine.ref_id == data.ref_id, OrderLine.kind == "product",
-            OrderLine.bundle_group_id.is_(None)).limit(1)
-            .execution_options(populate_existing=True))).scalars().first()
+            OrderLine.bundle_group_id.is_(None), OrderLine.description == data.description)
+            .execution_options(populate_existing=True))).scalars().all()
+        existing = next((ln for ln in same if abs(float(ln.unit_price or 0) - float(data.unit_price or 0)) < 0.005), None)
         if existing and not kit_group:
             existing.qty += data.qty
             existing.total = q2(existing.qty * existing.unit_price *

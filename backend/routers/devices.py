@@ -81,6 +81,7 @@ async def continue_at_limit(data: LimitContinue, request: Request, db: AsyncSess
     if emp is None or not emp.active or int(claims.get("tv", -1)) != int(emp.token_version or 0):
         raise HTTPException(401, "Please sign in again.")
     row = await _own_row(db, emp, data.session_id)
+    await _s.use_limit_token(db, claims)          # once only (QA wave 3)
     await _s.revoke(db, row, actor_id=emp.id, reason="limit")
     await db.commit()
     await _s.limit_reached(db, emp, mfa=bool(claims.get("mfa")))    # still over (limit lowered): pick another
