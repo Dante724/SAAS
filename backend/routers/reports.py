@@ -3,7 +3,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy import select, func
+from sqlalchemy import case, select, func
 from sqlalchemy.orm import selectinload
 from backend.db.database import get_db
 from backend.models import Order, Client, Invoice, Part, StockLevel, Task, Employee
@@ -207,7 +207,8 @@ async def _rep_work_orders_closed(db, org, df, dt, **kw):
 
 async def _rep_lead_source_revenue(db, org, df, dt, **kw):
     """Which lead sources bring paying customers: new clients, orders and money received in the
-    period, grouped by the client's lead source (Settings → Directories → Lead sources)."""
+    period, grouped by the client's lead source (Settings → Directories → Lead sources). "Paid" is
+    money in less money handed back (refunds) in the period."""
     src = func.coalesce(func.nullif(Client.source, ""), "Not recorded")
     new_clients = dict((await db.execute(select(src, func.count()).where(
         Client.org_id == org, Client.created_at >= df, Client.created_at <= dt).group_by(src))).all())
@@ -217,11 +218,11 @@ async def _rep_lead_source_revenue(db, org, df, dt, **kw):
         Order.created_at >= df, Order.created_at <= dt), kw).group_by(src)
     orders = {k: (n, t) for k, n, t in (await db.execute(oq)).all()}
     # A payment names its client directly or only through its order — attribute either way.
-    pq = (select(src, func.coalesce(func.sum(Payment.amount), 0))
+    is_refund = func.coalesce(Payment.kind, "payment") == "refund"
+    pq = (select(src, func.coalesce(func.sum(case((is_refund, -func.abs(Payment.amount)), else_=Payment.amount)), 0))
           .select_from(Payment).outerjoin(Order, Order.id == Payment.order_id)
           .join(Client, Client.id == func.coalesce(Payment.client_id, Order.client_id))
-          .where(Client.org_id == org, func.coalesce(Payment.kind, "payment") != "refund",
-                 Payment.paid_at >= df, Payment.paid_at <= dt).group_by(src))
+          .where(Client.org_id == org, Payment.paid_at >= df, Payment.paid_at <= dt).group_by(src))
     paid = dict((await db.execute(pq)).all())
     keys = sorted(set(new_clients) | set(orders) | set(paid), key=lambda k: -float(paid.get(k, 0) or 0))
     cols = ["Lead source", "New clients", "Work orders", "Order value", "Paid", "Avg paid / new client"]
@@ -319,7 +320,7 @@ async def _rep_technicians(db, org, df, dt, **kw):
     lines = (await db.execute(
         select(OrderLine, Order).join(Order, OrderLine.order_id == Order.id)
         .where(Order.org_id == org, Order.created_at >= df, Order.created_at <= dt,
-               Order.is_estimate == False,                              # noqa: E712
+               Order.is_estimate == False, Order.archived == False,     # noqa: E712
                *([Order.status.notin_(dropped)] if dropped else [])))).all()
     emp = {e.id: e.name for e in (await db.execute(select(Employee).where(Employee.org_id == org))).scalars().all()}
     # 144aw — attribute revenue/cost by the SAME split rule payroll uses (co_technicians →
@@ -339,13 +340,15 @@ async def _rep_technicians(db, org, df, dt, **kw):
 
 async def _line_sales(db, org, df, dt, kind: str) -> dict:
     """Per item: qty, revenue (ex tax) and cost of the `kind` lines on Ready+Closed jobs created
-    in the period, less goods returned to the shelf, plus the same items sold at the counter
-    (each sale's whole-sale discount shared over its lines; deleted sales left out)."""
+    in the period, less goods returned to the shelf, plus the same items sold at the counter: ex
+    tax, each sale's whole-sale discount shared over its lines, less what came back to the till
+    (deleted sales left out). A till line with no name is its own row, never merged with another."""
     from backend.models import ClientReturn, ClientReturnLine, Sale, SaleLine
     keys = await _closed_ready_keys(db, org)
     rows = (await db.execute(
         select(OrderLine, Order).join(Order, OrderLine.order_id == Order.id)
         .where(Order.org_id == org, Order.created_at >= df, Order.created_at <= dt,
+               Order.is_estimate == False, Order.archived == False,  # noqa: E712
                OrderLine.kind == kind))).all()
     agg = {}
     by_part = {}
@@ -380,15 +383,22 @@ async def _line_sales(db, org, df, dt, kind: str) -> dict:
         gross = {}
         for sl in slines:
             gross[sl.sale_id] = gross.get(sl.sale_id, 0) + float(sl.total or 0)
-        totals = {x.id: float(x.total or 0) for x in sales}
+        # what the customer paid ex tax (Sale.tax holds the tax, added on top or inside the price)
+        net = {x.id: float(x.total or 0) - float(getattr(x, "tax", 0) or 0) for x in sales}
+        numbers = {x.id: x.sale_number for x in sales}
         for sl in slines:
-            if sl.kind != kind:
+            if sl.kind != kind or not sl.qty:
                 continue
-            share = totals[sl.sale_id] / gross[sl.sale_id] if gross.get(sl.sale_id) else 0
-            a = agg.setdefault(sl.description, {"qty": 0, "rev": 0, "cost": 0})
-            a["qty"] += sl.qty
-            a["rev"] += float(sl.total or 0) * share
-            a["cost"] += float(sl.cost_price or 0) * sl.qty
+            share = net[sl.sale_id] / gross[sl.sale_id] if gross.get(sl.sale_id) else 0
+            # units brought back to the till (sales.return_sale_items) were not sold
+            kept = max(0.0, float(sl.qty) - float((sl.stock_draws or {}).get("returned") or 0))
+            name = (sl.description or "").strip()
+            key = name or ("unnamed", sl.id)
+            a = agg.setdefault(key, {"qty": 0, "rev": 0, "cost": 0,
+                                     "name": name or f"Unnamed item ({numbers[sl.sale_id] or 'counter sale'})"})
+            a["qty"] += kept
+            a["rev"] += float(sl.total or 0) * share * kept / float(sl.qty)
+            a["cost"] += float(sl.cost_price or 0) * kept
     return agg
 
 
@@ -396,7 +406,7 @@ def _profit_rows(agg):
     data = []
     for name, v in agg.items():
         gp = v["rev"] - v["cost"]
-        data.append([name, q2(v["qty"]), q2(v["rev"]), q2(v["cost"]),
+        data.append([v.get("name", name), q2(v["qty"]), q2(v["rev"]), q2(v["cost"]),
                      q2(gp), round(gp / v["cost"] * 100, 1) if v["cost"] else 0])
     return data
 
@@ -414,9 +424,11 @@ async def _rep_sold_products(db, org, df, dt, **kw):
 
 
 async def _rep_cash_flow(db, org, df, dt, **kw):
-    """Cash flow statement — income vs expense by cash-flow item."""
+    """Cash flow statement — income vs expense by cash-flow item. A deleted transaction (a voided
+    sale's takings, a deleted refund's payout) is struck through and left out, as in the account."""
     txns = (await db.execute(select(Transaction).where(
-        Transaction.org_id == org, Transaction.actual_date >= df, Transaction.actual_date <= dt))).scalars().all()
+        Transaction.org_id == org, func.coalesce(Transaction.status, "active") != "deleted",
+        Transaction.actual_date >= df, Transaction.actual_date <= dt))).scalars().all()
     items = {c.id: c.name for c in (await db.execute(select(CashFlowItem).where(CashFlowItem.org_id == org))).scalars().all()}
     agg = {}
     for t in txns:
@@ -437,18 +449,32 @@ async def _rep_total_money(db, org, df, dt, **kw):
     return cols, data
 
 
+# "return" movements that undo a use: parts back from a job, a deleted sale, a customer's return
+_USE_UNDONE_BY = ("order", "sale_void", "client_return")
+
+
+def _unit_cost(p) -> float:
+    """The one cost basis for stock value (moving average, else list cost), as on the product card."""
+    return float(p.avg_cost or p.cost_price or 0)
+
+
 async def _rep_product_turnover(db, org, df, dt, **kw):
-    """Goods written off to orders/sales (movement_type=use). `movement`: "with" (default) lists
-    products used in the period; "without" lists active products with no use in it; "all" both."""
+    """Goods written off to orders/sales (movement_type=use), less what came back in the period:
+    a line removed from a job, a deleted sale, goods returned by the customer. `movement`: "with"
+    (default) lists products used in the period; "without" lists active products with no use in
+    it; "all" both."""
     movement = kw.get("movement") or "with"
     rows = (await db.execute(
         select(StockMovement, Part).join(Part, StockMovement.part_id == Part.id)
-        .where(Part.org_id == org, StockMovement.movement_type == "use",
+        .where(Part.org_id == org, StockMovement.movement_type.in_(("use", "return")),
                StockMovement.created_at >= df, StockMovement.created_at <= dt))).all()
     agg: dict = {}
     for mv, part in rows:
+        if mv.movement_type == "return" and mv.ref_type not in _USE_UNDONE_BY:
+            continue
         a = agg.setdefault(part.id, [part.name, part.sku or "—", 0.0])
-        a[2] += abs(mv.qty or 0)
+        a[2] += abs(mv.qty or 0) if mv.movement_type == "use" else -abs(mv.qty or 0)
+    agg = {k: v for k, v in agg.items() if v[2] > 1e-9}
     cols = ["Product", "SKU", "Qty used (orders/sales)"]
     data = [[n, sku, q2(v)] for n, sku, v in agg.values()] if movement in ("with", "all") else []
     if movement in ("without", "all"):
@@ -478,7 +504,9 @@ async def _rep_stock_levels(db, org, df, dt, **kw):
     for p in parts:
         avail = sum(s.qty_available for s in p.stock_levels)
         res = sum(s.qty_reserved for s in p.stock_levels)
-        data.append([p.name, p.sku or "—", q2(avail), q2(res), p.min_stock, q2(avail * (p.cost_price or 0))])
+        # valued like stock_valuation / assortment: what is on hand, at the one cost basis
+        value = sum(max(s.qty_available or 0, 0) for s in p.stock_levels) * _unit_cost(p)
+        data.append([p.name, p.sku or "—", q2(avail), q2(res), p.min_stock, q2(value)])
     return cols, data
 
 
@@ -638,10 +666,10 @@ async def _rep_assortment(db, org, df, dt, **kw):
         if not avail and not (sl.qty_reserved or 0):
             continue
         w = whs.get(sl.warehouse_id)
-        cost = p.avg_cost or p.cost_price or 0
+        cost = _unit_cost(p)
         data.append([w.name if w else "—", p.name, p.sku or "—", p.category or "—",
                      q2(avail), q2(sl.qty_reserved or 0),
-                     q2(cost), q2(avail * cost)])
+                     q2(cost), q2(max(avail, 0) * cost)])
     data.sort(key=lambda r: (r[0], -r[7]))
     return cols, data
 
@@ -682,7 +710,7 @@ async def _rep_purchase_list(db, org, df, dt, **kw):
         shortfall = min_stock - free - on_order
         if shortfall <= 0:
             continue
-        cost = p.avg_cost or p.cost_price or 0
+        cost = _unit_cost(p)
         data.append([p.name, p.sku or "—", q2(avail), q2(res), q2(free), min_stock, q2(on_order),
                      q2(shortfall), q2(shortfall * cost)])
     data.sort(key=lambda r: -r[8])
@@ -785,7 +813,7 @@ async def _rep_stock_valuation(db, org, df, dt, **kw):
         avail = sl.qty_available or 0
         if avail <= 0:
             continue
-        cost = p.avg_cost or p.cost_price or 0
+        cost = _unit_cost(p)
         a = agg.setdefault(sl.warehouse_id, {"skus": set(), "units": 0.0, "value": 0.0})
         a["skus"].add(p.id)
         a["units"] += avail
@@ -824,7 +852,7 @@ async def _rep_dead_stock(db, org, df, dt, **kw):
         days = (now - ts).days if ts else None
         if days is not None and days < 90:
             continue
-        cost = p.avg_cost or p.cost_price or 0
+        cost = _unit_cost(p)
         data.append([p.name, p.sku or "—", q2(avail), q2(cost), q2(avail * cost), ts.strftime("%Y-%m-%d") if ts else "never",
                      days if days is not None else "—"])
     data.sort(key=lambda r: -r[4])
@@ -875,7 +903,7 @@ async def _rep_reorder_forecast(db, org, df, dt, **kw):
         suggest = daily * (ld + COVER) - free - incoming.get(p.id, 0)
         if suggest <= 0:
             continue
-        cost = p.avg_cost or p.cost_price or 0
+        cost = _unit_cost(p)
         stockout = (now_utc() + timedelta(days=days_left)).strftime("%Y-%m-%d")
         data.append([p.name, p.sku or "—", q2(free), q2(daily), round(days_left, 1), stockout, ld, q2(incoming.get(p.id, 0)),
                      round(suggest, 1), q2(suggest * cost)])
