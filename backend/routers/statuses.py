@@ -92,6 +92,7 @@ RECORD_TYPE_DEFAULTS: dict[str, list[tuple]] = {
         ("po_ordered",      "Ordered",          "in_progress", "#4f8ef7", False, False),
         ("po_in_transit",   "In transit",       "pending",     "#f06daa", False, False),
         ("po_delayed",      "Delayed",          "pending",     "#e8833a", False, False),
+        ("po_partial",      "Partly received",  "pending",     "#e8b33a", False, False),
         ("po_received",     "Received",         "ready",        "#2cd4c0", False, False),
         ("po_closed",       "Closed",           "closed",       "#1d8a4e", False, True),
         ("po_cancelled",    "Cancelled",        "dropped",      "#90a0c0", False, True),

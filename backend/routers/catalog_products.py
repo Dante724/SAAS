@@ -28,7 +28,7 @@ from backend.models import (
 from backend.services.auth import assert_perm, get_current_employee, require_perm
 from backend.routers.forms import resolve_custom_data
 from backend.services import product_codes
-from backend.services.money import q2
+from backend.services.money import MAX_MONEY, q2
 from backend.services.owned import get_owned_or_404, require_unique_name
 from backend.services.redact import can_see_costs, drop_cost_fields
 from backend.core.likes import contains as _contains
@@ -360,9 +360,9 @@ class ProductIn(BaseModel):
     default_supplier_id: Optional[str] = None
     category_id: Optional[str] = None
     uom: str = "pcs"
-    cost_price: float = Field(0.0, ge=0)
-    sell_price: float = Field(0.0, ge=0)
-    repair_price: Optional[float] = Field(None, ge=0)   # price on a work order; blank/0 = store price
+    cost_price: float = Field(0.0, ge=0, lt=MAX_MONEY)     # W3-D: past the column is a 422, not a 500
+    sell_price: float = Field(0.0, ge=0, lt=MAX_MONEY)
+    repair_price: Optional[float] = Field(None, ge=0, lt=MAX_MONEY)   # price on a work order; blank/0 = store price
     min_stock: int = Field(0, ge=0)
     serialized: bool = False
     expiry_tracking: bool = False
@@ -844,8 +844,8 @@ class VariantIn(BaseModel):
     name: Optional[str] = None        # defaults to "<base> (<attrs>)"
     sku: Optional[str] = None
     barcode: Optional[str] = None
-    sell_price: Optional[float] = None
-    cost_price: Optional[float] = None
+    sell_price: Optional[float] = Field(None, ge=0, lt=MAX_MONEY)
+    cost_price: Optional[float] = Field(None, ge=0, lt=MAX_MONEY)
     variant_attrs: dict               # {"Size":"L","Color":"Red"}
 
 

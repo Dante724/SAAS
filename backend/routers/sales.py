@@ -1148,6 +1148,16 @@ async def _st_stock_row(db, part_id, st, bin_id=None, *, unbinned=False):
     return float(sum(r.qty_available or 0 for r in found)) if found else None
 
 
+async def _mark_counted(db, st, line) -> None:
+    """W3-D: a line's book quantity is read when it is counted, and its variance is the count
+    minus that book. Posting applies the variance to the book as it is then, so stock that moves
+    after the count (a job taking 2) isn't put back, and stock that moved before it isn't taken twice."""
+    line_bin = line.bin_id or st.bin_id
+    book = await _st_stock_row(db, line.part_id, st, line_bin, unbinned=bool(st.by_bin and not line_bin))
+    line.system_qty = book or 0
+    line.variance = round((line.counted_qty or 0) - line.system_qty, 3)
+
+
 class StocktakeIn(BaseModel):
     location_id: Optional[str] = None
     warehouse_id: Optional[str] = None      # Build 91: warehouses are the real address
@@ -1278,8 +1288,11 @@ async def set_count(
         raise HTTPException(404, "Count line not found")
     if data.counted_qty < 0:
         raise HTTPException(422, "A count can't be negative")
+    part = (await db.execute(select(Part).where(Part.id == line.part_id))).scalar_one_or_none()
+    if part:
+        stock_rows.check_whole(part, data.counted_qty)
     line.counted_qty = data.counted_qty
-    line.variance = round(data.counted_qty - (line.system_qty or 0), 3)
+    await _mark_counted(db, st, line)
     await db.commit()
     return {"ok": True, "variance": None if _hide_book(st) else line.variance}
 
@@ -1316,19 +1329,15 @@ async def post_stocktake(
         for l in (await db.execute(select(StocktakeLine).where(
                 StocktakeLine.stocktake_id == st_id, StocktakeLine.counted_qty.is_(None)))).scalars().all():
             l.counted_qty = 0
+            await _mark_counted(db, st, l)      # counted as nothing now, against the book now
     lines = (await db.execute(select(StocktakeLine).where(
         StocktakeLine.stocktake_id == st_id,
         StocktakeLine.counted_qty.is_not(None)))).scalars().all()
-    # QA F2: the count is what's on the shelf now, so it's compared with the books now, not with the
-    # snapshot taken at the start — stock sold or written off during the count isn't taken twice.
-    # The product's rows are locked first so a sale can't land between reading and adjusting.
+    # QA F2 / W3-D: each line's variance was taken against the book when it was counted
+    # (_mark_counted), and is applied to the book as it is now. The product's rows are locked
+    # first so a sale can't land between reading and adjusting.
     for pid in sorted({l.part_id for l in lines}):
         await stock_rows.rows(db, pid, st.location_id, lock=True)
-    for l in lines:
-        line_bin = l.bin_id or st.bin_id
-        book = await _st_stock_row(db, l.part_id, st, line_bin, unbinned=bool(st.by_bin and not line_bin))
-        l.system_qty = book or 0
-        l.variance = round(l.counted_qty - l.system_qty, 3)
     adjusted = 0
     for l in lines:
         if not l.variance:
@@ -1640,8 +1649,9 @@ async def scan_count(
         step = 1 if (st.blind or unit) else data.qty
         if step <= 0:
             raise HTTPException(422, "Quantity must be positive")
+        stock_rows.check_whole(part, step)
         line.counted_qty = (line.counted_qty or 0) + step
-    line.variance = round(line.counted_qty - (line.system_qty or 0), 3)
+    await _mark_counted(db, st, line)
 
     # a serialized unit that the system thinks lives somewhere else is worth flagging
     if unit:
@@ -1796,6 +1806,11 @@ async def import_counts(
         if not _in_scope(st, part):
             errors.append({"row": i + 1, "error": f"“{part.name}” isn't in this count's category"})
             continue
+        try:
+            stock_rows.check_whole(part, qty)
+        except HTTPException as e:
+            errors.append({"row": i + 1, "error": e.detail})
+            continue
         if not bin_id and unit and st.by_bin and unit.location_id == st.location_id:
             bin_id = unit.bin_id
         line = await _count_line(db, st, part, bin_id, is_unknown=created)
@@ -1808,7 +1823,7 @@ async def import_counts(
         else:
             line.counted_qty = qty                       # the sheet is authoritative
             seen_lines.add(line.id)
-        line.variance = round((line.counted_qty or 0) - (line.system_qty or 0), 3)
+        await _mark_counted(db, st, line)
         applied += 1
 
     await db.commit()
