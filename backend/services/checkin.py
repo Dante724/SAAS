@@ -14,7 +14,7 @@ from datetime import date, datetime
 from typing import Optional
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import (
@@ -302,6 +302,12 @@ async def convert(db: AsyncSession, c: Checkin, *, actor=None) -> dict:
     from backend.models import AssetGroup, Order
     from backend.services import identifiers as ids
     from backend.services.leads import convert_lead
+    # Lock the row (a no-op UPDATE: a row lock on Postgres, the write lock on SQLite) and read it
+    # again, so two staff pressing Convert at once make one job: the second waits for the first
+    # to commit, then sees converted_order_id.
+    await db.execute(update(Checkin).where(Checkin.id == c.id).values(state=Checkin.state)
+                     .execution_options(synchronize_session=False))
+    await db.refresh(c)
     if c.converted_order_id:
         o = (await db.execute(select(Order).where(Order.id == c.converted_order_id))).scalar_one()
         return {"ok": True, "order_id": o.id, "order_number": o.order_number, "already": True}
