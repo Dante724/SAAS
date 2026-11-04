@@ -152,6 +152,8 @@ export default function ReaderCharge({ orderId, saleId, amount, accountId, title
             <div className="text-xs text-ink-secondary mt-0.5">
               {waiting ? `Ask the customer to tap, insert or swipe on ${reader?.label || "the reader"}.` : charge.error || (st === "succeeded" ? "Payment recorded." : "")}
             </div>
+            {/* The reader didn't confirm it got this charge: say so, and keep following it. */}
+            {waiting && charge.error && <div className="text-xs text-amber-700 mt-1">{charge.error}</div>}
             </div>
           </div>
         )}

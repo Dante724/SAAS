@@ -93,4 +93,34 @@ describe("FinanceHub payroll", () => {
     expect(await screen.findByText(/Could not run payroll/)).toBeTruthy();
     expect(posts).toEqual(["/api/payroll/run-all"]);
   });
+
+  it("Record payout keeps one Idempotency-Key per payout until it goes through", async () => {
+    const u = userEvent.setup();
+    render(<MemoryRouter><FinanceHub initialTab="reconcile" /></MemoryRouter>);
+    const payout = async () => {
+      await u.click(await screen.findByRole("button", { name: "Record payout" }));
+      await screen.findByText(/Payout gross amount/);
+      await u.type(screen.getAllByRole("textbox").pop()!, "100");
+      await u.click(screen.getAllByRole("button", { name: "OK" }).pop()!);   // gross
+      await screen.findByText(/Processing fee/);
+      await u.click(screen.getAllByRole("button", { name: "OK" }).pop()!);   // fee (blank)
+      await screen.findByText(/Reference/);
+      await u.click(screen.getAllByRole("button", { name: "OK" }).pop()!);   // reference (blank)
+    };
+    failPost = true;
+    await payout();
+    await vi.waitFor(() => expect(posts).toEqual(["/api/finance/payouts"]));
+    await screen.findByText("Could not record payout.");
+    await u.click(screen.getAllByRole("button", { name: "OK" }).pop()!);
+    await vi.waitFor(() => expect(screen.queryByText("Could not record payout.")).toBeNull());
+    failPost = false;
+    await payout();                                                       // the same payout, retried
+    await vi.waitFor(() => expect(posts).toHaveLength(2));
+    expect(keys[0]).toBeTruthy();
+    expect(keys[1]).toBe(keys[0]);
+    await payout();                                                       // the next payout
+    await vi.waitFor(() => expect(posts).toHaveLength(3));
+    expect(keys[2]).toBeTruthy();
+    expect(keys[2]).not.toBe(keys[0]);
+  });
 });

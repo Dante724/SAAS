@@ -4067,11 +4067,15 @@ class TerminalCharge(OrgScoped, Base):
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
-    # One open charge per reader, enforced by the database (idg01): the start check alone was
-    # check-then-insert, so two taps at once could both pass it and send two card charges.
-    # "pending" is services/terminal.OPEN.
+    # One open charge per reader, and per order / sale across readers, enforced by the database
+    # (idg01): the start check alone was check-then-insert, so two taps at once could both pass it
+    # and send two card charges. "pending" is services/terminal.OPEN.
     __table_args__ = (
         Index("uq_terminal_charges_open_per_reader", "terminal_id", unique=True,
+              sqlite_where=text("status = 'pending'"), postgresql_where=text("status = 'pending'")),
+        Index("uq_terminal_charges_open_per_order", "order_id", unique=True,
+              sqlite_where=text("status = 'pending'"), postgresql_where=text("status = 'pending'")),
+        Index("uq_terminal_charges_open_per_sale", "sale_id", unique=True,
               sqlite_where=text("status = 'pending'"), postgresql_where=text("status = 'pending'")),
     )
 
@@ -4133,6 +4137,9 @@ class IdempotencyRecord(OrgScoped, Base):
     # sha256 of what was asked (path ids + body), when the endpoint passes it: the same key sent
     # with a different request is refused instead of replaying the first answer for it (idg01).
     request_hash: Mapped[Optional[str]] = mapped_column(String(64))
+    # Set in the same transaction as the work's first commit (idg01). Once set, the work's money
+    # is in: the key is never released or taken over, so a retry can't post it again.
+    committed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     response: Mapped[Optional[dict]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
     __table_args__ = (UniqueConstraint("org_id", "key", name="uq_idempotency_org_key"),)

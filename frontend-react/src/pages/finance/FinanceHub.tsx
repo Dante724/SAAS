@@ -38,6 +38,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
   const [exFrom, setExFrom] = useState("");   // accountant export range (blank = current month)
   const [exTo, setExTo] = useState("");
   const INV_PAGE_SIZE = 50;
+  const payoutKey = useRef(idempotencyKey());
   async function recordPayout() {
     const gross = await promptDialog("Payout gross amount (total card/online sales in this deposit)");
     if (gross == null) return;
@@ -46,8 +47,10 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
     if (fee == null) return;
     const ref = await promptDialog("Reference (optional — payout ID from your statement)");
     try {
-      // One payout per dialog run: the server records a retried POST with this key once.
-      await api.postOnce("/finance/payouts", { gross_amount: g, fee_amount: parseFloat(fee || "0") || 0, reference: ref || undefined }, idempotencyKey());
+      // One key per payout, kept until it goes through: a retry after a failure or a timeout is
+      // recorded once by the server; the next payout gets a new key.
+      await api.postOnce("/finance/payouts", { gross_amount: g, fee_amount: parseFloat(fee || "0") || 0, reference: ref || undefined }, payoutKey.current);
+      payoutKey.current = idempotencyKey();
       const r = await api.get<{ items: any[]; count: number }>("/finance/reconciliation"); setRecon(r);
     } catch { await alertDialog("Could not record payout."); }
   }

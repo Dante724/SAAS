@@ -124,7 +124,9 @@ describe("ReaderCharge", () => {
     expect(await screen.findByRole("button", { name: "Cancel the waiting charge" })).toBeInTheDocument();
   });
 
-  it("sends an Idempotency-Key, reused when the same charge is retried after a failure", async () => {
+  it("a lost answer (gateway 502) is retried with the same key, so the server answers with the charge it already started", async () => {
+    // The request may have reached the server before the gateway gave up. The retry carries the
+    // same Idempotency-Key, so the server replays the first charge (c1) instead of sending another.
     const u = userEvent.setup();
     chargeReply = () => reply({ detail: "Bad gateway" }, 502);
     render(<ReaderCharge orderId="o1" amount={40} onApproved={vi.fn()} onClose={vi.fn()} />);
@@ -137,5 +139,21 @@ describe("ReaderCharge", () => {
     expect(sent).toHaveLength(2);
     expect(sent[0].key).toBeTruthy();
     expect(sent[1].key).toBe(sent[0].key);
+  });
+
+  it("a charge the reader didn't confirm stays waiting with the note, and nothing is sent again", async () => {
+    // The server couldn't tell whether the reader got it: it answers with the charge, waiting, and
+    // a note. The screen follows that charge (poll / cancel) instead of offering to send another.
+    const u = userEvent.setup();
+    const note = "The reader didn't confirm it received this charge. Watch the reader: it may still take the card.";
+    chargeReply = () => reply(charge("pending", { error: note }));
+    polled = ["pending", "pending", "pending"];
+    render(<ReaderCharge orderId="o1" amount={40} onApproved={vi.fn()} onClose={vi.fn()} />);
+    await u.click(await screen.findByRole("button", { name: /to reader/ }));
+    expect(await screen.findByText("Waiting for card…")).toBeInTheDocument();
+    expect(screen.getByText(/didn't confirm it received this charge/)).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: /to reader/ })).toBeNull();
+    expect(screen.getByRole("button", { name: /Cancel/ })).toBeInTheDocument();
+    expect(calls.filter((c) => c.url.endsWith("/terminal/charge"))).toHaveLength(1);
   });
 });
