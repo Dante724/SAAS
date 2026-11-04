@@ -3626,6 +3626,18 @@ async def _archive_order(db, current, order_id, reason, do_refund):
                     # The parts are back on the shelf: the line no longer holds stock. Without this,
                     # restore -> archive (or delete the line) returned the same parts again.
                     _l.pending_stock = _l.qty or 0
+    # Its stock holds go with it: an archived job must not keep its units reserved (up to 180
+    # days) from every other job and transfer. Same release as the expiry sweep. Restore un-hides
+    # only — reserve again by hand if the job still needs the parts.
+    from backend.models import StockReservation
+    from backend.services import stock_rows
+    _holds = (await db.execute(select(StockReservation).where(
+        StockReservation.org_id == current.org_id, StockReservation.order_id == order_id,
+        StockReservation.released == False).with_for_update())).scalars().all()  # noqa: E712
+    for _h in _holds:
+        await stock_rows.rows(db, _h.part_id, _h.location_id, lock=True)
+        await stock_rows.reserve(db, _h.part_id, _h.location_id, -float(_h.qty or 0))
+        _h.released = True
     if not order.is_estimate:
         from backend.services.payroll import CommissionEngine
         await CommissionEngine(db, current.org_id).reverse_for_deletion(order)
