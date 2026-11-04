@@ -16,6 +16,7 @@ from backend.models import Employee, Location, Organisation, Part, PriceType, Pr
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.money import q2
 from backend.services.dates import now_utc
+from backend.services.owned import get_owned_or_404
 
 router = APIRouter(prefix="/api/pricing", tags=["pricing"])
 
@@ -132,12 +133,10 @@ async def delete_type(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
-    p = (await db.execute(select(PriceType).where(
-        PriceType.id == type_id, PriceType.org_id == current.org_id))).scalar_one_or_none()
-    if p:
-        p.active = False
-        p.is_default = False
-        await db.commit()
+    p = await get_owned_or_404(db, PriceType, type_id, current.org_id, "price type")
+    p.active = False
+    p.is_default = False
+    await db.commit()
     return {"ok": True}
 
 
@@ -324,6 +323,7 @@ async def list_type_items(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
+    await get_owned_or_404(db, PriceType, type_id, current.org_id, "price type")
     rows = (await db.execute(select(PriceTypeItem).where(
         PriceTypeItem.price_type_id == type_id,
         PriceTypeItem.org_id == current.org_id))).scalars().all()
@@ -366,6 +366,7 @@ async def list_tiers(
     current: Employee = Depends(get_current_employee),
 ):
     from backend.models import PriceTypeTier
+    await get_owned_or_404(db, PriceType, type_id, current.org_id, "price type")
     rows = (await db.execute(select(PriceTypeTier).where(
         PriceTypeTier.price_type_id == type_id, PriceTypeTier.org_id == current.org_id)
         .order_by(PriceTypeTier.min_qty))).scalars().all()

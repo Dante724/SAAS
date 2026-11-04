@@ -304,6 +304,8 @@ async def list_service_commissions(
     current: Employee = Depends(get_current_employee),
 ):
     from backend.models import CommissionRule
+    from backend.services.owned import get_owned_or_404
+    await get_owned_or_404(db, Service, service_id, current.org_id, "service")
     rows = (await db.execute(select(CommissionRule).where(
         CommissionRule.org_id == current.org_id, CommissionRule.rule_level == "service",
         CommissionRule.service_id == service_id, CommissionRule.active == True))).scalars().all()  # noqa: E712
