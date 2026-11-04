@@ -21,7 +21,7 @@ Run against a dev or staging server, never production: the scripts create real r
 |---|---|---|---|
 | `regress.py` | One check per Critical/High/Medium QA finding (81 checks) | 3 | ~4 min |
 | `isolation.py` | ISO-1: shop B calls every `{id}` route with shop A's real ids | 2 | ~2 min |
-| `countries.py` | New shop in AU, US, GB, CA, CA-ON, DE, NZ: currency, time zone, tax on a job line | 7 | ~1 min, longer when rate-limited |
+| `countries.py` | New shop in AU, US, GB, CA, CA-ON, CA-AB, CA-ZZ, DE, NZ: currency, time zone, tax on a job line | 9 | ~1 min, longer when rate-limited |
 | `load.py` | 15 users (5 shops x owner + 2 staff) for 60 s on the core endpoints | 5 | ~2 min |
 
 `gate.py` is the shared library (HTTP client, throttle, sign-up, staff, barrier races, check runner).
@@ -82,8 +82,17 @@ Before and after the sweep every seeded A record is read back as A and compared.
 
 Signs up one shop per country and checks the company currency code and time zone, the default
 tax (name and rate), and that a new job's service line carries that rate and mode
-(`included` for AU/GB/DE/NZ, `imposed` for US/CA). Ontario (CA + province ON) must get HST 13%;
-while sign-up has no province at all (W3-E pending) that row SKIPs. **Pass = 0 FAIL.**
+(`included` for AU/GB/DE/NZ, `imposed` for US/CA).
+
+Canada's tax follows the province: CA-ON gets HST 13%, CA-AB GST 5%. A CA sign-up with no
+province, or one sign-up doesn't know (CA-ZZ, which must still sign up), takes the province from
+its time zone; the default `America/Toronto` is Ontario, so HST 13%. While sign-up has no province
+at all (W3-E pending) the province rows SKIP. **Pass = 0 FAIL.**
+
+```
+python3 tests-e2e/api_gate/countries.py              # all rows
+python3 tests-e2e/api_gate/countries.py CA-AB CA-ZZ  # just these
+```
 
 ### load.py
 
@@ -98,7 +107,7 @@ p50/p95/max, the status codes, the 5xx count and requests per second.
 
 - **Sign-up is rate-limited** (10 per hour per IP per server process). The scripts reuse a few
   shops per run and, on a 429, wait out `Retry-After` (up to `GATE_MAX_SIGNUP_WAIT`, default
-  1800 s). Running all four scripts back to back needs 17 sign-ups, so expect waits.
+  1800 s). Running all four scripts back to back needs 19 sign-ups, so expect waits.
 - **Under 300 requests a minute.** A client-side throttle holds every script to
   `GATE_MAX_RPM` (default 280). `load.py` lifts it for the timed phase only.
 - The server's own per-user limit is 600 a minute.
