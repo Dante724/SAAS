@@ -591,22 +591,34 @@ async def cancel(db: AsyncSession, ch: TerminalCharge) -> TerminalCharge:
         if ch.provider_ref:
             try:
                 await _stripe(creds, "POST", f"/v1/payment_intents/{ch.provider_ref}/cancel")
-            except HTTPException:
+            except HTTPException as e:
                 # Most likely it was paid a moment ago: settle that instead of claiming "canceled".
                 await refresh(db, ch)
                 if ch.status not in OPEN:
                     return ch
+                await _note_unconfirmed_cancel(db, ch, e)
                 raise
     elif ch.provider == "square" and ch.provider_ref:
         creds = await provider_creds(db, ch.org_id, "square")
         try:
             await _square(creds, "POST", f"/v2/terminals/checkouts/{ch.provider_ref}/cancel")
-        except HTTPException:
+        except HTTPException as e:
             await refresh(db, ch)
             if ch.status not in OPEN:
                 return ch
+            await _note_unconfirmed_cancel(db, ch, e)
             raise
     return await settle_failed(db, ch, "canceled", "Canceled by staff")
+
+
+async def _note_unconfirmed_cancel(db: AsyncSession, ch: TerminalCharge, e: HTTPException) -> None:
+    """Staff asked to cancel but the provider couldn't confirm it (outage, WAN flap). The charge
+    stays waiting — the reader may still take the card, and a later succeeded webhook/poll must
+    post that money — but the attempt is recorded on it, which is what lets other payments on the
+    document through (order_money.reader_charge_in_flight) so the till isn't locked to card."""
+    ch.error = f"Cancel requested, but not confirmed: {e.detail}"[:500]
+    ch.updated_at = now_utc()
+    await db.commit()
 
 
 async def simulate(db: AsyncSession, ch: TerminalCharge, outcome: str) -> TerminalCharge:

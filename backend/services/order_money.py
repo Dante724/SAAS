@@ -293,14 +293,29 @@ async def _delete_square_link(db: AsyncSession, intent: PaymentIntent) -> bool:
 # Reader charges still in flight: "pending" waits for the card, "processing" is approved but not
 # yet posted. While one exists, recording other money (or changing the balance) collects twice.
 READER_IN_FLIGHT = ("pending", "processing")
+# A waiting charge stops blocking other money once staff asked to cancel it but the provider
+# couldn't confirm (terminal.cancel notes that in `error` while it stays pending), or after this
+# many minutes with no news: a provider outage must not lock the till to card. The charge itself
+# stays live, so if the reader does take the card later the webhook/poll posts it as usual and the
+# order shows as overpaid. "processing" (money taken, not yet posted) always blocks.
+READER_PENDING_MAX_MIN = 15
 
 
 async def reader_charge_in_flight(db: AsyncSession, order_id: str | None) -> bool:
     if not order_id:
         return False
+    from datetime import timedelta
+
+    from sqlalchemy import and_, or_
+
     from backend.models import TerminalCharge
+    from backend.services.dates import now_utc
+    fresh = now_utc() - timedelta(minutes=READER_PENDING_MAX_MIN)
     return (await db.execute(select(TerminalCharge.id).where(
-        TerminalCharge.order_id == order_id, TerminalCharge.status.in_(READER_IN_FLIGHT))
+        TerminalCharge.order_id == order_id, or_(
+            TerminalCharge.status == "processing",
+            and_(TerminalCharge.status == "pending", TerminalCharge.error.is_(None),
+                 TerminalCharge.created_at > fresh)))
         .limit(1))).scalar_one_or_none() is not None
 
 
