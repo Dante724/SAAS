@@ -471,7 +471,7 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
             ? <span className="text-xs text-ink-tertiary">{members} {members === 1 ? "person has" : "people have"} this role</span>
             : <button onClick={remove} disabled={busy} className="px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50">Delete role</button>)}
           <button onClick={onClose} className="ml-auto px-4 py-2 rounded-xl border border-slate-200 text-ink-secondary hover:bg-slate-50 font-semibold text-xs">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-xl bg-ink-primary text-white font-semibold text-xs hover:opacity-90 disabled:opacity-60">{busy ? "Saving…" : isNew ? "Create role" : "Save"}</button>
+          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-xl bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : isNew ? "Create role" : "Save"}</button>
         </div>
       </div>
     </div>

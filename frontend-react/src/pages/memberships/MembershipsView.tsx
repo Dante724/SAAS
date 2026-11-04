@@ -63,7 +63,7 @@ export default function MembershipsView({ q = "" }: { q?: string }) {
             <div className="mx-auto h-11 w-11 rounded-2xl grid place-items-center bg-primary/10 text-primary"><M n="workspace_premium" c="text-xl" /></div>
             <div className="mt-3 text-sm font-semibold text-ink-primary">{view === "all" ? "No members yet" : "Nothing here"}</div>
             <div className="mt-1 text-xs text-ink-tertiary">{view === "all" ? "Sell a plan from a customer's page, one of their assets, or at checkout." : "All caught up."}</div>
-            {view === "all" && <a href="/catalog?tab=plans" className="mt-4 inline-flex h-9 px-3.5 rounded-xl bg-ink-primary text-white text-xs font-semibold items-center">Set up plans</a>}
+            {view === "all" && <a href="/catalog?tab=plans" className="mt-4 inline-flex h-9 px-3.5 rounded-xl bg-primary text-white hover:bg-primary-container text-xs font-semibold items-center">Set up plans</a>}
           </div>
         )}
         {data?.items.map((m) => (

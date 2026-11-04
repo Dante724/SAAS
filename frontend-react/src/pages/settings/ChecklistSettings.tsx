@@ -345,7 +345,7 @@ export function ChecklistEditor({ tpl, onClose, onSaved }: { tpl: any | null; on
 
         <div className="px-5 py-4 border-t border-slate-100 flex items-center gap-2">
           <button onClick={onClose} className="ml-auto px-4 py-2 rounded-xl border border-slate-200 text-ink-secondary hover:bg-slate-50 font-semibold text-xs">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-xl bg-ink-primary text-white font-semibold text-xs hover:opacity-90 disabled:opacity-60">{busy ? "Saving…" : isEdit ? "Save" : "Create checklist"}</button>
+          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-xl bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : isEdit ? "Save" : "Create checklist"}</button>
         </div>
       </div>
     </div>

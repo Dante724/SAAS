@@ -4,6 +4,7 @@ import { hueText, tint } from "../../lib/tint";
 import { money } from "../orders/types";
 import { api } from "../../api/client";
 import { deliveryText, deliveryTone, type Delivery, type Tone } from "../../lib/delivery";
+import { buttonClass } from "../../components/Button";
 
 /* Shared bits for the billing drawers (invoice view, record payment, credit notes). */
 
@@ -148,9 +149,10 @@ export function Drawer({ title, sub, onClose, children, footer, z = 50, width = 
   );
 }
 
-export const btnGhost = "inline-flex items-center justify-center gap-1.5 h-9 px-3.5 rounded-xl bg-white border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs disabled:opacity-50";
-export const btnPrimary = "inline-flex items-center justify-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60";
-export const btnDanger = "inline-flex items-center justify-center gap-1.5 h-9 px-3.5 rounded-xl bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 font-semibold text-xs disabled:opacity-50";
+// Kept as names for the ~14 billing screens that import them; they are the shared Button looks.
+export const btnGhost = buttonClass("secondary");
+export const btnPrimary = buttonClass("primary");
+export const btnDanger = buttonClass("danger");
 
 export function ErrorNote({ msg }: { msg: string | null }) {
   return msg ? <div role="alert" className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{msg}</div> : null;
