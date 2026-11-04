@@ -312,8 +312,10 @@ async def adjust_stock(
             unit_cost=float(cost), created_by_id=current.id, ref_type=data.movement_type,
             movement_type=data.movement_type, warehouse_id=_w.id if _w else None,
             cost_known=data.unit_cost is not None, serials=serials or None)
+        warnings = serial_intake.take_warnings(db)
         await db.commit()
-        return {"ok": True, "qty_available": (await stock_rows.totals(db, part_id, data.location_id))[0]}
+        return {"ok": True, "qty_available": (await stock_rows.totals(db, part_id, data.location_id))[0],
+                "warnings": warnings}
     if data.movement_type == "writeoff" or (data.movement_type in ("receive", "adjust") and data.qty < 0):
         # Out of stock the one way (services/stock_writeoff): refused beyond what is on hand, FIFO
         # layers consumed, outflow logged negative. A write-off is sent as a positive quantity.
@@ -473,8 +475,10 @@ async def create_posting(
         raise HTTPException(422, "Add at least one product line")
     posted, total_cost = await _do_posting(
         db, current.org_id, current.id, data.location_id, data.supplier_id, data.lines)
+    from backend.services import serial_intake
+    warnings = serial_intake.take_warnings(db)
     await db.commit()
-    return {"ok": True, "lines_posted": posted, "total_cost": total_cost}
+    return {"ok": True, "lines_posted": posted, "total_cost": total_cost, "warnings": warnings}
 
 
 # ── 144bk: bulk-posting front doors (preview + commit) + bulk qty adjust ──────
@@ -2184,9 +2188,10 @@ async def receive_po(
                 await adjust_supplier_ap(db, current.org_id, sup, ship_total, entry_type="posting",
                                          note=f"PO {po.po_number} shipment freight",
                                          ref_type="po", ref_id=po.id, created_by_id=current.id)
+    warnings = serial_intake.take_warnings(db)      # IMEI check digits that look wrong (QA wave 3)
     await db.commit()
     return {"ok": True, "status": po.status, "received_cost": received_cost_now,
-            "workflow_status": po.workflow_status}
+            "workflow_status": po.workflow_status, "warnings": warnings}
 
 
 @router.get("/parts/{part_id}/purchase-orders")
@@ -2742,6 +2747,8 @@ async def bulk_update_parts(
                 p.sell_price = q2(p.sell_price * factor)
                 changed += 1
     elif data.action == "set_active":
+        if data.number is None and data.value is not None:     # sent as text, "0" / "1" (QA wave 3)
+            data.number = {"0": 0, "1": 1, "false": 0, "true": 1}.get(str(data.value).strip().lower())
         if data.number not in (0, 1):
             raise HTTPException(422, "set_active expects 0 or 1")
         from backend.services import stock_archive

@@ -79,7 +79,9 @@ def test_one_country_tax_table():
 @pytest.mark.asyncio
 @pytest.mark.parametrize("country,code,tax", [
     ("AU", "AUD", ("GST", 10.0, "included")), ("US", "USD", ("Sales tax", 0.0, "imposed")),
-    ("GB", "GBP", ("VAT", 20.0, "included")), ("CA", "CAD", ("GST", 5.0, "imposed")),
+    # QA wave 3: Canada's tax follows the province; with none given, Toronto time reads as Ontario (HST
+    # 13%). Province by province: test_qa_w3e_jobs_roles.test_canadian_signup_picks_the_provinces_tax.
+    ("GB", "GBP", ("VAT", 20.0, "included")), ("CA", "CAD", ("HST", 13.0, "imposed")),
     ("DE", "EUR", ("VAT", 19.0, "included")), ("NZ", "NZD", ("GST", 15.0, "included")),
 ])
 async def test_country_alone_sets_currency_timezone_and_tax(client, country, code, tax):

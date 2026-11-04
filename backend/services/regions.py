@@ -35,6 +35,37 @@ COUNTRY_TAX: dict[str, tuple[str, float, str]] = {
     "IN": ("GST", 18.0, "imposed"),
 }
 
+# ── Canada: the sales tax a shop charges depends on its province (QA wave 3: an Ontario shop
+#    started on GST 5% instead of HST 13%). HST provinces charge one harmonised tax; elsewhere the
+#    federal GST is the default and the owner adds PST / QST / RST if they collect it.
+#    code → (label, tax name, rate %)
+CA_PROVINCES: dict[str, tuple[str, str, float]] = {
+    "AB": ("Alberta", "GST", 5.0), "BC": ("British Columbia", "GST", 5.0),
+    "MB": ("Manitoba", "GST", 5.0), "NB": ("New Brunswick", "HST", 15.0),
+    "NL": ("Newfoundland and Labrador", "HST", 15.0), "NS": ("Nova Scotia", "HST", 14.0),
+    "NT": ("Northwest Territories", "GST", 5.0), "NU": ("Nunavut", "GST", 5.0),
+    "ON": ("Ontario", "HST", 13.0), "PE": ("Prince Edward Island", "HST", 15.0),
+    "QC": ("Quebec", "GST", 5.0), "SK": ("Saskatchewan", "GST", 5.0), "YT": ("Yukon", "GST", 5.0),
+}
+# Without a province, the shop's time zone is the best guess; Toronto time (the sign-up default,
+# and most Canadian shops) reads as Ontario.
+CA_TZ_PROVINCE = {
+    "America/Toronto": "ON", "America/Vancouver": "BC", "America/Edmonton": "AB", "America/Winnipeg": "MB",
+    "America/Regina": "SK", "America/Swift_Current": "SK", "America/Halifax": "NS", "America/Glace_Bay": "NS",
+    "America/Moncton": "NB", "America/St_Johns": "NL", "America/Goose_Bay": "NL", "America/Montreal": "QC",
+    "America/Whitehorse": "YT", "America/Dawson": "YT", "America/Yellowknife": "NT", "America/Inuvik": "NT",
+    "America/Iqaluit": "NU", "America/Rankin_Inlet": "NU",
+}
+
+
+def ca_province_tax(province: Optional[str], timezone: Optional[str] = None) -> tuple[str, float, str]:
+    """(name, rate, mode) a Canadian shop starts with: its province's, else its time zone's
+    province's, else Ontario's."""
+    code = (province or "").strip().upper() or CA_TZ_PROVINCE.get(timezone or "", "ON")
+    _label, name, rate = CA_PROVINCES.get(code, CA_PROVINCES["ON"])
+    return name, rate, "imposed"
+
+
 # ── E-invoice standard per country (what the market mandates/uses) ─────────────
 # status: "live" = adapter implemented; "planned" = advertised, needs provider creds.
 EINVOICE: dict[str, dict] = {

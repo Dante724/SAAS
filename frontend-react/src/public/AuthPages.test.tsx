@@ -73,6 +73,42 @@ describe("auth pages", () => {
     expect(String(reg.timezone).startsWith("America/")).toBe(true);
   });
 
+  it("a Canadian shop picks its province, which decides GST or HST", async () => {
+    replies["/api/auth/signup-options"] = { status: 200, body: {
+      templates: [{ key: "phones", label: "Phones" }], regions: [], region_defaults: {}, employee_brackets: ["1"],
+      countries: [{ code: "CA", label: "Canada", currency_code: "CAD", timezone: "America/Toronto" },
+                  { code: "US", label: "United States", currency_code: "USD", timezone: "America/New_York" }],
+      country_hint: "CA",
+      provinces: { CA: [{ code: "BC", label: "British Columbia", tax_name: "GST", tax_rate: 5 },
+                        { code: "ON", label: "Ontario", tax_name: "HST", tax_rate: 13 }] } } };
+    replies["/api/auth/register"] = { status: 200, body: { access_token: "tok-ca" } };
+    const u = userEvent.setup();
+    render(<Signup />);
+    const province = await screen.findByLabelText("Province") as HTMLSelectElement;
+    expect(province.value).toBe("");                                   // blank: the server goes by the time zone
+    await u.selectOptions(province, "ON");
+    expect(screen.getByRole("option", { name: "Ontario · HST 13%" })).toBeTruthy();
+    await u.type(screen.getByLabelText("Shop name"), "Respawn");
+    await u.click(screen.getByRole("button", { name: "Continue" }));
+    await u.type(await screen.findByLabelText("Your name"), "Ash");
+    await u.type(screen.getByLabelText("Email"), "ash@respawn.ca");
+    await u.type(screen.getByLabelText("Password (8+ characters)"), "pw-12345678");
+    await u.click(screen.getByLabelText(/I agree to the/));
+    await u.click(screen.getByRole("button", { name: "Create shop" }));
+    await vi.waitFor(() => expect(localStorage.getItem("ros_tok")).toBe("tok-ca"));
+    expect(calls.find((c) => c.url === "/api/auth/register")!.body).toMatchObject({ country: "CA", province: "ON" });
+  });
+
+  it("the province picker is only for Canada", async () => {
+    replies["/api/auth/signup-options"] = { status: 200, body: {
+      templates: [], regions: [], region_defaults: {}, employee_brackets: ["1"],
+      countries: [{ code: "US", label: "United States", currency_code: "USD", timezone: "America/New_York" }],
+      country_hint: "US", provinces: { CA: [{ code: "ON", label: "Ontario", tax_name: "HST", tax_rate: 13 }] } } };
+    render(<Signup />);
+    await screen.findByLabelText("Country");
+    expect(screen.queryByLabelText("Province")).toBeNull();
+  });
+
   it("sign up takes the shop first, then the person, and creates both", async () => {
     replies["/api/auth/signup-options"] = { status: 200, body: { templates: [{ key: "tools", label: "Tools Repair" }], regions: [{ key: "in", label: "India" }], region_defaults: { in: { currency_code: "INR" } }, employee_brackets: ["1-5"] } };
     replies["/api/auth/register"] = { status: 200, body: { access_token: "tok-9" } };

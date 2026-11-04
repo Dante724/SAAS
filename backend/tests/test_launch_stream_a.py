@@ -86,7 +86,7 @@ async def test_b2_seeding_is_idempotent(client, db):
 # ── B4: tax is never charged ───────────────────────────────────────────────────────────────────
 async def test_b4_seeded_tax_is_on_the_sales_stack(client, db):
     """Reviewers: the default tax was seeded with no rule stack, so 0% applied."""
-    H, org_id = await _signup(client, country="CA")
+    H, org_id = await _signup(client, country="CA", province="AB")
     tax = (await db.execute(select(Tax).where(Tax.org_id == org_id))).scalar_one()
     assert (tax.name, tax.rate, tax.mode) == ("GST", 5.0, "imposed")
     rule = (await db.execute(select(TaxRule).where(TaxRule.org_id == org_id))).scalar_one()
@@ -123,7 +123,8 @@ async def test_b4_uk_signup_gets_20_percent_vat_pounds_and_london_time(client, d
 
 
 @pytest.mark.parametrize("country,code,rate,tz", [
-    ("US", "USD", 0.0, "America/New_York"), ("CA", "CAD", 5.0, "America/Toronto"),
+    # CA: no province given, Toronto time reads as Ontario, HST 13% (QA wave 3)
+    ("US", "USD", 0.0, "America/New_York"), ("CA", "CAD", 13.0, "America/Toronto"),
     ("GB", "GBP", 20.0, "Europe/London"), ("DE", "EUR", 19.0, "Europe/Berlin"),
     ("IN", "INR", 18.0, "Asia/Kolkata")])
 async def test_b4_country_picker_drives_currency_tax_and_timezone(client, db, country, code, rate, tz):
@@ -150,7 +151,7 @@ async def test_b4_vat_inclusive_price_is_unchanged_but_tax_is_stored(client, db)
 
 
 async def test_b4_invoice_from_a_job_stores_its_tax(client, db):
-    H, org_id = await _signup(client, country="CA")
+    H, org_id = await _signup(client, country="CA", province="AB")
     o = await _job(client, H, (await _loc(db, org_id)).id, [("Screen", 100)])
     r = await client.post("/api/orders/bulk", json={"order_ids": [o["id"]], "action": "create_invoice"},
                           headers=H)
@@ -162,7 +163,7 @@ async def test_b4_invoice_from_a_job_stores_its_tax(client, db):
 
 async def test_b4_pos_sale_charges_and_stores_tax(client, db):
     """Reviewers: no tax on POS sales."""
-    H, org_id = await _signup(client, country="CA")
+    H, org_id = await _signup(client, country="CA", province="AB")
     r = await client.post("/api/sales", json={"lines": [
         {"kind": "service", "description": "Screen protector fitting", "qty": 2, "unit_price": 10}]}, headers=H)
     assert r.status_code == 201, r.text
@@ -215,7 +216,7 @@ async def test_b4_invoice_pdf_is_a_usable_tax_invoice(client, db, monkeypatch):
 
 async def test_b4_imposed_tax_pdf_lists_lines_before_tax(client, db, monkeypatch):
     from backend.services import printing
-    H, org_id = await _signup(client, country="CA")
+    H, org_id = await _signup(client, country="CA", province="AB")
     o = await _job(client, H, (await _loc(db, org_id)).id, [("Screen", 100)])
     await client.post("/api/orders/bulk", json={"order_ids": [o["id"]], "action": "create_invoice"}, headers=H)
     from backend.models import Invoice

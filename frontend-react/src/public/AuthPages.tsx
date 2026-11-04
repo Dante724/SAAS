@@ -51,7 +51,8 @@ function Select({ id, label, value, onChange, options }: {
 
 // ── Sign up: two short steps (your shop, then you) ─────────────────────────
 type Country = { code: string; label: string; currency_code: string; timezone: string };
-type Opts = { templates: { key: string; label: string }[]; regions: { key: string; label: string }[]; region_defaults: Record<string, { currency_code?: string }>; employee_brackets: string[]; countries?: Country[]; country_hint?: string | null };
+type Province = { code: string; label: string; tax_name: string; tax_rate: number };
+type Opts = { templates: { key: string; label: string }[]; regions: { key: string; label: string }[]; region_defaults: Record<string, { currency_code?: string }>; employee_brackets: string[]; countries?: Country[]; country_hint?: string | null; provinces?: Record<string, Province[]> };
 const OTHER_COUNTRY = "other";
 
 // The marketing site hosts the legal pages; bump TERMS_VERSION when they change.
@@ -61,7 +62,7 @@ const TERMS_VERSION = "2026-10-19";
 export function Signup() {
   const [o, setO] = useState<Opts | null>(null);
   const [step, setStep] = useState<1 | 2>(1);
-  const [f, setF] = useState({ org: "", name: "", email: "", pass: "", region: "", currency: "", template: "", employees: "", phone: "", country: "" });
+  const [f, setF] = useState({ org: "", name: "", email: "", pass: "", region: "", currency: "", template: "", employees: "", phone: "", country: "", province: "" });
   const [agree, setAgree] = useState(false);
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
@@ -93,7 +94,7 @@ export function Signup() {
     setF((s) => {
       const n = { ...s, [k]: v };
       if (k === "region" && o) n.currency = o.region_defaults?.[v]?.currency_code || n.currency;
-      if (k === "country" && o) n.currency = o.countries?.find((c) => c.code === v)?.currency_code || n.currency;
+      if (k === "country" && o) { n.currency = o.countries?.find((c) => c.code === v)?.currency_code || n.currency; n.province = ""; }
       return n;
     });
   }
@@ -117,6 +118,8 @@ export function Signup() {
         org_name: f.org, name: f.name, email: f.email, password: f.pass,
         industry_template: f.template || null, region: country ? null : (f.region || null),
         country: country ? country.code : null, timezone: tz,
+        // Canada's sales tax depends on the province; blank lets the server go by the time zone
+        province: (country && f.province) || null,
         currency_code: f.currency || null, currency: f.currency || null,
         employee_count: f.employees || null, company_phone: f.phone || null,
         accept_terms: true, terms_version: TERMS_VERSION,
@@ -127,6 +130,7 @@ export function Signup() {
   }
 
   const opt = (xs: { key: string; label: string }[] = []) => xs.map((x) => ({ value: x.key, label: x.label }));
+  const provinces = o?.provinces?.[f.country] || [];
   return (
     <AuthShell title={step === 1 ? "Create your shop" : "Now, about you"} wide
       sub={<><span className="font-medium text-ink-primary">Step {step} of 2</span> · {step === 1 ? "Tell us about your shop." : "You'll use this to sign in."}</>}>
@@ -148,6 +152,11 @@ export function Signup() {
                 <input id="su-currency" className={inputCls} value={f.currency} onChange={(e) => set("currency", e.target.value.toUpperCase())} placeholder=" " maxLength={3} />
               </Field>
             </div>
+            {provinces.length > 0 && (
+              <Select id="su-province" label="Province" value={f.province} onChange={(v) => set("province", v)}
+                options={[{ value: "", label: "Use my time zone" },
+                          ...provinces.map((p) => ({ value: p.code, label: `${p.label} · ${p.tax_name} ${p.tax_rate}%` }))]} />
+            )}
             <Select id="su-team" label="Team size" value={f.employees} onChange={(v) => set("employees", v)}
               options={(o?.employee_brackets || []).map((b) => ({ value: b, label: b }))} />
           </div>

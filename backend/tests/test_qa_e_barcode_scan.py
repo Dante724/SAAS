@@ -44,8 +44,11 @@ async def test_scan_resolve_finds_imei_of_phone_in_stock(client, tenant, db):
     body = r.json()
     assert body["matched"] and body["type"] == "product" and body["id"] == p.id
     assert body["serial_id"] == si.id and body["serial_status"] == "in_stock"
-    # the same unit once sold isn't offered as stock
+    # the same unit once sold isn't offered as stock: QA wave 3 wants the scan to find it and say it
+    # was sold (a warranty claim starts from the phone's IMEI), never as a unit on the shelf
     si.status = "sold"
     await db.commit()
     r = await client.post("/api/scan/resolve", json={"code": "356789104512347"}, headers=tenant)
-    assert r.json()["matched"] is False
+    body = r.json()
+    assert body["matched"] and body["id"] == p.id and body["serial_id"] == si.id
+    assert body["serial_status"] == "sold"
