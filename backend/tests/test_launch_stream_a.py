@@ -123,7 +123,8 @@ async def test_b4_uk_signup_gets_20_percent_vat_pounds_and_london_time(client, d
 
 
 @pytest.mark.parametrize("country,code,rate,tz", [
-    ("US", "USD", 0.0, "America/New_York"), ("CA", "CAD", 5.0, "America/Toronto"),
+    # CA: no province given, Toronto time reads as Ontario, HST 13% (QA wave 3)
+    ("US", "USD", 0.0, "America/New_York"), ("CA", "CAD", 13.0, "America/Toronto"),
     ("GB", "GBP", 20.0, "Europe/London"), ("DE", "EUR", 19.0, "Europe/Berlin"),
     ("IN", "INR", 18.0, "Asia/Kolkata")])
 async def test_b4_country_picker_drives_currency_tax_and_timezone(client, db, country, code, rate, tz):
