@@ -948,7 +948,9 @@ async def void_document_legs(db, org_id, ref_type, ref_id, reason, actor_id) -> 
         acc = (await db.execute(select(Account).where(
             Account.id == leg.account_id, Account.org_id == org_id))).scalar_one_or_none()
         if acc:
-            acc.balance = q2((acc.balance or 0) - leg.amount)
+            # Atomic like post_transaction: a read-modify-write here lost a sale that posted
+            # into the same till between the read and the commit.
+            await add_to_column(db, acc, "balance", -float(leg.amount or 0))
         leg.status = "deleted"
         leg.void_reason = reason
         leg.voided_by_id = actor_id
