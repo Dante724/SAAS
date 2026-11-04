@@ -1,8 +1,9 @@
 /* AccountPicker — the one "which cashbox does this money go into?" control for every pay dialog.
    Used by the job payment / prepayment dialog (WODrawer), Record payment on an invoice
-   (RecordPaymentDrawer) and the mobile PaySheet. Exported on purpose so the POS checkout can adopt
-   it too: pass every account you know about, the payment option(s) that fit the chosen method and
-   the sale's location, and it keeps `value` on a sensible account.
+   (RecordPaymentDrawer) and the mobile PaySheet. The POS keeps its own list (any account, or "Pay
+   later") and uses SetUpCashbox from here when the shop has none. Pass every account you know
+   about, the payment option(s) that fit the chosen method and the sale's location, and it keeps
+   `value` on a sensible account.
 
    - Preselects automatically (see pickDefaultAccount): an account at this location, else a
      company-wide one, else the first. It never sits on an empty value while an account exists.
@@ -85,7 +86,8 @@ export default function AccountPicker({ accounts, paymentOption, locationId, val
   );
 }
 
-function SetUpCashbox({ option, locationId, onCreated }: { option: PaymentOption; locationId?: string | null; onCreated: (a: PayAccount) => void }) {
+/** The inline "Set up a cashbox" form on its own, for a dialog with its own account list (the POS). */
+export function SetUpCashbox({ option, locationId, onCreated }: { option: PaymentOption; locationId?: string | null; onCreated: (a: PayAccount) => void }) {
   const { can } = useMe();
   const [name, setName] = useState(DEFAULT_NAME[option]);
   const [busy, setBusy] = useState(false);

@@ -1292,8 +1292,10 @@ async def _scoped_location(db, current, location_id):
 
     from backend.models import Role
     from backend.services.auth import check_location_access, is_shop_owner
-    if not current.role_id or await is_shop_owner(db, current):
+    if await is_shop_owner(db, current):
         return location_id
+    if not current.role_id:      # no role isn't the owner (launch B10): no shop-wide figures
+        raise HTTPException(403, "Your account has no role yet. Ask the owner to give you one")
     if location_id:
         await check_location_access(db, current, location_id)
         return location_id

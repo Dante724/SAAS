@@ -409,16 +409,10 @@ async def print_payroll_statement(
     if not emp:
         raise HTTPException(404, "Employee not found")
 
-    # default-allow, matching require_perm: only an explicit False on the role blocks it
-    can_manage = True
-    if current.id != employee_id and current.role_id:
-        from backend.models import Role
-        role = (await db.execute(select(Role).where(
-            Role.id == current.role_id))).scalar_one_or_none()
-        from backend.services.permissions import role_allows as _ra
-        if role is None or not _ra(role, "can_manage_payroll"):
-            can_manage = False
-    if current.id != employee_id and not can_manage:
+    # the same check as require_perm: the owner, or a role allowed to manage payroll. Someone
+    # with no role is not the owner (launch B10), so they print only their own.
+    from backend.services.auth import has_perm
+    if current.id != employee_id and not await has_perm(db, current, "can_manage_payroll"):
         raise HTTPException(403, "You can only print your own payroll statement")
     if current.id != employee_id:
         from backend.services.payroll_views import assert_payroll_scope

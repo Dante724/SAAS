@@ -12,7 +12,7 @@ from decimal import Decimal
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -540,13 +540,10 @@ async def list_entries(
 
 
 async def _can_manage(db: AsyncSession, emp: Employee) -> bool:
-    """Owners (no role) and roles not explicitly denied can manage all timesheets."""
-    if not emp.role_id:
-        return True
-    from backend.models import Role
-    from backend.services.permissions import role_allows
-    role = (await db.execute(select(Role).where(Role.id == emp.role_id))).scalar_one_or_none()
-    return role is not None and role_allows(role, "can_manage_payroll")
+    """The owner, and roles allowed to manage payroll, can manage everyone's timesheets. Someone
+    with no role is not the owner (launch B10): they manage only their own time."""
+    from backend.services.auth import has_perm
+    return await has_perm(db, emp, "can_manage_payroll")
 
 
 async def _can_manage_emp(db: AsyncSession, current: Employee, employee_id: Optional[str]) -> bool:
@@ -1115,19 +1112,25 @@ async def order_time(
 
 
 class BillIn(BaseModel):
-    rate: Optional[float] = None       # override billable rate
-    round_to_min: int = 0              # 0 = no rounding, e.g. 15 = round up to 15-min
+    rate: Optional[float] = Field(None, ge=0)        # override billable rate
+    round_to_min: int = Field(0, ge=0, le=480)       # 0 = no rounding, e.g. 15 = round up to 15-min
 
 
 @router.post("/order/{order_id}/bill")
 async def bill_tracked(
     order_id: str, data: BillIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_add_services")),
 ):
-    """Convert tracked billable time into a labor line on the order."""
+    """Convert tracked billable time into a labor line on the order. It adds a service line,
+    so it takes the same rights as adding one by hand: a role that can't add services, or
+    change a price, can't do it here either (launch B10: a Viewer billed -500 through it)."""
     from backend.models import OrderLine
+    from backend.routers.orders import _guard_editable, _lock_for_lines, _recalc_order
+    from backend.services.auth import assert_perm
     o = await _resolve_order(db, current.org_id, order_id)
+    await _lock_for_lines(db, o)
+    await _guard_editable(db, o, current)
     rows = (await db.execute(select(TimeEntry).where(
         TimeEntry.org_id == current.org_id, TimeEntry.order_id == order_id,
         TimeEntry.state != "void", TimeEntry.billable == True))).scalars().all()  # noqa: E712
@@ -1139,14 +1142,17 @@ async def bill_tracked(
         import math
         minutes = math.ceil(minutes / data.round_to_min) * data.round_to_min
     hours = q2(minutes / 60)
-    rate = data.rate if data.rate is not None else (rows[0].billable_rate or 0)
+    tracked_rate = rows[0].billable_rate or 0
+    if data.rate is not None and q2(data.rate) != q2(tracked_rate):
+        await assert_perm(db, current, "can_edit_sale_price")   # a rate of your own is a price edit
+    rate = data.rate if data.rate is not None else tracked_rate
     amount = q2(hours * rate)
     line = OrderLine(order_id=order_id, line_type="labour", kind="service",
                      description=f"Tracked labor ({hours}h)", qty=hours,
                      unit_price=rate, total=amount)
     db.add(line)
-    o.labour_total = (o.labour_total or 0) + amount
-    o.total = (o.total or 0) + amount
+    await db.flush()
+    await _recalc_order(db, o)        # totals come from the lines, as for any other line
     await db.commit()
     return {"ok": True, "hours": hours, "rate": rate, "amount": amount,
             "labour_total": o.labour_total}
