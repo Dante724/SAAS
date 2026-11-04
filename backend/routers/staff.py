@@ -51,16 +51,6 @@ class EmployeeIn(BaseModel):
     public_name: Optional[str] = None     # name on public documents
     note: Optional[str] = None
 
-    # QA wave 3: a per-person commission % was stored but payroll never paid it (a 10% came out
-    # as 0). Commission is set as commission rules (per service / product), which payroll pays.
-    @field_validator("commission_labour", "commission_parts")
-    @classmethod
-    def _no_person_commission(cls, v):
-        if v:
-            raise ValueError("A commission % on the person isn't paid. Set commission as a commission rule "
-                             "in Payroll instead (per service or product).")
-        return v
-
 class EmployeeUpdate(BaseModel):
     name: Optional[str] = None
     email: Optional[str] = None
@@ -82,16 +72,6 @@ class EmployeeUpdate(BaseModel):
     public_name: Optional[str] = None
     note: Optional[str] = None
     active: Optional[bool] = None
-
-    # QA wave 3: a per-person commission % was stored but payroll never paid it (a 10% came out
-    # as 0). Commission is set as commission rules (per service / product), which payroll pays.
-    @field_validator("commission_labour", "commission_parts")
-    @classmethod
-    def _no_person_commission(cls, v):
-        if v:
-            raise ValueError("A commission % on the person isn't paid. Set commission as a commission rule "
-                             "in Payroll instead (per service or product).")
-        return v
 
 class PasswordReset(BaseModel):
     password: str

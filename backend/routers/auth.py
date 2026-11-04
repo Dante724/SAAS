@@ -78,13 +78,16 @@ class RegisterRequest(BaseModel):
     plan: Optional[str] = None            # solo | shop | pro, from the pricing page (default pro)
     province: Optional[str] = None        # Canada: two-letter province code, picks GST / HST
 
-    @field_validator("province")
+    @field_validator("province", mode="before")
     @classmethod
     def _province_known(cls, v):
+        # Sign-up never fails on this (council rule): a province we don't know is ignored, and
+        # the tax falls back to the time zone, then the country default.
         from backend.services.regions import CA_PROVINCES
-        v = (v or "").strip().upper() or None
+        v = str(v or "").strip().upper() or None
         if v and v not in CA_PROVINCES:
-            raise ValueError(f"Unknown province. Use one of: {', '.join(sorted(CA_PROVINCES))}")
+            _signup_log.warning("signup: unknown province %r ignored", v[:20])
+            return None
         return v
 
 

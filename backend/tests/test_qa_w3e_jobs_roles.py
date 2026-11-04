@@ -247,9 +247,18 @@ async def test_canadian_signup_picks_the_provinces_tax(client, extra, name, rate
 
 
 @pytest.mark.asyncio
-async def test_signup_refuses_an_unknown_province(client):
-    r = await client.post("/api/auth/register", json=_reg(country="CA", province="ZZ"))
-    assert r.status_code == 422, r.text
+@pytest.mark.parametrize("extra,name,rate", [
+    ({}, "HST", 13.0),                                                    # Toronto time: Ontario
+    ({"timezone": "America/Vancouver"}, "GST", 5.0),                      # the time zone still decides
+])
+async def test_signup_ignores_an_unknown_province(client, extra, name, rate):
+    """Sign-up never fails (council rule): an unknown province is ignored and the tax falls back to
+    the time zone, then the country default."""
+    r = await client.post("/api/auth/register", json=_reg(country="CA", province="ZZ", **extra))
+    assert r.status_code == 201, r.text
+    H = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    default = [t for t in await _taxes(client, H) if t["is_default"]]
+    assert [(t["name"], t["rate"], t["mode"]) for t in default] == [(name, rate, "imposed")]
 
 
 @pytest.mark.asyncio
@@ -411,12 +420,14 @@ async def test_dropped_job_with_work_done_writes_off_what_was_owed(client, tenan
 
 @pytest.mark.asyncio
 @pytest.mark.parametrize("field", ["commission_labour", "commission_parts"])
-async def test_employee_commission_percent_isnt_taken_when_it_wouldnt_be_paid(client, tenant, field):
+async def test_employee_commission_percent_is_still_stored(client, tenant, field):
+    """PM decision: payroll has no per-person commission % payout yet, so the value is accepted
+    and stored as before (no 422); paying it is an owner follow-up."""
     body = {"name": "Jake", "email": f"j-{uuid.uuid4().hex[:6]}@t.dev", "password": "pw-test-12345", field: 10}
     r = await client.post("/api/staff/employees", json=body, headers=tenant)
-    assert r.status_code == 422, r.text
-    assert "commission" in r.text.lower()
-    ok = await client.post("/api/staff/employees", json={**body, field: 0}, headers=tenant)
-    assert ok.status_code == 201, ok.text
-    r = await client.patch(f"/api/staff/employees/{ok.json()['id']}", json={field: 5}, headers=tenant)
-    assert r.status_code == 422, r.text
+    assert r.status_code == 201, r.text
+    eid = r.json()["id"]
+    r = await client.patch(f"/api/staff/employees/{eid}", json={field: 5}, headers=tenant)
+    assert r.status_code == 200, r.text
+    me = next(e for e in (await client.get("/api/staff/employees", headers=tenant)).json() if e["id"] == eid)
+    assert me[field] == 5
