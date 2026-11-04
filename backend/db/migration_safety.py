@@ -60,6 +60,14 @@ def repair_invalid_indexes(conn) -> list[str]:
                         "drop it with DROP INDEX CONCURRENTLY", name)
             continue
         log.warning("index %s is INVALID (a CONCURRENTLY build failed); rebuilding it", name)
-        conn.execute(text(f'REINDEX INDEX CONCURRENTLY "{name}"'))
+        # REINDEX CONCURRENTLY waits for every older open transaction in this database; the
+        # migration session's lock_timeout bounds that wait. If it gives up, the migrations have
+        # already committed: log it and leave the index for the next upgrade, don't fail the deploy.
+        try:
+            conn.execute(text(f'REINDEX INDEX CONCURRENTLY "{name}"'))
+        except Exception as exc:  # noqa: BLE001
+            log.warning("could not rebuild invalid index %s (%s); the next upgrade retries it",
+                        name, type(exc).__name__)
+            continue
         repaired.append(name)
     return repaired

@@ -27,6 +27,12 @@ def _engine(idle_ms: int):
         "server_settings": {"idle_in_transaction_session_timeout": str(idle_ms)}})
 
 
+async def _run(name, fn):
+    """run_exclusive under a hard bound: a lock or connection that never comes back fails this test
+    in seconds instead of hanging the CI shard."""
+    return await asyncio.wait_for(jobs.run_exclusive(name, fn), timeout=30)
+
+
 async def _kill_lock_holder(eng, name: str) -> int:
     """Terminate only the backend holding this job's advisory lock (as a DB restart would)."""
     key = jobs._lock_key(name)
@@ -50,13 +56,13 @@ async def test_lock_held_past_idle_in_transaction_timeout(monkeypatch):
     async def long_job():
         await asyncio.sleep(1.5)          # three times the idle-in-transaction timeout
         # Another worker's tick arrives while this run is still going: it must skip.
-        assert await jobs.run_exclusive("lock-hardening", rival) is False
+        assert await _run("lock-hardening", rival) is False
 
     try:
-        assert await jobs.run_exclusive("lock-hardening", long_job) is True
+        assert await _run("lock-hardening", long_job) is True
         assert second_ran == []
         # The lock was released at the end: the next tick runs.
-        assert await jobs.run_exclusive("lock-hardening", rival) is True
+        assert await _run("lock-hardening", rival) is True
         assert second_ran == [1]
     finally:
         await eng.dispose()
@@ -77,7 +83,7 @@ async def test_dead_lock_connection_does_not_mask_the_job_error(monkeypatch, cap
     try:
         with caplog.at_level(logging.WARNING, logger="tekly.jobs"):
             with pytest.raises(ValueError, match="job failed"):
-                await jobs.run_exclusive("lock-hardening-dead", job_that_fails)
+                await _run("lock-hardening-dead", job_that_fails)
         assert any("unlock" in r.getMessage() for r in caplog.records)
     finally:
         await eng.dispose()
@@ -94,7 +100,7 @@ async def test_dead_lock_connection_after_success_is_logged_not_raised(monkeypat
 
     try:
         with caplog.at_level(logging.WARNING, logger="tekly.jobs"):
-            assert await jobs.run_exclusive("lock-hardening-dead2", job) is True
+            assert await _run("lock-hardening-dead2", job) is True
         assert any("unlock" in r.getMessage() for r in caplog.records)
     finally:
         await eng.dispose()

@@ -69,7 +69,9 @@ uv pip compile requirements-dev.txt --universal --python-version 3.11 --generate
 - Several migrations build indexes with `CREATE INDEX CONCURRENTLY IF NOT EXISTS` (aqp01, ix144dh01,
   ix144p4, id144p4, sc144eo01). If one of those builds fails, Postgres keeps the index but marks
   it INVALID, and a retry skips it because the name exists. After every `upgrade` the migration
-  runner rebuilds any INVALID index with `REINDEX INDEX CONCURRENTLY` and logs it. Leftovers of a
+  runner rebuilds any INVALID index with `REINDEX INDEX CONCURRENTLY` and logs it. That rebuild
+  waits for older open transactions, bounded by the same lock timeout; if it gives up it logs a
+  warning, the deploy continues, and the next upgrade retries. Leftovers of a
   failed REINDEX (`*_ccnew`, `*_ccold`) are only logged: drop those with `DROP INDEX CONCURRENTLY`.
   To check by hand: `SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;`
 
