@@ -1,6 +1,6 @@
 // Payroll calculation filters: every filter goes to the API, the export keeps them, and a row
 // opens to the rule → job → line item breakdown.
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 import { MemoryRouter } from "react-router-dom";
@@ -20,6 +20,13 @@ const ROWS = [
   { employee_id: "e1", name: "Ann", position: "Techs", base_salary: 100, commissions_total: 15, computed_total: 115 },
   { employee_id: "e2", name: "Ben", position: "Desk", base_salary: 200, computed_total: 200, accrual_status: "paid" },
 ];
+
+// jsdom parses its whole default (UA) stylesheet the first time anything calls getComputedStyle:
+// ~200ms of CPU when idle, several times that on a loaded machine. The first *ByRole query calls
+// it (for the "hidden" check), so that one-off cost landed inside the first test's
+// findByRole("Show breakdown for Ann") 1000ms window, on top of the cold first render. Pay it
+// once here, outside any assertion timeout, so no test's budget depends on being first.
+beforeAll(() => { getComputedStyle(document.body); });
 
 beforeEach(() => {
   urls = []; opened.length = 0;

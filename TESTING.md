@@ -10,7 +10,7 @@ with Postgres covered by a dedicated CI job and an always-on dialect check.
 pip install -r requirements-dev.txt     # exact versions CI uses (pytest 8.2, ruff 0.6.9, …)
 make ci                                  # EVERY CI gate, in CI order. Green here == green in CI.
 make test                                # backend suite, parallel
-make test-pg PG=postgresql+asyncpg://user:pass@localhost:5432/repairos_test   # suite on Postgres
+make test-pg                             # suite on a throwaway Postgres 16 (scripts/test_pg.sh)
 cd frontend-react && npm run test:coverage   # frontend unit tests + coverage floor
 ```
 
@@ -20,7 +20,7 @@ cd frontend-react && npm run test:coverage   # frontend unit tests + coverage fl
 |---|---|---|---|---|
 | Backend unit + API integration | pytest (1,140+ tests), xdist | business logic, HTTP layer, tenant isolation, validation | CI every push | **hard** |
 | Prod-dialect check | `test_postgres_ddl_compat.py` | tables/indexes that won't compile on Postgres; partial indexes whose `WHERE` differs by DB | CI every push (no server needed) | **hard** |
-| Postgres behavioural run | `backend-postgres` CI job | migrations from scratch + full suite on real Postgres 16 | CI every push | advisory → **make hard after first green** |
+| Postgres behavioural run | `backend-postgres` CI job (4 shards, xdist) | migrations from scratch + full suite on real Postgres 16 | CI every push | **hard** — require the `backend-postgres (all shards)` check |
 | Migrations from scratch | `alembic upgrade head` | broken / non-replayable migrations | CI + `make ci` | **hard** |
 | Model ↔ migration drift | `test_144eo_migrated_schema.py` | migrations building a different schema than the models (missing index/FK/column, wrong length or `ondelete`) — invisible to every other test, because they build from the models | CI every push | **hard** (allowlist can only shrink) |
 | Lint | ruff 0.6.9 (pinned) | real bugs (unused vars, `== None`, broad `raises`) + import order | CI + pre-commit | **hard** |
@@ -39,6 +39,65 @@ of `backend/tests/conftest.py` assigns whole files to shards (balanced by test c
 `PYTEST_SHARD`/`PYTEST_SHARD_TOTAL` are set. The `coverage` job then checks that the shards ran exactly
 the collected suite, combines their coverage data, and enforces the floor. To reproduce one shard locally:
 `PYTEST_SHARD=2 PYTEST_SHARD_TOTAL=4 pytest -n auto`. Unset, nothing changes.
+
+## Running tests in parallel safely
+
+Several people (or Claude sessions) running suites on one machine at once is normal. These rules make
+it safe; each one exists because breaking it cost us a wave of fake failures.
+
+**Every test process has its own database — automatically.** `backend/tests/conftest.py` turns the
+configured `DATABASE_URL` / `TEST_DATABASE_URL` into a private one before the app is imported:
+
+| Configured | What a test process actually uses | Cleaned up |
+|---|---|---|
+| `sqlite+aiosqlite:///./test.db` | `./test_<run>[_gwN].db` | file deleted at the end of the run |
+| `postgresql+asyncpg://…/repairos_test` | database `repairos_test_<run>[_gwN]` on that server | `DROP DATABASE` at the end (`TEST_KEEP_DB=1` keeps it for debugging) |
+
+`<run>` is unique per run and shared by its xdist workers; `gwN` is the worker. So two runs in the same
+folder, or against the same server, can never drop or empty each other's tables, and xdist works on
+Postgres too. A crashed run can leave a `*_<run>*` database or file behind; it is never reused, and is
+safe to delete. Nothing to do on your side — just don't hard-code a database name in a test (use the
+`db` fixture or `os.environ["DATABASE_URL"]`).
+
+**A database outage is an infrastructure error, never a test result.** If the server is unreachable,
+in recovery, out of connections, or crashes and restarts mid-run, the run stops at once with one
+`INFRASTRUCTURE ERROR — …` message and **exit code 75**, instead of hundreds of 500s. That run proves
+nothing either way: fix the server and rerun. Only conftest's own code that *opens a connection* is
+classified this way, never a statement or a test body, so a real failure is never written off as
+"infra" — a missing table, a constraint error, a lock-table overflow or a statement timeout is always a
+real failure. A setup problem a rerun won't fix (the role can't `CREATE DATABASE`, wrong password)
+stops with `TEST SETUP ERROR` and exit code 4. "Too many clients" is reported as infra but says to
+check for a connection leak: if few runs share the server, it is a real bug.
+
+**Postgres locally: use `scripts/test_pg.sh`** (or `make test-pg`). It starts a throwaway Postgres 16
+just for this run (fresh data dir, its own socket dir under `/private/tmp/claude-$UID`, its own port, no
+TCP listener), runs the suite with 4 xdist workers, then stops the server and deletes its files.
+Any pytest arguments pass through: `scripts/test_pg.sh backend/tests/test_x.py -k foo`.
+`TEST_PG_WORKERS=0` runs serially; `PYTHON=.venv/bin/python` picks the interpreter. If that run's
+Postgres crashed, the script says so and fails even if pytest passed.
+
+**Cap the load.** At most `TEST_PG_MAX_RUNS` (default **2**) `test_pg.sh` runs go at once per
+machine; a third waits for a free slot. Rough cost of one full run: one Postgres server plus one
+Python process per worker (~250 MB each, at most 2 connections each). Connections and memory are not
+the limit; CPU and disk are (a SQLite run rebuilds the schema twice per test). Eight full Postgres runs
+plus SQLite runs at once drove this Mac to a load average of 26.
+- Never delete or re-`initdb` a Postgres data dir while its server is running (`pg_ctl stop` first).
+  That is what crashed Postgres on 2026-11-04: the running server lost its files, PANICked, and the
+  workers of 8 runs sharing it failed ~190 tests. `test_pg.sh` gives every run a fresh `mktemp` dir. Prefer one full run plus
+targeted `-k`/file runs while iterating.
+
+**Don't:**
+- point tests at a database you care about (the demo DB `tekly_retest` on :55610, staging, prod) —
+  isolation creates a sibling database there, but it still needs CREATEDB rights on that server;
+- pass `-p no:logging` — tests use `caplog`; conftest refuses to start with that flag;
+- `rm -f *test*.db` globs in a shared folder while other runs are going — the fixtures clean up;
+- treat a flaky-looking failure as infra without the `INFRASTRUCTURE ERROR` banner: rerun it alone,
+  and if it passes alone, it is a real ordering/timing bug to fix, not to retry.
+
+**Frontend (Vitest) under load.** Wait with Testing Library's `waitFor` / `findBy*`, not
+`vi.waitFor`: a failing `getByRole` inside `vi.waitFor` builds a full accessibility-tree dump on every
+50 ms poll and starves the render it is waiting for. Never rely on wall-clock gaps between events
+(set `timeStamp` explicitly, as `SalesPOS.test.tsx` does for the scanner).
 
 ## Coverage (ratchet)
 
