@@ -120,12 +120,16 @@ async def shift_clock_out(db: AsyncSession = Depends(get_db),
     if not s:
         raise HTTPException(409, "You are not clocked in")
     # Close every open shift, not just the newest: one leaked open (e.g. by an older double
-    # tap) would otherwise accrue hours forever.
-    ended = now_utc()
+    # tap) would otherwise accrue hours forever. Only the newest is worked time; a leaked
+    # duplicate closes at its own start with 0 hours, so payroll doesn't pay the time twice.
     for o in (await db.execute(select(Shift).where(
             Shift.employee_id == current.id, Shift.ended_at.is_(None)))).scalars().all():
-        o.ended_at = ended
-        o.hours_worked = q2(_shift_elapsed(o) / 3600.0)
+        if o is s:
+            o.ended_at = now_utc()
+            o.hours_worked = q2(_shift_elapsed(o) / 3600.0)
+        else:
+            o.ended_at = o.started_at
+            o.hours_worked = 0
     await db.commit()
     await db.refresh(s)
     return _ser_shift(s)

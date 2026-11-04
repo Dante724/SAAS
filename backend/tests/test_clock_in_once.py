@@ -8,6 +8,7 @@ request waits, then sees the first shift and gets 409); clock-out closes every o
 """
 import asyncio
 import os
+from datetime import timedelta
 
 import pytest
 from sqlalchemy import select
@@ -58,6 +59,23 @@ async def test_clock_out_after_double_tap_closes_everything(client, tenant, db, 
     r = await client.post("/api/timeclock/shift/clock-out", headers=tenant)
     assert r.status_code == 200, r.text
     assert await _open_shifts(db) == []
+
+
+async def test_leaked_duplicate_shift_is_not_paid_twice(client, tenant, db):
+    """Two shifts left open by a double tap cover the same time: clock-out pays it once."""
+    emp = (await db.execute(select(Employee))).scalars().first()
+    loc = (await db.execute(select(Location).where(Location.org_id == emp.org_id))).scalars().first()
+    emp_id = emp.id
+    start = now_utc() - timedelta(hours=8)
+    for _ in range(2):
+        db.add(Shift(employee_id=emp.id, location_id=loc.id, started_at=start))
+    await db.commit()
+    r = await client.post("/api/timeclock/shift/clock-out", headers=tenant)
+    assert r.status_code == 200, r.text
+    db.expire_all()
+    hours = sorted(float(s.hours_worked or 0) for s in (await db.execute(
+        select(Shift).where(Shift.employee_id == emp_id))).scalars().all())
+    assert hours[0] == 0 and 7.9 < hours[1] < 8.1, hours
 
 
 async def test_clock_out_closes_every_open_shift(client, tenant, db):
