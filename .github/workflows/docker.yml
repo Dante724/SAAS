@@ -67,6 +67,7 @@ jobs:
             sleep 1
           done
           curl -sf http://127.0.0.1:8000/api/health
+          curl -sf http://127.0.0.1:8000/api/readyz   # liveness doesn't check the DB; readiness does
           curl -sf http://127.0.0.1:8000/ | grep -qi '<div id="root"' || (echo "React shell not served"; exit 1)
       - name: Container logs
         if: always()

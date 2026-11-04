@@ -38,12 +38,12 @@ async def readyz(db: AsyncSession = Depends(get_db)):
     """Readiness: verifies the DB is reachable (for k8s/LB probes)."""
     try:
         await db.execute(text("SELECT 1"))
-        return {"status": "ready", "db": "ok"}
-    except Exception:  # pragma: no cover
+        return {"status": "ready", "db": "ok", "database": "up"}
+    except Exception:  # noqa: BLE001
         # The driver error names hosts, users and database names — log it, don't publish it.
         log.exception("readiness check: database unreachable")
-        return Response(status_code=503, content=json.dumps({"status": "unready", "db": "unreachable"}),
-                        media_type="application/json")
+        return Response(status_code=503, media_type="application/json", content=json.dumps(
+            {"status": "unready", "db": "unreachable", "database": "down"}))
 
 
 # ── B5: white-label branding ─────────────────────────────────────────────────
