@@ -373,7 +373,8 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
                            kind="payment", amount=q2(amount - take), **fields)
             db.add(rest)
             if not held_on:     # no job to hold it on: it's an overpayment on the invoice itself
-                inv.amount_paid = q2(float(inv.amount_paid or 0) + float(rest.amount))
+                from backend.services.money import add_to_column
+                await add_to_column(db, inv, "amount_paid", float(rest.amount))
             pays.append(rest)
     elif order:
         pays = await im.apply_order_payment(db, order, amount, **fields)
