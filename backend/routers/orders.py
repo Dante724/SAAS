@@ -3509,44 +3509,52 @@ async def _archive_order(db, current, order_id, reason, do_refund):
                                  "or void the payments first.")
 
     refunded = 0.0
-    if do_refund:
-        pays = _pays
-        net_paid = _net
-        if net_paid > 0:
-            acct = None
-            # refund to the account the payments used, else the first company account
-            acct_ids = [p.account_id for p in pays if p.account_id]
-            if acct_ids:
-                acct = (await db.execute(select(Account).where(Account.id == acct_ids[0]))).scalar_one_or_none()
-            if not acct:
-                acct = (await db.execute(select(Account).where(
-                    Account.org_id == current.org_id, Account.active == True))).scalars().first()  # noqa: E712
-            refund = Refund(org_id=current.org_id, order_id=order_id,
-                            account_id=acct.id if acct else None, amount=net_paid, reason=reason)
-            db.add(refund)
-            await db.flush()
-            from backend.routers.cash import open_drawer_shift
-            _rp = Payment(order_id=order_id, client_id=order.client_id, method="refund",
-                          kind="refund", amount=net_paid, account_id=acct.id if acct else None,
-                          # cash handed back from a till comes out of that drawer's count (B10)
-                          shift_id=await open_drawer_shift(db, current.org_id, acct),
-                          received_by_id=current.id, reference=f"Archive refund: {reason}"[:200])
-            db.add(_rp)
-            await db.flush()
-            refund.payment_id = _rp.id
-            if order.client_id:
-                # The cash goes back, so the client's ledger must show it — otherwise the reversed
-                # charge leaves them with phantom store credit equal to what they were refunded.
-                from backend.services.ledger import post_contact_ledger
-                await post_contact_ledger(db, current.org_id, order.client_id, "refund", abs(net_paid),
-                                          note=f"Refund on archived order {order.order_number}",
-                                          ref_type="refund", ref_id=refund.id, created_by_id=current.id)
-            if acct:
-                from backend.routers.cash import post_transaction
-                await post_transaction(db, current.org_id, acct.id, "refund", -net_paid,
-                                       comment=f"Refund on archived order {order.order_number}: {reason}",
-                                       ref_type="refund", ref_id=refund.id, employee_id=current.id)
-            refunded = net_paid
+    refunds_by_account: list = []
+    if do_refund and _net > 0:
+        # W3-C: each cashbox gives back what it took for this job (less what it already refunded),
+        # never everything from the first payment's account — card money goes back to the card,
+        # cash to the drawer. A drawer that no longer holds the cash is refused, never driven
+        # negative.
+        per: dict = {}
+        for p in _pays:
+            if p.account_id:
+                per[p.account_id] = q2(per.get(p.account_id, 0) + float(p.amount or 0))
+        for acc_id, amt in (await db.execute(select(Payment.account_id, func.sum(func.abs(Payment.amount))).where(
+                Payment.order_id == order_id, Payment.kind == "refund", Payment.account_id.isnot(None))
+                .group_by(Payment.account_id))).all():
+            per[acc_id] = q2(per.get(acc_id, 0) - float(amt or 0))
+        plan = {k: v for k, v in per.items() if v > 0}
+        # money that came in without an account, or refunded from a different one: settle the
+        # difference against the largest accounts so the total is exactly what's unrefunded
+        gap = q2(_net - sum(plan.values()))
+        for acc_id in sorted(plan, key=lambda k: -plan[k]):
+            if gap >= 0:
+                break
+            cut = min(plan[acc_id], -gap)
+            plan[acc_id], gap = q2(plan[acc_id] - cut), q2(gap + cut)
+        if gap > 0:
+            first = next(iter(plan), None) or (await db.execute(select(Account.id).where(
+                Account.org_id == current.org_id, Account.active == True))).scalars().first()  # noqa: E712
+            if first:
+                plan[first] = q2(plan.get(first, 0) + gap)
+        accts = {a.id: a for a in (await db.execute(select(Account).where(
+            Account.org_id == current.org_id, Account.id.in_(list(plan))).with_for_update())).scalars().all()}
+        for acc_id, amt in plan.items():
+            acct = accts.get(acc_id)
+            if acct is not None and amt > 0 and (acct.payment_option or "") == "cash" \
+                    and q2(float(acct.balance or 0)) < amt:
+                raise HTTPException(409, f"{amt:.2f} has to go back to the customer from the “{acct.name}” drawer, "
+                                         f"but it holds only {float(acct.balance or 0):.2f}. Put the cash back in "
+                                         "the drawer (or move it there), then delete the job.")
+        from backend.routers.returns import book_refund
+        for acc_id, amt in plan.items():
+            acct = accts.get(acc_id)
+            if acct is None or amt <= 0:
+                continue
+            await book_refund(db, current, order, acct, amt, reason=reason,
+                              reference=f"Archive refund: {reason}")
+            refunds_by_account.append({"account_id": acct.id, "account": acct.name, "amount": amt})
+            refunded = q2(refunded + amt)
 
     order.archived = True
     order.archive_reason = reason
@@ -3562,6 +3570,22 @@ async def _archive_order(db, current, order_id, reason, do_refund):
                 db, current.org_id, order.client_id, "charge", q2(-_net),
                 note=f"Order {order.order_number} archived", ref_type="order", ref_id=order.id,
                 created_by_id=current.id)
+    # W3-C: its invoices don't keep billing a deleted job. One that bills only this job, with its
+    # money given back above, is cancelled; one shared with other jobs stops billing this one
+    # (when none of this job's money sits on it).
+    if not order.is_estimate:
+        from backend.services.invoice_money import detach_order, invoices_for_order
+        from backend.services.invoicing import invoice_orders
+        for _inv in await invoices_for_order(db, order.id):
+            _jobs = {o.id for o in await invoice_orders(db, _inv)} | ({_inv.order_id} if _inv.order_id else set())
+            if _jobs <= {order.id}:
+                if q2(float(_inv.amount_paid or 0)) <= 0 and q2(float(_inv.credited or 0)) <= 0:
+                    _inv.status = "cancelled"
+            else:
+                try:
+                    await detach_order(db, _inv, order.id)
+                except HTTPException:
+                    pass          # this job's money is on it: it stays, as the refund left it
     # Return consumed stock to inventory — archiving an order must not silently lose the parts it
     # deducted (reuses the same reversal the delete-line/reopen paths use). Safe against re-run:
     # archiving an already-archived order is rejected above.
@@ -3587,7 +3611,8 @@ async def _archive_order(db, current, order_id, reason, do_refund):
     await log_system_event(db, current.org_id, "order", order.id,
                            f"Order archived: {reason}" + (f" (refunded {refunded})" if refunded else ""))
     await db.commit()
-    return {"ok": True, "id": order.id, "archived": True, "reason": reason, "refunded": refunded}
+    return {"ok": True, "id": order.id, "archived": True, "reason": reason, "refunded": refunded,
+            "refunds": refunds_by_account}
 
 
 class ArchiveIn(BaseModel):
@@ -4606,12 +4631,23 @@ async def add_line(
     return resp
 
 
-async def _reverse_fulfillment(db, order, part_id, qty):
+async def _reverse_fulfillment(db, order, part_id, qty, *, ref_type="order", ref_id=None, units=None,
+                               capped=True):
     """Unwind a fulfillment: return qty to warehouse stock, release serialized
     units allocated to this order, and restore FIFO cost layers (newest first,
-    capped at each layer's received qty). Mirrors _maybe_deduct."""
+    capped at each layer's received qty). Mirrors _maybe_deduct.
+    W3-C: never more than the job still holds — units the customer already brought back on a goods
+    return (services/job_returns) aren't restocked a second time. A goods return calls this with its
+    own movement ref, the units it named, and capped=False (it checked the cap itself). Returns the
+    qty put back."""
     if not part_id or qty <= 0:
-        return
+        return 0.0
+    if capped:
+        from backend.services.job_returns import returned_qty, still_held
+        if await returned_qty(db, order.id, part_id) > 1e-9:
+            qty = min(qty, await still_held(db, order.id, part_id))
+            if qty <= 1e-9:
+                return 0.0
     # Return stock to the location it was actually deducted from (recorded on the "use"
     # movement), not order.location_id — those differ after a work order is transferred to
     # another location, and returning to the new location would corrupt per-location on-hand.
@@ -4643,10 +4679,10 @@ async def _reverse_fulfillment(db, order, part_id, qty):
         back_bin = back_bin if back_bin in live else None
         await stock_rows.add(db, part_id, loc_id, q, bin_id=back_bin)
         db.add(StockMovement(part_id=part_id, location_id=loc_id, bin_id=back_bin,
-                             movement_type="return", qty=q, ref_type="order", ref_id=order.id))
+                             movement_type="return", qty=q, ref_type=ref_type, ref_id=ref_id or order.id))
     from backend.models import SerializedItem, StockItemBatch
-    # Release serialized units (newest allocated first)
-    serials = (await db.execute(select(SerializedItem).where(
+    # Release serialized units (the ones named, else newest allocated first)
+    serials = units if units is not None else (await db.execute(select(SerializedItem).where(
         SerializedItem.org_id == order.org_id, SerializedItem.part_id == part_id,
         SerializedItem.order_id == order.id, SerializedItem.status == "allocated_to_order")
         .order_by(SerializedItem.created_at.desc()).limit(int(qty)))).scalars().all()
@@ -4654,8 +4690,11 @@ async def _reverse_fulfillment(db, order, part_id, qty):
     for s in serials:
         s.status = "in_stock"
         s.order_id = None
-        serial_log.record(db, s, "returned", ref_type="order", ref_id=order.id,
-                          label=f"Taken off {order.order_number}")
+        if units is not None:     # a goods return names its units: they're on the shelf the stock went to
+            s.location_id, s.bin_id, s.warehouse_id = plan[0][0], None, None
+        else:
+            serial_log.record(db, s, "returned", ref_type="order", ref_id=order.id,
+                              label=f"Taken off {order.order_number}")
     # Restore cost layers (approximate without a per-line consumption journal:
     # newest layer first, never exceeding what that layer originally received)
     from decimal import Decimal as _D
@@ -4672,6 +4711,7 @@ async def _reverse_fulfillment(db, order, part_id, qty):
         back = min(remaining, consumed)
         layer.qty_remaining = _D(str(layer.qty_remaining or 0)) + back
         remaining -= back
+    return float(qty)
 
 
 def _can_override_reservation(perms, current) -> bool:

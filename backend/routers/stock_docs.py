@@ -131,6 +131,29 @@ async def _deplete_batches_fefo(db: AsyncSession, part_id: str, warehouse, qty: 
     # the aggregate decrement already handled it — we simply drain what batches we have.
 
 
+async def _restore_batches(db: AsyncSession, part_id: str, warehouse, qty: float) -> None:
+    """W3-C: a reverted write-off puts its units back on the cost layers it drew (the reverse of
+    _deplete_batches_fefo: the last layer drawn first, never above what a layer received), so the
+    layers keep holding exactly what's on the shelf."""
+    from decimal import Decimal as _D
+
+    from backend.models import StockItemBatch
+    batches = (await db.execute(select(StockItemBatch).where(
+        StockItemBatch.part_id == part_id, StockItemBatch.warehouse_id == warehouse.id)
+        .order_by(StockItemBatch.expiry_date.is_(None), StockItemBatch.expiry_date,
+                  StockItemBatch.received_at).with_for_update())).scalars().all()
+    left = _D(str(qty))
+    for b in reversed(batches):
+        if left <= 0:
+            break
+        room = _D(str(b.qty_received or 0)) - _D(str(b.qty_remaining or 0))
+        if room <= 0:
+            continue
+        back = min(room, left)
+        b.qty_remaining = _D(str(b.qty_remaining or 0)) + back
+        left -= back
+
+
 async def _give_stock(db: AsyncSession, part_id: str, warehouse, qty: float,
                       location_id: Optional[str], bin_id: Optional[str] = None) -> None:
     """Into the bin's row when a bin is named; else the warehouse's own unbinned row if it has one,
@@ -306,6 +329,8 @@ async def delete_return(
         PurchaseReturnLine.return_id == doc.id))).scalars().all()
     for ln in lines:
         await _give_stock(db, ln.part_id, w, ln.qty, w.location_id if w else None, bin_id=getattr(ln, "bin_id", None))
+        if w:
+            await _restore_batches(db, ln.part_id, w, ln.qty)
         if ln.serialized_item_id:
             unit = (await db.execute(select(SerializedItem).where(
                 SerializedItem.id == ln.serialized_item_id, SerializedItem.org_id == current.org_id,
@@ -532,6 +557,8 @@ async def delete_write_off(
         WriteOffLine.write_off_id == doc.id))).scalars().all()
     for ln in lines:
         await _give_stock(db, ln.part_id, w, ln.qty, w.location_id if w else None, bin_id=getattr(ln, "bin_id", None))
+        if w:
+            await _restore_batches(db, ln.part_id, w, ln.qty)
         if ln.serialized_item_id:
             unit = (await db.execute(select(SerializedItem).where(
                 SerializedItem.id == ln.serialized_item_id, SerializedItem.org_id == current.org_id,
