@@ -3539,10 +3539,19 @@ async def _archive_order(db, current, order_id, reason, do_refund):
                 plan[first] = q2(plan.get(first, 0) + gap)
         accts = {a.id: a for a in (await db.execute(select(Account).where(
             Account.org_id == current.org_id, Account.id.in_(list(plan))).with_for_update())).scalars().all()}
+        from backend.models import Transaction
         for acc_id, amt in plan.items():
             acct = accts.get(acc_id)
-            if acct is not None and amt > 0 and (acct.payment_option or "") == "cash" \
-                    and q2(float(acct.balance or 0)) < amt:
+            if acct is None or amt <= 0 or (acct.payment_option or "") != "cash" \
+                    or q2(float(acct.balance or 0)) >= amt:
+                continue
+            # only cash this job actually put into the drawer through the till (older or imported
+            # payments with no cashbox entry never moved the drawer's balance)
+            took = (await db.execute(select(func.coalesce(func.sum(Transaction.amount), 0)).where(
+                Transaction.org_id == current.org_id, Transaction.account_id == acc_id,
+                Transaction.ref_type == "order", Transaction.ref_id == order_id,
+                Transaction.txn_type == "invoice_payment", Transaction.status == "active"))).scalar() or 0
+            if q2(float(took)) > 0:
                 raise HTTPException(409, f"{amt:.2f} has to go back to the customer from the “{acct.name}” drawer, "
                                          f"but it holds only {float(acct.balance or 0):.2f}. Put the cash back in "
                                          "the drawer (or move it there), then delete the job.")
