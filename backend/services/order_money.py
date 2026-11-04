@@ -17,6 +17,15 @@ from backend.models import Invoice, Order, Payment, PaymentIntent
 from backend.services.money import q2
 
 
+def refuse_archived(order) -> None:
+    """A deleted (archived) job takes no money and gets no invoice: what it had taken was given
+    back when it was archived, so a new payment would be cash in the till against nothing and
+    phantom credit on the client. Restoring the job reopens it."""
+    if order is not None and getattr(order, "archived", False):
+        from fastapi import HTTPException
+        raise HTTPException(409, "This job was deleted. Restore it first.")
+
+
 async def paid_and_refunded(db: AsyncSession, order_id: str) -> tuple[float, float]:
     rows = (await db.execute(
         select(Payment.kind, func.coalesce(func.sum(Payment.amount), 0))
