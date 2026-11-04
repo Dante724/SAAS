@@ -269,11 +269,14 @@ export default function SalesPOS() {
   const [payCash, setPayCash] = useState("");
   const payAccount = accounts.find((a) => a.id === (payAcct || accountId)) || accounts.find((a) => a.payment_option === "cash") || accounts[0];
   const payTendered = payAccount?.payment_option === "cash" && payCash.trim() !== "" ? Number(payCash) : null;
+  const payKey = useRef<{ sale: string; key: string } | null>(null);   // one Idempotency-Key per sale being paid
   async function payPending() {
     if (!pending || !payAccount) return;
     setBusy(true);
     try {
-      const r = await api.post<{ due: number; change_due: number | null }>(`/sales/${pending.id}/pay`, { account_id: payAccount.id, cash_tendered: payTendered });
+      if (payKey.current?.sale !== pending.id) payKey.current = { sale: pending.id, key: idempotencyKey() };
+      const r = await api.postOnce<{ due: number; change_due: number | null }>(`/sales/${pending.id}/pay`, { account_id: payAccount.id, cash_tendered: payTendered }, payKey.current.key);
+      payKey.current = null;
       setPayCash("");
       paid(pending, `Sale ${pending.number} paid · ${cash(r.due)}`, r.change_due);
     } catch (e: any) { flash(e.message || "Couldn't take the payment"); } finally { setBusy(false); }

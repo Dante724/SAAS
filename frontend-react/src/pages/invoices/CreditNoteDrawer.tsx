@@ -1,7 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { M } from "../../components/Shell";
 import BulkPrintDialog from "../../components/BulkPrintDialog";
-import { api, openAuthedDoc } from "../../api/client";
+import { api, idempotencyKey, openAuthedDoc } from "../../api/client";
 import { alertDialog, confirmDialog } from "../../lib/dialog";
 import { humanize } from "../../lib/humanize";
 import { useMe } from "../../context/Me";
@@ -103,10 +103,13 @@ export default function CreditNoteDrawer({ id, invoice, clientId, onClose, onCha
     catch (e: any) { setErr(e.message || "Something went wrong"); }
     finally { busyRef.current = false; setBusy(false); }
   }
+  const createKey = useRef(idempotencyKey());
   async function saveDraft(): Promise<CreditNote | undefined> {
     const problem = check(); if (problem) { setErr(problem); return; }
     const body = payload();
-    const r = cn ? await api.put<CreditNote>(`/finance/credit-notes/${cn.id}`, body) : await api.post<CreditNote>("/finance/credit-notes", body);
+    // Creating carries a key: a retried Save makes one draft, not two.
+    const r = cn ? await api.put<CreditNote>(`/finance/credit-notes/${cn.id}`, body)
+      : await api.postOnce<CreditNote>("/finance/credit-notes", body, createKey.current);
     adopt(r); onChanged?.();
     return r;
   }

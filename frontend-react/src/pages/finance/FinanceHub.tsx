@@ -4,7 +4,7 @@ import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
-import { api, openAuthedDoc } from "../../api/client";
+import { api, idempotencyKey, openAuthedDoc } from "../../api/client";
 import Pager from "../../components/Pager";
 import { money } from "../orders/types";
 import { btnGhost, btnPrimary } from "../invoices/billing";
@@ -46,7 +46,8 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
     if (fee == null) return;
     const ref = await promptDialog("Reference (optional — payout ID from your statement)");
     try {
-      await api.post("/finance/payouts", { gross_amount: g, fee_amount: parseFloat(fee || "0") || 0, reference: ref || undefined });
+      // One payout per dialog run: the server records a retried POST with this key once.
+      await api.postOnce("/finance/payouts", { gross_amount: g, fee_amount: parseFloat(fee || "0") || 0, reference: ref || undefined }, idempotencyKey());
       const r = await api.get<{ items: any[]; count: number }>("/finance/reconciliation"); setRecon(r);
     } catch { await alertDialog("Could not record payout."); }
   }
@@ -89,6 +90,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
     } catch (e: any) { await alertDialog(`Could not run payroll: ${e.message}`); } finally { runBusyRef.current = false; setRunBusy(false); }
   }
   const [payingId, setPayingId] = useState<string | null>(null); const payingRef = useRef(false);
+  const payKeys = useRef<Record<string, string>>({});   // Idempotency-Key per payroll run being paid
   async function markPaid(id: string) {
     if (payingRef.current) return;
     payingRef.current = true;
@@ -102,7 +104,10 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
       const acct = tills[labels.indexOf(picked)];
       if (!(await confirmDialog(`Mark this payroll run as paid from ${picked}? This posts the payout and takes the money out of that account.`, { title: "Mark paid", confirmLabel: "Mark paid" }))) return;
       setPayingId(id);
-      await api.post(`/payroll/runs/${id}/pay`, { account_id: acct.id });
+      // One key per run until it is paid: retrying a failed or timed-out pay posts it once.
+      const key = (payKeys.current[id] ||= idempotencyKey());
+      await api.postOnce(`/payroll/runs/${id}/pay`, { account_id: acct.id }, key);
+      delete payKeys.current[id];
       loadRuns();
       api.get<any>("/cash/summary").then(setCash).catch(loadFailed("the cash summary"));
     } catch (e: any) { await alertDialog(`Could not mark paid: ${e.message}`); } finally { payingRef.current = false; setPayingId(null); }

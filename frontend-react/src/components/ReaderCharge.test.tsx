@@ -13,7 +13,7 @@ const charge = (status: string, extra = {}) => ({
   id: "c1", terminal_id: "t1", provider: "stripe", amount: 40, status, test_mode: true,
   status_label: { pending: "Waiting for card", succeeded: "Approved", declined: "Declined", canceled: "Canceled" }[status], ...extra });
 
-let calls: { method: string; url: string; body?: any }[] = [];
+let calls: { method: string; url: string; body?: any; key?: string }[] = [];
 let readers: unknown[] = [READER];
 let polled: string[] = [];
 let chargeReply: () => Response = () => reply(charge("pending"));
@@ -23,7 +23,8 @@ beforeEach(() => {
   chargeReply = () => reply(charge("pending"));
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method || "GET";
-    calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : undefined });
+    calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : undefined,
+                 key: (init?.headers as Record<string, string> | undefined)?.["Idempotency-Key"] });
     if (url.endsWith("/payments/terminal/readers")) return reply({ items: readers });
     if (url.endsWith("/payments/terminal/charge")) return chargeReply();
     if (url.endsWith("/charges/c1") && method === "GET") return reply(charge(polled.shift() || "succeeded"));
@@ -113,5 +114,28 @@ describe("ReaderCharge", () => {
     await u.click(await screen.findByRole("button", { name: "Cancel the waiting charge" }));
     expect(calls.some((c) => c.url.endsWith("/readers/t1/clear") && c.method === "POST")).toBe(true);
     expect(screen.queryByText(/already waiting/)).not.toBeInTheDocument();
+  });
+
+  it("the reader lost a same-moment race (409 in progress): it can be cleared too", async () => {
+    const u = userEvent.setup();
+    chargeReply = () => reply({ detail: "A charge is already in progress on this reader. Finish or cancel it first." }, 409);
+    render(<ReaderCharge orderId="o1" amount={40} onApproved={vi.fn()} onClose={vi.fn()} />);
+    await u.click(await screen.findByRole("button", { name: /to reader/ }));
+    expect(await screen.findByRole("button", { name: "Cancel the waiting charge" })).toBeInTheDocument();
+  });
+
+  it("sends an Idempotency-Key, reused when the same charge is retried after a failure", async () => {
+    const u = userEvent.setup();
+    chargeReply = () => reply({ detail: "Bad gateway" }, 502);
+    render(<ReaderCharge orderId="o1" amount={40} onApproved={vi.fn()} onClose={vi.fn()} />);
+    await u.click(await screen.findByRole("button", { name: /to reader/ }));
+    await screen.findByText(/Bad gateway/);
+    chargeReply = () => reply(charge("pending"));
+    await u.click(await screen.findByRole("button", { name: /to reader/ }));
+    expect(await screen.findByText("Waiting for card…")).toBeInTheDocument();
+    const sent = calls.filter((c) => c.url.endsWith("/terminal/charge"));
+    expect(sent).toHaveLength(2);
+    expect(sent[0].key).toBeTruthy();
+    expect(sent[1].key).toBe(sent[0].key);
   });
 });

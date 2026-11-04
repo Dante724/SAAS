@@ -12,14 +12,15 @@ import FinanceHub from "./FinanceHub";
 
 let posts: string[] = [];
 let bodies: unknown[] = [];
+let keys: (string | undefined)[] = [];
 let failPost = false;
 let runStatus = "draft";
 const reply = (status: number, body: unknown) => ({ ok: status < 400, status, statusText: "", headers: new Headers(), json: async () => body, text: async () => (typeof body === "string" ? body : JSON.stringify(body)) }) as Response;
 
 beforeEach(() => {
-  posts = []; bodies = []; failPost = false; runStatus = "draft";
+  posts = []; bodies = []; keys = []; failPost = false; runStatus = "draft";
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
-    if (init?.method === "POST") { posts.push(url); bodies.push(JSON.parse(String(init.body || "{}"))); return failPost ? reply(500, "boom") : reply(200, {}); }
+    if (init?.method === "POST") { posts.push(url); keys.push((init.headers as Record<string, string> | undefined)?.["Idempotency-Key"]); bodies.push(JSON.parse(String(init.body || "{}"))); return failPost ? reply(500, "boom") : reply(200, {}); }
     if (url.startsWith("/api/payroll/runs")) return reply(200, { items: [{ id: "r1", period_start: "2026-10-01", period_end: "2026-10-31", status: runStatus }] });
     if (url.startsWith("/api/cash/summary")) return reply(200, { accounts: [{ id: "a1", name: "Main till" }] });
     return reply(200, { items: [] });
@@ -51,6 +52,25 @@ describe("FinanceHub payroll", () => {
     await vi.waitFor(() => expect(posts).toEqual(["/api/payroll/runs/r1/pay"]));
     // the payout is taken out of a real account
     expect(bodies).toEqual([{ account_id: "a1" }]);
+  });
+
+  it("Mark paid sends an Idempotency-Key, reused when the same run's pay is retried", async () => {
+    const u = userEvent.setup();
+    failPost = true;
+    renderPayroll();
+    const pay = async () => {
+      await u.click(await screen.findByRole("button", { name: "Mark paid" }));
+      await screen.findByText(/Mark this payroll run as paid/);
+      await u.click(screen.getAllByRole("button", { name: "Mark paid" }).pop()!);
+    };
+    await pay();
+    await vi.waitFor(() => expect(posts).toHaveLength(1));
+    await u.click(await screen.findByRole("button", { name: "OK" }));       // "Could not mark paid"
+    failPost = false;
+    await pay();
+    await vi.waitFor(() => expect(posts).toHaveLength(2));
+    expect(keys[0]).toBeTruthy();
+    expect(keys[1]).toBe(keys[0]);
   });
 
   it("Void asks for a reason and posts it", async () => {
