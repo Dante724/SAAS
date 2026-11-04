@@ -1938,7 +1938,8 @@ async def recost_po(
     applied = expensed = 0.0
     scale = (delta_total / target) if target else 0
     for part_id, tpart in per_part_target.items():
-        part = (await db.execute(select(Part).where(Part.id == part_id))).scalar_one_or_none()
+        part = (await db.execute(select(Part).where(
+            Part.id == part_id, Part.org_id == current.org_id))).scalar_one_or_none()
         if not part:
             continue
         res = await stock_posting.apply_cost_adjustment(
@@ -2069,8 +2070,13 @@ async def receive_po(
             name = (await db.execute(select(Part.name).where(Part.id == pl.part_id))).scalar_one_or_none() or "a line"
             raise HTTPException(409, f"Receiving {recv:g} of {name}, but only {max(left, 0):g} "
                                      f"{'is' if left == 1 else 'are'} still to come on this order")
-        part = (await db.execute(select(Part).where(Part.id == pl.part_id))).scalar_one_or_none()
+        part = (await db.execute(select(Part).where(
+            Part.id == pl.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
         if not part:
+            if pl.part_id:
+                # A line pointing at a product this shop can't see (another shop's, from data
+                # written before the tenant guards): refuse rather than silently skip it.
+                raise HTTPException(404, "Referenced record not found")
             continue
         stock_rows.check_whole(part, recv)
         plan.append((pl, recv, part, rline))

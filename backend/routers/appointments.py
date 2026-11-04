@@ -74,7 +74,8 @@ async def create_appointment(
     start = await parse_wall_dt(db, current.org_id, current.location_id, data.scheduled_for, "scheduled_for")
     dur = data.duration_min
     if not dur and data.service_id:
-        svc = (await db.execute(select(Service).where(Service.id == data.service_id))).scalar_one_or_none()
+        svc = (await db.execute(select(Service).where(
+            Service.id == data.service_id, Service.org_id == current.org_id))).scalar_one_or_none()
         dur = getattr(svc, "duration_min", None) if svc else None
     dur = dur or 60
     end = start + timedelta(minutes=dur)

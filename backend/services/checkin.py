@@ -17,6 +17,7 @@ from fastapi import HTTPException
 from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.db.tenancy import set_tenant
 from backend.models import (
     Checkin,
     CheckinPoint,
@@ -73,6 +74,7 @@ async def point_by_token(db: AsyncSession, token: str) -> CheckinPoint:
     p = (await db.execute(select(CheckinPoint).where(CheckinPoint.token == token))).scalar_one_or_none()
     if not p or not p.active:
         raise HTTPException(410, "This code isn't used any more. Please ask at the counter.")
+    set_tenant(db, p.org_id)   # the rest of this public request only sees this point's shop
     return p
 
 

@@ -29,6 +29,7 @@ from sqlalchemy.orm import Mapped, Session, mapped_column, relationship, validat
 
 from backend.core.client_source import current_client
 from backend.db.database import Base
+from backend.db.tenancy import OrgScoped, OrgScopedLegacyNull  # read-side shop isolation
 from backend.db.secret_json import SecretFieldsJSON   # passcode-like custom fields, encrypted
 from backend.services.dates import now_utc
 
@@ -261,7 +262,7 @@ class Organisation(Base):
     locations: Mapped[list["Location"]] = relationship(back_populates="org")
     employees: Mapped[list["Employee"]] = relationship(back_populates="org")
 
-class Location(Base):
+class Location(OrgScoped, Base):
     __tablename__ = "locations"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
@@ -288,7 +289,7 @@ class Location(Base):
 # STAFF & AUTH
 # ─────────────────────────────────────────────
 
-class Role(Base):
+class Role(OrgScoped, Base):
     __tablename__ = "roles"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
@@ -330,7 +331,7 @@ class RolePermissionBackup(Base):
     created_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=now_utc)
 
 
-class EmployeeGroup(Base):
+class EmployeeGroup(OrgScoped, Base):
     """Build 83 — a named group of employees, separate from roles. Roles grant
     permissions; groups are used for assignment and notification targeting."""
     __tablename__ = "employee_groups"
@@ -340,7 +341,7 @@ class EmployeeGroup(Base):
     member_ids: Mapped[Optional[dict]] = mapped_column(JSON, default=list)  # employee ids
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
-class Employee(Base):
+class Employee(OrgScoped, Base):
     __tablename__ = "employees"
     # Sign-in emails are case-insensitive (migration ls144r3); the app stores them lowercase.
     __table_args__ = (Index("uq_employees_email_lower", text("lower(email)"), unique=True),)
@@ -421,7 +422,7 @@ class WageRecord(Base):
 # CLIENTS & DEVICES
 # ─────────────────────────────────────────────
 
-class Client(Base):
+class Client(OrgScoped, Base):
     __tablename__ = "clients"
     # Clients list: filter org_id, sort by name (clients had no org index before).
     __table_args__ = (Index("ix_clients_org_name", "org_id", "name"),)
@@ -480,7 +481,7 @@ class Client(Base):
     invoices: Mapped[list["Invoice"]] = relationship(back_populates="client", foreign_keys="Invoice.client_id")
     custom_data: Mapped[Optional[dict]] = mapped_column(SecretFieldsJSON, default=dict)  # values for org custom client fields
 
-class ClientPortalLink(Base):
+class ClientPortalLink(OrgScoped, Base):
     """A customer-portal magic link (/portal/{token}). Only the SHA-256 of the token is stored,
     and every link expires. A client can hold several (each message mints one); issuing a link
     from the client page replaces them all."""
@@ -493,7 +494,7 @@ class ClientPortalLink(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class Device(Base):
+class Device(OrgScopedLegacyNull, Base):
     __tablename__ = "devices"
     # Intake / scan look a device up by identifier within the shop (values stored normalized,
     # see services/identifiers.py).
@@ -553,7 +554,7 @@ class RevokedSession(Base):
     expires_at: Mapped[datetime] = mapped_column(DateTime, index=True)
 
 
-class AuthSession(Base):
+class AuthSession(OrgScoped, Base):
     """One sign-in on one device. The token carries its `sid`; this row is what the user sees under
     "Signed-in devices", what a sign-out revokes, and what the shop's device limit counts."""
     __tablename__ = "auth_sessions"
@@ -620,7 +621,7 @@ class OrderStatus(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     location: Mapped["Location"] = relationship(back_populates="order_statuses")
 
-class Order(Base):
+class Order(OrgScoped, Base):
     __tablename__ = "orders"
     # 144ej — order numbers are unique PER ORG, not globally (Orderry scopes
     # numbering to the account). Two tenants can each have their own "WO-00001".
@@ -768,7 +769,7 @@ class OrderLine(Base):
     bundle_std_price: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
 
 
-class OrderItem(Base):
+class OrderItem(OrgScoped, Base):
     """Several items per job (multi-asset). One row per item the customer left on this job.
 
     Tenant-scoped twice over: org_id on every row, and every read/write also matches order_id,
@@ -821,7 +822,7 @@ class OrderComment(Base):
 # INVENTORY
 # ─────────────────────────────────────────────
 
-class Bundle(Base):
+class Bundle(OrgScoped, Base):
     """A catalog kit: one pick that explodes into component services/products
     on the order, auto-deducting component stock (Orderry Bundles)."""
     __tablename__ = "bundles"
@@ -849,7 +850,7 @@ class BundleComponent(Base):
     device_variant: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
-class Appointment(Base):
+class Appointment(OrgScoped, Base):
     """An appointment: service duration drives the slot; an employee can't be
     double-booked for overlapping windows."""
     __tablename__ = "appointments"
@@ -880,7 +881,7 @@ class Appointment(Base):
     )
 
 
-class ChatThread(Base):
+class ChatThread(OrgScoped, Base):
     """One conversation with a contact on one channel. Auto-links to the CRM
     client by phone (most recent record wins). Transport is a simulated
     adapter until provider keys exist."""
@@ -919,7 +920,7 @@ class ChatMessage(Base):
     __table_args__ = (Index("uq_chat_messages_thread_external", "thread_id", "external_id", unique=True),)
 
 
-class Part(Base):
+class Part(OrgScoped, Base):
     __tablename__ = "parts"
     # Inventory list: filter org_id (parts had no org index before), sort by name.
     __table_args__ = (Index("ix_parts_org_name", "org_id", "name"),
@@ -982,7 +983,7 @@ class Part(Base):
     movements: Mapped[list["StockMovement"]] = relationship(back_populates="part")
 
 
-class Service(Base):
+class Service(OrgScoped, Base):
     """Services & Labors catalog — preset labor items with price + cost.
     Unlike Parts, services carry no stock; they are pure labor revenue."""
     __tablename__ = "services"
@@ -1009,7 +1010,7 @@ class Service(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class SavedFilter(Base):
+class SavedFilter(OrgScoped, Base):
     """A saved work-order filter combination. Private unless shared with all staff."""
     __tablename__ = "saved_filters"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -1021,7 +1022,7 @@ class SavedFilter(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class UserPref(Base):
+class UserPref(OrgScoped, Base):
     """Build 144ca — per-user UI preferences that follow the user across devices
     (e.g. list column layout + saved views). One row per (employee, key)."""
     __tablename__ = "user_prefs"
@@ -1051,7 +1052,7 @@ class AuthToken(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class Invite(Base):
+class Invite(OrgScoped, Base):
     """Build 144cc — a pending teammate invitation. An admin creates it with the
     new person's email + role; we email a link carrying a single-use token (only
     its hash is stored). Accepting it creates the Employee with a password the
@@ -1184,7 +1185,7 @@ for _sql in ADMIN_LOG_PG_TRIGGERS:
     event.listen(AdminActionLog.__table__, "after_create", DDL(_sql).execute_if(dialect="postgresql"))
 
 
-class AdminApprovalRequest(Base):
+class AdminApprovalRequest(OrgScoped, Base):
     """An action over someone's limit, waiting for the owner (e.g. a 30% discount)."""
     __tablename__ = "admin_approval_requests"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -1200,7 +1201,7 @@ class AdminApprovalRequest(Base):
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
-class AdminShopNote(Base):
+class AdminShopNote(OrgScoped, Base):
     """A note on a shop's admin timeline (call notes, emails sent, contact)."""
     __tablename__ = "admin_shop_notes"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -1211,7 +1212,7 @@ class AdminShopNote(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class AdminAssignmentLog(Base):
+class AdminAssignmentLog(OrgScoped, Base):
     """Who a shop was handed from and to (sales → account manager, someone leaving)."""
     __tablename__ = "admin_assignment_log"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -1247,7 +1248,7 @@ class BillingEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class Tax(Base):
+class Tax(OrgScoped, Base):
     """A named, reusable tax rate. Mode: included (price already contains it,
     extracted for reporting) or imposed (added on top, shown to customer)."""
     __tablename__ = "taxes"
@@ -1264,7 +1265,7 @@ class Tax(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
-class ProductBarcode(Base):
+class ProductBarcode(OrgScoped, Base):
     """ii144a — every barcode a product answers to. A product can have several (a supplier's EAN, a
     repackaged unit's UPC, the shop's own label). `is_main` mirrors `parts.barcode` and is kept in sync
     by services/product_codes.py on every flush; `active` mirrors the product's, so an archived product
@@ -1323,7 +1324,7 @@ class StockMovement(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     part: Mapped["Part"] = relationship(back_populates="movements")
 
-class TelephonyConfig(Base):
+class TelephonyConfig(OrgScoped, Base):
     """B7: per-org telephony/VoIP settings. Provider-agnostic; a simulated
     provider works with no external creds so the flow is usable out of the box."""
     __tablename__ = "telephony_config"
@@ -1337,7 +1338,7 @@ class TelephonyConfig(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
-class Tag(Base):
+class Tag(OrgScoped, Base):
     """B6: a reusable label attachable to contacts, orders, chats, etc."""
     __tablename__ = "tags"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -1351,7 +1352,7 @@ class Tag(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class Taggable(Base):
+class Taggable(OrgScoped, Base):
     """B6: join row — a tag applied to one entity (entity_type + entity_id)."""
     __tablename__ = "taggables"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -1362,7 +1363,7 @@ class Taggable(Base):
     __table_args__ = (UniqueConstraint("tag_id", "entity_type", "entity_id", name="uq_taggable"),)
 
 
-class Supplier(Base):
+class Supplier(OrgScoped, Base):
     __tablename__ = "suppliers"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
@@ -1378,7 +1379,7 @@ class Supplier(Base):
     client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"), index=True)
     purchase_orders: Mapped[list["PurchaseOrder"]] = relationship(back_populates="supplier")
 
-class PurchaseOrder(Base):
+class PurchaseOrder(OrgScopedLegacyNull, Base):
     __tablename__ = "purchase_orders"
     # PO numbers are per shop like order numbers (migration ls144r2): a global unique made the
     # second shop's first PO-00001 a 500.
@@ -1442,7 +1443,7 @@ class POLine(Base):
 # ─────────────────────────────────────────────
     reserved_order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"))  # Build 94
 
-class Invoice(Base):
+class Invoice(OrgScoped, Base):
     __tablename__ = "invoices"
     # Invoices list: filter org_id, sort created_at DESC. One invoice number per shop (migration
     # ls144r4; scripts/find_duplicate_invoice_numbers.py finds legacy clashes).
@@ -1488,7 +1489,7 @@ class Invoice(Base):
     lines: Mapped[list["InvoiceLine"]] = relationship(
         cascade="all, delete-orphan")  # 144ed: free-form invoice lines
 
-class DocumentSignature(Base):
+class DocumentSignature(OrgScoped, Base):
     """144ig — tamper-evident client e-signature on a document (estimate OR work order).
 
     Beyond Orderry's bare drawn scribble: we capture the typed name, the drawn image,
@@ -1514,7 +1515,7 @@ class DocumentSignature(Base):
     revision: Mapped[int] = mapped_column(Integer, default=1, server_default="1")  # E5: estimate version decided
 
 
-class EstimateRevision(Base):
+class EstimateRevision(OrgScoped, Base):
     """E5 — one earlier version of an estimate, kept when staff send a new one or the customer
     approves only some of its lines. The estimate itself always holds the latest version (what the
     customer sees); these rows are the history. ``lines`` is a snapshot: description, qty, unit
@@ -1585,7 +1586,7 @@ class CashShift(Base):
     payments: Mapped[list["Payment"]] = relationship(foreign_keys=[Payment.shift_id])
 
 
-class CashDrawerMovement(Base):
+class CashDrawerMovement(OrgScoped, Base):
     """144bc — a manual cash in/out during an open shift (petty cash, bank run, change top-up).
     Each carries a mandatory note so the drawer can be reconciled; feeds expected_cash."""
     __tablename__ = "cash_drawer_movements"
@@ -1599,7 +1600,7 @@ class CashDrawerMovement(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class ProcessorPayout(Base):
+class ProcessorPayout(OrgScoped, Base):
     """144bf — a card/online processor's deposit to the bank (Stripe/Square/SumUp or manual). The
     third reconciliation leg: card payments the shop took, minus fees, should equal what the
     processor actually deposited. A connector will populate this table later; for now it's entered
@@ -1617,7 +1618,7 @@ class ProcessorPayout(Base):
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
-class Expense(Base):
+class Expense(OrgScoped, Base):
     __tablename__ = "expenses"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
@@ -1631,7 +1632,7 @@ class Expense(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class Account(Base):
+class Account(OrgScoped, Base):
     """A cashbox/account. Holds a running balance. Its payment_option gates which
     payment methods appear at checkout. Company-scoped (all locations) or per-location."""
     __tablename__ = "accounts"
@@ -1653,7 +1654,7 @@ class Account(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class ConsentLog(Base):
+class ConsentLog(OrgScoped, Base):
     """Build 144cs — GDPR proof-of-consent trail. Every grant/withdrawal of a
     client's contact/marketing consent is recorded permanently with who + when
     + source, so the controller can demonstrate lawful basis (GDPR Art. 7(1))."""
@@ -1668,7 +1669,7 @@ class ConsentLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class Currency(Base):
+class Currency(OrgScoped, Base):
     """Build 144cr — an additional (non-base) currency the company works with.
     ``rate`` is units of the BASE currency per 1 unit of this currency
     (i.e. ``1 <code> = rate <base>``). Editing the rate appends a history row."""
@@ -1684,7 +1685,7 @@ class Currency(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class CurrencyRateHistory(Base):
+class CurrencyRateHistory(OrgScoped, Base):
     """Build 144cr — permanent audit trail of exchange-rate changes."""
     __tablename__ = "currency_rate_history"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -1695,7 +1696,7 @@ class CurrencyRateHistory(Base):
     changed_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class CashFlowItem(Base):
+class CashFlowItem(OrgScoped, Base):
     """A tag categorising a transaction (Sales, Rent, Payroll, Supplier payment…)."""
     __tablename__ = "cash_flow_items"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -1706,7 +1707,7 @@ class CashFlowItem(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
-class Transaction(Base):
+class Transaction(OrgScoped, Base):
     """A single money movement against an account. Types: income, expense,
     transfer (paired), invoice_payment, fee. The ledger that feeds all reports."""
     __tablename__ = "transactions"
@@ -1745,7 +1746,7 @@ class Transaction(Base):
 # TASKS & COMMS
 # ─────────────────────────────────────────────
 
-class Task(Base):
+class Task(OrgScoped, Base):
     __tablename__ = "tasks"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
@@ -1774,7 +1775,7 @@ class Task(Base):
     assigned_employee: Mapped[Optional["Employee"]] = relationship(back_populates="tasks", foreign_keys=[assigned_to_id])
     order: Mapped[Optional["Order"]] = relationship(back_populates="tasks")
 
-class NotificationTemplate(Base):
+class NotificationTemplate(OrgScoped, Base):
     __tablename__ = "notification_templates"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
@@ -1787,7 +1788,7 @@ class NotificationTemplate(Base):
     active: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
-class NotificationRule(Base):
+class NotificationRule(OrgScoped, Base):
     """Build 80 — an external-notification rule.
 
     Orderry configures notifications per module as *rules*, not just templates:
@@ -1820,7 +1821,7 @@ class NotificationRule(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class WorkOrderType(Base):
+class WorkOrderType(OrgScoped, Base):
     """A work-order template: Repair, Warranty, Rental, etc.
     Each type has its own set of custom fields and an initial status."""
     __tablename__ = "work_order_types"
@@ -1840,7 +1841,7 @@ class WorkOrderType(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class InsightCard(Base):
+class InsightCard(OrgScoped, Base):
     """Build 144ay — a saved Company Insights card (diagram or trend).
     Configuration only; the data is aggregated live on read."""
     __tablename__ = "insight_cards"
@@ -1856,7 +1857,7 @@ class InsightCard(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class CustomField(Base):
+class CustomField(OrgScoped, Base):
     """A configurable field. May belong to a work-order TYPE (type_id set)
     or to a generic entity (client/device) when type_id is null."""
     __tablename__ = "custom_fields"
@@ -1907,7 +1908,7 @@ class CustomField(Base):
     upsell_value: Mapped[Optional[str]] = mapped_column(String(200))       # match value (is/is_not)
     upsell_threshold: Mapped[Optional[float]] = mapped_column(Float)       # numeric (lt/gt)
 
-class FormLayout(Base):
+class FormLayout(OrgScoped, Base):
     """144da — Forms Editor system-field layout. One row per (org, entity, type_id).
     `data` holds the ordered system-field settings: [{key, visible, required, sort}].
     Entities: order|invoice|contact|product|vehicle. type_id only used for order."""
@@ -1919,7 +1920,7 @@ class FormLayout(Base):
     type_id: Mapped[Optional[str]] = mapped_column(String)  # work-order type (nullable); '' for none
     data: Mapped[Optional[list]] = mapped_column(JSON, default=list)
 
-class AuditLog(Base):
+class AuditLog(OrgScoped, Base):
     __tablename__ = "audit_log"
     __table_args__ = (Index("ix_audit_log_org_created", "org_id", "created_at"),)   # phase 4 perf: hot lookup path
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -1933,7 +1934,7 @@ class AuditLog(Base):
     client: Mapped[Optional[str]] = mapped_column(String(32), default=current_client)   # which app (core/client_source)
 
 
-class EventFeedItem(Base):
+class EventFeedItem(OrgScoped, Base):
     """Polymorphic event feed — attaches to a work order OR a client.
 
     item_type: comment | photo | signature | file | system
@@ -1957,7 +1958,7 @@ class EventFeedItem(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class Recommendation(Base):
+class Recommendation(OrgScoped, Base):
     """Build 144bd — upsell / recommended service or product on a work order.
 
     Anyone internal (role perm ``can_recommend``, default-allow) drafts an item;
@@ -2017,7 +2018,7 @@ class InvoiceLine(Base):
     total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
 
 
-class StatusTransition(Base):
+class StatusTransition(OrgScoped, Base):
     """Allowed status moves (from -> to), optionally restricted to a role."""
     __tablename__ = "status_transitions"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -2027,7 +2028,7 @@ class StatusTransition(Base):
     role_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("roles.id"))  # null = all roles
 
 
-class AssetMovement(Base):
+class AssetMovement(OrgScoped, Base):
     """Logs an asset moving between warehouses/zones, usually driven by a status change.
 
     Build 120: also used as the asset's lifecycle log — ``event_type`` distinguishes a
@@ -2050,7 +2051,7 @@ class AssetMovement(Base):
     moved_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class StockReservation(Base):
+class StockReservation(OrgScoped, Base):
     """Reserves stock for an order. Reserved qty is excluded from available."""
     __tablename__ = "stock_reservations"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -2065,7 +2066,7 @@ class StockReservation(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class Warehouse(Base):
+class Warehouse(OrgScoped, Base):
     """Build 84 — a warehouse is a first-class entity (Settings → Warehouses).
 
     Orderry separates two parallel worlds and Tekly now does the same:
@@ -2106,7 +2107,7 @@ class Warehouse(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class WarehouseAccess(Base):
+class WarehouseAccess(OrgScoped, Base):
     """Build 89 — per-employee, per-warehouse permissions. Overrides the role's
     warehouse scope: an employee may be allowed to post here but not write off."""
     __tablename__ = "warehouse_access"
@@ -2118,7 +2119,7 @@ class WarehouseAccess(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class StorageBin(Base):
+class StorageBin(OrgScoped, Base):
     """Bin-level (micro-location) storage within a warehouse (Orderry "bin locations").
     A warehouse divides into zones/shelves, and each bin is the smallest pick unit
     (e.g. A1, B2, C18H036). Bins carry a barcode for scan-based posting/stocktake."""
@@ -2147,7 +2148,7 @@ class StorageBin(Base):
 
 # ════════ Payroll & Commissions (Mandate 1) ════════
 
-class CommissionRule(Base):
+class CommissionRule(OrgScoped, Base):
     """A payroll commission rule. Triggers on an event and pays a flat amount or
     a percentage. Percentage basis can be the line total or the margin
     (price − moving-average cost). Optional category override + seniority
@@ -2177,7 +2178,7 @@ class CommissionRule(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class EmployeeCoefficient(Base):
+class EmployeeCoefficient(OrgScoped, Base):
     """Build 72 — per-employee seniority coefficient scoped to a product, service,
     or category, applied on top of exceptional commissions. Separate coefficients
     can apply in the work-order vs the sales context (Orderry)."""
@@ -2192,7 +2193,7 @@ class EmployeeCoefficient(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class WorkSchedule(Base):
+class WorkSchedule(OrgScoped, Base):
     """Build 73 — a planned entry on an employee's work calendar: a shift with
     start/end minutes-of-day, or a whole-day absence. Payroll runs off actual
     timesheets (TimeEntry); this is the plan the timesheet is compared against."""
@@ -2209,7 +2210,7 @@ class WorkSchedule(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class EmployeeBalanceLedger(Base):
+class EmployeeBalanceLedger(OrgScoped, Base):
     """Append-only ledger of every change to an employee's payroll balance.
     Positive = accrual (commission/bonus/base), negative = claw-back/penalty/payout.
     `idempotency_key` blocks the same accrual from posting twice (no double-dipping)."""
@@ -2249,7 +2250,7 @@ class EmployeeBalanceLedger(Base):
         return EmployeeBalanceLedger.normalize_key(value)
 
 
-class PayrollRun(Base):
+class PayrollRun(OrgScoped, Base):
     """A monthly payroll roll-up per employee: base salary for the period plus the
     sum of ledger commissions/bonuses/penalties, ending in a payout entry."""
     __tablename__ = "payroll_runs"
@@ -2278,7 +2279,7 @@ class PayrollRun(Base):
 
 # ════════ Serialized Inventory & Cost Layers (Mandate 2) ════════
 
-class StockItemBatch(Base):
+class StockItemBatch(OrgScoped, Base):
     """A distinct cost layer for a (part, warehouse[, bin]) — one row per intake at
     a given unit cost. FIFO/LIFO consume from these layers oldest/newest first."""
     __tablename__ = "stock_item_batches"
@@ -2297,7 +2298,7 @@ class StockItemBatch(Base):
     received_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
 
-class SerializedItem(Base):
+class SerializedItem(OrgScoped, Base):
     """A unique serialized unit of a product, tracked individually through its
     lifecycle, with a hard link to the batch cost layer it came in on."""
     __tablename__ = "serialized_items"
@@ -2326,7 +2327,7 @@ class SerializedItem(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class SerialEvent(Base):
+class SerialEvent(OrgScoped, Base):
     """ii144c — one line of a serialized unit's history (the unit passport): received, moved, used on
     a job, returned, sold, written off, counted… Written by services/serial_log.py where the unit's
     status or place changes; `ref_type`/`ref_id` point at the document that did it."""
@@ -2346,7 +2347,7 @@ class SerialEvent(Base):
     item: Mapped["SerializedItem"] = relationship()   # many-to-one only: orders the insert after a new unit
 
 
-class AssetProductConversion(Base):
+class AssetProductConversion(OrgScoped, Base):
     """Build 76 — an immutable conversion document.
 
     Records a serialized product unit becoming a tracked asset, or an asset becoming
@@ -2374,7 +2375,7 @@ class AssetProductConversion(Base):
     metadata_json: Mapped[Optional[dict]] = mapped_column(JSON, default=dict)
 
 
-class NotificationLog(Base):
+class NotificationLog(OrgScoped, Base):
     """Every notification the system rendered + attempted to deliver. This is the
     communication history shown on the order and the client profile."""
     __tablename__ = "notification_logs"
@@ -2401,7 +2402,7 @@ class NotificationLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
 
-class TimeEntry(Base):
+class TimeEntry(OrgScoped, Base):
     """A span of labor time, tracked against a work order (or non-job time when
     order_id is null). Rates are snapshotted at start so later raises don't
     rewrite history. At most one 'running' entry per employee at a time."""
@@ -2437,7 +2438,7 @@ class TimeEntry(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
-class TimeEntryAudit(Base):
+class TimeEntryAudit(OrgScoped, Base):
     """144ay — append-only edit history for a time entry. Makes the job clock usable as the
     system of record for payable hours (ADR 144ax → Option B): every edit/void/approve/reopen
     writes an immutable row of who changed what, old→new. Never updated or deleted."""
@@ -2459,7 +2460,7 @@ def _new_webhook_secret() -> str:
     return encrypt("whsec_" + secrets.token_urlsafe(32))
 
 
-class WebhookEndpoint(Base):
+class WebhookEndpoint(OrgScoped, Base):
     """A customer-registered URL that receives event callbacks.
 
     whh1: the signing secret is a `whsec_` token stored encrypted (services.crypto) and shown only
@@ -2485,7 +2486,7 @@ class WebhookEndpoint(Base):
     deleted_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
-class WebhookDelivery(Base):
+class WebhookDelivery(OrgScoped, Base):
     """One attempt to deliver one event to one endpoint (the delivery log)."""
     __tablename__ = "webhook_deliveries"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -2506,7 +2507,7 @@ class WebhookDelivery(Base):
     claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
-class Lead(Base):
+class Lead(OrgScoped, Base):
     """An inquiry — the pre-order pipeline (Orderry Inquiries/Lead Funnel).
     Each lead carries a response-time SLA; "won" converts into a work order,
     creating the client on the fly if the contact isn't in CRM yet."""
@@ -2542,7 +2543,7 @@ class Lead(Base):
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
-class CheckinPoint(Base):
+class CheckinPoint(OrgScoped, Base):
     """Self check-in: a place where customers arrive (front door, key box, dock, counter
     tablet). A location can have several; each has its own unguessable QR token, which is
     all the public page ever sees — the server works out the shop and location from it."""
@@ -2570,7 +2571,7 @@ class CheckinPoint(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class Checkin(Base):
+class Checkin(OrgScoped, Base):
     """One customer's self check-in. The inquiry (Lead, source walk_in) is the record staff
     work with; this row keeps what only a check-in has: the queue number, the scanned
     identifier, the reading, the answers against the form as it was, the signature."""
@@ -2611,7 +2612,7 @@ class Checkin(Base):
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
-class LeadType(Base):
+class LeadType(OrgScoped, Base):
     """WS-C — an inquiry type (Repair, Sale, Consultation…) with its own respond-by time."""
     __tablename__ = "lead_types"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -2623,7 +2624,7 @@ class LeadType(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class PriceType(Base):
+class PriceType(OrgScoped, Base):
     """A named markup over cost price (Orderry Settings > Prices and discounts).
     Computed price = cost basis x (1 + markup_pct/100). Products use avg_cost
     (falling back to cost_price); services use their cost_price. Selectable on
@@ -2644,7 +2645,7 @@ class PriceType(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class Sale(Base):
+class Sale(OrgScoped, Base):
     """Over-the-counter sale (Orderry Sales page): services + products sold
     without a work order. One warehouse per sale; estimated profit = total − cost."""
     __tablename__ = "sales"
@@ -2689,7 +2690,7 @@ class SaleLine(Base):
     stock_draws: Mapped[Optional[dict]] = mapped_column(JSON)
 
 
-class Stocktake(Base):
+class Stocktake(OrgScoped, Base):
     """Guided count: snapshot system qty → enter counted → post one adjustment."""
     __tablename__ = "stocktakes"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -2737,7 +2738,7 @@ class StocktakeSerial(Base):
     serialized_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("serialized_items.id", ondelete="SET NULL"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
-class ClientReturn(Base):
+class ClientReturn(OrgScoped, Base):
     """Goods coming back from a client (separate from the money refund)."""
     __tablename__ = "client_returns"
     # Lists page newest-first inside one shop (audit 29 Oct 2026).
@@ -2767,7 +2768,7 @@ class ClientReturnLine(Base):
     restock: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
-class Refund(Base):
+class Refund(OrgScoped, Base):
     """Money going back to a client (separate from the goods return)."""
     __tablename__ = "refunds"
     # Lists page newest-first inside one shop (audit 29 Oct 2026).
@@ -2787,7 +2788,7 @@ class Refund(Base):
     void_reason: Mapped[Optional[str]] = mapped_column(String(300))
 
 
-class StockTransfer(Base):
+class StockTransfer(OrgScoped, Base):
     """Inter-branch transfer with transit statuses (Orderry Mar-2026):
     draft -> ready (reserves at source) -> in_transit (stock held on the transfer)
     -> received (arrived, verify) -> completed (lands at destination).
@@ -2824,7 +2825,7 @@ class StockTransferLine(Base):
     serial_ids: Mapped[Optional[list]] = mapped_column(JSON)
     received_serial_ids: Mapped[Optional[list]] = mapped_column(JSON)   # the ones that arrived (short delivery)
 
-class FeedbackSettings(Base):
+class FeedbackSettings(OrgScoped, Base):
     """Per-org feedback config: which rating system + per-band answer messages.
     bands is a JSON list like [{"min":1,"max":3,"message":"..."}]."""
     __tablename__ = "feedback_settings"
@@ -2843,7 +2844,7 @@ class FeedbackSettings(Base):
     google_review_url: Mapped[Optional[str]] = mapped_column(String(400))
 
 
-class Feedback(Base):
+class Feedback(OrgScoped, Base):
     """A submitted customer rating for an order."""
     __tablename__ = "feedback"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -2860,7 +2861,7 @@ class Feedback(Base):
 
 # ════════ Phase F — Documents, Templates & Barcodes ════════
 
-class DocumentTemplate(Base):
+class DocumentTemplate(OrgScoped, Base):
     """A print/PDF template with {variables}. doc_type groups it (Orderry families)."""
     __tablename__ = "document_templates"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -2885,7 +2886,7 @@ class DocumentTemplate(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class GeneratedDocument(Base):
+class GeneratedDocument(OrgScoped, Base):
     """A rendered document instance attached to an order."""
     __tablename__ = "generated_documents"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -2899,7 +2900,7 @@ class GeneratedDocument(Base):
 
 # ════════ Phase G — Location Resources (bays/rooms/equipment) ════════
 
-class Resource(Base):
+class Resource(OrgScoped, Base):
     """A schedulable location resource (bay, room, machine) — Orderry 'By resource'."""
     __tablename__ = "resources"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -2913,7 +2914,7 @@ class Resource(Base):
 
 
 # Import trigger for init_db
-class ApiKey(Base):
+class ApiKey(OrgScoped, Base):
     """A token for the public REST API (Phase 2B). The plaintext key is shown
     once at creation; only its sha256 hash is stored."""
     __tablename__ = "api_keys"
@@ -2936,7 +2937,7 @@ class ApiKey(Base):
     rotated_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
-class PaymentIntent(Base):
+class PaymentIntent(OrgScoped, Base):
     """A payment being collected through an external gateway (Phase 2A). Tracks
     the checkout/charge lifecycle and, on success, links to the reconciled Payment."""
     __tablename__ = "payment_intents"
@@ -2959,7 +2960,7 @@ class PaymentIntent(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
-class QboConnection(Base):
+class QboConnection(OrgScoped, Base):
     """QuickBooks Online OAuth connection state for an org (Phase 2C)."""
     __tablename__ = "qbo_connections"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -2975,7 +2976,7 @@ class QboConnection(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
-class IntegrationMapping(Base):
+class IntegrationMapping(OrgScoped, Base):
     """Maps a local record to its counterpart id in an external system (Phase 2C)."""
     __tablename__ = "integration_mappings"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -2987,7 +2988,7 @@ class IntegrationMapping(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class IntegrationSyncLog(Base):
+class IntegrationSyncLog(OrgScoped, Base):
     """One sync attempt for one record (Phase 2C). The audit trail of the sync."""
     __tablename__ = "integration_sync_logs"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -3002,7 +3003,7 @@ class IntegrationSyncLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
 
-class Category(Base):
+class Category(OrgScoped, Base):
     """A shared, hierarchical category tree reused across products, services and
     bundles (Orderry keeps a tree per catalog type with an 'All ...' root).
     entity_type scopes the tree; parent_id builds the hierarchy."""
@@ -3018,7 +3019,7 @@ class Category(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class StaffNotification(Base):
+class StaffNotification(OrgScoped, Base):
     """Per-employee in-app notification (powers the technician unread count and
     the push payload). Created by services.push.notify()."""
     __tablename__ = "staff_notifications"
@@ -3035,7 +3036,7 @@ class StaffNotification(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
 
-class PushSubscription(Base):
+class PushSubscription(OrgScoped, Base):
     """A Web Push (browser) subscription for one employee's device."""
     __tablename__ = "push_subscriptions"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -3049,7 +3050,7 @@ class PushSubscription(Base):
     last_used_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
-class ChecklistTemplate(Base):
+class ChecklistTemplate(OrgScoped, Base):
     """A reusable checklist (Build 144dp: Orderry-style Template → Steps →
     Sections → typed Fields). `scope` = all|selected; when 'selected', the
     applicable order types are listed in `type_ids` (JSON). `type_id` is kept for
@@ -3068,7 +3069,7 @@ class ChecklistTemplate(Base):
     auto_status_keys: Mapped[Optional[list]] = mapped_column(JSON)
 
 
-class ChecklistStep(Base):
+class ChecklistStep(OrgScoped, Base):
     """A stage of a checklist template (e.g. Receipt → Diagnostics → Handover)."""
     __tablename__ = "checklist_steps"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -3079,7 +3080,7 @@ class ChecklistStep(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
 
-class ChecklistSection(Base):
+class ChecklistSection(OrgScoped, Base):
     """Groups fields by topic within a step. `allow_notes` lets staff add a free
     comment/photo where there is no dedicated field."""
     __tablename__ = "checklist_sections"
@@ -3091,7 +3092,7 @@ class ChecklistSection(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
 
-class ChecklistTemplateItem(Base):
+class ChecklistTemplateItem(OrgScoped, Base):
     """A typed field inside a section. `field_kind` drives the response control;
     `options` (JSON) holds choices for dropdown/multiselect."""
     __tablename__ = "checklist_template_items"
@@ -3117,7 +3118,7 @@ class ChecklistTemplateItem(Base):
     upsell_comparator: Mapped[Optional[str]] = mapped_column(String(4))    # lt | gt | fail
 
 
-class OrderChecklist(Base):
+class OrderChecklist(OrgScoped, Base):
     """One template instantiated onto a work order. Header for its answers; a job
     can carry several (diagnostic, QA, handover). Snapshot — later template edits
     never touch it."""
@@ -3134,7 +3135,7 @@ class OrderChecklist(Base):
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
-class OrderChecklistItem(Base):
+class OrderChecklistItem(OrgScoped, Base):
     """A field instantiated onto one work-order checklist (snapshot, so editing a
     template never mutates a job's history). `value` holds the typed answer as
     JSON; `file_ids` references uploaded media."""
@@ -3166,7 +3167,7 @@ class OrderChecklistItem(Base):
     upsell_comparator: Mapped[Optional[str]] = mapped_column(String(4))
 
 
-class NotificationPreference(Base):
+class NotificationPreference(OrgScoped, Base):
     """Per-employee push/notification opt-out by kind. Absence of a row means
     enabled (notifications are on by default)."""
     __tablename__ = "notification_preferences"
@@ -3178,7 +3179,7 @@ class NotificationPreference(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
-class GiftCard(Base):
+class GiftCard(OrgScoped, Base):
     __tablename__ = "gift_cards"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
@@ -3191,7 +3192,7 @@ class GiftCard(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class GiftCardLedger(Base):
+class GiftCardLedger(OrgScoped, Base):
     """Every load (+) and redemption (−); balance is always derivable."""
     __tablename__ = "gift_card_ledger"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -3204,7 +3205,7 @@ class GiftCardLedger(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class Coupon(Base):
+class Coupon(OrgScoped, Base):
     __tablename__ = "coupons"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
@@ -3223,7 +3224,7 @@ class Coupon(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class LoyaltyLedger(Base):
+class LoyaltyLedger(OrgScoped, Base):
     """Per-client points: + earn on paid invoices, − burn at redemption."""
     __tablename__ = "loyalty_ledger"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -3237,7 +3238,7 @@ class LoyaltyLedger(Base):
 
 
 # ── Phase 1: numbering engine + legal entities ──────────────────────────────
-class NumberSequence(Base):
+class NumberSequence(OrgScoped, Base):
     """A per-scope document counter driven by a token template
     ({D}{M}{Y}{C:n}). scope_key: 'org' | 'loc:{id}' | 'entity:{id}'."""
     __tablename__ = "number_sequences"
@@ -3251,7 +3252,7 @@ class NumberSequence(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
-class LegalEntity(Base):
+class LegalEntity(OrgScoped, Base):
     """A billing entity used to issue invoices with its own details + numbering."""
     __tablename__ = "legal_entities"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -3274,7 +3275,7 @@ class LegalEntity(Base):
 
 
 # ── Phase 2: tax engine depth ───────────────────────────────────────────────
-class TaxGroup(Base):
+class TaxGroup(OrgScoped, Base):
     __tablename__ = "tax_groups"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
@@ -3283,7 +3284,7 @@ class TaxGroup(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class TaxRule(Base):
+class TaxRule(OrgScoped, Base):
     """Ordered default tax stack per document family. Lower priority = applied
     first / highest precedence (Orderry: 'first tax has the highest priority')."""
     __tablename__ = "tax_rules"
@@ -3294,7 +3295,7 @@ class TaxRule(Base):
     priority: Mapped[int] = mapped_column(Integer, default=0)
 
 
-class TaxStackBackfillLog(Base):
+class TaxStackBackfillLog(OrgScoped, Base):
     """Migration taxbf01: one row per shop whose job tax stack was set to its default tax, with
     the stack it had before, so the migration's downgrade can put it back."""
     __tablename__ = "tax_stack_backfill_log"
@@ -3305,7 +3306,7 @@ class TaxStackBackfillLog(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, nullable=False)
 
 
-class TaxException(Base):
+class TaxException(OrgScoped, Base):
     """Override the default stack for a specific labor/service/product/category."""
     __tablename__ = "tax_exceptions"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -3320,7 +3321,7 @@ class TaxException(Base):
 
 
 
-class PriceTypeItem(Base):
+class PriceTypeItem(OrgScoped, Base):
     """Explicit price for a catalog item within a price type; overrides the
     cost x markup derivation when present."""
     __tablename__ = "price_type_items"
@@ -3333,7 +3334,7 @@ class PriceTypeItem(Base):
     price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
 
 
-class PriceTypeTier(Base):
+class PriceTypeTier(OrgScoped, Base):
     """144he — quantity break: at or above min_qty, this price type uses tier_markup_pct
     instead of its base markup. Highest matching min_qty wins."""
     __tablename__ = "price_type_tiers"
@@ -3345,7 +3346,7 @@ class PriceTypeTier(Base):
 
 
 
-class Directory(Base):
+class Directory(OrgScoped, Base):
     """A named, org-customizable reference list (asset types, manufacturers,
     cancel reasons, lead sources...) that feeds dropdowns app-wide. `key` is a
     stable slug; some directories are system-seeded and cannot be deleted."""
@@ -3359,7 +3360,7 @@ class Directory(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class DirectoryItem(Base):
+class DirectoryItem(OrgScoped, Base):
     __tablename__ = "directory_items"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
@@ -3383,7 +3384,7 @@ class DirectoryItem(Base):
 # in backend/services/industry.py; these tables hold the org-editable data.
 # ─────────────────────────────────────────────
 
-class AssetGroup(Base):
+class AssetGroup(OrgScoped, Base):
     """A per-template asset category (e.g. Phone/Tablet for mobile, Car/Truck for
     auto, Boat/Trailer for marine). Scoped by org + template_key."""
     __tablename__ = "asset_groups"
@@ -3399,7 +3400,7 @@ class AssetGroup(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class AssetBrand(Base):
+class AssetBrand(OrgScoped, Base):
     """A brand within a template (optionally narrowed to one asset group). Two
     rows named the same under different templates are intentionally distinct."""
     __tablename__ = "asset_brands"
@@ -3423,7 +3424,7 @@ class AssetBrand(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class AssetModel(Base):
+class AssetModel(OrgScoped, Base):
     """A model under a brand, within a template (and optionally a group)."""
     __tablename__ = "asset_models"
     __table_args__ = (UniqueConstraint("org_id", "template_key", "brand_id", "name",
@@ -3442,7 +3443,7 @@ class AssetModel(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class AssetIdentifierRule(Base):
+class AssetIdentifierRule(OrgScoped, Base):
     """Which identifier kind is primary (and which are allowed) for a template,
     optionally overridden per asset group. Drives template-aware scanning so a
     phone never shows VIN and a car never shows IMEI. asset_group_id null = the
@@ -3458,7 +3459,7 @@ class AssetIdentifierRule(Base):
     allowed_kinds: Mapped[Optional[list]] = mapped_column(JSON, default=list)
     is_system: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
-class XeroConnection(Base):
+class XeroConnection(OrgScoped, Base):
     """QuickBooks Online OAuth connection state for an org (Phase 2C)."""
     __tablename__ = "xero_connections"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -3474,7 +3475,7 @@ class XeroConnection(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
-class MediaBlob(Base):
+class MediaBlob(OrgScoped, Base):
     """B3: an offloaded media object. The row holds metadata + a storage key;
     the bytes live in the configured backend (local FS or S3), not the DB.
     When MEDIA_BACKEND=db (legacy), `inline_data` still holds the payload so
@@ -3492,7 +3493,7 @@ class MediaBlob(Base):
 
 
 
-class EmailConnection(Base):
+class EmailConnection(OrgScoped, Base):
     """A6: per-org OAuth email account (Gmail/Outlook) for sending notifications
     from the shop's own address. Gated like every provider — inert until
     connected. Tokens are stored for the send path; refresh handled at send time."""
@@ -3512,7 +3513,7 @@ class EmailConnection(Base):
 
 
 
-class Call(Base):
+class Call(OrgScoped, Base):
     """A7 — a VoIP call record (inbound/outbound), linked to a client if matched.
     Populated by the provider webhook; the provider itself is a gated seam."""
     __tablename__ = "calls"
@@ -3541,7 +3542,7 @@ class Call(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class Campaign(Base):
+class Campaign(OrgScoped, Base):
     """A7 — a marketing campaign (SMS/email blast to a client segment)."""
     __tablename__ = "campaigns"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -3557,7 +3558,7 @@ class Campaign(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class SsoConnection(Base):
+class SsoConnection(OrgScoped, Base):
     """SSO groundwork — per-org identity provider config (SAML/OIDC). Metadata
     only; the actual assertion/token exchange is a gated seam (needs an IdP)."""
     __tablename__ = "sso_connections"
@@ -3574,7 +3575,7 @@ class SsoConnection(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class AutomationRule(Base):
+class AutomationRule(OrgScoped, Base):
     """Build 144w — workflow automation: WHEN an event happens (and optional
     conditions match) THEN run an action beyond messaging.
 
@@ -3630,7 +3631,7 @@ all_models = [
 ]
 
 
-class PurchaseReturn(Base):
+class PurchaseReturn(OrgScoped, Base):
     """Build 87 — a return-to-supplier document.
 
     The mirror image of a posting: stock leaves the warehouse and the money owed to
@@ -3665,7 +3666,7 @@ class PurchaseReturnLine(Base):
     total: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
 
 
-class WriteOff(Base):
+class WriteOff(OrgScoped, Base):
     """Build 88 — a write-off document.
 
     Previously a write-off was a fire-and-forget stock movement, so it could never be
@@ -3701,7 +3702,7 @@ class WriteOffLine(Base):
     comment_public: Mapped[bool] = mapped_column(Boolean, default=False)
 
 
-class Posting(Base):
+class Posting(OrgScoped, Base):
     """Build 93 — a stock posting (goods-in) as an editable document.
 
     Postings were a fire-and-forget bulk inflow, so a mistyped purchase price was
@@ -3740,7 +3741,7 @@ class PostingLine(Base):
     total: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
 
 
-class LabelTemplate(Base):
+class LabelTemplate(OrgScoped, Base):
     """Build 95 — a printable label or price tag.
 
     `fields` is the ordered list of things to show (name, sku, price, barcode…), so one
@@ -3764,7 +3765,7 @@ class LabelTemplate(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class AutomationSetting(Base):
+class AutomationSetting(OrgScoped, Base):
     """Build 97 — a per-org automation toggle with a small JSON config.
 
     Keyed by name (`task_on_missed_call`, …) so new automations don't each need a column.
@@ -3780,7 +3781,7 @@ class AutomationSetting(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
-class InboxThread(Base):
+class InboxThread(OrgScoped, Base):
     """Build 104 — one conversation with one customer, across whatever channel it
     arrived on. The unified inbox exists so the front desk stops tab-hopping between
     WhatsApp, SMS, social DMs and email: every message lands in one stream keyed by
@@ -3802,7 +3803,7 @@ class InboxThread(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class InboxMessage(Base):
+class InboxMessage(OrgScoped, Base):
     """Build 104 — a single message within a thread."""
     __tablename__ = "inbox_messages"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -3817,7 +3818,7 @@ class InboxMessage(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
 
-class EmailAccount(Base):
+class EmailAccount(OrgScoped, Base):
     """Build 106 — one of up to N connected sending mailboxes for the org, with a
     per-account allow-list of who may send from it. Multi-account email with sender
     permissions keeps a personal inbox from becoming a shared free-for-all.
@@ -3834,7 +3835,7 @@ class EmailAccount(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class EcommerceIntegration(Base):
+class EcommerceIntegration(OrgScoped, Base):
     """Build 107 — a connected online store. Product and order sync run against this
     record; credentials are referenced, never stored in the clear here.
     """
@@ -3853,7 +3854,7 @@ class EcommerceIntegration(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class EcommerceOrderMap(Base):
+class EcommerceOrderMap(OrgScoped, Base):
     """Build 107 — maps an external store order to a Tekly order, so re-syncing the
     same store order updates rather than duplicates."""
     __tablename__ = "ecommerce_order_maps"
@@ -3866,7 +3867,7 @@ class EcommerceOrderMap(Base):
     synced_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class ApprovalRequest(Base):
+class ApprovalRequest(OrgScoped, Base):
     """Build 108 — a pending approval for an action that exceeds a role's authority,
     e.g. a refund above the refund ceiling. Rather than a blunt allow/deny permission,
     a sensitive action can be *requested* and an authorised employee approves or rejects
@@ -3887,7 +3888,7 @@ class ApprovalRequest(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
 
-class ClientLedgerEntry(Base):
+class ClientLedgerEntry(OrgScoped, Base):
     """Build 116 — append-only movements on a contact's balance.
 
     Every advance (client pays money in), payout (we return money), invoice charge, and
@@ -3908,7 +3909,7 @@ class ClientLedgerEntry(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
 
-class MergeLog(Base):
+class MergeLog(OrgScoped, Base):
     """Build 144aj — one record per contact merge, enough to reverse it.
 
     A merge hard-deletes the source contacts after re-pointing their history at the target.
@@ -3928,7 +3929,7 @@ class MergeLog(Base):
     undone_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
-class MessageTemplate(Base):
+class MessageTemplate(OrgScoped, Base):
     """Build 143 — a reusable message snippet the front desk inserts into a reply
     (Phase 4: templates + snippet insertion). Org-scoped, per channel."""
     __tablename__ = "message_templates"
@@ -3940,7 +3941,7 @@ class MessageTemplate(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class OrgIntegrationCredential(Base):
+class OrgIntegrationCredential(OrgScoped, Base):
     """Per-org (per-shop) provider credentials for the multi-tenant integrations.
 
     This is what makes the keyed connectors (Stripe/Square/SumUp, Twilio, SMTP,
@@ -3960,7 +3961,7 @@ class OrgIntegrationCredential(Base):
     __table_args__ = (UniqueConstraint("org_id", "provider", name="uq_org_integration_cred"),)
 
 
-class CustomReport(Base):
+class CustomReport(OrgScoped, Base):
     """A user-defined report (custom report builder). `config` is a JSON spec —
     {source, columns, filters, group_by, aggregate, sort} — validated server-side
     against a strict whitelist before it ever touches the DB. Org-scoped."""
@@ -3974,7 +3975,7 @@ class CustomReport(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
-class CreditNote(Base):
+class CreditNote(OrgScoped, Base):
     """opb — a credit note: money the shop owes back to a client, as a numbered, locked document.
 
     draft → issued (locked, numbered via services/numbering doc_type "credit_note") → canceled.
@@ -4022,7 +4023,7 @@ class CreditNoteLine(Base):
     total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
 
 
-class PaymentTerminal(Base):
+class PaymentTerminal(OrgScoped, Base):
     """F2/F3 — a card reader the shop charges from (server-driven). provider is stripe|square, or
     simulated (local development only). reader_id is Stripe's tmr_… or Square's device id."""
     __tablename__ = "payment_terminals"
@@ -4044,7 +4045,7 @@ class PaymentTerminal(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class TerminalCharge(Base):
+class TerminalCharge(OrgScoped, Base):
     """One attempt to take money on a reader, for a work order or a counter sale. Settled exactly
     once (webhook or status poll) into the cash system; payment_id links the recorded Payment."""
     __tablename__ = "terminal_charges"
@@ -4068,7 +4069,7 @@ class TerminalCharge(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
-class PaymentWebhookEvent(Base):
+class PaymentWebhookEvent(OrgScoped, Base):
     """Provider webhook events already applied (Stripe evt_…, Square event_id): a redelivery is
     acknowledged without being applied twice."""
     __tablename__ = "payment_webhook_events"
@@ -4080,7 +4081,7 @@ class PaymentWebhookEvent(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class ImportBatch(Base):
+class ImportBatch(OrgScoped, Base):
     """One committed spreadsheet import (Products, Services, Clients, Assets, Suppliers): who,
     which file, the counts, and what the undo needs — ids created, field values before an update,
     stock posted. `undone_at` is set once it has been rolled back."""
@@ -4099,7 +4100,7 @@ class ImportBatch(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class ImportMapping(Base):
+class ImportMapping(OrgScoped, Base):
     """A remembered column mapping {sheet header: field} per list, and per supplier for
     postings / purchase orders (supplier_id NULL = the list's own default)."""
     __tablename__ = "import_mappings"
@@ -4112,7 +4113,7 @@ class ImportMapping(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
-class IdempotencyRecord(Base):
+class IdempotencyRecord(OrgScoped, Base):
     """One row per client-chosen Idempotency-Key, so a create or a payment that is retried
     (double tap, a timeout on a phone's flaky connection) runs once and the retry gets the
     first answer back. `response` is null while the first request is still in flight.
@@ -4127,7 +4128,7 @@ class IdempotencyRecord(Base):
     __table_args__ = (UniqueConstraint("org_id", "key", name="uq_idempotency_org_key"),)
 
 
-class MessageHandoff(Base):
+class MessageHandoff(OrgScoped, Base):
     """A text or WhatsApp a staff member opened on their own phone from Tekly Go. Tekly fills in
     the message; the phone's own SMS/WhatsApp app sends it after the person taps Send, so Tekly
     can't know it was delivered, only what the person told us when they came back ("Sent?").
@@ -4148,7 +4149,7 @@ class MessageHandoff(Base):
     resolved_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
 
 
-class ApiIdempotencyKey(Base):
+class ApiIdempotencyKey(OrgScoped, Base):
     """apih1: a public-API write sent with an Idempotency-Key header. The same key with the same
     body replays the stored response; with a different body it is refused. Kept for 24 hours.
     status_code is None while the first request is still running."""
@@ -4167,7 +4168,7 @@ class ApiIdempotencyKey(Base):
 
 # ── Memberships (docs/SPEC_memberships.md) ───────────────────────────────────────────────────────
 
-class MembershipPlan(Base):
+class MembershipPlan(OrgScoped, Base):
     """What a shop sells: a list of included items, priced monthly and/or yearly."""
     __tablename__ = "membership_plans"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -4189,7 +4190,7 @@ class MembershipPlan(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
-class MembershipPlanItem(Base):
+class MembershipPlanItem(OrgScoped, Base):
     """One included item: a catalog service with a count per plan year, a discount, or a perk."""
     __tablename__ = "membership_plan_items"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -4207,7 +4208,7 @@ class MembershipPlanItem(Base):
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
 
 
-class Membership(Base):
+class Membership(OrgScoped, Base):
     """One plan on one asset, paid by one client."""
     __tablename__ = "memberships"
     __table_args__ = (Index("ix_memberships_org_status_end", "org_id", "status", "period_end"),)
@@ -4233,7 +4234,7 @@ class Membership(Base):
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
 
-class MembershipAsset(Base):
+class MembershipAsset(OrgScoped, Base):
     """The assets a membership covers. Phase 1 writes one row; fleet plans will write several."""
     __tablename__ = "membership_assets"
     __table_args__ = (UniqueConstraint("membership_id", "device_id", name="uq_membership_asset"),)
@@ -4243,7 +4244,7 @@ class MembershipAsset(Base):
     device_id: Mapped[str] = mapped_column(String, ForeignKey("devices.id"), index=True)
 
 
-class MembershipPeriod(Base):
+class MembershipPeriod(OrgScoped, Base):
     """One billing period and what charges it: a plan invoice, or the work order it was sold on."""
     __tablename__ = "membership_periods"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
@@ -4260,7 +4261,7 @@ class MembershipPeriod(Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class MembershipUsage(Base):
+class MembershipUsage(OrgScoped, Base):
     """An included item used on a work order, at the list price that was waived."""
     __tablename__ = "membership_usage"
     __table_args__ = (UniqueConstraint("order_line_id", name="uq_membership_usage_line"),)

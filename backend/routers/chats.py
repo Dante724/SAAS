@@ -266,6 +266,7 @@ async def twilio_inbound(request: Request, db: AsyncSession = Depends(get_db),
     require_signature(secrets, verified, "Twilio", status=403)
     if secrets:
         await _check_twilio_tenant(db, org_id, form, presented, urls, params)
+    db.sync_session.info["tenant_org"] = org_id   # verified for this shop: scope the rest of the request
     twiml = Response(content="<?xml version='1.0' encoding='UTF-8'?><Response></Response>",
                      media_type="application/xml")
     raw_from = (form.get("From") or "").strip()
@@ -346,6 +347,7 @@ async def meta_inbound(org_id: str, request: Request, db: AsyncSession = Depends
         # than trust a delivery that could belong to any shop.
         raise HTTPException(403, "Register this shop's Meta Page / Instagram / WhatsApp ids first")
     require_signature(secrets, verified, "Meta", status=403)
+    db.sync_session.info["tenant_org"] = org_id   # verified for this shop: scope the rest of the request
     try:
         payload = json.loads(raw.decode() or "{}")
     except Exception:  # noqa: BLE001 — a malformed body ingests nothing

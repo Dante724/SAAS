@@ -116,6 +116,7 @@ async def _by_status(db: AsyncSession, status_token: str) -> Checkin:
     c = (await db.execute(select(Checkin).where(Checkin.status_token == status_token))).scalar_one_or_none()
     if not c:
         raise HTTPException(404, "Check-in not found")
+    svc.set_tenant(db, c.org_id)   # the rest of this public request only sees this check-in's shop
     return c
 
 

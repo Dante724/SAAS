@@ -9,6 +9,7 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
+from backend.db.tenancy import set_tenant
 from backend.services.dates import parse_date
 from backend.models import Feedback, FeedbackSettings, Order
 from backend.services.auth import get_current_employee, Employee, require_perm
@@ -115,6 +116,7 @@ async def public_form(token: str, db: AsyncSession = Depends(get_db)):
     fb = (await db.execute(select(Feedback).where(Feedback.token == token))).scalar_one_or_none()
     if not fb:
         raise HTTPException(404, "Feedback link not found")
+    set_tenant(db, fb.org_id)   # the rest of this public request only sees this shop
     s = (await db.execute(select(FeedbackSettings).where(FeedbackSettings.org_id == fb.org_id))).scalar_one_or_none()
     return {
         "system": fb.system,
@@ -154,6 +156,7 @@ async def submit_feedback(token: str, data: SubmitIn, db: AsyncSession = Depends
     fb = (await db.execute(select(Feedback).where(Feedback.token == token))).scalar_one_or_none()
     if not fb:
         raise HTTPException(404, "Feedback link not found")
+    set_tenant(db, fb.org_id)   # the rest of this public request only sees this shop
     if fb.submitted_at:
         raise HTTPException(409, "Feedback already submitted")
     fb.rating = data.rating
