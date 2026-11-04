@@ -16,7 +16,7 @@ This file records only what was actually run and seen. ⏳ means the check is ru
 | ruff (CI scope) | `ruff check main.py backend/config.py backend/core backend/db backend/tests` | ✅ All checks passed |
 | ruff (security.yml scope) | `ruff check backend main.py scripts --select F,E9` | ✅ All checks passed |
 | Backend, SQLite | `pytest -q -n auto` | ✅ **3606 passed, 4 skipped, 0 failed** (53 min) |
-| Backend, Postgres ×3 | as `ci.yml` `backend-postgres` runs it: `PYTEST_SHARD=1..4 PYTEST_SHARD_TOTAL=4 pytest -q -p no:xdist`, each shard on its own database | ⏳ running |
+| Backend, Postgres ×3 | as `ci.yml` `backend-postgres` runs it: `PYTEST_SHARD=1..4 PYTEST_SHARD_TOTAL=4 pytest -q -p no:xdist`, each shard on its own database, shards in parallel | ✅ run 1: **3607 passed, 3 skipped, 0 failed** · run 2: same · run 3: same (about 18 min per run) |
 | Alembic heads | `alembic -c backend/alembic.ini heads` | ✅ exactly 1 head: `ce144w3` |
 | Upgrade from an empty Postgres | `alembic upgrade head` on a new database | ✅ exit 0, 239 migrations applied, no errors |
 | Downgrade −1, then upgrade head | `alembic downgrade -1 && alembic upgrade head` | ✅ both exit 0: `ce144w3 → ret01 → ce144w3` |
@@ -28,10 +28,16 @@ This file records only what was actually run and seen. ⏳ means the check is ru
 
 ### Flaky tests
 - Frontend (vitest ×3): **none**.
-- Backend Postgres ×3: ⏳ not yet known.
+- Backend Postgres ×3: **none**. The same 3607 tests passed in all 3 runs.
+- Skipped tests (the same in every run; they need real sandbox credentials): `test_opd_telephony.py:507` (Twilio), `test_opf_card_readers.py:1019` (Stripe), `test_opf_card_readers.py:1039` (Square). SQLite also skips a 4th: `test_deploy_readiness.py:54`, "React build not present". It ran on Postgres after `npm run build`. Each backend all-in is 3610 tests.
 
 ### Real failures
-None so far.
+None.
+
+### Environment finding (not a product bug)
+The Postgres suite needs the DB role to be a **superuser**. `backend/tests/conftest.py:110` runs `SET LOCAL session_replication_role = replica` between tests. With a role that only has `CREATEDB`, nearly every test errors at setup with `InsufficientPrivilegeError: permission denied to set parameter "session_replication_role"`. We saw ~900 errors per shard, 3 of 3 runs. CI doesn't notice because the `postgres:16-alpine` `POSTGRES_USER` is a superuser. `TESTING.md` and `make test-pg` don't say this. The results above are with `ALTER ROLE … SUPERUSER`, matching CI.
+
+Repro: `createuser --createdb u` → `make test-pg PG=postgresql+asyncpg://u:…@localhost/db` → mass setup errors.
 
 ## Round 2 — parallel isolation (#92)
 ⏸ Waiting: #92 is not merged yet.
