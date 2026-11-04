@@ -37,13 +37,11 @@ async def create_return(
     data: ReturnIn,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_returns")),
 ):
     """Goods back from a customer. QA F2: a double click with the same Idempotency-Key restocks once
-    and gets the first answer back (as a sale does). W3-C: the front desk that takes returns
-    (can_create_returns) can do this without managing inventory."""
-    if not (await has_perm(db, current, "can_create_returns") or await has_perm(db, current, "can_manage_inventory")):
-        raise HTTPException(403, "Your role can't take goods back from customers. Ask a manager.")
+    and gets the first answer back (as a sale does). W3-C: gated like refunds (can_create_returns),
+    so the front desk that takes returns doesn't need to manage inventory."""
     from backend.services.idempotency import idem_begin
     claim = await idem_begin(db, current.org_id, request, "returns.create")
     if claim.replay is not None:
