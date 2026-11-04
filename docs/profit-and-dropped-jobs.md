@@ -18,10 +18,13 @@ contacts/Go/public API (C).
    - doesn't auto-draft an invoice;
    - is kept out of job profit: it is reported on its own line.
 2. **Total profit** (Reports → Total profit): one number for the period — jobs + dropped jobs +
-   counter sales, after tax and commissions — by location and by technician, with the change
-   against the previous period of the same length, and a click-through to the jobs and sales
-   behind each number.
-3. **Unsuccessful jobs profit** (the old "Cancellations by reason" upgraded): one row per
+   counter sales, plus a "Refunds and other" card when there is one, after tax and commissions —
+   by location and by technician, with the change against the previous period (named under the
+   figure: "vs 1 Sep – 30 Sep"), and a click-through to the jobs and sales behind each number.
+   The cards add up to the total. Export downloads the same rows as CSV
+   (`GET /api/reports/total-profit.csv`, same date, location and technician filters; needs
+   "Export the sales" as well).
+3. **Dropped jobs** (the old "Cancellations by reason" upgraded): one row per
    dropped job with paid, written off, cost, commission, tax and profit; filter by job type and
    status; totals by reason stay.
 4. **Report filters**: product turnover "with movement / without movement / all"; closed jobs
@@ -33,19 +36,33 @@ contacts/Go/public API (C).
    device, linked both ways ("Continued from" / "Continued in").
 
 ## Engineer — how
-- **One profit function**: `backend/services/profit.py::job_figures()` is the only place job
-  profit is computed. Job profitability, Total profit and Unsuccessful jobs all call it, so they
-  can't disagree. Per job:
-  - `charged` = job total − credit notes; for a dropped job, only the money actually kept
-    (net paid, capped at that) — never the written-off part;
-  - `tax` = job tax × charged / total; `revenue` = charged − tax;
-  - `parts_cost` = Σ qty × cost of product/part lines; `labour_cost` = Σ clocked hours × the
-    snapshot cost rate (same as job profitability today);
+- **One definition**: revenue, tax, cost of goods and what's owed come from
+  `backend/services/revenue.py` (its docstring is the definition) and `order_money`; Total
+  profit, Job profitability, Work orders profit and Dropped jobs all go through
+  `backend/services/profit.py::job_figures()`, which adds labour and commission on top. So they
+  agree with the dashboard, finance summary and P&L. Per job:
+  - `charged` = the job's bill less credit notes and refunds (with tax); for a dropped job only
+    the money actually kept (paid less refunds, capped at the bill) — never the written-off part;
+  - `revenue` = charged without tax (at the job's own tax share); `tax` = the rest;
+  - `cogs` = Σ qty × cost of product/part lines, less parts that came back to the shelf;
+    `labour_cost` = Σ clocked hours × the snapshot cost rate;
   - `commission` = net of the payroll ledger rows for the job and its lines (accruals,
     claw-backs, reversals);
-  - `profit` = revenue − parts − labour − commission.
-  Counter sales: revenue = sale total, cost = FIFO cost stamped on the sale, voided sales out
-  (sales carry no tax or commission today). Period = closed date for jobs, sale date for sales.
+  - `profit` = revenue − parts − labour − commission (before running costs like rent).
+  - An invoice billing several jobs shares its credit notes between them by job total
+    (`order_money.invoice_job_shares`), for revenue, write-offs and what's owed alike.
+  Counter sales: revenue = sale total less any tax the till stored, cost = FIFO cost stamped on
+  the sale, voided sales out. Dates: a job counts on the day it was closed or its invoice was
+  sent, whichever came first; a dropped job on the day it was dropped; a sale on its sale date.
+  Total profit adds one reconciling row so its revenue equals net sales for the period: refunds,
+  returns and credit notes dated in the period that aren't inside a job above (a refund this
+  month for last month's job), and invoices that bill no job. With a technician filter that row
+  is left out (net sales has no technician split), so per-technician totals add up to less.
+- Known limits: costs, clocked time and commission added after a job's date still land on that
+  job, and so does a refund on a dropped job, so a past period can change later. A shop that sets
+  a labour cost rate and also pays commission sees both subtracted.
+- Money in after dropping (any payment path) lowers the write-off (`resync_write_off`), and
+  dropping a job revokes its open pay links.
 - **Schema** (one migration after the head): `orders.written_off` (money, default 0) and
   `orders.continued_from_order_id` (FK orders, indexed). Models and migration match (drift gate).
 - `order_money.balance_due` subtracts `written_off`. The contact ledger reconciles a dropped
@@ -66,7 +83,7 @@ contacts/Go/public API (C).
   Job profitability's rows; dropped job counts only kept money; the grand total = jobs +
   dropped + sales; previous period numbers and delta are right; location and technician
   filters narrow every bucket.
-- Permissions: Total profit and Unsuccessful jobs need "See estimated profit"; cost and profit
+- Permissions: Total profit and Dropped jobs need "See estimated profit"; cost and profit
   fields are removed for roles without "View the purchase price"; a location-limited role only
   sees its branch; another shop's jobs never appear.
 - Filters: turnover without movement lists active products with no use in the period; closed

@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { api } from "../../api/client";
+import { api, openAuthedDoc } from "../../api/client";
+import { alertDialog } from "../../lib/dialog";
 import DateField from "../../components/DateField";
 import { M } from "../../components/Shell";
 import { money } from "../orders/types";
@@ -11,8 +12,10 @@ type Bucket = { count: number; revenue: number; tax: number; cogs?: number; labo
 type Group = Bucket & { name: string; jobs: number; dropped: number; sales: number; location_id?: string | null; employee_id?: string | null };
 type Report = {
   totals: Bucket & { margin_pct?: number };
-  buckets: { jobs: Bucket; dropped: Bucket; sales: Bucket };
-  previous: Bucket & { buckets: { jobs: Bucket; dropped: Bucket; sales: Bucket } };
+  // other = refunds, returns and credit notes in the period not inside a job above, and invoices
+  // that bill no job; it counts toward the totals so the buckets add up to them.
+  buckets: { jobs: Bucket; dropped: Bucket; sales: Bucket; other?: Bucket };
+  previous: Bucket & { buckets: { jobs: Bucket; dropped: Bucket; sales: Bucket; other?: Bucket }; range?: { from: string; to: string } };
   by_location: Group[]; by_technician: Group[]; rows: ProfitRow[];
 };
 
@@ -42,22 +45,34 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
   const [drill, setDrill] = useState<{ title: string; d: Drill } | null>(null);
 
   useEffect(() => { api.get<any>("/staff/employees").then((r) => setTechs(r.items || r || [])).catch(() => setTechs([])); }, []);
-  function load(f = from, t = to) {
-    setRep(null); setErr("");
+  // The page and its CSV use the same filters.
+  function query(f = from, t = to) {
     const qs = new URLSearchParams({ date_from: f, date_to: t });
     if (locId) qs.set("location_id", locId);
     if (techId) qs.set("technician_id", techId);
-    api.get<Report>(`/reports/total-profit?${qs.toString()}`).then(setRep).catch((e) => setErr(e?.message || "Couldn't load the report."));
+    return qs.toString();
+  }
+  function load(f = from, t = to) {
+    setRep(null); setErr("");
+    api.get<Report>(`/reports/total-profit?${query(f, t)}`).then(setRep).catch((e) => setErr(e?.message || "Couldn't load the report."));
+  }
+  function exportCsv() {
+    openAuthedDoc(`/reports/total-profit.csv?${query()}`).catch((e) => alertDialog(e?.message || "Couldn't export the report."));
   }
   useEffect(() => { load(); }, [locId, techId]);   // eslint-disable-line react-hooks/exhaustive-deps
 
   const costsHidden = !!rep && rep.totals.profit === undefined;
-  const cards: { key: "jobs" | "dropped" | "sales"; title: string; hint: string; icon: string }[] = [
-    { key: "jobs", title: "Jobs", hint: "Closed jobs", icon: "build" },
-    { key: "dropped", title: "Dropped jobs", hint: "Money kept from jobs that weren't finished", icon: "block" },
+  type CardKey = "jobs" | "dropped" | "sales" | "other";
+  const other = rep?.buckets.other;
+  const showOther = !!other && (other.revenue !== 0 || (other.profit ?? 0) !== 0 || other.tax !== 0);
+  const cards: { key: CardKey; title: string; hint: string; icon: string }[] = [
+    { key: "jobs", title: "Jobs", hint: "Jobs closed, or invoiced and sent", icon: "build" },
+    { key: "dropped", title: "Dropped jobs", hint: "Money paid and kept on jobs that weren't finished", icon: "block" },
     { key: "sales", title: "Counter sales", hint: "Sales without a job", icon: "point_of_sale" },
+    ...(showOther ? [{ key: "other" as const, title: "Refunds and other", hint: "Refunds and returns made this period for jobs from other periods, plus invoices not tied to a job", icon: "undo" }] : []),
   ];
-  const kindOf = { jobs: "job", dropped: "dropped", sales: "sale" } as const;
+  const kindOf = { jobs: "job", dropped: "dropped", sales: "sale", other: "other" } as const;
+  const day = (v: string) => new Date(v).toLocaleDateString();
   const shown = rep && drill ? drillRows(rep.rows, drill.d) : [];
 
   return (
@@ -78,6 +93,8 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
         <span className="text-ink-tertiary">→</span>
         <DateField mode="date" value={to} onChange={setTo} className="w-36" />
         <button onClick={() => load()} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110">Show</button>
+        <button type="button" onClick={exportCsv}
+          className="px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-ink-secondary hover:bg-slate-50 text-xs font-bold flex items-center gap-1.5 shadow-clay-sm"><M n="download" c="text-sm" />Export</button>
       </div>
 
       {err && <div role="alert" className="text-xs text-rose-600">{err}</div>}
@@ -88,35 +105,41 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4 flex flex-wrap items-end gap-x-8 gap-y-3">
             <div>
               <p className="text-[11px] font-bold text-ink-tertiary">Profit for the period</p>
-              <p className={`text-3xl font-bold tabular-nums ${(n(rep.totals.profit) ?? 0) < 0 ? "text-rose-600" : "text-ink-primary"}`}>
+              <p data-testid="profit-total" className={`text-3xl font-bold tabular-nums ${(n(rep.totals.profit) ?? 0) < 0 ? "text-rose-600" : "text-ink-primary"}`}>
                 {costsHidden ? "—" : money(rep.totals.profit)}
               </p>
-              {!costsHidden && <div className="mt-1"><TrendChip cur={n(rep.totals.profit)} prev={n(rep.previous.profit)} /></div>}
+              {!costsHidden && <p className="text-[11px] text-ink-tertiary">Before running costs like rent and wages</p>}
+              {!costsHidden && (
+                <div className="mt-1 flex items-center gap-1.5 flex-wrap">
+                  <TrendChip cur={n(rep.totals.profit)} prev={n(rep.previous.profit)} />
+                  {rep.previous.range && <span className="text-[11px] text-ink-tertiary">vs {day(rep.previous.range.from)} – {day(rep.previous.range.to)}</span>}
+                </div>
+              )}
             </div>
             <div className="text-xs text-ink-secondary space-y-0.5">
-              <p>Takings after tax <span className="font-semibold text-ink-primary tabular-nums">{money(rep.totals.revenue)}</span></p>
+              <p>Sales <span className="font-semibold text-ink-primary tabular-nums">{money(rep.totals.revenue)}</span></p>
               <p>Tax collected <span className="font-semibold text-ink-primary tabular-nums">{money(rep.totals.tax)}</span></p>
               <p>Commissions <span className="font-semibold text-ink-primary tabular-nums">{money(rep.totals.commission)}</span></p>
-              {rep.totals.written_off > 0 && <p>Written off on dropped jobs <span className="font-semibold text-ink-primary tabular-nums">{money(rep.totals.written_off)}</span></p>}
+              {rep.totals.written_off > 0 && <p>Not charged on dropped jobs (written off, not in sales) <span className="font-semibold text-ink-primary tabular-nums">{money(rep.totals.written_off)}</span></p>}
             </div>
-            {costsHidden && <p className="text-[11px] text-ink-tertiary max-w-xs">Profit and costs are hidden for your role. Ask the owner for "View the purchase price".</p>}
+            {costsHidden && <p className="text-[11px] text-ink-tertiary max-w-xs">Your role can't see costs, so profit is hidden. The owner can turn on "View the purchase price" for your role in Settings → Roles.</p>}
           </div>
 
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
+          <div className={`grid grid-cols-1 gap-3 ${cards.length > 3 ? "sm:grid-cols-2 xl:grid-cols-4" : "sm:grid-cols-3"}`}>
             {cards.map((c) => {
-              const b = rep.buckets[c.key];
+              const b = rep.buckets[c.key]!;
               const pb = rep.previous.buckets[c.key];
               return (
-                <button key={c.key} type="button" onClick={() => setDrill({ title: c.title, d: { kind: kindOf[c.key] } })}
+                <button key={c.key} data-testid={`profit-card-${c.key}`} type="button" onClick={() => setDrill({ title: c.title, d: { kind: kindOf[c.key] } })}
                   className="text-left bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 hover:border-primary/40 hover:shadow-clay-card transition-colors">
                   <div className="flex items-center gap-2">
                     <M n={c.icon} c="text-base text-primary" />
                     <span className="text-xs font-bold text-ink-primary">{c.title}</span>
-                    <span className="ml-auto text-[11px] text-ink-tertiary">{b.count}</span>
+                    {c.key !== "other" && <span className="ml-auto text-[11px] text-ink-tertiary">{b.count}</span>}
                   </div>
-                  <p className="mt-2 text-xl font-bold tabular-nums text-ink-primary">{costsHidden ? money(b.revenue) : money(b.profit)}</p>
-                  <p className="text-[11px] text-ink-tertiary">{costsHidden ? "Takings after tax" : `Profit on ${money(b.revenue)} taken`}</p>
-                  {!costsHidden && <div className="mt-1.5"><TrendChip cur={n(b.profit)} prev={n(pb.profit)} /></div>}
+                  <p data-testid="card-amount" className={`mt-2 text-xl font-bold tabular-nums ${(costsHidden ? b.revenue : b.profit ?? 0) < 0 ? "text-rose-600" : "text-ink-primary"}`}>{costsHidden ? money(b.revenue) : money(b.profit)}</p>
+                  <p className="text-[11px] text-ink-tertiary">{costsHidden ? "Sales" : `Profit on ${money(b.revenue)} of sales`}</p>
+                  {!costsHidden && pb && <div className="mt-1.5"><TrendChip cur={n(b.profit)} prev={n(pb.profit)} /></div>}
                   <p className="mt-1.5 text-[11px] text-ink-tertiary">{c.hint}</p>
                 </button>
               );
@@ -129,8 +152,8 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
                 <div className="p-3 border-b border-slate-100 text-xs font-bold text-ink-primary">{title}</div>
                 <table className="w-full text-left text-xs">
                   <thead><tr className="text-[11px] font-bold text-ink-tertiary bg-slate-50/60">
-                    <th className="py-2 px-3">Name</th><th className="py-2 px-3 text-right">Jobs · sales</th>
-                    <th className="py-2 px-3 text-right">Taken</th><th className="py-2 px-3 text-right">{costsHidden ? "" : "Profit"}</th>
+                    <th className="py-2 px-3">Name</th><th className="py-2 px-3 text-right">Jobs (incl. dropped) · Sales</th>
+                    <th className="py-2 px-3 text-right">Sales</th><th className="py-2 px-3 text-right">{costsHidden ? "" : "Profit"}</th>
                   </tr></thead>
                   <tbody className="divide-y divide-slate-100">
                     {list.length === 0 && <tr><td colSpan={4} className="py-4 px-3 text-ink-tertiary">Nothing in this period.</td></tr>}
@@ -160,7 +183,7 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
                 <table className="w-full text-left text-xs">
                   <thead className="sticky top-0"><tr className="text-[11px] font-bold text-ink-tertiary bg-slate-50">
                     <th className="py-2 px-3">Number</th><th className="py-2 px-3">What</th><th className="py-2 px-3">Date</th>
-                    <th className="py-2 px-3">Customer</th><th className="py-2 px-3 text-right">Taken</th><th className="py-2 px-3 text-right">Tax</th>
+                    <th className="py-2 px-3">Customer</th><th className="py-2 px-3 text-right">Sales</th><th className="py-2 px-3 text-right">Tax</th>
                     {!costsHidden && <th className="py-2 px-3 text-right">Parts</th>}
                     <th className="py-2 px-3 text-right">Labour</th><th className="py-2 px-3 text-right">Commission</th>
                     {!costsHidden && <th className="py-2 px-3 text-right">Profit</th>}
@@ -168,15 +191,16 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
                   <tbody className="divide-y divide-slate-100">
                     {shown.length === 0 && <tr><td colSpan={10} className="py-4 px-3 text-ink-tertiary">Nothing here for this period.</td></tr>}
                     {shown.map((r) => (
-                      <tr key={r.kind + r.id} className="hover:bg-blue-50/50">
+                      <tr key={r.kind + (r.id ?? "")} className="hover:bg-blue-50/50">
                         <td className="py-2 px-3 whitespace-nowrap">
-                          {r.kind === "sale"
+                          {r.kind === "other" ? <span className="text-ink-tertiary">—</span>
+                            : r.kind === "sale"
                             ? <span className="font-mono font-semibold">{r.number}</span>
                             : <button type="button" onClick={() => nav(`/orders?open=${r.id}`)} className="font-mono font-semibold text-primary hover:underline">{r.number}</button>}
                         </td>
                         <td className="py-2 px-3">{KIND_LABEL[r.kind]}{r.reason ? <span className="text-ink-tertiary"> · {r.reason}</span> : null}
                           {r.written_off > 0 && <span className="block text-[11px] text-ink-tertiary">{money(r.written_off)} written off</span>}</td>
-                        <td className="py-2 px-3 whitespace-nowrap">{new Date(r.date).toLocaleDateString()}</td>
+                        <td className="py-2 px-3 whitespace-nowrap">{day(r.date)}</td>
                         <td className="py-2 px-3">{r.client_name || "—"}</td>
                         <td className="py-2 px-3 text-right tabular-nums">{money(r.revenue)}</td>
                         <td className="py-2 px-3 text-right tabular-nums">{money(r.tax)}</td>
@@ -192,7 +216,7 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
             </div>
           )}
           <p className="text-[11px] text-ink-tertiary">
-            Profit = takings after tax − parts − labour − commissions. Jobs count on the day they were closed or dropped; a dropped job counts only the money you kept. Counter sales carry no tax or commission.
+            Profit = sales − parts − labour − commissions. Jobs count on the day they were closed, invoiced and sent, or dropped; a dropped job counts only the money you kept. Sales matches Sales on Reports and the P&L. Paid on Home is money in on the day it arrived, so it can differ. With a technician picked, refunds that aren't on a job are left out.
           </p>
         </>
       )}
