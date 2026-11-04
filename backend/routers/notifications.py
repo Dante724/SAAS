@@ -185,7 +185,11 @@ async def notification_log(
     return {"items": [{
         "id": r.id, "scope": r.scope, "channel": r.channel, "trigger_event": r.trigger_event,
         "order_id": r.order_id, "client_id": r.client_id, "recipient": r.recipient,
-        "subject": r.subject, "body": r.body, "status": r.status, "error": r.error,
+        "subject": r.subject, "body": r.body,
+        # The outbox's "dead" (gave up) reads as "failed", the status the app already shows.
+        "status": "failed" if r.status == "dead" else r.status, "error": r.error,
+        "attempts": r.attempts or 0, "last_error": r.last_error,
+        "next_attempt_at": utc_iso(r.next_attempt_at) if r.next_attempt_at else None,
         "created_at": utc_iso(r.created_at),
     } for r in rows]}
 
@@ -460,7 +464,7 @@ async def rule_stats(
         if status == "sent":
             d["sent_7d"] += n
             d["last_sent_at"] = max(filter(None, [d["last_sent_at"], last.isoformat() if last else None]), default=None)
-        elif status == "failed":
+        elif status in ("failed", "dead"):
             d["failed_7d"] += n
         elif status == "skipped":
             d["skipped_7d"] += n

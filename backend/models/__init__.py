@@ -2379,7 +2379,9 @@ class NotificationLog(OrgScoped, Base):
     """Every notification the system rendered + attempted to deliver. This is the
     communication history shown on the order and the client profile."""
     __tablename__ = "notification_logs"
-    __table_args__ = (Index("ix_notification_logs_org_created", "org_id", "created_at"),)   # phase 4 perf: hot lookup path
+    __table_args__ = (Index("ix_notification_logs_org_created", "org_id", "created_at"),   # phase 4 perf: hot lookup path
+                      # the outbox sweep: due "scheduled" rows and stuck "sending" rows
+                      Index("ix_notification_logs_status_send_at", "status", "send_at"))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     scope: Mapped[str] = mapped_column(String(12), default="client")  # client|employee
@@ -2395,10 +2397,19 @@ class NotificationLog(OrgScoped, Base):
     # Whether the body is HTML, fixed from the template when the message is rendered (a later
     # edit to the template mustn't change how an already-filled message is sent).
     is_html: Mapped[Optional[bool]] = mapped_column(Boolean)
-    status: Mapped[str] = mapped_column(String(20), default="queued")  # queued|scheduled|sent|failed|skipped
+    # queued|scheduled|sending|sent|skipped|dead|draft. "dead" = the outbox gave up (permanent error
+    # or out of attempts); "failed" only on rows written before the outbox, and is still read as such.
+    status: Mapped[str] = mapped_column(String(20), default="queued")
     rule_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("notification_rules.id", ondelete="SET NULL"))  # Build 80; SET NULL so deleting a rule that already fired keeps its log history
     send_at: Mapped[Optional[datetime]] = mapped_column(DateTime, index=True)  # due time for delayed/reminder sends
     error: Mapped[Optional[str]] = mapped_column(Text)
+    # Outbox delivery (services/notification_rules.run_due): tries so far, when the next retry is
+    # due (None = send_at decides), the last provider error (short), and when a sweep claimed the
+    # row for sending (a row "sending" for too long is reclaimed).
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    next_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    last_error: Mapped[Optional[str]] = mapped_column(String(255))
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
 

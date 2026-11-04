@@ -48,6 +48,7 @@ async def test_birthday_sweep_sends_once(client, tenant, db):
     from backend.services import notification_rules as nr
     n1 = await nr.notify_contact_birthdays(db, org_id=oid)
     assert n1 >= 1
+    await nr.run_due(db, org_id=oid)       # the greeting is queued; the outbox sweep sends it
     logs = (await db.execute(select(NotificationLog).where(
         NotificationLog.client_id == cid,
         NotificationLog.trigger_event == "birthday"))).scalars().all()

@@ -137,8 +137,10 @@ async def test_new_variables_render_in_a_rule_send(client, tenant, db):
     await db.commit()
     from backend.services import notification_rules as nr
     await nr.evaluate(db, org_id=org_id, order_id=oid, event="created")
+    await nr.run_due(db, org_id=org_id)     # evaluate queues; the outbox sweep sends (and redacts)
     log = (await db.execute(select(NotificationLog).where(NotificationLog.order_id == oid,
-                                                          NotificationLog.template_id == tpl.id))).scalars().first()
+                                                          NotificationLog.template_id == tpl.id)
+                            .execution_options(populate_existing=True))).scalars().first()
     assert log.body.startswith("Hi Sam Rivera (+15550100). Born 14 March, age ")
     assert "Due $150.00 of $150.00." in log.body
     assert "Booked Fri 30 Oct, 10:00." in log.body

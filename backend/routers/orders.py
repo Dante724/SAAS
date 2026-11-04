@@ -1986,25 +1986,29 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
             await db.refresh(order, ["lines"])
             await eng.accrue_on_status(order, order.status)
 
-    await db.commit()
-
-    # Customer/staff messages go out only AFTER the status change is committed — sending them
-    # inside the transaction meant a failed commit still texted the customer about a change
-    # that never happened.
+    # Customer/staff messages are queued in the SAME transaction as the status change (outbox):
+    # they exist only if the change does, and the notification sweep sends them. Nothing here
+    # calls Twilio/SMTP, so a provider outage can't slow or fail this request. The savepoint keeps
+    # a rule error from undoing the status change; the error is logged, not swallowed.
+    from backend.services import notification_rules as _nr
+    _ev = "closed" if is_closing else "status_changed"
     try:
-        from backend.services import notification_rules as _nr
-        _ev = "closed" if is_closing else "status_changed"
-        await _nr.evaluate(db, org_id=current.org_id, order_id=order.id,
-                           event=_ev, status_key=data.status)
-        # 144jb: Internal › Workflows — notify the assignee + manager (staff-scoped rules).
-        await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
-                                     event=_ev, status_key=data.status, actor_id=current.id)
-    except Exception:  # noqa: BLE001
-        pass
+        async with db.begin_nested():
+            await _nr.evaluate(db, org_id=current.org_id, order_id=order.id,
+                               event=_ev, status_key=data.status, commit=False)
+            # 144jb: Internal › Workflows — notify the assignee + manager (staff-scoped rules).
+            await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
+                                         event=_ev, status_key=data.status, actor_id=current.id,
+                                         commit=False)
+    except Exception:  # noqa: BLE001 — never fails the status change
+        import logging
+        logging.getLogger("tekly.notifications").exception(
+            "notification rules failed for org %s order %s (%s to %s); status change kept",
+            current.org_id, order.id, _ev, data.status)
     # No legacy fallback: the old "templates when no rule matched and the status has
     # triggers_notification" path is gone so one setting (Settings › Notifications) decides
     # what the customer gets. Flagged statuses were converted to equivalent per-status rules.
-    await db.commit()   # persist the notification log rows written above
+    await db.commit()   # the status change and its queued messages, together
 
     # Notify the assigned technician their job's status moved (unless they did it).
     if order.assigned_to_id and order.assigned_to_id != current.id:

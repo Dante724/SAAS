@@ -69,6 +69,33 @@ async def sweep_notifications() -> None:
             log.info("notification-sweep: queued %d, sent %d", queued, sent)
 
 
+@job_runner.every(30, "notification-outbox")
+async def deliver_notifications() -> None:
+    """Send queued customer/staff messages within ~30 seconds. Rules only queue a message (the
+    request never calls Twilio/SMTP); this delivers it, retries provider failures with backoff and
+    reclaims sends a crashed worker left behind (services/notification_rules.run_due). One query
+    finds the shops with something due, so idle shops cost nothing; each shop then gets its own
+    session, and one shop's error never stops the others. The slower notification-sweep above
+    also runs run_due; the claim makes sure a message still goes out only once."""
+    from backend.db.database import AsyncSessionLocal
+    from backend.services import notification_rules as nr
+
+    async with AsyncSessionLocal() as db:
+        org_ids = await nr.orgs_with_due(db)
+    totals = {"sent": 0, "retrying": 0, "dead": 0}
+    for oid in org_ids:
+        async with AsyncSessionLocal() as db:
+            try:
+                res = await nr.run_due(db, org_id=oid)
+                for k in totals:
+                    totals[k] += res.get(k, 0)
+            except Exception:  # noqa: BLE001 — one bad org never stalls the sweep
+                log.exception("notification-outbox failed for org %s", oid)
+                await db.rollback()
+    if any(totals.values()):
+        log.info("notification-outbox: sent %(sent)d, retrying %(retrying)d, gave up %(dead)d", totals)
+
+
 @job_runner.every(3600, "contact-lifecycle-sweep")
 async def sweep_contact_lifecycle() -> None:
     """144ja (N-P4) — fire Contacts-module birthday greetings.

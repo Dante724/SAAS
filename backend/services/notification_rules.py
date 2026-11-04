@@ -9,14 +9,20 @@ A NotificationRule decides *whether and when* to send; a NotificationTemplate is
     working morning instead of waking the customer
   * **appointment reminders** — fire N minutes *before* an order's scheduled_for
 
-Delayed/reminder sends are written to NotificationLog with status='scheduled' and a
-`send_at`. A worker tick (`run_due`) flushes the ones that have come due, so nothing
-depends on a long-lived in-process timer.
+Every send is an outbox row: evaluating a rule writes a NotificationLog with status='scheduled'
+and a `send_at` (now, or later for delayed / out-of-hours / reminder sends), in the caller's
+transaction. Nothing calls Twilio or SMTP inside a request. The worker tick (`run_due`) claims each
+due row with a compare-and-set, sends it, retries transient provider errors with backoff, gives up
+("dead") on permanent errors or after OUTBOX_MAX_ATTEMPTS, and reclaims rows a crashed worker left
+in "sending". Same shape as the webhook outbox in services/webhooks.py.
 """
+import asyncio
+import logging
+import re
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
-from sqlalchemy import func, select
+from sqlalchemy import and_, func, or_, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -29,6 +35,8 @@ from backend.models import (
 )
 from backend.services.notifications import _adapter_for, channel_consented, notif_creds, try_oauth_email
 from backend.services.dates import now_utc
+
+log_ = logging.getLogger("tekly.notifications")
 
 
 async def _send(db, org_id, channel, *, recipient, subject, body, log=None, headers=None):
@@ -216,14 +224,17 @@ async def with_opt_out(db: AsyncSession, org_id: str, client_id: Optional[str], 
     prior = (await db.execute(select(NotificationLog.id).where(
         NotificationLog.org_id == org_id, NotificationLog.client_id == client_id,
         NotificationLog.channel.in_(["sms", "whatsapp"]),
-        NotificationLog.status.in_(["sent", "scheduled"])).limit(1))).scalar_one_or_none()
+        NotificationLog.status.in_(["sent", "scheduled", "sending"])).limit(1))).scalar_one_or_none()
     return body if prior else f"{(body or '').rstrip()}\n{OPT_OUT_FOOTER}"
 
 
 async def evaluate(db: AsyncSession, *, org_id: str, order_id: str, event: str,
-                   status_key: Optional[str] = None, now: Optional[datetime] = None) -> dict:
-    """Run every matching rule for an order event. Immediate sends go out now;
-    delayed / out-of-hours sends are queued with a due time."""
+                   status_key: Optional[str] = None, now: Optional[datetime] = None,
+                   commit: bool = True) -> dict:
+    """Run every matching rule for an order event and queue what it sends: immediate sends are
+    due now, delayed / out-of-hours ones later. The outbox sweep (`run_due`) delivers them; this
+    never calls a provider. commit=False leaves the rows in the caller's transaction, so they are
+    saved together with the change that triggered them (or not at all)."""
     from backend.services.billing import org_has_feature
     if not await org_has_feature(db, org_id, "notification_rules"):   # Shop plan and up
         return {"sent": 0, "scheduled": 0, "matched": 0}
@@ -239,7 +250,7 @@ async def evaluate(db: AsyncSession, *, org_id: str, order_id: str, event: str,
 
     matched = _status_overrides(
         [r for r in rules if _rule_matches(r, event=event, status_key=status_key, order=order)])
-    sent = scheduled = 0
+    queued = scheduled = 0
     for rule in matched:
         subject, body, tpl_id = await _render(db, org_id, order, rule)
         client = order.client
@@ -269,16 +280,14 @@ async def evaluate(db: AsyncSession, *, org_id: str, order_id: str, event: str,
         elif not channel_consented(client, channel):
             log.status = "skipped"
             log.error = f"No client consent for {channel}"
-        elif send_at <= now:
-            result = await _send(db, org_id, channel, recipient=recipient, subject=subject, body=body, log=log)
-            log.status = result["status"]
-            log.error = result.get("error")
-            sent += 1 if log.status == "sent" else 0
         else:
-            log.status = "scheduled"      # a worker tick will flush it when due
-            scheduled += 1
-    await db.commit()
-    return {"sent": sent, "scheduled": scheduled, "matched": len(matched)}
+            log.status = "scheduled"      # the outbox sweep sends it when due
+            if send_at <= now:
+                queued += 1
+            else:
+                scheduled += 1
+    await (db.commit() if commit else db.flush())
+    return {"sent": 0, "queued": queued, "scheduled": scheduled, "matched": len(matched)}
 
 
 async def queue_reminders(db: AsyncSession, *, org_id: str,
@@ -337,53 +346,187 @@ async def queue_reminders(db: AsyncSession, *, org_id: str,
     return queued
 
 
-async def run_due(db: AsyncSession, *, org_id: str, now: Optional[datetime] = None) -> dict:
-    """Worker tick: dispatch every scheduled notification whose send_at has passed."""
+# ── The outbox: delivering queued notifications ────────────────────────────────────────────
+# Wait before attempt 2, 3, ... (1m, 5m, 30m, 2h, 8h); after OUTBOX_MAX_ATTEMPTS sends the row is
+# "dead". A permanent error (bad number/address, opted out, no provider) is dead at once.
+RETRY_SCHEDULE_S = (60, 300, 1800, 7200, 28800)
+OUTBOX_MAX_ATTEMPTS = 1 + len(RETRY_SCHEDULE_S)
+# A row "sending" for this long was left by a worker that died mid-send (provider calls time out
+# after 10 seconds). It is retried, so a crash can at worst repeat one message; it never loses it.
+STUCK_SENDING_AFTER = timedelta(minutes=10)
+OUTBOX_BATCH = 200                 # per shop per tick; the rest go next tick
+LAST_ERROR_MAX = 240
+INTERRUPTED = "Interrupted while sending"
+
+_PERMANENT_TEXT = (
+    "on file",                        # "No phone number on file", "Client has no sms on file"
+    "no recipient",
+    "consent",                        # "No client consent for sms"
+    "opted out",
+    "unsubscribed",
+    "provider is configured",         # a deploy with no provider for the channel
+    "must be a public address",       # a shop SMTP host we refuse to connect to
+    "live twilio texting is off",     # test servers refuse billed texts (twilio_voice.sms_refusal)
+)
+
+
+def is_permanent_error(error: Optional[str]) -> bool:
+    """Would sending the same message again fail the same way? Then retrying is pointless (and,
+    for a customer who replied STOP, wrong). Unknown errors count as transient: they get the
+    bounded retries and then end "dead" anyway."""
+    if not error:
+        return False
+    e = error.lower()
+    if any(t in e for t in _PERMANENT_TEXT):
+        return True
+    m = re.match(r"twilio (\d{3})\b", e)
+    if m:   # a 4xx is the request itself (bad/unsubscribed number), except auth, timeout, rate limit
+        code = int(m.group(1))
+        return 400 <= code < 500 and code not in (401, 403, 408, 429)
+    if e.startswith("smtp"):  # the server refused the recipient address (550 / 5.1.x)
+        return bool(re.search(r"@[^']*': \(5[0-5]\d,|\b5\.1\.\d+\b", e))
+    return False
+
+
+def next_retry_delay(attempts: int) -> Optional[int]:
+    """Seconds to wait after the `attempts`-th failed send, or None once out of attempts."""
+    if attempts < 1 or attempts >= OUTBOX_MAX_ATTEMPTS:
+        return None
+    return RETRY_SCHEDULE_S[attempts - 1]
+
+
+def _short(error: Optional[str]) -> Optional[str]:
+    return (str(error).strip()[:LAST_ERROR_MAX] or None) if error else None
+
+
+def _due(now: datetime):
+    """A queued row whose time has come (and, after a failed try, whose backoff is over)."""
+    return and_(NotificationLog.status == "scheduled",
+                NotificationLog.send_at.isnot(None), NotificationLog.send_at <= now,
+                or_(NotificationLog.next_attempt_at.is_(None), NotificationLog.next_attempt_at <= now))
+
+
+def _stuck(now: datetime):
+    return and_(NotificationLog.status == "sending", NotificationLog.claimed_at.isnot(None),
+                NotificationLog.claimed_at < now - STUCK_SENDING_AFTER)
+
+
+async def orgs_with_due(db: AsyncSession, now: Optional[datetime] = None) -> list:
+    """Active shops that have something for the outbox to do right now (one query for all)."""
+    from backend.models import Organisation
     now = now or now_utc()
-    due = (await db.execute(select(NotificationLog).where(
-        NotificationLog.org_id == org_id, NotificationLog.status == "scheduled",
-        NotificationLog.send_at.isnot(None), NotificationLog.send_at <= now))).scalars().all()
-    sent = failed = 0
-    from sqlalchemy import update as _update
-    for log in due:
-        if not log.recipient:
-            log.status = "skipped"
+    return list((await db.execute(
+        select(NotificationLog.org_id).distinct()
+        .join(Organisation, Organisation.id == NotificationLog.org_id)
+        .where(Organisation.active == True, or_(_due(now), _stuck(now)))  # noqa: E712
+    )).scalars().all())
+
+
+async def _reclaim_stuck(db: AsyncSession, org_id: str, now: datetime) -> int:
+    """Rows a crashed worker left in "sending": the interrupted try counts as an attempt (so a
+    message that crashes the worker every time still runs out), then they are due again. Old rows
+    from before the outbox have no claimed_at and are left alone, as they always were."""
+    retry = await db.execute(update(NotificationLog).where(
+        NotificationLog.org_id == org_id, _stuck(now),
+        NotificationLog.attempts + 1 < OUTBOX_MAX_ATTEMPTS)
+        .values(status="scheduled", attempts=NotificationLog.attempts + 1, next_attempt_at=now,
+                last_error=INTERRUPTED, claimed_at=None)
+        .execution_options(synchronize_session=False))
+    # Out of attempts: dead. Through the ORM so the row is redacted like every finished message.
+    spent = (await db.execute(select(NotificationLog).where(
+        NotificationLog.org_id == org_id, _stuck(now))
+        .execution_options(populate_existing=True))).scalars().all()
+    for row in spent:
+        row.attempts = (row.attempts or 0) + 1
+        row.status, row.error, row.last_error = "dead", INTERRUPTED, INTERRUPTED
+        row.claimed_at = row.next_attempt_at = None
+    await db.commit()
+    n = (retry.rowcount or 0) + len(spent)
+    if n:
+        log_.warning("notification outbox: org %s reclaimed %d stuck message(s), %d given up",
+                     org_id, n, len(spent))
+    return n
+
+
+async def _claim(db: AsyncSession, org_id: str, log_id: str, now: datetime) -> bool:
+    """Compare-and-set scheduled → sending, committed, so exactly one sweep (in any process) sends
+    a row. Re-checks that it is still due: another sweep may have just tried and backed it off."""
+    res = await db.execute(update(NotificationLog)
+        .where(NotificationLog.id == log_id, NotificationLog.org_id == org_id, _due(now))
+        .values(status="sending", claimed_at=now).execution_options(synchronize_session=False))
+    await db.commit()
+    return res.rowcount == 1
+
+
+async def _hold_or_skip(db: AsyncSession, org_id: str, log, now: datetime) -> bool:
+    """Checks made at the moment of sending, on a row this sweep has claimed. True when the row
+    was settled here (skipped, or put back to wait) and must not be sent now."""
+    if not log.recipient:
+        log.status, log.claimed_at = "skipped", None
+        return True
+    # Tekly Sense agent messages: the agent must still be on (and the platform switch off),
+    # win-back still needs marketing consent, and nothing goes outside opening hours.
+    if (log.trigger_event or "").startswith("agent."):
+        from backend.services import sense_agents
+        verdict, why = await sense_agents.send_check(db, org_id, log, now)
+        if verdict == "later":
+            log.status, log.send_at, log.next_attempt_at, log.claimed_at = "scheduled", why, None, None
+            return True
+        if verdict == "stop":
+            log.status, log.error, log.claimed_at = "skipped", why, None
+            return True
+    # Consent is checked again at send time: a customer who replied STOP after this
+    # message was queued must not receive it.
+    if log.client_id:
+        from backend.models import Client
+        c = (await db.execute(select(Client).where(
+            Client.id == log.client_id, Client.org_id == org_id))).scalar_one_or_none()
+        if c is None or not channel_consented(c, log.channel):
+            log.status, log.claimed_at = "skipped", None
+            log.error = ("Client no longer on file" if c is None
+                         else f"No client consent for {log.channel}")
+            return True
+    return False
+
+
+def _record(log, result: dict, now: datetime) -> str:
+    """Write one send's outcome on the row: sent, retrying (back to scheduled, later) or dead."""
+    log.attempts = (log.attempts or 0) + 1
+    log.claimed_at = None
+    if (result or {}).get("status") == "sent":
+        log.status, log.error, log.next_attempt_at = "sent", None, None
+        return "sent"
+    err = _short((result or {}).get("error")) or "Delivery failed"
+    log.last_error = err
+    delay = None if is_permanent_error(err) else next_retry_delay(log.attempts)
+    if delay is None:
+        log.status, log.error, log.next_attempt_at = "dead", err, None
+        return "dead"
+    # Still "scheduled" (not "failed"): it is still owed, and a queued row keeps its live portal
+    # link (services/notifications._freeze_log redacts finished ones).
+    log.status, log.error = "scheduled", None
+    log.next_attempt_at = now + timedelta(seconds=delay)
+    return "retrying"
+
+
+async def run_due(db: AsyncSession, *, org_id: str, now: Optional[datetime] = None,
+                  limit: int = OUTBOX_BATCH) -> dict:
+    """Outbox tick for one shop: reclaim stuck rows, then claim and send every due one, committing
+    after each so a crash never re-sends what already went out."""
+    now = now or now_utc()
+    reclaimed = await _reclaim_stuck(db, org_id, now)
+    due = (await db.execute(select(NotificationLog.id).where(
+        NotificationLog.org_id == org_id, _due(now))
+        .order_by(NotificationLog.send_at).limit(limit))).scalars().all()
+    counts = {"sent": 0, "retrying": 0, "dead": 0}
+    for log_id in due:
+        if not await _claim(db, org_id, log_id, now):
+            continue                                  # another sweep has it
+        log = (await db.execute(select(NotificationLog).where(
+            NotificationLog.id == log_id, NotificationLog.org_id == org_id)
+            .execution_options(populate_existing=True))).scalar_one()
+        if await _hold_or_skip(db, org_id, log, now):
             await db.commit()
-            continue
-        # Tekly Sense agent messages: the agent must still be on (and the platform switch off),
-        # win-back still needs marketing consent, and nothing goes outside opening hours.
-        if (log.trigger_event or "").startswith("agent."):
-            from backend.services import sense_agents
-            verdict, why = await sense_agents.send_check(db, org_id, log, now)
-            if verdict == "later":
-                log.send_at = why
-                await db.commit()
-                continue
-            if verdict == "stop":
-                log.status, log.error = "skipped", why
-                await db.commit()
-                continue
-        # Consent is checked again at send time: a customer who replied STOP after this
-        # message was queued must not receive it.
-        if log.client_id:
-            from backend.models import Client
-            c = (await db.execute(select(Client).where(
-                Client.id == log.client_id, Client.org_id == org_id))).scalar_one_or_none()
-            if c is None or not channel_consented(c, log.channel):
-                log.status = "skipped"
-                log.error = ("Client no longer on file" if c is None
-                             else f"No client consent for {log.channel}")
-                await db.commit()
-                continue
-        # Claim the row before sending and commit after each message: the old loop sent
-        # everything and committed once at the end, so a crash mid-sweep re-sent every message
-        # already delivered, and two runners could both send the same row. A row left in
-        # "sending" by a crash is never re-sent automatically (no duplicates to customers).
-        claimed = await db.execute(_update(NotificationLog)
-            .where(NotificationLog.id == log.id, NotificationLog.status == "scheduled")
-            .values(status="sending").execution_options(synchronize_session=False))
-        await db.commit()
-        if claimed.rowcount == 0:
             continue
         # Sense emails carry List-Unsubscribe headers (and have no template, so they are plain
         # text either way); every other message passes its log so HTML-ness follows the template.
@@ -392,16 +535,72 @@ async def run_due(db: AsyncSession, *, org_id: str, now: Optional[datetime] = No
             from backend.services.sense_agents import email_headers
             h = email_headers(log)
             extra = {"headers": h} if h else {}   # no template: plain text, nothing to look up
+        # A raise here (a crashed worker) leaves the row "sending"; _reclaim_stuck retries it.
         result = await _send(db, org_id, log.channel,
             recipient=log.recipient, subject=log.subject, body=log.body, **extra)
-        log.status = result["status"]
-        log.error = result.get("error")
+        outcome = _record(log, result, now)
         await db.commit()
-        if log.status == "sent":
-            sent += 1
-        else:
-            failed += 1
-    return {"due": len(due), "sent": sent, "failed": failed}
+        counts[outcome] += 1
+        if outcome != "sent":
+            log_.warning("notification %s (org %s, %s) %s after attempt %d: %s", log_id, org_id,
+                         log.channel, "will retry" if outcome == "retrying" else "gave up",
+                         log.attempts, log.last_error)
+    return {"due": len(due), "sent": counts["sent"], "failed": counts["retrying"] + counts["dead"],
+            "retrying": counts["retrying"], "dead": counts["dead"], "reclaimed": reclaimed}
+
+
+# ── Account emails (password reset, email verification) ─────────────────────────────────────
+# These don't go through the outbox: the body holds a one-time sign-in link whose token is only
+# ever stored hashed, and the shop's message history is readable by staff, so the link must not
+# be written to notification_logs. They also go out from the platform's mail account, not the
+# shop's. Instead: the first try as before, then a bounded retry in the background on a
+# transient failure, and every failure logged (never the link).
+ACCOUNT_EMAIL_RETRY_S = (5, 30)
+_ACCOUNT_EMAIL_TASKS: set = set()
+_EMAIL_ADDR = re.compile(r"[^\s'\"<>]+@[^\s'\"<>]+")
+
+
+def _mail_failed(res) -> Optional[str]:
+    """The error of a failed send, else None (fakes and old callers may return nothing)."""
+    if isinstance(res, dict) and res.get("status") not in (None, "sent"):
+        return _EMAIL_ADDR.sub("<address>", _short(res.get("error")) or "Delivery failed")
+    return None
+
+
+async def _account_try(send, recipient, subject, body):
+    try:
+        return _mail_failed(await send(recipient, subject, body))
+    except Exception as exc:  # noqa: BLE001 — a crashed send is a failed try, not a crashed request
+        return type(exc).__name__
+
+
+async def send_account_email(send, recipient: str, subject: str, body: str, *, what: str) -> None:
+    """Send an account email with `send` (send_direct_email, looked up by the caller so tests can
+    swap it). A transient failure is retried in the background (ACCOUNT_EMAIL_RETRY_S)."""
+    err = await _account_try(send, recipient, subject, body)
+    if err is None:
+        return
+    who = (recipient or "")[:3] + "…"
+    if is_permanent_error(err) or not ACCOUNT_EMAIL_RETRY_S:
+        log_.error("%s email to %s not sent: %s", what, who, err)
+        return
+    log_.warning("%s email to %s failed, will retry: %s", what, who, err)
+
+    async def _retry():
+        last = err
+        for attempt, delay in enumerate(ACCOUNT_EMAIL_RETRY_S, start=2):
+            await asyncio.sleep(delay)
+            last = await _account_try(send, recipient, subject, body)
+            if last is None:
+                log_.info("%s email to %s sent on attempt %d", what, who, attempt)
+                return
+            if is_permanent_error(last):
+                break
+        log_.error("%s email to %s not sent after retrying: %s", what, who, last)
+
+    task = asyncio.get_running_loop().create_task(_retry())
+    _ACCOUNT_EMAIL_TASKS.add(task)          # kept referenced until done
+    task.add_done_callback(_ACCOUNT_EMAIL_TASKS.discard)
 
 
 # ── Build 85: appointment notifications ──────────────────────────────────────────
@@ -424,7 +623,7 @@ async def evaluate_appointment(db: AsyncSession, *, org_id: str, appointment_id:
     if not b:
         return {"sent": 0, "scheduled": 0, "matched": 0}
 
-    sent = scheduled = 0
+    queued = scheduled = 0
     for rule in rules:
         if rule.location_id and rule.location_id != b.location_id:
             continue
@@ -456,17 +655,14 @@ async def evaluate_appointment(db: AsyncSession, *, org_id: str, appointment_id:
         elif not await _appointment_consented(db, b, rule.channel):
             log.status = "skipped"
             log.error = f"No client consent for {rule.channel}"
-        elif send_at <= now:
-            res = await _send(db, org_id, rule.channel, 
-                recipient=recipient, subject=subject, body=body, log=log)
-            log.status = res["status"]
-            log.error = res.get("error")
-            sent += 1 if log.status == "sent" else 0
         else:
-            log.status = "scheduled"
-            scheduled += 1
+            log.status = "scheduled"      # the outbox sweep sends it when due
+            if send_at <= now:
+                queued += 1
+            else:
+                scheduled += 1
     await db.commit()
-    return {"sent": sent, "scheduled": scheduled, "matched": len(rules)}
+    return {"sent": 0, "queued": queued, "scheduled": scheduled, "matched": len(rules)}
 
 
 async def _appointment_consented(db: AsyncSession, b: Appointment, channel: str) -> bool:
@@ -543,13 +739,14 @@ async def queue_appointment_reminders(db: AsyncSession, *, org_id: str,
 async def notify_staff_order(db: AsyncSession, *, org_id: str, order_id: str, event: str,
                              status_key: Optional[str] = None,
                              actor_id: Optional[str] = None,
-                             now: Optional[datetime] = None) -> int:
+                             now: Optional[datetime] = None, commit: bool = True) -> int:
     """Fire `module="order"`, `scope="staff"` rules on an order event — Orderry's
     Internal › Workflows. Targets the people responsible for the job: the assigned
     technician and the order's manager. Never notifies the person who made the change.
 
     Channel `push`/`in_app` → in-app bell + web push (StaffNotification). `email`/`sms`
-    → the employee's email/phone via the usual adapter + a NotificationLog row.
+    → a NotificationLog row queued for the employee's email/phone (sent by the outbox sweep).
+    Returns how many notifications were made (bell items + queued messages).
     """
     from backend.models import Employee as _Emp
     from backend.services import push as _push
@@ -601,12 +798,9 @@ async def notify_staff_order(db: AsyncSession, *, org_id: str, order_id: str, ev
                 log.status = "skipped"
                 log.error = f"Employee has no {rule.channel}"
             else:
-                res = await _send(db, org_id, rule.channel, 
-                    recipient=recipient, subject=subject, body=body, log=log)
-                log.status = res["status"]
-                log.error = res.get("error")
-                sent += 1 if log.status == "sent" else 0
-    await db.commit()
+                log.status = "scheduled"      # the outbox sweep sends it
+                sent += 1
+    await (db.commit() if commit else db.flush())
     return sent
 
 
@@ -618,7 +812,8 @@ async def notify_contact_birthdays(db: AsyncSession, *, org_id: str,
     lifecycle greeting to the contact, not tied to any order.
 
     Idempotent per client+rule+year: a client who already has a birthday send this
-    calendar year is skipped, so the daily sweep never double-greets.
+    calendar year is skipped, so the daily sweep never double-greets. Returns how many
+    greetings were queued (the outbox sweep sends them).
     """
     from backend.services.billing import org_has_feature
     if not await org_has_feature(db, org_id, "notification_rules"):   # Shop plan and up
@@ -684,11 +879,8 @@ async def notify_contact_birthdays(db: AsyncSession, *, org_id: str,
                 log.status = "skipped"
                 log.error = f"No client consent for {rule.channel}"
             else:
-                res = await _send(db, org_id, rule.channel, 
-                    recipient=recipient, subject=subject, body=body, log=log)
-                log.status = res["status"]
-                log.error = res.get("error")
-                sent += 1 if log.status == "sent" else 0
+                log.status = "scheduled"      # the outbox sweep sends it
+                sent += 1
     await db.commit()
     return sent
 
@@ -747,14 +939,9 @@ async def notify_task(db: AsyncSession, *, org_id: str, task, event: str,
             if not recipient:
                 log.status = "skipped"
                 log.error = f"Employee has no {rule.channel}"
-            elif send_at <= now:
-                res = await _send(db, org_id, rule.channel, 
-                    recipient=recipient, subject=subject, body=body, log=log)
-                log.status = res["status"]
-                log.error = res.get("error")
-                sent += 1 if log.status == "sent" else 0
             else:
-                log.status = "scheduled"
+                log.status = "scheduled"      # the outbox sweep sends it when due
+                sent += 1 if send_at <= now else 0
     return sent
 
 
