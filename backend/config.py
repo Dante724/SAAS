@@ -89,6 +89,13 @@ class Settings(BaseSettings):
     TWILIO_AUTH_TOKEN: str = ""
     TWILIO_FROM: str = ""
     TWILIO_WHATSAPP_FROM: str = ""
+    # Texts (SMS/WhatsApp) one shop may send per day through the OPERATOR's Twilio account above,
+    # i.e. while it has no Twilio keys of its own. Stops a free sign-up running toll fraud / SMS
+    # pumping on the shared number; a shop on its own Twilio account is never capped. Trial shops
+    # get the lower cap. Enforced in services/notifications.TwilioAdapter via services/ratelimit
+    # (shared across workers when REDIS_URL is set). 0 refuses every text on the shared account.
+    OPERATOR_SMS_DAILY_CAP: int = 200
+    OPERATOR_SMS_DAILY_CAP_TRIAL: int = 50
     # D1: a shop's live Twilio voice credentials are refused unless this is true AND
     # ENVIRONMENT=production. Test credentials (magic numbers, nothing dials) always work.
     ALLOW_LIVE_TELEPHONY: bool = False

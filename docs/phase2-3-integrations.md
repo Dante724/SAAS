@@ -79,6 +79,7 @@ Endpoints: `POST /api/ai/orders/{id}/summary`, `POST /api/ai/estimate/draft`,
 | `TWILIO_ACCOUNT_SID` / `TWILIO_AUTH_TOKEN` | Twilio credentials |
 | `TWILIO_FROM` | SMS sender number |
 | `TWILIO_WHATSAPP_FROM` | WhatsApp sender (`whatsapp:+...`) |
+| `OPERATOR_SMS_DAILY_CAP` / `OPERATOR_SMS_DAILY_CAP_TRIAL` | Texts per shop per day through the operator's Twilio account above (default 200 / 50 for trial shops); shops with their own Twilio keys are never capped |
 
 Inbound: point your Twilio number's webhook at
 `POST /api/chats/webhook/twilio?org_id=<org>`. Inbound messages create/link a

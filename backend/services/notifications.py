@@ -180,11 +180,24 @@ class SmtpEmailAdapter(ChannelAdapter):
         return await asyncio.to_thread(_blocking)
 
 
+OPERATOR_TEXT_CAP_MESSAGE = ("Daily text limit reached on Tekly's shared number — connect your own Twilio "
+                             "account in Settings › Integrations to send more.")
+# notif_creds() tags the creds it returns with these; _adapter_for() strips them off again.
+_ORG_KEY = "_org_id"
+_CAP_KEY = "_operator_daily_cap"
+
+
 class TwilioAdapter(ChannelAdapter):
-    """Real SMS / WhatsApp delivery via the Twilio REST API (async httpx)."""
-    def __init__(self, channel: str, creds: Optional[dict] = None):
+    """Real SMS / WhatsApp delivery via the Twilio REST API (async httpx).
+
+    `daily_cap` (with `org_id`) is set when the shop texts through the OPERATOR's Twilio account:
+    sends past it are refused with OPERATOR_TEXT_CAP_MESSAGE (toll fraud / SMS pumping guard)."""
+    def __init__(self, channel: str, creds: Optional[dict] = None, *, org_id: Optional[str] = None,
+                 daily_cap: Optional[int] = None):
         self.name = channel  # 'sms' or 'whatsapp'
         self.creds = creds or {}   # 144jn: this shop's own Twilio account
+        self.org_id = org_id
+        self.daily_cap = daily_cap
 
     async def send(self, *, recipient: str, subject: Optional[str], body: str,
                    html: Optional[bool] = None, headers: Optional[dict] = None) -> dict:
@@ -202,6 +215,16 @@ class TwilioAdapter(ChannelAdapter):
         refused = sms_refusal(c, whatsapp=is_wa)   # S7: no billed texts outside production
         if refused:
             return {"status": "failed", "error": refused}
+        if self.daily_cap is not None and self.org_id:
+            from fastapi import HTTPException
+
+            from backend.services import ratelimit
+            try:
+                await ratelimit.aenforce("operator_text", self.org_id, self.daily_cap, 24 * 3600)
+            except HTTPException:
+                # Reported, never raised: automatic notifications log a failed send and move on;
+                # the manual send endpoints turn `capped` into a 429.
+                return {"status": "failed", "error": OPERATOR_TEXT_CAP_MESSAGE, "capped": True}
         try:
             import httpx
             url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
@@ -243,7 +266,8 @@ def _adapter_for(channel: str, creds: Optional[dict] = None) -> ChannelAdapter:
     """
     from backend.config import settings
     ch = (channel or "").lower()
-    c = creds or {}
+    c = dict(creds or {})
+    org_id, daily_cap = c.pop(_ORG_KEY, None), c.pop(_CAP_KEY, None)
     if ch == "email":
         host = c.get("host") or settings.SMTP_HOST
         from_ok = c.get("from") or c.get("user") or settings.SMTP_FROM or settings.SMTP_USER
@@ -253,7 +277,7 @@ def _adapter_for(channel: str, creds: Optional[dict] = None) -> ChannelAdapter:
         sid = c.get("account_sid") or settings.TWILIO_ACCOUNT_SID
         token = c.get("auth_token") or settings.TWILIO_AUTH_TOKEN
         if sid and token:
-            return TwilioAdapter(ch, c)
+            return TwilioAdapter(ch, c, org_id=org_id, daily_cap=daily_cap)
     return SimulatedAdapter(channel)
 
 
@@ -265,7 +289,29 @@ async def notif_creds(db, org_id: str, channel: str) -> Optional[dict]:
     if not provider:
         return None
     from backend.services import org_creds
-    return await org_creds.effective(db, org_id, provider)
+    creds = dict(await org_creds.effective(db, org_id, provider))
+    if provider == "twilio":
+        # Tag for TwilioAdapter: which shop is sending, and its daily cap when the keys are the
+        # operator's shared account (None on the shop's own account).
+        creds[_ORG_KEY] = org_id
+        cap = await operator_text_cap(db, org_id, creds)
+        if cap is not None:
+            creds[_CAP_KEY] = cap
+    return creds
+
+
+async def operator_text_cap(db, org_id: str, creds: dict) -> Optional[int]:
+    """Texts per day this shop may send on the OPERATOR's Twilio account (the server env keys);
+    None when the keys are the shop's own. Trial shops get the lower cap."""
+    from backend.config import settings
+    sid = settings.TWILIO_ACCOUNT_SID
+    if not sid or creds.get("account_sid") != sid:
+        return None
+    from backend.models import Organisation
+    status = (await db.execute(select(Organisation.sub_status).where(
+        Organisation.id == org_id))).scalar_one_or_none()
+    trial = (status or "trial") == "trial"
+    return int(settings.OPERATOR_SMS_DAILY_CAP_TRIAL if trial else settings.OPERATOR_SMS_DAILY_CAP)
 
 
 async def send_direct_email(recipient: str, subject: str, body: str) -> dict:
