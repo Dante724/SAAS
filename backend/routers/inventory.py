@@ -40,6 +40,13 @@ class PartIn(BaseModel):
     active: Optional[bool] = None        # false archives (refused while the product still has stock)
     write_off_remaining: Optional[bool] = None   # with active=false: write the stock off, then archive
 
+    @field_validator("cost_price", "sell_price", "repair_price")
+    @classmethod
+    def _price_in_range(cls, v):
+        # W3-D: a price past the column (99999999999) was a Postgres numeric-overflow 500
+        from backend.services.money import check_money
+        return check_money(v, allow_negative=True)
+
 _ADJUST_TYPES = {"receive", "adjust", "writeoff"}
 
 
@@ -1025,6 +1032,7 @@ async def part_batches(
     expiry. `in_stock` = qty still remaining; used by the All / In stock / Out of stock
     filter on the client."""
     from backend.models import Location, PurchaseOrder, StockItemBatch, Supplier, Warehouse
+    await get_owned_or_404(db, Part, part_id, current.org_id, "product")   # W3-D: not an empty 200
     rows = (await db.execute(
         select(StockItemBatch).where(
             StockItemBatch.org_id == current.org_id, StockItemBatch.part_id == part_id)
@@ -1285,16 +1293,16 @@ async def _po_part_weights(db, po_lines) -> dict:
     return {pid: (w or 0) for pid, w in rows}
 
 
-async def _resolve_received_workflow(db, org_id: str) -> Optional[str]:
-    """The org's 'Received' purchase-order workflow key, if the pipeline has one — used to
-    auto-advance the manual stage on a full receipt. Returns None (leave unchanged) when the
+async def _resolve_received_workflow(db, org_id: str, key: str = "po_received") -> Optional[str]:
+    """The org's purchase-order workflow `key` ('Received' by default), if the pipeline has one —
+    used to move the manual stage along with the receipt state (W3-D: ordered / partly received). Returns None (leave unchanged) when the
     org has renamed/removed that stage, so we never invent a key the pipeline doesn't define."""
     from backend.models import OrderStatus
     from backend.routers.statuses import ensure_seeded
     await ensure_seeded(db, org_id)
     return (await db.execute(select(OrderStatus.key).where(
         OrderStatus.org_id == org_id, OrderStatus.record_type == "purchase_order",
-        OrderStatus.active == True, OrderStatus.key == "po_received"))).scalars().first()  # noqa: E712
+        OrderStatus.active == True, OrderStatus.key == key))).scalars().first()  # noqa: E712
 
 
 def _ser_po(po: PurchaseOrder, lines, part_names, supplier=None) -> dict:
@@ -1682,7 +1690,7 @@ async def group_pos(
     total = sum(q * c for q, c in merged.values())
     newpo = PurchaseOrder(supplier_id=pos[0].supplier_id, location_id=pos[0].location_id,
                           org_id=current.org_id, po_number=await next_number(db, current.org_id, "po"),
-                          status="ordered", total=total, ordered_at=now_utc())
+                          status="ordered", workflow_status="po_ordered", total=total, ordered_at=now_utc())
     db.add(newpo)
     await db.flush()
     for pid, (q, c) in merged.items():
@@ -1806,11 +1814,15 @@ async def set_po_status(
             raise HTTPException(409, "Only an ordered PO with nothing received can return to draft")
         po.status = "draft"
         po.ordered_at = None
+        if po.workflow_status == "po_ordered":      # W3-D: the stage follows the receipt state
+            po.workflow_status = await _resolve_received_workflow(db, current.org_id, "po_draft") or po.workflow_status
     else:  # ordered
         if cur != "draft":
             raise HTTPException(409, f"Can't move a {cur} purchase order to ordered")
         po.status = "ordered"
         po.ordered_at = po.ordered_at or now_utc()
+        if (po.workflow_status or "po_draft") == "po_draft":
+            po.workflow_status = await _resolve_received_workflow(db, current.org_id, "po_ordered") or po.workflow_status
     from backend.services.po_links import notify_po_change
     await notify_po_change(db, current.org_id, po, "marked ordered" if po.status == "ordered" else f"back to {po.status}",
                            actor_id=current.id)
@@ -2021,6 +2033,8 @@ async def receive_po(
         # A draft hasn't been placed yet — receiving must follow "mark as ordered", so stock
         # can never land against an order that was never actually sent to the supplier.
         raise HTTPException(409, "Mark this purchase order as ordered before receiving")
+    if any(r.qty < 0 for r in data.lines):
+        raise HTTPException(422, "A received quantity can't be negative")   # W3-D: was a silent 200
     by_id = {r.po_line_id: r for r in data.lines}
     # Lock the PO's lines for this receive: two concurrent "receive the remainder" calls both read
     # the same qty_received and doubled stock and supplier AP. The loser now waits and sees 0 left.
@@ -2135,6 +2149,11 @@ async def receive_po(
         # without stomping a deliberate manual choice.
         if fully and (po.workflow_status or "") not in ("po_received", "po_closed", "po_cancelled"):
             po.workflow_status = await _resolve_received_workflow(db, current.org_id)
+        elif not fully and (po.workflow_status or "po_draft") in ("po_draft", "po_ordered"):
+            # W3-D: a part receipt says so (older pipelines without that stage show Ordered)
+            po.workflow_status = (await _resolve_received_workflow(db, current.org_id, "po_partial")
+                                  or await _resolve_received_workflow(db, current.org_id, "po_ordered")
+                                  or po.workflow_status)
         # Buy-on-credit: increment the supplier's outstanding balance by what we received
         if po.on_credit and received_cost_now > 0:
             sup = (await db.execute(select(Supplier).where(Supplier.id == po.supplier_id))).scalar_one_or_none()
@@ -2327,6 +2346,7 @@ async def _forecast_suggestions(db, org_id: str):
         suggest = daily * (lead + COVER) - free - incoming.get(p.id, 0)
         if suggest <= 0:
             continue
+        suggest = stock_rows.order_qty(p, suggest)     # W3-D: whole items for a pcs product
         cost = p.avg_cost or p.cost_price or 0
         out.append({
             "part_id": p.id, "name": p.name, "sku": p.sku,
@@ -2335,7 +2355,7 @@ async def _forecast_suggestions(db, org_id: str):
             "free": q2(free), "daily_use": q2(daily),
             "days_left": round(free / daily, 1) if daily else None,
             "lead_days": lead, "on_order": q2(incoming.get(p.id, 0)),
-            "suggest_qty": round(suggest, 1), "unit_cost": q2(cost),
+            "suggest_qty": suggest, "unit_cost": q2(cost),
             "est_cost": q2(suggest * cost),
         })
     out.sort(key=lambda r: (r["days_left"] if r["days_left"] is not None else 1e9))
@@ -2401,7 +2421,7 @@ async def create_pos_from_forecast(
         total = sum(q * c for _, q, c in lines)
         po = PurchaseOrder(supplier_id=sup_id, location_id=loc_id,
                            org_id=current.org_id, po_number=await next_number(db, current.org_id, "po"),
-                           status="draft", total=total)
+                           status="draft", workflow_status="po_draft", total=total)
         db.add(po)
         await db.flush()
         for pid, q, c in lines:
@@ -2622,6 +2642,7 @@ class MarkupIn(BaseModel):
     markup_pct: float          # sell = cost * (1 + markup/100)
     part_ids: Optional[list[str]] = None   # default: every active product
     basis: str = "avg_cost"    # avg_cost|cost_price
+    allow_lower: bool = False  # W3-D: a price the markup would lower is kept unless this is set
 
 
 @router.post("/parts/apply-markup")
@@ -2632,7 +2653,8 @@ async def apply_markup(
 ):
     """Set sell prices from cost + markup (Orderry prices products by markup on
     posting). Uses the moving-average cost by default so pricing tracks what the
-    stock actually cost, not the last quoted price."""
+    stock actually cost, not the last quoted price. W3-D: a sell price is never lowered unless
+    `allow_lower` is set; the answer lists each price changed (from → to) and each one kept."""
     if data.markup_pct < 0:
         raise HTTPException(400, "markup_pct can't be negative")
     if data.basis not in ("avg_cost", "cost_price"):
@@ -2641,15 +2663,25 @@ async def apply_markup(
     if data.part_ids:
         q = q.where(Part.id.in_(data.part_ids))
     parts = (await db.execute(q)).scalars().all()
-    updated = []
+    updated, kept = [], []
     for p in parts:
         base = (p.avg_cost or p.cost_price or 0) if data.basis == "avg_cost" else (p.cost_price or 0)
         if not base:
             continue                      # no cost basis → leave the price alone
-        p.sell_price = q2(base * (1 + data.markup_pct / 100))
-        updated.append({"id": p.id, "name": p.name, "cost": base, "sell_price": p.sell_price})
+        old = q2(p.sell_price or 0)
+        new = q2(base * (1 + data.markup_pct / 100))
+        if new == old:
+            continue
+        if new < old and not data.allow_lower:
+            kept.append({"id": p.id, "name": p.name, "cost": base, "sell_price": old,
+                         "markup_price": new, "reason": "The markup price is lower than the current price"})
+            continue
+        p.sell_price = new
+        updated.append({"id": p.id, "name": p.name, "cost": base, "old_sell_price": old,
+                        "sell_price": new})
     await db.commit()
-    return {"ok": True, "updated": len(updated), "items": updated[:50]}
+    return {"ok": True, "updated": len(updated), "items": updated[:50],
+            "kept": len(kept), "kept_items": kept[:50]}
 
 
 # ── Build 96: bulk product actions ───────────────────────────────────────────

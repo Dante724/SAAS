@@ -214,6 +214,7 @@ async def create_transfer(
             Part.id == li.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
         if not part:
             raise HTTPException(404, "Product not found")
+        stock_rows.check_whole(part, li.qty)
         units = await _pick_units(db, current.org_id, part, data.from_location_id, li.serials, li.qty)
         if seen & {u.id for u in units}:
             raise HTTPException(409, "The same unit is on two lines")
@@ -417,6 +418,9 @@ async def receive_lines(
         ln = await _receive_line(db, current.org_id, tid, r)
         if r.qty_received < 0:
             raise HTTPException(422, "Received quantity can't be negative")
+        part = (await db.execute(select(Part).where(Part.id == ln.part_id))).scalar_one_or_none()
+        if part:
+            stock_rows.check_whole(part, r.qty_received)
         if r.qty_received > (ln.qty or 0):
             raise HTTPException(
                 409, f"Received {r.qty_received:g} but only {ln.qty:g} was shipped — "
@@ -517,6 +521,7 @@ async def scan_transfer_line(
     if part.serialized and not unit:
         raise HTTPException(422, f"Scan the IMEI / serial of the “{part.name}” going in the box")
     qty = 1 if unit else data.qty
+    stock_rows.check_whole(part, qty)
 
     ln = (await db.execute(select(StockTransferLine).where(
         StockTransferLine.transfer_id == tid,

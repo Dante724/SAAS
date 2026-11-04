@@ -37,9 +37,9 @@ async def test_autoadvance_workflow_on_full_receipt(client, tenant):
     po, detail = await _po(client, tenant, sid, loc, [{"part_id": pid, "qty_ordered": 4, "unit_cost": 5}])
     assert detail["workflow_status"] == "po_ordered"
     line = detail["lines"][0]["id"]
-    # partial receipt does NOT auto-advance to received
+    # partial receipt says Partly received (W3-D), not Received
     await client.post(f"/api/inventory/po/{po}/receive", headers=tenant, json={"lines": [{"po_line_id": line, "qty": 2}]})
-    assert (await client.get(f"/api/inventory/po/{po}", headers=tenant)).json()["workflow_status"] == "po_ordered"
+    assert (await client.get(f"/api/inventory/po/{po}", headers=tenant)).json()["workflow_status"] == "po_partial"
     # full receipt auto-advances the manual stage to Received
     r = await client.post(f"/api/inventory/po/{po}/receive", headers=tenant, json={"lines": [{"po_line_id": line, "qty": 2}]})
     assert r.json()["workflow_status"] == "po_received"

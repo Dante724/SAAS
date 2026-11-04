@@ -9,7 +9,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel, Field
-from sqlalchemy import func, select
+from sqlalchemy import func, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
@@ -166,9 +166,17 @@ async def call_next(cid: str, db: AsyncSession = Depends(get_db),
 async def no_show(cid: str, db: AsyncSession = Depends(get_db),
                   current: Employee = Depends(get_current_employee)):
     c = await _own(db, current, cid)
-    if c.state in ("converted",):
-        raise HTTPException(409, "This check-in is already a job")
-    c.state, c.updated_at = "no_show", datetime.utcnow()
+    # Only someone still in the queue can fail to turn up. Conditional, so it can't overwrite a
+    # convert or a customer's cancel that lands at the same moment.
+    res = await db.execute(update(Checkin).where(Checkin.id == c.id, Checkin.state.in_(("waiting", "called")))
+                           .values(state="no_show", updated_at=datetime.utcnow())
+                           .execution_options(synchronize_session=False))
+    if res.rowcount != 1:
+        await db.rollback()
+        await db.refresh(c)
+        raise HTTPException(409, "This check-in is already a job" if c.state == "converted"
+                            else "This check-in is already closed")
+    await db.refresh(c)
     lead = (await db.execute(select(Lead).where(Lead.id == c.lead_id))).scalar_one()
     if lead.status in ("new", "in_progress"):
         lead.status = "lost"

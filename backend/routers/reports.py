@@ -10,7 +10,7 @@ from backend.models import Order, Client, Invoice, Part, StockLevel, Task, Emplo
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.dates import day_start_utc, now_utc, shop_today, shop_tzname, today_in
 # The money figures and low stock are defined once, in services/revenue (read its docstring).
-from backend.services import revenue as money_rules
+from backend.services import revenue as money_rules, stock_rows
 from backend.services.revenue import low_stock_count_query, low_stock_query, line_net
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
@@ -906,7 +906,7 @@ async def _rep_reorder_forecast(db, org, df, dt, **kw):
         cost = _unit_cost(p)
         stockout = (now_utc() + timedelta(days=days_left)).strftime("%Y-%m-%d")
         data.append([p.name, p.sku or "—", q2(free), q2(daily), round(days_left, 1), stockout, ld, q2(incoming.get(p.id, 0)),
-                     round(suggest, 1), q2(suggest * cost)])
+                     stock_rows.order_qty(p, suggest), q2(stock_rows.order_qty(p, suggest) * cost)])
     data.sort(key=lambda r: r[4])
     return cols, data
 

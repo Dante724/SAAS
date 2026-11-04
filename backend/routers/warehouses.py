@@ -184,6 +184,9 @@ async def get_access(
 ):
     """Every active employee, with the actions they're explicitly granted here.
     An employee with no row inherits the role-level scope instead."""
+    if not (await db.execute(select(Warehouse.id).where(
+            Warehouse.id == warehouse_id, Warehouse.org_id == current.org_id))).scalar_one_or_none():
+        raise HTTPException(404, "Warehouse not found")      # W3-D: another shop's id listed our staff
     emps = (await db.execute(select(Employee).where(
         Employee.org_id == current.org_id, Employee.active == True))).scalars().all()  # noqa: E712
     rows = {a.employee_id: a for a in (await db.execute(select(WarehouseAccess).where(
