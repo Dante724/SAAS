@@ -126,26 +126,79 @@ async def order_charge_net(db: AsyncSession, client_id: Optional[str], order_id:
     return q2(float(total))
 
 
+async def _job_rows(db: AsyncSession, client_id: str, order_id: Optional[str]) -> float:
+    """Net of one job's own ledger rows (its charges and the money taken for it)."""
+    if not order_id:
+        return 0.0
+    from backend.models import Payment
+    pay_ids = select(Payment.id).where(Payment.order_id == order_id)
+    return float((await db.execute(select(func.coalesce(func.sum(ClientLedgerEntry.amount), 0)).where(
+        ClientLedgerEntry.client_id == client_id,
+        ((ClientLedgerEntry.ref_type == "order") & (ClientLedgerEntry.ref_id == order_id))
+        | ((ClientLedgerEntry.ref_type == "payment") & ClientLedgerEntry.ref_id.in_(pay_ids))))).scalar() or 0)
+
+
 async def available_credit(db: AsyncSession, org_id: str, client_id: Optional[str],
                            order_id: Optional[str] = None) -> float:
     """Client money the shop already holds that can pay for something (B3).
 
     The ledger balance already nets this job's charge and the money taken for it, so credit used
-    on a job is the balance *without* that job. A "pay from balance" moves no money and posts no
-    ledger row: it only marks the job paid out of credit the ledger already shows."""
+    on a job is the balance *without* that job. A "pay from balance" moves no money: it marks the
+    job paid out of that credit and spends it through :func:`spend_credit`."""
     if not client_id:
         return 0.0
     bal = (await db.execute(select(Client.balance).where(
         Client.id == client_id, Client.org_id == org_id))).scalar() or 0
-    job = 0.0
-    if order_id:
-        from backend.models import Payment
-        pay_ids = select(Payment.id).where(Payment.order_id == order_id)
-        job = (await db.execute(select(func.coalesce(func.sum(ClientLedgerEntry.amount), 0)).where(
-            ClientLedgerEntry.client_id == client_id,
-            ((ClientLedgerEntry.ref_type == "order") & (ClientLedgerEntry.ref_id == order_id))
-            | ((ClientLedgerEntry.ref_type == "payment") & ClientLedgerEntry.ref_id.in_(pay_ids))))).scalar() or 0
-    return q2(max(0.0, -(float(bal) - float(job))))
+    return q2(max(0.0, -(float(bal) - await _job_rows(db, client_id, order_id))))
+
+
+async def spend_credit(db: AsyncSession, org_id: str, client_id: str, amount: float, *,
+                       order_id: Optional[str], parts, invoice_id: Optional[str] = None,
+                       label: str = "", created_by_id: Optional[str] = None) -> None:
+    """A job or invoice paid from client credit spends that credit now, not at the job's close.
+
+    Marking the job paid without a ledger row left the credit on the balance, so the same 100 of
+    credit paid any number of open jobs. Each job's share of the payment is charged to the ledger
+    up front — a ``charge`` row on the job, capped at what its close would still bill, which the
+    close then nets (order_charge_net), so the job is never billed twice; a share with no job is
+    charged to the invoice itself. The balance moves by one guarded UPDATE that only goes through
+    while the credit, less this job's own rows, still covers ``amount`` (the check available_credit
+    makes, taken on the row), so two balance-pays at once can't both spend it. ``parts`` are
+    (order_id | None, amount) pairs, as apply_payment_to_invoice splits the payment."""
+    from fastapi import HTTPException
+    from sqlalchemy import update
+
+    from backend.models import Order
+    rows: list[tuple[str, str, float, str]] = []
+    for oid, amt in parts:
+        amt = q2(float(amt or 0))
+        if amt <= 0:
+            continue
+        if oid:
+            o = (await db.execute(select(Order).where(Order.id == oid))).scalar_one_or_none()
+            target = q2(float(o.total or 0) - float(o.written_off or 0)) if o else 0.0
+            early = q2(min(amt, max(0.0, target - await order_charge_net(db, client_id, oid))))
+            if early > 0:
+                rows.append(("order", oid, early, f"Paid from client credit: {o.order_number}"))
+        elif invoice_id:
+            rows.append(("invoice", invoice_id, amt, f"Paid from client credit: invoice {label}"))
+    job = await _job_rows(db, client_id, order_id)
+    delta = q2(sum(r[2] for r in rows))
+    res = await db.execute(update(Client).where(
+        Client.id == client_id, Client.org_id == org_id,
+        func.coalesce(Client.balance, 0) <= q2(job - float(amount)) + 0.005)
+        .values(balance=func.coalesce(Client.balance, 0) + delta)
+        .execution_options(synchronize_session=False))
+    if res.rowcount != 1:
+        credit = await available_credit(db, org_id, client_id, order_id)
+        raise HTTPException(400, f"This client has only {credit:.2f} of credit to pay from. "
+                                 "Take the rest in cash or by card.")
+    for ref_type, ref_id, amt, note in rows:
+        db.add(ClientLedgerEntry(org_id=org_id, client_id=client_id, entry_type="charge", amount=amt,
+                                 note=note, ref_type=ref_type, ref_id=ref_id, created_by_id=created_by_id))
+    c = (await db.execute(select(Client).where(Client.id == client_id))).scalar_one_or_none()
+    if c is not None:
+        await db.refresh(c, attribute_names=["balance"])
 
 
 async def _has_ref(db: AsyncSession, client_id: str, ref_type: str, ref_id: str) -> bool:
