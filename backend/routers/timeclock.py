@@ -93,6 +93,9 @@ async def shift_clock_in(db: AsyncSession = Depends(get_db),
     from backend.models import Location, Shift
     if not await _clock_enabled(db, current.org_id, "attendance"):
         raise HTTPException(403, "Shop attendance clock is turned off for this company")
+    # Lock the employee row for this transaction so a double tap serialises: the second
+    # request waits here, then sees the first shift and gets 409 instead of a second open shift.
+    await db.execute(select(Employee.id).where(Employee.id == current.id).with_for_update())
     if await _open_shift(db, current.id):
         raise HTTPException(409, "You are already clocked in")
     loc_id = current.location_id
@@ -112,11 +115,17 @@ async def shift_clock_in(db: AsyncSession = Depends(get_db),
 @router.post("/shift/clock-out")
 async def shift_clock_out(db: AsyncSession = Depends(get_db),
                           current: Employee = Depends(get_current_employee)):
+    from backend.models import Shift
     s = await _open_shift(db, current.id)
     if not s:
         raise HTTPException(409, "You are not clocked in")
-    s.ended_at = now_utc()
-    s.hours_worked = q2(_shift_elapsed(s) / 3600.0)
+    # Close every open shift, not just the newest: one leaked open (e.g. by an older double
+    # tap) would otherwise accrue hours forever.
+    ended = now_utc()
+    for o in (await db.execute(select(Shift).where(
+            Shift.employee_id == current.id, Shift.ended_at.is_(None)))).scalars().all():
+        o.ended_at = ended
+        o.hours_worked = q2(_shift_elapsed(o) / 3600.0)
     await db.commit()
     await db.refresh(s)
     return _ser_shift(s)
