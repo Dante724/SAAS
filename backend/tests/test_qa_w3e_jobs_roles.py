@@ -187,7 +187,7 @@ async def test_add_line_merges_only_identical_lines(client, tenant):
     assert again.get("merged") is True
     await K.add_line(client, tenant, oid, **{**base, "description": "ALPS stick R"})
     await K.add_line(client, tenant, oid, **{**base, "unit_price": 25})
-    lines = sorted(((ln["description"], ln["unit_price"], ln["qty"]) for ln in await K.lines(client, tenant, oid)))
+    lines = sorted((ln["description"], ln["unit_price"], ln["qty"]) for ln in await K.lines(client, tenant, oid))
     assert lines == [("ALPS stick L", 20, 2), ("ALPS stick L", 25, 1), ("ALPS stick R", 20, 1)]
     assert await K.stock(client, tenant, pid) == 6                      # every unit taken once
 
