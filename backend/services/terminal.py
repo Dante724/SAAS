@@ -20,6 +20,7 @@ import httpx
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy import update as sa_update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
@@ -344,7 +345,17 @@ async def start_charge(db: AsyncSession, *, org_id: str, actor_id: str, terminal
                         sale_id=sale_id, account_id=acc.id, amount=amount, currency=currency,
                         status="pending", created_by_id=actor_id)
     db.add(ch)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as e:
+        # Two starts on one reader at the same moment both passed the check above; the partial
+        # unique index (one open charge per reader) lets only the first one through.
+        await db.rollback()
+        why = str(getattr(e, "orig", e))
+        if "uq_terminal_charges_open_per_reader" not in why and "terminal_charges.terminal_id" not in why:
+            raise
+        raise TerminalError(409, "A charge is already in progress on this reader. "
+                                 "Finish or cancel it first.")
     try:
         if t.provider == "stripe":
             pi = await _stripe(creds, "POST", "/v1/payment_intents", {

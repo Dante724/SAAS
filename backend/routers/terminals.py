@@ -3,7 +3,7 @@ one, follow the charge (polling), cancel, refund, and (outside production) prese
 The money side lives in services/terminal.py; provider webhooks arrive in routers/payments.py."""
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -147,9 +147,16 @@ class ChargeIn(BaseModel):
 
 
 @router.post("/charge", status_code=201)
-async def charge(data: ChargeIn, db: AsyncSession = Depends(get_db),
+async def charge(data: ChargeIn, request: Request, db: AsyncSession = Depends(get_db),
                  current: Employee = Depends(require_perm("can_take_card_payments"))):
-    """Send an amount to a reader. The reader then waits for the card; poll GET /charges/{id}."""
+    """Send an amount to a reader. The reader then waits for the card; poll GET /charges/{id}.
+    A retry with the same Idempotency-Key gets the first charge back instead of sending another."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "terminal.charge", data,
+                          lambda: _charge_start(data, db, current))
+
+
+async def _charge_start(data: ChargeIn, db: AsyncSession, current: Employee):
     if data.order_id:
         await assert_perm(db, current, "can_view_finance")   # same gate as taking any order payment
     if data.sale_id:

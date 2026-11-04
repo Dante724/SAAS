@@ -3,7 +3,7 @@ from datetime import date, datetime, timedelta
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1028,12 +1028,20 @@ async def _get_run(db, org_id, run_id) -> PayrollRun:
 @router.post("/runs/{run_id}/pay")
 async def mark_run_paid(
     run_id: str,
+    request: Request,
     data: Optional[PayIn] = None,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_payroll")),
 ):
     """Pay an accrued run: draw the employee's balance down (payout ledger entry) and take the
-    money out of the chosen cashbox as a Payroll expense, which is what the P&L counts."""
+    money out of the chosen cashbox as a Payroll expense, which is what the P&L counts.
+    A retry with the same Idempotency-Key gets the first answer back instead of a 409."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "payroll.run_pay", {"run_id": run_id, "body": data},
+                          lambda: _mark_run_paid(run_id, data, db, current))
+
+
+async def _mark_run_paid(run_id: str, data: Optional[PayIn], db: AsyncSession, current: Employee):
     from backend.models import Account
     from backend.routers.cash import post_transaction
     from backend.services import scoping

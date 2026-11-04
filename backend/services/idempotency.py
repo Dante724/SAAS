@@ -19,10 +19,16 @@ Usage in a handler:
 Without the header nothing changes (claim.active is False and finish/release do nothing).
 The key is reserved (committed) before the work starts, so two concurrent requests with one key
 can't both run: the second sees the reservation and gets a 409 telling it to retry shortly.
+
+Pass `body=` (what was asked: path ids and the request body) and the key is bound to it: the same
+key sent with a different request is a 422, not the first request's answer. `run_once` wraps the
+whole begin / work / finish-or-release dance for a handler.
 """
+import hashlib
+import json
 from dataclasses import dataclass
 from datetime import datetime, timedelta
-from typing import Any, Optional
+from typing import Any, Awaitable, Callable, Optional
 
 from fastapi import HTTPException, Request
 from fastapi.encoders import jsonable_encoder
@@ -63,21 +69,30 @@ class Claim:
             pass   # the 48h sweep removes it; the client then gets "still in progress" until then
 
 
-async def idem_begin(db, org_id: str, request: Request, endpoint: str) -> Claim:
-    key = (request.headers.get(HEADER) or "").strip()
+def request_hash(body: Any) -> str:
+    return hashlib.sha256(json.dumps(jsonable_encoder(body), sort_keys=True, separators=(",", ":"),
+                                     default=str).encode()).hexdigest()
+
+
+async def idem_begin(db, org_id: str, request: Request, endpoint: str, *, body: Any = None) -> Claim:
+    key = (request.headers.get(HEADER) or "").strip() if request is not None else ""
     if not key:
         return Claim()
     if len(key) > 80:
         raise HTTPException(400, "Idempotency-Key is too long (80 characters at most)")
+    digest = request_hash(body) if body is not None else None
     existing = (await db.execute(select(IdempotencyRecord).where(
         IdempotencyRecord.org_id == org_id, IdempotencyRecord.key == key))).scalar_one_or_none()
     if existing is not None:
         if existing.endpoint != endpoint:
             raise HTTPException(422, "This Idempotency-Key was already used for a different action")
+        if digest is not None and existing.request_hash is not None and existing.request_hash != digest:
+            raise HTTPException(422, "This Idempotency-Key was already used with a different request")
         if existing.response is None:
             raise HTTPException(409, "The same request is still being processed. Try again in a moment.")
         return Claim(replay=existing.response)
-    rec = IdempotencyRecord(org_id=org_id, key=key, endpoint=endpoint, created_at=datetime.utcnow())
+    rec = IdempotencyRecord(org_id=org_id, key=key, endpoint=endpoint, request_hash=digest,
+                            created_at=datetime.utcnow())
     db.add(rec)
     try:
         await db.commit()
@@ -85,6 +100,21 @@ async def idem_begin(db, org_id: str, request: Request, endpoint: str) -> Claim:
         await db.rollback()
         raise HTTPException(409, "The same request is still being processed. Try again in a moment.")
     return Claim(record_id=rec.id)
+
+
+async def run_once(db, org_id: str, request: Optional[Request], endpoint: str, body: Any,
+                   work: Callable[[], Awaitable[Any]]) -> Any:
+    """Run `work()` once per Idempotency-Key (and request body); a retry gets the first answer."""
+    claim = await idem_begin(db, org_id, request, endpoint, body=body)
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        result = await work()
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
 
 
 async def sweep(db) -> int:
