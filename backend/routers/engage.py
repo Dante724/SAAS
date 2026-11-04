@@ -285,6 +285,9 @@ async def list_client_coupons(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
+    from backend.models import Client as _Client
+    from backend.services.owned import get_owned_or_404
+    await get_owned_or_404(db, _Client, client_id, current.org_id, "client")
     rows = (await db.execute(select(Coupon).where(
         Coupon.org_id == current.org_id, Coupon.client_id == client_id)
         .order_by(Coupon.created_at.desc()))).scalars().all()
