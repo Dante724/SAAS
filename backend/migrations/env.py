@@ -18,6 +18,7 @@ sys.path.insert(0, os.path.abspath(os.path.join(os.path.dirname(__file__), "..",
 
 from backend.config import settings          # noqa: E402
 from backend.db.database import Base          # noqa: E402
+from backend.db.migration_safety import migration_connect_args, repair_invalid_indexes  # noqa: E402
 from backend.models import all_models         # noqa: E402,F401 — registers tables
 
 config = context.config
@@ -50,10 +51,14 @@ def run_migrations_offline() -> None:
 
 
 async def _run_async() -> None:
+    # Postgres: lock_timeout so a migration waiting on a table lock fails fast instead of queueing
+    # live traffic behind it; no statement_timeout so a long backfill/index build isn't cut off.
+    # See backend/db/migration_safety.py.
     connectable = async_engine_from_config(
         config.get_section(config.config_ini_section, {}),
         prefix="sqlalchemy.",
         poolclass=pool.NullPool,
+        connect_args=migration_connect_args(settings.DATABASE_URL),
     )
     def _do_run(sync_conn):
         _configure(sync_conn)
@@ -65,6 +70,12 @@ async def _run_async() -> None:
 
     async with connectable.connect() as connection:
         await connection.run_sync(_do_run)
+    if connectable.dialect.name == "postgresql":
+        # A failed CREATE INDEX CONCURRENTLY leaves an INVALID index the IF NOT EXISTS retry skips;
+        # rebuild those now (REINDEX CONCURRENTLY needs AUTOCOMMIT, hence its own connection).
+        async with connectable.connect() as raw:
+            conn = await raw.execution_options(isolation_level="AUTOCOMMIT")
+            await conn.run_sync(repair_invalid_indexes)
     await connectable.dispose()
 
 

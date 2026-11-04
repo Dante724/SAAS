@@ -35,6 +35,7 @@ uv pip compile requirements-dev.txt --universal --python-version 3.11 --generate
 | `REDIS_URL` | multi-instance | Shared rate-limit store. |
 | `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` | no | Postgres connections per worker (default 10 + 10). Keep `WEB_CONCURRENCY` × their sum under the server's `max_connections`. `DB_POOL_TIMEOUT_S` (default 10) is how long a request waits for a free connection before failing. |
 | `DB_STATEMENT_TIMEOUT_MS` | no | Postgres cancels any single statement that runs longer (default 15000). `DB_IDLE_IN_TX_TIMEOUT_MS` (default 60000) ends sessions left idle inside a transaction. Set to 0 behind a PgBouncer that rejects startup parameters, and set them on the database role instead. |
+| `MIGRATION_LOCK_TIMEOUT` | no | How long a migration waits for a table lock before failing (default `5s`). Migrations run with no statement timeout. See "Migrations and live traffic" below. |
 | `MEDIA_BACKEND` | recommended | `s3` in production (see §5). |
 | `SENTRY_DSN` | recommended | Sends unhandled errors to Sentry/GlitchTip (headers, cookies, bodies and query strings are scrubbed). Optional `SENTRY_TRACES_SAMPLE_RATE` (default 0) and `RELEASE` (git SHA). |
 | `SUPPORT_EMAIL` / `SUPPORT_URL` | no | Where the in-app Help & support menu and "contact support" errors point (default `hello@tekly.app`; a `SUPPORT_URL` help page wins over the email). |
@@ -49,10 +50,38 @@ uv pip compile requirements-dev.txt --universal --python-version 3.11 --generate
 1. **Back up** the database (or confirm point-in-time recovery is on).
 2. **Migrate** with the new image, before starting it:
    `docker run --rm --env-file .env repairos:<tag> alembic -c backend/alembic.ini upgrade head`
-3. **Start** the new containers; the health check is `GET /api/health` (database reachable).
+3. **Start** the new containers. Two probes:
+   - `GET /api/health` (also `/health`) is **liveness**: the process is up. It never touches the
+     database and always answers fast. The Docker `HEALTHCHECK` uses it, so a database blip does
+     not restart every container at once.
+   - `GET /api/readyz` is **readiness**: 200 `{"status": "ready", "database": "up"}` when the
+     database answers, 503 `{"status": "unready", "database": "down"}` when it doesn't. Point the
+     load balancer's target health check (and uptime monitors that should page on DB loss) here.
 4. **Smoke test:** sign in, open a work order, take a test payment in Stripe test mode.
 5. **Roll back** by starting the previous image tag. Migrations are additive; only run
    `alembic downgrade` if a release notes says it's required.
+
+### Migrations and live traffic
+
+- On Postgres every migration session runs with `lock_timeout` (`MIGRATION_LOCK_TIMEOUT`, default
+  `5s`) and no `statement_timeout`. A migration that can't get its table lock quickly fails
+  instead of queueing live queries behind it; rerun step 2 when traffic is quieter.
+- Several migrations build indexes with `CREATE INDEX CONCURRENTLY IF NOT EXISTS` (aqp01, ix144dh01,
+  ix144p4, id144p4, sc144eo01). If one of those builds fails, Postgres keeps the index but marks
+  it INVALID, and a retry skips it because the name exists. After every `upgrade` the migration
+  runner rebuilds any INVALID index with `REINDEX INDEX CONCURRENTLY` and logs it. Leftovers of a
+  failed REINDEX (`*_ccnew`, `*_ccold`) are only logged: drop those with `DROP INDEX CONCURRENTLY`.
+  To check by hand: `SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;`
+
+### Connection pooling (PgBouncer)
+
+Periodic background jobs (notification and webhook sweeps) elect one runner across all workers
+and replicas with a **session-level** Postgres advisory lock, held on one connection for the
+whole run. That needs a real session: connect the app to Postgres directly, or through
+PgBouncer in **session** pooling mode. PgBouncer **transaction** pooling hands the connection to
+another client between statements, so the lock can be held by, or released on, the wrong session
+and the same sweep can run twice. Migrations also need a direct (or session-pooled) connection:
+`CREATE INDEX CONCURRENTLY` and `REINDEX CONCURRENTLY` run outside a transaction.
 
 ## 4. Backups and restore
 
