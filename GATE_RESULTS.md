@@ -49,7 +49,7 @@ Server: fresh database `repairos_gate`, then `alembic upgrade head` (clean), the
 
 | Script | Summary line (verbatim) | Owner's pass bar | Verdict |
 |---|---|---|---|
-| `regress.py` | `81 checks: 73 PASS, 1 FAIL, 7 SKIP (failed: W3-E-7)` | 0 FAIL | ❌ **1 FAIL**, see below |
+| `regress.py` | `81 checks: 73 PASS, 1 FAIL, 7 SKIP (failed: W3-E-7)` | 0 FAIL | ❌ **1 FAIL**: harness and W3-E disagree on intent, not a product bug (finding 2) |
 | `isolation.py` | `356 probes … blocked 325, leaks 0 (body 0, A data changed 0), 2xx-without-A-data 21, 5xx 0, refused-before-lookup 10` | 0 leaks | ✅ **0 leaks**, 0 × 5xx. The script still exits 1, because its own README bar also needs 0 × 2xx. See below |
 | `countries.py` | `7 countries: 6 PASS, 1 FAIL, 0 SKIP` | all PASS | ❌ **CA FAIL**: harness and W3-E disagree on intent, see below |
 | `load.py` | `2017 requests in 60s = 33.3 req/s, 5xx 0, endpoints with p95 >= 1s: none` | 0 × 5xx, p95 < 1 s | ✅ |
@@ -67,7 +67,21 @@ Server: fresh database `repairos_gate`, then `alembic upgrade head` (clean), the
 - Not edited (rule: never edit a test to pass). **Owner decision:** either update `countries.py:20` to the W3-E default, or change the default to federal GST and update the 3 backend tests.
 - Repro: `TEKLY_URL=http://localhost:8090 python3 tests-e2e/api_gate/countries.py`, or sign up with `{"country":"CA"}` and no province, then GET the default tax.
 
-**2. regress.py W3-E-7: `AU receipt tax 0.0 on a 110 sale with GST included`.** Under investigation, see the next update.
+**2. regress.py W3-E-7: `AU receipt tax 0.0 on a 110 sale with GST included`. The harness and the shipped W3-E behaviour don't match; this is not a product bug, and the owner needs to decide.**
+- Minimal repro, against the same server: an AU shop, `PUT /api/staff/company {"company_details":"ABN 51 824 753 556"}`, a till sale of 1 × 110, then `GET /api/sales/{id}/receipt`. It returns:
+  ```
+  tax = 0.0
+  tax_lines = [{'name': 'GST', 'rate': 10.0, 'amount': 10.0, 'included': True}]
+  shop_tax_id = None
+  line tax: [(110.0, 10.0)]
+  text: … Total  $110 / Includes GST 10%  $10 / Paid …
+  ```
+- **GST is correct on the receipt.** W3-E reports included tax in `tax_lines` and in the text. The top-level `tax` is by definition only the tax added on top (`sale_tax_added()`, `backend/routers/sales.py`), so it is 0 for a GST-inclusive sale. The harness asserts `tax > 0`, which is the pre-W3-E contract.
+- **ABN is missing because of where the harness puts it.** W3-E reads the shop tax number from the default legal entity, `vat_no` or `tax_id` (`shop_tax_id()`). The harness writes it into the free-text `company_details`, and receipts never read that field. The shipped path is covered by `backend/tests/test_qa_w3e_jobs_roles.py:272`: `POST /api/settings/legal-entities {"vat_no":…,"is_default":true}` gives `shop_tax_id == {"label":"ABN",…}` and the ABN appears in the text, for AU, DE and GB. **That test passed in all 3 Postgres runs and on SQLite.**
+- Not edited. **Owner decision:**
+  - (a) update `regress.py` `w3e_7` to read `tax_lines` and set the ABN via legal entities; or
+  - (b) if an ABN typed into Company details is meant to print, that is a product gap. It would need a test first, then a fix.
+- Repro: `TEKLY_URL=http://localhost:8090 python3 tests-e2e/api_gate/regress.py W3-E-7`.
 
 **3. isolation.py: 21 × `2xx-without-A-data`. Not a leak, but it misses the README's "0 2xx" bar.**
 - 13 GETs return an empty list or zero for shop A's id instead of 404. For example `GET /api/clients/{id}/calls`, `/coupons`, `/documents`, `/feedback`, `GET /api/payroll/balance/{employee_id}`, and `GET /api/directories/{id}/export`, which returns a CSV header only.
