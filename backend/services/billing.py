@@ -82,7 +82,7 @@ FEATURES: dict[str, tuple[str, str]] = {
     "payroll": ("Payroll and commissions", "pro"),
     "multi_location": ("Stock transfers between locations", "pro"),
     "ai_estimates": ("AI estimate drafting and parts recognition", "pro"),
-    "accounting_sync": ("QuickBooks and Xero sync", "pro"),
+    "accounting_sync": ("Sending invoices and payments to QuickBooks Online", "pro"),
     "sso": ("Single sign-on", "pro"),
     "api_keys": ("API keys", "pro"),
 }

@@ -193,17 +193,19 @@ async def draft_estimate_lines(*, complaint: str, device: str = "") -> dict:
                 return {"provider": "anthropic", "lines": norm}
         except Exception:
             pass
-    # deterministic stub: a sensible diagnostic + labor scaffold
+    # No AI configured: a diagnostic + labour scaffold with no prices. Made-up amounts would land on
+    # a customer's estimate as if the shop had priced them, so the shop prices every line itself.
     c = (complaint or "").lower()
-    lines = [{"description": "Diagnostic / inspection", "qty": 1, "unit_price": 35.0},
-             {"description": "Bench labor (1h)", "qty": 1, "unit_price": 60.0}]
+    lines = [{"description": "Diagnostic / inspection", "qty": 1, "unit_price": 0.0},
+             {"description": "Bench labor (1h)", "qty": 1, "unit_price": 0.0}]
     if "screen" in c or "crack" in c or "display" in c:
-        lines.insert(1, {"description": "Display assembly replacement", "qty": 1, "unit_price": 120.0})
+        lines.insert(1, {"description": "Display assembly replacement", "qty": 1, "unit_price": 0.0})
     elif "battery" in c:
-        lines.insert(1, {"description": "Battery replacement", "qty": 1, "unit_price": 45.0})
+        lines.insert(1, {"description": "Battery replacement", "qty": 1, "unit_price": 0.0})
     elif "water" in c or "liquid" in c:
-        lines.insert(1, {"description": "Liquid-damage cleaning + reball", "qty": 1, "unit_price": 90.0})
-    return {"provider": "stub", "lines": lines}
+        lines.insert(1, {"description": "Liquid-damage cleaning + reball", "qty": 1, "unit_price": 0.0})
+    return {"provider": "stub", "lines": lines,
+            "note": "AI drafting isn't set up, so these lines have no prices. Price each one before sending the estimate."}
 
 
 async def suggest_reply(*, customer_message: str, context: str = "") -> dict:

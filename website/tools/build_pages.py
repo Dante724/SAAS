@@ -684,8 +684,9 @@ def main():
 # The legal pages carry [[COMPANY LEGAL NAME]]-style tokens until the founder supplies the real
 # details. Shipping Terms people agree to at sign-up with a blank where the company's name goes is a
 # legal exposure, so the build fails while any remain. Only capitalised tokens count: the trade
-# boards' data-fields JSON also starts with "[[".
-PLACEHOLDER = re.compile(r"\[\[[A-Z][^\]]*\]\]")
+# boards' data-fields JSON also starts with "[[". CI runs check_legal_placeholders.py (same rule) on
+# the committed pages, since a deploy of website/ as committed would skip this build.
+from check_legal_placeholders import PLACEHOLDER  # noqa: E402
 
 
 def legal_placeholders(text):

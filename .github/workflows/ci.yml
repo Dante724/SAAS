@@ -147,15 +147,12 @@ jobs:
   backend-postgres:
     # Production runs Postgres 16; the main job runs on SQLite (fast but lenient about types,
     # constraints and SQL dialect). This job runs migrations from scratch AND the full suite on a
-    # real Postgres so prod-only failures surface in CI, not at deploy.
-    # ADVISORY until its first green run on GitHub — then delete `continue-on-error` to make it a
-    # required gate. (Postgres DDL compile + partial-index parity are already hard-gated in the
-    # main job via test_postgres_ddl_compat.py.)
+    # real Postgres so prod-only failures surface in CI, not at deploy. A required gate: a red
+    # migration or Postgres-only failure fails the run.
     # Sharded like `test` (same conftest hook); every matrix job gets its own Postgres container.
     name: backend-postgres (shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    continue-on-error: true
     strategy:
       fail-fast: false
       matrix:
@@ -202,6 +199,23 @@ jobs:
           PYTEST_SHARD: ${{ matrix.shard }}
           PYTEST_SHARD_TOTAL: ${{ strategy.job-total }}
         run: pytest -q -p no:xdist
+
+  website-legal:
+    # The Terms and Privacy pages shops agree to at sign-up still carry [[...]] tokens until the
+    # founder supplies the company's legal details. The built pages are committed, so this checks
+    # what would actually be deployed: it fails on main and on pull requests into main, and only
+    # warns on other branches so feature work isn't blocked on the legal details.
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: No legal placeholders in the served pages
+        run: |
+          if [ "$GITHUB_REF" = "refs/heads/main" ] || [ "$GITHUB_BASE_REF" = "main" ]; then
+            python3 website/tools/check_legal_placeholders.py
+          else
+            python3 website/tools/check_legal_placeholders.py --warn-only
+          fi
 
   frontend:
     runs-on: ubuntu-latest

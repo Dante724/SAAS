@@ -1198,7 +1198,7 @@ function IntegrationsHub({ data, goSection, reload, pro = { accounting: true, ap
       { name: "QuickBooks Online", desc: "Send invoices, payments and contacts to QuickBooks.",
         badge: data.qbo?.connected ? { text: "Connected", tone: "on" } : { text: data.qbo?.configured ? "Not connected" : "Not configured", tone: "off" },
         hint: data.qbo?.configured ? undefined : "Contact Tekly support to turn this on", ...(pro.accounting ? {} : proCard) },
-      { name: "Xero", desc: "Sync invoices, payments and clients both ways.",
+      { name: "Xero", desc: "Send invoices, payments and contacts to Xero.",
         badge: data.xero?.connected ? { text: "Connected", tone: "on" } : { text: data.xero?.configured ? "Not connected" : "Not configured", tone: "off" },
         hint: data.xero?.configured ? undefined : "Contact Tekly support to turn this on", ...(pro.accounting ? {} : proCard) } ] },
     { group: "Communication", cards: [

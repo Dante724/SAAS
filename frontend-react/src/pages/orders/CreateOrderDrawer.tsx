@@ -483,6 +483,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                     const r = await api.post<any>("/ai/estimate/draft", { complaint: issueText(), device: [brand, model].filter(Boolean).join(" ") });
                     const add = (r.lines || []).map((l: any) => ({ id: Math.random().toString(36).slice(2), description: l.description, kind: "service", price: l.unit_price || 0 }));
                     if (add.length) setLines((ls) => [...ls, ...add]);
+                    if (r.note) await alertDialog(r.note);   // no AI set up: the lines come unpriced
                   } catch (e: any) { await alertDialog(e.message || "Couldn't draft lines from the complaint. Add them from the search instead."); }
                 }} className="h-8 rounded-lg px-2.5 text-xs font-semibold text-primary hover:bg-primary/5 flex items-center gap-1"><M n="auto_awesome" c="text-sm" />Draft from the complaint</button>}
               </div>
