@@ -37,10 +37,11 @@ async def create_return(
     data: ReturnIn,
     request: Request,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_manage_inventory")),
+    current: Employee = Depends(require_perm("can_create_returns")),
 ):
     """Goods back from a customer. QA F2: a double click with the same Idempotency-Key restocks once
-    and gets the first answer back (as a sale does)."""
+    and gets the first answer back (as a sale does). W3-C: gated like refunds (can_create_returns),
+    so the front desk that takes returns doesn't need to manage inventory."""
     from backend.services.idempotency import idem_begin
     claim = await idem_begin(db, current.org_id, request, "returns.create")
     if claim.replay is not None:
@@ -62,8 +63,17 @@ async def _create_return(data: ReturnIn, db: AsyncSession, current: Employee):
         from backend.models import Location
         loc_id = (await db.execute(select(Location.id).where(
             Location.org_id == current.org_id).order_by(Location.created_at).limit(1))).scalar_one_or_none()
+    order = None
+    if data.order_id:
+        order = (await db.execute(select(Order).where(
+            Order.id == data.order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+        if order is None:
+            raise HTTPException(404, "Order not found")
+        # W3-C: two returns for one job queue up here, and each sees what the other took back
+        from backend.services.invoice_money import lock_order
+        await lock_order(db, order.id)
     ret = ClientReturn(org_id=current.org_id, order_id=data.order_id,
-                       client_id=data.client_id, location_id=loc_id,
+                       client_id=data.client_id or (order.client_id if order else None), location_id=loc_id,
                        reason=data.reason, created_by_id=current.id)
     db.add(ret)
     await db.flush()
@@ -73,9 +83,26 @@ async def _create_return(data: ReturnIn, db: AsyncSession, current: Employee):
             Part.id == li.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
         if not part:
             raise HTTPException(404, "Product not found")
-        units = await _returned_units(db, current, part, li) if li.restock and li.qty > 0 else []
+        if li.qty <= 0:
+            raise HTTPException(422, "Return a positive quantity")
+        if order is not None:
+            await _check_job_holds(db, order, part, li.qty)
+        units = await _returned_units(db, current, part, li, order) if li.restock and li.qty > 0 else []
         db.add(ClientReturnLine(return_id=ret.id, part_id=li.part_id,
                                 qty=li.qty, restock=li.restock))
+        await db.flush()
+        if order is not None:
+            if li.restock:
+                # back where the job took it from, onto the cost layers the job drew (not at cost 0)
+                from backend.routers.orders import _reverse_fulfillment
+                await _reverse_fulfillment(db, order, part.id, li.qty, ref_type="client_return", ref_id=ret.id,
+                                           units=units, capped=False)
+                from backend.services import serial_log
+                for u in units:
+                    serial_log.record(db, u, "returned", ref_type="client_return", ref_id=ret.id,
+                                      label=data.reason or "Customer return", actor_id=current.id)
+                restocked += 1
+            continue
         if li.restock and li.qty > 0:
             from backend.services import serial_log, stock_rows
             await stock_rows.add(db, li.part_id, loc_id, li.qty)
@@ -94,9 +121,23 @@ async def _create_return(data: ReturnIn, db: AsyncSession, current: Employee):
     return {"id": ret.id, "restocked": restocked}
 
 
-async def _returned_units(db, current, part, li) -> list:
+async def _check_job_holds(db, order, part, qty: float) -> None:
+    """W3-C: a return against a job takes back only a part the job used, up to what it used less
+    what already came back (read under the job's lock)."""
+    from backend.services.job_returns import returned_qty, still_held, used_by_job
+    used = await used_by_job(db, order.id, part.id)
+    if used <= 1e-9 and not await returned_qty(db, order.id, part.id):
+        raise HTTPException(409, f"“{part.name}” wasn't used on job {order.order_number}, so it can't come back on it")
+    left = await still_held(db, order.id, part.id)
+    if qty > left + 1e-9:
+        raise HTTPException(409, f"Only {left:g} of “{part.name}” from job {order.order_number} can still come back "
+                                 f"(it used {used:g}; the rest is already returned)")
+
+
+async def _returned_units(db, current, part, li, order=None) -> list:
     """QA F2 — the units of a serialized product that came back: one serial per unit, each one this
-    shop sold or used on a job (a unit still in stock can't come back)."""
+    shop sold or used on a job (a unit still in stock can't come back). Against a job, a unit of
+    that job."""
     from backend.models import SerializedItem
     from backend.services.serial_intake import matches as _sn_matches
     named = list(dict.fromkeys(x.strip() for x in (li.serials or []) if x and x.strip()))
@@ -110,6 +151,7 @@ async def _returned_units(db, current, part, li) -> list:
         u = (await db.execute(select(SerializedItem).where(
             SerializedItem.org_id == current.org_id, SerializedItem.part_id == part.id,
             SerializedItem.status.in_(("sold", "allocated_to_order")),
+            *([SerializedItem.order_id == order.id] if order is not None else []),
             _sn_matches(SerializedItem.serial_number, sn)).with_for_update())).scalars().first()
         if u is None:
             raise HTTPException(409, f"{sn} isn't a “{part.name}” this shop sold")
@@ -167,49 +209,30 @@ async def create_refund(
         raise HTTPException(400, f"Cannot refund more than was paid ({net_paid:g})")
     # Money handed back beyond an overpayment is money the customer is no longer charged: the
     # job's total goes down with it, so a goodwill refund or a returned item never shows the
-    # customer as owing (QA F1). Handing back an overpayment leaves the total alone.
-    take_off = round(data.amount - min(data.amount, max(0.0, net_paid - float(locked.total or 0))), 2)
+    # customer as owing (QA F1). Handing back an overpayment, or (W3-C) a deposit on a job that
+    # isn't closed yet, leaves the total alone: it only lowers what was paid.
+    keep = await refundable_without_discount(db, locked, deposits=not data.return_id)
+    take_off = round(data.amount - min(data.amount, keep), 2)
+    claw = take_off
     # A dropped job keeps its bill: money handed back there is more of the bill not collected
     # (written off, order_money.resync_write_off), not a smaller bill. As in Orderry.
     from backend.services.revenue import dropped_keys
     if locked.status in await dropped_keys(db, current.org_id):
-        take_off = 0.0
+        take_off, claw = 0.0, data.amount
     data.order_id = order_id
-    refund = Refund(org_id=current.org_id, order_id=data.order_id, return_id=data.return_id,
-                    account_id=data.account_id, amount=data.amount, reason=data.reason)
-    db.add(refund)
-    await db.flush()
-    from backend.routers.cash import open_drawer_shift
-    _shift = await open_drawer_shift(db, current.org_id, acct)
-    pay = Payment(order_id=order_id, client_id=locked.client_id, method="cash" if _shift else "refund",
-                  kind="refund", amount=data.amount, account_id=data.account_id, received_by_id=current.id,
-                  shift_id=_shift,   # cash handed back from a drawer reduces that drawer's expected cash
-                  reference=f"Refund: {data.reason or ''}"[:200])
-    db.add(pay)
-    await db.flush()
-    refund.payment_id = pay.id
+    refund = await book_refund(db, current, locked, acct, data.amount, reason=data.reason,
+                               return_id=data.return_id, reference=f"Refund: {data.reason or ''}")
     if take_off > 0:
         await _take_off_job(db, current, locked, refund, take_off)
-    # Money out of the cashbox (signed ledger)
-    from backend.routers.cash import post_transaction
-    await post_transaction(db, current.org_id, data.account_id, "refund", -data.amount,
-                           comment=f"Refund{(' for order' if data.order_id else '')}: {data.reason or ''}".strip(),
-                           ref_type="refund", ref_id=refund.id, employee_id=current.id)
     # Refund on an order claws back the refunded share of its commissions
     if data.order_id:
         order = (await db.execute(select(Order).where(
             Order.id == data.order_id, Order.org_id == current.org_id)
             .options(selectinload(Order.lines)))).scalar_one_or_none()
         if order:
-            from backend.services.payroll import CommissionEngine
-            await CommissionEngine(db, current.org_id).clawback_for_refund(order, refund.id, data.amount)
-            # Reflect the refund on the customer's balance (cash went back to them), so the
-            # Balance tab / Client.balance stays in sync — was previously silent.
-            if order.client_id:
-                from backend.services.ledger import post_contact_ledger
-                await post_contact_ledger(db, current.org_id, order.client_id, "refund", abs(data.amount),
-                                          note=f"Refund for {order.order_number}", ref_type="refund",
-                                          ref_id=refund.id, created_by_id=current.id)
+            if claw > 0:      # a deposit or an overpayment given back doesn't change what was earned
+                from backend.services.payroll import CommissionEngine
+                await CommissionEngine(db, current.org_id).clawback_for_refund(order, refund.id, claw)
             from backend.services.order_money import resync_write_off   # dropped job: no debt comes back
             await resync_write_off(db, order, current.id)
     from backend.routers.feed import log_system_event
@@ -217,6 +240,56 @@ async def create_refund(
                            f"Refund {data.amount:g} from {acct.name}")
     await db.commit()
     return {"id": refund.id, "amount": data.amount}
+
+
+async def refundable_without_discount(db, order, *, deposits: bool = True) -> float:
+    """How much can go back without taking anything off the job's price: an overpayment, or (W3-C)
+    on a job that isn't closed, the deposits still held on it (prepayments less what was already
+    refunded). Payments taken on the job itself aren't a deposit: refunding them is a discount."""
+    from backend.services.order_money import net_paid as _net_paid
+    from backend.services.money import q2
+    net = await _net_paid(db, order.id)
+    keep = max(0.0, net - float(order.total or 0))
+    if deposits:
+        from backend.routers.orders import _is_closed
+        if not order.is_estimate and not await _is_closed(db, order.org_id, order):
+            from sqlalchemy import func
+            prepaid = float((await db.execute(select(func.coalesce(func.sum(Payment.amount), 0)).where(
+                Payment.order_id == order.id, Payment.kind == "prepayment"))).scalar() or 0)
+            refunded = float((await db.execute(select(func.coalesce(func.sum(func.abs(Payment.amount)), 0)).where(
+                Payment.order_id == order.id, Payment.kind == "refund"))).scalar() or 0)
+            keep = max(keep, min(net, prepaid - refunded))
+    return q2(max(keep, 0.0))
+
+
+async def book_refund(db, current, order, acct, amount: float, *, reason=None, return_id=None,
+                      reference=None) -> Refund:
+    """Money back to the customer on a job, from one cashbox — the one way every refund path books
+    it (/returns/refunds, /cash/orders/{id}/refund, deleting a paid job): the Refund document, its
+    refund Payment(s) off held money and then the job's invoices (invoice_money.refund_payments),
+    cash out of the drawer's shift, the cashbox ledger and the customer's ledger. Caller commits."""
+    refund = Refund(org_id=current.org_id, order_id=order.id, return_id=return_id,
+                    account_id=acct.id, amount=amount, reason=reason, created_by_id=current.id)
+    db.add(refund)
+    await db.flush()
+    from backend.routers.cash import open_drawer_shift, post_transaction
+    from backend.services.invoice_money import refund_payments
+    _shift = await open_drawer_shift(db, current.org_id, acct)
+    pays = await refund_payments(db, order, amount, method="cash" if _shift else "refund",
+                                 account_id=acct.id, received_by_id=current.id,
+                                 shift_id=_shift,   # cash handed back from a drawer reduces that drawer's expected cash
+                                 reference=(reference or f"Refund: {reason or ''}")[:200])
+    refund.payment_id = pays[0].id
+    await post_transaction(db, current.org_id, acct.id, "refund", -amount,
+                           comment=f"Refund for order {order.order_number}: {reason or ''}".strip(),
+                           ref_type="refund", ref_id=refund.id, employee_id=current.id)
+    if order.client_id:
+        # cash went back to them, so the Balance tab / Client.balance stays in sync
+        from backend.services.ledger import post_contact_ledger
+        await post_contact_ledger(db, current.org_id, order.client_id, "refund", abs(amount),
+                                  note=f"Refund for {order.order_number}", ref_type="refund",
+                                  ref_id=refund.id, created_by_id=current.id)
+    return refund
 
 
 @router.get("")
@@ -321,9 +394,11 @@ async def delete_refund(
     reason = (reason or "Deleted").strip()[:300]
 
     if pay is not None:
-        refund.payment_id = None             # the row goes; the audit entry below keeps its id
+        refund.payment_id = None             # the rows go; the audit entry below keeps the first id
         await db.flush()
-        await db.delete(pay)
+        from backend.services.invoice_money import refund_siblings, unrefund_payment
+        for p in await refund_siblings(db, pay):
+            await unrefund_payment(db, p)    # its invoice counts the money again
     from backend.routers.cash import void_document_legs
     await void_document_legs(db, current.org_id, "refund", refund.id, reason, current.id)
     entries = (await db.execute(select(ClientLedgerEntry).where(
