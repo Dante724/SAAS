@@ -25,6 +25,7 @@ permissions:
 jobs:
   lint-migrations:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     env:
       ENVIRONMENT: test
@@ -54,6 +55,7 @@ jobs:
     # and uploads raw coverage data; the `coverage` job combines them and enforces the floor.
     name: test (shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
+    timeout-minutes: 40  # ~2-3x a normal run; a timeout is a hang to investigate (TESTING.md), not a rerun
     strategy:
       fail-fast: false   # let every shard report its failures
       matrix:
@@ -100,6 +102,7 @@ jobs:
     needs: test
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       ENVIRONMENT: test
       SEED_DEMO: "false"
@@ -147,12 +150,16 @@ jobs:
   backend-postgres:
     # Production runs Postgres 16; the main job runs on SQLite (fast but lenient about types,
     # constraints and SQL dialect). This job runs migrations from scratch AND the full suite on a
-    # real Postgres so prod-only failures surface in CI, not at deploy. A required gate: a red
-    # migration or Postgres-only failure fails the run.
-    # Sharded like `test` (same conftest hook); every matrix job gets its own Postgres container.
+    # real Postgres so prod-only failures surface in CI, not at deploy.
+    # A HARD gate (it was advisory until it had a long green record: every red run since sharding
+    # was a real bug that also failed SQLite). Sharded like `test` (same conftest hook); every matrix
+    # job gets its own Postgres container, and inside it conftest gives each xdist worker its own
+    # database, created at start and dropped at the end. If the server itself fails, the run stops
+    # with "INFRASTRUCTURE ERROR" and exit code 75: rerun the job; never read that as a pass.
     name: backend-postgres (shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    timeout-minutes: 45  # normal run 12-20 min
     strategy:
       fail-fast: false
       matrix:
@@ -192,13 +199,27 @@ jobs:
           psql -h localhost -U repairos -d repairos_test -c "CREATE DATABASE repairos_mig"
           alembic -c backend/alembic.ini upgrade head
       - name: Test suite on Postgres (this shard)
-        # Serial (-p no:xdist): every worker would share this one database.
+        # Parallel: each worker works in its own database (repairos_test_<run>_gwN) on this server.
         env:
           DATABASE_URL: postgresql+asyncpg://repairos:repairos@localhost:5432/repairos_test
           TEST_DATABASE_URL: postgresql+asyncpg://repairos:repairos@localhost:5432/repairos_test
           PYTEST_SHARD: ${{ matrix.shard }}
           PYTEST_SHARD_TOTAL: ${{ strategy.job-total }}
-        run: pytest -q -p no:xdist
+        run: pytest -q -n auto
+
+  backend-postgres-all:
+    # The one check to list as required in branch protection: red unless every Postgres shard passed
+    # (a shard that failed, was cancelled or timed out all count as red).
+    name: backend-postgres (all shards)
+    needs: backend-postgres
+    if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: All Postgres shards passed
+        run: |
+          echo "backend-postgres shards: ${{ needs.backend-postgres.result }}"
+          test "${{ needs.backend-postgres.result }}" = success
 
   website-legal:
     # The Terms and Privacy pages shops agree to at sign-up still carry [[...]] tokens until the
@@ -219,6 +240,7 @@ jobs:
 
   frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     defaults:
       run:

@@ -210,6 +210,8 @@ async def employee_balance(
         await assert_perm(db, current, "can_view_own_compensation")
     else:
         await assert_payroll_scope(db, current, employee_id)
+    from backend.services.owned import get_owned_or_404
+    await get_owned_or_404(db, Employee, employee_id, current.org_id, "employee")
     eng = CommissionEngine(db, current.org_id)
     bal = await eng.balance(employee_id)
     rows = (await db.execute(select(EmployeeBalanceLedger).where(
