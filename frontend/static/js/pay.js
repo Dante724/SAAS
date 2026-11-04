@@ -44,7 +44,7 @@
     if (d.shop_name) document.title = 'Payment request · ' + d.shop_name;
     if (d.status === 'succeeded' || d.status === 'paid') return paid(d);
     if (!d.payable || !(d.amount > 0)) return invalid(d);
-    if (d.provider !== 'simulated' && (d.status === 'pending' || d.status === 'created')) {
+    if (d.provider !== 'simulated' && (d.status === 'pending' || d.status === 'created' || d.status === 'viewed')) {
       // Live providers: poll once in case the customer already paid on the hosted page.
       try { const r = await (await fetch('/api/payments/intents/' + id + '/refresh', { method: 'POST' })).json();
             if (r.status === 'succeeded') return paid(d); } catch (e) {}
