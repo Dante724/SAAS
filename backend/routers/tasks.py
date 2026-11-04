@@ -15,19 +15,20 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
-from backend.services.dates import parse_dt
 from backend.models import Client, Employee, Order, Task
 from backend.services.auth import get_current_employee, has_perm
-from backend.services.dates import now_utc
+from backend.services.dates import now_utc, parse_wall_dt, shop_tzname, utc_iso, utc_to_wall, wall_now_for
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 
 STATUSES = ["todo", "in_progress", "done"]
 
 
-def _ser(t: Task, names: dict | None = None) -> dict:
+def _ser(t: Task, names: dict | None = None, wall_now=None) -> dict:
+    """wall_now: dates.wall_now_for() for the shop. due_at is shop wall-clock time (sent from a
+    datetime-local field), created_at/completed_at are UTC instants, sent with a "Z"."""
     names = names or {}
-    overdue = bool(t.due_at and not t.completed_at and t.due_at < now_utc())
+    overdue = bool(t.due_at and not t.completed_at and wall_now and t.due_at < wall_now(t.location_id))
     return {
         "id": t.id, "title": t.title, "description": t.description,
         "status": t.status,
@@ -39,10 +40,10 @@ def _ser(t: Task, names: dict | None = None) -> dict:
         "order_id": t.order_id, "client_id": t.client_id, "lead_id": t.lead_id,
         "location_id": t.location_id, "parent_task_id": t.parent_task_id,
         "due_at": t.due_at.isoformat() if t.due_at else None,
-        "completed_at": t.completed_at.isoformat() if t.completed_at else None,
+        "completed_at": utc_iso(t.completed_at),
         "completed_on_time": t.completed_on_time,
         "overdue": overdue,
-        "created_at": t.created_at.isoformat() if t.created_at else None,
+        "created_at": utc_iso(t.created_at),
     }
 
 
@@ -73,9 +74,12 @@ async def list_tasks(
         q = q.where(Task.order_id == order_id)
     if client_id:
         q = q.where(Task.client_id == client_id)
+    wall_now = await wall_now_for(db, current.org_id)
     if overdue:
-        q = q.where(Task.completed_at.is_(None), Task.due_at < now_utc())
+        q = q.where(Task.completed_at.is_(None), Task.due_at.isnot(None))
     rows = (await db.execute(q)).scalars().all()
+    if overdue:   # due_at is each branch's wall clock, so this is decided per row, not in SQL
+        rows = [t for t in rows if t.due_at < wall_now(t.location_id)]
     if mine:   # assigned to me (primary or one of several), or created by me
         rows = [t for t in rows if _involves(t, current.id)]
 
@@ -83,7 +87,7 @@ async def list_tasks(
     rows.sort(key=lambda t: (t.completed_at is not None, t.due_at or far))
     names = await _names(db, current.org_id)
     numbers = await _order_numbers(db, current.org_id, [t.order_id for t in rows])
-    return {"items": [{**_ser(t, names), "order_number": numbers.get(t.order_id)} for t in rows],
+    return {"items": [{**_ser(t, names, wall_now), "order_number": numbers.get(t.order_id)} for t in rows],
             "statuses": STATUSES}
 
 
@@ -179,13 +183,14 @@ async def request_part(
 
 
 async def _create_task(data: TaskIn, ids: list, primary, db: AsyncSession, current: Employee):
+    location_id = data.location_id or current.location_id
     t = Task(
         org_id=current.org_id, title=data.title, description=data.description,
         assigned_to_id=primary, assignee_ids=ids, created_by_id=current.id,
         order_id=data.order_id, client_id=data.client_id, lead_id=data.lead_id,
-        location_id=data.location_id or current.location_id,
+        location_id=location_id,
         parent_task_id=data.parent_task_id, priority=data.priority,
-        due_at=parse_dt(data.due_at, "due_at") if data.due_at else None,
+        due_at=await parse_wall_dt(db, current.org_id, location_id, data.due_at, "due_at") if data.due_at else None,
         status="todo")
     db.add(t)
     await db.flush()
@@ -193,7 +198,7 @@ async def _create_task(data: TaskIn, ids: list, primary, db: AsyncSession, curre
     await _notify(db, current, t, "assigned")
     await db.commit()
     await db.refresh(t)
-    return {**_ser(t, await _names(db, current.org_id)),
+    return {**_ser(t, await _names(db, current.org_id), await wall_now_for(db, current.org_id)),
             "order_number": (await _order_numbers(db, current.org_id, [t.order_id])).get(t.order_id)}
 
 
@@ -204,7 +209,8 @@ async def get_task(
     current: Employee = Depends(get_current_employee),
 ):
     t = await _load(db, current, task_id)
-    d = _ser(t, await _names(db, current.org_id))
+    wall_now = await wall_now_for(db, current.org_id)
+    d = _ser(t, await _names(db, current.org_id), wall_now)
     # J4 — linked records are read within this shop only, as a second line of defence behind
     # the tenancy guard that refuses cross-shop links when a task is saved.
     if t.order_id:
@@ -215,7 +221,7 @@ async def get_task(
         c = (await db.execute(select(Client).where(
             Client.id == t.client_id, Client.org_id == current.org_id))).scalar_one_or_none()
         d["client_name"] = c.name if c else None
-    d["subtasks"] = [_ser(x) for x in (await db.execute(select(Task).where(
+    d["subtasks"] = [_ser(x, None, wall_now) for x in (await db.execute(select(Task).where(
         Task.parent_task_id == t.id, Task.org_id == current.org_id))).scalars().all()]
     return d
 
@@ -263,7 +269,8 @@ async def update_task(
         if data.assigned_to_id and data.assigned_to_id not in cur:
             t.assignee_ids = [data.assigned_to_id] + cur
     if data.due_at is not None:
-        t.due_at = parse_dt(data.due_at, "due_at") if data.due_at else None
+        t.due_at = (await parse_wall_dt(db, current.org_id, t.location_id, data.due_at, "due_at")
+                    if data.due_at else None)
     if data.status is not None:
         if data.status not in STATUSES:
             raise HTTPException(422, f"status must be one of {STATUSES}")
@@ -271,7 +278,9 @@ async def update_task(
         if data.status == "done" and not t.completed_at:
             t.completed_at = now_utc()
             # on-time analysis: no due date means it can't be late
-            t.completed_on_time = (t.due_at is None) or (t.completed_at <= t.due_at)
+            # completed_at is UTC, due_at the shop's wall clock: compare on the shop's clock
+            t.completed_on_time = (t.due_at is None) or (
+                utc_to_wall(t.completed_at, await shop_tzname(db, current.org_id, t.location_id)) <= t.due_at)
             await _feed(db, current, t, "Task completed"
                         + ("" if t.completed_on_time else " (late)"))
             await _notify(db, current, t, "completed")
@@ -288,7 +297,7 @@ async def update_task(
 
     await db.commit()
     await db.refresh(t)
-    return {**_ser(t, await _names(db, current.org_id)),
+    return {**_ser(t, await _names(db, current.org_id), await wall_now_for(db, current.org_id)),
             "order_number": (await _order_numbers(db, current.org_id, [t.order_id])).get(t.order_id)}
 
 
@@ -321,7 +330,7 @@ async def task_feed(
     return {"items": [{
         "id": f.id, "body": f.body, "kind": f.item_type,
         "author_id": f.author_id, "author_name": f.author_name,
-        "created_at": f.created_at.isoformat() if f.created_at else None,
+        "created_at": utc_iso(f.created_at),
     } for f in rows]}
 
 

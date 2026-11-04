@@ -156,12 +156,29 @@ def local_now(tzname) -> datetime:
     """'Now' as naive wall-clock time in `tzname`. Scheduled and due times are stored as naive
     shop-local time (the web app sends datetime-local values), so "today" and "overdue" must be
     measured on the same clock, not UTC. Unknown or empty zones fall back to UTC."""
-    from datetime import timezone
-    from zoneinfo import ZoneInfo
-    try:
-        return datetime.now(ZoneInfo(tzname or "UTC")).replace(tzinfo=None)
-    except Exception:
-        return datetime.now(timezone.utc).replace(tzinfo=None)
+    return utc_to_wall(now_utc(), tzname)
+
+
+async def wall_now_for(db, org_id: str):
+    """local_now() per branch, for a list that spans branches: returns f(location_id) → "now" on
+    that branch's clock (shop_tzname's rule, one query). Due and scheduled times are shop wall-clock,
+    so "overdue" is `due_at < f(location_id)`, never `due_at < now_utc()` (that flagged a New York
+    job due in two hours as overdue, and an IST job two hours late as on time)."""
+    from sqlalchemy import select
+
+    from backend.models import Location, Organisation
+    org_tz = (await db.execute(select(Organisation.timezone).where(Organisation.id == org_id))).scalar() or "UTC"
+    tzs = {lid: tz for lid, tz in (await db.execute(select(Location.id, Location.timezone).where(
+        Location.org_id == org_id))).all() if tz and tz != "UTC"}
+    now = now_utc()
+    cache: dict = {}
+
+    def at(location_id: str | None = None) -> datetime:
+        tz = tzs.get(location_id) or org_tz
+        if tz not in cache:
+            cache[tz] = utc_to_wall(now, tz)
+        return cache[tz]
+    return at
 
 
 async def shop_timezone(db, employee) -> str:

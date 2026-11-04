@@ -29,7 +29,7 @@ from backend.services import industry as _ind
 from backend.services.auth import assert_perm, get_current_employee, has_perm, require_perm, record_scope
 from backend.services.batching import names_by_id, rows_by
 from backend.services.numbering import next_number
-from backend.services.dates import now_utc
+from backend.services.dates import now_utc, wall_now_for
 
 router = APIRouter(prefix="/api/orders", tags=["orders"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -333,8 +333,9 @@ def _intake_photos_payload(o: Order) -> list:
     return out
 
 
-def _serialize_order_scalars(o: Order) -> dict:
-    """Every field of a work order except its lines, comments and status history."""
+def _serialize_order_scalars(o: Order, now_wall: Optional[datetime] = None) -> dict:
+    """Every field of a work order except its lines, comments and status history. `now_wall` is
+    "now" on the job's branch clock (dates.wall_now_for), the clock due_at is kept in."""
     return {
         "id": o.id,
         "order_number": o.order_number,
@@ -351,6 +352,7 @@ def _serialize_order_scalars(o: Order) -> dict:
         "labour_total": o.labour_total,
         "parts_total": o.parts_total,
         "total": o.total,
+        "tax": float(o.tax or 0),            # B4: the tax inside/added to total, as stored
         "prepayment_total": getattr(o, "prepayment_total", 0.0) or 0.0,
         "deposit_amount": getattr(o, "deposit_amount", 0.0) or 0.0,
         "currency_code": o.currency_code,      # Build 122: display currency + snapshot rate
@@ -361,7 +363,7 @@ def _serialize_order_scalars(o: Order) -> dict:
         "resource_id": o.resource_id,
         "barcode": o.barcode,
         "due_at": o.due_at.isoformat() if o.due_at else None,
-        "overdue_by_date": bool(o.due_at and not o.closed_at and o.due_at < now_utc()),
+        "overdue_by_date": bool(o.due_at and not o.closed_at and now_wall and o.due_at < now_wall),
         "status_entered_at": o.status_entered_at.isoformat() if o.status_entered_at else None,
         "is_estimate": o.is_estimate,
         "estimate_approved_at": o.estimate_approved_at.isoformat() if o.estimate_approved_at else None,
@@ -403,8 +405,8 @@ def _asset_has_passcode(d) -> bool:
     return has_passcode(d)
 
 
-def _serialize_order(o: Order) -> dict:
-    row = _serialize_order_scalars(o)
+def _serialize_order(o: Order, now_wall: Optional[datetime] = None) -> dict:
+    row = _serialize_order_scalars(o, now_wall)
     row.update({
         "signature": o.signature,   # J1: the drawer shows the in-shop signature (detail view only)
         "device": {"id": o.device.id, "brand": o.device.brand, "model": o.device.model, "serial": o.device.serial, "imei": o.device.imei, "vin": o.device.vin, "hin": o.device.hin, "asset_type": o.device.asset_type, "asset_label": _ind.asset_label(getattr(o.device, "template_key", None)), "image_data": getattr(o.device, "image_data", None), "watch_out": getattr(o.device, "watch_out", None), "custom_data": _asset_custom(o.device.custom_data), "has_passcode": _asset_has_passcode(o.device)} if o.device else None,
@@ -503,11 +505,11 @@ def _device_image_url(device_id: Optional[str], has_image: bool) -> Optional[str
     return f"/api/assets/{device_id}/image" if (device_id and has_image) else None
 
 
-def _serialize_order_row(o: Order, has_image: bool) -> dict:
+def _serialize_order_row(o: Order, has_image: bool, now_wall: Optional[datetime] = None) -> dict:
     """List-row shape: every scalar field of the detail serializer, but no lines, comments or
     status history, and the asset photo as a URL instead of inline base64. The drawer loads
     GET /orders/{id} for the full record."""
-    row = _serialize_order_scalars(o)
+    row = _serialize_order_scalars(o, now_wall)
     if o.device:
         d = o.device
         row["device"] = {"id": d.id, "brand": d.brand, "model": d.model, "serial": d.serial,
@@ -602,9 +604,10 @@ async def list_orders(
                 _OCI.order_id.in_(oids), _OCI.required == True, _OCI.done == False))).all():  # noqa: E712
             pending_cl.add(oid)
     with_img = await _devices_with_images(db, [o.device_id for o in orders])
+    wall_now = await wall_now_for(db, current.org_id)
     items = []
     for o in orders:
-        row = _serialize_order_row(o, o.device_id in with_img)
+        row = _serialize_order_row(o, o.device_id in with_img, wall_now(o.location_id))
         row["invoice_status"] = inv_status.get(o.id)  # None = not invoiced
         row["checklists_pending"] = o.id in pending_cl
         items.append(row)
@@ -1130,7 +1133,8 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
                        if data.scheduled_for else None),
         scheduled_to=(await parse_wall_dt(db, current.org_id, data.location_id, data.scheduled_to, "scheduled_to")
                       if data.scheduled_to else None),
-        due_at=parse_dt(data.due_at, "due_at") if data.due_at else None,
+        due_at=(await parse_wall_dt(db, current.org_id, data.location_id, data.due_at, "due_at")
+                if data.due_at else None),
         duration_min=data.duration_min or 60,
         resource_id=data.resource_id or None,
         type_id=data.type_id,
@@ -1205,7 +1209,8 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
                  selectinload(Order.assigned_to), selectinload(Order.manager), selectinload(Order.lines),
                  selectinload(Order.comments), selectinload(Order.status_logs))
     )
-    return _serialize_order(result.scalar_one())
+    created = result.scalar_one()
+    return _serialize_order(created, (await wall_now_for(db, current.org_id))(created.location_id))
 
 @router.get("/board")
 async def board(
@@ -1266,6 +1271,7 @@ async def board(
         group_counts[g] = group_counts.get(g, 0) + n
 
     now = now_utc()
+    wall_now = await wall_now_for(db, current.org_id)
     known = list(grp_of)
     cards_by_group = {g: [] for g in group_order}
     for g in group_order:
@@ -1305,7 +1311,7 @@ async def board(
                 "age_days": (now - o.created_at).days if o.created_at else None,
                 # flag: scheduled but still in New group → needs attention (Orderry)
                 "needs_attention": bool(o.scheduled_for and g == "new"),
-                "overdue": bool(o.due_at and o.due_at < now),
+                "overdue": bool(o.due_at and o.due_at < wall_now(o.location_id)),
                 "client_msg_unread": getattr(o, "client_msg_unread", 0) or 0,
                 "rec_unread": getattr(o, "rec_unread", 0) or 0,
             })
@@ -1370,7 +1376,7 @@ async def get_order(
     from backend.services import scoping
     if not await scoping.can_view_order(db, current, order):
         raise HTTPException(403, "You can only open work orders assigned to you")
-    data = _serialize_order(order)
+    data = _serialize_order(order, (await wall_now_for(db, current.org_id))(order.location_id))
     if order.type_id:      # J6: the job type's name for the "Job type" picker
         from backend.models import WorkOrderType as _WOT
         data["type_name"] = (await db.execute(select(_WOT.name).where(

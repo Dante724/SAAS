@@ -289,7 +289,12 @@ async def build_invoice_pdf(db: AsyncSession, inv: "Invoice", *, org_name: str, 
                   "one_line": "Single line"}.get(inv.display_mode or "detailed", "Detailed")
 
     def _day(dt):
-        return utc_to_wall(dt, tz).strftime("%Y-%m-%d") if dt else None
+        # A date picked on a manual invoice is stored as plain midnight (finance._pdate): it is
+        # that calendar day, not a UTC instant (moved to the shop's clock it printed a day early
+        # west of UTC). Made-by-the-app dates are instants (utcnow, with microseconds).
+        if not dt:
+            return None
+        return (dt if dt.time() == dt.min.time() else utc_to_wall(dt, tz)).strftime("%Y-%m-%d")
     meta = seller_meta + [
             ("Bill to", payer.name if payer else None),
             ("Address", (getattr(payer, "billing_address", None) or getattr(payer, "address", None)) if payer else None),

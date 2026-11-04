@@ -116,6 +116,21 @@ def _jobs_tax(orders) -> float:
     return q2(sum(float(getattr(o, "tax", 0) or 0) for o in orders))
 
 
+def _lines_tax(lines) -> float:
+    """The tax inside some of a job's lines (orders.order_tax for a subset): a line-subset invoice
+    carries its lines' VAT or sales tax the way a whole-job invoice carries the job's."""
+    from backend.services.tax import line_tax
+    return q2(sum(line_tax(qty=l.qty, unit_price=l.unit_price, discount=l.discount,
+                           discount_type=l.discount_type, tax_rate=l.tax_rate, tax_mode=l.tax_mode)
+                  for l in lines))
+
+
+async def _billed_lines_tax(db: AsyncSession, inv: Invoice) -> float:
+    ids = [r.order_line_id for r in await _billed_rows(db, inv)]
+    return _lines_tax((await db.execute(select(OrderLine).where(OrderLine.id.in_(ids)))).scalars().all()) \
+        if ids else 0.0
+
+
 async def _has_free_lines(db: AsyncSession, inv: Invoice) -> bool:
     return bool((await db.execute(select(InvoiceLine.id).where(
         InvoiceLine.invoice_id == inv.id, InvoiceLine.order_line_id.is_(None)).limit(1))).scalar_one_or_none())
@@ -155,13 +170,23 @@ async def new_invoice(db: AsyncSession, *, org_id: str, orders: list[Order] = ()
                            total=q2(qty * price)))
     await db.flush()
     inv.subtotal = q2(subtotal) if subtotal else await source_subtotal(db, inv)
-    if discount_pct is not None or tax_pct is not None:
+    # The tax already inside what's billed: whole jobs' totals, or the listed job lines' (recheck
+    # B4: a line-subset invoice, and any invoice made with percentages, used to store tax 0).
+    carried = 0.0
+    if not subtotal and not tax and not tax_pct:
+        if lines:
+            carried = _lines_tax(lines)
+        elif orders and not free_lines:
+            carried = _jobs_tax(orders)
+    if carried:
+        # Shown as the invoice's tax, the subtotal is what's left; the total doesn't change. A
+        # percentage discount comes off the subtotal and takes the tax down with it.
+        inv.subtotal = q2(inv.subtotal - carried)
+        if discount_pct:
+            discount = q2(inv.subtotal * float(discount_pct) / 100)
+        tax = q2(carried * (1 - float(discount_pct or 0) / 100))
+    elif discount_pct is not None or tax_pct is not None:
         discount, tax = pct_amounts(inv.subtotal, discount_pct or 0, tax_pct or 0)
-    elif orders and not lines and not free_lines and not subtotal and not tax:
-        # Whole jobs: their totals already include their tax, so it's shown as the invoice's
-        # tax and the subtotal is what's left. The total doesn't change.
-        tax = _jobs_tax(orders)
-        inv.subtotal = q2(inv.subtotal - tax)
     inv.discount, inv.tax = q2(discount or 0), q2(tax or 0)
     retotal(inv)
     await db.flush()
@@ -395,10 +420,19 @@ async def sync_order_invoices(db: AsyncSession, order: Order, prev_total: float)
                                        "sent or paid. That invoice keeps its total; the difference is owed on the "
                                        "job and goes on a new invoice.")
             continue
-        sub = await source_subtotal(db, inv) if await _billed_rows(db, inv) else q2(float(inv.subtotal or 0) + delta)
-        if sub == q2(float(inv.subtotal or 0)):
+        if await _billed_rows(db, inv):
+            # Job lines: recomputed from them, and the tax follows the lines (their totals include it)
+            tax = await _billed_lines_tax(db, inv)
+            sub = q2(await source_subtotal(db, inv) - tax)
+        else:
+            sub, tax = q2(float(inv.subtotal or 0) + delta), q2(float(inv.tax or 0))
+            if not await _has_free_lines(db, inv):
+                # Whole jobs: keep the jobs' tax split out, with the total unchanged.
+                jt = _jobs_tax(await invoice_orders(db, inv))
+                sub, tax = q2(sub + tax - jt), jt
+        if (sub, tax) == (q2(float(inv.subtotal or 0)), q2(float(inv.tax or 0))):
             continue
-        new_total = q2(sub - float(inv.discount or 0) + float(inv.tax or 0))
+        new_total = q2(sub - float(inv.discount or 0) + tax)
         excess = q2(float(inv.amount_paid or 0) + float(inv.credited or 0) - new_total)
         if excess > float(inv.amount_paid or 0):     # checked before anything changes
             raise HTTPException(409, f"Invoice {inv.invoice_number} has credit notes worth more than its new total "
@@ -407,11 +441,7 @@ async def sync_order_invoices(db: AsyncSession, order: Order, prev_total: float)
             # Paid more than it now bills: the extra goes back to being held on the job, where it
             # shows as an overpayment staff can refund (or it pays the job's next invoice).
             await release_payments(db, inv, excess, prefer_order=order.id)
-        inv.subtotal = sub
-        if not await _billed_rows(db, inv) and not await _has_free_lines(db, inv):
-            # Whole jobs: keep the jobs' tax split out, with the total unchanged.
-            jt = _jobs_tax(await invoice_orders(db, inv))
-            inv.subtotal, inv.tax = q2(sub + float(inv.tax or 0) - jt), jt
+        inv.subtotal, inv.tax = sub, tax
         retotal(inv)
         settle_status(inv)
         if inv.status == "paid":
@@ -449,6 +479,8 @@ async def detach_order(db: AsyncSession, inv: Invoice, order_id: str) -> bool:
               if r.order_line_id in set((await db.execute(select(OrderLine.id).where(
                   OrderLine.order_id == order_id))).scalars().all())]
     amount = sum(float(r.total or 0) for r in billed) if billed else float(order.total or 0) if order else 0.0
+    billed_tax = min(_lines_tax((await db.execute(select(OrderLine).where(OrderLine.id.in_(
+        [r.order_line_id for r in billed])))).scalars().all()), float(inv.tax or 0)) if billed else 0.0
     for r in billed:
         await db.delete(r)
     if link:
@@ -458,7 +490,8 @@ async def detach_order(db: AsyncSession, inv: Invoice, order_id: str) -> bool:
             InvoiceOrder.invoice_id == inv.id, InvoiceOrder.order_id != order_id)
             .order_by(InvoiceOrder.sort_order))).scalars().first()
         inv.order_id = nxt.order_id if nxt else None
-    jt = _jobs_tax([order]) if order and not billed and float(inv.tax or 0) >= _jobs_tax([order]) else 0.0
+    jt = billed_tax if billed else \
+        _jobs_tax([order]) if order and float(inv.tax or 0) >= _jobs_tax([order]) else 0.0
     inv.subtotal = q2(max(float(inv.subtotal or 0) - (amount - jt), 0))
     inv.tax = q2(float(inv.tax or 0) - jt)
     retotal(inv)
