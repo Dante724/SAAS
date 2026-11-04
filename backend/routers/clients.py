@@ -14,6 +14,7 @@ from backend.models import Client, Device, Employee
 from backend.services.auth import assert_perm, get_current_employee, require_perm, record_scope
 from backend.core import paging as _paging
 from backend.services.money import q2
+from backend.services.owned import get_owned_or_404
 from backend.core.spreadsheet import MAX_IMPORT_ROWS, safe_row
 
 from backend.services import addresses as _addr
@@ -558,6 +559,7 @@ async def client_documents(
 ):
     """All work orders for this client (Orderry's Documents tab in the contact profile)."""
     from backend.models import Order
+    await get_owned_or_404(db, Client, client_id, current.org_id, "client")
     orders = (await db.execute(
         select(Order).where(Order.client_id == client_id, Order.org_id == current.org_id)
         .order_by(Order.created_at.desc())
@@ -1010,6 +1012,7 @@ async def client_calls(
     current: Employee = Depends(get_current_employee),
 ):
     from backend.models import Call
+    await get_owned_or_404(db, Client, client_id, current.org_id, "client")
     rows = (await db.execute(select(Call).where(
         Call.org_id == current.org_id, Call.client_id == client_id)
         .order_by(Call.id.desc()).limit(100))).scalars().all()
@@ -1030,6 +1033,7 @@ async def client_feedback(
     current: Employee = Depends(get_current_employee),
 ):
     from backend.models import Feedback
+    await get_owned_or_404(db, Client, client_id, current.org_id, "client")
     rows = (await db.execute(select(Feedback).where(
         Feedback.org_id == current.org_id, Feedback.client_id == client_id)
         .order_by(Feedback.created_at.desc()).limit(50))).scalars().all()
