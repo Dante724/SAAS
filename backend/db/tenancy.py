@@ -36,7 +36,8 @@ each OrgScoped entity in it (joins and aliases included). So ``db.get(Part, othe
 None, ``update(Client).where(Client.id == other_shops_id)`` changes 0 rows, and a query that
 forgets its ``org_id`` filter returns only this shop's rows. The hand-written filters stay: this
 is the safety net under them, not a replacement. A row whose org_id is NULL (devices and POs
-still allow it, from an old backfill: migration trg01 fills what it can) is visible to no shop.
+still allow it, from an old backfill: migration trg01 fills what it can) is visible to no shop,
+so a new device or PO saved without one takes its shop from its links before flush.
 
 - Not filtered: sessions with no tenant; refreshes of rows already loaded; and statements that
   opt out with ``.execution_options(skip_tenant_filter=True)``. Each such call site says why
@@ -200,9 +201,40 @@ def _soft_targets(obj, attr: str = "ref_id") -> tuple:
     return (t["part"], t["service"], t["bundle"])
 
 
+# Tables whose org_id is still nullable (old backfill): a new row written without one takes its
+# shop from these links, in this order (the same rules as migration trg01), so no new row is ever
+# org-less, and so invisible to every shop. Falls back to the request's shop.
+_ORG_FROM_LINKS = {
+    "devices": ("client_id", "location_id", "warehouse_id"),
+    "purchase_orders": ("location_id", "supplier_id"),
+}
+
+
+def _fill_missing_org(session: Session, tenant) -> None:
+    for obj in session.new:
+        links = _ORG_FROM_LINKS.get(getattr(getattr(obj, "__table__", None), "name", None))
+        if not links or getattr(obj, "org_id", None):
+            continue
+        org = None
+        for attr in links:
+            val = getattr(obj, attr, None)
+            if not val:
+                continue
+            col = obj.__table__.c[attr]
+            target = next(iter(col.foreign_keys)).column.table
+            # Plain table columns, explicit opt-out: only the linked row's shop id is read.
+            with session.no_autoflush:
+                org = session.execute(select(target.c.org_id).where(target.c.id == val)
+                                      .execution_options(skip_tenant_filter=True)).scalar()
+            if org:
+                break
+        obj.org_id = org or tenant
+
+
 @event.listens_for(Session, "before_flush")
 def _guard_cross_tenant_references(session: Session, flush_context, instances) -> None:
     tenant = session.info.get("tenant_org")
+    _fill_missing_org(session, tenant)
     if tenant:
         for obj in session.deleted:
             org = getattr(obj, "org_id", None)
