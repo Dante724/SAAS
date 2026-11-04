@@ -77,9 +77,8 @@ async def delete_resource(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
-    r = (await db.execute(select(Resource).where(
-        Resource.id == rid, Resource.org_id == current.org_id))).scalar_one_or_none()
-    if r:
-        r.active = False
-        await db.commit()
+    from backend.services.owned import get_owned_or_404
+    r = await get_owned_or_404(db, Resource, rid, current.org_id, "resource")
+    r.active = False
+    await db.commit()
     return {"ok": True}
