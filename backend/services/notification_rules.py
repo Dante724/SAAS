@@ -17,8 +17,10 @@ due row with a compare-and-set, sends it, retries transient provider errors with
 in "sending". Same shape as the webhook outbox in services/webhooks.py.
 """
 import asyncio
+import atexit
 import logging
 import re
+import time
 from datetime import datetime, timedelta, timezone
 from typing import Optional
 
@@ -355,6 +357,10 @@ OUTBOX_MAX_ATTEMPTS = 1 + len(RETRY_SCHEDULE_S)
 # after 10 seconds). It is retried, so a crash can at worst repeat one message; it never loses it.
 STUCK_SENDING_AFTER = timedelta(minutes=10)
 OUTBOX_BATCH = 200                 # per shop per tick; the rest go next tick
+# A batch stops claiming new rows after this long, and one send is cut off after SEND_TIMEOUT_S,
+# so nothing a batch claims can sit in "sending" anywhere near STUCK_SENDING_AFTER.
+OUTBOX_BATCH_SECONDS = 120
+SEND_TIMEOUT_S = 60
 LAST_ERROR_MAX = 240
 INTERRUPTED = "Interrupted while sending"
 
@@ -450,10 +456,12 @@ async def _reclaim_stuck(db: AsyncSession, org_id: str, now: datetime) -> int:
 
 async def _claim(db: AsyncSession, org_id: str, log_id: str, now: datetime) -> bool:
     """Compare-and-set scheduled → sending, committed, so exactly one sweep (in any process) sends
-    a row. Re-checks that it is still due: another sweep may have just tried and backed it off."""
+    a row. Re-checks that it is still due: another sweep may have just tried and backed it off.
+    claimed_at is the moment of THIS claim (not when the batch started): a long batch must not
+    make its later rows look stuck to the reclaimer."""
     res = await db.execute(update(NotificationLog)
         .where(NotificationLog.id == log_id, NotificationLog.org_id == org_id, _due(now))
-        .values(status="sending", claimed_at=now).execution_options(synchronize_session=False))
+        .values(status="sending", claimed_at=now_utc()).execution_options(synchronize_session=False))
     await db.commit()
     return res.rowcount == 1
 
@@ -489,8 +497,9 @@ async def _hold_or_skip(db: AsyncSession, org_id: str, log, now: datetime) -> bo
     return False
 
 
-def _record(log, result: dict, now: datetime) -> str:
-    """Write one send's outcome on the row: sent, retrying (back to scheduled, later) or dead."""
+def _record(log, result: dict) -> str:
+    """Write one send's outcome on the row: sent, retrying (back to scheduled, later) or dead.
+    The backoff runs from when this send finished, not from when the batch started."""
     log.attempts = (log.attempts or 0) + 1
     log.claimed_at = None
     if (result or {}).get("status") == "sent":
@@ -505,7 +514,7 @@ def _record(log, result: dict, now: datetime) -> str:
     # Still "scheduled" (not "failed"): it is still owed, and a queued row keeps its live portal
     # link (services/notifications._freeze_log redacts finished ones).
     log.status, log.error = "scheduled", None
-    log.next_attempt_at = now + timedelta(seconds=delay)
+    log.next_attempt_at = now_utc() + timedelta(seconds=delay)
     return "retrying"
 
 
@@ -519,7 +528,10 @@ async def run_due(db: AsyncSession, *, org_id: str, now: Optional[datetime] = No
         NotificationLog.org_id == org_id, _due(now))
         .order_by(NotificationLog.send_at).limit(limit))).scalars().all()
     counts = {"sent": 0, "retrying": 0, "dead": 0}
-    for log_id in due:
+    started = time.monotonic()
+    for i, log_id in enumerate(due):
+        if i and time.monotonic() - started > OUTBOX_BATCH_SECONDS:
+            break                                     # out of time: the rest go next tick
         if not await _claim(db, org_id, log_id, now):
             continue                                  # another sweep has it
         log = (await db.execute(select(NotificationLog).where(
@@ -535,10 +547,19 @@ async def run_due(db: AsyncSession, *, org_id: str, now: Optional[datetime] = No
             from backend.services.sense_agents import email_headers
             h = email_headers(log)
             extra = {"headers": h} if h else {}   # no template: plain text, nothing to look up
-        # A raise here (a crashed worker) leaves the row "sending"; _reclaim_stuck retries it.
-        result = await _send(db, org_id, log.channel,
-            recipient=log.recipient, subject=log.subject, body=log.body, **extra)
-        outcome = _record(log, result, now)
+        try:
+            result = await asyncio.wait_for(_send(db, org_id, log.channel,
+                recipient=log.recipient, subject=log.subject, body=log.body, **extra), SEND_TIMEOUT_S)
+        except Exception as exc:  # noqa: BLE001 — one bad row must not stop the rows behind it
+            # Only the error type: a raw message could carry the recipient or provider details.
+            result = {"status": "failed",
+                      "error": "Timed out" if isinstance(exc, asyncio.TimeoutError) else type(exc).__name__}
+            await db.rollback()                       # the claim is committed; drop anything half-done
+            log = (await db.execute(select(NotificationLog).where(
+                NotificationLog.id == log_id, NotificationLog.org_id == org_id)
+                .execution_options(populate_existing=True))).scalar_one()
+        # A worker that dies here (killed, cancelled) leaves the row "sending"; _reclaim_stuck retries it.
+        outcome = _record(log, result)
         await db.commit()
         counts[outcome] += 1
         if outcome != "sent":
@@ -563,7 +584,9 @@ _EMAIL_ADDR = re.compile(r"[^\s'\"<>]+@[^\s'\"<>]+")
 def _mail_failed(res) -> Optional[str]:
     """The error of a failed send, else None (fakes and old callers may return nothing)."""
     if isinstance(res, dict) and res.get("status") not in (None, "sent"):
-        return _EMAIL_ADDR.sub("<address>", _short(res.get("error")) or "Delivery failed")
+        # Scrub first, then shorten: shortening first can cut an address in half and leave the
+        # local part where the pattern no longer sees it.
+        return _short(_EMAIL_ADDR.sub("<address>", str(res.get("error") or ""))) or "Delivery failed"
     return None
 
 
@@ -601,6 +624,17 @@ async def send_account_email(send, recipient: str, subject: str, body: str, *, w
     task = asyncio.get_running_loop().create_task(_retry())
     _ACCOUNT_EMAIL_TASKS.add(task)          # kept referenced until done
     task.add_done_callback(_ACCOUNT_EMAIL_TASKS.discard)
+
+
+@atexit.register
+def warn_pending_account_emails() -> int:
+    """At shutdown, say how many account-email retries were still waiting (they live in memory
+    and are lost). Only a count: never an address or a link."""
+    pending = sum(1 for t in _ACCOUNT_EMAIL_TASKS if not t.done())
+    if pending:
+        log_.warning("shutting down with %d account email retry(ies) not finished; "
+                     "those emails were not sent", pending)
+    return pending
 
 
 # ── Build 85: appointment notifications ──────────────────────────────────────────
@@ -739,7 +773,8 @@ async def queue_appointment_reminders(db: AsyncSession, *, org_id: str,
 async def notify_staff_order(db: AsyncSession, *, org_id: str, order_id: str, event: str,
                              status_key: Optional[str] = None,
                              actor_id: Optional[str] = None,
-                             now: Optional[datetime] = None, commit: bool = True) -> int:
+                             now: Optional[datetime] = None, commit: bool = True,
+                             push_later: Optional[list] = None) -> int:
     """Fire `module="order"`, `scope="staff"` rules on an order event — Orderry's
     Internal › Workflows. Targets the people responsible for the job: the assigned
     technician and the order's manager. Never notifies the person who made the change.
@@ -747,6 +782,9 @@ async def notify_staff_order(db: AsyncSession, *, org_id: str, order_id: str, ev
     Channel `push`/`in_app` → in-app bell + web push (StaffNotification). `email`/`sms`
     → a NotificationLog row queued for the employee's email/phone (sent by the outbox sweep).
     Returns how many notifications were made (bell items + queued messages).
+
+    push_later: collect the web pushes into this list instead of sending them, for a caller
+    running inside a transaction; it sends them with push.dispatch_deferred after its commit.
     """
     from backend.models import Employee as _Emp
     from backend.services import push as _push
@@ -782,7 +820,8 @@ async def notify_staff_order(db: AsyncSession, *, org_id: str, order_id: str, ev
             if rule.channel in ("push", "in_app"):
                 await _push.notify(db, org_id=org_id, employee_id=emp_id,
                                    kind=f"workflow.{event}", title=subject, body=body,
-                                   deep_link=f"/tech#/order/{order.id}", commit=False)
+                                   deep_link=f"/tech#/order/{order.id}", commit=False,
+                                   deferred=push_later)
                 sent += 1
                 continue
             emp = (await db.execute(select(_Emp).where(_Emp.id == emp_id))).scalar_one_or_none()

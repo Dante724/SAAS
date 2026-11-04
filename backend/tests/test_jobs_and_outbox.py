@@ -46,10 +46,12 @@ async def test_notification_sweep_commits_each_send_and_never_resends(client, te
     async def flaky_send(_db, _org, _channel, *, recipient, subject, body, log=None):
         calls.append(recipient)
         if len(calls) == 2:
-            raise RuntimeError("worker crashed mid-sweep")
+            # the worker dies mid-send (cancelled at shutdown, killed): an ordinary provider
+            # exception is a failed try instead (test_notification_outbox, poison row)
+            raise asyncio.CancelledError("worker crashed mid-sweep")
         return {"status": "sent"}
     monkeypatch.setattr(nr, "_send", flaky_send)
-    with pytest.raises(RuntimeError):
+    with pytest.raises(asyncio.CancelledError):
         await nr.run_due(db, org_id=org_id)
     await db.rollback()
     await nr.run_due(db, org_id=org_id)            # the next tick

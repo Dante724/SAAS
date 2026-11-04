@@ -290,3 +290,138 @@ async def test_the_outbox_sweep_delivers_only_for_shops_with_due_messages(client
     assert (await _row(db, lid)).status == "sent" and (await _row(db, old)).status == "failed"
     assert provider.calls == ["+15550101"]
     assert await nr.orgs_with_due(db) == []
+
+
+# ── review fixes (PR #95) ────────────────────────────────────────────────────────────────────
+async def test_a_reclaim_mid_batch_never_sends_a_row_twice(client, tenant, db, monkeypatch):
+    """A long batch (slow provider during an outage) must not look "stuck" to the other sweep:
+    each claim is stamped with the time it was made, not the time the batch started."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    org = await _org_id(client, tenant)
+    ids = [await _due_sms(db, org, minutes_ago=30) for _ in range(3)]
+    Session = async_sessionmaker(db.bind, expire_on_commit=False)
+    calls, state = [], {"other": False}
+
+    async def slow_send(_db, _org, _channel, *, recipient, subject, body, log=None, headers=None):
+        calls.append(log.id if log is not None else recipient)
+        if not state["other"]:                 # mid-batch, the other job's sweep runs
+            state["other"] = True
+            async with Session() as s:
+                await nr.run_due(s, org_id=org)
+        return OK
+    monkeypatch.setattr(nr, "_send", slow_send)
+    # This batch started 11 minutes ago: the provider has been that slow.
+    await nr.run_due(db, org_id=org, now=now_utc() - nr.STUCK_SENDING_AFTER - timedelta(minutes=1))
+    assert sorted(calls) == sorted(ids), calls          # every row exactly once
+    assert {(await _row(db, i)).status for i in ids} == {"sent"}
+
+
+async def test_a_batch_stops_claiming_when_it_runs_long(client, tenant, db, provider, monkeypatch):
+    monkeypatch.setattr(nr, "OUTBOX_BATCH_SECONDS", 0, raising=False)
+    org = await _org_id(client, tenant)
+    for _ in range(3):
+        await _due_sms(db, org)
+    first = await nr.run_due(db, org_id=org)
+    assert first["sent"] == 1                            # one row, then the time budget is spent
+    rest = await nr.run_due(db, org_id=org)
+    assert rest["sent"] == 1 and len(provider.calls) == 2
+
+
+async def test_only_one_notification_job_delivers_at_a_time(client, tenant, db, monkeypatch):
+    """notification-outbox (30s) and notification-sweep (120s) both deliver; they must never
+    overlap, or one can reclaim what the other is still sending."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from backend.core import scheduled
+    org = await _org_id(client, tenant)
+    await _due_sms(db, org)
+    monkeypatch.setattr("backend.db.database.AsyncSessionLocal",
+                        async_sessionmaker(db.bind, expire_on_commit=False))
+    inner = []
+    real = nr.run_due
+
+    async def run_due(session, *, org_id, now=None):
+        if not inner:
+            inner.append("outer")
+            await scheduled.sweep_notifications()          # the other job fires mid-delivery
+        else:
+            inner.append("inner")
+        return await real(session, org_id=org_id, now=now)
+    monkeypatch.setattr(nr, "run_due", run_due)
+    await scheduled.deliver_notifications()
+    assert inner == ["outer"], inner                     # the sweep queued reminders only
+
+
+async def test_a_poison_row_does_not_block_the_rows_behind_it(client, tenant, db, monkeypatch):
+    org = await _org_id(client, tenant)
+    poison = await _due_sms(db, org, minutes_ago=10)     # first in the queue
+    good = [await _due_sms(db, org, minutes_ago=5) for _ in range(2)]
+    sent = []
+
+    async def send(_db, _org, _channel, *, recipient, subject, body, log=None, headers=None):
+        if log.id == poison:
+            raise ValueError("bad template data")
+        sent.append(log.id)
+        return OK
+    monkeypatch.setattr(nr, "_send", send)
+    res = await nr.run_due(db, org_id=org)
+    assert sorted(sent) == sorted(good) and res["sent"] == 2
+    row = await _row(db, poison)
+    assert row.status == "scheduled" and row.attempts == 1 and row.last_error == "ValueError"
+
+
+async def test_staff_push_goes_out_after_the_status_change_commits(client, tenant, db, monkeypatch, caplog):
+    """A staff push rule on a status change: no commit inside the savepoint, and the blocking
+    webpush call runs off the event loop, after the status change is saved."""
+    import sys
+    import threading
+    import types
+
+    from backend.config import settings
+    from backend.models import Employee, Order, PushSubscription, StaffNotification
+    org, oid, key = await _status_setup(client, tenant, db)
+    tech = Employee(org_id=org, name="Tech", email="tech-push@test.dev", password_hash="x", active=True)
+    db.add(tech)
+    await db.flush()
+    db.add(PushSubscription(org_id=org, employee_id=tech.id, endpoint="https://push.example/x",
+                            p256dh="k", auth="a"))
+    o = (await db.execute(select(Order).where(Order.id == oid))).scalar_one()
+    o.assigned_to_id = tech_id = tech.id
+    db.add(NotificationRule(org_id=org, module="order", scope="staff", event="status_changed",
+                            channel="push", active=True))
+    await db.commit()
+    monkeypatch.setattr(settings, "VAPID_PRIVATE_KEY", "priv", raising=False)
+    monkeypatch.setattr(settings, "VAPID_PUBLIC_KEY", "pub", raising=False)
+    pushed = []
+    fake = types.ModuleType("pywebpush")
+    fake.webpush = lambda **kw: pushed.append(threading.current_thread() is threading.main_thread())
+    monkeypatch.setitem(sys.modules, "pywebpush", fake)
+    monkeypatch.setattr(nr, "_adapter_for", FakeProvider(OK).adapter_for)
+
+    with caplog.at_level(logging.ERROR, logger="tekly.notifications"):
+        r = await client.patch(f"/api/orders/{oid}/status", json={"status": key}, headers=tenant)
+    assert r.status_code == 200, r.text
+    assert not [rec for rec in caplog.records if rec.name == "tekly.notifications"], caplog.text
+    assert pushed and not any(pushed)                    # sent, and off the event-loop thread
+    db.expire_all()
+    assert (await db.execute(select(StaffNotification).where(
+        StaffNotification.employee_id == tech_id))).scalars().first() is not None
+    logs = (await db.execute(select(NotificationLog).where(
+        NotificationLog.order_id == oid, NotificationLog.trigger_event == "status_changed"))).scalars().all()
+    assert [lg.status for lg in logs] == ["scheduled"]   # the customer message was queued too
+
+
+def test_account_email_errors_are_scrubbed_before_truncating():
+    long_err = "SMTP: " + "x" * (nr.LAST_ERROR_MAX - 12) + " someone.long.address@example.com refused"
+    out = nr._mail_failed({"status": "failed", "error": long_err})
+    assert "some" not in out and "@" not in out      # no part of the address survives
+
+
+async def test_shutdown_warns_about_unfinished_account_email_retries(monkeypatch, caplog):
+    task = asyncio.get_running_loop().create_task(asyncio.sleep(60))
+    monkeypatch.setattr(nr, "_ACCOUNT_EMAIL_TASKS", {task})
+    with caplog.at_level(logging.WARNING, logger="tekly.notifications"):
+        assert nr.warn_pending_account_emails() == 1
+    task.cancel()
+    msg = " ".join(r.getMessage() for r in caplog.records)
+    assert "1 account email" in msg and "@" not in msg
