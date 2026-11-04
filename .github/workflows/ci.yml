@@ -25,6 +25,7 @@ permissions:
 jobs:
   lint-migrations:
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     env:
       ENVIRONMENT: test
@@ -54,6 +55,7 @@ jobs:
     # and uploads raw coverage data; the `coverage` job combines them and enforces the floor.
     name: test (shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
+    timeout-minutes: 40  # ~2-3x a normal run; a timeout is a hang to investigate (TESTING.md), not a rerun
     strategy:
       fail-fast: false   # let every shard report its failures
       matrix:
@@ -100,6 +102,7 @@ jobs:
     needs: test
     if: ${{ !cancelled() }}
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     env:
       ENVIRONMENT: test
       SEED_DEMO: "false"
@@ -156,7 +159,7 @@ jobs:
     name: backend-postgres (shard ${{ matrix.shard }})
     runs-on: ubuntu-latest
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
-    timeout-minutes: 30
+    timeout-minutes: 45  # normal run 12-20 min
     strategy:
       fail-fast: false
       matrix:
@@ -211,6 +214,7 @@ jobs:
     needs: backend-postgres
     if: ${{ !cancelled() && (github.event_name != 'pull_request' || !github.event.pull_request.draft) }}
     runs-on: ubuntu-latest
+    timeout-minutes: 5
     steps:
       - name: All Postgres shards passed
         run: |
@@ -219,6 +223,7 @@ jobs:
 
   frontend:
     runs-on: ubuntu-latest
+    timeout-minutes: 15
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     defaults:
       run:

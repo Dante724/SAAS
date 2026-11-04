@@ -69,6 +69,11 @@ real failure. A setup problem a rerun won't fix (the role can't `CREATE DATABASE
 stops with `TEST SETUP ERROR` and exit code 4. "Too many clients" is reported as infra but says to
 check for a connection leak: if few runs share the server, it is a real bug.
 
+**A CI timeout is a hang to investigate, never a reason to rerun until it passes.** Every CI job has
+a `timeout-minutes` of about 2–3× its normal run (backend shards: 40–45 min against a normal 10–20).
+A job that hits it is stuck — a deadlock, a test waiting on a network call, a leaked connection — and
+that is a real bug: find it from the job log before rerunning.
+
 **Postgres locally: use `scripts/test_pg.sh`** (or `make test-pg`). It starts a throwaway Postgres 16
 just for this run (fresh data dir, its own socket dir under `/private/tmp/claude-$UID`, its own port, no
 TCP listener), runs the suite with 4 xdist workers, then stops the server and deletes its files.
