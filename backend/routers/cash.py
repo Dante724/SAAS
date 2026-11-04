@@ -685,6 +685,14 @@ async def _pay_order(order_id: str, data: OrderPaymentIn, db: AsyncSession, curr
     # Lock the order row so two concurrent "pay" requests serialize (Postgres) — combined with the
     # remaining<=0 guard below this prevents a double-click / webhook-race from double-posting a
     # payment. (with_for_update is a no-op on SQLite, which already serializes writes.)
+    # The job's live invoices first, then the job (Invoice -> Order, as Invoices › Record payment
+    # does): two jobs billed on one invoice and paid together each held its own job and then
+    # waited on the shared invoice, a deadlock once amount_paid moved by an atomic UPDATE.
+    from backend.services.invoice_money import invoices_for_order
+    inv_ids = sorted(i.id for i in await invoices_for_order(db, order_id))
+    if inv_ids:
+        await db.execute(select(Invoice.id).where(Invoice.id.in_(inv_ids), Invoice.org_id == current.org_id)
+                         .order_by(Invoice.id).with_for_update())
     o = (await db.execute(select(Order).where(
         Order.id == order_id, Order.org_id == current.org_id).with_for_update())).scalar_one_or_none()
     if not o:
