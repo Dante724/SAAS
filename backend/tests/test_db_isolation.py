@@ -112,3 +112,45 @@ def test_infra_message_hides_the_password_and_says_to_rerun():
     msg = iso.infra_message("the database server is unreachable", "postgresql+asyncpg://u:s3cret@h/db_r1",
                             ConnectionRefusedError(61, "Connection refused"))
     assert msg.startswith("INFRASTRUCTURE ERROR") and "s3cret" not in msg and "rerun" in msg
+
+
+class _FakeConn:
+    """Just enough of an asyncpg connection for the privilege probe."""
+
+    def __init__(self, error=None):
+        self.error, self.rolled_back = error, False
+
+    def transaction(self):
+        conn = self
+
+        class _Tr:
+            async def start(self):
+                pass
+
+            async def rollback(self):
+                conn.rolled_back = True
+
+        return _Tr()
+
+    async def execute(self, sql):
+        assert sql == "SET LOCAL session_replication_role = replica"
+        if self.error:
+            raise self.error
+
+
+def test_privilege_probe_passes_for_a_role_that_can_set_replica_mode():
+    conn = _FakeConn()
+    asyncio.run(iso._check_privileges(conn))
+    assert conn.rolled_back  # the probe changes nothing
+
+
+def test_a_role_without_superuser_stops_the_run_as_a_setup_error_not_infra():
+    conn = _FakeConn(ape.InsufficientPrivilegeError('permission denied to set parameter "session_replication_role"'))
+    with pytest.raises(iso.MissingPrivilegeError) as info:
+        asyncio.run(iso._check_privileges(conn))
+    assert conn.rolled_back
+    assert not iso.is_infra_error(info.value)  # a rerun can't fix it, so never exit 75
+    msg = iso.setup_message("could not create this run's test database", "postgresql+asyncpg://u:s3cret@h/db",
+                            info.value)
+    assert msg.startswith("TEST SETUP ERROR — the test database role lacks a privilege")
+    assert "SUPERUSER" in msg and "GRANT SET ON PARAMETER session_replication_role" in msg and "s3cret" not in msg

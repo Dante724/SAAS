@@ -66,7 +66,11 @@ nothing either way: fix the server and rerun. Only conftest's own code that *ope
 classified this way, never a statement or a test body, so a real failure is never written off as
 "infra" — a missing table, a constraint error, a lock-table overflow or a statement timeout is always a
 real failure. A setup problem a rerun won't fix (the role can't `CREATE DATABASE`, wrong password)
-stops with `TEST SETUP ERROR` and exit code 4. "Too many clients" is reported as infra but says to
+stops with `TEST SETUP ERROR` and exit code 4. **The Postgres test role must be a superuser** (or, on
+Postgres 15+, be granted `GRANT SET ON PARAMETER session_replication_role TO <role>`, plus CREATEDB):
+cleanup between tests runs `SET LOCAL session_replication_role = replica`. CI's `postgres:16` container
+and `scripts/test_pg.sh` already use a superuser; any other server is checked once at the start and,
+if the role falls short, the run stops with `TEST SETUP ERROR` naming what to grant. "Too many clients" is reported as infra but says to
 check for a connection leak: if few runs share the server, it is a real bug.
 
 **A CI timeout is a hang to investigate, never a reason to rerun until it passes.** Every CI job has

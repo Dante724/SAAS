@@ -90,11 +90,38 @@ async def _check_primary(conn) -> None:
         raise RecoveryModeError("the server is in recovery (a crash restart or a read-only standby)")
 
 
+REPLICA_ROLE_HINT = (
+    "Cleaning up between tests runs `SET LOCAL session_replication_role = replica` (so the per-test DELETEs\n"
+    "  skip foreign-key triggers). The test role must be SUPERUSER, or on Postgres 15+ be granted:\n"
+    "    GRANT SET ON PARAMETER session_replication_role TO <role>;\n"
+    "  scripts/test_pg.sh's throwaway server already uses a superuser. A rerun won't help."
+)
+
+
+class MissingPrivilegeError(Exception):
+    """The role can reach the server but lacks a privilege the suite needs (not an outage: never infra)."""
+
+
+async def _check_privileges(conn) -> None:
+    """One probe per run: the between-tests cleanup in conftest's `_schema` needs this setting."""
+    from asyncpg import exceptions as ape
+
+    tr = conn.transaction()
+    await tr.start()
+    try:
+        await conn.execute("SET LOCAL session_replication_role = replica")
+    except ape.InsufficientPrivilegeError as e:
+        raise MissingPrivilegeError(f"the test role can't set session_replication_role ({e})") from e
+    finally:
+        await tr.rollback()
+
+
 async def preflight_postgres(url: str, base_db: str) -> None:
-    """Raise unless the server is up and writable. Creates nothing."""
+    """Raise unless the server is up and writable and the role has what the suite needs. Creates nothing."""
     conn = await _admin_connect(url, base_db)
     try:
         await _check_primary(conn)
+        await _check_privileges(conn)
     finally:
         await conn.close()
 
@@ -104,6 +131,7 @@ async def create_postgres(url: str, base_db: str):
     conn = await _admin_connect(url, base_db)
     try:
         await _check_primary(conn)
+        await _check_privileges(conn)  # before CREATE, so a run that can't proceed leaves nothing behind
         name = make_url(url).database
         # No DROP first: names are unique per run, so an existing one belongs to someone else — fail.
         # template0: CREATE DATABASE from template1 fails if anyone else is connected to template1.
@@ -187,12 +215,16 @@ def infra_message(what: str, url: str, exc: BaseException | None = None) -> str:
 
 
 def setup_message(what: str, url: str, exc: BaseException) -> str:
+    if isinstance(exc, MissingPrivilegeError):
+        what, hint = "the test database role lacks a privilege the suite needs", REPLICA_ROLE_HINT
+    else:
+        hint = ("The server answered, but this run can't make its own database there. A rerun won't help: check\n"
+                "  the role's CREATEDB right and password, or use scripts/test_pg.sh (a throwaway server).")
     return (
         f"TEST SETUP ERROR — {what}\n"
         f"  database: {describe(url)}\n"
         f"  cause: {type(exc).__name__}: {(str(exc).strip().splitlines() or [''])[0][:300]}\n"
-        "  The server answered, but this run can't make its own database there. A rerun won't help: check\n"
-        "  the role's CREATEDB right and password, or use scripts/test_pg.sh (a throwaway server)."
+        f"  {hint}"
     )
 
 

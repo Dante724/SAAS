@@ -77,6 +77,8 @@ cleanup() {
 trap cleanup EXIT
 trap 'exit 130' INT TERM HUP
 
+# -U postgres: the bootstrap role is a SUPERUSER, which the suite needs (cleanup between tests sets
+# session_replication_role; conftest checks this up front). See TESTING.md.
 # The cluster's locale only (the suite itself runs with the caller's environment, like CI).
 LC_ALL=en_US.UTF-8 LANG=en_US.UTF-8 "$PG_BIN/initdb" -D "$RUN/data" -U postgres -A trust -E UTF8 >"$RUN/initdb.log" 2>&1 \
   || { tail -5 "$RUN/initdb.log" >&2; die "initdb failed"; }
