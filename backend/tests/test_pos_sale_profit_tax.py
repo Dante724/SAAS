@@ -16,7 +16,7 @@ async def _sale(client, H, price):
 
 
 async def test_imposed_tax_is_not_profit(client):
-    H, _ = await _signup(client, country="CA")         # GST 5% added on top
+    H, _ = await _signup(client, country="CA", province="AB")         # GST 5% added on top
     s = await _sale(client, H, 100)
     assert (s["total"], s["tax"], s["profit"]) == (105.0, 5.0, 100.0)
     row = next(x for x in (await client.get("/api/sales", headers=H)).json()["items"] if x["id"] == s["id"])

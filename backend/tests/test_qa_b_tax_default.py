@@ -33,7 +33,7 @@ async def _taxes(client, h):
 
 @pytest.mark.asyncio
 async def test_seeded_tax_is_what_jobs_charge(client):
-    h = await _shop(client, "ca-seed@qa.dev", region="ca", country="CA")
+    h = await _shop(client, "ca-seed@qa.dev", region="ca", country="CA", province="BC")
     gst = (await _taxes(client, h))["GST"]
     assert await _stack(client, h) == [gst["id"]]
     assert await _line_tax(client, h) == (5.0, 105.0)
@@ -41,7 +41,7 @@ async def test_seeded_tax_is_what_jobs_charge(client):
 
 @pytest.mark.asyncio
 async def test_new_default_tax_replaces_seeded_one_on_jobs(client):
-    h = await _shop(client, "ca-new@qa.dev", region="ca", country="CA")
+    h = await _shop(client, "ca-new@qa.dev", region="ca", country="CA", province="BC")
     r = await client.post("/api/catalog/taxes", headers=h, json={"name": "HST", "rate": 13, "is_default": True})
     assert r.status_code == 201, r.text
     assert await _stack(client, h) == [r.json()["id"]]
@@ -65,7 +65,7 @@ async def test_put_default_moves_the_stack_too(client):
 @pytest.mark.asyncio
 async def test_unticking_the_only_tax_is_refused(client):
     """Unticking "default" never silently empties the job tax list."""
-    h = await _shop(client, "ca-off@qa.dev", region="ca", country="CA")
+    h = await _shop(client, "ca-off@qa.dev", region="ca", country="CA", province="BC")
     gst = (await _taxes(client, h))["GST"]
     r = await client.put(f"/api/catalog/taxes/{gst['id']}", headers=h, json={"name": "GST", "is_default": False})
     assert r.status_code == 422, r.text
@@ -75,7 +75,7 @@ async def test_unticking_the_only_tax_is_refused(client):
 
 @pytest.mark.asyncio
 async def test_unticking_the_default_hands_over_to_the_next_tax(client):
-    h = await _shop(client, "ca-next@qa.dev", region="ca", country="CA")
+    h = await _shop(client, "ca-next@qa.dev", region="ca", country="CA", province="BC")
     gst = (await _taxes(client, h))["GST"]
     pst = (await client.post("/api/catalog/taxes", headers=h, json={"name": "PST", "rate": 7})).json()
     await client.put("/api/settings/tax-rules", headers=h,
@@ -90,7 +90,7 @@ async def test_unticking_the_default_hands_over_to_the_next_tax(client):
 async def test_existing_shop_without_a_stack_is_not_backfilled(client):
     """Shops from before this change have a default flag but no job stack (they charge 0%).
     Nothing fills the stack in for them; only the owner making a tax the default does."""
-    h = await _shop(client, "old@qa.dev", region="ca", country="CA")
+    h = await _shop(client, "old@qa.dev", region="ca", country="CA", province="BC")
     await client.put("/api/settings/tax-rules", headers=h, json={"doc_family": "tickets_sales", "tax_ids": []})
     await client.post("/api/catalog/taxes", headers=h, json={"name": "PST", "rate": 7})
     assert await _stack(client, h) == []
@@ -109,7 +109,7 @@ async def test_switched_off_tax_cant_go_in_the_stack(client, tenant):
 
 @pytest.mark.asyncio
 async def test_saving_the_stack_marks_its_first_tax_default(client):
-    h = await _shop(client, "ca-stack@qa.dev", region="ca", country="CA")
+    h = await _shop(client, "ca-stack@qa.dev", region="ca", country="CA", province="BC")
     hst = (await client.post("/api/catalog/taxes", headers=h, json={"name": "HST", "rate": 13})).json()
     r = await client.put("/api/settings/tax-rules", headers=h,
                          json={"doc_family": "tickets_sales", "tax_ids": [hst["id"]]})
@@ -121,7 +121,7 @@ async def test_saving_the_stack_marks_its_first_tax_default(client):
 @pytest.mark.asyncio
 async def test_custom_stack_keeps_other_taxes_when_default_changes(client):
     """A shop stacking GST + PST keeps PST when it swaps GST for another default."""
-    h = await _shop(client, "ca-mix@qa.dev", region="ca", country="CA")
+    h = await _shop(client, "ca-mix@qa.dev", region="ca", country="CA", province="BC")
     gst = (await _taxes(client, h))["GST"]
     pst = (await client.post("/api/catalog/taxes", headers=h, json={"name": "PST", "rate": 7})).json()
     await client.put("/api/settings/tax-rules", headers=h,
