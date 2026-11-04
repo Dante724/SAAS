@@ -584,11 +584,10 @@ async def delete_template(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
-    t = (await db.execute(select(DocumentTemplate).where(
-        DocumentTemplate.id == tid, DocumentTemplate.org_id == current.org_id))).scalar_one_or_none()
-    if t:
-        t.active = False
-        await db.commit()
+    from backend.services.owned import get_owned_or_404
+    t = await get_owned_or_404(db, DocumentTemplate, tid, current.org_id, "template")
+    t.active = False
+    await db.commit()
     return {"ok": True}
 
 
@@ -661,7 +660,8 @@ def _line_numbers(line: OrderLine) -> dict:
         disc = gross_no_disc * float(line.discount or 0) / 100.0
     else:
         disc = float(line.discount or 0)
-    base = max(gross_no_disc - disc, 0)                 # taxable base, after discount
+    # taxable base, after discount; a coupon line is negative and takes its tax back off
+    base = (gross_no_disc - disc) if gross_no_disc < 0 else max(gross_no_disc - disc, 0)
     tax = base * rate
     amount = float(line.total) if line.total is not None else base + tax
     return {"qty": qty, "unit_ex": unit_ex, "unit_inc": unit_inc, "rate": rate, "disc": disc,
@@ -1401,9 +1401,9 @@ async def preview_template(
 
 
 class AiGenIn(BaseModel):
-    prompt: str = ""
-    doc_type: str = "estimate"
-    preset: str = ""
+    prompt: str = Field("", max_length=4000)   # offline builder, but bound the keyword scan
+    doc_type: str = Field("estimate", max_length=40)
+    preset: str = Field("", max_length=80)
 
 
 @router.get("/smart-presets")
@@ -2007,6 +2007,12 @@ async def auto_print(
     other document comes back at its exact page size too (receipt, A4…)."""
     if event not in ("create", "close"):
         raise HTTPException(422, "event must be create or close")
+    # The job first: another shop's id is a 404 even when this shop prints nothing automatically.
+    order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
+        .options(selectinload(Order.lines), selectinload(Order.client),
+                 selectinload(Order.device), selectinload(Order.assigned_to)))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
     tpls = await _auto_templates(db, current.org_id, event)
     # Print only what this person may see: an invoice needs "View invoices" (as when printing by
     # hand), and line prices are blanked for staff without "View prices".
@@ -2018,11 +2024,6 @@ async def auto_print(
     tpls = allowed
     if not tpls:
         return {"docs": []}
-    order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
-        .options(selectinload(Order.lines), selectinload(Order.client),
-                 selectinload(Order.device), selectinload(Order.assigned_to)))).scalar_one_or_none()
-    if not order:
-        raise HTTPException(404, "Order not found")
     from backend.models import OrderItem
     asset_ids = [order.device_id] if order.device_id else []
     for (aid,) in (await db.execute(select(OrderItem.asset_id).where(

@@ -14,7 +14,7 @@ async def _owner(client):
 
 
 async def _tech(client, H):
-    role = (await client.post("/api/settings/rbac/roles", json={"name": "Tech", "permissions": {"can_view_purchase_price": False}},
+    role = (await client.post("/api/settings/rbac/roles", json={"template": "Full access", "name": "Tech", "permissions": {"can_view_purchase_price": False}},
                               headers=H)).json()
     email = f"t-{uuid.uuid4().hex[:6]}@test.dev"
     r = await client.post("/api/staff/employees", json={"name": "Tech", "email": email, "password": "pw-test-12345",

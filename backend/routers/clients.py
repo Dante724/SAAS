@@ -1,4 +1,5 @@
 from datetime import datetime
+import re
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
@@ -13,6 +14,7 @@ from backend.models import Client, Device, Employee
 from backend.services.auth import assert_perm, get_current_employee, require_perm, record_scope
 from backend.core import paging as _paging
 from backend.services.money import q2
+from backend.services.owned import get_owned_or_404
 from backend.core.spreadsheet import MAX_IMPORT_ROWS, safe_row
 
 from backend.services import addresses as _addr
@@ -157,6 +159,47 @@ async def list_clients(
     return {"total": total, "items": [_ser_client(c, order_count=counts.get(c.id, 0)) for c in clients],
             "skip": skip, "limit": limit}
 
+async def _guard_duplicates(db: AsyncSession, org, client_type: Optional[str], *, phone=None,
+                           email=None, exclude_id: Optional[str] = None) -> None:
+    """Orderry's "prohibit duplicate phone / email": no second contact of the same type (person or
+    organisation — a company may share its owner's number) with this phone or email. Numbers are
+    compared as numbers ("(647) 555-0199" is "+1 647 555 0199"), emails without case, and the
+    duplicates that existed before the switch was turned on don't break the check."""
+    from backend.services.owned import problem
+    ctype = client_type or "person"
+    if org.prohibit_dup_phone and phone:
+        from backend.services.call_contacts import find_client
+        dup = await find_client(db, org.id, phone, client_type=ctype, exclude_id=exclude_id)
+        if dup:
+            raise problem(409, f"{dup.name} already has this number.",
+                          "Settings › Contacts › No duplicate phone numbers is on", existing_id=dup.id,
+                          existing_name=dup.name)
+    if org.prohibit_dup_email and email and email.strip():
+        same_type = Client.client_type == ctype if ctype != "person" else \
+            or_(Client.client_type == "person", Client.client_type.is_(None))
+        q = select(Client.id, Client.name).where(Client.org_id == org.id, same_type,
+                                                 func.lower(func.trim(Client.email)) == email.strip().lower())
+        if exclude_id:
+            q = q.where(Client.id != exclude_id)
+        dup = (await db.execute(q.limit(1))).first()
+        if dup is not None:
+            raise problem(409, f"{dup.name} already has this email.",
+                          "Settings › Contacts › No duplicate emails is on", existing_id=dup.id,
+                          existing_name=dup.name)
+
+
+async def _guard_edit(db: AsyncSession, current: Employee, client: Client, *, phone, email, client_type) -> None:
+    """The duplicate guard on edit: only when the phone, email or contact type actually changes."""
+    if (phone == client.phone and email == client.email and client_type == client.client_type):
+        return
+    from backend.models import Organisation
+    org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one()
+    await _guard_duplicates(db, org, client_type,
+                            phone=phone if (phone != client.phone or client_type != client.client_type) else None,
+                            email=email if (email != client.email or client_type != client.client_type) else None,
+                            exclude_id=client.id)
+
+
 @router.post("", status_code=201)
 async def create_client(
     data: ClientIn,
@@ -183,17 +226,7 @@ async def _create_client(data: ClientIn, db: AsyncSession, current: Employee):
     from backend.models import Organisation
     org = (await db.execute(select(Organisation).where(
         Organisation.id == current.org_id))).scalar_one()
-    # Duplicate guards (Orderry: prohibit creating a contact with an existing phone/email)
-    if org.prohibit_dup_phone and data.phone:
-        dup = (await db.execute(select(Client).where(
-            Client.org_id == current.org_id, Client.phone == data.phone))).scalar_one_or_none()
-        if dup:
-            raise HTTPException(409, "A contact with this phone number already exists")
-    if org.prohibit_dup_email and data.email:
-        dup = (await db.execute(select(Client).where(
-            Client.org_id == current.org_id, Client.email == data.email))).scalar_one_or_none()
-        if dup:
-            raise HTTPException(409, "A contact with this email already exists")
+    await _guard_duplicates(db, org, data.client_type, phone=data.phone, email=data.email)
     payload = data.model_dump()
     # drop None consent so org-policy setdefault applies
     for k in ("consent_phone", "consent_email"):
@@ -230,21 +263,26 @@ async def duplicate_phones(
     """C: surface clients sharing a phone so staff can merge them. Phone is the
     universal match key; duplicates silently break notifications and call history.
     Defined before /{client_id} so the literal path wins over the wildcard."""
-    rows = (await db.execute(
-        select(Client.phone, func.count(Client.id)).where(
+    from backend.models import Organisation
+    from backend.services.call_contacts import phone_key
+    country = (await db.execute(select(Organisation.country).where(
+        Organisation.id == current.org_id))).scalar_one_or_none()
+    # Group on the normalised number so formatting variants of one phone land together.
+    by_key: dict = {}
+    for c in (await db.execute(select(Client.id, Client.name, Client.phone, Client.client_type, Client.created_at).where(
             Client.org_id == current.org_id, Client.phone.isnot(None), Client.phone != "")
-        .group_by(Client.phone).having(func.count(Client.id) > 1))).all()
-    by_phone: dict = {}
-    if rows:
-        for c in (await db.execute(select(Client).where(
-                Client.org_id == current.org_id, Client.phone.in_([phone for phone, _ in rows]))
-                .order_by(Client.created_at))).scalars().all():
-            by_phone.setdefault(c.phone, []).append(c)
+            .order_by(Client.created_at, Client.id))).all():
+        # A value with letters in it isn't a phone number: only an identical value matches it.
+        key = c.phone.strip().lower() if re.search(r"[A-Za-z]", c.phone) else phone_key(c.phone, country)
+        key = (c.client_type or "person", key)     # a company may share its owner's number
+        if len(key[1]) >= 4:
+            by_key.setdefault(key, []).append(c)
     clusters = []
-    for phone, n in rows:
-        members = by_phone.get(phone, [])
+    for members in by_key.values():
+        if len(members) < 2:
+            continue
         clusters.append({
-            "phone": phone, "count": n,
+            "phone": members[0].phone, "count": len(members),
             "keep_hint_id": members[-1].id if members else None,  # latest-created wins
             "clients": [{"id": c.id, "name": c.name,
                          "created_at": c.created_at.isoformat() if c.created_at else None}
@@ -277,14 +315,17 @@ async def get_client(
 @router.post("/{client_id}/portal-link")
 async def issue_portal_link(
     client_id: str,
+    replace: bool = False,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_client_info")),
 ):
-    """Issue (or rotate) a customer-portal magic link for this client.
+    """Issue a customer-portal magic link for this client.
 
     The relative URL `/portal/{token}` lets the customer see all their work orders, estimates
-    and invoices and approve estimates without a login. The link expires (services/portal_links)
-    and replaces every earlier one; the token is shown once and only its hash is kept.
+    and invoices and approve estimates without a login. The link expires (services/portal_links);
+    the token is shown once and only its hash is kept. Links the customer already has keep working
+    (QA F1: a new link silently killed the one in their inbox) unless ``replace=true`` rotates them,
+    or ``/portal-link/revoke`` stops them all.
     """
     from backend.services import portal_links
     client = (await db.execute(
@@ -292,9 +333,29 @@ async def issue_portal_link(
     )).scalar_one_or_none()
     if not client:
         raise HTTPException(404, "Client not found")
-    raw = await portal_links.issue(db, client, replace=True)
+    raw = await portal_links.issue(db, client, replace=replace)
     await db.commit()
-    return {"portal_token": raw, "portal_url": f"/portal/{raw}", "expires_in_days": portal_links.LINK_DAYS}
+    # `token` mirrors the track link's field name; `portal_token` stays for existing callers.
+    return {"portal_token": raw, "token": raw, "portal_url": f"/portal/{raw}",
+            "expires_in_days": portal_links.LINK_DAYS}
+
+
+@router.post("/{client_id}/portal-link/revoke")
+async def revoke_portal_links(
+    client_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_view_client_info")),   # same right as issuing one
+):
+    """Stop every portal link this client has (a lost phone, a forwarded email)."""
+    from backend.services import portal_links
+    client = (await db.execute(
+        select(Client).where(Client.id == client_id, Client.org_id == current.org_id)
+    )).scalar_one_or_none()
+    if not client:
+        raise HTTPException(404, "Client not found")
+    await portal_links.revoke_all(db, client.id)
+    await db.commit()
+    return {"ok": True}
 
 
 _DISCOUNT_FIELDS = ("disc_services_mode", "disc_services_value", "disc_services_price_type_id",
@@ -321,6 +382,7 @@ async def update_client(
     client = result.scalar_one_or_none()
     if not client:
         raise HTTPException(404, "Client not found")
+    await _guard_edit(db, current, client, phone=data.phone, email=data.email, client_type=data.client_type)
     await _guard_standing_discount(db, current, client, data.model_dump())
     if "address" in data.model_fields_set and not any(k in data.model_fields_set for k in _addr.PARTS):
         _addr.typed_line(client, data.address)
@@ -389,6 +451,9 @@ async def patch_client(
     if not client:
         raise HTTPException(404, "Client not found")
     fields = data.model_dump(exclude_unset=True)
+    await _guard_edit(db, current, client, phone=fields.get("phone", client.phone),
+                      email=fields.get("email", client.email),
+                      client_type=fields.get("client_type") or client.client_type)
     await _guard_standing_discount(db, current, client, fields)
     cd = fields.pop("custom_data", None)
     addr = {k: fields.pop(k) for k in _addr.PARTS if k in fields}
@@ -494,6 +559,7 @@ async def client_documents(
 ):
     """All work orders for this client (Orderry's Documents tab in the contact profile)."""
     from backend.models import Order
+    await get_owned_or_404(db, Client, client_id, current.org_id, "client")
     orders = (await db.execute(
         select(Order).where(Order.client_id == client_id, Order.org_id == current.org_id)
         .order_by(Order.created_at.desc())
@@ -946,6 +1012,7 @@ async def client_calls(
     current: Employee = Depends(get_current_employee),
 ):
     from backend.models import Call
+    await get_owned_or_404(db, Client, client_id, current.org_id, "client")
     rows = (await db.execute(select(Call).where(
         Call.org_id == current.org_id, Call.client_id == client_id)
         .order_by(Call.id.desc()).limit(100))).scalars().all()
@@ -966,6 +1033,7 @@ async def client_feedback(
     current: Employee = Depends(get_current_employee),
 ):
     from backend.models import Feedback
+    await get_owned_or_404(db, Client, client_id, current.org_id, "client")
     rows = (await db.execute(select(Feedback).where(
         Feedback.org_id == current.org_id, Feedback.client_id == client_id)
         .order_by(Feedback.created_at.desc()).limit(50))).scalars().all()
@@ -1058,7 +1126,7 @@ async def move_balance(
 async def client_payments(
     client_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_finance")),   # money, not contact info
 ):
     """Build 124 — the contact's Payments tab: every payment, prepayment and refund
     recorded against them, newest first, each linked back to its source order. Reads the
@@ -1195,6 +1263,7 @@ async def suggest_client_reply(
             InboxMessage.thread_id.in_(tids), InboxMessage.direction == "inbound")
             .order_by(InboxMessage.created_at.desc()))).scalars().first()
     customer_message = (last_in.body if last_in else "") or "Hi, checking in on my repair."
+    await ai.enforce_quota(current)
     out = await ai.suggest_reply(customer_message=customer_message,
                                  context=f"Customer {c.name}")
     return {"provider": out.get("provider", "stub"), "reply": out.get("reply", ""),

@@ -30,7 +30,7 @@ async def _order(client, H):
 
 
 async def _emp_with_role(client, H, perms):
-    role = (await client.post("/api/staff/roles", json={"name": "R", "permissions": perms}, headers=H)).json()
+    role = (await client.post("/api/staff/roles", json={"name": f"R {uuid.uuid4().hex[:6]}", "permissions": perms}, headers=H)).json()
     email = f"e-{uuid.uuid4().hex[:6]}@t.dev"
     await client.post("/api/staff/employees", json={
         "name": "Emp", "email": email, "password": "pw-test-12345", "role_id": role["id"]}, headers=H)

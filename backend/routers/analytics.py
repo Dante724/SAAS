@@ -21,6 +21,7 @@ from backend.models import (
 )
 from backend.services.auth import record_scope, require_perm
 from backend.services.money import q2
+from backend.services.revenue import line_net
 from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"],
@@ -223,24 +224,27 @@ async def business_insights(
     current: Employee = Depends(require_perm("can_view_reports")),
 ):
     """Owner-level KPI roll-up: revenue, ticket throughput, avg turnaround,
-    top technicians and top services over the window."""
+    top technicians and top services over the window. Revenue is net sales for the window and
+    a closed job is one earned in it (services/revenue, the rule every report uses): a dropped
+    job's written-off value is never revenue, and dropped or deleted jobs aren't closed ones."""
     from collections import defaultdict
 
-    start, _ = _window(days)
-    terminal = await _terminal_keys(db, current.org_id)
-    orders = (await db.execute(select(Order).where(
-        Order.org_id == current.org_id, Order.is_estimate == False,  # noqa: E712
-        Order.created_at >= start))).scalars().all()
-
-    created = len(orders)
-    closed = [o for o in orders if o.status in terminal]
-    revenue = q2(sum(float(o.total or 0) for o in closed))
+    from backend.services import revenue as money_rules
+    start, end = _window(days)
+    created = (await db.execute(select(func.count()).select_from(Order).where(
+        Order.org_id == current.org_id, Order.is_estimate == False, Order.archived == False,  # noqa: E712
+        Order.created_at >= start))).scalar() or 0
+    earned = await money_rules.earned_jobs_query(db, current.org_id, start, end)
+    closed = list((await db.execute(earned)).scalars().all())
+    revenue = (await money_rules.net_sales(db, current.org_id, start, end))["revenue"]
+    figs = await money_rules.job_figures(db, earned.with_only_columns(Order.id))
+    jobs_revenue = sum(f["revenue"] for f in figs.values())
     # avg turnaround (hours) for closed orders that have both timestamps
     turns = [((o.closed_at - o.created_at).total_seconds() / 3600.0)
              for o in closed if o.closed_at and o.created_at]
     avg_turnaround_h = round(sum(turns) / len(turns), 1) if turns else None
-    close_rate = round(100.0 * len(closed) / created, 1) if created else 0.0
-    avg_ticket = q2(revenue / len(closed)) if closed else 0.0
+    close_rate = min(100.0, round(100.0 * len(closed) / created, 1)) if created else 0.0
+    avg_ticket = q2(jobs_revenue / len(closed)) if closed else 0.0
 
     # top technicians by closed-order revenue (via line technician_id)
     tech_rev: dict = defaultdict(float)
@@ -248,12 +252,12 @@ async def business_insights(
     closed_ids = [o.id for o in closed]
     if closed_ids:
         lines = (await db.execute(select(OrderLine).where(
-            OrderLine.order_id.in_(closed_ids)))).scalars().all()
+            OrderLine.order_id.in_(closed_ids), func.coalesce(OrderLine.kind, "") != "refund"))).scalars().all()
         from backend.services.payroll import _line_splits
         for ln in lines:
             # 144aw — split a line's revenue across its technicians (matches payroll).
             for tid, share in _line_splits(ln):
-                tech_rev[tid] += float(ln.total or 0) * share
+                tech_rev[tid] += line_net(ln.total, ln.tax_rate) * share   # ex tax
             if ln.line_type == "labour" and ln.description:
                 svc_count[ln.description] += 1
     # resolve tech names

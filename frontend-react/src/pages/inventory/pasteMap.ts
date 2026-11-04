@@ -3,9 +3,9 @@
 // No UI, no network — just text in, {grid, map, rows} out, so it can be unit-tested.
 
 export type PasteField = "code" | "mpn" | "name" | "qty" | "cost" | "markup" | "type" | "serials" | "ignore";
-// serials: one cell per line, comma / semicolon / newline separated (only set when a column maps to it)
 // product_type (16a): the sheet's "Type" cell — serialized / expiry-tracked; only shapes new products.
-export type PostRow = { code: string; mpn: string; name: string; qty: number; purchase_price: number; markup_pct: number; serials?: string; product_type?: string };
+// serials: one cell per line, comma / semicolon / newline separated (only set when a column maps to it)
+export type PostRow = { code: string; mpn: string; name: string; qty: number; purchase_price: number; markup_pct: number; product_type?: string; serials?: string };
 
 export const FIELD_LABELS: Record<PasteField, string> = {
   code: "Code / SKU", mpn: "MPN", name: "Name", qty: "Qty", cost: "Cost", markup: "Markup %", type: "Product type", serials: "Serials", ignore: "Ignore",
@@ -22,8 +22,8 @@ const SYN: Record<Exclude<PasteField, "ignore">, string[]> = {
   qty: ["qty", "quantity", "count", "units", "unit", "onhand", "on hand", "received", "qtyreceived", "qty received", "pcs", "stock"],
   cost: ["cost", "unitcost", "unit cost", "price", "unitprice", "unit price", "buy", "buyprice", "purchase", "purchaseprice", "purchase price", "wholesale", "net", "rate"],
   markup: ["markup", "margin", "markup%", "margin%", "mkup", "uplift"],
-  serials: ["serials", "serial", "serial numbers", "serialnumbers", "serial no", "serialno", "sn", "imei", "imeis"],
   type: ["type", "product type", "producttype", "item type", "tracking", "tracked by", "serialized", "serialised"],
+  serials: ["serials", "serial", "serial numbers", "serialnumbers", "serial no", "serialno", "sn", "imei", "imeis"],
 };
 
 const norm = (s: string) => s.toLowerCase().replace(/[^a-z0-9%# ]/g, "").trim();
@@ -121,8 +121,8 @@ export function gridToRows(grid: string[][], map: PasteField[]): PostRow[] {
       else if (f === "qty") { const n = toNum(v); if (n !== null) row.qty = n; }
       else if (f === "cost") { const n = toNum(v); if (n !== null) row.purchase_price = n; }
       else if (f === "markup") { const n = toNum(v); if (n !== null) row.markup_pct = n; }
-      else if (f === "serials") row.serials = v;
       else if (f === "type") row.product_type = v;
+      else if (f === "serials") row.serials = v;
     });
     return row;
   }).filter((r) => r.code || r.mpn || r.name);
@@ -135,7 +135,7 @@ export function gridToRows(grid: string[][], map: PasteField[]): PostRow[] {
 export function mergeRemap(grid: string[][], oldMap: PasteField[], newMap: PasteField[], currentRows: PostRow[]): PostRow[] {
   const oldBase = gridToRows(grid, oldMap);
   const newBase = gridToRows(grid, newMap);
-  const keys: (keyof PostRow)[] = ["code", "mpn", "name", "qty", "purchase_price", "markup_pct", "serials", "product_type"];
+  const keys: (keyof PostRow)[] = ["code", "mpn", "name", "qty", "purchase_price", "markup_pct", "product_type", "serials"];
   return newBase.map((r, i) => {
     const old = oldBase[i], cur = currentRows[i];
     if (!old || !cur) return r;

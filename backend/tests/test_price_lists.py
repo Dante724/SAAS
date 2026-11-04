@@ -76,8 +76,8 @@ async def test_doc_type_defaults_resolution(client, tenant, db):
 async def test_defaults_roundtrip_and_decimals(client, tenant):
     pt = await _pt(client, tenant, "Base2", 0)
     r = await client.put("/api/pricing/defaults",
-                         json={"price_type_invoices_id": pt["id"], "price_decimals": 3},
+                         json={"price_type_invoices_id": pt["id"], "price_decimals": 1},
                          headers=tenant)
     assert r.status_code == 200
     d = (await client.get("/api/pricing/defaults", headers=tenant)).json()
-    assert d["price_type_invoices_id"] == pt["id"] and d["price_decimals"] == 3
+    assert d["price_type_invoices_id"] == pt["id"] and d["price_decimals"] == 1

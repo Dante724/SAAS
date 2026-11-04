@@ -16,9 +16,10 @@ from typing import Annotated, Optional
 from datetime import date as _date
 from datetime import datetime as _dt
 from backend.db.database import get_db
+from backend.db.tenancy import set_tenant
 from backend.models import (
     Order, Client, Device, Organisation, Location,
-    OrderStatusLog, EventFeedItem, DocumentSignature,
+    OrderStatus, OrderStatusLog, EventFeedItem, DocumentSignature,
     Feedback, FeedbackSettings,
 )
 from backend.services.dates import now_utc, shop_today
@@ -36,6 +37,12 @@ STAGE_LABEL = {
     "delivered": "Completed",
 }
 
+# An estimate's own steps for the customer (it is never "In repair"), placed by status group.
+EST_STAGES = [{"key": "prepared", "label": "Being prepared"},
+              {"key": "sent", "label": "Waiting for your approval"},
+              {"key": "accepted", "label": "Approved"}]
+EST_STAGE_BY_GROUP = {"new": 0, "in_progress": 0, "pending": 1, "ready": 1, "closed": 2}
+
 
 class AcceptIn(BaseModel):
     decision: str          # accept | decline
@@ -52,6 +59,7 @@ async def _load(db: AsyncSession, token: str) -> Order:
     order = row.scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    set_tenant(db, order.org_id)   # the rest of this request only sees this order's shop
     return order
 
 
@@ -155,6 +163,19 @@ async def _already_decided(db: AsyncSession, order: "Order") -> bool:
         DocumentSignature.revision == _revision(order)).limit(1))).first() is not None
 
 
+async def _claim_estimate_decision(db: AsyncSession, order: "Order") -> None:
+    """A double tap on Accept, or Accept while staff press Convert, must not convert twice. Both
+    requests pass _already_decided before either has written, so claim the row with a conditional
+    UPDATE on the status this request read (row lock on Postgres, write lock on SQLite). If someone
+    moved or converted it meanwhile, nothing matches and this answer is refused."""
+    from sqlalchemy import update as _update
+    won = await db.execute(_update(Order).where(
+        Order.id == order.id, Order.is_estimate == True, Order.status == order.status)  # noqa: E712
+        .values(status=order.status).execution_options(synchronize_session=False))
+    if won.rowcount != 1:
+        raise HTTPException(409, "This estimate has already been answered")
+
+
 async def _decide_estimate(db: AsyncSession, order: "Order", decision: str,
                            signature: Optional[str], who: str,
                            request: Optional[Request] = None, reason: Optional[str] = None) -> Optional[str]:
@@ -167,6 +188,8 @@ async def _decide_estimate(db: AsyncSession, order: "Order", decision: str,
     rules, notifications, webhooks and auto-conversion with the new-job steps all run.
     """
     verb = "accepted" if decision == "accept" else "declined"
+    if order.is_estimate:
+        await _claim_estimate_decision(db, order)
     doc = "estimate" if order.is_estimate else "work order"
     reason = ((reason or "").strip()[:1000] or None) if decision == "decline" else None
     order.estimate_decline_reason = reason      # E5: shown to staff on the job
@@ -323,10 +346,15 @@ async def _track_payload(db: AsyncSession, order: "Order") -> dict:
     _cur_st = _sts.get(order.status)
     _group = getattr(_cur_st, "status_group", None)
     stopped = _group == "dropped"
-    try:
-        stage_index = STAGE_FLOW.index(order.status)
-    except ValueError:
-        stage_index = {"new": 0, "pending": 2, "in_progress": 3, "ready": 4, "closed": 5}.get(_group or "", 0)
+    if getattr(order, "is_estimate", False):
+        stages = EST_STAGES
+        stage_index = EST_STAGE_BY_GROUP.get(_group or "", 0)
+    else:
+        stages = [{"key": s, "label": STAGE_LABEL[s]} for s in STAGE_FLOW]
+        try:
+            stage_index = STAGE_FLOW.index(order.status)
+        except ValueError:
+            stage_index = {"new": 0, "pending": 2, "in_progress": 3, "ready": 4, "closed": 5}.get(_group or "", 0)
 
     def _label(key):
         return STAGE_LABEL.get(key) or (_sts[key].name if key in _sts else (key or "").replace("_", " ").capitalize())
@@ -416,7 +444,7 @@ async def _track_payload(db: AsyncSession, order: "Order") -> dict:
         "stage_label": _label(order.status),
         "stage_index": stage_index,
         "stopped": stopped,
-        "stages": [{"key": s, "label": STAGE_LABEL[s]} for s in STAGE_FLOW],
+        "stages": stages,
         "shop_name": org.name if org else "Repair shop",
         "shop_phone": shop_phone,
         "client_name": client.name if client else None,
@@ -734,6 +762,7 @@ async def _client_by_portal(db: AsyncSession, token: str) -> Client:
     client = await portal_links.client_for(db, token)
     if not client:
         raise HTTPException(404, "Portal not found")
+    set_tenant(db, client.org_id)   # the rest of this request only sees this client's shop
     return client
 
 
@@ -953,23 +982,36 @@ async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDe
     seam; the rows are locked so a double tap can't add the same work twice."""
     if not await _recommend_enabled(db, order.org_id):
         raise HTTPException(403, "Recommendations are turned off for this shop")
+    from backend.routers.orders import _is_closed
+    st = (await db.execute(select(OrderStatus).where(
+        OrderStatus.org_id == order.org_id, OrderStatus.key == order.status))).scalars().first()
+    if (st and st.locks_edits) or await _is_closed(db, order.org_id, order):
+        raise HTTPException(409, "This job is closed. Contact the shop to add more work.")
     from datetime import timedelta as _td
 
     from backend.models import Recommendation as _R
     from backend.routers.recommendations import approve_recommendation
     approve = list(dict.fromkeys(data.approve_ids or []))
     later = list(dict.fromkeys((data.later_ids or []) + (data.decline_ids or [])))
+    # Declining is stored as "not now" too, but the reply counts what the customer chose: one
+    # "later" and one "decline" used to come back as 2 and 2 (QA wave 3).
+    declined_ids = set(data.decline_ids or []) - set(data.later_ids or [])
     if set(approve) & set(later):
         raise HTTPException(400, "An item can't be both added and saved for later")
     ids = approve + later
     if not ids:
         raise HTTPException(400, "Nothing selected")
     name = (data.name or "").strip()[:200] or None
+    # The job's lock before any line goes in: two approvals at once (two taps, or the customer and
+    # staff) queue up, so the job total is recomputed over every line and neither is lost.
+    from backend.services.invoice_money import lock_order
+    await lock_order(db, order.id)
+    await db.refresh(order)
     rows = {r.id: r for r in (await db.execute(select(_R).where(
         _R.order_id == order.id, _R.org_id == order.org_id, _R.id.in_(ids))
-        .with_for_update())).scalars().all()}
-    approved = later_n = 0
-    added = 0.0
+        .with_for_update().execution_options(populate_existing=True))).scalars().all()}
+    approved = later_n = declined_n = 0
+    new_lines: list[str] = []
     skipped: list[str] = []
     for rid in approve:
         r = rows.get(rid)
@@ -978,10 +1020,13 @@ async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDe
             skipped.append(rid)
             continue
         line = await approve_recommendation(db, r)
+        if line is None:                 # a parallel tap approved it first
+            skipped.append(rid)
+            continue
         r.decline_reason = None
         r.remind_after = None
         r.decided_by_name = name
-        added += float(line.total or 0)
+        new_lines.append(line.id)
         approved += 1
     remind_on = await shop_today(db, order.org_id) + _td(days=REMIND_AFTER_DAYS) if later else None
     for rid in later:
@@ -995,17 +1040,14 @@ async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDe
         r.remind_after = remind_on
         r.decided_by_name = name
         later_n += 1
+        declined_n += rid in declined_ids
     decided = approved + later_n
     if decided:
         order.rec_unread = (order.rec_unread or 0) + decided
         # Add the chosen work to the job's total (a job priced at check-in may have no lines
         # yet, so recomputing from lines would wipe its quoted price).
-        prev_total = float(order.total or 0)
-        order.total = q2(prev_total + added)
-        if added:
-            # A draft invoice for the job follows the new total; a sent one keeps its own.
-            from backend.services.invoice_money import sync_order_invoices
-            await sync_order_invoices(db, order, prev_total)
+        from backend.routers.recommendations import add_approved_to_total
+        await add_approved_to_total(db, order, new_lines)
         parts = []
         if approved:
             parts.append(f"added {approved} recommended item{'s' if approved != 1 else ''}")
@@ -1018,7 +1060,7 @@ async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDe
             await customer_approved_work(db, order, name or "Customer")
         # Who confirmed and when is kept on each item (decided_by_name / decided_at); the signed
         # estimate/work-order record is left alone, so adding an extra never reads as "signed".
-    return {"approved": approved, "saved_for_later": later_n, "declined": later_n, "skipped": skipped,
+    return {"approved": approved, "saved_for_later": later_n - declined_n, "declined": declined_n, "skipped": skipped,
             "total": q2(float(order.total or 0))}
 
 
@@ -1240,6 +1282,7 @@ async def _org_by_slug(db: AsyncSession, slug: str) -> _Org:
         org = (await db.execute(select(_Org).where(_Org.id == slug))).scalar_one_or_none()
     if not org:
         raise HTTPException(404, "Appointment page not found")
+    set_tenant(db, org.id)   # the rest of this request only sees this shop
     return org
 
 
@@ -1621,6 +1664,7 @@ async def public_pay_info(intent_id: str, db: AsyncSession = Depends(get_db)):
     i = (await db.execute(select(PaymentIntent).where(PaymentIntent.id == intent_id))).scalar_one_or_none()
     if not i:
         raise HTTPException(404, "Payment not found")
+    set_tenant(db, i.org_id)   # the rest of this request only sees this payment's shop
     order_no, o = None, None
     if i.order_id:
         o = (await db.execute(select(Order).where(Order.id == i.order_id))).scalar_one_or_none()
@@ -1693,7 +1737,9 @@ async def lookup_order(data: LookupIn, request: Request, db: AsyncSession = Depe
     # resolution via the shop slug (exactly like the /appointment/{slug} routes); when no
     # shop is supplied we fall back to scoping by the client whose phone actually
     # matches, so we still never return an order the caller can't prove is theirs.
-    q = select(Order).where(Order.order_number == num)
+    # Until the phone pins one shop this may span shops, so it reads columns only (ids, shop ids,
+    # phone digits): no other shop's order or client is loaded into the session (tenancy rule).
+    q = select(Order.id, Order.org_id, Order.client_id).where(Order.order_number == num)
     if data.shop:
         org = (await db.execute(select(_Org).where(_Org.subdomain == data.shop))).scalar_one_or_none()
         if not org:
@@ -1702,22 +1748,25 @@ async def lookup_order(data: LookupIn, request: Request, db: AsyncSession = Depe
             # same opaque 404 — don't confirm whether the shop/number/phone exists
             raise HTTPException(404, "No matching order — check the number and phone")
         q = q.where(Order.org_id == org.id)
+        set_tenant(db, org.id)   # shop named: only its orders and clients are read from here on
     await aenforce("lookup_num", f"{org.id if data.shop else '*'}:{ip}:{num}", 5, 3600)
 
-    candidates = (await db.execute(q)).scalars().all()
-    order = None
-    for cand in candidates:
-        if not cand.client_id:
+    candidates = (await db.execute(q)).all()
+    match = None
+    for cand_id, cand_org, cand_client in candidates:
+        if not cand_client:
             continue
-        client = (await db.execute(select(Client).where(
-            Client.id == cand.client_id, Client.org_id == cand.org_id))).scalar_one_or_none()
-        on_file = "".join(ch for ch in (client.phone or "") if ch.isdigit())[-10:] if client else ""
+        on_file = (await db.execute(select(Client.phone).where(
+            Client.id == cand_client, Client.org_id == cand_org))).scalar_one_or_none()
+        on_file = "".join(ch for ch in (on_file or "") if ch.isdigit())[-10:]
         if on_file and on_file == phone:
-            order = cand   # the phone match pins the tenant when no slug was given
+            match = (cand_id, cand_org)   # the phone match pins the tenant when no slug was given
             break
-    if not order:
+    if not match:
         # same 404 whether the shop, number or phone is wrong — don't confirm a number exists
         raise HTTPException(404, "No matching order — check the number and phone")
+    set_tenant(db, match[1])
+    order = (await db.execute(select(Order).where(Order.id == match[0]))).scalar_one()
 
     if not order.public_token:
         import secrets

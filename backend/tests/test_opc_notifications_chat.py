@@ -33,7 +33,7 @@ async def _tenant(client):
 
 
 async def _emp_with_role(client, H, perms):
-    role = (await client.post("/api/staff/roles", json={"name": "R", "permissions": perms}, headers=H)).json()
+    role = (await client.post("/api/staff/roles", json={"name": f"R {uuid.uuid4().hex[:6]}", "permissions": perms}, headers=H)).json()
     email = f"e-{uuid.uuid4().hex[:6]}@t.dev"
     await client.post("/api/staff/employees", json={
         "name": "Emp", "email": email, "password": "pw-test-12345", "role_id": role["id"]}, headers=H)
@@ -171,7 +171,7 @@ async def test_birthday_greeting_renders_short_client_variables(client, tenant, 
     me = await _me(client, tenant)
     org_id = me["org_id"]
     from backend.services.dates import shop_today
-    today = await shop_today(db, org_id)   # the shop's calendar day, which is what the sweep uses
+    today = await shop_today(db, org_id)   # birthdays follow the shop's calendar
     cid = (await client.post("/api/clients", json={
         "name": "Ana Lopez", "phone": "+1777", "birthday": f"1990-{today.month:02d}-{today.day:02d}"},
         headers=tenant)).json()["id"]

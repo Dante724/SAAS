@@ -56,9 +56,11 @@ from backend.services.admin_access import (
     wider_than,
 )
 from backend.services.auth import hash_password, verify_password
+from backend.services.dates import platform_today
 from backend.services.platform_auth import (
     COOKIE,
     SESSION_SECONDS,
+    accept_code,
     admin_from_ticket,
     create_ticket,
     end_session,
@@ -95,22 +97,22 @@ def _segment(org: Organisation) -> str:
         return "paid"
     if st in ("churned", "unpaid"):
         return "lost_paid"
-    if st == "trial_lost" or (st not in ("suspended",) and org.trial_ends_at and org.trial_ends_at <= date.today()):
+    if st == "trial_lost" or (st not in ("suspended",) and org.trial_ends_at and org.trial_ends_at <= platform_today()):
         return "lost_trial"
     if st == "suspended":
         return "suspended"
-    if org.sub_start and (date.today() - org.sub_start).days <= NEW_TRIAL_DAYS:
+    if org.sub_start and (platform_today() - org.sub_start).days <= NEW_TRIAL_DAYS:
         return "new"
     return "trial"
 
 
 def _segment_filter(q, segment: str):
-    new_since = date.today() - timedelta(days=NEW_TRIAL_DAYS)
+    new_since = platform_today() - timedelta(days=NEW_TRIAL_DAYS)
     # Anything that isn't a known non-trial stage counts as a trial, as in _segment().
     on_trial = or_(Organisation.sub_status.is_(None), Organisation.sub_status.notin_(
         ("active", "past_due", "churned", "unpaid", "trial_lost", "suspended")))
     # A trial whose clock ran out without paying counts as a lost trial, as in _segment().
-    trial_over = Organisation.trial_ends_at.is_not(None) & (Organisation.trial_ends_at <= date.today())
+    trial_over = Organisation.trial_ends_at.is_not(None) & (Organisation.trial_ends_at <= platform_today())
     trial = on_trial & ~trial_over
     by = {
         "paid": Organisation.sub_status.in_(("active", "past_due")),
@@ -205,10 +207,7 @@ async def login_mfa(data: MfaIn, request: Request, response: Response, db: Async
     await _rate("admin_mfa", admin.id, limit=10, window_sec=300)
     ok = False
     if data.code:
-        secret = crypto.decrypt(admin.mfa_secret) if admin.mfa_secret else None
-        step = mfa.verify_step(secret, data.code) if secret else None
-        if step is not None and step > (admin.mfa_last_step or 0):   # a code works once
-            admin.mfa_last_step, ok = step, True
+        ok = await accept_code(db, admin, data.code)   # a code works once
     elif data.recovery_code:
         used, remaining = await asyncio.to_thread(mfa.consume_recovery_code, admin.mfa_recovery, data.recovery_code)
         if used:
@@ -306,7 +305,7 @@ async def list_tenants(segment: Optional[str] = None, q: Optional[str] = Query(N
     if mine:
         query = query.where(Organisation.assigned_admin_id == ctx.admin.id)
     if ending_days is not None:   # trials whose end date falls in the next N days
-        today = date.today()
+        today = platform_today()
         until = today + timedelta(days=ending_days)
         # The billing trial clock (trial_ends_at) or a hand-set term end (sub_end).
         query = query.where(or_(and_(Organisation.sub_end >= today, Organisation.sub_end <= until),
@@ -428,7 +427,7 @@ async def patch_tenant(org_id: str, data: PatchTenant, ctx: AdminCtx = Depends(r
     if "price_locked_until" in p:
         org.price_locked_until = _parse_date(p["price_locked_until"])
     after = _sub_snapshot(org)
-    if org.sub_end and org.sub_end < date.today():
+    if org.sub_end and org.sub_end < platform_today():
         await _boot_staff(db, org.id)
     await admin_log.write(db, admin=ctx.admin, action="edit_subscription", org_id=org.id, before=before, after=after,
                           reason=data.reason, ip=ctx.ip)
@@ -466,9 +465,9 @@ async def _apply(db, org: Organisation, action: str, payload: dict) -> tuple[dic
         # which blocks sign-in) moves with it so it doesn't cut the longer trial short.
         days = timedelta(days=int(payload["days"]))
         before = {"sub_end": _iso(org.sub_end), "trial_ends_at": _iso(org.trial_ends_at)}
-        org.trial_ends_at = max(org.trial_ends_at or date.today(), date.today()) + days
+        org.trial_ends_at = max(org.trial_ends_at or platform_today(), platform_today()) + days
         if org.sub_end is not None:
-            org.sub_end = max(org.sub_end, date.today()) + days
+            org.sub_end = max(org.sub_end, platform_today()) + days
         return before, {"sub_end": _iso(org.sub_end), "trial_ends_at": _iso(org.trial_ends_at),
                         "days": payload["days"]}
     if action == "plan_change":
@@ -490,7 +489,7 @@ async def set_discount(org_id: str, data: DiscountIn, ctx: AdminCtx = Depends(re
     if not math.isfinite(data.pct) or not (0 < data.pct <= 100):
         raise HTTPException(422, "A discount is between 0 and 100%")
     until = _parse_date(data.until)
-    if until and until < date.today():
+    if until and until < platform_today():
         raise HTTPException(422, "The end date has already passed")
     org = await get_shop(db, ctx, org_id)
     if not can_see(ctx, org, "billing"):   # don't let someone overwrite a discount they can't see
@@ -757,7 +756,7 @@ async def apply_coupon(org_id: str, data: ApplyCouponIn, ctx: AdminCtx = Depends
     c = (await db.execute(select(PlatformCoupon).where(PlatformCoupon.code == code))).scalar_one_or_none()
     if not c or not c.active:
         raise HTTPException(404, "Coupon not found")
-    if c.expires_at and c.expires_at < date.today():
+    if c.expires_at and c.expires_at < platform_today():
         raise HTTPException(400, "Coupon has expired")
     if c.plan and c.plan != org.plan:
         raise HTTPException(400, f"This coupon only applies to the {c.plan} plan")
@@ -819,7 +818,7 @@ async def decide(req_id: str, data: DecideIn, ctx: AdminCtx = Depends(require_ad
     org = await get_shop(db, ctx, r.org_id)          # the approver's own scope applies too
     payload = r.payload or {}
     if data.decision == "approve" and r.action == "discount" and payload.get("until") \
-            and date.fromisoformat(payload["until"]) < date.today():
+            and date.fromisoformat(payload["until"]) < platform_today():
         raise HTTPException(409, "That discount's end date has passed. Ask for a new one.")
     # Claim the request atomically, so two clicks can't apply it twice.
     now = datetime.utcnow()

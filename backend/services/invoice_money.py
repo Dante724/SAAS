@@ -24,7 +24,7 @@ Callers commit; notify_payment_received() runs after the commit.
 from datetime import datetime
 
 from fastapi import HTTPException
-from sqlalchemy import select
+from sqlalchemy import case, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import Invoice, InvoiceLine, InvoiceOrder, Order, OrderLine, Payment
@@ -54,9 +54,33 @@ def pct_amounts(subtotal: float, discount_pct: float, tax_pct: float) -> tuple[f
 
 
 async def lock_order(db: AsyncSession, order_id: str) -> None:
-    """Serialize money moves on one job (Postgres row lock; SQLite already serializes writes), so
-    two requests can't both apply the same held deposit or both create the job's first invoice."""
-    await db.execute(select(Order.id).where(Order.id == order_id).with_for_update())
+    """Serialize changes to one job's money and lines, so two requests can't both apply the same
+    held deposit, both create the job's first invoice, or edit its lines over each other. Postgres:
+    a row lock. SQLite ignores FOR UPDATE and only serializes writes, so there a no-op UPDATE
+    takes the write lock now (the second request waits, then reads what the first one saved)."""
+    if db.get_bind().dialect.name == "sqlite":
+        from sqlalchemy import update
+        await db.execute(update(Order).where(Order.id == order_id)
+                         .values(updated_at=Order.updated_at).execution_options(synchronize_session=False))
+    else:
+        await db.execute(select(Order.id).where(Order.id == order_id).with_for_update())
+
+
+async def billed_on(db: AsyncSession, order_id: str, *, exclude_invoice_id: str | None = None):
+    """What live invoices already bill on this job, read under lock_order: (an invoice billing
+    the whole job — it lists none of the job's lines, so it follows the job — or None,
+    {order_line_id: invoice} for lines listed on an invoice, partial or frozen when sent/paid)."""
+    job_lines = set((await db.execute(select(OrderLine.id).where(OrderLine.order_id == order_id))).scalars().all())
+    whole, lines = None, {}
+    for inv in await invoices_for_order(db, order_id):
+        if inv.id == exclude_invoice_id:
+            continue
+        mine = [r.order_line_id for r in await _billed_rows(db, inv) if r.order_line_id in job_lines]
+        if mine:
+            lines.update({lid: inv for lid in mine})
+        elif whole is None:
+            whole = inv
+    return whole, lines
 
 
 async def invoices_for_order(db: AsyncSession, order_id: str) -> list[Invoice]:
@@ -242,6 +266,8 @@ async def apply_order_payment(db: AsyncSession, order: Order, amount: float, **f
         out.append(_new_payment(invoice_id=None, order_id=order.id, amount=left, **fields))
         db.add(out[-1])
     await db.flush()
+    from backend.services.order_money import resync_write_off   # paid after dropping: less is written off
+    await resync_write_off(db, order, fields.get("received_by_id"))
     return out
 
 
@@ -271,6 +297,9 @@ async def apply_payment_to_invoice(db: AsyncSession, inv: Invoice, amount: float
         db.add(out[-1])
     await _credit(db, inv, q2(amount))
     await db.flush()
+    from backend.services.order_money import resync_write_off   # paid after dropping: less is written off
+    for o in orders:
+        await resync_write_off(db, o, fields.get("received_by_id"))
     return out
 
 
@@ -473,6 +502,63 @@ async def reverse_charge(db: AsyncSession, order: Order, charge_ref: str | None,
                 settle_status(inv)
     await db.flush()
     return out
+
+
+async def refund_payments(db: AsyncSession, order: Order, amount: float, **fields) -> list[Payment]:
+    """Money handed back on a job (a refund, a deposit given back, a deleted job), W3-C. It comes
+    off money held on the job first, then off the job's invoices, newest first, each lowered by
+    what it gives back — so an invoice never stays "paid" for money the customer has back. One
+    refund Payment per invoice it touches (invoice_id None = held money), all with one paid_at so
+    deleting the refund finds them together (refund_siblings). Caller commits."""
+    from sqlalchemy import func
+    await lock_order(db, order.id)
+    held_in, held_out = (float(x or 0) for x in (await db.execute(select(
+        func.coalesce(func.sum(case((Payment.kind.in_(MONEY_IN), Payment.amount), else_=0)), 0),
+        func.coalesce(func.sum(case((Payment.kind == "refund", func.abs(Payment.amount)), else_=0)), 0))
+        .where(Payment.order_id == order.id, Payment.invoice_id.is_(None)))).one())
+    left = q2(amount)
+    parts: dict = {}
+    take = q2(min(left, max(held_in - held_out, 0.0)))
+    if take > 0:
+        parts[None], left = take, q2(left - take)
+    for inv in reversed(await invoices_for_order(db, order.id)):
+        if left <= 0:
+            break
+        rows = (await db.execute(select(Payment.kind, Payment.amount).where(
+            Payment.invoice_id == inv.id, Payment.order_id == order.id))).all()
+        on_inv = q2(sum(float(a or 0) * (-1 if k == "refund" else 1) for k, a in rows))
+        take = q2(min(left, on_inv, float(inv.amount_paid or 0)))
+        if take <= 0:
+            continue
+        parts[inv.id], left = take, q2(left - take)
+        inv.amount_paid = q2(max(float(inv.amount_paid or 0) - take, 0))
+        settle_status(inv)
+    if left > 0:
+        parts[None] = q2(parts.get(None, 0) + left)
+    at = datetime.utcnow()
+    fields.setdefault("client_id", order.client_id)
+    out = [_new_payment(order_id=order.id, invoice_id=iid, kind="refund", amount=amt, paid_at=at, **fields)
+           for iid, amt in parts.items()]
+    db.add_all(out)
+    await db.flush()
+    return out
+
+
+async def refund_siblings(db: AsyncSession, pay: Payment) -> list[Payment]:
+    """Every Payment one refund_payments() call wrote, given one of them."""
+    return list((await db.execute(select(Payment).where(
+        Payment.order_id == pay.order_id, Payment.kind == "refund", Payment.paid_at == pay.paid_at,
+        Payment.account_id == pay.account_id))).scalars().all()) if pay.order_id else [pay]
+
+
+async def unrefund_payment(db: AsyncSession, pay: Payment) -> None:
+    """A refund Payment is deleted (the refund was voided): its invoice counts the money again."""
+    if pay.invoice_id:
+        inv = (await db.execute(select(Invoice).where(Invoice.id == pay.invoice_id))).scalar_one_or_none()
+        if inv is not None and (inv.status or "") not in VOID_STATUSES:
+            inv.amount_paid = q2(float(inv.amount_paid or 0) + float(pay.amount or 0))
+            settle_status(inv)
+    await db.delete(pay)
 
 
 async def notify_payment_received(db: AsyncSession, org_id: str, order_ids, actor_id: str | None = None) -> None:

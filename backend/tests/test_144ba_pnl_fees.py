@@ -21,6 +21,12 @@ async def test_card_fee_reduces_net_profit_and_shows_as_a_line(client, tenant):
     oid = await _order_total(client, tenant, 100)
     r = await client.post(f"/api/cash/orders/{oid}/pay", json={"method": "card", "account_id": aid, "amount": 100}, headers=tenant)
     assert r.status_code in (200, 201), r.text   # posts a 2.90 fee transaction
+    # revenue counts once the job is done (or its invoice sent), not when it's paid (services/revenue)
+    sts = (await client.get("/api/statuses", headers=tenant)).json()
+    closed = next(s["key"] for s in (sts.get("items", sts) if isinstance(sts, dict) else sts)
+                  if s.get("status_group") == "closed")
+    r = await client.patch(f"/api/orders/{oid}/status", json={"status": closed}, headers=tenant)
+    assert r.status_code == 200, r.text
 
     p = (await client.get("/api/finance/pnl", headers=tenant)).json()
     assert "fees" in p, p

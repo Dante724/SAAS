@@ -89,6 +89,28 @@ async def admin_from_ticket(db: AsyncSession, ticket: str, stage: str) -> Platfo
     return admin
 
 
+async def accept_code(db: AsyncSession, admin: PlatformAdmin, code: str | None) -> bool:
+    """A current TOTP code, each one usable once (audit M6). The step is recorded with a
+    conditional UPDATE, so two requests racing with the same intercepted code can't both pass,
+    on any database (the ticket's row lock only serialises them on Postgres)."""
+    from sqlalchemy import or_, update
+
+    from backend.services import crypto
+    from backend.services.mfa import verify_step
+    secret = crypto.decrypt(admin.mfa_secret) if admin.mfa_secret else None
+    step = verify_step(secret, code or "") if secret else None
+    if step is None:
+        return False
+    res = await db.execute(update(PlatformAdmin).where(
+        PlatformAdmin.id == admin.id,
+        or_(PlatformAdmin.mfa_last_step.is_(None), PlatformAdmin.mfa_last_step < step),
+    ).values(mfa_last_step=step).execution_options(synchronize_session=False))
+    if res.rowcount != 1:
+        return False
+    admin.mfa_last_step = step
+    return True
+
+
 async def start_session(db: AsyncSession, admin: PlatformAdmin, ip: str | None) -> str:
     sess = AdminSession(admin_id=admin.id, ip=(ip or "")[:64])
     db.add(sess)

@@ -343,7 +343,8 @@ async def test_honeypot_and_phone_rate_limit(client, tenant):
     s = await _setup(client, tenant)
     url = f"/api/public/checkin/{s['token']}"
     assert (await client.post(url, json=_body(s, website="http://spam"))).status_code == 422
-    codes = [(await client.post(url, json=_body(s))).status_code for _ in range(4)]
+    # (a new issue each time: the very same form twice is one double-tapped check-in)
+    codes = [(await client.post(url, json=_body(s, issue=f"Visit {i}"))).status_code for i in range(4)]
     assert codes[:3] == [201, 201, 201] and codes[3] == 429
 
 

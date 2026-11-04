@@ -8,7 +8,7 @@
 - notification_logs.is_html: HTML or plain, fixed from the template when the message is filled.
 
 Revision ID: aul1
-Revises: mkw01
+Revises: aud3r01
 """
 import hashlib
 import uuid
@@ -18,7 +18,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "aul1"
-down_revision = "mkw01"
+down_revision = "aud3r01"
 branch_labels = None
 depends_on = None
 

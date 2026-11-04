@@ -214,7 +214,6 @@ PATCH /api/orders/{order_id}/type [staff]
 PUT /api/prefs/{pref_key} [staff]
 # pricing
 POST /api/pricing/margin-check [staff]
-# print
 # push
 POST /api/push/subscribe [staff]
 POST /api/push/unsubscribe [staff]

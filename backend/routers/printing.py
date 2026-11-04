@@ -145,15 +145,14 @@ async def delete_template(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
-    t = (await db.execute(select(LabelTemplate).where(
-        LabelTemplate.id == tpl_id,
-        LabelTemplate.org_id == current.org_id))).scalar_one_or_none()
-    if t:
-        await db.delete(t)
-        await db.commit()
+    from backend.services.owned import get_owned_or_404
+    t = await get_owned_or_404(db, LabelTemplate, tpl_id, current.org_id, "label template")
+    await db.delete(t)
+    await db.commit()
     return {"ok": True}
 
 
+# ── print labels ─────────────────────────────────────────────────────────────
 # Product labels print as HTML from /api/documents (documents.render_labels). The old reportlab
 # PDF sheet here (POST /api/print/labels), and the print view of the removed stock-docs postings,
 # had no caller and were deleted (audit 29 Oct 2026). ii144c: every label — products, bins,

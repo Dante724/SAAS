@@ -73,11 +73,56 @@ async def row_for(db, part_id: str, location_id: str, bin_id: Optional[str] = No
     if row is None and create:
         from backend.db.database import insert_ignore
         from backend.models import _uuid
+        # QA fix D: a new row always says which warehouse it is in — the bin's, else the location's
+        # default product warehouse. Untagged rows showed as a separate "—" warehouse in valuation.
+        tag = warehouse_id or await warehouse_for(db, location_id, bin_id)
         # Insert-or-ignore: two requests receiving the first unit at once must both land on one row.
         await insert_ignore(db, StockLevel, id=_uuid(), part_id=part_id, location_id=location_id,
-                            bin_id=bin_id, warehouse_id=warehouse_id, qty_available=0.0, qty_reserved=0.0)
+                            bin_id=bin_id, warehouse_id=tag, qty_available=0.0, qty_reserved=0.0)
         return await row_for(db, part_id, location_id, bin_id, warehouse_id=warehouse_id)
     return row
+
+
+# Units counted in whole items: 2.5 of these is a typo, not a quantity (QA fix D). Metres, kilos,
+# litres and hours stay fractional.
+COUNTED_UNITS = {"pcs", "pc", "piece", "pieces", "ea", "each", "unit", "units", "set", "sets"}
+
+
+def order_qty(part, qty: float) -> float:
+    """A suggested quantity to buy: whole items (rounded up) for a product counted in whole
+    items, one decimal otherwise (W3-D: the reorder forecast suggested 0.5 pcs)."""
+    if (getattr(part, "uom", None) or "pcs").strip().lower() in COUNTED_UNITS:
+        import math
+        return float(math.ceil(qty - _EPS))
+    return round(qty, 1)
+
+
+def check_whole(part, *qtys) -> None:
+    """422 when a product counted in whole items is given a fractional quantity."""
+    if (getattr(part, "uom", None) or "pcs").strip().lower() not in COUNTED_UNITS:
+        return
+    for q in qtys:
+        if q is not None and abs(float(q) - round(float(q))) > _EPS:
+            from fastapi import HTTPException
+            raise HTTPException(422, f"“{part.name}” is counted in whole {part.uom or 'pcs'} — "
+                                     f"{float(q):g} isn't a whole number. Use a whole number, "
+                                     f"or change its unit on the product.")
+
+
+async def warehouse_for(db, location_id: str, bin_id: Optional[str] = None) -> Optional[str]:
+    """The warehouse stock at this place belongs to: the bin's own warehouse, else the location's
+    default product warehouse (provisioned when the location has none yet)."""
+    from backend.models import Location, StorageBin
+    from backend.services import warehouses as _wh
+    if bin_id:
+        wid = (await db.execute(select(StorageBin.warehouse_id).where(StorageBin.id == bin_id))).scalar_one_or_none()
+        if wid:
+            return wid
+    org_id = (await db.execute(select(Location.org_id).where(Location.id == location_id))).scalar_one_or_none()
+    if not org_id:
+        return None
+    w = await _wh.default_for_location(db, org_id, location_id)
+    return w.id if w else None
 
 
 async def add(db, part_id: str, location_id: str, qty: float, *, bin_id: Optional[str] = None,

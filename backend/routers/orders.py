@@ -44,7 +44,9 @@ async def unique_order_code(db: AsyncSession) -> str:
     for _ in range(25):
         # 12 digits, first digit 2 so it never starts with 0 and stays EAN-13-friendly
         code = "2" + "".join(secrets.choice("0123456789") for _ in range(11))
-        exists = (await db.execute(select(Order.id).where(Order.barcode == code))).first()
+        # skip_tenant_filter: barcodes are unique across every shop (uq_orders_barcode).
+        exists = (await db.execute(select(Order.id).where(Order.barcode == code)
+                                   .execution_options(skip_tenant_filter=True))).first()
         if not exists:
             return code
     # astronomically unlikely fallback: widen to 16 digits
@@ -58,7 +60,9 @@ async def unique_public_token(db: AsyncSession) -> str:
     A DB-wide unique index on orders.public_token is the hard guarantee."""
     for _ in range(25):
         tok = secrets.token_urlsafe(16)  # ~22 url-safe chars, fits the 40-char column
-        exists = (await db.execute(select(Order.id).where(Order.public_token == tok))).first()
+        # skip_tenant_filter: track-link tokens are unique across every shop's orders.
+        exists = (await db.execute(select(Order.id).where(Order.public_token == tok)
+                                   .execution_options(skip_tenant_filter=True))).first()
         if not exists:
             return tok
     return secrets.token_urlsafe(24)  # widen on the astronomically unlikely streak
@@ -200,6 +204,12 @@ class CommentIn(BaseModel):
     visible_to_client: Optional[bool] = None   # left out: the shop's default comment visibility
 
 # ── Helpers ──────────────────────────────────
+
+async def job_number(db, org_id: str, is_estimate: bool) -> str:
+    """The next number for a new job or estimate. Estimates count on their own sequence (E-00001,
+    Settings > Numbering), so creating one never makes the work-order numbers skip (QA F1)."""
+    return await next_number(db, org_id, "estimate" if is_estimate else "order")
+
 
 def _order_number(org_id: str, seq: int, is_estimate: bool = False) -> str:
     return f"{'E' if is_estimate else 'WO-'}{seq:05d}"
@@ -701,7 +711,8 @@ async def bulk_action(
         # (or one of the built-in terminal keys the single path also accepts).
         from backend.models import OrderStatus as _OS
         _valid = set((await db.execute(select(_OS.key).where(
-            _OS.org_id == current.org_id, _OS.active == True))).scalars().all())  # noqa: E712
+            _OS.org_id == current.org_id, _OS.active == True,  # noqa: E712
+            _OS.record_type.in_(("work_order", "estimate"))))).scalars().all())
         _valid |= {"new", "done", "closed", "delivered"}
         if data.value not in _valid:
             raise HTTPException(400, f"Unknown status '{data.value}'")
@@ -743,6 +754,10 @@ async def bulk_action(
         if data.action == "group_invoice":
             continue                       # handled in a batch after the loop
         if data.action == "assign":
+            try:
+                await _guard_editable(db, o, current)    # same rule as assigning one closed job
+            except HTTPException:
+                continue
             o.assigned_to_id = data.value or None
         elif data.action == "set_priority":
             try:
@@ -821,7 +836,8 @@ async def _new_job_steps(db, current, order, creator_id=None):
     webhook, the creator's commission, the assignee's alert, the "created" notification rules
     and automations. Shared by create_order and estimate conversion (flow check E3), so a job
     made from an approved estimate gets the same treatment as one typed in at the counter.
-    Every step is best-effort and commits on its own (R1): the job is already saved."""
+    Each step is best-effort and commits on its own; a failure is logged and rolled back so the
+    steps after it still work (R1). `current` may be a SystemActor (customer approved online)."""
     reload = (current,) if isinstance(current, Employee) else ()
 
     async def checklists():
@@ -854,6 +870,7 @@ async def _new_job_steps(db, current, order, creator_id=None):
     created_matched = 0
 
     async def notification_rules():
+        # Phase 1: fire "order created" notifications (real work orders only).
         # 144jc: run the rules engine first (client + staff), fall back to the legacy
         # template dispatch only when no rule matched — same convergence as status change.
         nonlocal created_matched
@@ -869,6 +886,7 @@ async def _new_job_steps(db, current, order, creator_id=None):
             db, org_id=current.org_id, order_id=order.id, trigger_event="order_created")
 
     async def automations():
+        # Build 144w: workflow automations for order-created.
         from backend.services import automation as _auto
         await _auto.run(db, current.org_id, "order_created", order=order)
 
@@ -877,8 +895,8 @@ async def _new_job_steps(db, current, order, creator_id=None):
         await _order_side_effect(db, order, "order.created webhook", webhook, *reload)
     if creator_id:
         await _order_side_effect(db, order, "creation commissions", commissions, *reload)
-    # Not when the customer approved online: the assignee already got that alert
-    # (customer_messages.notify_staff_about_customer).
+    # Notify the assigned technician (in-app + push) on a fresh assignment. Not when the customer
+    # approved online: the assignee already got that alert (customer_messages.notify_staff_about_customer).
     if current.id and order.assigned_to_id and order.assigned_to_id != current.id:
         await _order_side_effect(db, order, "technician notification", notify_technician, *reload)
     if not order.is_estimate:
@@ -963,6 +981,7 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
     _fixed_cost = not _hide_cost and not await has_perm(db, current, "can_set_cost_price")
     for li in data.lines:
         await _assert_line_rights(db, current, li)
+        await _assert_line_ref(db, current.org_id, li)
         if _hide_cost or _fixed_cost:
             li.cost_price = await _catalog_cost(db, current.org_id, li.kind, li.ref_id)
         await _apply_client_discount(db, current.org_id, data.client_id, li)
@@ -1096,7 +1115,7 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
     _intake = await _clean_intake_photos(db, current.org_id, data.intake_photos)
 
     order = Order(
-        order_number=("E" + (await next_number(db, current.org_id, "order"))[3:]) if data.is_estimate else await next_number(db, current.org_id, "order"),
+        order_number=await job_number(db, current.org_id, bool(data.is_estimate)),
         barcode=await unique_order_code(db),   # 144ei — globally-unique scannable code from birth
         public_token=await unique_public_token(db),   # 144cu — globally-unique track link from birth
         org_id=current.org_id,
@@ -1379,6 +1398,18 @@ async def get_order(
         # invoice keeps its balance until the shop credits it.
         from backend.services.order_money import balance_due as _bd
         data["payment_due"] = await _bd(db, order) > 0
+    # QA wave 3: a dropped job whose parts all went back on the shelf and had no work on it isn't
+    # a loss. Its balance is still cleared (written_off), but the job says nothing was done
+    # instead of "the full bill, tax included, was written off".
+    data["nothing_done"] = False
+    if not order.is_estimate:
+        grp = (await db.execute(select(OrderStatus.status_group).where(
+            OrderStatus.org_id == current.org_id, OrderStatus.key == order.status,
+            OrderStatus.record_type == "work_order"))).scalars().first()
+        if grp == "dropped":
+            data["nothing_done"] = all(
+                (ln.kind == "product" and float(ln.pending_stock or 0) >= float(ln.qty or 0) - 1e-9)
+                for ln in order.lines if ln.kind != "refund")
     # 144bj: prior-visit count for this device (repeat-repair signal on the WO card).
     if order.device_id and data.get("device"):
         vc = (await db.execute(select(func.count()).select_from(Order).where(
@@ -1482,6 +1513,83 @@ async def change_status(
                                       comment=data.comment, allow_unpaid=data.allow_unpaid)
 
 
+async def _status_group(db, org_id: str, record_type: str, key):
+    from backend.models import OrderStatus
+    return (await db.execute(select(OrderStatus.status_group).where(
+        OrderStatus.org_id == org_id, OrderStatus.key == key,
+        OrderStatus.record_type == record_type))).scalars().first()
+
+
+async def _job_product_lines(db, order) -> list:
+    return (await db.execute(select(OrderLine).where(
+        OrderLine.order_id == order.id, OrderLine.kind == "product", OrderLine.ref_id.isnot(None))
+        .execution_options(populate_existing=True))).scalars().all()
+
+
+async def _return_parts_on_drop(db, current, order) -> None:
+    """Every part the job took goes back where it came from (stock, bin, serials, cost layers), with
+    a "return" movement. The line then holds nothing (its qty shows as pending), so removing it or
+    dropping the job again can't return the same parts twice. Same reversal as archiving a job."""
+    from backend.routers.feed import log_system_event
+    back = 0.0
+    for line in await _job_product_lines(db, order):
+        taken = (line.qty or 0) - (line.pending_stock or 0)
+        if taken > 0:
+            await _reverse_fulfillment(db, order, line.ref_id, taken)
+            line.pending_stock = line.qty or 0
+            back += taken
+    if back:
+        await log_system_event(db, current.org_id, "order", order.id,
+                               f"Job dropped: {back:g} part(s) returned to stock")
+
+
+async def _retake_parts_on_reopen(db, current, order) -> None:
+    """A dropped job taken up again uses its parts again: whatever is free now is taken off the
+    shelf and the rest stays pending, exactly like adding the line. Parts held for another job stay
+    pending rather than blocking the reopen."""
+    perms = {**(await _order_perms(db, current)), "can_add_without_stock": True}
+    for line in await _job_product_lines(db, order):
+        want = line.pending_stock or 0
+        if want <= 0:
+            continue
+        try:
+            async with db.begin_nested():
+                line.pending_stock = 0
+                # lenient: free stock and this job's own holds only; never another job's hold,
+                # even for roles that may override reservations (the rest stays pending)
+                await _maybe_deduct(db, order, line, want, perms, current, lenient=True)
+        except HTTPException:
+            line.pending_stock = want         # reserved for another job: leave it pending
+
+
+# A bare "closed" predates the configurable statuses; API clients still send it to close a job.
+_LEGACY_CLOSE_KEYS = {"closed"}
+
+
+async def _pipeline_status(db, org_id: str, record_type: str, key: str):
+    """The org's active status ``key`` in this record type's pipeline, or None. Seeds the default
+    pipelines first when the shop has none yet (a job can move before the board was ever opened).
+    .first() (not scalar_one_or_none) so legacy duplicate keys can never crash a status change."""
+    from backend.models import OrderStatus
+
+    async def _find():
+        return (await db.execute(
+            select(OrderStatus).where(OrderStatus.org_id == org_id,
+                                      OrderStatus.key == key,
+                                      OrderStatus.active == True,  # noqa: E712
+                                      OrderStatus.record_type == record_type)
+            .order_by(OrderStatus.sort_order)
+        )).scalars().first()
+
+    found = await _find()
+    if found is None and not (await db.execute(select(OrderStatus.id).where(
+            OrderStatus.org_id == org_id, OrderStatus.record_type == record_type).limit(1))).first():
+        from backend.routers.statuses import ensure_seeded
+        await ensure_seeded(db, org_id)
+        found = await _find()
+    return found
+
+
 @router.post("/{order_id}/status/check")
 async def check_status_change(
     order_id: str,
@@ -1543,28 +1651,49 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     via_api = isinstance(current, ApiActor)
     if not via_api:
         await _guard_order_access(db, current, order)
-        if data.status != order.status and await _is_closed(db, current.org_id, order):
-            await assert_perm(db, current, "can_edit_closed_ticket")   # reopening counts as editing it
-
     # Resolve the target status from the configurable status table, scoped to this
-    # record's pipeline. .first() (not scalar_one_or_none) so legacy duplicate keys
-    # across record types can never crash the status change.
+    # record's pipeline (first: seeding a shop's empty pipeline commits).
     from backend.models import OrderStatus
     _rt = "estimate" if order.is_estimate else "work_order"
-    target = (await db.execute(
-        select(OrderStatus).where(OrderStatus.org_id == current.org_id,
-                                  OrderStatus.key == data.status,
-                                  OrderStatus.active == True,  # noqa: E712
-                                  OrderStatus.record_type == _rt)
-        .order_by(OrderStatus.sort_order)
-    )).scalars().first()
+    target = await _pipeline_status(db, current.org_id, _rt, data.status)
+    # Two status changes on one job queue up: the second sees the first one's status, so a
+    # double-tapped "Drop" returns the parts once (QA F1). Then re-read what the gates use.
+    from backend.services.invoice_money import lock_order
+    await lock_order(db, order.id)
+    await db.refresh(order, ["status", "closed_at", "total"])
+    if target is None and data.status != order.status and data.status not in _LEGACY_CLOSE_KEYS:
+        # QA F1: any text (or an invoice / PO / estimate key such as inv_paid) used to be saved and
+        # could lock the job closed. Only the record's own, switched-on pipeline is accepted.
+        kind = "an estimate" if order.is_estimate else "a job"
+        raise HTTPException(422, f"'{data.status}' isn't a status for {kind}. "
+                                 "Pick one from the list (Settings > Statuses).")
     is_closing = target.is_terminal if target else (data.status in ("done", "closed", "delivered"))
+    # Reopening a closed job counts as editing it. Moving it on between closed statuses
+    # (done -> delivered) doesn't: the desk hands the device over without "Edit the closed ticket".
+    if not via_api and data.status != order.status and await _is_closed(db, current.org_id, order) \
+            and not (target and target.status_group == "closed"):
+        await assert_perm(db, current, "can_edit_closed_ticket")
     # Finishing a job is its own permission (closing used to need none). Bulk changes and
     # /complete come through here too.
     if is_closing:
-        from backend.services.auth import has_perm
         if not await has_perm(db, current, "can_close_tickets"):
             raise HTTPException(403, "Your role can't finish jobs. Move it to a ready status, or ask someone who can.")
+    # Closing a job the customer still owes on is a money decision: it needs the right to take
+    # client payments, as in Orderry's close dialog (a technician could close an unpaid job —
+    # QA 31 Oct 2026). "Not collected" isn't a close.
+    # A close that takes the payment with it (assume_paid) owes nothing by then; taking payments,
+    # client payments and the finance manager's "move on unpaid" (B11, below) all count as the right.
+    if target and target.status_group == "closed" and data.status != order.status \
+            and not order.is_estimate and not assume_paid \
+            and not any([await has_perm(db, current, c) for c in
+                         ("can_make_client_payments", "can_take_payments", "can_view_finance")]):
+        from backend.services.order_money import balance_due as _due_now
+        due = await _due_now(db, order)
+        if due > 0:
+            from backend.services.currency import org_money
+            fmt = await org_money(db, current.org_id)
+            raise HTTPException(403, f"{order.order_number} still has {fmt(due)} to pay. Take the payment "
+                                     "first, or ask someone who takes payments to close it.")
     # Dropped jobs (the customer never collected, refused the repair…): a reason is required,
     # the finished-work checks below are skipped and what's still owed is written off.
     is_dropping = bool(target and (target.status_group or "") == "dropped" and not order.is_estimate)
@@ -1651,7 +1780,21 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
             if _missing:
                 raise HTTPException(409, f"Fill in before closing: {', '.join(_missing)}.")
 
+    # Stock follows a drop: a job closed unsuccessfully gives its parts back, and taking it up
+    # again takes them again (QA F1, as Orderry). Moves between two dropped statuses do neither.
+    # A job that was already finished (Done, Delivered) left with its parts inside the device, so
+    # dropping it afterwards returns nothing (a goods return puts back what the customer brings).
+    _drop_rt = not order.is_estimate and order.status != data.status
+    _prev_group = await _status_group(db, current.org_id, _rt, order.status)
+    _was_dropped = _prev_group == "dropped"
+    entering_drop = _drop_rt and bool(target) and (target.status_group or "") == "dropped" and not _was_dropped
+    leaving_drop = _drop_rt and _was_dropped and not (target and (target.status_group or "") == "dropped")
+    if leaving_drop:     # before the pending-stock gate: closing it straight away needs them back
+        await _retake_parts_on_reopen(db, current, order)
+        await db.refresh(order, ["lines"])
+
     # Orderry rule: cannot close an order with products not yet written off from stock
+    # (a dropped job writes nothing off: its parts go back to the shelf below).
     if is_closing and not is_dropping:
         pending = sum((l.pending_stock or 0) for l in order.lines)
         if pending > 0:
@@ -1675,6 +1818,8 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     order.status = data.status
     if target and (target.status_group or "") == "dropped" and (data.reason or "").strip():
         order.cancel_reason = data.reason.strip()[:120]
+    if entering_drop and _prev_group != "closed":
+        await _return_parts_on_drop(db, current, order)
     # Write off (or, on reopen / a normal close, undo) what the customer still owes.
     from backend.services.audit import record as _audit_wo
     from backend.services.order_money import balance_due as _owed
@@ -1684,13 +1829,18 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         order.written_off = await _owed(db, order)
         # Writing off what a customer owes is a money decision, not just a status change.
         if order.written_off > _was_written_off and not await has_perm(db, current, "can_view_finance"):
-            raise HTTPException(403, f"This job still has {order.written_off:.2f} owed. Only someone who can use "
-                                     "finance can drop it and write that off — ask a manager.")
+            from backend.services.currency import org_money
+            fmt = await org_money(db, current.org_id)
+            raise HTTPException(403, f"The customer still owes {fmt(order.written_off)} on this job. Dropping it "
+                                     "writes that off, so a manager with finance access has to do it.")
     if q2(float(order.written_off or 0)) != _was_written_off:
         await _audit_wo(db, org_id=current.org_id, actor_id=current.id, action="order.write_off",
                         entity_type="order", entity_id=order.id,
                         diff={"amount": q2(float(order.written_off or 0)), "previous": _was_written_off,
                               "reason": order.cancel_reason if is_dropping else None})
+    if is_dropping:   # nothing is owed now: a pay link sent earlier can't charge the customer any more
+        from backend.services.order_money import cancel_open_pay_links
+        await cancel_open_pay_links(db, order)
     order.status_entered_at = now_utc()
     from backend.services.audit import record as _audit_sc
     await _audit_sc(db, org_id=current.org_id, actor_id=current.id, action="order.status_change",
@@ -1903,14 +2053,24 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     # tell the frontend whether to open the payment window (per-status trigger)
     wants_payment = bool(target.triggers_payment) if target else is_closing
     return {"ok": True, "status": data.status, "triggers_payment": wants_payment,
-            "is_closing": is_closing, "converted_order_id": converted_id}
+            "is_closing": is_closing, "is_dropped": is_dropping, "converted_order_id": converted_id}
 
 
 async def _convert_estimate(db, current, estimate):
     """Convert an estimate into a work order IN PLACE (Build 144di, Orderry-style):
     the same record flips ``is_estimate`` off, gets a fresh WO number, keeps its
-    lines and history, and now deducts stock. Irreversible. Returns the id."""
+    lines and history, and now deducts stock. Irreversible. Returns the id, or None when another
+    request converted it first (double tap, accept + staff convert): the flip below is a
+    conditional UPDATE, so only one caller wins and stock / the WO number move once."""
+    from sqlalchemy import update as _update
+
     from backend.models import OrderLine, OrderStatus, WorkOrderType
+    won = await db.execute(_update(Order).where(
+        Order.id == estimate.id, Order.is_estimate == True)  # noqa: E712
+        .values(is_estimate=False).execution_options(synchronize_session=False))
+    if won.rowcount != 1:
+        await db.refresh(estimate)
+        return None
     old_number = estimate.order_number
     # initial work-order status: the job type's own starting status (E3), else the org default, else "new"
     init = "new"
@@ -1970,13 +2130,17 @@ async def convert_estimate_endpoint(
     if not est:
         raise HTTPException(404, "Estimate not found")
     await _guard_order_access(db, current, est)
+    # A second click (or the customer accepting at the same moment) gets the work order back
+    # instead of an error: the screen just opens it. Nothing converts twice.
     if not est.is_estimate:
-        raise HTTPException(400, "This is already a work order")
+        return {"ok": True, "order_id": est.id, "already_converted": True}
     if est.converted_order_id:
-        raise HTTPException(400, "Already converted")
+        return {"ok": True, "order_id": est.converted_order_id, "already_converted": True}
     from backend.services.billing import assert_can_add_job
     await assert_can_add_job(db, current.org_id)
     new_id = await _convert_estimate(db, current, est)
+    if new_id is None:
+        return {"ok": True, "order_id": est.id, "already_converted": True}
     return {"ok": True, "order_id": new_id}
 
 
@@ -2001,6 +2165,7 @@ async def change_order_currency(
         Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    await _guard_editable(db, order, current)   # a closed job changes only with "Edit the closed ticket"
     from backend.services import currency as _cur
     info = await _cur.resolve_for_client(db, current.org_id, order.client_id, data.currency_code)
     order.currency_code = info["code"]
@@ -2174,6 +2339,7 @@ async def set_deposit(
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, order)
+    await _guard_editable(db, order, current)   # a closed job changes only with "Edit the closed ticket"
     if data.percent is not None:
         if data.percent < 0 or data.percent > 100:
             raise HTTPException(400, "percent must be 0–100")
@@ -2184,6 +2350,10 @@ async def set_deposit(
         raise HTTPException(400, "Provide amount or percent")
     if amount < 0:
         raise HTTPException(400, "deposit cannot be negative")
+    if (order.total or 0) > 0 and amount > q2(order.total):   # a deposit at check-in, before any lines, is fine
+        from backend.services.currency import org_money     # deposit and total are both base currency
+        fmt = await org_money(db, current.org_id)
+        raise HTTPException(422, f"The deposit can't be more than the job total ({fmt(order.total)}).")
     order.deposit_amount = amount
     await db.commit()
     return {"ok": True, "deposit_amount": amount}
@@ -2203,6 +2373,7 @@ async def switch_type(
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, order)
+    await _guard_editable(db, order, current)   # a closed job changes only with "Edit the closed ticket"
     wot = (await db.execute(select(WorkOrderType).where(WorkOrderType.id == data.type_id, WorkOrderType.org_id == current.org_id))).scalar_one_or_none()
     if not wot:
         raise HTTPException(404, "Type not found")
@@ -2617,8 +2788,11 @@ async def invoice_preview(
     )).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    # QA 2026-10-31 B: the stored line total (after its discount and tax), so lines add up.
     lines = [{"description": l.description, "qty": l.qty, "unit_price": l.unit_price,
-              "line_type": l.line_type, "total": q2((l.qty or 0) * (l.unit_price or 0))}
+              "discount": l.discount or 0, "discount_type": l.discount_type,
+              "line_type": l.line_type,
+              "total": q2(l.total if l.total is not None else (l.qty or 0) * (l.unit_price or 0))}
              for l in order.lines]
     from backend.services.order_money import balance_due
     balance = await balance_due(db, order)
@@ -2985,15 +3159,15 @@ async def duplicate_order(
         from backend.services.billing import assert_can_add_job
         await assert_can_add_job(db, current.org_id)
 
-    number = await next_number(db, current.org_id, "order")
-    if src.is_estimate:
-        number = "E" + number[3:]
+    number = await job_number(db, current.org_id, bool(src.is_estimate))
 
     new_lines = []
     labour = parts = 0.0
     import uuid as _uuid
     _groups: dict = {}   # each kit on the copy gets its own group id
     for l in src.lines:
+        if l.kind == "refund":
+            continue            # money given back on the old job isn't a discount on the copy
         _gid = (_groups.setdefault(l.bundle_group_id, str(_uuid.uuid4())) if l.bundle_group_id else None)
         nl = OrderLine(
             bundle_group_id=_gid, bundle_name=l.bundle_name, bundle_print_mode=l.bundle_print_mode,
@@ -3312,7 +3486,7 @@ async def _archive_order(db, current, order_id, reason, do_refund):
     if order.archived:
         raise HTTPException(400, "Order is already archived")
 
-    from backend.models import Account, Payment, Refund
+    from backend.models import Account, Payment
 
     # Issued credit notes on this order's invoices put credit on the client's ledger; archiving
     # zeroes the order's charge, so leaving them would hand the client phantom credit. They are
@@ -3352,44 +3526,61 @@ async def _archive_order(db, current, order_id, reason, do_refund):
                                  "or void the payments first.")
 
     refunded = 0.0
-    if do_refund:
-        pays = _pays
-        net_paid = _net
-        if net_paid > 0:
-            acct = None
-            # refund to the account the payments used, else the first company account
-            acct_ids = [p.account_id for p in pays if p.account_id]
-            if acct_ids:
-                acct = (await db.execute(select(Account).where(Account.id == acct_ids[0]))).scalar_one_or_none()
-            if not acct:
-                acct = (await db.execute(select(Account).where(
-                    Account.org_id == current.org_id, Account.active == True))).scalars().first()  # noqa: E712
-            refund = Refund(org_id=current.org_id, order_id=order_id,
-                            account_id=acct.id if acct else None, amount=net_paid, reason=reason)
-            db.add(refund)
-            await db.flush()
-            from backend.routers.cash import open_drawer_shift
-            _rp = Payment(order_id=order_id, client_id=order.client_id, method="refund",
-                          kind="refund", amount=net_paid, account_id=acct.id if acct else None,
-                          # cash handed back from a till comes out of that drawer's count (B10)
-                          shift_id=await open_drawer_shift(db, current.org_id, acct),
-                          received_by_id=current.id, reference=f"Archive refund: {reason}"[:200])
-            db.add(_rp)
-            await db.flush()
-            refund.payment_id = _rp.id
-            if order.client_id:
-                # The cash goes back, so the client's ledger must show it — otherwise the reversed
-                # charge leaves them with phantom store credit equal to what they were refunded.
-                from backend.services.ledger import post_contact_ledger
-                await post_contact_ledger(db, current.org_id, order.client_id, "refund", abs(net_paid),
-                                          note=f"Refund on archived order {order.order_number}",
-                                          ref_type="refund", ref_id=refund.id, created_by_id=current.id)
-            if acct:
-                from backend.routers.cash import post_transaction
-                await post_transaction(db, current.org_id, acct.id, "refund", -net_paid,
-                                       comment=f"Refund on archived order {order.order_number}: {reason}",
-                                       ref_type="refund", ref_id=refund.id, employee_id=current.id)
-            refunded = net_paid
+    refunds_by_account: list = []
+    if do_refund and _net > 0:
+        # W3-C: each cashbox gives back what it took for this job (less what it already refunded),
+        # never everything from the first payment's account — card money goes back to the card,
+        # cash to the drawer. A drawer that no longer holds the cash is refused, never driven
+        # negative.
+        per: dict = {}
+        for p in _pays:
+            if p.account_id:
+                per[p.account_id] = q2(per.get(p.account_id, 0) + float(p.amount or 0))
+        for acc_id, amt in (await db.execute(select(Payment.account_id, func.sum(func.abs(Payment.amount))).where(
+                Payment.order_id == order_id, Payment.kind == "refund", Payment.account_id.isnot(None))
+                .group_by(Payment.account_id))).all():
+            per[acc_id] = q2(per.get(acc_id, 0) - float(amt or 0))
+        plan = {k: v for k, v in per.items() if v > 0}
+        # money that came in without an account, or refunded from a different one: settle the
+        # difference against the largest accounts so the total is exactly what's unrefunded
+        gap = q2(_net - sum(plan.values()))
+        for acc_id in sorted(plan, key=lambda k: -plan[k]):
+            if gap >= 0:
+                break
+            cut = min(plan[acc_id], -gap)
+            plan[acc_id], gap = q2(plan[acc_id] - cut), q2(gap + cut)
+        if gap > 0:
+            first = next(iter(plan), None) or (await db.execute(select(Account.id).where(
+                Account.org_id == current.org_id, Account.active == True))).scalars().first()  # noqa: E712
+            if first:
+                plan[first] = q2(plan.get(first, 0) + gap)
+        accts = {a.id: a for a in (await db.execute(select(Account).where(
+            Account.org_id == current.org_id, Account.id.in_(list(plan))).with_for_update())).scalars().all()}
+        from backend.models import Transaction
+        for acc_id, amt in plan.items():
+            acct = accts.get(acc_id)
+            if acct is None or amt <= 0 or (acct.payment_option or "") != "cash" \
+                    or q2(float(acct.balance or 0)) >= amt:
+                continue
+            # only cash this job actually put into the drawer through the till (older or imported
+            # payments with no cashbox entry never moved the drawer's balance)
+            took = (await db.execute(select(func.coalesce(func.sum(Transaction.amount), 0)).where(
+                Transaction.org_id == current.org_id, Transaction.account_id == acc_id,
+                Transaction.ref_type == "order", Transaction.ref_id == order_id,
+                Transaction.txn_type == "invoice_payment", Transaction.status == "active"))).scalar() or 0
+            if q2(float(took)) > 0:
+                raise HTTPException(409, f"{amt:.2f} has to go back to the customer from the “{acct.name}” drawer, "
+                                         f"but it holds only {float(acct.balance or 0):.2f}. Put the cash back in "
+                                         "the drawer (or move it there), then delete the job.")
+        from backend.routers.returns import book_refund
+        for acc_id, amt in plan.items():
+            acct = accts.get(acc_id)
+            if acct is None or amt <= 0:
+                continue
+            await book_refund(db, current, order, acct, amt, reason=reason,
+                              reference=f"Archive refund: {reason}")
+            refunds_by_account.append({"account_id": acct.id, "account": acct.name, "amount": amt})
+            refunded = q2(refunded + amt)
 
     order.archived = True
     order.archive_reason = reason
@@ -3405,6 +3596,22 @@ async def _archive_order(db, current, order_id, reason, do_refund):
                 db, current.org_id, order.client_id, "charge", q2(-_net),
                 note=f"Order {order.order_number} archived", ref_type="order", ref_id=order.id,
                 created_by_id=current.id)
+    # W3-C: its invoices don't keep billing a deleted job. One that bills only this job, with its
+    # money given back above, is cancelled; one shared with other jobs stops billing this one
+    # (when none of this job's money sits on it).
+    if not order.is_estimate:
+        from backend.services.invoice_money import detach_order, invoices_for_order
+        from backend.services.invoicing import invoice_orders
+        for _inv in await invoices_for_order(db, order.id):
+            _jobs = {o.id for o in await invoice_orders(db, _inv)} | ({_inv.order_id} if _inv.order_id else set())
+            if _jobs <= {order.id}:
+                if q2(float(_inv.amount_paid or 0)) <= 0 and q2(float(_inv.credited or 0)) <= 0:
+                    _inv.status = "cancelled"
+            else:
+                try:
+                    await detach_order(db, _inv, order.id)
+                except HTTPException:
+                    pass          # this job's money is on it: it stays, as the refund left it
     # Return consumed stock to inventory — archiving an order must not silently lose the parts it
     # deducted (reuses the same reversal the delete-line/reopen paths use). Safe against re-run:
     # archiving an already-archived order is rejected above.
@@ -3430,7 +3637,8 @@ async def _archive_order(db, current, order_id, reason, do_refund):
     await log_system_event(db, current.org_id, "order", order.id,
                            f"Order archived: {reason}" + (f" (refunded {refunded})" if refunded else ""))
     await db.commit()
-    return {"ok": True, "id": order.id, "archived": True, "reason": reason, "refunded": refunded}
+    return {"ok": True, "id": order.id, "archived": True, "reason": reason, "refunded": refunded,
+            "refunds": refunds_by_account}
 
 
 class ArchiveIn(BaseModel):
@@ -3795,8 +4003,10 @@ async def set_order_code(
     if not want:
         order.barcode = await unique_order_code(db)   # never leave a WO codeless
     else:
+        # skip_tenant_filter: barcodes are unique across every shop (uq_orders_barcode); only the
+        # fact of a clash is read, never the other order.
         clash = (await db.execute(select(Order.id).where(
-            Order.barcode == want, Order.id != order.id))).first()
+            Order.barcode == want, Order.id != order.id).execution_options(skip_tenant_filter=True))).first()
         if clash:
             raise HTTPException(409, "That code is already used by another work order")
         order.barcode = want
@@ -3823,6 +4033,7 @@ async def save_custom_data(
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, order)
+    await _guard_editable(db, order, current)   # a closed job changes only with "Edit the closed ticket"
     from backend.models import CustomField
     fields = (await db.execute(select(CustomField).where(
         CustomField.org_id == current.org_id, CustomField.type_id == order.type_id,
@@ -3916,6 +4127,7 @@ async def assign_people(
     order = result.scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    await _guard_editable(db, order, current)   # a closed job changes only with "Edit the closed ticket"
     sent = data.model_fields_set
     if "manager_id" in sent:
         await _assert_listed(db, current.org_id, data.manager_id, "display_in_managers", "Managers")
@@ -4034,7 +4246,7 @@ async def _recalc_order(db, order):
     if total < 0:
         # Discounts left behind after the work they paid for was removed: the job is worth 0, and
         # labour + parts still add up to it (discount lines sit in labour_total).
-        order.labour_total = labour + fees - total
+        order.labour_total = msum([labour, fees, -total])
     # Item 3: optional whole-document rounding (nearest 0.05). Off by default.
     _org = (await db.execute(select(Organisation).where(Organisation.id == order.org_id))).scalar_one_or_none()
     if _org and getattr(_org, "rounding_enabled", False):
@@ -4042,7 +4254,7 @@ async def _recalc_order(db, order):
     # Never below zero: discount lines (gift card, coupon, loyalty) left behind after the lines
     # they paid for were removed made the total negative, which then read as an "overpayment" and
     # could be refunded in cash (audit 2026-10-29, H5).
-    order.total = max(total, 0)
+    order.total = max(total, 0)   # (rounding can't push a 0 below zero; kept for clarity)
     order.tax = order_tax(lines)
     from backend.services.invoice_money import sync_order_invoices
     await sync_order_invoices(db, order, prev_total)
@@ -4081,6 +4293,10 @@ async def _guard_discount_approval(db, org_id, perms, discount, discount_type, i
         discount = 100.0 if not base or base <= 0 else min(100.0, float(discount) / float(base) * 100)
     if perms.get("can_approve_discount") is not False:
         return
+    # Giving the whole line away is always an approval, threshold or not (with no threshold set,
+    # a role denied approval could still make a job free — QA 31 Oct 2026).
+    if (discount or 0) >= 100:
+        raise HTTPException(403, "A 100% discount needs manager approval.")
     org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
     thr = float(getattr(org, "discount_approval_pct", 0) or 0)
     if thr <= 0 or (discount or 0) <= thr:
@@ -4129,6 +4345,20 @@ async def _assert_line_rights(db, current, li) -> None:
         await assert_perm(db, current, "can_add_custom_product" if product else "can_add_custom_service")
     if (li.discount or 0) > 0 and (li.discount_type or "pct") != "pct":
         await assert_perm(db, current, "can_set_discount_type")
+
+
+async def _assert_line_ref(db, org_id, li) -> None:
+    """A picked line points at one of this shop's products or services, as at the till. An id
+    that is nobody's, or isn't that kind of item (a client's id sent as a product), used to make a
+    line pointing at nothing (QA wave 3)."""
+    if not li.ref_id or li.kind not in ("product", "service"):
+        return
+    from backend.models import Part, Service as _Svc
+    model = Part if li.kind == "product" else _Svc
+    found = (await db.execute(select(model.id).where(model.id == li.ref_id, model.org_id == org_id))).scalar_one_or_none()
+    if not found:
+        raise HTTPException(404, "That product isn't in your catalog" if li.kind == "product"
+                            else "That service isn't in your catalog")
 
 
 # What "View prices of labors, services, products" hides on a work order's lines.
@@ -4197,10 +4427,12 @@ async def add_line(
     order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    await _lock_for_lines(db, order)
     await _guard_editable(db, order, current)
     if (data.discount or 0) > 0:
         await assert_perm(db, current, "can_set_discount")
     await _assert_line_rights(db, current, data)
+    await _assert_line_ref(db, current.org_id, data)
     await _validate_line_assignment(db, current.org_id, technician_id=data.technician_id, co_technicians=data.co_technicians)
     if data.order_item_id:
         from backend.services import multi_asset as _ma
@@ -4355,12 +4587,17 @@ async def add_line(
         # price the client sent (it decides how the kit's locked total is shared out).
         data.order_item_id = kit_group.order_item_id
 
-    # Merge: if the same product already exists on the order, just bump qty (Orderry)
+    # Merge: the same line added again (a double click) just bumps qty (Orderry). Only an
+    # identical line: the same product at the same price with the same description. A second
+    # line for the product with its own description ("stick R" next to "stick L") stays its own
+    # line (QA wave 3).
     if data.kind == "product" and data.ref_id:
         # A kit's lines are never merged into: an extra must stay a line of its own.
-        existing = (await db.execute(select(OrderLine).where(
+        same = (await db.execute(select(OrderLine).where(
             OrderLine.order_id == order_id, OrderLine.ref_id == data.ref_id, OrderLine.kind == "product",
-            OrderLine.bundle_group_id.is_(None)).limit(1))).scalars().first()
+            OrderLine.bundle_group_id.is_(None), OrderLine.description == data.description)
+            .execution_options(populate_existing=True))).scalars().all()
+        existing = next((ln for ln in same if abs(float(ln.unit_price or 0) - float(data.unit_price or 0)) < 0.005), None)
         if existing and not kit_group:
             existing.qty += data.qty
             existing.total = q2(existing.qty * existing.unit_price *
@@ -4441,12 +4678,23 @@ async def add_line(
     return resp
 
 
-async def _reverse_fulfillment(db, order, part_id, qty):
+async def _reverse_fulfillment(db, order, part_id, qty, *, ref_type="order", ref_id=None, units=None,
+                               capped=True):
     """Unwind a fulfillment: return qty to warehouse stock, release serialized
     units allocated to this order, and restore FIFO cost layers (newest first,
-    capped at each layer's received qty). Mirrors _maybe_deduct."""
+    capped at each layer's received qty). Mirrors _maybe_deduct.
+    W3-C: never more than the job still holds — units the customer already brought back on a goods
+    return (services/job_returns) aren't restocked a second time. A goods return calls this with its
+    own movement ref, the units it named, and capped=False (it checked the cap itself). Returns the
+    qty put back."""
     if not part_id or qty <= 0:
-        return
+        return 0.0
+    if capped:
+        from backend.services.job_returns import returned_qty, still_held
+        if await returned_qty(db, order.id, part_id) > 1e-9:
+            qty = min(qty, await still_held(db, order.id, part_id))
+            if qty <= 1e-9:
+                return 0.0
     # Return stock to the location it was actually deducted from (recorded on the "use"
     # movement), not order.location_id — those differ after a work order is transferred to
     # another location, and returning to the new location would corrupt per-location on-hand.
@@ -4478,10 +4726,10 @@ async def _reverse_fulfillment(db, order, part_id, qty):
         back_bin = back_bin if back_bin in live else None
         await stock_rows.add(db, part_id, loc_id, q, bin_id=back_bin)
         db.add(StockMovement(part_id=part_id, location_id=loc_id, bin_id=back_bin,
-                             movement_type="return", qty=q, ref_type="order", ref_id=order.id))
+                             movement_type="return", qty=q, ref_type=ref_type, ref_id=ref_id or order.id))
     from backend.models import SerializedItem, StockItemBatch
-    # Release serialized units (newest allocated first)
-    serials = (await db.execute(select(SerializedItem).where(
+    # Release serialized units (the ones named, else newest allocated first)
+    serials = units if units is not None else (await db.execute(select(SerializedItem).where(
         SerializedItem.org_id == order.org_id, SerializedItem.part_id == part_id,
         SerializedItem.order_id == order.id, SerializedItem.status == "allocated_to_order")
         .order_by(SerializedItem.created_at.desc()).limit(int(qty)))).scalars().all()
@@ -4489,8 +4737,11 @@ async def _reverse_fulfillment(db, order, part_id, qty):
     for s in serials:
         s.status = "in_stock"
         s.order_id = None
-        serial_log.record(db, s, "returned", ref_type="order", ref_id=order.id,
-                          label=f"Taken off {order.order_number}")
+        if units is not None:     # a goods return names its units: they're on the shelf the stock went to
+            s.location_id, s.bin_id, s.warehouse_id = plan[0][0], None, None
+        else:
+            serial_log.record(db, s, "returned", ref_type="order", ref_id=order.id,
+                              label=f"Taken off {order.order_number}")
     # Restore cost layers (approximate without a per-line consumption journal:
     # newest layer first, never exceeding what that layer originally received)
     from decimal import Decimal as _D
@@ -4507,6 +4758,7 @@ async def _reverse_fulfillment(db, order, part_id, qty):
         back = min(remaining, consumed)
         layer.qty_remaining = _D(str(layer.qty_remaining or 0)) + back
         remaining -= back
+    return float(qty)
 
 
 def _can_override_reservation(perms, current) -> bool:
@@ -4667,6 +4919,16 @@ async def _consume_from_bins(db, order, line, qty, current, *, bin_id=None, seri
     from backend.services import inventory_alerts as _alerts  # 144bo: low-stock alert
     await _alerts.maybe_low_stock_by_id(db, order.org_id, part_id)
     return taken
+
+
+async def _lock_for_lines(db, order) -> None:
+    """Every change to a job's lines (add, edit, remove, merge) takes the job's lock first and
+    re-reads it, so two people on one job queue up: neither loses the other's edit, stock moves
+    for what is saved now (not a stale qty), a line removed twice returns its stock once, and the
+    order total is recomputed from every line. Lines are read after this with populate_existing."""
+    from backend.services.invoice_money import lock_order
+    await lock_order(db, order.id)
+    await db.refresh(order)
 
 
 def _line_as_in(line) -> "LineIn":
@@ -4869,10 +5131,14 @@ async def update_line(
     order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    await _lock_for_lines(db, order)
     await _guard_editable(db, order, current)
-    line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id))).scalar_one_or_none()
+    line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id)
+                             .execution_options(populate_existing=True))).scalar_one_or_none()
     if not line:
         raise HTTPException(404, "Line not found")
+    if line.kind == "refund":
+        raise HTTPException(409, "This line is a refund. Delete the refund (Finance > Refunds) to undo it.")
     if line.kind == "membership":
         # The plan's own price: removing it would make the plan free. Cancel the membership instead.
         raise HTTPException(409, "This is a membership plan. Cancel it from the customer's membership instead.")
@@ -4880,10 +5146,12 @@ async def update_line(
     if payload.keys() & {"qty", "unit_price", "discount", "discount_type", "tax_rate", "tax_mode"}:
         from backend.services.invoice_money import assert_line_editable
         await assert_line_editable(db, line.id)   # not under a sent or paid invoice
-    if current.role_id and not (await _order_perms(db, current)).get("can_view_purchase_price"):
-        payload.pop("cost_price", None)
+    # A cost change from someone who may not set costs is refused, not silently dropped (a 200
+    # that changed nothing — QA 31 Oct 2026). The editor only sends cost when it showed it.
     if "cost_price" in payload and float(payload["cost_price"] or 0) != float(line.cost_price or 0):
         await assert_perm(db, current, "can_set_cost_price")
+    if current.role_id and not (await _order_perms(db, current)).get("can_view_purchase_price"):
+        payload.pop("cost_price", None)
     if "discount_type" in payload and (payload["discount_type"] or "pct") != (line.discount_type or "pct"):
         await assert_perm(db, current, "can_set_discount_type")
     # Changing what the customer pays needs the matching right (a technician can't zero a job).
@@ -4979,10 +5247,14 @@ async def delete_line(
     order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    await _lock_for_lines(db, order)
     await _guard_editable(db, order, current)
-    line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id))).scalar_one_or_none()
+    line = (await db.execute(select(OrderLine).where(OrderLine.id == line_id, OrderLine.order_id == order_id)
+                             .execution_options(populate_existing=True))).scalar_one_or_none()
     if not line:
         raise HTTPException(404, "Line not found")
+    if line.kind == "refund":
+        raise HTTPException(409, "This line is a refund. Delete the refund (Finance > Refunds) to undo it.")
     # Removing a line takes the same right as adding one (this had no check at all).
     perms = await _order_perms(db, current)
     need = "can_add_products" if line.kind == "product" else "can_add_services"

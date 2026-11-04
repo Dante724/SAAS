@@ -449,7 +449,7 @@ export default function ReportsHub() {
     { label: "Jobs and estimates", value: dash?.total_orders ?? "—", onClick: () => nav("/orders") },
     { label: "Still open", value: dash?.open_orders ?? "—", onClick: () => nav("/orders") },
     { label: "Customers", value: dash?.total_clients ?? "—", onClick: () => nav("/clients") },
-    { label: "Paid invoices", value: money(dash?.revenue), onClick: () => nav("/finance") },
+    { label: "Sales", value: money(dash?.revenue), hint: "Sales after returns and refunds. Money collected is under Paid on Home.", onClick: () => nav("/finance") },
     { label: "Still owed to you", value: money(dash?.outstanding), onClick: () => nav("/invoices") },
   ];
 
@@ -525,7 +525,7 @@ export default function ReportsHub() {
               <div className="p-3.5 border-b border-slate-100 text-xs font-bold text-ink-primary ">Job profitability</div>
               <table className="w-full text-left border-collapse text-xs">
                 <thead><tr className="bg-slate-50/60 border-b border-slate-100 text-ink-tertiary text-[11px] font-bold ">
-                  <th className="py-3 px-4">Order</th><th className="py-3 px-4">Client</th><th className="py-3 px-4 text-right">Takings after tax</th><th className="py-3 px-4 text-right">Costs</th><th className="py-3 px-4 text-right">Profit</th><th className="py-3 px-4 text-right">Margin</th>
+                  <th className="py-3 px-4">Order</th><th className="py-3 px-4">Client</th><th className="py-3 px-4 text-right">Sales</th><th className="py-3 px-4 text-right">Costs</th><th className="py-3 px-4 text-right">Profit</th><th className="py-3 px-4 text-right">Margin</th>
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
                   {profit == null && <SkeletonRows cols={6} />}

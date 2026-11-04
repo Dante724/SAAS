@@ -58,10 +58,10 @@ async def test_portal_link_expires(client, tenant, db):
 
 
 @pytest.mark.asyncio
-async def test_reissuing_a_portal_link_stops_the_old_one(client, tenant):
+async def test_rotating_a_portal_link_stops_the_old_one(client, tenant):
     cid = await _client_id(client, tenant)
     old = (await client.post(f"/api/clients/{cid}/portal-link", headers=tenant)).json()["portal_token"]
-    new = (await client.post(f"/api/clients/{cid}/portal-link", headers=tenant)).json()["portal_token"]
+    new = (await client.post(f"/api/clients/{cid}/portal-link?replace=true", headers=tenant)).json()["portal_token"]
     assert old != new
     assert (await client.get(f"/api/public/portal/{old}")).status_code == 404
     assert (await client.get(f"/api/public/portal/{new}")).status_code == 200
@@ -572,6 +572,10 @@ async def test_retention_only_touches_its_own_shop_and_covers_messages(client, t
         cutoff = datetime.utcnow() - timedelta(days=30)
         if model is ChatMessage:
             q = select(func.count()).select_from(ChatMessage).join(ChatThread).where(ChatThread.org_id == oid)
+        elif model is AuditLog:
+            # only the rows made above: signing up writes recent audit rows (new sign-in device),
+            # which retention rightly keeps
+            q = select(func.count()).select_from(AuditLog).where(AuditLog.org_id == oid, AuditLog.action == "x")
         else:
             q = select(func.count()).select_from(model).where(model.org_id == oid)
         return (await db.execute(q.where(model.created_at < cutoff))).scalar()

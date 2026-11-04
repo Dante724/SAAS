@@ -296,7 +296,7 @@ export default function WorkOrdersHub() {
     setBusy(true);
     // Single atomic call (was N per-row PATCHes). action=set_status.
     try { await api.post("/orders/bulk", { order_ids: [...sel], action: "set_status", value: key, reason: reason || undefined }); setSel(new Set()); refetch(); }
-    catch { let failed = 0; for (const id of sel) { await api.patch(`/orders/${id}/status`, { status: key, reason: reason || undefined }).catch(() => { failed++; }); } if (failed) showNotice(`Couldn't change the status of ${failed} job${failed === 1 ? "" : "s"}.`); setSel(new Set()); refetch(); }
+    catch { let failed = 0, why = ""; for (const id of sel) { await api.patch(`/orders/${id}/status`, { status: key, reason: reason || undefined }).catch((e: any) => { failed++; why ||= e?.message || ""; }); } if (failed) showNotice(failed === 1 && why ? why : `Couldn't change the status of ${failed} job${failed === 1 ? "" : "s"}.${why ? ` ${why}` : ""}`); setSel(new Set()); refetch(); }
     finally { setBusy(false); }
   }
   // 144-G: bulk archive (soft-delete, reversible). Orders carrying unrefunded payments are

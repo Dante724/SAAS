@@ -22,7 +22,7 @@ import PrintMenu from "./PrintMenu";
 import { autoPrintIfClosed } from "../../lib/autoPrint";
 import { Order, deviceName, money } from "./types";
 import { Avatar, deviceIcon, dueText, friendlyDate } from "./look";
-import { api, openAuthedDoc } from "../../api/client";
+import { api, idempotencyKey, openAuthedDoc } from "../../api/client";
 import { readAsDataUrl } from "../../lib/files";
 import { confirmDialog, alertDialog, promptDialog } from "../../lib/dialog";
 import AuthedImage from "../../components/AuthedImage";
@@ -37,7 +37,6 @@ import JobCardFields from "../../components/JobCardFields";
 import ReaderCharge from "../../components/ReaderCharge";
 import AccountPicker, { type PayAccount, type PaymentOption, accountsFor, pickDefaultAccount } from "../../components/AccountPicker";
 import CardPaymentsList from "../../components/CardPaymentsList";
-import { binChoices, byLocation, needsBinChoice } from "../../lib/stockBins";
 import LineQtyEditor from "./LineQtyEditor";
 import AutoPrintPicker from "../../components/AutoPrintPicker";
 import KitGroupHeader from "./KitGroupHeader";
@@ -45,6 +44,7 @@ import EstimateTerms, { startRevision } from "./EstimateTerms";
 import JobTasks from "./JobTasks";
 import { sendInvoice } from "../invoices/billing";
 import { groupKitLines } from "../../lib/kitGroups";
+import { binChoices, byLocation, needsBinChoice } from "../../lib/stockBins";
 import { loadFailed, saveFailed } from "../../lib/notice";
 import { clickable } from "../../lib/clickable";
 import { jobTypeLabel, type WOTypeRef } from "./jobType";
@@ -147,7 +147,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   useEffect(() => { api.get<Timing>(`/orders/${order.id}/timing`).then(setTiming).catch(() => setTiming(null)); }, [order.id, d.status]);
   useEffect(() => { api.get<any>("/staff/employees").then((r) => setEmps(r.items || r || [])).catch(loadFailed("the staff list")); }, []);
   const [woTypes, setWoTypes] = useState<WOTypeRef[] | null>(null);
-  useEffect(() => { api.get<any>("/forms/types").then((r) => setWoTypes(r.items || [])).catch(() => setWoTypes([])); }, []);
+  useEffect(() => { api.get<any>("/forms/types").then((r) => setWoTypes(r.items || [])).catch((e) => { setWoTypes([]); loadFailed("job types")(e); }); }, []);
 
   // B11: a status that needs something first (a comment, or payment) asks for it right here,
   // under the header, instead of failing with a message the drawer gave no way to fix.
@@ -170,7 +170,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
       let detail: any = null; try { detail = JSON.parse(e?.body || "null")?.detail; } catch { /* not JSON */ }
       if (e?.status === 409 && detail?.code === "comment_required") { setGateText(""); setGate({ key, name, reason: reason || undefined, kind: "comment" }); return; }
       if (e?.status === 409 && detail?.code === "unpaid") { setGate({ key, name, reason: reason || undefined, kind: "unpaid", message: detail.message, canOverride: !!detail.can_override }); return; }
-      flash(e.message || "That didn't save. Try again.");
+      // The server says why in a sentence ("WO-12 still has $40 to pay…"): show it as it is.
+      flash(e.message || "Couldn't change the status");
     }
   }
   async function continueLinked() {
@@ -712,10 +713,10 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
 
               <ChecklistRings orderId={order.id} onOpen={() => setTab("checklists")} />
 
-              {(d as any).written_off > 0 && (
+              {((d as any).written_off > 0 || !!droppedStatus(statuses as any[], d.status || "")) && (
                 <div role="note" className="flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-xs text-ink-secondary">
                   <M n="block" c="text-base text-ink-tertiary" />
-                  <span>Dropped{(d as any).cancel_reason ? `: ${(d as any).cancel_reason}` : ""}. The {money((d as any).written_off)} the customer still owed was written off, so it isn't counted as a debt or as profit.</span>
+                  <span>Dropped{(d as any).cancel_reason ? `: ${(d as any).cancel_reason}` : ""}.{(d as any).nothing_done ? " Nothing was done and the parts went back on the shelf, so nothing is owed." : (d as any).written_off > 0 ? ` ${money((d as any).written_off)} the customer didn't pay was written off. It's not a debt and not in sales.` : ""}</span>
                 </div>
               )}
               <LinkedJobs orderId={order.id} />
@@ -751,7 +752,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             </div>
           )}
           {tab === "checklists" && <ChecklistsTab orderId={order.id} typeId={(d as any).type_id} />}
-          {tab === "invoices" && <InvoicesTab onChanged={reload} orderId={order.id} total={d.total} writtenOff={(d as any).written_off || 0} deposit={(d as any).deposit_amount} currencyCode={(d as any).currency_code} fxRate={(d as any).fx_rate} currencySymbol={(d as any).currency_symbol} onCurrencyChange={(code, rate, symbol) => setD({ ...d, currency_code: code, fx_rate: rate, currency_symbol: symbol } as any)} onFlash={flash} />}
+          {tab === "invoices" && <InvoicesTab onChanged={reload} orderId={order.id} total={d.total} writtenOff={(d as any).written_off || 0} nothingDone={!!(d as any).nothing_done} deposit={(d as any).deposit_amount} currencyCode={(d as any).currency_code} fxRate={(d as any).fx_rate} currencySymbol={(d as any).currency_symbol} onCurrencyChange={(code, rate, symbol) => setD({ ...d, currency_code: code, fx_rate: rate, currency_symbol: symbol } as any)} onFlash={flash} />}
           {/* G3 — one customer conversation: ActivityTab shows the shared thread and its message box */}
           {tab === "activity" && (
             <ActivityTab orderId={order.id} clientName={c.name} clientPhone={c.phone} onFlash={flash}
@@ -1401,8 +1402,8 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, onFla
         line_type: pick.kind === "service" ? "labour" : "part",
         ref_id: pick.ref_id, qty: 1, unit_price: pick.price || 0,
         ...(tagging && forItem ? { order_item_id: forItem } : {}),
-        ...(pick.kind === "product" && takeBin ? { bin_id: takeBin } : {}),
         ...(intoKit && pick.kind !== "bundle" ? { bundle_group_id: intoKit.id } : {}),
+        ...(pick.kind === "product" && takeBin ? { bin_id: takeBin } : {}),
       });
       const out = pick.kind === "product" && pick.available != null && pick.available <= 0 ? ". It's out of stock: order or transfer it" : "";
       const inKitNow = intoKit && pick.kind !== "bundle";
@@ -1886,7 +1887,7 @@ type PayCtx = { order_total: number; already_paid: number; prepaid: number; rema
 // Every account from the payment context in one list, each tagged with the method it sits under.
 const ctxAccounts = (c: PayCtx | null): PayAccount[] =>
   c ? Object.entries(c.accounts_by_method || {}).flatMap(([k, list]) => (list || []).map((a) => ({ ...a, payment_option: a.payment_option || k }))) : [];
-export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyCode, fxRate, currencySymbol, onCurrencyChange, onFlash, onChanged }: { orderId: string; total?: number; writtenOff?: number; deposit?: number; currencyCode?: string; fxRate?: number; currencySymbol?: string; onCurrencyChange?: (code: string, rate: number, symbol: string) => void; onFlash: Flash; onChanged?: () => void }) {
+export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = false, deposit, currencyCode, fxRate, currencySymbol, onCurrencyChange, onFlash, onChanged }: { orderId: string; total?: number; writtenOff?: number; nothingDone?: boolean; deposit?: number; currencyCode?: string; fxRate?: number; currencySymbol?: string; onCurrencyChange?: (code: string, rate: number, symbol: string) => void; onFlash: Flash; onChanged?: () => void }) {
   const { base, opts: curOpts, multi: multiCurrency } = useCurrencies();
   const { can } = useMe();
   const changeCurrency = async (code: string) => {
@@ -1954,19 +1955,24 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyC
   const openPay = async (kind: "pay" | "prepay") => {
     try { const c = await api.get<PayCtx>(`/cash/orders/${orderId}/payment-context`); setCtx(c);
       setAccount(pickDefaultAccount(accountsFor(ctxAccounts(c), method as PaymentOption), c.location_id)); setAmount(String(kind === "pay" ? c.remaining : "")); setModal(kind);
+      payKey.current = idempotencyKey();   // a new payment gets a new key; retries of it reuse this one
     } catch (e: any) { onFlash(`Cannot open payment: ${e.message}`); }
   };
   // Busy guard: the ref blocks a second click landing before React re-renders the disabled button,
   // so a double-click can never post the same payment twice.
   const [payBusy, setPayBusy] = useState(false); const payBusyRef = useRef(false);
+  // One key per payment window: a second click (or another tab's retry) gets the first answer back
+  // from the server instead of posting the money again. A new key once it has gone through.
+  const payKey = useRef(idempotencyKey());
   const [onReader, setOnReader] = useState(false);   // F2/F3: card taken on a reader instead of recorded by hand
   const submit = async () => {
     if (payBusyRef.current) return;
     payBusyRef.current = true; setPayBusy(true);
     const amt = parseFloat(amount);
     try {
-      if (modal === "prepay") await api.post(`/cash/orders/${orderId}/prepay`, { amount: amt, account_id: account });
-      else await api.post(`/cash/orders/${orderId}/pay`, { amount: amt, account_id: account, method });
+      if (modal === "prepay") await api.postOnce(`/cash/orders/${orderId}/prepay`, { amount: amt, account_id: account }, payKey.current);
+      else await api.postOnce(`/cash/orders/${orderId}/pay`, { amount: amt, account_id: account, method }, payKey.current);
+      payKey.current = idempotencyKey();
       setModal(null); onFlash("Payment recorded"); load();
     } catch (e: any) { onFlash(e.message || "That didn't go through. Try again."); } finally { payBusyRef.current = false; setPayBusy(false); }
   };
@@ -1989,7 +1995,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyC
         const tone = {
           due: { edge: "bg-amber-400", pill: "bg-amber-50 text-amber-800 ring-amber-200", dot: "bg-amber-500", label: "Balance due" },
           settled: { edge: "bg-emerald-500", pill: "bg-emerald-50 text-emerald-700 ring-emerald-200", dot: "bg-emerald-500", label: "Settled" },
-          written_off: { edge: "bg-slate-300", pill: "bg-slate-100 text-ink-secondary ring-slate-200", dot: "bg-slate-400", label: "Written off" },
+          written_off: { edge: "bg-slate-300", pill: "bg-slate-100 text-ink-secondary ring-slate-200", dot: "bg-slate-400", label: nothingDone ? "Nothing owed" : "Written off" },
           empty: { edge: "bg-slate-200", pill: "bg-slate-100 text-ink-secondary ring-slate-200", dot: "bg-slate-400", label: "Nothing to pay yet" },
         }[state];
         const shown = money(due);
@@ -2017,7 +2023,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyC
             )}
             <p className="mt-2 text-xs text-ink-tertiary tabular-nums">
               <span className="font-medium text-ink-secondary">{money(paid)}</span> of <span className="font-medium text-ink-secondary">{money(t)}</span> collected
-              {writtenOff > 0 && <> · <span className="font-medium text-ink-secondary">{money(writtenOff)}</span> written off</>}
+              {writtenOff > 0 && (nothingDone ? <> · nothing was done, so nothing is owed</> : <> · <span className="font-medium text-ink-secondary">{money(writtenOff)}</span> written off</>)}
             </p>
         {isForeign && (
           <p className="text-xs text-ink-secondary mt-1 tabular-nums">≈ {currencySymbol}{conv(due).toFixed(2)} {currencyCode} <span className="text-ink-tertiary">(1 {currencyCode} = {fxRate && (1 / fxRate).toFixed(4)} {base?.code})</span></p>
@@ -2032,8 +2038,8 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyC
         )}
         {((!settled && t > 0) || link) && (
           <div className="mt-4 flex flex-wrap items-center gap-2">
-            {!settled && (can("can_take_payments") || can("can_view_finance")) && <button onClick={() => openPay("pay")} className={btnPrimary}><M n="credit_card" c="text-sm" />Take payment</button>}
-            {!settled && (can("can_take_payments") || can("can_view_finance")) && <button onClick={() => openPay("prepay")} className={btnSecondary}><M n="savings" c="text-sm" />Take prepayment</button>}
+            {!settled && can("can_take_payments") && <button onClick={() => openPay("pay")} className={btnPrimary}><M n="credit_card" c="text-sm" />Take payment</button>}
+            {!settled && can("can_view_finance") && <button onClick={() => openPay("prepay")} className={btnSecondary}><M n="savings" c="text-sm" />Take prepayment</button>}
             {!link ? !settled && can("can_create_payment_links") && (
               <button onClick={() => createLink(false)} className={btnSecondary}><M n="link" c="text-sm" />Payment link</button>
             ) : (

@@ -3,10 +3,11 @@ import { useEffect, useState, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
 import ScanStockPanel from "../../components/ScanStockPanel";
-import { api, openAuthedDoc } from "../../api/client";
+import { api, idempotencyKey, openAuthedDoc } from "../../api/client";
 import { downloadSheet } from "../../lib/downloadSheet";
 import { isoDate } from "../../lib/localDate";
 import { missingBarcodesMessage } from "../../lib/barcodes";
+import { shrinkImageFile } from "../../lib/files";
 import { Product, Supplier, PO, Service, Bundle, Asset, currencySymbol, money } from "./types";
 import { analyzePaste, gridToRows, mergeRemap, loadRememberedMap, saveRememberedMap, fileToGrid, mapByHeader, splitSerials, FIELD_LABELS, FIELD_ORDER } from "./pasteMap";
 import type { PasteField, PostRow } from "./pasteMap";
@@ -23,11 +24,13 @@ import { assetStatusTone } from "./statusTone";
 import { cachedPref, loadPref, savePref } from "../../lib/userPref";
 import Pager from "../../components/Pager";
 import SerialEntry from "../../components/SerialEntry";
+import UnitSerials, { unnamedUnits } from "../../components/UnitSerials";
 import DateField from "../../components/DateField";
 import AssetStateTabs, { AssetCounts, useAssetState } from "../../components/AssetStateTabs";
 import { useDebounced, useServerPage } from "../../hooks/useServerPage";
 import { useMe, hasFeature } from "../../context/Me";
 import { alertDialog, confirmDialog, promptDialog } from "../../lib/dialog";
+import { type BlockedItem, keptMessage, splitBlocked, writeOffPrompt } from "./archiveBlocked";
 import { printHtmlInFrame } from "../../lib/safeHtml";
 import { MoreMenu, inputCls } from "../invoices/billing";
 import { humanize } from "../../lib/humanize";
@@ -305,11 +308,21 @@ export default function InventoryHub() {
   async function pBulk(act: "delete" | "price", extra: any = {}) {
     setPBusy(true);
     try {
-      const r = await api.post<{ count?: number; blocked?: string[]; blocked_items?: { id: string; name: string; reason: string }[] }>("/catalog/products/bulk", { ids: [...psel], action: act, ...extra });
-      pClear(); loadProducts();
-      // The server says why each one was kept: in stock, on an open job or estimate, on an open PO, or in a kit.
-      const kept = r?.blocked_items?.length ? r.blocked_items.map((b) => `${b.name}: ${b.reason}`) : (r?.blocked || []);
-      if (kept.length) await alertDialog(`${kept.length === 1 ? "This product was" : `${kept.length} products were`} kept:\n${kept.join("\n")}`, "Some products weren't archived");
+      type BulkOut = { count?: number; blocked?: string[]; blocked_items?: BlockedItem[] };
+      const r = await api.post<BulkOut>("/catalog/products/bulk", { ids: [...psel], action: act, ...extra });
+      pClear();
+      let { stocked, other } = splitBlocked(r?.blocked_items || []);
+      // still in stock: one step — write it off and archive
+      if (stocked.length && await confirmDialog(writeOffPrompt(stocked), { danger: true, confirmLabel: "Write off and archive" })) {
+        const r2 = await api.post<BulkOut>("/catalog/products/bulk",
+          { ids: stocked.map((i) => i.id), action: "delete", write_off_remaining: true });
+        other = [...other, ...(r2?.blocked_items || [])];
+        stocked = [];
+      }
+      loadProducts();
+      const kept = [...other, ...stocked];
+      if (kept.length) await alertDialog(keptMessage(kept), "Some products weren't archived");
+      else if (!r?.blocked_items && r?.blocked?.length) await alertDialog(`${r.blocked.length} item(s) were kept: ${r.blocked.join(", ")}.`, "Some products weren't archived");
     }
     catch (e: any) { await alertDialog(e.message || "Couldn't update the selected products. Try again."); }
     finally { setPBusy(false); }
@@ -757,9 +770,10 @@ function ActionModal({ kind, products, preselected, onClose, onDone }:
   const [locations, setLocations] = useState<{ id: string; name: string }[]>([]);
   const [fromLoc, setFromLoc] = useState(""); const [toLoc, setToLoc] = useState("");
   const [reason, setReason] = useState(""); const [note, setNote] = useState("");
-  const [lines, setLines] = useState<{ part_id: string; qty: number }[]>(
+  const [lines, setLines] = useState<{ part_id: string; qty: number; serials?: string[] }[]>(
     preselected.length ? preselected.map((id) => ({ part_id: id, qty: 1 })) : [{ part_id: "", qty: 1 }]);
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
+  const saveKey = useRef(idempotencyKey());
 
   useEffect(() => {
     api.get<any>("/staff/locations").then((r) => {
@@ -773,18 +787,35 @@ function ActionModal({ kind, products, preselected, onClose, onDone }:
   const addLine = () => setLines([...lines, { part_id: "", qty: 1 }]);
   const rmLine = (i: number) => setLines(lines.filter((_, j) => j !== i));
 
+  // QA F2: a serialized product's line names the IMEI / serial of each unit that moves
+  const isSerialized = (pid: string) => !!products.find((p) => p.id === pid)?.serialized;
   async function save() {
-    const clean = lines.filter((l) => l.part_id && l.qty > 0);
+    const clean = lines.filter((l) => l.part_id && l.qty > 0)
+      .map((l) => isSerialized(l.part_id) ? { ...l, serialized: true, serials: l.serials || [] } : { part_id: l.part_id, qty: l.qty });
     if (!clean.length) { setErr("Add at least one product line."); return; }
+    const unnamed = unnamedUnits(clean as any[]);
+    if (unnamed.length) { setErr("Scan the IMEI / serial of each serialized unit."); return; }
+    const body = clean.map(({ serialized: _s, ...l }: any) => l);
     setBusy(true); setErr(null);
     try {
       if (kind === "transfer") {
         if (fromLoc === toLoc) { setErr("Source and destination must differ."); setBusy(false); return; }
-        await api.post("/transfers", { from_location_id: fromLoc, to_location_id: toLoc, note, lines: clean });
+        await api.post("/transfers", { from_location_id: fromLoc, to_location_id: toLoc, note, lines: body });
       } else if (kind === "return") {
-        await api.post("/returns", { reason, lines: clean.map((l) => ({ ...l, restock: true })) });
+        await api.postOnce("/returns", { reason, lines: body.map((l: any) => ({ ...l, restock: true })) }, saveKey.current);   // a double click restocks once
       } else {
-        await api.post("/stock-docs/write-offs", { location_id: fromLoc, reason, note, lines: clean });
+        // a write-off document takes one line per serialized unit, naming it
+        const out: any[] = [];
+        for (const l of body) {
+          if (!l.serials) { out.push(l); continue; }
+          const r = await api.get<{ items: { id: string; serial_number: string; status: string }[] }>(`/serials?part_id=${encodeURIComponent(l.part_id)}&status=in_stock`);
+          for (const sn of l.serials) {
+            const u = (r.items || []).find((x) => x.serial_number === sn && x.status === "in_stock");
+            if (!u) { setErr(`${sn} isn't in stock.`); setBusy(false); return; }
+            out.push({ part_id: l.part_id, qty: 1, serialized_item_id: u.id });
+          }
+        }
+        await api.post("/stock-docs/write-offs", { location_id: fromLoc, reason, note, lines: out });
       }
       onDone();
     } catch (e: any) { setErr(e.message || "Could not save"); setBusy(false); }
@@ -823,13 +854,21 @@ function ActionModal({ kind, products, preselected, onClose, onDone }:
               <button onClick={addLine} className="text-primary text-xs font-semibold flex items-center gap-1"><M n="add" c="text-sm" />Add line</button></div>
             <div className="space-y-2">
               {lines.map((l, i) => (
-                <div key={i} className="flex items-center gap-2">
-                  <select value={l.part_id} onChange={(e) => setLine(i, "part_id", e.target.value)} className="flex-1 glass-input rounded-xl px-3 py-2 text-xs">
+                <div key={i}>
+                <div className="flex items-center gap-2">
+                  <select value={l.part_id} onChange={(e) => setLines(lines.map((x, j) => j === i ? { ...x, part_id: e.target.value, serials: [] } : x))} className="flex-1 glass-input rounded-xl px-3 py-2 text-xs">
                     <option value="">Select product…</option>
                     {products.map((p) => <option key={p.id} value={p.id}>{p.name}{p.sku ? ` (${p.sku})` : ""}</option>)}
                   </select>
                   <input type="number" min={0} value={l.qty} onChange={(e) => setLine(i, "qty", Number(e.target.value))} className="w-20 glass-input rounded-xl px-3 py-2 text-xs text-right" />
                   <button aria-label="Remove line" onClick={() => rmLine(i)} className="w-8 h-8 rounded-lg hover:bg-rose-50 text-ink-tertiary hover:text-rose-600 flex items-center justify-center"><M n="delete" c="text-sm" /></button>
+                </div>
+                {l.part_id && isSerialized(l.part_id) && (
+                  <UnitSerials partId={l.part_id} need={Math.max(0, Math.floor(l.qty))} value={l.serials || []}
+                    status={kind === "return" ? "sold" : "in_stock"}
+                    label={products.find((p) => p.id === l.part_id)?.name || "this product"}
+                    onChange={(v) => setLine(i, "serials", v)} />
+                )}
                 </div>
               ))}
             </div>
@@ -1056,7 +1095,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
     // mergeRemap keeps any cell the user hand-edited while the mapping bar is open
     setMapCols(next); setRows(mergeRemap(dataGrid, mapCols, next, rows));
     // a sheet's mapping is remembered per supplier on the server; a paste's in this browser
-    if (fileHeaders) api.put(`/imports/posting/mapping${supplierId ? `?supplier_id=${encodeURIComponent(supplierId)}` : ""}`, { mapping: mapByHeader(fileHeaders, next) }).catch(() => { /* silent: remembering the column mapping is a convenience; this import is unaffected */ });
+    if (fileHeaders) api.put(`/imports/posting/mapping${supplierId ? `?supplier_id=${encodeURIComponent(supplierId)}` : ""}`, { mapping: mapByHeader(fileHeaders, next) }).catch(() => { /* silent: remembering the column mapping is only a convenience */ });
     else saveRememberedMap(next);
   }
   async function onSheet(e: any) {
@@ -1077,7 +1116,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
     const f = e.target.files?.[0]; if (!f) return;
     setBusy(true); setErr(null); setInfo(null);
     try {
-      const fd = new FormData(); fd.append("file", f);
+      const fd = new FormData(); fd.append("file", await shrinkImageFile(f));
       const r = await api.postForm<any>("/inventory/postings/extract", fd);
       const rws: PostRow[] = (r.rows || []).map((x: any) => ({ code: x.code || "", mpn: x.mpn || "", name: x.name || "", qty: Number(x.qty) || 1, purchase_price: Number(x.purchase_price) || 0, markup_pct: 0 }));
       if (rws.length) { setRows(rws); setMapCols(null); setDataGrid(null); setInfo(`Read ${rws.length} line${rws.length === 1 ? "" : "s"} from the file. Check each one before posting.`); }
@@ -1090,7 +1129,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
     if (!clean.length) { setErr("Add at least one row (code, MPN or name + qty)."); return; }
     setBusy(true); setErr(null);
     try {
-      const r = await api.post<any>("/inventory/postings/preview", { rows: clean.map((x) => ({ code: x.code || null, mpn: x.mpn || null, name: x.name || null, qty: Number(x.qty), purchase_price: Number(x.purchase_price) || null, markup_pct: x.markup_pct ? Number(x.markup_pct) : null, product_type: x.product_type || null })) });
+      const r = await api.post<any>("/inventory/postings/preview", { rows: clean.map((x) => ({ code: x.code || null, mpn: x.mpn || null, name: x.name || null, qty: Number(x.qty), purchase_price: Number(x.purchase_price) || null, markup_pct: x.markup_pct ? Number(x.markup_pct) : null, product_type: x.product_type || null, ...(splitSerials(x.serials).length ? { serials: splitSerials(x.serials) } : {}) })) });
       // Back → edit → review again keeps what was scanned and chosen for the same row.
       setReview((r.rows || []).map((rr: any) => {
         const k = kept[rowKey(rr)];
@@ -1109,7 +1148,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
   const badSerials = (review || []).filter((r) => rowSerialized(r) && (r.serialState?.blocked || r.serialState?.checking));
   async function doCommit() {
     if (!review) return;
-    if (needSerials.length) { setErr(`${needSerials.length} row${needSerials.length === 1 ? " still needs" : "s still need"} a serial for each unit.`); return; }
+    if (needSerials.length && !genSerials) { setErr(`${needSerials.length} row${needSerials.length === 1 ? " still needs" : "s still need"} a serial for each unit.`); return; }
     if (badSerials.length) { setErr("Fix the serials marked in red first."); return; }
     setBusy(true); setErr(null);
     try {
@@ -1197,12 +1236,12 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
             <div><label className={lbl2}>Note / reference</label><textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} className={`${fld} w-full`} /></div>
           </>) : (<>
             <p className="text-xs text-ink-secondary">Confirm each row before stock moves. {newCount > 0 && <b className="text-primary">{newCount} new product{newCount === 1 ? "" : "s"} will be created.</b>}</p>
-            <label className="flex items-center gap-2 text-xs text-ink-secondary"><input type="checkbox" checked={genSerials} onChange={(e) => setGenSerials(e.target.checked)} />Generate missing serial numbers for serialized products</label>
-            {needSerials.length > 0 && (
+            {needSerials.length > 0 && !genSerials && (
               <div className="rounded-lg bg-amber-50 border border-amber-200 text-amber-800 text-xs px-3 py-2 flex items-center gap-1.5">
                 <M n="barcode_scanner" c="text-sm" />{needSerials.length} row{needSerials.length === 1 ? " still needs" : "s still need"} a serial for each unit. Scan them below.
               </div>
             )}
+            <label className="flex items-center gap-2 text-xs text-ink-secondary"><input type="checkbox" checked={genSerials} onChange={(e) => setGenSerials(e.target.checked)} />Generate the missing serial numbers for me</label>
             <div className="space-y-1.5">
               {review.map((r, i) => {
                 const ser = rowSerialized(r), exp = rowExpiry(r), isNew = !r.chosen || r.chosen === "__new__";
@@ -1258,7 +1297,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
         <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
           {!review
             ? <button onClick={doPreview} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Matching…" : "Review and match"}</button>
-            : <button onClick={doCommit} disabled={busy || (!genSerials && needSerials.length > 0) || badSerials.length > 0} title={needSerials.length ? "Enter a serial for each unit first" : undefined} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Posting…" : "Post stock"}</button>}
+            : <button onClick={doCommit} disabled={busy || (!genSerials && needSerials.length > 0) || badSerials.length > 0} title={needSerials.length && !genSerials ? "Enter a serial for each unit first" : undefined} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Posting…" : "Post stock"}</button>}
           <button onClick={review ? backToEdit : onClose} className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50">{review ? "Back" : "Cancel"}</button>
         </div>
       </div>

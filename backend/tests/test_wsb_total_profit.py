@@ -1,4 +1,4 @@
-"""Workstream B — Total profit (gap #1) and Unsuccessful jobs profit (gap #2).
+"""Workstream B — Total profit (gap #1) and Dropped jobs (gap #2).
 
 One shared profit function (services/profit.job_figures) feeds Job profitability, Total profit
 and the dropped-jobs report, so the numbers can't disagree. These tests build a small shop:
@@ -204,7 +204,7 @@ async def test_unsuccessful_jobs_report(client, tenant, db):
     row = dict(zip(cols, rep["rows"][0]))
     assert len(rep["rows"]) == 1
     assert row["Reason"] == "Too expensive"
-    assert row["Money kept"] == 40.0 and row["Written off"] == 160.0
+    assert row["Paid and kept (incl. tax)"] == 40.0 and row["Written off"] == 160.0
     assert row["Profit"] == -10.0
     # filter by status: a status with no dropped jobs → nothing
     r = await client.get("/api/reports/run/dropped_jobs", params={"status": "nonexistent"}, headers=tenant)

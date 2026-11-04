@@ -137,7 +137,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
   // Each KPI jumps to the Finance tab that explains it; Outstanding opens the Invoices page.
   const kpiStats: SummaryStat[] = [
     { label: "Cash and bank now", value: money(cash?.total_cash), onClick: () => setTab(can("can_view_cashbox") ? "cashboxes" : "balances") },
-    { label: "Paid invoices", value: money(fin?.total_revenue), onClick: () => setTab("pnl") },
+    { label: "Sales", value: money(fin?.total_revenue), hint: "Sales after returns and refunds. Money collected is under Paid on Home.", onClick: () => setTab("pnl") },
     { label: "Still owed to you", value: money(fin?.total_outstanding), onClick: () => navigate("/invoices") },
     { label: "Expenses", value: money(fin?.total_expenses), onClick: () => setTab("pnl") },
     { label: "Profit before tax", value: money(fin?.gross_profit), tone: (fin?.gross_profit || 0) < 0 ? "bad" : undefined, onClick: () => setTab("pnl") },
@@ -158,7 +158,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
         {tab === "overview" && (<>
           {can("can_export_accountant") && (
             <div className="space-y-2.5">
-              <div><h3 className="text-sm font-bold text-ink-primary">Since you started</h3><p className="text-xs text-ink-tertiary">Paid invoices, money still owed and expenses, all time. Pick dates to export a period for your accountant.</p></div>
+              <div><h3 className="text-sm font-bold text-ink-primary">Since you started</h3><p className="text-xs text-ink-tertiary">Sales after returns, money still owed and expenses, all time. Pick dates to export a period for your accountant.</p></div>
               <div className="flex items-center gap-1.5 flex-wrap">
                 <button onClick={() => { const qs = [exFrom && `date_from=${exFrom}`, exTo && `date_to=${exTo}`].filter(Boolean).join("&"); openAuthedDoc(`/finance/export/accountant.csv${qs ? `?${qs}` : ""}`).catch(() => alertDialog("Could not export.")); }} className={btnGhost}><M n="download" c="text-sm" />Export for accountant</button>
                 <DateField mode="date" value={exFrom} onChange={setExFrom} placeholder="From" className="w-36" />
@@ -205,14 +205,14 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
                   <p className="text-[11px] text-ink-tertiary mt-1">Net margin {pnl.net_margin_pct}% · {pnl.invoice_count} invoices · {dayRange(pnl.date_from, pnl.date_to)}</p>
                 </div>
                 <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4 text-xs text-ink-secondary max-w-2xl">
-                  <div className="flex justify-between py-1.5 border-b border-slate-100"><span>Net revenue (ex-tax)</span><span className="tabular-nums font-semibold text-ink-primary">{cur(pnl.revenue)}</span></div>
+                  <div className="flex justify-between py-1.5 border-b border-slate-100"><span>Net revenue</span><span className="tabular-nums font-semibold text-ink-primary">{cur(pnl.revenue)}</span></div>
                   <div className="flex justify-between py-1.5 border-b border-slate-100"><span>− Cost of parts (COGS)</span><span className="tabular-nums text-rose-600">−{cur(pnl.cogs)}</span></div>
                   <div className="flex justify-between py-1.5 border-b border-slate-100 font-bold text-ink-primary"><span>= Gross profit</span><span className="tabular-nums">{cur(pnl.gross_profit)} <span className="text-[11px] text-ink-tertiary">({pnl.gross_margin_pct}%)</span></span></div>
                   <div className="flex justify-between py-1.5 border-b border-slate-100"><span>− Operating expenses</span><span className="tabular-nums text-rose-600">−{cur(pnl.opex)}</span></div>
                   <div className="flex justify-between py-1.5 border-b border-slate-100"><span>− Processing fees (card/online)</span><span className="tabular-nums text-rose-600">−{cur(pnl.fees)}</span></div>
                   <div className="flex justify-between py-2 font-bold text-sm text-ink-primary"><span>= Net profit</span><span className={`tabular-nums ${pnl.net_profit >= 0 ? "text-emerald-700" : "text-rose-700"}`}>{cur(pnl.net_profit)}</span></div>
                   <div className="flex justify-between pt-2 mt-1 border-t border-slate-100 text-ink-tertiary"><span>Tax collected (not counted as revenue)</span><span className="tabular-nums">{cur(pnl.tax_collected)}</span></div>
-                  <p className="mt-2 text-[11px] text-ink-tertiary">Revenue is accrual (issued invoices, ex-tax); expenses are cash-basis for the period.{pack?.region ? ` Region: ${String(pack.region).toUpperCase()} · ${pack.currency_code}` : ""}</p>
+                  <p className="mt-2 text-[11px] text-ink-tertiary">Revenue is accrual (issued invoices); expenses are cash-basis for the period.{pack?.region ? ` Region: ${String(pack.region).toUpperCase()} · ${pack.currency_code}` : ""}</p>
                 </div>
               </>
             )}

@@ -49,14 +49,23 @@ PG_TRIGGERS = [
 
 
 def upgrade() -> None:
+    # The parity line's aud6m01 already added token_version, mfa_secret (String 255) and
+    # mfa_last_step on databases upgraded there: add only what is missing, and widen mfa_secret
+    # to Text like this line's.
+    have = {c["name"]: c for c in sa.inspect(op.get_bind()).get_columns("platform_admins")}
     with op.batch_alter_table("platform_admins") as b:
-        b.add_column(sa.Column("role_id", sa.String(), nullable=True))
-        b.add_column(sa.Column("token_version", sa.Integer(), nullable=False, server_default="0"))
-        b.add_column(sa.Column("mfa_secret", sa.Text(), nullable=True))
-        b.add_column(sa.Column("mfa_recovery", sa.Text(), nullable=True))
-        b.add_column(sa.Column("mfa_enrolled_at", sa.DateTime(), nullable=True))
-        b.add_column(sa.Column("mfa_last_step", sa.Integer(), nullable=True))
-        b.add_column(sa.Column("last_login_at", sa.DateTime(), nullable=True))
+        for col in (sa.Column("role_id", sa.String(), nullable=True),
+                    sa.Column("token_version", sa.Integer(), nullable=False, server_default="0"),
+                    sa.Column("mfa_secret", sa.Text(), nullable=True),
+                    sa.Column("mfa_recovery", sa.Text(), nullable=True),
+                    sa.Column("mfa_enrolled_at", sa.DateTime(), nullable=True),
+                    sa.Column("mfa_last_step", sa.Integer(), nullable=True),
+                    sa.Column("last_login_at", sa.DateTime(), nullable=True)):
+            if col.name not in have:
+                b.add_column(col)
+        if "mfa_secret" in have and not isinstance(have["mfa_secret"]["type"], sa.Text):
+            b.alter_column("mfa_secret", existing_type=have["mfa_secret"]["type"], type_=sa.Text(),
+                           existing_nullable=True)
     op.create_index("ix_platform_admins_role_id", "platform_admins", ["role_id"])
 
     op.create_table(

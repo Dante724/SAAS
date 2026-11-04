@@ -99,14 +99,19 @@ async def list_email_accounts(
 ):
     rows = (await db.execute(select(EmailAccount).where(
         EmailAccount.org_id == current.org_id, EmailAccount.active == True))).scalars().all()  # noqa: E712
-    # an employee only sees accounts they may actually send from
+    # an employee only sees accounts they may actually send from; who else may is for whoever
+    # runs the settings (QA wave 3: a technician listed every account and its senders)
+    from backend.services.auth import has_perm
+    admin = await has_perm(db, current, "can_manage_settings")
     out = []
     for a in rows:
         allowed = not a.allowed_employee_ids or current.id in a.allowed_employee_ids
+        if not admin and not allowed:
+            continue
         out.append({"id": a.id, "address": a.address, "display_name": a.display_name,
                     "provider": a.provider, "is_default": a.is_default,
                     "can_send": allowed,
-                    "allowed_employee_ids": a.allowed_employee_ids or []})
+                    "allowed_employee_ids": (a.allowed_employee_ids or []) if admin else []})
     return {"items": out}
 
 

@@ -34,6 +34,11 @@ async def consume_fifo_lifo(db: AsyncSession, *, org_id: str, part_id: str,
                    StockItemBatch.qty_remaining > 0)
             .order_by(order_by).with_for_update())
     layers = (await db.execute(stmt)).scalars().all()
+    have = sum((_d(layer.qty_remaining) for layer in layers), Decimal("0"))
+    if have < qty:
+        # Checked before any layer is touched: a caller that catches this must not be left with
+        # layers half-drawn in its transaction (QA F2).
+        raise HTTPException(409, f"Insufficient cost-layered stock: short by {float(qty - have):g} unit(s)")
 
     remaining = qty
     total_cost = Decimal("0")

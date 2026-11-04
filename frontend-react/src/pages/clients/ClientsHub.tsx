@@ -21,8 +21,8 @@ import { Avatar } from "../orders/look";
 import { MoreMenu, btnDanger, btnGhost, btnPrimary } from "../invoices/billing";
 import MembershipsView from "../memberships/MembershipsView";
 import { hueText, tint } from "../../lib/tint";
-import ImportDrawer from "../../components/ImportDrawer";
 import { clickableRow } from "../../lib/clickable";
+import ImportDrawer from "../../components/ImportDrawer";
 
 type Client = { id: string; name?: string; phone?: string; email?: string; loyalty_tier?: string; balance?: number; devices?: any[]; order_count?: number };
 type Tab = "clients" | "memberships" | "suppliers";

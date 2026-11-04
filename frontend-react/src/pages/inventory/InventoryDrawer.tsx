@@ -12,11 +12,13 @@ import CategoryPicker from "../../components/CategoryPicker";
 import CatalogPicker, { CatalogItem } from "../../components/CatalogPicker";
 import { useFormLayout, LayoutFields, reqStar, missingRequired, has } from "../../lib/formLayout";
 import ServiceForm, { serviceBody } from "./ServiceForm";
+import { KIT_PRINT_LABELS } from "../../lib/kitGroups";
 import MoveStockDialog from "../../components/MoveStockDialog";
 import LabelPrintDialog from "../../components/LabelPrintDialog";
 import SerialPassport from "../../components/SerialPassport";
+import SerialEntry from "../../components/SerialEntry";
+import UnitSerials from "../../components/UnitSerials";
 import { rowLabel } from "../../lib/stockBins";
-import { KIT_PRINT_LABELS } from "../../lib/kitGroups";
 import { fmtDay, fmtServerTime } from "../../lib/serverTime";
 import { loadFailed } from "../../lib/notice";
 import Switch from "../../components/Switch";
@@ -124,6 +126,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
   const [locs, setLocs] = useState<LocLite[]>([]);
   const [adjOpen, setAdjOpen] = useState(false);
   const [adjLoc, setAdjLoc] = useState(""); const [adjQty, setAdjQty] = useState(""); const [adjType, setAdjType] = useState("receive"); const [adjNote, setAdjNote] = useState(""); const [adjBusy, setAdjBusy] = useState(false);
+  const [adjSerials, setAdjSerials] = useState<string[]>([]);   // QA F2: serialized stock comes in with a serial per unit
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2000); };
   const editing = !!id;
   const [codeBusy, setCodeBusy] = useState(false);
@@ -207,13 +210,18 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
     }
   }, [ptab, kind, id, moves, pos, stock, batches, units]);
 
+  // Serialized stock moves unit by unit: new units get a serial, a write-off names the units that leave.
+  const adjNeedsSerials = !!p.serialized && Number(adjQty) > 0;
   async function submitAdjust() {
     if (!adjLoc || !adjQty) { flash("Pick a location and quantity"); return; }
+    const withSerials = adjNeedsSerials;
+    if (withSerials && adjSerials.length !== Number(adjQty)) { flash(`Scan the IMEI / serial of each unit: ${adjSerials.length} of ${Number(adjQty)} done`); return; }
     setAdjBusy(true);
     try {
-      await api.post(`/inventory/parts/${id}/adjust`, { location_id: adjLoc, qty: Number(adjQty), movement_type: adjType, note: adjNote || null });
+      await api.post(`/inventory/parts/${id}/adjust`, { location_id: adjLoc, qty: Number(adjQty), movement_type: adjType, note: adjNote || null,
+        ...(withSerials ? { serials: adjSerials } : {}) });
       flash("Stock adjusted");
-      setAdjOpen(false); setAdjQty(""); setAdjNote("");
+      setAdjOpen(false); setAdjQty(""); setAdjNote(""); setAdjSerials([]);
       setStock(null); setMoves(null); setBatches(null);   // refetch affected tabs
     } catch (e: any) { flash(e.message || "Couldn't adjust the stock"); } finally { setAdjBusy(false); }
   }
@@ -472,6 +480,12 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                   <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Quantity</label><input type="number" value={adjQty} onChange={(e) => setAdjQty(e.target.value)} className="glass-input font-mono block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-xl" placeholder="0" /></div>
                   <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Note</label><input value={adjNote} onChange={(e) => setAdjNote(e.target.value)} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-xl" placeholder="Reason (optional)" /></div>
                 </div>
+                {adjNeedsSerials && (
+                  <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">{adjType === "writeoff" ? "IMEI / serial of each unit written off" : "IMEI / serial of each unit"}</label>
+                    {adjType === "writeoff"
+                      ? <UnitSerials partId={id || ""} need={Math.floor(Number(adjQty))} value={adjSerials} onChange={setAdjSerials} label={p.name} />
+                      : <SerialEntry value={adjSerials} onChange={setAdjSerials} target={Math.floor(Number(adjQty))} partId={id} />}</div>
+                )}
                 <div className="flex justify-end"><button type="button" onClick={submitAdjust} disabled={adjBusy} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{adjBusy ? "Saving…" : "Apply adjustment"}</button></div>
               </div>
             )}

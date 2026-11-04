@@ -16,7 +16,7 @@ stops with that list. Nothing is merged or renamed automatically — the owner d
 keeps a code. Fix the listed rows, then run the upgrade again.
 
 Revision ID: ii144a01
-Revises: opd1
+Revises: aul3
 """
 import uuid
 from datetime import datetime
@@ -25,7 +25,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "ii144a01"
-down_revision = "opd1"
+down_revision = "aul3"
 branch_labels = None
 depends_on = None
 

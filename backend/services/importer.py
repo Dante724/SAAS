@@ -354,10 +354,9 @@ class Products(Kind):
         elif ident and ident[0] == "name":
             ctx.claim("u-name", self._norm(*ident), row, f"Name {ident[1]}")
         # codes that identify a product must not land on a second one, in the shop or in this file.
-        # The SKU always does (ii144a: one active product per SKU, enforced by the database), whatever
-        # the shop's matching key; so does the MPN.
-        ident_keys = [k for k in ctx.data["keys"] if k != "name"]
-        for k in ident_keys + [k for k in ("sku", "mpn") if k not in ident_keys]:
+        # SKU and barcode are unique per shop in the database whichever key the shop matches on
+        # (ii144a: one active product per SKU); so is the MPN.
+        for k in dict.fromkeys([k for k in ctx.data["keys"] if k != "name"] + ["sku", "barcode", "mpn"]):
             v = rec.get(k)
             if not v:
                 continue

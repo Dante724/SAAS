@@ -72,13 +72,19 @@ async def _records(db, org_id, subject, start, location_id):
         closed = {"closed", "dropped"}
         types = {t.id: t.name for t in (await db.execute(select(WorkOrderType).where(WorkOrderType.org_id == org_id))).scalars().all()}
         locs = {l.id: l.name for l in (await db.execute(select(Location).where(Location.org_id == org_id))).scalars().all()}
-        q = select(Order).where(Order.org_id == org_id, Order.is_estimate == False)  # noqa: E712
+        q = select(Order).where(Order.org_id == org_id, Order.is_estimate == False,  # noqa: E712
+                                Order.archived == False, Order.created_at >= start,  # noqa: E712
+                                Order.status.in_([k for k, g in grp.items() if g in closed] or [""]))
         if location_id:
             q = q.where(Order.location_id == location_id)
-        for o in (await db.execute(q)).scalars().all():
-            if grp.get(o.status) not in closed or o.created_at < start:
-                continue
-            out.append({"ts": o.created_at, "amount": o.total or 0, "profit": 0, "groups": {
+        orders = (await db.execute(q)).scalars().all()
+        # what each job earned, by the rule every report uses (services/revenue): ex tax, after
+        # refunds and credit notes; a dropped job only the money it kept, never what was written off
+        from backend.services.revenue import job_figures
+        figs = await job_figures(db, q.with_only_columns(Order.id)) if orders else {}
+        for o in orders:
+            amount = q2(figs[o.id]["revenue"]) if o.id in figs else 0.0
+            out.append({"ts": o.created_at, "amount": amount, "profit": 0, "groups": {
                 "type": types.get(o.type_id, "No type"), "location": locs.get(o.location_id, "—"),
                 "status_group": grp.get(o.status, "closed"),
                 "month": o.created_at.strftime("%Y-%m"), "quarter": f"{o.created_at.year} Q{(o.created_at.month - 1) // 3 + 1}"}})
@@ -88,10 +94,19 @@ async def _records(db, org_id, subject, start, location_id):
         q = select(Sale).where(Sale.org_id == org_id, Sale.voided_at.is_(None))
         if location_id:
             q = q.where(Sale.location_id == location_id)
+        q = q.where(Sale.created_at >= start)
+        # ex tax and less what came back to the till (ClientReturn.sale_id), as in net sales
+        from backend.models import ClientReturn
+        back = {sid: (float(a or 0), float(t or 0), float(c or 0)) for sid, a, t, c in (await db.execute(
+            select(ClientReturn.sale_id, func.sum(ClientReturn.amount), func.sum(ClientReturn.tax),
+                   func.sum(ClientReturn.cost))
+            .where(ClientReturn.org_id == org_id, ClientReturn.sale_id.in_(q.with_only_columns(Sale.id)))
+            .group_by(ClientReturn.sale_id))).all()}
         for s in (await db.execute(q)).scalars().all():
-            if s.created_at < start:
-                continue
-            out.append({"ts": s.created_at, "amount": s.total or 0, "profit": (s.total or 0) - (s.tax or 0) - (s.total_cost or 0), "groups": {
+            amt, tax, cost = back.get(s.id, (0.0, 0.0, 0.0))
+            amount = q2(float(s.total or 0) - float(s.tax or 0) - (amt - tax))
+            out.append({"ts": s.created_at, "amount": amount,
+                        "profit": q2(amount - (float(s.total_cost or 0) - cost)), "groups": {
                 "seller": sellers.get(s.seller_id, "—"), "location": locs.get(s.location_id, "—"),
                 "month": s.created_at.strftime("%Y-%m"), "quarter": f"{s.created_at.year} Q{(s.created_at.month - 1) // 3 + 1}"}})
     elif subject == "payments":

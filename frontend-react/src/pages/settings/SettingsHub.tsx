@@ -14,6 +14,7 @@ import { FEATURES } from "../../lib/features";
 import { SetupChecklist } from "./SetupChecklist";
 import { Avatar } from "../orders/look";
 import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
+import RetentionCard from "./RetentionCard";
 import Switch from "../../components/Switch";
 import SaveFooter from "../../components/SaveFooter";
 import { SettingRow, SettingGroup, NumField } from "../../components/SettingRow";
@@ -48,7 +49,6 @@ const CheckinPointsSettings = lazy(() => import("./CheckinPointsSettings"));
 const MembershipSettings = lazy(() => import("./MembershipSettings"));
 const WebhooksSettings = lazy(() => import("./WebhooksSettings"));
 const sectionLoading = <div className="text-xs text-ink-tertiary py-6">Loading…</div>;
-import RetentionCard from "./RetentionCard";
 
 // Full section set = the registry sections + a few that have no nav entry of their own.
 type Section = SectionId | "overview" | "automation" | "payroll-rules";

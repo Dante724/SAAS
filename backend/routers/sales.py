@@ -1,8 +1,9 @@
 """Sales (over-the-counter POS) + Stocktake (count → variance → adjust)."""
+from datetime import datetime
 from decimal import Decimal
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy import update as sa_update
@@ -155,7 +156,9 @@ async def _price_sale(db, org_id, data: SaleIn, *, location_id, sale: Optional[S
         if err:
             refuse("coupon", err)
         else:
-            coupon = min(q2(gross * c.value / 100.0) if c.kind == "pct" else q2(c.value), q2(remaining))
+            # QA 2026-10-31 B: the percentage is of what's left after the sale discount.
+            from backend.services.coupons import coupon_amount
+            coupon = coupon_amount(c.kind, c.value, remaining)
             if sale is not None:
                 # guarded atomic increment: refuse if a concurrent redemption hit max_uses meanwhile
                 res = await db.execute(sa_update(Coupon)
@@ -320,6 +323,7 @@ async def lookup_code(
     parts = (await db.execute(base.where(or_(*[func.lower(c) == low for c in fields.values()], Part.id.in_(extra)))
                               .order_by(Part.name).limit(20))).scalars().all()
     matched = {p.id: next((k for k in fields if (getattr(p, k, None) or "").lower() == low), "barcode") for p in parts}
+    unit_serial = None
     if not parts:
         from backend.models import SerializedItem
         from backend.services.serial_intake import matches as _sn_matches
@@ -330,6 +334,7 @@ async def lookup_code(
         if si:
             parts = (await db.execute(base.where(Part.id == si.part_id))).scalars().all()
             matched = {p.id: "serial" for p in parts}
+            unit_serial = si.serial_number
     loc_id = current.location_id
     stock = {}
     if parts:
@@ -346,6 +351,8 @@ async def lookup_code(
         "qty_available": stock.get(p.id, 0.0),
         # the small list thumbnail, not the full photo: a till lookup stays light
         "image_data": thumbs.get(p.id), "has_image": p.id in thumbs, "matched_on": matched.get(p.id),
+        # QA F2: a serialized product needs its unit's serial at the till; a scanned IMEI already says which
+        "serialized": bool(p.serialized), "serial": unit_serial if matched.get(p.id) == "serial" else None,
     } for p in parts]}
 
 
@@ -400,6 +407,13 @@ async def delete_sale(
         raise HTTPException(409, "This sale was paid on a card reader. Refund the card payment first "
                                  "(Recent sales › Card reader payments), then delete the sale.")
     reason = (reason or "Deleted").strip()[:300]
+    # QA F2: claim the void before anything moves. A double click read the sale as not voided in
+    # both requests (FOR UPDATE is a no-op on SQLite; the session's copy can be stale on Postgres)
+    # and put the stock and the takings back twice.
+    won = await db.execute(sa_update(Sale).where(Sale.id == sale.id, Sale.voided_at.is_(None))
+                           .values(voided_at=now_utc()).execution_options(synchronize_session=False))
+    if won.rowcount != 1:
+        raise HTTPException(409, "This sale was already deleted")
 
     lines = (await db.execute(select(SaleLine).where(SaleLine.sale_id == sale.id))).scalars().all()
     if any(_returned(ln) > 0 for ln in lines):   # B5: the return already put stock and money back
@@ -424,13 +438,7 @@ async def delete_sale(
         await _unsell_serials(db, current.org_id, draws.get("serials") or [],
                               ref_type="sale_void", ref_id=sale.id, actor_id=current.id,
                               label=f"Sale {sale.sale_number or ''} deleted".replace("  ", " "))
-        for d in draws.get("layers") or []:
-            batch = (await db.execute(select(StockItemBatch).where(
-                StockItemBatch.id == d["batch_id"], StockItemBatch.org_id == current.org_id))).scalar_one_or_none()
-            if batch:
-                back = Decimal(str(d["qty"]))
-                cap = Decimal(str(batch.qty_received or 0))
-                batch.qty_remaining = min(Decimal(str(batch.qty_remaining or 0)) + back, cap)
+        await _restore_layers(db, current.org_id, draws.get("layers") or [])
         for d in draws.get("holds") or []:
             hold = (await db.execute(select(StockReservation).where(
                 StockReservation.id == d["hold_id"], StockReservation.org_id == current.org_id))).scalar_one_or_none()
@@ -477,12 +485,28 @@ async def delete_sale(
 @router.post("", status_code=201)
 async def create_sale(
     data: SaleIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_create_sales")),
 ):
     """One warehouse per sale (the seller's location). Products deduct stock via
     the guarded UPDATE + FIFO cost layers, so COGS — and therefore the estimated
-    profit (total − cost) — is exact."""
+    profit (total − cost) — is exact. A double click on Charge with the same
+    Idempotency-Key makes one sale and gets the first answer back."""
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "sales.create")
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        result = await _create_sale(data, db, current)
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
+
+
+async def _create_sale(data: SaleIn, db: AsyncSession, current: Employee):
     if not data.lines:
         raise HTTPException(400, "A sale needs at least one line")
     if any(ln.kind == "service" for ln in data.lines):
@@ -551,20 +575,20 @@ async def create_sale(
             draws["bins"] = [[b, q] for b, q in taken]
             if units:
                 draws["serials"] = [u.id for u in units]
-            unit_cost = part.avg_cost or part.cost_price or 0
-            # FIFO cost layers → exact COGS when layers exist
-            has_batch = (await db.execute(select(StockItemBatch.id).where(
-                StockItemBatch.org_id == current.org_id, StockItemBatch.part_id == li.ref_id,
-                StockItemBatch.qty_remaining > 0).limit(1))).scalar_one_or_none()
-            if has_batch:
-                from backend.services.serialized import consume_fifo_lifo
-                try:
-                    rc = await consume_fifo_lifo(db, org_id=current.org_id, part_id=li.ref_id,
-                                                 qty=Decimal(str(li.qty)), method="fifo")
-                    unit_cost = rc["avg_unit_cost"]
-                    draws["layers"] = [{"batch_id": x["batch_id"], "qty": x["qty"]} for x in rc["layers"]]
-                except HTTPException:
-                    pass
+            # QA F2: cost from this location's layers (each sold unit's own layer first); units no layer
+            # covers are valued at the average. The old org-wide draw emptied another branch's layers,
+            # and when the layers fell short it had already drawn them before giving up (COGS at average).
+            from backend.services.stock_writeoff import consume_layers
+            taken_layers: list = []
+            spent = 0.0
+            for u in units:
+                spent += await consume_layers(db, part=part, location_id=loc_id, qty=1,
+                                              batch_id=u.batch_id, taken=taken_layers)
+            if li.qty - len(units) > 1e-9:
+                spent += await consume_layers(db, part=part, location_id=loc_id,
+                                              qty=li.qty - len(units), taken=taken_layers)
+            draws["layers"] = taken_layers
+            unit_cost = q4(spent / li.qty) if li.qty else 0
             cost = q4(unit_cost * li.qty)
             db.add(StockMovement(part_id=li.ref_id, location_id=loc_id,
                                  movement_type="use", qty=-li.qty, unit_cost=unit_cost,
@@ -624,6 +648,7 @@ async def get_sale(
     """One sale with its lines and how many of each can still be returned."""
     sale = await _load_sale(db, current, sale_id)
     lines = (await db.execute(select(SaleLine).where(SaleLine.sale_id == sale.id))).scalars().all()
+    out = await _line_serials(db, current.org_id, lines, still_sold=True)
     return {
         "id": sale.id, "sale_number": sale.sale_number, "client_id": sale.client_id, "total": sale.total,
         "discount": sale.discount, "paid": sale.paid, "account_id": sale.account_id,
@@ -632,7 +657,10 @@ async def get_sale(
         "gift_card": await sale_gift_card_paid(db, sale.id), "due": await sale_amount_due(db, sale),
         "lines": [{"id": ln.id, "kind": ln.kind, "ref_id": ln.ref_id, "description": ln.description,
                    "qty": ln.qty, "unit_price": ln.unit_price, "total": ln.total, "returned": _returned(ln),
-                   "returnable": q4(max((ln.qty or 0) - _returned(ln), 0))} for ln in lines],
+                   "returnable": q4(max((ln.qty or 0) - _returned(ln), 0)),
+                   # QA F2: the serials / IMEIs of this line's units not yet back, so the return
+                   # screen can ask which ones are coming back.
+                   "serials_out": out.get(ln.id, [])} for ln in lines],
     }
 
 
@@ -713,6 +741,7 @@ async def pay_sale(
 class SaleReturnLineIn(BaseModel):
     line_id: str
     qty: float = Field(gt=0)
+    serials: Optional[list[str]] = Field(None, max_length=500)   # QA F2: which sold units came back
 
 
 class SaleReturnIn(BaseModel):
@@ -726,7 +755,34 @@ async def return_sale_items(
     sale_id: str, data: SaleReturnIn,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_create_sales")),
+    request: Request = None,
 ):
+    """A double tap with the same Idempotency-Key makes one return and gets the first answer back
+    (the sale lock below stops a second full return; the key also covers a partial one)."""
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "sales.return") if request is not None else None
+    if claim is not None and claim.replay is not None:
+        return claim.replay
+    keyed = bool(request is not None and (request.headers.get("Idempotency-Key") or "").strip())
+    try:
+        result = await _return_sale_items(sale_id, data, db, current, keyed=keyed)
+    except BaseException:
+        if claim is not None:
+            await claim.release(db)
+        raise
+    if claim is not None:
+        await claim.finish(db, result)
+    return result
+
+
+# Two identical returns of a sale this close together, without an Idempotency-Key, are one click
+# sent twice (QA final gate F-3): the second is refused. A deliberate second return a moment later
+# comes from the return screen with its own key, so it goes through.
+_DOUBLE_CLICK_S = 10
+
+
+async def _return_sale_items(sale_id: str, data: SaleReturnIn, db: AsyncSession, current: Employee,
+                             *, keyed: bool = False):
     """B5 — the customer brings items back. Products go back on the shelf (a client return), and
     the customer gets the items' share of what they paid: discounts and tax included, the cash part
     as a refund out of the chosen cashbox and any gift-card part back onto the card."""
@@ -734,14 +790,27 @@ async def return_sale_items(
     await assert_perm(db, current, "can_create_returns")
     if not data.lines:
         raise HTTPException(400, "Pick at least one item to return")
+    if len({r.line_id for r in data.lines}) != len(data.lines):
+        raise HTTPException(422, "Each item can only be listed once in a return")
     sale = await _load_sale(db, current, sale_id, lock=True)
+    # QA F2: a double-clicked return refunded and restocked twice. FOR UPDATE is a no-op on SQLite,
+    # so a write on the sale takes the lock on both databases (the second click waits for the first
+    # to commit), and the lines are then read fresh: the second click sees what is already back.
+    # A void racing a return waits on the same row: whichever commits second sees the other (the
+    # void claims voided_at and refuses a sale with returns; the return refuses a voided sale).
+    await db.execute(sa_update(Sale).where(Sale.id == sale.id).values(paid=Sale.paid)
+                     .execution_options(synchronize_session=False))
+    await db.refresh(sale)
     if sale.voided_at:
         raise HTTPException(409, "This sale was deleted")
     if not sale.paid:
         raise HTTPException(409, "This sale isn't paid. Take payment or delete it instead.")
-    lines = {ln.id: ln for ln in (await db.execute(select(SaleLine).where(SaleLine.sale_id == sale.id))).scalars()}
+    lines = {ln.id: ln for ln in (await db.execute(select(SaleLine).where(SaleLine.sale_id == sale.id)
+                                                   .execution_options(populate_existing=True))).scalars()}
     base = q2(sum(float(ln.total or 0) for ln in lines.values()))
+    now = now_utc()
     value = 0.0
+    cost_back = 0.0
     for r in data.lines:
         ln = lines.get(r.line_id)
         if not ln:
@@ -749,7 +818,25 @@ async def return_sale_items(
         left = (ln.qty or 0) - _returned(ln)
         if r.qty > left + 1e-9:
             raise HTTPException(400, f"Only {left:g} of '{ln.description}' can still be returned")
+        await _units_coming_back(db, current.org_id, ln, r)
         value += float(ln.total or 0) * r.qty / ln.qty
+        if ln.kind == "product" and ln.ref_id:
+            cost_back += float(ln.cost_price or 0) * r.qty
+    # (after the checks above: a click on a line with nothing left gets their 400 first)
+    if not keyed:
+        def _same_just_now(ln, qty):
+            for rec in (ln.stock_draws or {}).get("returns") or []:
+                try:
+                    at = datetime.fromisoformat(rec.get("at") or "")
+                except ValueError:
+                    continue
+                if abs(float(rec.get("qty") or 0) - qty) < 1e-9 and abs((now - at).total_seconds()) < _DOUBLE_CLICK_S:
+                    return True
+            return False
+        if data.lines and all(lines.get(r.line_id) is not None and _same_just_now(lines[r.line_id], r.qty)
+                              for r in data.lines):
+            raise HTTPException(409, "These items were just returned. If more came back, return them again "
+                                     "in a moment.")
     value = q2(value * float(sale.total or 0) / base) if base else 0.0
     gift_paid = await sale_gift_card_paid(db, sale.id)
     gift_back = q2(value * gift_paid / float(sale.total)) if sale.total else 0.0
@@ -764,25 +851,37 @@ async def return_sale_items(
             raise HTTPException(404, "Cashbox not found")
     reason = (data.reason or "").strip()
 
+    # C-6: what came back, so net sales takes it off revenue, tax and cost of goods (revenue.py)
+    tax_back = q2(value * float(sale.tax or 0) / float(sale.total)) if sale.total else 0.0
     ret = ClientReturn(org_id=current.org_id, client_id=sale.client_id, location_id=sale.location_id,
-                       reason=f"Sale {sale.sale_number}" + (f": {reason}" if reason else ""), created_by_id=current.id)
+                       reason=f"Sale {sale.sale_number}" + (f": {reason}" if reason else ""), created_by_id=current.id,
+                       sale_id=sale.id, amount=value, tax=tax_back, cost=q2(cost_back))
     db.add(ret)
     await db.flush()
     for r in data.lines:
         ln = lines[r.line_id]
-        _sold = list((ln.stock_draws or {}).get("serials") or [])
-        _back = _sold[:int(r.qty)] if ln.kind == "product" else []
-        ln.stock_draws = {**(ln.stock_draws or {}), "returned": q4(_returned(ln) + r.qty),
-                          "serials": _sold[len(_back):]}
-        await _unsell_serials(db, current.org_id, _back, ref_type="client_return", ref_id=ret.id,
-                              label=f"Returned from sale {sale.sale_number or ''}".strip(),
-                              actor_id=current.id)
+        draws = dict(ln.stock_draws or {})
+        units = await _units_coming_back(db, current.org_id, ln, r)
+        back_ids = {u.id for u in units}
+        draws["returned"] = q4(_returned(ln) + r.qty)
+        draws["returns"] = [*(draws.get("returns") or [])[-9:], {"qty": r.qty, "at": now.isoformat()}]
+        draws["serials"] = [u for u in (draws.get("serials") or []) if u not in back_ids]
         if ln.kind == "product" and ln.ref_id:
+            # QA F2 / fix D: the units go back in stock with a passport line, and into the cost layers
+            # they were sold from, so the layers keep holding exactly what is on hand.
+            await _unsell_serials(db, current.org_id, list(back_ids), ref_type="client_return", ref_id=ret.id,
+                                  label=f"Returned from sale {sale.sale_number or ''}".strip(),
+                                  actor_id=current.id)
+            for u in units:      # back on the unbinned row, like every client return
+                u.bin_id = None
+            draws["layers"] = await _restore_layers(db, current.org_id, draws.get("layers") or [], r.qty,
+                                                    first=[u.batch_id for u in units if u.batch_id])
             db.add(ClientReturnLine(return_id=ret.id, part_id=ln.ref_id, qty=r.qty, restock=True))
             await stock_rows.add(db, ln.ref_id, sale.location_id, r.qty)
             db.add(StockMovement(part_id=ln.ref_id, location_id=sale.location_id, movement_type="return",
                                  qty=r.qty, unit_cost=ln.cost_price or 0, ref_type="client_return",
                                  ref_id=ret.id, created_by_id=current.id))
+        ln.stock_draws = draws
     refund = None
     if money_back > 0:
         refund = Refund(org_id=current.org_id, return_id=ret.id, account_id=acc.id, amount=money_back,
@@ -809,10 +908,66 @@ async def return_sale_items(
             "refunded": money_back, "gift_card": gift_back}
 
 
+async def _units_coming_back(db, org_id: str, ln: SaleLine, r: SaleReturnLineIn) -> list:
+    """QA F2 — the serialized units a return line brings back: the ones named (each must be a unit
+    this line sold and that hasn't come back yet), or every unit still out when the return covers
+    them all. A line that sold no units brings none back."""
+    sold = list((ln.stock_draws or {}).get("serials") or [])
+    if ln.kind != "product" or not sold:
+        return []
+    from backend.models import SerializedItem
+    from backend.services.serial_intake import matches as _sn_matches
+    base = select(SerializedItem).where(SerializedItem.org_id == org_id, SerializedItem.id.in_(sold),
+                                        SerializedItem.status == "sold")
+    named = list(dict.fromkeys(x.strip() for x in (r.serials or []) if x and x.strip()))
+    if not named:
+        units = list((await db.execute(base)).scalars().all())
+        if abs(r.qty - len(units)) > 1e-9:
+            raise HTTPException(422, f"Scan the IMEI / serial of each '{ln.description}' coming back "
+                                     f"(0 of {r.qty:g} entered)")
+        return units
+    units = []
+    for sn in named:
+        u = (await db.execute(base.where(_sn_matches(SerializedItem.serial_number, sn)))).scalars().first()
+        if u is None or u in units:
+            raise HTTPException(409, f"Serial {sn} wasn't sold on this line, or is already back")
+        units.append(u)
+    if abs(r.qty - len(units)) > 1e-9:
+        raise HTTPException(422, f"Scan the IMEI / serial of each '{ln.description}' coming back "
+                                 f"({len(units)} of {r.qty:g} entered)")
+    return units
+
+
+async def _restore_layers(db, org_id: str, layers: list, qty: Optional[float] = None, *,
+                          first: Optional[list] = None) -> list:
+    """Put sold units back into the FIFO cost layers they were drawn from (a sale's
+    stock_draws["layers"]): all of them (qty=None, a void) or `qty` units, the named batches
+    (returned serialized units' own layers) first, then the most recently drawn. A layer never holds
+    more than it received. Returns what is still drawn, to keep on the line."""
+    left = [dict(d) for d in layers]
+    want = sum(float(d["qty"]) for d in left) if qty is None else float(qty)
+    order = sorted(range(len(left)), key=lambda i: (left[i]["batch_id"] not in (first or []), -i))
+    for i in order:
+        if want <= 1e-9:
+            break
+        take = min(float(left[i]["qty"]), want)
+        if take <= 1e-9:
+            continue
+        batch = (await db.execute(select(StockItemBatch).where(
+            StockItemBatch.id == left[i]["batch_id"], StockItemBatch.org_id == org_id)
+            .execution_options(populate_existing=True))).scalar_one_or_none()
+        if batch:
+            cap = Decimal(str(batch.qty_received or 0))
+            batch.qty_remaining = min(Decimal(str(batch.qty_remaining or 0)) + Decimal(str(take)), cap)
+        left[i]["qty"] = float(left[i]["qty"]) - take
+        want -= take
+    return [d for d in left if float(d["qty"]) > 1e-9]
+
+
 async def _sell_units(db, current, sale, part, loc_id, li) -> list:
-    """ii144c — a serialized product sold at the counter: the units named on the line (each must be in
-    stock here), else the oldest units in stock. They become `sold` with a passport line; returns the
-    units, whose bins the stock is drawn from."""
+    """ii144c — a serialized product sold at the counter: the units named on the line, each in stock
+    here and one per unit sold (QA F2: no longer the oldest units when none are named). They become
+    `sold` with a passport line; returns the units, whose bins the stock is drawn from."""
     from backend.models import SerializedItem
     from backend.services import serial_log
     from backend.services.serial_intake import matches as _sn_matches
@@ -834,12 +989,11 @@ async def _sell_units(db, current, sale, part, loc_id, li) -> list:
         units.append(u)
     if len(units) > n:
         raise HTTPException(422, f"{len(units)} serials named for {n:g} of '{part.name}'")
-    if len(units) < n:
-        q = base.where(SerializedItem.id.not_in([u.id for u in units])) if units else base
-        more = (await db.execute(q
-                                 .order_by(SerializedItem.created_at).limit(n - len(units))
-                                 .with_for_update(skip_locked=True))).scalars().all()
-        units.extend(more)
+    if part.serialized and (len(units) < n or abs(li.qty - n) > 1e-9):
+        # QA F2: the till records which phone left — picking the oldest unit put the wrong IMEI on
+        # the sale (warranty, theft checks). The serial is asked for wherever a serialized unit moves.
+        raise HTTPException(422, f"Scan the IMEI / serial of each '{part.name}' sold "
+                                 f"({len(units)} of {li.qty:g} entered)")
     for u in units:
         u.status = "sold"
         serial_log.record(db, u, "sold", ref_type="sale", ref_id=sale.id,
@@ -858,8 +1012,55 @@ def sale_tax_added(sale: Sale, lines: list) -> float:
     return tax if tax > 0.005 else 0.0
 
 
+async def receipt_taxes(db, org, lines: list) -> list[dict]:
+    """The tax on a receipt, one row per tax: name, rate, amount and whether it is inside the
+    prices. A GST / VAT price-included sale used to print no tax at all (QA wave 3), and a tax
+    invoice must show it. A line keeps its rate and mode; the name is the shop's tax at that rate."""
+    from backend.models import Tax
+    from backend.services.regions import COUNTRY_TAX
+    rows: dict = {}
+    for ln in lines:
+        amt = float(ln.tax or 0)
+        if abs(amt) < 0.005 or not ln.tax_rate:
+            continue
+        key = (round(float(ln.tax_rate), 4), (ln.tax_mode or "imposed") == "included")
+        rows[key] = rows.get(key, 0.0) + amt
+    if not rows:
+        return []
+    taxes = (await db.execute(select(Tax).where(Tax.org_id == org.id).order_by(
+        Tax.is_default.desc(), Tax.active.desc()))).scalars().all() if org else []
+    fallback = COUNTRY_TAX.get((getattr(org, "country", None) or "").upper(), ("Tax",))[0]
+
+    def name(rate):
+        return next((t.name for t in taxes if abs(float(t.rate or 0) - rate) < 1e-6), None) or fallback
+    return [{"name": name(rate), "rate": rate, "amount": q2(amt), "included": inc}
+            for (rate, inc), amt in sorted(rows.items(), key=lambda kv: (not kv[0][1], -kv[0][0]))]
+
+
+async def shop_tax_id(db, org) -> Optional[dict]:
+    """The shop's own tax number for receipts ({label, value}), from its default legal entity;
+    None when it hasn't set one. Australia calls it the ABN."""
+    if not org:
+        return None
+    from backend.models import LegalEntity
+    le = (await db.execute(select(LegalEntity).where(
+        LegalEntity.org_id == org.id, LegalEntity.active == True).order_by(  # noqa: E712
+        LegalEntity.is_default.desc(), LegalEntity.created_at))).scalars().first()
+    value = ((le.vat_no or le.tax_id) if le else None) or None
+    if not value:
+        return None
+    country = (getattr(org, "country", None) or "").upper()
+    if country == "AU":
+        label = "ABN"
+    else:
+        from backend.services.regions import COUNTRY_TAX
+        label = f"{COUNTRY_TAX.get(country, ('Tax',))[0]} no." if country in COUNTRY_TAX else "Tax no."
+    return {"label": label, "value": value.strip()}
+
+
 def receipt_text(org_name: str, sale: Sale, lines: list, sym: str, tz: Optional[str] = None,
-                 gift_card: float = 0) -> str:
+                 serials: Optional[dict] = None, gift_card: float = 0,
+                 taxes: Optional[list] = None, tax_id: Optional[dict] = None) -> str:
     """The customer's receipt in plain words — what was bought and what was paid. Never cost
     or profit (that's the shop's business, not the customer's)."""
     def m(v):
@@ -875,17 +1076,23 @@ def receipt_text(org_name: str, sale: Sale, lines: list, sym: str, tz: Optional[
         except Exception:
             pass
         when = at.strftime("%d %b %Y, %H:%M")
-    out = [org_name, f"Receipt {sale.sale_number}" + (f" · {when}" if when else ""), ""]
+    out = [org_name] + ([f"{tax_id['label']} {tax_id['value']}"] if tax_id else []) \
+        + [f"Receipt {sale.sale_number}" + (f" · {when}" if when else ""), ""]
     for ln in lines:
         qty = ln.qty or 1
         qty_s = f"{qty:g} × " if qty != 1 else ""
         out.append(f"{qty_s}{ln.description or ln.kind}  {m(ln.total)}")
+        for sn in (serials or {}).get(ln.id, []):
+            out.append(f"  IMEI / SN {sn}")
     if float(sale.discount or 0):
         out.append(f"Discount  −{m(sale.discount)}")
     tax = sale_tax_added(sale, lines)
     if tax:
         out.append(f"Tax  {m(tax)}")
     out += ["", f"Total  {m(sale.total)}"]
+    for t in taxes or []:
+        if t["included"]:
+            out.append(f"Includes {t['name']} {t['rate']:g}%  {m(t['amount'])}")
     if gift_card:
         out.append(f"Gift card  −{m(gift_card)}")
     out += ["Paid" if sale.paid else "Not paid yet", "", "Thank you!"]
@@ -910,16 +1117,38 @@ async def sale_receipt(
     from backend.services.currency import _base
     from backend.services.dates import utc_iso
     sym = _base(org)["symbol"]
+    serials = await _line_serials(db, current.org_id, lines)
     gift = await sale_gift_card_paid(db, sale.id)
+    taxes = await receipt_taxes(db, org, lines)
+    tax_id = await shop_tax_id(db, org)
     return {
         "sale_number": sale.sale_number, "shop_name": org.name if org else "",
         "total": sale.total, "discount": sale.discount, "paid": sale.paid,
         "tax": sale_tax_added(sale, lines), "gift_card": gift,
+        "tax_lines": taxes, "shop_tax_id": tax_id,     # QA wave 3: GST / VAT inside the prices, ABN / VAT no.
         "created_at": utc_iso(sale.created_at),   # launch B6: "Z" so the browser reads UTC
-        "lines": [{"description": ln.description, "qty": ln.qty, "total": ln.total, "tax": ln.tax} for ln in lines],
+        "lines": [{"description": ln.description, "qty": ln.qty, "total": ln.total, "tax": ln.tax,
+                   "serials": serials.get(ln.id, [])} for ln in lines],
         "client_email": client.email if client else None, "client_phone": client.phone if client else None,
-        "text": receipt_text(org.name if org else "", sale, lines, sym, getattr(org, "timezone", None), gift),
+        "text": receipt_text(org.name if org else "", sale, lines, sym, getattr(org, "timezone", None),
+                             serials=serials, gift_card=gift, taxes=taxes, tax_id=tax_id),
     }
+
+
+async def _line_serials(db, org_id: str, lines: list, still_sold: bool = False) -> dict:
+    """QA F2: line id → the serials / IMEIs that line sold, for the receipt (warranty claims).
+    still_sold: only the units not returned yet."""
+    from backend.models import SerializedItem
+    ids = {ln.id: list((ln.stock_draws or {}).get("serials") or []) for ln in lines}
+    wanted = {u for v in ids.values() for u in v}
+    if not wanted:
+        return {}
+    q = select(SerializedItem.id, SerializedItem.serial_number).where(
+        SerializedItem.org_id == org_id, SerializedItem.id.in_(wanted))
+    if still_sold:
+        q = q.where(SerializedItem.status == "sold")
+    sn = dict((await db.execute(q)).all())
+    return {lid: [sn[u] for u in us if u in sn] for lid, us in ids.items() if us}
 
 
 @router.post("/{sale_id}/receipt/email")
@@ -971,6 +1200,16 @@ async def _st_stock_row(db, part_id, st, bin_id=None, *, unbinned=False):
     if not found:
         found = await stock_rows.rows(db, part_id, st.location_id)
     return float(sum(r.qty_available or 0 for r in found)) if found else None
+
+
+async def _mark_counted(db, st, line) -> None:
+    """W3-D: a line's book quantity is read when it is counted, and its variance is the count
+    minus that book. Posting applies the variance to the book as it is then, so stock that moves
+    after the count (a job taking 2) isn't put back, and stock that moved before it isn't taken twice."""
+    line_bin = line.bin_id or st.bin_id
+    book = await _st_stock_row(db, line.part_id, st, line_bin, unbinned=bool(st.by_bin and not line_bin))
+    line.system_qty = book or 0
+    line.variance = round((line.counted_qty or 0) - line.system_qty, 3)
 
 
 class StocktakeIn(BaseModel):
@@ -1103,8 +1342,11 @@ async def set_count(
         raise HTTPException(404, "Count line not found")
     if data.counted_qty < 0:
         raise HTTPException(422, "A count can't be negative")
+    part = (await db.execute(select(Part).where(Part.id == line.part_id))).scalar_one_or_none()
+    if part:
+        stock_rows.check_whole(part, data.counted_qty)
     line.counted_qty = data.counted_qty
-    line.variance = round(data.counted_qty - (line.system_qty or 0), 3)
+    await _mark_counted(db, st, line)
     await db.commit()
     return {"ok": True, "variance": None if _hide_book(st) else line.variance}
 
@@ -1131,14 +1373,25 @@ async def post_stocktake(
         raise HTTPException(404, "Stocktake not found")
     if st.status == "posted":
         raise HTTPException(409, "Stocktake is already posted")
+    # Claim the post first: a second click sent while the first is in flight applies nothing.
+    won = await db.execute(sa_update(Stocktake).where(
+        Stocktake.id == st.id, Stocktake.status != "posted")
+        .values(status="posted").execution_options(synchronize_session=False))
+    if won.rowcount != 1:
+        raise HTTPException(409, "Stocktake is already posted")
     if data.uncounted == "zero":
         for l in (await db.execute(select(StocktakeLine).where(
                 StocktakeLine.stocktake_id == st_id, StocktakeLine.counted_qty.is_(None)))).scalars().all():
             l.counted_qty = 0
-            l.variance = round(-(l.system_qty or 0), 3)
+            await _mark_counted(db, st, l)      # counted as nothing now, against the book now
     lines = (await db.execute(select(StocktakeLine).where(
         StocktakeLine.stocktake_id == st_id,
         StocktakeLine.counted_qty.is_not(None)))).scalars().all()
+    # QA F2 / W3-D: each line's variance was taken against the book when it was counted
+    # (_mark_counted), and is applied to the book as it is now. The product's rows are locked
+    # first so a sale can't land between reading and adjusting.
+    for pid in sorted({l.part_id for l in lines}):
+        await stock_rows.rows(db, pid, st.location_id, lock=True)
     adjusted = 0
     for l in lines:
         if not l.variance:
@@ -1450,8 +1703,9 @@ async def scan_count(
         step = 1 if (st.blind or unit) else data.qty
         if step <= 0:
             raise HTTPException(422, "Quantity must be positive")
+        stock_rows.check_whole(part, step)
         line.counted_qty = (line.counted_qty or 0) + step
-    line.variance = round(line.counted_qty - (line.system_qty or 0), 3)
+    await _mark_counted(db, st, line)
 
     # a serialized unit that the system thinks lives somewhere else is worth flagging
     if unit:
@@ -1606,6 +1860,11 @@ async def import_counts(
         if not _in_scope(st, part):
             errors.append({"row": i + 1, "error": f"“{part.name}” isn't in this count's category"})
             continue
+        try:
+            stock_rows.check_whole(part, qty)
+        except HTTPException as e:
+            errors.append({"row": i + 1, "error": e.detail})
+            continue
         if not bin_id and unit and st.by_bin and unit.location_id == st.location_id:
             bin_id = unit.bin_id
         line = await _count_line(db, st, part, bin_id, is_unknown=created)
@@ -1618,7 +1877,7 @@ async def import_counts(
         else:
             line.counted_qty = qty                       # the sheet is authoritative
             seen_lines.add(line.id)
-        line.variance = round((line.counted_qty or 0) - (line.system_qty or 0), 3)
+        await _mark_counted(db, st, line)
         applied += 1
 
     await db.commit()

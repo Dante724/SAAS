@@ -69,7 +69,8 @@ async def _stock(db, pid, loc):
 
 @pytest.mark.asyncio
 async def test_reviewer_case_quote_and_saved_sale_agree(client, tenant, db):
-    """₹68 cart, ₹3 off and SAVE10: the button said ₹65, the sale saved ₹58.20."""
+    """₹68 cart, ₹3 off and SAVE10: the button said ₹65, the sale saved ₹58.20. Quote and sale now
+    agree, and (QA fix B) the 10% is of what is left after the ₹3 off: 6.50, so ₹58.50."""
     from backend.models import Coupon
     await client.post("/api/coupons", json={"code": "SAVE10", "kind": "pct", "value": 10, "min_total": 0,
                                             "max_uses": 5}, headers=tenant)
@@ -79,9 +80,9 @@ async def test_reviewer_case_quote_and_saved_sale_agree(client, tenant, db):
     q = q.json()
     assert q["subtotal"] == pytest.approx(68)
     assert q["discount"] == pytest.approx(3)
-    assert q["coupon"] == pytest.approx(6.8)
-    assert q["total"] == pytest.approx(58.2)
-    assert q["due"] == pytest.approx(58.2)
+    assert q["coupon"] == pytest.approx(6.5)
+    assert q["total"] == pytest.approx(58.5)
+    assert q["due"] == pytest.approx(58.5)
     assert q["problems"] == {}
     # A quote is a dry run: the coupon is not used up.
     db.expire_all()
@@ -99,7 +100,7 @@ async def test_charge_refused_when_the_total_on_screen_is_stale(client, tenant):
     r = await client.post("/api/sales", json={"discount": 3, "coupon_code": "SAVE10", "expected_due": 65,
                                               "lines": [_svc(68)]}, headers=tenant)
     assert r.status_code == 409, r.text
-    assert "58.20" in r.json()["detail"]
+    assert "58.50" in r.json()["detail"]      # QA fix B: 10% of what's left after the ₹3 off
     assert (await client.get("/api/sales", headers=tenant)).json()["items"] == []
 
 

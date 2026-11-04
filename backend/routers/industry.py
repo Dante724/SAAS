@@ -503,7 +503,11 @@ async def _match_existing(db, org_id, kind, value) -> Optional[Device]:
     from backend.services import identifiers as _ids
     col = {"vin": Device.vin, "hin": Device.hin, "imei": Device.imei}.get(kind, Device.serial)
     k = kind if kind in _ids.KINDS else "serial"
-    return (await db.execute(select(Device).where(base, col == _ids.normalize(k, value)))).scalars().first()
+    # skip_tenant_filter: the read guard hides org-less (legacy) devices from every shop; this
+    # narrow opt-out lets a shop match its OWN clients' org-less devices. `base` above is the
+    # ownership proof: this shop's devices, or org-less ones whose client is this shop's.
+    return (await db.execute(select(Device).where(base, col == _ids.normalize(k, value))
+                             .execution_options(skip_tenant_filter=True))).scalars().first()
 
 
 class ScanIn(BaseModel):

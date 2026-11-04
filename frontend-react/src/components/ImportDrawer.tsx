@@ -3,6 +3,7 @@
 // → 3 Review every row (green create, blue update, red needs fixing) → Import. The server does the
 // checking (POST /imports/{kind}/preview is a dry run); this only shows it.
 import { useEffect, useMemo, useRef, useState } from "react";
+import { loadFailed } from "../lib/notice";
 import { api, downloadAuthed } from "../api/client";
 import { M } from "./Shell";
 import { toXlsx } from "../lib/sheet";
@@ -10,7 +11,6 @@ import {
   countBy, errorsSheet, KIND_NOUN, missingRequired, sampleValues,
   type FieldDef, type ImportKind, type Parsed, type RowVerdict,
 } from "../lib/importRows";
-import { loadFailed } from "../lib/notice";
 
 type Batch = { id: string; file_name: string | null; created: number; updated: number; created_at: string; can_undo: boolean; undone_at: string | null };
 type Step = "start" | "columns" | "review" | "done";
@@ -53,7 +53,7 @@ export default function ImportDrawer({ kind, onClose, onDone }: { kind: ImportKi
 
   const loadLast = () => api.get<{ items: Batch[] }>(`/imports/batches?kind=${kind}`).then((r) => setLast(r.items?.[0] || null)).catch(() => setLast(null));
   useEffect(() => {
-    api.get<any>("/imports/kinds").then((r) => { setFields(r[kind]?.fields || []); setMatchOn(r[kind]?.match_on || ""); }).catch(loadFailed("the import fields"));
+    api.get<any>("/imports/kinds").then((r) => { setFields(r[kind]?.fields || []); setMatchOn(r[kind]?.match_on || ""); }).catch(loadFailed("the import columns"));
     loadLast();
     if (kind === "products") api.get<any>("/staff/locations").then((r) => { const it = r.items || r || []; setLocations(it); if (it[0]) setOpts((o) => ({ ...o, location_id: it[0].id })); }).catch(loadFailed("locations"));
   }, [kind]); // eslint-disable-line

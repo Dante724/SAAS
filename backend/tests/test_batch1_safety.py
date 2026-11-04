@@ -54,7 +54,8 @@ async def test_part_history_and_pos_are_shop_only(client):
 
     assert (await client.get(f"/api/inventory/parts/{part}/movements", headers=A)).status_code == 200
     assert (await client.get(f"/api/inventory/parts/{part}/movements", headers=B)).status_code == 404
-    assert (await client.get(f"/api/inventory/parts/{part}/purchase-orders", headers=B)).json()["items"] == []
+    assert (await client.get(f"/api/inventory/parts/{part}/purchase-orders", headers=A)).json()["items"] == []
+    assert (await client.get(f"/api/inventory/parts/{part}/purchase-orders", headers=B)).status_code == 404
 
 
 @pytest.mark.asyncio
@@ -117,9 +118,9 @@ async def test_owner_is_recorded_at_signup(client, db):
 @pytest.mark.asyncio
 async def test_cannot_assign_role_with_wider_data_scope(client):
     H, _, _ = await _register(client)
-    narrow = (await client.post("/api/settings/rbac/roles", json={
+    narrow = (await client.post("/api/settings/rbac/roles", json={"template": "Full access", 
         "name": "Own orders manager", "order_scope": "own"}, headers=H)).json()["id"]
-    wide = (await client.post("/api/settings/rbac/roles", json={
+    wide = (await client.post("/api/settings/rbac/roles", json={"template": "Full access", 
         "name": "Front desk", "permissions": {"can_view_finance": False}}, headers=H)).json()["id"]
     _, M = await _teammate(client, H, narrow)
 
@@ -139,7 +140,7 @@ async def test_staff_role_and_key_admin_actions_are_audited(client, db):
     emp_id, _ = await _teammate(client, H, await _admin_role_id(db, org))
     await client.post(f"/api/staff/employees/{emp_id}/password", json={"password": "new-pass-1234"}, headers=H)
     await client.post(f"/api/staff/employees/{emp_id}/reset-mfa", headers=H)
-    await client.post("/api/settings/rbac/roles", json={"name": "Tech"}, headers=H)
+    await client.post("/api/settings/rbac/roles", json={"template": "Full access", "name": "Tech"}, headers=H)
     await client.post("/api/api-keys", json={"name": "Zapier"}, headers=H)
 
     actions = set((await db.execute(select(AuditLog.action).where(AuditLog.org_id == org))).scalars().all())

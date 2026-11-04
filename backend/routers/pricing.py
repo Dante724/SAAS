@@ -7,7 +7,7 @@ import json
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,6 +16,7 @@ from backend.models import Employee, Location, Organisation, Part, PriceType, Pr
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.money import q2
 from backend.services.dates import now_utc
+from backend.services.owned import get_owned_or_404
 
 router = APIRouter(prefix="/api/pricing", tags=["pricing"])
 
@@ -132,12 +133,10 @@ async def delete_type(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
-    p = (await db.execute(select(PriceType).where(
-        PriceType.id == type_id, PriceType.org_id == current.org_id))).scalar_one_or_none()
-    if p:
-        p.active = False
-        p.is_default = False
-        await db.commit()
+    p = await get_owned_or_404(db, PriceType, type_id, current.org_id, "price type")
+    p.active = False
+    p.is_default = False
+    await db.commit()
     return {"ok": True}
 
 
@@ -311,6 +310,12 @@ class PriceItemIn(BaseModel):
     item_id: str
     price: float
 
+    @field_validator("price")
+    @classmethod
+    def _money(cls, v):
+        from backend.services.money import check_money
+        return check_money(v)
+
 
 @router.get("/types/{type_id}/items")
 async def list_type_items(
@@ -318,6 +323,7 @@ async def list_type_items(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
+    await get_owned_or_404(db, PriceType, type_id, current.org_id, "price type")
     rows = (await db.execute(select(PriceTypeItem).where(
         PriceTypeItem.price_type_id == type_id,
         PriceTypeItem.org_id == current.org_id))).scalars().all()
@@ -331,16 +337,19 @@ async def set_type_item(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
+    await get_owned_or_404(db, PriceType, type_id, current.org_id, "price type")
     if data.item_type not in ("product", "service"):
         raise HTTPException(422, "item_type must be product|service")
     row = (await db.execute(select(PriceTypeItem).where(
         PriceTypeItem.price_type_id == type_id, PriceTypeItem.item_type == data.item_type,
         PriceTypeItem.item_id == data.item_id, PriceTypeItem.org_id == current.org_id))).scalar_one_or_none()
+    from backend.services.money import org_price_decimals, round_price
+    price = round_price(data.price, await org_price_decimals(db, current.org_id))
     if row:
-        row.price = data.price
+        row.price = price
     else:
         db.add(PriceTypeItem(org_id=current.org_id, price_type_id=type_id,
-                             item_type=data.item_type, item_id=data.item_id, price=data.price))
+                             item_type=data.item_type, item_id=data.item_id, price=price))
     await db.commit()
     return {"ok": True}
 
@@ -358,6 +367,7 @@ async def list_tiers(
     current: Employee = Depends(get_current_employee),
 ):
     from backend.models import PriceTypeTier
+    await get_owned_or_404(db, PriceType, type_id, current.org_id, "price type")
     rows = (await db.execute(select(PriceTypeTier).where(
         PriceTypeTier.price_type_id == type_id, PriceTypeTier.org_id == current.org_id)
         .order_by(PriceTypeTier.min_qty))).scalars().all()
@@ -407,6 +417,28 @@ class PriceDefaultsIn(BaseModel):
     min_margin_pct: Optional[float] = None
     margin_guard: Optional[str] = None       # off | warn | block
     discount_approval_pct: Optional[float] = None
+
+    # QA 2026-10-31 B: price_decimals -3 and margin_guard "banana" used to be stored.
+    @field_validator("price_decimals")
+    @classmethod
+    def _decimals(cls, v):
+        if v is not None and not 0 <= v <= 2:      # prices are stored with 2 decimals
+            raise ValueError("price_decimals must be 0, 1 or 2")
+        return v
+
+    @field_validator("margin_guard")
+    @classmethod
+    def _guard(cls, v):
+        if v is not None and v not in ("off", "warn", "block"):
+            raise ValueError("margin_guard must be off, warn or block")
+        return v
+
+    @field_validator("min_margin_pct", "discount_approval_pct")
+    @classmethod
+    def _pct(cls, v):
+        if v is not None and not 0 <= v <= 100:
+            raise ValueError("Percentages must be between 0 and 100")
+        return v
 
 
 @router.get("/defaults")

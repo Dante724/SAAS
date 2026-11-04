@@ -21,6 +21,7 @@ from backend.services.dates import now_utc
 # Built-in defaults mirror the pre-Phase-1 hardcoded formats exactly.
 DEFAULT_TEMPLATES = {
     "order": "WO-{C:5}",
+    "estimate": "E-{C:5}",     # own counter: estimates no longer use up work-order numbers
     "invoice": "INV-{C:5}",
     "inquiry": "INQ-{C:5}",
     "sale": "S-{C:5}",
@@ -95,7 +96,7 @@ async def _existing_count(db, org_id, doc_type) -> int:
     import backend.models as M
     name = {"order": "Order", "invoice": "Invoice", "sale": "Sale",
             "po": "PurchaseOrder", "transfer": "StockTransfer", "inquiry": "Order",
-            "credit_note": "CreditNote",
+            "credit_note": "CreditNote", "estimate": "Order",
             "purchase_return": "PurchaseReturn", "write_off": "WriteOff", "posting": "Posting"}.get(doc_type)
     model = getattr(M, name, None) if name else None
     if model is None or not hasattr(model, "org_id"):
@@ -103,6 +104,8 @@ async def _existing_count(db, org_id, doc_type) -> int:
     q = _sel(func.count()).select_from(model).where(model.org_id == org_id)
     if doc_type == "credit_note":
         q = q.where(model.number.isnot(None))     # drafts carry no number until issued
+    if doc_type == "estimate":
+        q = q.where(model.is_estimate == True)  # noqa: E712
     try:
         return (await db.execute(q)).scalar() or 0
     except Exception:
@@ -151,9 +154,10 @@ async def next_number(
 
 
 async def _number_taken(db: AsyncSession, org_id: str, doc_type: str, number: str) -> bool:
-    from backend.models import CreditNote, Invoice, PurchaseOrder
+    from backend.models import CreditNote, Invoice, Order, PurchaseOrder
     col = {"invoice": (Invoice, Invoice.invoice_number), "po": (PurchaseOrder, PurchaseOrder.po_number),
-           "credit_note": (CreditNote, CreditNote.number)}.get(doc_type)
+           "credit_note": (CreditNote, CreditNote.number),
+           "estimate": (Order, Order.order_number)}.get(doc_type)
     if col is None:
         return False
     model, number_col = col
@@ -161,9 +165,31 @@ async def _number_taken(db: AsyncSession, org_id: str, doc_type: str, number: st
         model.org_id == org_id, number_col == number).limit(1))).scalar_one_or_none() is not None
 
 
+_DOC_TOKEN = re.compile(r"\{(D|M|Y|C(?::\d+)?)\}")
+_ANY_BRACE = re.compile(r"\{[^{}]*\}")
+_TOKEN_HINTS = {"YYYY": "Y", "YY": "Y", "MM": "M", "DD": "D", "N": "C:5", "COUNTER": "C:5"}
+DOC_TOKENS_HELP = "{C} or {C:n} (counter, n digits), {D} (day), {M} (month), {Y} (year)"
+
+
+def doc_template_problem(template: str) -> str | None:
+    """A plain reason a document-number template can't be used, or None. Anything in braces
+    that isn't a supported token would be printed literally on every document."""
+    t = template or ""
+    for m in _ANY_BRACE.finditer(t):
+        if not _DOC_TOKEN.fullmatch(m.group(0)):
+            inner = m.group(0)[1:-1]
+            hint = _TOKEN_HINTS.get(inner.upper())
+            tip = f" — use {{{hint}}}" if hint else ""
+            return f"{m.group(0)} isn't a numbering token{tip}. Supported: {DOC_TOKENS_HELP}"
+    if not re.search(r"\{C(?::\d+)?\}", t):
+        return f"Template must contain a {{C}} counter token. Supported: {DOC_TOKENS_HELP}"
+    return None
+
+
 # Where each doc type's issued numbers live: (model, number column). PurchaseOrder has no org_id,
 # so it's scoped through its location.
 _NUMBER_COLUMN = {"order": ("Order", "order_number"), "inquiry": ("Order", "order_number"),
+                  "estimate": ("Order", "order_number"),
                   "invoice": ("Invoice", "invoice_number"), "sale": ("Sale", "sale_number"),
                   "po": ("PurchaseOrder", "po_number"), "transfer": ("StockTransfer", "transfer_number"),
                   "purchase_return": ("PurchaseReturn", "number"), "write_off": ("WriteOff", "number"),

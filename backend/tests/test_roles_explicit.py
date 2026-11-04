@@ -35,7 +35,7 @@ def test_snapshot_keeps_what_a_legacy_role_grants():
 
 
 def test_a_permission_added_later_is_off_for_explicit_roles():
-    r = Role(name="tech", permissions=P.new_role_permissions(), perms_explicit=True)
+    r = Role(name="tech", permissions=P.new_role_permissions("Full access"), perms_explicit=True)
     assert P.role_allows(r, "can_create_tickets") is True
     assert P.role_allows(r, "can_some_future_permission") is False
     legacy = Role(name="old", permissions={}, perms_explicit=False)
@@ -53,7 +53,7 @@ def test_shop_creators_legacy_admin_role_keeps_everything():
 @pytest.mark.asyncio
 async def test_new_role_and_me_list_every_permission(client):
     H = await _owner(client)
-    r = await client.post("/api/settings/rbac/roles", json={"name": "Tech", "permissions": {"can_view_cashflow": False}}, headers=H)
+    r = await client.post("/api/settings/rbac/roles", json={"template": "Full access", "name": "Tech", "permissions": {"can_view_cashflow": False}}, headers=H)
     assert r.status_code == 201, r.text
     perms = r.json()["permissions"]
     assert set(perms) >= P.ALL_CODES and perms["can_view_cashflow"] is False and perms["can_create_tickets"] is True
@@ -64,8 +64,8 @@ async def test_new_role_and_me_list_every_permission(client):
 @pytest.mark.asyncio
 async def test_managers_cannot_widen_roles(client, db):
     H = await _owner(client)
-    mgr_role = (await client.post("/api/settings/rbac/roles", json={"name": "Manager", "permissions": {"can_view_payroll": False}}, headers=H)).json()
-    tech_role = (await client.post("/api/settings/rbac/roles", json={"name": "Tech", "permissions": {"can_view_payroll": False, "can_view_cashflow": False}}, headers=H)).json()
+    mgr_role = (await client.post("/api/settings/rbac/roles", json={"template": "Full access", "name": "Manager", "permissions": {"can_view_payroll": False}}, headers=H)).json()
+    tech_role = (await client.post("/api/settings/rbac/roles", json={"template": "Full access", "name": "Tech", "permissions": {"can_view_payroll": False, "can_view_cashflow": False}}, headers=H)).json()
     M = await _person(client, H, mgr_role["id"], "Mgr")
     # can't edit their own role
     r = await client.put(f"/api/settings/rbac/roles/{mgr_role['id']}", json={"name": "Manager", "permissions": {"can_view_payroll": True}}, headers=M)
@@ -77,7 +77,7 @@ async def test_managers_cannot_widen_roles(client, db):
     r = await client.put(f"/api/settings/rbac/roles/{tech_role['id']}", json={"name": "Tech", "permissions": {"can_view_cashflow": True}}, headers=M)
     assert r.status_code == 200 and r.json()["permissions"]["can_view_cashflow"] is True
     # a new role they create is capped at their own access
-    r = await client.post("/api/staff/roles", json={"name": "Helper"}, headers=M)
+    r = await client.post("/api/staff/roles", json={"template": "Full access", "name": "Helper"}, headers=M)
     assert r.status_code == 201
     helper = (await db.execute(select(Role).where(Role.id == r.json()["id"]))).scalar_one()
     assert helper.permissions["can_view_payroll"] is False and helper.perms_explicit is True
@@ -89,8 +89,8 @@ async def test_managers_cannot_widen_roles(client, db):
 @pytest.mark.asyncio
 async def test_scoped_manager_cannot_open_up_scope(client):
     H = await _owner(client)
-    mgr_role = (await client.post("/api/settings/rbac/roles", json={"name": "Lead", "order_scope": "own"}, headers=H)).json()
-    tech_role = (await client.post("/api/settings/rbac/roles", json={"name": "Tech", "order_scope": "own"}, headers=H)).json()
+    mgr_role = (await client.post("/api/settings/rbac/roles", json={"template": "Full access", "name": "Lead", "order_scope": "own"}, headers=H)).json()
+    tech_role = (await client.post("/api/settings/rbac/roles", json={"template": "Full access", "name": "Tech", "order_scope": "own"}, headers=H)).json()
     M = await _person(client, H, mgr_role["id"], "Lead")
     r = await client.put(f"/api/settings/rbac/roles/{tech_role['id']}", json={"name": "Tech", "order_scope": "all"}, headers=M)
     assert r.status_code == 403
@@ -123,7 +123,7 @@ async def test_customer_said_yes_by_phone(client):
 @pytest.mark.asyncio
 async def test_phone_approval_needs_the_permission(client):
     H = await _owner(client)
-    role = (await client.post("/api/settings/rbac/roles", json={"name": "Desk", "permissions": {"can_approve_rec_for_customer": False}}, headers=H)).json()
+    role = (await client.post("/api/settings/rbac/roles", json={"template": "Full access", "name": "Desk", "permissions": {"can_approve_rec_for_customer": False}}, headers=H)).json()
     D = await _person(client, H, role["id"], "Desk")
     o, rec = await _job_with_rec(client, H)
     r = await client.post(f"/api/orders/{o['id']}/recommendations/{rec['id']}/approve-for-customer", json={}, headers=D)

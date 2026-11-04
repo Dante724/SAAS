@@ -11,12 +11,12 @@ Index names follow the metadata naming convention (ix_<table>_<column>), matchin
 models declare, so the model<->migration drift gate stays clean.
 
 Revision ID: aqp01
-Revises: mkw01
+Revises: est01
 """
 from alembic import op
 
 revision = "aqp01"
-down_revision = "mkw01"
+down_revision = "est01"
 branch_labels = None
 depends_on = None
 

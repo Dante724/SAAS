@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
+import { loadFailed } from "../../lib/notice";
 import { M } from "../../components/Shell";
 import SkeletonRows from "../../components/SkeletonRows";
 import BinScanField from "../../components/BinScanField";
@@ -7,7 +8,6 @@ import MoveStockDialog from "../../components/MoveStockDialog";
 import { api } from "../../api/client";
 import { barcodeTypeLabel } from "../../lib/barcodes";
 import { confirmDialog } from "../../lib/dialog";
-import { loadFailed } from "../../lib/notice";
 
 type Bin = { id: string; name: string; location_id: string; warehouse_id?: string | null; zone?: string | null; shelf?: string | null;
   bin_number?: string | null; barcode?: string | null; barcode_type?: string; is_default?: boolean; qty_on_hand?: number };

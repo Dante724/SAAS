@@ -16,7 +16,7 @@ from decimal import Decimal
 from typing import Optional
 
 from fastapi import HTTPException
-from sqlalchemy import func, select
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import CommissionRule, Employee, EmployeeBalanceLedger, Order, OrderLine, Task
@@ -79,17 +79,20 @@ def expected_base(emp: Employee, ps: date, pe: date) -> Decimal:
     return _money(total)
 
 
-def _date_window(q, ps: date, pe: date):
+def _date_window(q, ps: date, pe: date, tzname: str | None):
+    """Entries made on the shop's days ps..pe (created_at is naive UTC; the period is shop days)."""
+    from backend.services.dates import day_end_utc, day_start_utc
     L = EmployeeBalanceLedger
-    return q.where(func.date(L.created_at) >= ps, func.date(L.created_at) <= pe)
+    return q.where(L.created_at >= day_start_utc(ps, tzname), L.created_at < day_end_utc(pe, tzname))
 
 
 async def adjustments(db: AsyncSession, org_id: str, employee_id: str, ps: date, pe: date) -> dict:
     """Manual bonuses and penalties dated in the period (penalties shown positive)."""
+    from backend.services.dates import shop_tzname
     L = EmployeeBalanceLedger
     rows = (await db.execute(_date_window(select(L).where(
         L.org_id == org_id, L.employee_id == employee_id, L.ref_type == "manual",
-        L.entry_type.in_(("bonus", "penalty"))), ps, pe).order_by(L.created_at))).scalars().all()
+        L.entry_type.in_(("bonus", "penalty"))), ps, pe, await shop_tzname(db, org_id)).order_by(L.created_at))).scalars().all()
 
     def _row(e):
         return {"id": e.id, "date": e.created_at.isoformat(), "amount": float(abs(_money(e.amount))),
@@ -105,10 +108,11 @@ async def commission_breakdown(db: AsyncSession, org_id: str, employee_id: str,
 
     A claw-back is posted against the order, but it belongs to the line (or order, or task)
     whose commission it reverses; its accrual group's first commission says which one."""
+    from backend.services.dates import shop_tzname
     L = EmployeeBalanceLedger
     rows = (await db.execute(_date_window(select(L).where(
         L.org_id == org_id, L.employee_id == employee_id,
-        L.entry_type.in_(("commission", "clawback"))), ps, pe).order_by(L.created_at))).scalars().all()
+        L.entry_type.in_(("commission", "clawback"))), ps, pe, await shop_tzname(db, org_id)).order_by(L.created_at))).scalars().all()
     if not rows:
         return []
 

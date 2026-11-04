@@ -56,6 +56,13 @@ async def credited(db: AsyncSession, order_id: str) -> float:
     return q2(total)
 
 
+async def balance_due(db: AsyncSession, order: Order) -> float:
+    """Amount still owed on the order (never negative), net of payments, credit notes and what
+    was written off when the job was dropped."""
+    return q2(max(0.0, float(order.total or 0) - float(getattr(order, "written_off", 0) or 0)
+                  - await net_paid(db, order.id) - await credited(db, order.id)))
+
+
 async def resync_write_off(db: AsyncSession, order: Order, actor_id: str | None = None) -> None:
     """A dropped job's write-off follows the money the shop actually kept: when money comes back
     to the customer (a refund) after the job was dropped, the written-off part grows by the same
@@ -78,14 +85,51 @@ async def resync_write_off(db: AsyncSession, order: Order, actor_id: str | None 
                                       ref_type="order", ref_id=order.id, created_by_id=actor_id)
 
 
-async def _unsettled(db: AsyncSession, order: Order) -> float:
-    return q2(max(0.0, float(order.total or 0) - await net_paid(db, order.id) - await credited(db, order.id)))
+def invoice_job_shares():
+    """Subquery of (invoice_id, order_id, share): each job an invoice bills (its links plus the
+    primary order_id) and its share of that invoice — by job total, equal shares when the totals
+    are 0, the whole invoice for a single job. The one rule for splitting an invoice's credit
+    notes between its jobs (`credited`, `balances_due`, and the reports in services/revenue)."""
+    from sqlalchemy import case, union
+    from backend.models import InvoiceOrder
+    inv_jobs = union(
+        select(InvoiceOrder.invoice_id.label("invoice_id"), InvoiceOrder.order_id.label("order_id")),
+        select(Invoice.id.label("invoice_id"), Invoice.order_id.label("order_id"))
+        .where(Invoice.order_id.isnot(None))).subquery()
+    whole = (select(inv_jobs.c.invoice_id, func.sum(func.coalesce(Order.total, 0)).label("whole"),
+                    func.count().label("n"))
+             .join(Order, Order.id == inv_jobs.c.order_id).group_by(inv_jobs.c.invoice_id).subquery())
+    share = case((whole.c.n <= 1, 1.0),
+                 (whole.c.whole != 0, func.coalesce(Order.total, 0) * 1.0 / whole.c.whole),
+                 else_=1.0 / whole.c.n)
+    return (select(inv_jobs.c.invoice_id, inv_jobs.c.order_id, share.label("share"))
+            .join(whole, whole.c.invoice_id == inv_jobs.c.invoice_id)
+            .join(Order, Order.id == inv_jobs.c.order_id).subquery())
 
 
-async def balance_due(db: AsyncSession, order: Order) -> float:
-    """Amount still owed on the order (never negative), net of payments, credit notes and any
-    balance written off when the job was dropped."""
-    return q2(max(0.0, await _unsettled(db, order) - float(getattr(order, "written_off", 0) or 0)))
+def balances_due(org_id: str):
+    """`balance_due` for every order of a shop in one query: a subquery of (order_id, owed). Same
+    rules (total − what was written off when the job was dropped − payments net of refunds −
+    credit notes, an invoice billing several orders sharing its credit by order total, never
+    below 0), so reports agree with the job screen."""
+    from sqlalchemy import case
+    void = ("void", "voided", "cancelled", "canceled")
+    sh = invoice_job_shares()
+    credit = (select(sh.c.order_id, func.sum(Invoice.credited * sh.c.share).label("credited"))
+              .join(Invoice, Invoice.id == sh.c.invoice_id)
+              .where(Invoice.org_id == org_id, Invoice.credited > 0, Invoice.status.notin_(void))
+              .group_by(sh.c.order_id).subquery())
+    paid = (select(Payment.order_id,
+                   func.sum(case((Payment.kind.in_(("payment", "prepayment")), Payment.amount),
+                                 (Payment.kind == "refund", -func.abs(Payment.amount)), else_=0)).label("net"))
+            .join(Order, Order.id == Payment.order_id).where(Order.org_id == org_id)
+            .group_by(Payment.order_id).subquery())
+    owed = (func.coalesce(Order.total, 0) - func.coalesce(Order.written_off, 0)
+            - func.coalesce(paid.c.net, 0) - func.coalesce(credit.c.credited, 0))
+    return (select(Order.id.label("order_id"), case((owed > 0, owed), else_=0).label("owed"))
+            .outerjoin(paid, paid.c.order_id == Order.id)
+            .outerjoin(credit, credit.c.order_id == Order.id)
+            .where(Order.org_id == org_id).subquery())
 
 
 async def overpaid(db: AsyncSession, order: Order) -> float:
@@ -119,18 +163,16 @@ async def apply_deposits(db: AsyncSession, inv: Invoice, order: Order) -> float:
 
 
 async def open_receivables(db: AsyncSession, order_ids: list[str]) -> float:
-    """"To collect": what the given jobs still owe — totals net of the money already taken for them
-    (payments and deposits, less refunds) and write-offs — in two SQL aggregates."""
+    """"To collect": what the given jobs (all of one shop) still owe, by `balances_due` (totals
+    less write-offs, money taken net of refunds and credit notes), summed in the database."""
     if not order_ids:
         return 0.0
-    from sqlalchemy import case
-    totals = dict((await db.execute(select(
-        Order.id, func.coalesce(Order.total, 0) - func.coalesce(Order.written_off, 0))
-        .where(Order.id.in_(order_ids)))).all())
-    paid = dict((await db.execute(select(Payment.order_id, func.coalesce(func.sum(case(
-        (Payment.kind == "refund", -func.abs(Payment.amount)), else_=Payment.amount)), 0))
-        .where(Payment.order_id.in_(order_ids)).group_by(Payment.order_id))).all())
-    return q2(sum(max(0.0, float(t or 0) - float(paid.get(oid) or 0)) for oid, t in totals.items()))
+    org_id = (await db.execute(select(Order.org_id).where(Order.id == order_ids[0]))).scalar()
+    if not org_id:
+        return 0.0
+    due = balances_due(org_id)
+    return q2(float((await db.execute(select(func.coalesce(func.sum(due.c.owed), 0))
+                                      .where(due.c.order_id.in_(order_ids)))).scalar() or 0))
 
 
 async def primary_invoice(db: AsyncSession, order_id: str):

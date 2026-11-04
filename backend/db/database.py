@@ -54,6 +54,7 @@ def engine_kwargs(cfg) -> dict:
         connect_args.update(pg_connect_args(cfg))
     return kw
 
+
 # JSON columns (audit details, snapshots, webhook payloads) may now hold Decimal money read from
 # Numeric columns: write it as a number, the way floats always were.
 from backend.services.money import json_dumps as _json_dumps  # noqa: E402

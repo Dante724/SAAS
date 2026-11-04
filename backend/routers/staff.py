@@ -80,6 +80,7 @@ class PasswordReset(BaseModel):
 class RoleIn(BaseModel):
     name: str
     permissions: dict = {}
+    template: Optional[str] = None   # start from a template, as in the role editor (QA wave 3)
     # Build 83 — record-level access conditions
     contact_scope: str = "all"       # all|own
     order_scope: str = "all"         # all|own
@@ -112,6 +113,10 @@ async def list_employees(
     # Pay and tax ids are payroll data: only roles allowed to view payroll see colleagues' values.
     see_pay = await has_perm(db, current, "can_view_payroll")
     see_own = see_pay or await has_perm(db, current, "can_view_own_compensation")
+    # Everyone needs the team's names (assignee pickers, schedules); their email, phone, the
+    # manager's note and HR details (hours, hire date, time tracking) are for whoever manages staff
+    # (a technician read them all — QA 31 Oct 2026, wave 3).
+    see_contact = await has_perm(db, current, "can_manage_employees")
     from backend.services.payroll_views import in_scope, payroll_scope_ids
     scope = await payroll_scope_ids(db, current)   # E3: colleagues' pay only inside the payroll scope
     listed = await _picker_lists(db, current.org_id, employees)
@@ -120,13 +125,18 @@ async def list_employees(
         if e.id == current.id:
             return v if see_own else None
         return v if (see_pay and in_scope(scope, e.id)) else None
-    return [{"id": e.id, "name": e.name, "email": e.email,
-             "phone": e.phone, "wage_type": pay(e, e.wage_type), "wage_value": pay(e, e.wage_value),
+    def contact(e, v):
+        return v if (see_contact or e.id == current.id) else None
+    def hr(e, v):        # payroll works from hours and time tracking too
+        return v if (see_contact or see_pay or e.id == current.id) else None
+    return [{"id": e.id, "name": e.name, "email": contact(e, e.email),
+             "phone": contact(e, e.phone), "wage_type": pay(e, e.wage_type), "wage_value": pay(e, e.wage_value),
              "commission_labour": pay(e, e.commission_labour), "commission_parts": pay(e, e.commission_parts),
-             "weekly_hours": e.weekly_hours, "hourly_basis": e.hourly_basis or "labour",
-             "track_job_hours": e.track_job_hours, "track_attendance": e.track_attendance,
-             "position": e.position, "hired_at": e.hired_at.isoformat() if e.hired_at else None,
-             "tax_id": pay(e, e.tax_id), "public_name": e.public_name, "note": e.note,
+             "weekly_hours": hr(e, e.weekly_hours), "hourly_basis": hr(e, e.hourly_basis or "labour"),
+             "track_job_hours": hr(e, e.track_job_hours), "track_attendance": hr(e, e.track_attendance),
+             "position": e.position,
+             "hired_at": hr(e, e.hired_at.isoformat() if e.hired_at else None),
+             "tax_id": pay(e, e.tax_id), "public_name": e.public_name, "note": contact(e, e.note),
              "location_id": e.location_id, "role_id": e.role_id, "active": e.active,
              # whether their role shows them in the work order's Managers / Assignee pickers
              "in_managers": listed[e.id][0], "in_assignees": listed[e.id][1]} for e in employees]
@@ -243,7 +253,9 @@ async def create_employee(
     import secrets
 
     data.email = norm_email(data.email)
-    existing = await db.execute(select(Employee).where(func.lower(Employee.email) == data.email))
+    # skip_tenant_filter: sign-in emails are unique across every shop (one email = one login).
+    existing = await db.execute(select(Employee.id).where(func.lower(Employee.email) == data.email)
+                                .execution_options(skip_tenant_filter=True))
     if existing.scalar_one_or_none():
         raise HTTPException(400, "Email already in use")
     if data.password is not None and len(data.password) < MIN_PASSWORD_LEN:
@@ -352,8 +364,10 @@ async def update_employee(
             # Changing your own sign-in email then resetting the password is an account takeover
             # for anyone holding a session token, so it needs the password too.
             await _assert_current_password(current, current_password)
-        dupe = (await db.execute(select(Employee).where(
-            func.lower(Employee.email) == payload["email"], Employee.id != emp.id))).scalar_one_or_none()
+        # skip_tenant_filter: sign-in emails are unique across every shop (one email = one login).
+        dupe = (await db.execute(select(Employee.id).where(
+            func.lower(Employee.email) == payload["email"], Employee.id != emp.id)
+            .execution_options(skip_tenant_filter=True))).scalar_one_or_none()
         if dupe:
             raise HTTPException(400, "Email already in use")
         emp.email_verified = False   # the new address hasn't been proven yet
@@ -471,7 +485,7 @@ class InviteIn(BaseModel):
 
 @router.get("/invites")
 async def list_invites(db: AsyncSession = Depends(get_db),
-                       current: Employee = Depends(get_current_employee)):
+                       current: Employee = Depends(require_perm("can_manage_employees"))):
     """Pending (unaccepted) invitations for this org."""
     from backend.models import Invite
     rows = (await db.execute(select(Invite).where(
@@ -501,8 +515,12 @@ async def create_invite(data: InviteIn, db: AsyncSession = Depends(get_db),
     await _assert_can_assign_role(db, current, data.role_id)
     from backend.services.billing import assert_can_add
     await assert_can_add(db, current.org_id, "team_members")
-    dupe = (await db.execute(select(Employee).where(func.lower(Employee.email) == email))).scalar_one_or_none()
-    if dupe and dupe.org_id == current.org_id:
+    # skip_tenant_filter: sign-in emails are unique across every shop (one email = one login), so
+    # an address already used at another shop can't be invited either. Only its shop id is read.
+    dupe_org = (await db.execute(select(Employee.org_id).where(func.lower(Employee.email) == email)
+                                 .execution_options(skip_tenant_filter=True))).scalar_one_or_none()
+    dupe = dupe_org is not None
+    if dupe and dupe_org == current.org_id:
         raise HTTPException(400, "Someone with that email is already on the team")
     if dupe:
         # One email = one Tekly login today; accepting would fail on the unique email.
@@ -565,6 +583,8 @@ async def list_roles(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
+    from backend.routers.rbac import assert_can_read_roles
+    await assert_can_read_roles(db, current)
     roles = (await db.execute(select(Role).where(Role.org_id == current.org_id))).scalars().all()
     counts = {}
     for e in (await db.execute(select(Employee).where(Employee.org_id == current.org_id, Employee.active == True))).scalars().all():  # noqa: E712
@@ -751,6 +771,8 @@ async def create_location(
     # Launch B2/B6: the shop's timezone (unless one was picked) and a Cash drawer + Card account.
     from backend.services.shop_setup import setup_location
     await setup_location(db, ln)
+    from backend.services.warehouses import provision_default
+    await provision_default(db, ln)      # QA fix D: its stock has a warehouse from day one
     await db.commit()
     await db.refresh(ln)
     await billing.sync_quantity(db, current.org_id)   # billed per active location
@@ -817,7 +839,12 @@ async def get_company(
     org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
     if not org:
         raise HTTPException(404, "Company not found")
-    return {
+    # Shop admin details (the account id support asks for, the device limit, payment set-up,
+    # the documents' footer note) are for whoever runs the settings; everyone else gets what the
+    # app needs to show prices, dates and the shop's name (QA wave 3: a technician read it all).
+    from backend.services.auth import has_perm
+    admin = await has_perm(db, current, "can_manage_settings")
+    out = {
         "name": org.name, "account_id": org.account_id,   # read-only; what Tekly support asks for
         "company_email": org.company_email, "company_phone": org.company_phone,
         "company_address": org.company_address, "company_details": org.company_details,
@@ -850,6 +877,10 @@ async def get_company(
         "require_mfa": bool(getattr(org, "require_mfa", False)),
         "max_sessions_per_login": getattr(org, "max_sessions_per_login", None),
     }
+    if not admin:
+        for k in ("account_id", "company_note", "payment_provider", "require_mfa", "max_sessions_per_login"):
+            out[k] = None
+    return out
 
 
 class CompanyIn(BaseModel):
@@ -922,6 +953,26 @@ async def update_company(
         from backend.services.sessions import LIMIT_CHOICES
         if payload["max_sessions_per_login"] not in LIMIT_CHOICES:
             raise HTTPException(422, f"Devices per person must be one of {list(LIMIT_CHOICES)}, or no limit")
+    # QA E3: a made-up currency or timezone breaks every amount and date that follows.
+    from backend.services.currency import is_currency_code
+    from backend.services.owned import problem
+    if payload.get("currency_code"):
+        payload["currency_code"] = payload["currency_code"].strip().upper()
+        if not is_currency_code(payload["currency_code"]):
+            raise problem(422, f"{payload['currency_code']} isn't a currency we know. Pick one like USD, EUR or GBP.",
+                          "currency_code must be an ISO 4217 code", field="currency_code")
+    for cur in payload.get("currencies") or []:
+        code = cur.get("code") if isinstance(cur, dict) else None
+        if code and not is_currency_code(code):
+            raise problem(422, f"{code} isn't a currency we know. Pick one like USD, EUR or GBP.",
+                          "currencies[].code must be an ISO 4217 code", field="currencies")
+    if payload.get("timezone"):
+        from zoneinfo import ZoneInfo
+        try:
+            ZoneInfo(payload["timezone"])
+        except (KeyError, ValueError):
+            raise problem(422, f"{payload['timezone']} isn't a time zone we know. Pick one from the list.",
+                          "timezone must be an IANA name like Europe/London", field="timezone")
     if "payment_provider" in payload:
         valid = ("auto", "stripe", "square", "sumup", "simulated")
         if payload["payment_provider"] not in valid:
@@ -988,7 +1039,7 @@ class InventorySettingsIn(BaseModel):
     enable_bins: Optional[bool] = None
     unique_identifier: Optional[str] = None
     enable_reservations: Optional[bool] = None
-    reservation_max_days: Optional[int] = None
+    reservation_max_days: Optional[int] = Field(None, ge=0, le=3650)
     product_serial_template: Optional[str] = None
     asset_serial_template: Optional[str] = None
     sku_template: Optional[str] = None       # ii144a: empty = SKUs stay as typed

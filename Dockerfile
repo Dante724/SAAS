@@ -10,6 +10,10 @@ WORKDIR /app/frontend-react
 COPY frontend-react/package.json frontend-react/package-lock.json ./
 RUN npm ci --no-audit --no-fund
 COPY frontend-react/ ./
+# Optional browser error tracking, baked in at build time (a frontend DSN is public by design):
+#   docker build --build-arg VITE_SENTRY_DSN=https://...  --build-arg VITE_RELEASE=$(git rev-parse HEAD)
+ARG VITE_SENTRY_DSN=""
+ARG VITE_RELEASE=""
 RUN npm run build
 
 # ── 2. Python runtime ────────────────────────────────────────────────────────
@@ -39,6 +43,8 @@ RUN useradd --system --uid 10001 --no-create-home repairos && chown -R repairos 
 USER repairos
 
 EXPOSE 8000
+# Liveness only: /api/health never touches the database, so a DB blip doesn't restart every
+# container at once. Readiness (database reachable) is /api/readyz, for load balancers.
 HEALTHCHECK --interval=30s --timeout=5s --start-period=20s --retries=3 \
   CMD python -c "import urllib.request,sys; sys.exit(0 if urllib.request.urlopen('http://127.0.0.1:8000/api/health', timeout=4).status == 200 else 1)"
 

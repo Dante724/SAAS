@@ -18,6 +18,7 @@ export type Me = {
   mfa_enabled?: boolean; mfa_required?: boolean; email_verified?: boolean;
   pin_set?: boolean;   // Tekly Go payment PIN
   location_id?: string | null;
+  support?: { email?: string; url?: string };
   billing?: Billing | null;
 };
 

@@ -1,11 +1,12 @@
 import asyncio
+import logging
 from datetime import datetime as _datetime
 from datetime import timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from fastapi.security import OAuth2PasswordRequestForm
-from pydantic import BaseModel
+from pydantic import BaseModel, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -16,9 +17,9 @@ from backend.services import shop_setup as _shop_setup
 from backend.services import tokens as _tok
 from backend.services.audit import record as _audit
 from backend.services.currency import symbol_for as _symbol_for  # sign-up sends a code; we store its symbol
-from backend.services.auth import (ACCOUNT_OFF, assert_org_active, create_access_token, get_current_employee,
-                                   hash_password, is_shop_owner,
-                                   is_old_default_password, norm_email, verify_password)
+from backend.services.auth import (account_off_message, assert_org_active, create_access_token,
+                                   get_current_employee, hash_password, is_old_default_password,
+                                   is_shop_owner, norm_email, verify_password)
 from backend.services.notifications import send_direct_email
 from backend.services.ratelimit import client_ip as _ip
 from backend.services.ratelimit import aenforce as _rate
@@ -75,6 +76,22 @@ class RegisterRequest(BaseModel):
     company_phone: Optional[str] = None
     employee_count: Optional[str] = None
     plan: Optional[str] = None            # solo | shop | pro, from the pricing page (default pro)
+    province: Optional[str] = None        # Canada: two-letter province code, picks GST / HST
+
+    @field_validator("province", mode="before")
+    @classmethod
+    def _province_known(cls, v):
+        # Sign-up never fails on this (council rule): a province we don't know is ignored, and
+        # the tax falls back to the time zone, then the country default.
+        from backend.services.regions import CA_PROVINCES
+        v = str(v or "").strip().upper() or None
+        if v and v not in CA_PROVINCES:
+            _signup_log.warning("signup: unknown province %r ignored", v[:20])
+            return None
+        return v
+
+
+_signup_log = logging.getLogger("tekly.signup")
 
 
 # Build 144cl — seed a sensible default tax so a new shop isn't starting blank.
@@ -85,14 +102,12 @@ REGION_TAX = {
     "ca":   {"name": "GST",       "rate": 5.0,  "mode": "imposed"},
     "eu":   {"name": "VAT",       "rate": 21.0, "mode": "included"},
     "mena": {"name": "VAT",       "rate": 5.0,  "mode": "included"},
+    "au":   {"name": "GST",       "rate": 10.0, "mode": "included"},
     "other": None,
 }
-COUNTRY_VAT = {  # ISO alpha-2 → (name, rate, mode)
-    "DE": ("VAT", 19.0, "included"), "FR": ("VAT", 20.0, "included"), "ES": ("IVA", 21.0, "included"),
-    "IT": ("IVA", 22.0, "included"), "NL": ("BTW", 21.0, "included"), "IE": ("VAT", 23.0, "included"),
-    "GB": ("VAT", 20.0, "included"), "AE": ("VAT", 5.0, "included"), "SA": ("VAT", 15.0, "included"),
-    "QA": ("VAT", 0.0, "included"), "US": ("Sales tax", 0.0, "imposed"), "CA": ("GST", 5.0, "imposed"),
-}
+# Country rates live in one table, services.regions.COUNTRY_TAX; the old name stays importable.
+from backend.services.regions import CA_PROVINCES as _CA_PROV  # noqa: E402
+from backend.services.regions import COUNTRY_TAX as COUNTRY_VAT  # noqa: E402  ISO alpha-2 → (name, rate, mode)
 
 
 def _default_tax_for(region, country):
@@ -108,6 +123,7 @@ REGION_DEFAULTS = {
     "ca":   {"currency": "$", "currency_code": "CAD", "timezone": "America/Toronto", "language": "en"},
     "eu":   {"currency": "€", "currency_code": "EUR", "timezone": "Europe/Berlin", "language": "en"},
     "mena": {"currency": "AED", "currency_code": "AED", "timezone": "Asia/Dubai", "language": "en"},
+    "au":   {"currency": "$", "currency_code": "AUD", "timezone": "Australia/Sydney", "language": "en"},
     "other": {"currency": "$", "currency_code": "USD", "timezone": "UTC", "language": "en"},
 }
 
@@ -133,6 +149,8 @@ def _region_hint(country: str | None) -> str | None:
         return "eu"
     if c in _MENA_ISO:
         return "mena"
+    if c == "AU":
+        return "au"
     return "other"
 
 
@@ -156,6 +174,7 @@ async def signup_options(request: Request):
             {"key": "ca", "label": "Canada"},
             {"key": "eu", "label": "Europe"},
             {"key": "mena", "label": "Middle East"},
+            {"key": "au", "label": "Australia"},
             {"key": "other", "label": "Other"},
         ],
         "region_defaults": REGION_DEFAULTS,
@@ -164,6 +183,9 @@ async def signup_options(request: Request):
         "countries": _shop_setup.country_options(),
         "country_hint": (country or "").strip().upper() or None,
         "employee_brackets": ["1", "2-5", "6-20", "21-50", "50+"],
+        # QA wave 3: Canada's tax depends on the province (send it back as `province`).
+        "provinces": {"CA": [{"code": c, "label": lbl, "tax_name": n, "tax_rate": r}
+                             for c, (lbl, n, r) in sorted(_CA_PROV.items(), key=lambda kv: kv[1][0])]},
     }
 
 
@@ -214,6 +236,17 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
         raise HTTPException(400, "We couldn't create an account with these details. If you already "
                                  "have one, sign in or reset your password.")
 
+    # Sign-up never fails on the industry: known words map ("electronics", "computer_repair"…), and
+    # anything else starts as "general" (changeable in Settings), logged so new words can be added.
+    _industry_key = None
+    if data.industry_template:
+        from backend.services import industry as _ind
+        _industry_key = _ind.resolve_template_key(data.industry_template)
+        if _industry_key is None:
+            _signup_log.warning("unknown industry_template at sign-up: %r → general",
+                                data.industry_template[:60])
+            _industry_key = _ind.DEFAULT_TEMPLATE
+
     import secrets as _sec
     org = Organisation(name=data.org_name, webhook_secret=_sec.token_urlsafe(24),
                        sub_status="trial",   # build 144ce
@@ -257,8 +290,9 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
     if data.employee_count:
         org.employee_count = data.employee_count
     if data.industry_template:
-        from backend.services import industry as _ind
-        org.industry_template = _ind.normalize_template_key(data.industry_template)
+        org.industry_template = _industry_key
+    if data.country and data.country.upper() == "AU" and not data.region:
+        org.region = "au"
     org.sub_start = platform_today()   # subscription dates are platform (UTC) days
     db.add(org)
     await db.flush()
@@ -286,7 +320,11 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
 
     # Build 144cl: seed a region-appropriate default tax rate (owner can edit/disable it).
     # Launch B4: the tax goes on the sales stack too, or it is never charged.
-    if cdef:
+    if (data.country or "").upper() == "CA" or (not data.country and data.region == "ca"):
+        from backend.services.regions import ca_province_tax
+        _n, _r, _m = ca_province_tax(data.province, org.timezone)
+        _tax = {"name": _n, "rate": _r, "mode": _m}
+    elif cdef:
         _n, _r, _m = cdef["tax"]
         _tax = {"name": _n, "rate": _r, "mode": _m}
     else:
@@ -357,7 +395,7 @@ async def login(request: Request, form: OAuth2PasswordRequestForm = Depends(), d
         raise HTTPException(status_code=401, detail="Incorrect email or password")
     if not employee.active:
         await _login_failed(db, employee, "disabled")
-        raise HTTPException(status_code=403, detail=ACCOUNT_OFF)
+        raise HTTPException(status_code=403, detail=account_off_message())
     # H1: an account still on the old default password (flagged by migration dp144q1, or simply
     # signing in with it) gets no session: the password is public, so whoever typed it may not be
     # the owner. A reset link goes to the account's own email instead.
@@ -856,6 +894,8 @@ async def me(current: Employee = Depends(get_current_employee),
         # build 144x: org master switches — effective clock = org ON *and* employee tracks it
         "clock_wo_enabled": (org.clock_wo_enabled if org and org.clock_wo_enabled is not None else True),
         "clock_attendance_enabled": (org.clock_attendance_enabled if org and org.clock_attendance_enabled is not None else True),
+        # where the Help & support menu and "contact support" errors point
+        "support": {"email": settings.SUPPORT_EMAIL, "url": settings.SUPPORT_URL},
         # Subscription: plan, trial, read-only state and the Pro features unlocked, so the app
         # hides what the plan lacks (the server enforces the same in services/billing.py).
         "billing": await _billing_summary(db, org),

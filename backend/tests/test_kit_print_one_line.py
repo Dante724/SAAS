@@ -298,7 +298,7 @@ async def test_old_untagged_kit_lines_print_as_before(client, tenant, db):
 # ── roles ──────────────────────────────────────────────────────────────────────────────────────
 
 async def _person(client, h, perms):
-    r = await client.post("/api/settings/rbac/roles", headers=h, json={"name": f"R{uuid.uuid4().hex[:4]}", "permissions": perms})
+    r = await client.post("/api/settings/rbac/roles", headers=h, json={"template": "Full access", "name": f"R{uuid.uuid4().hex[:4]}", "permissions": perms})
     assert r.status_code == 201, r.text
     email = f"p-{uuid.uuid4().hex[:6]}@test.dev"
     r = await client.post("/api/staff/employees", headers=h, json={
@@ -516,20 +516,22 @@ async def test_invoiced_kit_lines_are_frozen(client, tenant):
                                json={"print_mode": "itemized"})).status_code == 200   # printing only
 
 
-@pytest.mark.parametrize("price", ["NaN", "Infinity", 1e15, -1])
+# NaN/Infinity: 422 from the request-wide check before the route runs. A real but out-of-range
+# number reaches the route's own kit-price check: 400 "Enter a kit price of 0 or more".
+@pytest.mark.parametrize("price,code", [("NaN", 422), ("Infinity", 422), (1e15, 400), (-1, 400)])
 @pytest.mark.asyncio
-async def test_kit_price_must_be_a_real_amount(client, tenant, price):
+async def test_kit_price_must_be_a_real_amount(client, tenant, price, code):
     s = await _shop(client, tenant)
     oid, _cid, gid = await _job_with_kit_and_charger(client, tenant, s)
     raw = price if isinstance(price, str) else repr(price)
     body = f'{{"price": {raw}, "reason": "test"}}'
     r = await client.patch(f"/api/orders/{oid}/kits/{gid}", headers={**tenant, "Content-Type": "application/json"},
                            content=body)
-    assert r.status_code in (400, 422), r.text   # 422 when the request-wide NaN/Infinity check catches it first
+    assert r.status_code == code, r.text
     r = await client.post("/api/bundles", headers={**tenant, "Content-Type": "application/json"}, content=(
         f'{{"name": "Bad", "price_mode": "fixed", "price": {raw}, '
         f'"components": [{{"ref_type": "service", "ref_id": "{s.fit}"}}]}}'))
-    assert r.status_code in (400, 422), r.text
+    assert r.status_code == code, r.text
 
 
 @pytest.mark.asyncio

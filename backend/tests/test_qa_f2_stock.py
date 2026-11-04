@@ -1,0 +1,375 @@
+"""QA fix F2 (5-shop run, 31 Oct 2026): POS returns, stocktake counts, transfer scan/receive and
+serialized (IMEI) items move stock exactly once and only when they should."""
+import pytest
+from sqlalchemy import func, select
+
+from backend.models import StockLevel, StockMovement
+from backend.tests.test_stocktake_postings_print import _loc, _part, _stock, _wh
+
+
+async def _on_hand(db, part_id):
+    db.expire_all()
+    return float((await db.execute(select(func.coalesce(func.sum(StockLevel.qty_available), 0))
+                                   .where(StockLevel.part_id == part_id))).scalar_one())
+
+
+async def _moved(db, part_id):
+    return float((await db.execute(select(func.coalesce(func.sum(StockMovement.qty), 0))
+                                   .where(StockMovement.part_id == part_id))).scalar_one())
+
+
+async def _ledger_matches(db, part_id):
+    """Every unit on the shelf is explained by a movement."""
+    assert await _on_hand(db, part_id) == pytest.approx(await _moved(db, part_id))
+
+
+# ── 2. stocktake: the count is what's on the shelf when it posts ───────────────────────────────
+@pytest.mark.asyncio
+async def test_stock_moved_during_the_count_isnt_subtracted_again(client, tenant, db):
+    w = await _wh(client, tenant)
+    p = await _part(client, tenant, sku="PADS-1", barcode="PADS-1")
+    await _stock(client, tenant, p["id"], 31)
+    st = (await client.post("/api/stocktake", json={"warehouse_id": w["id"], "kind": "full"},
+                            headers=tenant)).json()
+    # two pads written off while the count is under way: the shelf now really holds 29
+    r = await client.post(f"/api/inventory/parts/{p['id']}/adjust", headers=tenant, json={
+        "location_id": await _loc(client, tenant), "qty": -2, "movement_type": "adjust"})
+    assert r.status_code in (200, 201), r.text
+    line = (await client.get(f"/api/stocktake/{st['id']}", headers=tenant)).json()["lines"][0]
+    assert (await client.patch(f"/api/stocktake/{st['id']}/lines/{line['id']}",
+                               json={"counted_qty": 29}, headers=tenant)).status_code == 200
+    assert (await client.post(f"/api/stocktake/{st['id']}/post", headers=tenant)).status_code == 200
+    assert await _on_hand(db, p["id"]) == 29            # was 27: the write-off was taken twice
+    posted = (await client.get(f"/api/stocktake/{st['id']}", headers=tenant)).json()["lines"][0]
+    assert posted["system_qty"] == 29 and posted["variance"] == 0
+    await _ledger_matches(db, p["id"])
+
+
+@pytest.mark.asyncio
+async def test_posted_count_cant_be_edited_and_negative_is_refused(client, tenant):
+    w = await _wh(client, tenant)
+    p = await _part(client, tenant, sku="PADS-2", barcode="PADS-2")
+    await _stock(client, tenant, p["id"], 5)
+    st = (await client.post("/api/stocktake", json={"warehouse_id": w["id"], "kind": "full"},
+                            headers=tenant)).json()
+    line = (await client.get(f"/api/stocktake/{st['id']}", headers=tenant)).json()["lines"][0]
+    url = f"/api/stocktake/{st['id']}/lines/{line['id']}"
+    assert (await client.patch(url, json={"counted_qty": -3}, headers=tenant)).status_code == 422
+    assert (await client.patch(url, json={"counted_qty": 5}, headers=tenant)).status_code == 200
+    assert (await client.post(f"/api/stocktake/{st['id']}/post", headers=tenant)).status_code == 200
+    assert (await client.patch(url, json={"counted_qty": 99}, headers=tenant)).status_code == 409
+
+
+# ── 3. transfers: scan only adds, and a short delivery can be recorded from what the API returns ─
+async def _draft_transfer(client, tenant, db, sku, stock=10):
+    from backend.models import Location
+    from backend.tests.test_stocktake_postings_print import _me
+    me = await _me(client, tenant)
+    dest = Location(org_id=me["org_id"], name=f"Back store {sku}")
+    db.add(dest)
+    await db.commit()
+    p = await _part(client, tenant, sku=sku, barcode=sku)
+    await _stock(client, tenant, p["id"], stock)
+    t = (await client.post("/api/transfers", headers=tenant, json={
+        "from_location_id": await _loc(client, tenant), "to_location_id": dest.id,
+        "lines": [{"part_id": p["id"], "qty": 1}]})).json()
+    return t["id"], p, dest.id
+
+
+@pytest.mark.asyncio
+async def test_transfer_scan_refuses_zero_and_negative_qty(client, tenant, db):
+    tid, p, _ = await _draft_transfer(client, tenant, db, "BC-1700")
+    ok = await client.post(f"/api/transfers/{tid}/scan", json={"code": "BC-1700", "qty": 3}, headers=tenant)
+    assert ok.status_code == 200 and ok.json()["line_id"] and ok.json()["qty"] == 4
+    for bad in (-5, 0):
+        r = await client.post(f"/api/transfers/{tid}/scan", json={"code": "BC-1700", "qty": bad}, headers=tenant)
+        assert r.status_code == 422, r.text
+    lines = (await client.get(f"/api/transfers/{tid}", headers=tenant)).json()["lines"]
+    assert [ln["qty"] for ln in lines] == [4]
+
+
+@pytest.mark.asyncio
+async def test_short_delivery_recorded_with_ids_the_api_returns(client, tenant, db):
+    tid, p, dest = await _draft_transfer(client, tenant, db, "TUBE-1")
+    await client.post(f"/api/transfers/{tid}/scan", json={"code": "TUBE-1", "qty": 3}, headers=tenant)
+    for s in ("ready", "in_transit"):
+        assert (await client.patch(f"/api/transfers/{tid}/status", json={"status": s}, headers=tenant)).status_code == 200
+    detail = (await client.get(f"/api/transfers/{tid}", headers=tenant)).json()["lines"][0]
+    listed = next(t for t in (await client.get("/api/transfers", headers=tenant)).json()["items"] if t["id"] == tid)
+    assert detail["id"] == detail["line_id"] == listed["lines"][0]["line_id"]
+    # by line id (from the detail) …
+    r = await client.post(f"/api/transfers/{tid}/receive", headers=tenant,
+                          json={"lines": [{"line_id": detail["line_id"], "qty_received": 3}]})
+    assert r.status_code == 200 and r.json()["discrepancies"] == 1, r.text
+    # … or by the product, as the person holding the box knows it
+    r = await client.post(f"/api/transfers/{tid}/receive", headers=tenant,
+                          json={"lines": [{"part_id": p["id"], "qty_received": 3}]})
+    assert r.status_code == 200, r.text
+    r = await client.post(f"/api/transfers/{tid}/receive", headers=tenant,
+                          json={"lines": [{"code": "TUBE-1", "qty_received": 3}]})
+    assert r.status_code == 200, r.text
+    assert (await client.post(f"/api/transfers/{tid}/receive", headers=tenant,
+                              json={"lines": [{"qty_received": 3}]})).status_code == 422
+    assert (await client.patch(f"/api/transfers/{tid}/status", json={"status": "completed"},
+                               headers=tenant)).status_code == 200
+    db.expire_all()
+    at_dest = (await db.execute(select(func.coalesce(func.sum(StockLevel.qty_available), 0)).where(
+        StockLevel.part_id == p["id"], StockLevel.location_id == dest))).scalar_one()
+    assert float(at_dest) == 3 and await _on_hand(db, p["id"]) == 9      # 1 booked as lost
+    await _ledger_matches(db, p["id"])
+
+
+# ── 4. serialized (IMEI) items: the serial is asked for wherever stock moves ──────────────────
+async def _phone(client, tenant, n=2):
+    from backend.tests.test_inventory_bins_passport_stocktake import SN, _product, _receive
+    loc = await _loc(client, tenant)
+    p = await _product(client, tenant, name="iPhone 13", serialized=True)
+    await _receive(client, tenant, loc, p["id"], n, serials=SN[5:5 + n])
+    return p, loc, SN[5:5 + n]
+
+
+@pytest.mark.asyncio
+async def test_till_needs_the_imei_of_a_serialized_phone_and_shows_it(client, tenant, db):
+    from backend.models import SerializedItem
+    p, _, sns = await _phone(client, tenant)
+    line = {"kind": "product", "ref_id": p["id"], "description": "iPhone 13", "qty": 1, "unit_price": 400}
+    r = await client.post("/api/sales", json={"lines": [line]}, headers=tenant)
+    assert r.status_code == 422 and "IMEI" in r.json()["detail"], r.text          # was: oldest unit, silently
+    assert await _on_hand(db, p["id"]) == 2
+    # scanning the phone's IMEI at the till says which product and which unit
+    hit = (await client.get(f"/api/sales/lookup?code={sns[1]}", headers=tenant)).json()["items"][0]
+    assert hit["id"] == p["id"] and hit["serialized"] and hit["serial"] == sns[1]
+    r = await client.post("/api/sales", json={"lines": [{**line, "serials": [sns[1]]}]}, headers=tenant)
+    assert r.status_code == 201, r.text
+    db.expire_all()
+    status = {u.serial_number: u.status for u in (await db.execute(select(SerializedItem).where(
+        SerializedItem.part_id == p["id"]))).scalars()}
+    assert status == {sns[0]: "in_stock", sns[1]: "sold"}
+    rc = (await client.get(f"/api/sales/{r.json()['id']}/receipt", headers=tenant)).json()
+    assert rc["lines"][0]["serials"] == [sns[1]] and sns[1] in rc["text"]
+    assert await _on_hand(db, p["id"]) == 1
+    await _ledger_matches(db, p["id"])
+
+
+@pytest.mark.asyncio
+async def test_serialized_stock_only_rises_with_a_serial_per_unit(client, tenant, db):
+    from backend.models import SerializedItem
+    from backend.tests.test_inventory_bins_passport_stocktake import SN
+    p, loc, _ = await _phone(client, tenant, n=1)
+    url = f"/api/inventory/parts/{p['id']}/adjust"
+    r = await client.post(url, json={"location_id": loc, "qty": 2, "movement_type": "receive"}, headers=tenant)
+    assert r.status_code == 422 and "serial" in r.json()["detail"], r.text      # was 200: +2, no units
+    r = await client.post(url, json={"location_id": loc, "qty": 2, "movement_type": "adjust",
+                                     "serials": [SN[8]]}, headers=tenant)
+    assert r.status_code == 422, r.text                                         # one short
+    r = await client.post(url, json={"location_id": loc, "qty": 2, "movement_type": "receive",
+                                     "serials": SN[8:10]}, headers=tenant)
+    assert r.status_code == 200, r.text
+    db.expire_all()
+    units = (await db.execute(select(SerializedItem).where(SerializedItem.part_id == p["id"],
+                                                           SerializedItem.status == "in_stock"))).scalars().all()
+    assert len(units) == 3 and await _on_hand(db, p["id"]) == 3                # every unit has its serial
+    await _ledger_matches(db, p["id"])
+
+
+@pytest.mark.asyncio
+async def test_till_costs_from_this_shops_layers_and_a_void_puts_them_back(client, tenant, db):
+    from backend.models import Location, StockItemBatch
+    from backend.tests.test_stocktake_postings_print import _me
+    me = await _me(client, tenant)
+    branch = Location(org_id=me["org_id"], name="Branch")
+    db.add(branch)
+    await db.flush()
+    branch_id = branch.id
+    await db.commit()
+    here = await _loc(client, tenant)
+    p = await _part(client, tenant, sku="CELL-1", barcode="CELL-1", cost=5)
+    adj = f"/api/inventory/parts/{p['id']}/adjust"
+    # the branch's (older, cheaper) layer must not be what a sale here costs or empties
+    for loc, qty, cost in ((branch_id, 4, 3), (here, 2, 7)):
+        r = await client.post(adj, json={"location_id": loc, "qty": qty, "movement_type": "receive",
+                                         "unit_cost": cost}, headers=tenant)
+        assert r.status_code == 200, r.text
+    s = await client.post("/api/sales", json={"lines": [
+        {"kind": "product", "ref_id": p["id"], "description": "Cell", "qty": 1, "unit_price": 20}]}, headers=tenant)
+    assert s.status_code == 201, s.text
+    assert s.json()["total_cost"] == pytest.approx(7)                              # was 3: the branch's layer
+
+    async def layers():
+        db.expire_all()
+        return {loc: float(q) for loc, q in (await db.execute(
+            select(StockItemBatch.location_id, StockItemBatch.qty_remaining)
+            .where(StockItemBatch.part_id == p["id"]))).all()}
+    assert await layers() == {branch_id: 4, here: 1}
+    assert (await client.delete(f"/api/sales/{s.json()['id']}", headers=tenant)).status_code == 200
+    assert await layers() == {branch_id: 4, here: 2}
+    await _ledger_matches(db, p["id"])
+
+
+# ── serialized units travel with a transfer ───────────────────────────────────────────────────
+async def _units(db, part_id):
+    from backend.models import SerializedItem
+    db.expire_all()
+    return {u.serial_number: (u.status, u.location_id) for u in (await db.execute(
+        select(SerializedItem).where(SerializedItem.part_id == part_id))).scalars()}
+
+
+async def _branch(client, tenant, db, name):
+    from backend.models import Location
+    from backend.tests.test_stocktake_postings_print import _me
+    me = await _me(client, tenant)
+    b = Location(org_id=me["org_id"], name=name)
+    db.add(b)
+    await db.flush()
+    bid = b.id
+    await db.commit()
+    return bid
+
+
+@pytest.mark.asyncio
+async def test_phones_move_with_the_transfer_and_sell_at_the_branch(client, tenant, db):
+    p, here, sns = await _phone(client, tenant, n=3)
+    dest = await _branch(client, tenant, db, "Branch phones")
+    body = {"from_location_id": here, "to_location_id": dest}
+    # a serialized line needs the units' serials (which phones are in the box)
+    r = await client.post("/api/transfers", headers=tenant, json={**body, "lines": [{"part_id": p["id"], "qty": 2}]})
+    assert r.status_code == 422, r.text
+    tid = (await client.post("/api/transfers", headers=tenant, json={**body, "lines": [
+        {"part_id": p["id"], "qty": 1, "serials": [sns[0]]}]})).json()["id"]
+    # scanning a phone's IMEI into the box adds that unit; its plain barcode can't say which one
+    r = await client.post(f"/api/transfers/{tid}/scan", json={"code": sns[1]}, headers=tenant)
+    assert r.status_code == 200 and r.json()["qty"] == 2 and r.json()["serials"] == sns[:2], r.text
+    assert (await client.post(f"/api/transfers/{tid}/scan", json={"code": sns[1]},
+                              headers=tenant)).status_code == 409                    # already in the box
+    for s in ("ready", "in_transit"):
+        assert (await client.patch(f"/api/transfers/{tid}/status", json={"status": s}, headers=tenant)).status_code == 200
+    u = await _units(db, p["id"])
+    assert u[sns[0]][0] == u[sns[1]][0] == "in_transit" and u[sns[2]] == ("in_stock", here)
+    # one phone didn't arrive: the received serials say which
+    r = await client.post(f"/api/transfers/{tid}/receive", headers=tenant,
+                          json={"lines": [{"part_id": p["id"], "qty_received": 1, "serials": [sns[1]]}]})
+    assert r.status_code == 200, r.text
+    assert (await client.patch(f"/api/transfers/{tid}/status", json={"status": "completed"},
+                               headers=tenant)).status_code == 200
+    u = await _units(db, p["id"])
+    assert u[sns[1]] == ("in_stock", dest) and u[sns[0]][0] == "written_off" and u[sns[2]] == ("in_stock", here)
+    await _ledger_matches(db, p["id"])
+
+
+@pytest.mark.asyncio
+async def test_canceled_transfer_puts_the_phones_back(client, tenant, db):
+    p, here, sns = await _phone(client, tenant, n=2)
+    dest = await _branch(client, tenant, db, "Branch cancel")
+    tid = (await client.post("/api/transfers", headers=tenant, json={
+        "from_location_id": here, "to_location_id": dest,
+        "lines": [{"part_id": p["id"], "qty": 2, "serials": sns}]})).json()["id"]
+    for s in ("ready", "in_transit"):
+        assert (await client.patch(f"/api/transfers/{tid}/status", json={"status": s}, headers=tenant)).status_code == 200
+    assert (await client.patch(f"/api/transfers/{tid}/status", headers=tenant, json={
+        "status": "canceled", "return_location_id": here})).status_code == 200
+    assert await _units(db, p["id"]) == {sns[0]: ("in_stock", here), sns[1]: ("in_stock", here)}
+    await _ledger_matches(db, p["id"])
+
+
+@pytest.mark.asyncio
+async def test_writing_off_a_phone_names_which_one(client, tenant, db):
+    p, here, sns = await _phone(client, tenant, n=2)
+    url = f"/api/inventory/parts/{p['id']}/adjust"
+    r = await client.post(url, json={"location_id": here, "qty": 1, "movement_type": "writeoff"}, headers=tenant)
+    assert r.status_code == 422, r.text                     # was: stock −1, both units still "in stock"
+    r = await client.post(url, json={"location_id": here, "qty": 1, "movement_type": "writeoff",
+                                     "serials": [sns[1]]}, headers=tenant)
+    assert r.status_code == 200, r.text
+    assert await _units(db, p["id"]) == {sns[0]: ("in_stock", here), sns[1]: ("written_off", here)}
+    # the write-off document needs the unit too
+    w = await _wh(client, tenant)
+    r = await client.post("/api/stock-docs/write-offs", headers=tenant, json={
+        "warehouse_id": w["id"], "reason": "Cracked", "lines": [{"part_id": p["id"], "qty": 1}]})
+    assert r.status_code == 422, r.text
+    assert await _on_hand(db, p["id"]) == 1
+    await _ledger_matches(db, p["id"])
+
+
+@pytest.mark.asyncio
+async def test_customer_return_of_a_phone_puts_that_unit_back(client, tenant, db):
+    p, here, sns = await _phone(client, tenant, n=2)
+    line = {"kind": "product", "ref_id": p["id"], "description": "iPhone 13", "qty": 1, "unit_price": 400,
+            "serials": [sns[0]]}
+    assert (await client.post("/api/sales", json={"lines": [line]}, headers=tenant)).status_code == 201
+    r = await client.post("/api/returns", headers=tenant, json={"reason": "Changed mind",
+                          "lines": [{"part_id": p["id"], "qty": 1}]})
+    assert r.status_code == 422, r.text                     # which phone came back?
+    r = await client.post("/api/returns", headers=tenant, json={"reason": "Changed mind",
+                          "lines": [{"part_id": p["id"], "qty": 1, "serials": [sns[1]]}]})
+    assert r.status_code == 409, r.text                     # that one never left the shop
+    r = await client.post("/api/returns", headers=tenant, json={"reason": "Changed mind",
+                          "lines": [{"part_id": p["id"], "qty": 1, "serials": [sns[0]]}]})
+    assert r.status_code == 201, r.text
+    assert await _units(db, p["id"]) == {sns[0]: ("in_stock", here), sns[1]: ("in_stock", here)}
+    assert await _on_hand(db, p["id"]) == 2
+    await _ledger_matches(db, p["id"])
+
+
+@pytest.mark.asyncio
+async def test_scan_to_stock_writes_off_the_phone_whose_imei_was_scanned(client, tenant, db):
+    p, here, sns = await _phone(client, tenant, n=2)
+    r = await client.post("/api/inventory/scan-adjust", headers=tenant, json={
+        "code": sns[0], "location_id": here, "qty": 1, "movement_type": "writeoff"})
+    assert r.status_code == 200 and r.json()["part_id"] == p["id"], r.text
+    assert await _units(db, p["id"]) == {sns[0]: ("written_off", here), sns[1]: ("in_stock", here)}
+    await _ledger_matches(db, p["id"])
+
+
+@pytest.mark.asyncio
+async def test_catalog_write_off_only_takes_a_unit_at_that_location(client, tenant, db):
+    p, here, sns = await _phone(client, tenant, n=1)
+    other = await _branch(client, tenant, db, "Branch w/o")
+    r = await client.post(f"/api/catalog/products/{p['id']}/write-off", headers=tenant,
+                          json={"location_id": other, "serials": [sns[0]]})
+    assert r.status_code == 404, r.text
+    assert await _units(db, p["id"]) == {sns[0]: ("in_stock", here)}
+
+
+# ── 1 (roadmap). a counter sale taken back twice at once puts stock and money back once ──────────
+# POS returns (/sales/{id}/returns) aren't on this branch yet (release/1.0, PR #76); here the till
+# takes a sale back by voiding it, and the void had the same stale-read gap.
+@pytest.mark.asyncio
+async def test_sale_voided_twice_at_once_restocks_and_refunds_once(client, tenant, db):
+    from fastapi import HTTPException
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from backend.models import Account, Employee, Sale
+    from backend.routers.sales import delete_sale
+    till = (await client.post("/api/cash/accounts", json={"name": "Till", "payment_option": "cash"},
+                              headers=tenant)).json()["id"]
+    p = await _part(client, tenant, sku="VOID-1", barcode="VOID-1")
+    await _stock(client, tenant, p["id"], 5)
+    s = (await client.post("/api/sales", headers=tenant, json={"account_id": till, "lines": [
+        {"kind": "product", "ref_id": p["id"], "description": "Cable", "qty": 2, "unit_price": 10}]})).json()
+    emp = (await db.execute(select(Employee))).scalars().first()
+    stale = (await db.execute(select(Sale).where(Sale.id == s["id"]))).scalar_one()    # A: not voided yet
+    async with async_sessionmaker(db.bind, expire_on_commit=False)() as b:              # B: the other click
+        emp_b = (await b.execute(select(Employee).where(Employee.id == emp.id))).scalar_one()
+        assert (await delete_sale(s["id"], "Wrong item", b, emp_b))["ok"]
+    with pytest.raises(HTTPException) as e:
+        await delete_sale(s["id"], "Wrong item", db, emp)
+    assert e.value.status_code == 409 and stale is not None
+    await db.rollback()
+    assert await _on_hand(db, p["id"]) == 5                               # 3 after the sale, +2 once
+    bal = (await db.execute(select(Account.balance).where(Account.id == till))).scalar_one()
+    assert float(bal) == 0                                                # +20 taken, −20 once
+    await _ledger_matches(db, p["id"])
+
+
+@pytest.mark.asyncio
+async def test_client_return_sent_twice_with_one_key_restocks_once(client, tenant, db):
+    p = await _part(client, tenant, sku="RET-1", barcode="RET-1")
+    await _stock(client, tenant, p["id"], 1)
+    body = {"reason": "Wrong colour", "lines": [{"part_id": p["id"], "qty": 1}]}
+    h = {**tenant, "Idempotency-Key": "ret-click-1"}
+    a = await client.post("/api/returns", json=body, headers=h)
+    b = await client.post("/api/returns", json=body, headers=h)
+    assert a.status_code == 201 and b.status_code in (200, 201), b.text
+    assert b.json()["id"] == a.json()["id"]
+    assert await _on_hand(db, p["id"]) == 2
+    await _ledger_matches(db, p["id"])

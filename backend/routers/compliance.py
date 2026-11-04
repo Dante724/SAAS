@@ -308,6 +308,8 @@ async def consent_history(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
+    from backend.services.owned import get_owned_or_404
+    await get_owned_or_404(db, Client, client_id, current.org_id, "client")
     rows = (await db.execute(select(ConsentLog).where(
         ConsentLog.org_id == current.org_id, ConsentLog.client_id == client_id).order_by(
         ConsentLog.created_at.desc()))).scalars().all()

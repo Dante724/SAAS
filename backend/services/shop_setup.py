@@ -13,46 +13,55 @@ from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import Account, Location, Organisation, Tax, TaxRule
+from backend.services.regions import COUNTRY_TAX
 
 # The sales documents a default tax applies to (work orders, invoices and POS sales all read
 # the "tickets_sales" stack; services/tax.py).
 SALES_DOC_FAMILY = "tickets_sales"
 
-# Launch countries for the sign-up Country picker: currency, timezone and the default tax.
-# (name, rate %, mode) — "included" = VAT-style, already in the price; "imposed" = added on top.
-# A US shop starts at 0% because sales tax depends on the state; the setup guide asks for it.
+# Launch countries for the sign-up Country picker: currency, timezone and region. The default tax
+# comes from the one country tax table, services.regions.COUNTRY_TAX (a US shop starts at 0%
+# because sales tax depends on the state; the setup guide asks for it).
 COUNTRIES: dict[str, dict] = {
     "US": {"label": "United States", "region": "us", "currency_code": "USD", "currency": "$",
-           "timezone": "America/New_York", "tax": ("Sales tax", 0.0, "imposed")},
+           "timezone": "America/New_York"},
     "CA": {"label": "Canada", "region": "ca", "currency_code": "CAD", "currency": "$",
-           "timezone": "America/Toronto", "tax": ("GST", 5.0, "imposed")},
+           "timezone": "America/Toronto"},
     "GB": {"label": "United Kingdom", "region": "eu", "currency_code": "GBP", "currency": "£",
-           "timezone": "Europe/London", "tax": ("VAT", 20.0, "included")},
+           "timezone": "Europe/London"},
     "IE": {"label": "Ireland", "region": "eu", "currency_code": "EUR", "currency": "€",
-           "timezone": "Europe/Dublin", "tax": ("VAT", 23.0, "included")},
+           "timezone": "Europe/Dublin"},
     "DE": {"label": "Germany", "region": "eu", "currency_code": "EUR", "currency": "€",
-           "timezone": "Europe/Berlin", "tax": ("VAT", 19.0, "included")},
+           "timezone": "Europe/Berlin"},
     "FR": {"label": "France", "region": "eu", "currency_code": "EUR", "currency": "€",
-           "timezone": "Europe/Paris", "tax": ("VAT", 20.0, "included")},
+           "timezone": "Europe/Paris"},
     "ES": {"label": "Spain", "region": "eu", "currency_code": "EUR", "currency": "€",
-           "timezone": "Europe/Madrid", "tax": ("IVA", 21.0, "included")},
+           "timezone": "Europe/Madrid"},
     "IT": {"label": "Italy", "region": "eu", "currency_code": "EUR", "currency": "€",
-           "timezone": "Europe/Rome", "tax": ("IVA", 22.0, "included")},
+           "timezone": "Europe/Rome"},
     "NL": {"label": "Netherlands", "region": "eu", "currency_code": "EUR", "currency": "€",
-           "timezone": "Europe/Amsterdam", "tax": ("BTW", 21.0, "included")},
+           "timezone": "Europe/Amsterdam"},
     "BE": {"label": "Belgium", "region": "eu", "currency_code": "EUR", "currency": "€",
-           "timezone": "Europe/Brussels", "tax": ("BTW", 21.0, "included")},
+           "timezone": "Europe/Brussels"},
     "PT": {"label": "Portugal", "region": "eu", "currency_code": "EUR", "currency": "€",
-           "timezone": "Europe/Lisbon", "tax": ("IVA", 23.0, "included")},
+           "timezone": "Europe/Lisbon"},
     "AT": {"label": "Austria", "region": "eu", "currency_code": "EUR", "currency": "€",
-           "timezone": "Europe/Vienna", "tax": ("VAT", 20.0, "included")},
+           "timezone": "Europe/Vienna"},
     "PL": {"label": "Poland", "region": "eu", "currency_code": "PLN", "currency": "zł",
-           "timezone": "Europe/Warsaw", "tax": ("VAT", 23.0, "included")},
+           "timezone": "Europe/Warsaw"},
     "SE": {"label": "Sweden", "region": "eu", "currency_code": "SEK", "currency": "kr",
-           "timezone": "Europe/Stockholm", "tax": ("VAT", 25.0, "included")},
+           "timezone": "Europe/Stockholm"},
+    "AU": {"label": "Australia", "region": "au", "currency_code": "AUD", "currency": "$",
+           "timezone": "Australia/Sydney"},
+    "NZ": {"label": "New Zealand", "region": "au", "currency_code": "NZD", "currency": "$",
+           "timezone": "Pacific/Auckland"},
     "IN": {"label": "India", "region": "other", "currency_code": "INR", "currency": "₹",
-           "timezone": "Asia/Kolkata", "tax": ("GST", 18.0, "imposed")},
+           "timezone": "Asia/Kolkata"},
 }
+
+
+for _c, _d in COUNTRIES.items():
+    _d["tax"] = COUNTRY_TAX[_c]
 
 
 def country_defaults(country: Optional[str]) -> Optional[dict]:

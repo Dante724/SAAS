@@ -13,6 +13,7 @@ from backend.core import paging as _paging
 from backend.config import settings
 from backend.core.webhook_security import provider_secrets, require_signature
 from backend.db.database import get_db
+from backend.db.tenancy import set_tenant
 from backend.models import Employee, PaymentIntent
 from backend.services import payments as pay
 from backend.services.auth import assert_perm, get_current_employee, require_perm
@@ -144,6 +145,7 @@ async def mark_viewed(intent_id: str, request: Request, db: AsyncSession = Depen
     i = (await db.execute(select(PaymentIntent).where(PaymentIntent.id == intent_id))).scalar_one_or_none()
     if not i:
         raise HTTPException(404, "Intent not found")
+    set_tenant(db, i.org_id)   # the pay link is the credential: scope the request to its shop
     if i.viewed_at is None:
         i.viewed_at = now_utc()
     if i.status == "created":
@@ -184,6 +186,7 @@ async def simulate_pay(intent_id: str, db: AsyncSession = Depends(get_db)):
     i = (await db.execute(select(PaymentIntent).where(PaymentIntent.id == intent_id))).scalar_one_or_none()
     if not i:
         raise HTTPException(404, "Intent not found")
+    set_tenant(db, i.org_id)   # the pay link is the credential: scope the request to its shop
     if i.provider != "simulated":
         raise HTTPException(400, "This intent uses a live gateway; pay via its checkout URL")
     i = await pay.mark_succeeded(db, i)
@@ -200,6 +203,7 @@ async def refresh_intent_status(intent_id: str, request: Request, db: AsyncSessi
     intent = (await db.execute(select(PaymentIntent).where(PaymentIntent.id == intent_id))).scalar_one_or_none()
     if not intent:
         raise HTTPException(404, "Payment not found")
+    set_tenant(db, intent.org_id)   # the pay link is the credential: scope the request to its shop
     try:
         # At most one provider call per link every 5 seconds, however often the page polls.
         await ratelimit.aenforce("pay_refresh_poll", intent.id, 1, 5)
@@ -259,6 +263,7 @@ async def _require_square_signature(request: Request, raw: bytes, db: AsyncSessi
     else:
         secrets = [s for s in [settings.SQUARE_WEBHOOK_SIGNATURE_KEY] if s]
     _signature_check(secrets, _square_verified(request, raw, secrets), "Square")
+    set_tenant(db, org_id)   # verified as this shop's event: the rest of the request is scoped to it
 
 
 async def _require_stripe_signature(payload: bytes, sig: str, db: AsyncSession, org_id: Optional[str]) -> None:
@@ -267,6 +272,7 @@ async def _require_stripe_signature(payload: bytes, sig: str, db: AsyncSession, 
     else:
         secrets = [s for s in [settings.STRIPE_WEBHOOK_SECRET] if s]
     _signature_check(secrets, any(_verify_stripe_sig(payload, sig, s) for s in secrets), "Stripe")
+    set_tenant(db, org_id)   # verified as this shop's event: the rest of the request is scoped to it
 
 
 def _parse(raw: bytes) -> dict:

@@ -23,7 +23,7 @@ branch_labels = None
 depends_on = None
 
 
-def upgrade() -> None:
+def _create_idempotency_records() -> None:
     op.create_table(
         "idempotency_records",
         sa.Column("id", sa.String(), primary_key=True),
@@ -36,6 +36,12 @@ def upgrade() -> None:
     )
     op.create_index("ix_idempotency_records_org_id", "idempotency_records", ["org_id"])
     op.create_index("ix_idempotency_records_created_at", "idempotency_records", ["created_at"])
+
+
+def upgrade() -> None:
+    # The parity line's idem01 creates the same table (same columns); create it only once.
+    if not sa.inspect(op.get_bind()).has_table("idempotency_records"):
+        _create_idempotency_records()
 
     from backend.services.permissions import grant_go_codes
     conn = op.get_bind()

@@ -5,10 +5,10 @@ Accounts hold balances and gate which payment methods appear at checkout.
 Every money movement posts a Transaction. Closing a paid order posts an
 income transaction to the chosen account (or to client debt).
 """
-from datetime import datetime
+from datetime import datetime, timedelta
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from pydantic import BaseModel
 from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -635,6 +635,28 @@ async def post_order_payment(db, org_id, o, amount, acc, method, *, actor_id=Non
     return pays[0], fee
 
 
+# W3-C: the same payment for a job, into the same cashbox, this close together and without an
+# Idempotency-Key, is one click sent twice: the second is refused (as till returns are, #82). A
+# deliberate second payment comes from the payment dialog with its own key, so it goes through.
+_DOUBLE_CLICK_S = 10
+
+
+def _keyed(request) -> bool:
+    return bool(request is not None and (request.headers.get("Idempotency-Key") or "").strip())
+
+
+async def _refuse_double_click(db, org_id, order_id, account_id, amount) -> None:
+    """Called under the job's lock, so a second identical request sees the first one's posting."""
+    since = now_utc() - timedelta(seconds=_DOUBLE_CLICK_S)
+    hit = (await db.execute(select(Transaction.id).where(
+        Transaction.org_id == org_id, Transaction.account_id == account_id, Transaction.ref_type == "order",
+        Transaction.ref_id == order_id, Transaction.txn_type == "invoice_payment", Transaction.status == "active",
+        Transaction.amount == q2(abs(amount)), Transaction.created_at >= since).limit(1))).scalar_one_or_none()
+    if hit:
+        raise HTTPException(409, f"{q2(abs(amount)):.2f} was just taken for this job into this account. "
+                                 "If the customer is paying again, take it again in a moment.")
+
+
 @router.post("/orders/{order_id}/pay")
 async def pay_order(
     order_id: str,
@@ -643,14 +665,14 @@ async def pay_order(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_take_payments")),
 ):
-    # A retried tap with the same Idempotency-Key returns the first payment's answer: the row
+    # A retried click with the same Idempotency-Key returns the first payment's answer: the row
     # lock below only stops a second "pay the balance", not a part payment sent twice.
     from backend.services.idempotency import idem_begin
     claim = await idem_begin(db, current.org_id, request, "cash.pay_order")
     if claim.replay is not None:
         return claim.replay
     try:
-        result = await _pay_order(order_id, data, db, current)
+        result = await _pay_order(order_id, data, db, current, keyed=_keyed(request))
     except BaseException:
         await claim.release(db)
         raise
@@ -658,7 +680,8 @@ async def pay_order(
     return result
 
 
-async def _pay_order(order_id: str, data: OrderPaymentIn, db: AsyncSession, current: Employee):
+async def _pay_order(order_id: str, data: OrderPaymentIn, db: AsyncSession, current: Employee, *,
+                     keyed: bool = True):
     # Lock the order row so two concurrent "pay" requests serialize (Postgres) — combined with the
     # remaining<=0 guard below this prevents a double-click / webhook-race from double-posting a
     # payment. (with_for_update is a no-op on SQLite, which already serializes writes.)
@@ -711,6 +734,10 @@ async def _pay_order(order_id: str, data: OrderPaymentIn, db: AsyncSession, curr
     acc = (await db.execute(select(Account).where(Account.id == data.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
     if not acc:
         raise HTTPException(404, "Account not found")
+    if not keyed:
+        from backend.services.invoice_money import lock_order
+        await lock_order(db, o.id)
+        await _refuse_double_click(db, current.org_id, o.id, acc.id, amount)
 
     _pay, fee = await post_order_payment(db, current.org_id, o, amount, acc, data.method, actor_id=current.id)
     await log_system_event(db, current.org_id, "order", order_id,
@@ -731,20 +758,44 @@ class PrepayIn(BaseModel):
 async def prepay_order(
     order_id: str,
     data: PrepayIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
     """Take a prepayment on an order. Posts income to the chosen cashbox and
     records a Payment(kind=prepayment) that the close-window math subtracts. It lands on the
-    job's open invoice now, or on the job's next invoice when it gets one (G4)."""
+    job's open invoice now, or on the job's next invoice when it gets one (G4).
+    A double click with the same Idempotency-Key posts once and gets the first answer back."""
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "cash.prepay_order")
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        result = await _prepay_order(order_id, data, db, current, keyed=_keyed(request))
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
+
+
+async def _prepay_order(order_id: str, data: PrepayIn, db: AsyncSession, current: Employee, *,
+                        keyed: bool = True):
     o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
+    # The job's lock (a real one on SQLite too), then a fresh read: two prepayments at once both
+    # count in prepayment_total below.
+    from backend.services.invoice_money import lock_order
+    await lock_order(db, o.id)
+    await db.refresh(o)
     if data.amount <= 0:
         raise HTTPException(400, "Amount must be positive")
     acc = (await db.execute(select(Account).where(Account.id == data.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
     if not acc:
         raise HTTPException(404, "Account not found")
+    if not keyed:
+        await _refuse_double_click(db, current.org_id, o.id, acc.id, data.amount)
     sales = (await db.execute(select(CashFlowItem).where(CashFlowItem.org_id == current.org_id, CashFlowItem.name == "Sales"))).scalar_one_or_none()
     await post_transaction(db, current.org_id, acc.id, "invoice_payment", abs(data.amount),
                            cash_flow_item_id=sales.id if sales else None,
@@ -765,9 +816,10 @@ async def prepay_order(
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "order", order_id, f"Prepayment {data.amount} to {acc.name}")
     from backend.services.invoice_money import apply_order_money, notify_payment_received
-    from backend.services.order_money import cancel_open_pay_links
+    from backend.services.order_money import cancel_open_pay_links, resync_write_off
     await db.flush()
     await apply_order_money(db, o)
+    await resync_write_off(db, o, current.id)   # paid after dropping: less is written off
     await cancel_open_pay_links(db, o)
     await db.commit()
     await notify_payment_received(db, current.org_id, [order_id], current.id)
@@ -781,39 +833,40 @@ async def refund_overpayment(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
-    """Refund an overpayment (prepayments exceeded the order total) from a cashbox."""
+    """Give money back on a job without changing its price, from a cashbox: an overpayment
+    (prepayments exceeded the order total) or (W3-C) a deposit on a job that isn't closed yet —
+    the customer pays at pickup instead. The job's total stays; only what was paid goes down. It's
+    a refund document like any other (listed under refunds, deletable). A goodwill refund or
+    returned goods go through /api/returns/refunds, which also lowers the bill."""
     await assert_perm(db, current, "can_create_returns")   # paying money back, not just seeing it
     # Row lock (B11): two refunds at once both read the same overpayment and paid it out twice.
     o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
                           .with_for_update())).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
+    from backend.services.invoice_money import lock_order
+    await lock_order(db, o.id)          # SQLite ignores FOR UPDATE: two refunds queue up here
+    await db.refresh(o)
     acc = (await db.execute(select(Account).where(Account.id == data.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
     if not acc:
         raise HTTPException(404, "Account not found")
-    # Only money actually received beyond the total can go back out — this endpoint used to pay
-    # any amount (or a negative one) out of the till.
+    # Only money actually received beyond the total, or a deposit still held on an open job, can go
+    # back out here — this endpoint used to pay any amount (or a negative one) out of the till.
+    from backend.routers.returns import book_refund, refundable_without_discount
     from backend.services.order_money import overpaid
     excess = await overpaid(db, o)
+    room = max(excess, await refundable_without_discount(db, o))
     if data.amount is None or data.amount <= 0:
         raise HTTPException(400, "Refund amount must be positive")
-    if data.amount > excess + 0.005:
-        raise HTTPException(400, f"Only the overpayment can be refunded here ({excess:g})")
-    await post_transaction(db, current.org_id, acc.id, "expense", -abs(data.amount),
-                           comment=f"Refund overpayment {o.order_number}", ref_type="order",
-                           ref_id=order_id, employee_id=current.id)
-    refund_pay = Payment(invoice_id=None, order_id=order_id, client_id=o.client_id, method=data.method,
-                         kind="refund", account_id=acc.id, amount=data.amount, received_by_id=current.id,
-                         reference="Overpayment refund")
-    db.add(refund_pay)
-    if o.client_id:
-        await db.flush()
-        from backend.services.ledger import post_contact_ledger
-        await post_contact_ledger(db, current.org_id, o.client_id, "refund", abs(data.amount),
-                                  note=f"Refund for {o.order_number}", ref_type="payment",
-                                  ref_id=refund_pay.id, created_by_id=current.id)
+    if data.amount > room + 0.005:
+        raise HTTPException(400, f"Only the overpayment can be refunded here ({excess:g})" if room <= excess + 0.005
+                                 else f"Only the deposit still held can be refunded here ({room:g})")
+    what = "Overpayment refund" if data.amount <= excess + 0.005 else "Deposit refund"
+    refund = await book_refund(db, current, o, acc, data.amount, reason=what, reference=what)
+    from backend.routers.feed import log_system_event
+    await log_system_event(db, current.org_id, "order", order_id, f"{what} {data.amount:g} from {acc.name}")
     await db.commit()
-    return {"ok": True, "refunded": data.amount}
+    return {"ok": True, "refunded": data.amount, "id": refund.id}
 
 
 class SubInvoiceIn(BaseModel):
@@ -824,8 +877,10 @@ class SubInvoiceIn(BaseModel):
 async def create_sub_invoice(
     order_id: str,
     data: SubInvoiceIn,
+    response: Response,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_view_finance")),
+    # the same right as POST /finance/invoices: invoicing isn't taking money
+    current: Employee = Depends(require_perm("can_create_invoices")),
 ):
     """Create an invoice billing a SUBSET of the order's lines (multi-invoice per order)."""
     from backend.models import OrderLine
@@ -833,9 +888,23 @@ async def create_sub_invoice(
     if not o:
         raise HTTPException(404, "Order not found")
     lines = (await db.execute(select(OrderLine).where(OrderLine.order_id == order_id))).scalars().all()
-    chosen = [l for l in lines if not data.line_ids or l.id in data.line_ids]
+    # A line is billed once. No lines picked = bill the rest (every line not on an invoice yet).
+    from backend.services.invoice_money import billed_on, lock_order
+    await lock_order(db, o.id)
+    whole, billed = await billed_on(db, o.id)
+    if whole:
+        if data.line_ids:
+            raise HTTPException(409, f"This job is billed in full on invoice {whole.invoice_number}, "
+                                     "which follows the job. Edit that invoice instead.")
+        response.status_code = 200
+        return {"ok": True, "invoice_id": whole.id, "invoice_number": whole.invoice_number,
+                "total": whole.total, "existing": True}
+    again = [l for l in lines if l.id in billed and l.id in (data.line_ids or [])]
+    if again:
+        raise HTTPException(409, f"'{again[0].description}' is already on invoice {billed[again[0].id].invoice_number}.")
+    chosen = [l for l in lines if (l.id in data.line_ids if data.line_ids else l.id not in billed)]
     if not chosen:
-        raise HTTPException(400, "No lines selected")
+        raise HTTPException(400, "Every line on this job is already billed" if billed else "No lines selected")
     await _check_backdating(db, current.org_id)
     from backend.services.invoice_money import new_invoice
     inv = await new_invoice(db, org_id=current.org_id, orders=[o], lines=chosen)
@@ -847,9 +916,12 @@ async def create_sub_invoice(
 async def list_order_invoices(
     order_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(require_perm("can_view_finance")),
+    current: Employee = Depends(require_perm("can_view_invoices")),   # as GET /finance/invoices
 ):
     await assert_perm(db, current, "can_view_invoices_tab")   # the work order's Invoices and payments tab
+    if not (await db.execute(select(Order.id).where(
+            Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none():
+        raise HTTPException(404, "Order not found")   # payments below aren't org-filtered
     linked = select(InvoiceOrder.invoice_id).where(InvoiceOrder.order_id == order_id)   # shared invoices too
     invs = (await db.execute(select(Invoice).where(
         (Invoice.order_id == order_id) | Invoice.id.in_(linked), Invoice.org_id == current.org_id)

@@ -324,12 +324,20 @@ async def archive_blocker(db, org_id: str, part: Part) -> Optional[str]:
     work order / estimate, or on an open purchase order would vanish from those screens
     (and its stock from the books) — sell, write off or remove it there first.
     inventory.py / sales.py archive paths should call this too."""
-    from backend.models import Order, OrderLine, POLine, PurchaseOrder, StockLevel
-    from backend.services.po_links import _closed_keys
+    from backend.models import StockLevel
     on_hand = (await db.execute(select(func.coalesce(func.sum(StockLevel.qty_available), 0)).where(
         StockLevel.part_id == part.id))).scalar() or 0
     if on_hand > 0:
         return f"{on_hand:g} still in stock. Sell or write them off first"
+    return await in_use_blocker(db, org_id, part)
+
+
+async def in_use_blocker(db, org_id: str, part: Part) -> Optional[str]:
+    """The open work order / estimate / purchase order part of archive_blocker. Archive paths
+    that write the remaining stock off ask this first, so a product that can't be archived
+    keeps its stock."""
+    from backend.models import Order, OrderLine, POLine, PurchaseOrder
+    from backend.services.po_links import _closed_keys
     closed = await _closed_keys(db, org_id)
     jobs = (await db.execute(select(Order.order_number, Order.is_estimate).join(
         OrderLine, OrderLine.order_id == Order.id).where(

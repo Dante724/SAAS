@@ -1,7 +1,7 @@
 // F1 scan-to-cart: a keyboard-wedge burst or Enter in the search box adds the exact match,
 // several matches open a picker, and no match says so.
-import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
-import { render, screen, fireEvent, act, within } from "@testing-library/react";
+import { describe, it, expect, vi, beforeAll, beforeEach, afterEach } from "vitest";
+import { render, screen, fireEvent, createEvent, act, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
 
 vi.mock("../../components/Shell", () => ({ M: ({ n }: { n: string }) => <i data-icon={n} />, default: ({ children }: any) => <div>{children}</div> }));
@@ -34,6 +34,12 @@ const plainQuote = (b: any): Record<string, unknown> => {
 };
 let quote = plainQuote;
 
+// jsdom parses its whole default (UA) stylesheet the first time anything calls getComputedStyle
+// (~200ms of CPU when idle, several times that on a loaded machine). ByRole queries and every
+// user-event pointer action call it, so that one-off cost used to land inside whichever test's
+// first findBy/waitFor window (1000ms) came first. Pay it here, outside any assertion timeout.
+beforeAll(() => { getComputedStyle(document.body); });
+
 beforeEach(() => {
   lookups = [];
   calls = [];
@@ -65,23 +71,40 @@ beforeEach(() => {
 });
 afterEach(() => { vi.unstubAllGlobals(); vi.mocked(scanBeep).mockClear(); });
 
+// The wedge detector compares each key's event.timeStamp with the previous one (max 50ms gap).
+// jsdom stamps events with the wall clock, so a GC pause or a descheduled worker on a loaded
+// machine could split one "scan" into two slow bursts and the scan was silently dropped. The
+// scanner's keys are stamped explicitly instead, 5ms apart: a burst is a burst however busy the CPU.
+// The clock starts at "now" (jsdom stamps real events with Date.now()) and only moves forward, so a
+// scan never looks like it came before, or glued onto, a real keypress.
+let scanClock = 0;
+function scanKey(key: string) {
+  const ev = createEvent.keyDown(window, { key });
+  Object.defineProperty(ev, "timeStamp", { value: (scanClock += 5) });
+  fireEvent(window, ev);
+}
 function wedge(code: string) {
   // A scanner types every key within a few milliseconds, then Enter.
-  for (const ch of code) fireEvent.keyDown(window, { key: ch });
-  fireEvent.keyDown(window, { key: "Enter" });
+  scanClock = Math.max(scanClock, Date.now());
+  for (const ch of code) scanKey(ch);
+  scanKey("Enter");
 }
 
 const cartLines = () => screen.queryAllByTestId("cart-line");
+// Polling uses Testing Library's waitFor, not vi.waitFor: every failed getByRole() poll inside
+// vi.waitFor built the full "Here are the accessible roles" + DOM dump error (60-100ms of CPU per
+// poll, every 50ms, while waiting out the 150ms quote debounce), starving the very render it was
+// waiting for under load. RTL's waitFor skips those diagnostics while polling and runs in act().
 
 describe("SalesPOS scan-to-cart", () => {
   it("a wedge scan of an exact barcode adds the product, and a second scan adds one more", async () => {
     render(<SalesPOS />);
     await act(async () => wedge("0123456789012"));
-    await vi.waitFor(() => expect(cartLines()).toHaveLength(1));
+    await waitFor(() => expect(cartLines()).toHaveLength(1));
     expect(within(cartLines()[0]).getByText("USB-C cable")).toBeInTheDocument();
     expect(scanBeep).toHaveBeenCalledWith(true);
     await act(async () => wedge("0123456789012"));
-    await vi.waitFor(() => expect(within(cartLines()[0]).getByText("2")).toBeInTheDocument());
+    await waitFor(() => expect(within(cartLines()[0]).getByText("2")).toBeInTheDocument());
     expect(cartLines()).toHaveLength(1);
     expect(lookups).toEqual(["0123456789012", "0123456789012"]);
   });
@@ -95,7 +118,7 @@ describe("SalesPOS scan-to-cart", () => {
     await u.type(search, "555{Enter}");
     const dlg = await screen.findByRole("dialog", { name: "Choose a product" });
     await u.click(within(dlg).getByText("Case blue"));
-    await vi.waitFor(() => expect(cartLines()).toHaveLength(1));
+    await waitFor(() => expect(cartLines()).toHaveLength(1));
     expect(within(cartLines()[0]).getByText("Case blue")).toBeInTheDocument();
     expect(screen.queryByRole("dialog", { name: "Choose a product" })).not.toBeInTheDocument();
   });
@@ -162,6 +185,108 @@ describe("SalesPOS look", () => {
   });
 });
 
+// B5: Charge is enabled once the server has priced the cart (POST /sales/quote).
+const chargeBtn = () => screen.getByRole("button", { name: /^Charge [^o]/ });
+
+describe("SalesPOS charge", () => {
+  it("sends an Idempotency-Key and re-sends it when a failed charge is retried", async () => {
+    const keys: (string | undefined)[] = [];
+    let fail = true;
+    const base = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (url: any, init?: RequestInit) => {
+      if (init?.method === "POST" && new URL(url, "http://x").pathname === "/api/sales") {
+        keys.push((init.headers as Record<string, string>)["Idempotency-Key"]);
+        if (fail) { fail = false; return reply({ detail: "timeout" }, 504); }
+        return reply({ id: "s1", sale_number: "S-1", total: 9.5, paid: true, redeemed: {} }, 201);
+      }
+      return base(url, init);
+    });
+    const u = userEvent.setup();
+    render(<SalesPOS />);
+    await act(async () => wedge("0123456789012"));
+    await waitFor(() => expect(cartLines()).toHaveLength(1));
+    await waitFor(() => expect(chargeBtn()).toBeEnabled());
+    await u.click(chargeBtn());
+    await waitFor(() => expect(keys).toHaveLength(1));
+    await waitFor(() => expect(chargeBtn()).toBeEnabled());
+    await u.click(chargeBtn());
+    await waitFor(() => expect(keys).toHaveLength(2));
+    expect(keys[0]).toMatch(/^web-/);
+    expect(keys[1]).toBe(keys[0]);                       // the retry can't make a second sale
+    await waitFor(() => expect(cartLines()).toHaveLength(0));   // the sale went through once
+  });
+});
+
+// QA F2: a serialized phone needs its IMEI before the till charges, and the sale carries it.
+describe("SalesPOS serialized items", () => {
+  const PHONE = { id: "ph", name: "iPhone 13", sku: "IP13", barcode: "1900000000001", sell_price: 400, qty_available: 2, serialized: true };
+  const IMEI = "352841012345067";
+  function catchSales() {
+    const bodies: any[] = [];
+    const base = vi.mocked(fetch).getMockImplementation()!;
+    vi.mocked(fetch).mockImplementation(async (url: any, init?: RequestInit) => {
+      const path = new URL(url, "http://x").pathname;
+      if (init?.method === "POST" && path === "/api/sales") {
+        bodies.push(JSON.parse(String(init.body)));
+        return reply({ id: "s1", sale_number: "S-1", total: 400, paid: true, redeemed: {} }, 201);
+      }
+      if (path === "/api/serials") return reply({ items: [{ serial_number: IMEI, status: "in_stock" }] });
+      return base(url, init);
+    });
+    return bodies;
+  }
+
+  it("asks for the IMEI before charging, then sends it with the line", async () => {
+    lookupItems["1900000000001"] = [PHONE];
+    const bodies = catchSales();
+    const u = userEvent.setup();
+    render(<SalesPOS />);
+    await act(async () => wedge("1900000000001"));
+    await waitFor(() => expect(cartLines()).toHaveLength(1));
+    await waitFor(() => expect(chargeBtn()).toBeEnabled());
+    await u.click(chargeBtn());
+    await waitFor(() => expect(screen.getByText(/Scan the IMEI \/ serial of each iPhone 13/)).toBeInTheDocument());
+    expect(bodies).toHaveLength(0);                              // nothing sold without the unit
+    const box = screen.getByLabelText("IMEI or serial for iPhone 13");
+    await u.type(box, `${IMEI}{Enter}`);
+    expect(within(cartLines()[0]).getByText(IMEI)).toBeInTheDocument();
+    await waitFor(() => expect(chargeBtn()).toBeEnabled());
+    await u.click(chargeBtn());
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0].lines[0]).toMatchObject({ ref_id: "ph", qty: 1, serials: [IMEI] });
+  });
+
+  it("scanning the phone's IMEI puts that unit on the line", async () => {
+    lookupItems[IMEI] = [{ ...PHONE, matched_on: "serial", serial: IMEI }];
+    const bodies = catchSales();
+    const u = userEvent.setup();
+    render(<SalesPOS />);
+    await act(async () => wedge(IMEI));
+    await waitFor(() => expect(cartLines()).toHaveLength(1));
+    expect(within(cartLines()[0]).getByText(IMEI)).toBeInTheDocument();
+    expect(screen.queryByLabelText("IMEI or serial for iPhone 13")).toBeNull();
+    await act(async () => wedge(IMEI));                       // the same phone scanned again: still one
+    expect(within(cartLines()[0]).getByText("1")).toBeInTheDocument();
+    await waitFor(() => expect(chargeBtn()).toBeEnabled());
+    await u.click(chargeBtn());
+    await waitFor(() => expect(bodies).toHaveLength(1));
+    expect(bodies[0].lines[0].serials).toEqual([IMEI]);
+  });
+
+  it("tapping the phone, then scanning its IMEI, fills the line instead of adding a second phone", async () => {
+    products = [PHONE];
+    lookupItems[IMEI] = [{ ...PHONE, matched_on: "serial", serial: IMEI }];
+    catchSales();
+    const u = userEvent.setup();
+    render(<SalesPOS />);
+    await u.click(await screen.findByRole("button", { name: /iPhone 13/ }));
+    await waitFor(() => expect(cartLines()).toHaveLength(1));
+    await act(async () => wedge(IMEI));
+    await waitFor(() => expect(within(cartLines()[0]).getByText(IMEI)).toBeInTheDocument());
+    expect(within(cartLines()[0]).getByText("1")).toBeInTheDocument();
+  });
+});
+
 describe("SalesPOS charges what the button says (B5)", () => {
   const CASE = { id: "p68", name: "Phone case", sku: "CASE", sell_price: 68, qty_available: 9 };
   const charge = () => screen.getByRole("button", { name: /^Charge (?!on reader)/ });
@@ -179,12 +304,12 @@ describe("SalesPOS charges what the button says (B5)", () => {
     await u.clear(discount); await u.type(discount, "3");
     await u.click(screen.getByRole("button", { name: /Rewards/ }));
     await u.type(screen.getByLabelText("Coupon code"), "save10");
-    await vi.waitFor(() => expect(charge()).toHaveTextContent("Charge $58.20"));
+    await waitFor(() => expect(charge()).toHaveTextContent("Charge $58.20"));
     expect(charge()).toBeEnabled();
     expect(lastQuote()).toMatchObject({ discount: 3, coupon_code: "SAVE10" });
     expect(screen.getByText("Coupon")).toBeInTheDocument();
     await u.click(charge());
-    await vi.waitFor(() => expect(calls.some((c) => c.path === "/api/sales" && c.method === "POST")).toBe(true));
+    await waitFor(() => expect(calls.some((c) => c.path === "/api/sales" && c.method === "POST")).toBe(true));
     const sent = calls.find((c) => c.path === "/api/sales" && c.method === "POST")!.body;
     expect(sent.expected_due).toBeCloseTo(58.2);    // the server refuses to save any other amount
   });
@@ -197,11 +322,11 @@ describe("SalesPOS charges what the button says (B5)", () => {
     const u = userEvent.setup();
     render(<SalesPOS />);
     await u.click(await screen.findByText("Phone case"));
-    await vi.waitFor(() => expect(charge()).toHaveTextContent("Charge $74.80"));
+    await waitFor(() => expect(charge()).toHaveTextContent("Charge $74.80"));
     expect(screen.getByText("VAT 10%")).toBeInTheDocument();
     await u.click(screen.getByRole("button", { name: /Rewards/ }));
     await u.type(screen.getByLabelText("Gift card"), "gc-1");
-    await vi.waitFor(() => expect(charge()).toHaveTextContent("Charge $44.80"));
+    await waitFor(() => expect(charge()).toHaveTextContent("Charge $44.80"));
     expect(screen.getByText("Paid by gift card")).toBeInTheDocument();
   });
 
@@ -225,10 +350,10 @@ describe("SalesPOS charges what the button says (B5)", () => {
     await u.click(await screen.findByText("USB-C cable"));
     const given = await screen.findByLabelText("Cash received");
     await u.type(given, "5");
-    await vi.waitFor(() => expect(charge()).toBeDisabled());
+    await waitFor(() => expect(charge()).toBeDisabled());
     expect(screen.getByText(/less than the total/)).toBeInTheDocument();
     await u.clear(given); await u.type(given, "20");
-    await vi.waitFor(() => expect(screen.getByTestId("change-due")).toHaveTextContent("$10.50"));
+    await waitFor(() => expect(screen.getByTestId("change-due")).toHaveTextContent("$10.50"));
     expect(charge()).toBeEnabled();
   });
 
@@ -237,7 +362,7 @@ describe("SalesPOS charges what the button says (B5)", () => {
     const u = userEvent.setup();
     render(<SalesPOS />);
     await u.click(await screen.findByText("USB-C cable"));
-    await vi.waitFor(() => expect(charge()).toBeEnabled());
+    await waitFor(() => expect(charge()).toBeEnabled());
     await u.click(screen.getByRole("button", { name: /Charge on reader/ }));
     await u.click(await screen.findByText("Decline card"));
     expect(cartLines()).toHaveLength(1);                         // nothing lost
@@ -245,20 +370,20 @@ describe("SalesPOS charges what the button says (B5)", () => {
     expect(within(box).getByText(/S-1 isn't paid yet/)).toBeInTheDocument();
     expect(within(box).getByRole("button", { name: "Try the card again" })).toBeInTheDocument();
     await u.click(within(box).getByRole("button", { name: /Take payment/ }));
-    await vi.waitFor(() => expect(calls.some((c) => c.path === "/api/sales/s1/pay")).toBe(true));
+    await waitFor(() => expect(calls.some((c) => c.path === "/api/sales/s1/pay")).toBe(true));
     expect(calls.find((c) => c.path === "/api/sales/s1/pay")!.body).toMatchObject({ account_id: "till" });
-    await vi.waitFor(() => expect(cartLines()).toHaveLength(0));
+    await waitFor(() => expect(cartLines()).toHaveLength(0));
   });
 
   it("an approved card clears the cart only once it is paid", async () => {
     const u = userEvent.setup();
     render(<SalesPOS />);
     await u.click(await screen.findByText("USB-C cable"));
-    await vi.waitFor(() => expect(charge()).toBeEnabled());
+    await waitFor(() => expect(charge()).toBeEnabled());
     await u.click(screen.getByRole("button", { name: /Charge on reader/ }));
     await screen.findByRole("dialog", { name: "Card reader" });
     expect(cartLines()).toHaveLength(1);
     await u.click(screen.getByText("Approve card"));
-    await vi.waitFor(() => expect(cartLines()).toHaveLength(0));
+    await waitFor(() => expect(cartLines()).toHaveLength(0));
   });
 });

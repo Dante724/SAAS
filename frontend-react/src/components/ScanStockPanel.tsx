@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
 import { M } from "./Shell";
 import { api } from "../api/client";
-import { loadFailed } from "../lib/notice";
 import ScanButton from "./ScanButton";
+import { loadFailed } from "../lib/notice";
 
 /**
  * Phase 2 — hands-free stock posting. Pick a location + movement type once, then
@@ -18,6 +18,7 @@ export default function ScanStockPanel({ onClose, onPosted }: { onClose: () => v
   const [mode, setMode] = useState<"receive" | "writeoff" | "adjust">("receive");
   const [qty, setQty] = useState(1);
   const [code, setCode] = useState("");
+  const [serial, setSerial] = useState("");    // QA F2: a serialized item coming in names its IMEI / serial
   const [log, setLog] = useState<Row[]>([]);
   const ref = useRef<HTMLInputElement | null>(null);
 
@@ -33,13 +34,15 @@ export default function ScanStockPanel({ onClose, onPosted }: { onClose: () => v
     const c = (scanned ?? code).trim();
     if (!c || !loc) return;
     try {
-      const r = await api.post<any>("/inventory/scan-adjust", { code: c, location_id: loc, qty, movement_type: mode });
+      const sn = serial.trim();
+      const r = await api.post<any>("/inventory/scan-adjust", { code: c, location_id: loc, movement_type: mode,
+        ...(sn ? { qty: 1, serials: [sn] } : { qty }) });
       setLog((l) => [{ code: c, ok: true, msg: `${r.part_name} → ${r.qty_available} on hand` }, ...l].slice(0, 40));
       onPosted?.();
     } catch (e: any) {
       setLog((l) => [{ code: c, ok: false, msg: e.message || "No match" }, ...l].slice(0, 40));
     }
-    setCode(""); ref.current?.focus();
+    setCode(""); setSerial(""); ref.current?.focus();
   }
 
   const verb = { receive: "Receive", writeoff: "Write off", adjust: "Count / adjust" }[mode];
@@ -66,7 +69,11 @@ export default function ScanStockPanel({ onClose, onPosted }: { onClose: () => v
               <input ref={ref} value={code} onChange={(e) => setCode(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") post(); }} placeholder="SKU / barcode" className="glass-input rounded-xl px-3 py-2 text-xs w-full font-mono" /></div>
             <ScanButton title="Scan with camera" onScan={(c) => { setCode(c); post(c); }} />
           </div>
-          <div className="text-[11px] text-ink-tertiary">{verb} {qty} to the selected location per scan. Enter posts each one.</div>
+          {mode !== "writeoff" && (
+            <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">IMEI / serial (serial-tracked items)</label>
+              <input value={serial} onChange={(e) => setSerial(e.target.value)} placeholder="Fill in before scanning a phone's barcode" className="glass-input rounded-lg px-3 py-2 text-sm w-full font-mono" /></div>
+          )}
+          <div className="text-[11px] text-ink-tertiary">{verb} {qty} to the selected location per scan. Enter posts each one. To write off a phone, scan its IMEI.</div>
           {log.length > 0 && (
             <div className="max-h-52 overflow-y-auto rounded-lg border border-slate-200/70 divide-y divide-slate-100">
               {log.map((r, i) => (

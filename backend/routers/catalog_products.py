@@ -22,13 +22,14 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import (
-    Part, StockLevel, StockMovement, StockItemBatch, SerializedItem,
+    Part, StockLevel, SerializedItem,
     Category, Employee,
 )
 from backend.services.auth import assert_perm, get_current_employee, require_perm
 from backend.routers.forms import resolve_custom_data
-from backend.services import product_codes, stock_rows
-from backend.services.money import q2
+from backend.services import product_codes
+from backend.services.money import MAX_MONEY, q2
+from backend.services.owned import get_owned_or_404, require_unique_name
 from backend.services.redact import can_see_costs, drop_cost_fields
 from backend.core.likes import contains as _contains
 from backend.core.spreadsheet import (
@@ -119,6 +120,11 @@ async def create_category(data: CategoryIn, db: AsyncSession = Depends(get_db),
     name = (data.name or "").strip()
     if not name:
         raise HTTPException(400, "Category name is required")
+    if data.parent_id:
+        await get_owned_or_404(db, Category, data.parent_id, current.org_id, "parent category")
+    await require_unique_name(db, Category, current.org_id, name, "category", extra=(
+        Category.entity_type == data.entity_type, Category.parent_id.is_(None) if not data.parent_id
+        else Category.parent_id == data.parent_id))
     c = Category(org_id=current.org_id, entity_type=data.entity_type, name=name,
                  parent_id=data.parent_id or None, auto_deduct=data.auto_deduct,
                  template_key=(data.template_key or None))
@@ -141,6 +147,13 @@ async def update_category(cid: str, data: CategoryPatch, db: AsyncSession = Depe
     if not c:
         raise HTTPException(404, "Category not found")
     sent = data.model_fields_set
+    new_name = data.name.strip() if data.name is not None and data.name.strip() else c.name
+    parent = (data.parent_id or None) if "parent_id" in sent else c.parent_id
+    # a rename or a move must not land next to a sibling of the same name; re-saving as-is is fine
+    await require_unique_name(db, Category, current.org_id, new_name, "category", exclude_id=c.id,
+                              current_name=c.name if parent == c.parent_id else None, extra=(
+        Category.entity_type == c.entity_type,
+        Category.parent_id.is_(None) if not parent else Category.parent_id == parent))
     if data.name is not None and data.name.strip():
         old = c.name
         c.name = data.name.strip()
@@ -154,6 +167,7 @@ async def update_category(cid: str, data: CategoryPatch, db: AsyncSession = Depe
             raise HTTPException(400, "A category can't be its own parent")
         # 144bc security: block moving a node under one of its own descendants (would orphan a subtree)
         if data.parent_id:
+            await get_owned_or_404(db, Category, data.parent_id, current.org_id, "parent category")
             all_cats = (await db.execute(select(Category).where(Category.org_id == current.org_id))).scalars().all()
             kids: dict = {}
             for x in all_cats:
@@ -251,7 +265,9 @@ async def _stock_for(db, part_id, warehouse_id=None, wh_location_id=None):
 @router.get("/products")
 async def list_products(search: Optional[str] = None, category_id: Optional[str] = None,
                         warehouse_id: Optional[str] = None, include_variants: bool = False,
+                        q_: Optional[str] = Query(None, alias="q"),     # QA E6: `q` is the usual name
                         db: AsyncSession = Depends(get_db), current: Employee = Depends(get_current_employee)):
+    search = search or q_
     q = select(Part).where(Part.org_id == current.org_id, Part.active == True)  # noqa: E712
     if not include_variants:
         q = q.where(Part.parent_id.is_(None))  # base products only
@@ -344,9 +360,9 @@ class ProductIn(BaseModel):
     default_supplier_id: Optional[str] = None
     category_id: Optional[str] = None
     uom: str = "pcs"
-    cost_price: float = Field(0.0, ge=0)
-    sell_price: float = Field(0.0, ge=0)
-    repair_price: Optional[float] = Field(None, ge=0)   # price on a work order; blank/0 = store price
+    cost_price: float = Field(0.0, ge=0, lt=MAX_MONEY)     # W3-D: past the column is a 422, not a 500
+    sell_price: float = Field(0.0, ge=0, lt=MAX_MONEY)
+    repair_price: Optional[float] = Field(None, ge=0, lt=MAX_MONEY)   # price on a work order; blank/0 = store price
     min_stock: int = Field(0, ge=0)
     serialized: bool = False
     expiry_tracking: bool = False
@@ -447,6 +463,8 @@ async def create_product(data: ProductIn, db: AsyncSession = Depends(get_db),
                                              barcode=data.barcode, code=data.code, barcode_type=data.barcode_type)
     from backend.routers.forms import check_entity_required
     await check_entity_required(db, current.org_id, "product", data)   # built-ins the product form requires
+    if data.category_id:
+        await get_owned_or_404(db, Category, data.category_id, current.org_id, "category")
     payload = data.model_dump()
     payload["mpn"] = await _checked_mpn(db, current.org_id, data.mpn)
     payload["image_data"] = _checked_image(data.image_data)
@@ -460,7 +478,7 @@ async def create_product(data: ProductIn, db: AsyncSession = Depends(get_db),
     await _sync_part_category_name(db, current.org_id, p)
     await product_codes.fill_new_product(db, p)
     db.add(p); await commit_mpn_safe(db); await db.refresh(p)
-    return _ser_product(p)
+    return _with_barcode_warning(_ser_product(p), p.barcode)
 
 
 class BulkProductsIn(BaseModel):
@@ -469,6 +487,7 @@ class BulkProductsIn(BaseModel):
     category_id: Optional[str] = None
     price_pct: Optional[float] = None  # adjust by +/- percent
     price_set: Optional[float] = None  # set absolute price
+    write_off_remaining: bool = False  # delete: write off what's still in stock, then archive
 
 
 @router.post("/products/bulk")
@@ -480,11 +499,17 @@ async def bulk_products(data: BulkProductsIn, db: AsyncSession = Depends(get_db)
         raise HTTPException(422, "No products selected")
     if data.action == "delete":
         await assert_perm(db, current, "can_delete_products")
+    if data.action == "category" and data.category_id:
+        await get_owned_or_404(db, Category, data.category_id, current.org_id, "category")
     parts = (await db.execute(select(Part).where(
         Part.id.in_(data.ids), Part.org_id == current.org_id))).scalars().all()
     n = 0
     blocked: list[str] = []
-    blocked_items: list[dict] = []
+    blocked_items: list[dict] = []    # why each was kept: {id, name, reason, in_stock}
+
+    def _keep(p, reason, in_stock=0.0):
+        blocked.append(p.name)
+        blocked_items.append({"id": p.id, "name": p.name, "reason": reason, "in_stock": in_stock})
     for p in parts:
         if data.action == "category":
             p.category_id = data.category_id or None
@@ -497,14 +522,27 @@ async def bulk_products(data: BulkProductsIn, db: AsyncSession = Depends(get_db)
         elif data.action == "delete":
             # 144co: never silently orphan a job kit — skip parts still in use, report them.
             from backend.services.catalog_links import catalog_usage
-            reason = None
             if await catalog_usage(db, current.org_id, "product", p.id):
-                reason = "used in a job kit — remove it there first"
-            else:   # in stock, or on an open job / estimate / PO: it would vanish from those
-                reason = await product_codes.archive_blocker(db, current.org_id, p)
+                _keep(p, "Used in a bundle or job kit. Remove it there first")
+                continue
+            # on an open job / estimate / PO: it would vanish from those screens. Checked before any
+            # write-off, so a product that stays active keeps its stock.
+            reason = await product_codes.in_use_blocker(db, current.org_id, p)
             if reason:
-                blocked.append(f"{p.name} ({reason})")
-                blocked_items.append({"id": p.id, "name": p.name, "reason": reason})
+                _keep(p, reason)
+                continue
+            from backend.services import stock_archive        # still in stock: same rule as inventory
+            if data.write_off_remaining:
+                try:   # per product: a write-off refused halfway leaves nothing behind
+                    async with db.begin_nested():
+                        await stock_archive.write_off_remaining(db, current, p)
+                except HTTPException as e:
+                    _keep(p, e.detail)
+                    continue
+            if await stock_archive.archive_blocker(db, current.org_id, p):
+                have = float((await db.execute(select(func.coalesce(func.sum(StockLevel.qty_available), 0))
+                                                .where(StockLevel.part_id == p.id))).scalar() or 0)
+                _keep(p, f"{have:g} still in stock", in_stock=have)
                 continue
             p.active = False
         else:
@@ -761,6 +799,8 @@ async def update_product(pid: str, data: ProductIn, db: AsyncSession = Depends(g
     # a product photo vanishing). The same goes for cost when it isn't sent.
     payload = data.model_dump(exclude_unset=True)
     payload["name"] = data.name
+    if payload.get("category_id"):
+        await get_owned_or_404(db, Category, payload["category_id"], current.org_id, "category")
     if "image_data" in payload:
         payload["image_data"] = _checked_image(payload["image_data"])
     if "repair_price" in payload:
@@ -796,7 +836,7 @@ async def update_product(pid: str, data: ProductIn, db: AsyncSession = Depends(g
     if "category_id" in payload:
         await _sync_part_category_name(db, current.org_id, p)
     await commit_mpn_safe(db); await db.refresh(p)
-    return _ser_product(p)
+    return _with_barcode_warning(_ser_product(p), p.barcode if "barcode" in payload else None)
 
 
 # ── Variants ─────────────────────────────────────────────────────────────────
@@ -804,8 +844,8 @@ class VariantIn(BaseModel):
     name: Optional[str] = None        # defaults to "<base> (<attrs>)"
     sku: Optional[str] = None
     barcode: Optional[str] = None
-    sell_price: Optional[float] = None
-    cost_price: Optional[float] = None
+    sell_price: Optional[float] = Field(None, ge=0, lt=MAX_MONEY)
+    cost_price: Optional[float] = Field(None, ge=0, lt=MAX_MONEY)
     variant_attrs: dict               # {"Size":"L","Color":"Red"}
 
 
@@ -858,6 +898,15 @@ from backend.services import barcode_types as _bt  # noqa: E402
 
 BARCODE_TYPES = tuple(_bt.TYPES)
 _TYPES_MSG = "type must be one of " + "|".join(BARCODE_TYPES)
+
+
+def _with_barcode_warning(out: dict, barcode) -> dict:
+    """QA E5: a GTIN-length barcode with a bad check digit is saved, with a `warnings` note."""
+    from backend.services.scan_codes import gtin_warning
+    w = gtin_warning(barcode)
+    if w:
+        out = {**out, "warnings": [w]}
+    return out
 
 
 def _checked_barcode(kind, value):
@@ -1044,25 +1093,30 @@ async def write_off(pid: str, data: WriteOffIn, db: AsyncSession = Depends(get_d
             from backend.services.serial_intake import matches as _sn_matches
             si = (await db.execute(select(SerializedItem).where(
                 SerializedItem.part_id == pid, _sn_matches(SerializedItem.serial_number, sn),
-                SerializedItem.status == "in_stock"))).scalars().first()
+                SerializedItem.status == "in_stock",
+                SerializedItem.location_id == data.location_id))).scalars().first()   # QA F2: here, not elsewhere
             if not si:
-                raise HTTPException(404, f"Serial '{sn}' not in stock")
+                raise HTTPException(404, f"Serial '{sn}' not in stock here")
             si.status = "written_off"
             from backend.services import serial_log
             serial_log.record(db, si, "written_off", ref_type="product_write_off",
                               label=(getattr(data, "reason", None) or "Written off"), actor_id=current.id)
-            done.append((sn, si.bin_id))
-        for _sn, unit_bin in done:      # out of the unit's own bin first; never below zero
-            have, _res = await stock_rows.totals(db, pid, data.location_id)
-            if have > 0:
-                try:
-                    await stock_rows.draw(db, pid, data.location_id, min(1, have), bin_id=unit_bin)
-                except stock_rows.NotEnoughStock:
-                    pass      # taken by a concurrent request: nothing left to clamp, as before
-        done = [sn for sn, _b in done]
-        qty = len(done)
-        db.add(StockMovement(part_id=pid, location_id=data.location_id, movement_type="writeoff",
-                             qty=qty, ref_type="writeoff", created_by_id=current.id))
+            done.append(si)
+        # one write-off path (services/stock_writeoff): out of the unit's own bin and its own cost
+        # layer, logged as an outflow (it was +qty here)
+        from backend.services import stock_writeoff
+        qty = 0
+        for si in done:
+            try:
+                await stock_writeoff.write_off(db, part=p, location_id=data.location_id, qty=1,
+                                               created_by_id=current.id, bin_id=si.bin_id, batch_id=si.batch_id)
+                qty += 1
+            except HTTPException as e:
+                if e.status_code != 409:
+                    raise
+                # the unit was in stock but the location's count was already 0 (taken by a concurrent
+                # request, or older data): nothing left to draw, as before
+        done = [si.serial_number for si in done]
         await db.commit()
         return {"ok": True, "written_off": done, "qty": qty}
 
@@ -1070,28 +1124,11 @@ async def write_off(pid: str, data: WriteOffIn, db: AsyncSession = Depends(get_d
     qty = data.qty or 0
     if qty <= 0:
         raise HTTPException(400, "Provide a positive qty to write off")
-    have, _res = await stock_rows.totals(db, pid, data.location_id)
-    if have < qty:
-        raise HTTPException(409, f"Only {have:g} in stock at this location")
-    # consume cost layers: FEFO when expiry tracking is on, else FIFO
-    batches = (await db.execute(select(StockItemBatch).where(
-        StockItemBatch.part_id == pid, StockItemBatch.location_id == data.location_id,
-        StockItemBatch.qty_remaining > 0).order_by(
-        StockItemBatch.expiry_date.asc().nullslast() if p.expiry_tracking
-        else StockItemBatch.received_at.asc()))).scalars().all()
-    remaining = qty
-    for b in batches:
-        if remaining <= 0:
-            break
-        take = min(float(b.qty_remaining), remaining)
-        b.qty_remaining = float(b.qty_remaining) - take
-        remaining -= take
-    try:
-        await stock_rows.draw(db, pid, data.location_id, qty)
-    except stock_rows.NotEnoughStock as e:
-        raise HTTPException(409, f"Only {e.have:g} in stock at this location")
-    db.add(StockMovement(part_id=pid, location_id=data.location_id, movement_type="writeoff",
-                         qty=qty, ref_type="writeoff", created_by_id=current.id))
+    # one write-off path (services/stock_writeoff): refused beyond stock, FEFO/FIFO layers consumed,
+    # the movement logged as an outflow (it was +qty here)
+    from backend.services import stock_writeoff
+    out = await stock_writeoff.write_off(db, part=p, location_id=data.location_id, qty=qty,
+                                         created_by_id=current.id)
     await db.commit()
     return {"ok": True, "qty": qty, "method": "FEFO" if p.expiry_tracking else "FIFO",
-            "qty_available": (await stock_rows.totals(db, pid, data.location_id))[0]}
+            "qty_available": out["qty_available"]}

@@ -196,7 +196,8 @@ async def test_refund_void_undoes_cash_payment_ledger_and_clawback(client, db):
     rid = r.json()["id"]
     assert await _commission(db, org, tech) == 40
     assert await _account_balance(client, H, till) == pytest.approx(400)
-    assert await _client_balance(db, cl) == pytest.approx(client_before + 100)
+    # money given back is off the job too (QA F1), so the customer doesn't owe it
+    assert await _client_balance(db, cl) == pytest.approx(client_before)
 
     T = await _teammate(client, H, "can_delete_refunds")
     assert (await client.delete(f"/api/returns/refunds/{rid}", headers=T)).status_code == 403

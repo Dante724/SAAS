@@ -1,13 +1,13 @@
 """Import centre: import batches (audit + undo) and remembered column mappings.
 
 Revision ID: imc01
-Revises: mkw01
+Revises: aqp01
 """
 import sqlalchemy as sa
 from alembic import op
 
 revision = "imc01"
-down_revision = "mkw01"
+down_revision = "aqp01"
 branch_labels = None
 depends_on = None
 

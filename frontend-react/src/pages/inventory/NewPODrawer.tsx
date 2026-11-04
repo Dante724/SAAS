@@ -3,10 +3,10 @@ import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import DateField from "../../components/DateField";
 import { Product, Supplier, money } from "./types";
-import { FIELD_LABELS, FIELD_ORDER, fileToGrid, gridToRows, mapByHeader, type PasteField } from "./pasteMap";
-import { loadFailed } from "../../lib/notice";
 import PasteImport, { ImportedLine } from "./PasteImport";
 import { useMe } from "../../context/Me";
+import { loadFailed } from "../../lib/notice";
+import { FIELD_LABELS, FIELD_ORDER, fileToGrid, gridToRows, mapByHeader, type PasteField } from "./pasteMap";
 
 /** Create a purchase order: supplier + location + line items → POST /inventory/po.
  * This is the entry point that was missing — the toolbar button used to open the
@@ -90,7 +90,7 @@ export default function NewPODrawer({ products, onClose, onCreated }:
     const map = sheet.map.map((f, c) => (field !== "ignore" && f === field && c !== col ? "ignore" : f)) as PasteField[];
     map[col] = field;
     setSheet({ ...sheet, map });
-    api.put(`/imports/po/mapping${supQ(true)}`, { mapping: mapByHeader(sheet.headers, map) }).catch(() => { /* silent: remembering the column mapping is a convenience; this import is unaffected */ });
+    api.put(`/imports/po/mapping${supQ(true)}`, { mapping: mapByHeader(sheet.headers, map) }).catch(() => { /* silent: remembering the column mapping is only a convenience */ });
   }
   async function matchSheet() {
     if (!sheet) return;

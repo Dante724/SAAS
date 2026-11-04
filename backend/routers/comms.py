@@ -210,6 +210,7 @@ async def _twilio_request(request: Request, db, org_id: str, *, status_only: boo
         raise HTTPException(403, "Live telephony is turned off on this server")
     if not cfg.enabled and not status_only:
         raise HTTPException(409, "Telephony is turned off for this shop")
+    db.sync_session.info["tenant_org"] = org_id   # signed for this shop: scope the rest of the request
     return cfg, f
 
 
@@ -360,7 +361,8 @@ async def _task_for_missed_call(db, org_id, call, client_id):
     who = None
     name = call.from_number
     if client_id:
-        c = (await db.execute(select(Client).where(Client.id == client_id))).scalar_one_or_none()
+        c = (await db.execute(select(Client).where(
+            Client.id == client_id, Client.org_id == org_id))).scalar_one_or_none()
         if c:
             name = c.name
             who = c.manager_id      # the client's account manager, if they have one

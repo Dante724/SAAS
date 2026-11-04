@@ -35,7 +35,7 @@ async def test_birthday_sweep_sends_once(client, tenant, db):
     from backend.models import Client, NotificationLog, NotificationRule
     oid = await _org_id(client, tenant)
     from backend.services.dates import shop_today
-    today = await shop_today(db, oid)   # the shop's calendar day, which is what the sweep uses
+    today = await shop_today(db, oid)      # birthdays follow the shop's calendar
     bday = f"1990-{today.month:02d}-{today.day:02d}"
     cid = (await client.post("/api/clients",
                              json={"name": "Birthday Person", "email": "bday@example.com",

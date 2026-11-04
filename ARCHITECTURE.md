@@ -36,6 +36,23 @@ JWT `{sub: employee.id, org_id}`; `get_current_employee` resolves the employee,
 is scoped by `org_id`. `POST /api/auth/refresh` issues a sliding-session token
 for the PWA.
 
+Shop isolation is also enforced at the ORM layer (`backend/db/tenancy.py`). Once a
+request knows its shop (`session.info["tenant_org"]`: set by `get_current_employee`, API
+keys, and `set_tenant` in public pages, check-in and verified webhooks), the flush guard
+refuses writes to or references at another shop's rows. The read guard adds
+`org_id = :tenant` to every ORM SELECT and bulk `update(Model)` / `delete(Model)` on an
+`OrgScoped` model. Hand-written `org_id` filters stay; the guard is the safety net.
+
+- Legit cross-shop reads opt out with `.execution_options(skip_tenant_filter=True)` and a
+  reason comment.
+- Opt-out and pre-tenant reads select columns (ids, org ids), not whole rows.
+- Not covered:
+  - `text()` SQL, `from_statement`, plain-`Table` or `Model.__table__` statements, Core
+    `exists()` over table columns;
+  - `session.get` hits answered from the identity map.
+- `TENANT_READ_GUARD=report` turns filtering off and logs other-shop rows read instead (a
+  diagnostic and kill-switch).
+
 ## Frontends
 
 ### Desktop SPA (`/`)

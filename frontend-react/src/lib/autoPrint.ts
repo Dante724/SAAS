@@ -27,7 +27,8 @@ export function autoPrintForSale(saleId: string, print: (html: string) => void =
 }
 
 /** After a status change: a job that just closed prints what's switched on for closing. */
-export function autoPrintIfClosed(orderId: string, r: { is_closing?: boolean } | null | undefined,
+export function autoPrintIfClosed(orderId: string, r: { is_closing?: boolean; is_dropped?: boolean } | null | undefined,
                                   print: (html: string) => void = printHtmlInFrame): Promise<number> {
-  return r?.is_closing ? autoPrintForJob(orderId, "close", print) : Promise.resolve(0);
+  // A dropped job is written off, not finished: nothing prints by itself for it.
+  return r?.is_closing && !r?.is_dropped ? autoPrintForJob(orderId, "close", print) : Promise.resolve(0);
 }

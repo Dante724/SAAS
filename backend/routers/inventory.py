@@ -18,6 +18,7 @@ from backend.services.batching import names_by_id
 from backend.services.numbering import next_number
 from backend.services.redact import can_see_costs, drop_cost_fields
 from backend.services.dates import now_utc
+from backend.services.owned import get_owned_or_404, problem, require_location
 
 router = APIRouter(prefix="/api/inventory", tags=["inventory"])
 
@@ -36,6 +37,15 @@ class PartIn(BaseModel):
     min_order_qty: float = 0
     weight: Optional[float] = None       # kg — used for weight-basis freight allocation (144ar)
     dimensions: Optional[str] = None     # "LxWxH" cm
+    active: Optional[bool] = None        # false archives (refused while the product still has stock)
+    write_off_remaining: Optional[bool] = None   # with active=false: write the stock off, then archive
+
+    @field_validator("cost_price", "sell_price", "repair_price")
+    @classmethod
+    def _price_in_range(cls, v):
+        # W3-D: a price past the column (99999999999) was a Postgres numeric-overflow 500
+        from backend.services.money import check_money
+        return check_money(v, allow_negative=True)
 
 _ADJUST_TYPES = {"receive", "adjust", "writeoff"}
 
@@ -45,6 +55,11 @@ class StockAdjust(BaseModel):
     qty: float
     movement_type: str = "receive"  # receive|writeoff|adjust (transfers go through /transfers)
     note: Optional[str] = None
+    # What stock coming in cost (opening stock, a count-up). Omitted → the current average cost,
+    # else the catalog cost — never 0 by accident, which made COGS 0 and margins nonsense.
+    unit_cost: Optional[float] = Field(None, ge=0)
+    # QA F2: a serialized product's stock only rises with one serial / IMEI per unit coming in
+    serials: Optional[list[SerialStr]] = Field(None, max_length=500)
 
 
 # A stock quantity above this is almost certainly a barcode/serial typed into the
@@ -92,9 +107,11 @@ async def list_parts(
     device_id: Optional[str] = None,          # 144jt: flag/limit parts that fit this device
     compatible_only: bool = False,
     low_stock: bool = False, skip: int = 0, limit: int = Query(100, ge=1, le=500),
+    q_: Optional[str] = Query(None, alias="q"),   # QA E6: `q` accepted as another name for `search`
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
+    search = search or q_
     q = select(Part).where(Part.org_id == current.org_id, Part.active == True)
     if search:
         # Build 144an — POS findability: match name, SKU, barcode, or internal code.
@@ -184,6 +201,9 @@ async def create_part(
     payload = product_codes.clean_codes(data.model_dump())   # " abc-1 " and "abc-1" are one SKU
     if not payload.get("name"):
         raise HTTPException(422, "Name is required")
+    payload.pop("write_off_remaining", None)
+    if payload.get("active") is None:
+        payload.pop("active", None)
     if not await can_see_costs(db, current):
         drop_cost_fields(payload)
     part = Part(org_id=current.org_id, **payload)
@@ -193,7 +213,9 @@ async def create_part(
     db.add(part)
     await db.commit()
     await db.refresh(part)
-    return {"id": part.id, "name": part.name, "sku": part.sku}
+    from backend.services.scan_codes import gtin_warning
+    _bw = gtin_warning(part.barcode)
+    return {"id": part.id, "name": part.name, "sku": part.sku, **({"warnings": [_bw]} if _bw else {})}
 
 @router.get("/parts/{part_id}")
 async def get_part(
@@ -224,11 +246,29 @@ async def update_part(
     payload = product_codes.clean_codes(data.model_dump(exclude_unset=True))
     if "name" in payload and not payload["name"]:
         raise HTTPException(422, "Name is required")
+    write_off = bool(payload.pop("write_off_remaining", None))
     if not await can_see_costs(db, current):
         drop_cost_fields(payload)
+    if "active" in payload:
+        if payload["active"] is None:
+            payload.pop("active")
+        elif payload["active"] is False and part.active:
+            from backend.services import stock_archive
+            why = await product_codes.in_use_blocker(db, current.org_id, part)   # open job / estimate / PO
+            if why:
+                raise HTTPException(409, f"Can't archive “{part.name}”: it is {why}. Remove it there first.")
+            if write_off:      # one step: what's left on the shelf is written off, then archived
+                await stock_archive.write_off_remaining(db, current, part)
+            why = await stock_archive.archive_blocker(db, current.org_id, part)
+            if why:
+                raise HTTPException(409, f"Can't archive “{part.name}”: {why}, "
+                                         "or archive with write_off_remaining.")
+    checks = set(payload)
+    if payload.get("active") and not part.active:
+        checks |= {"name", "sku", "barcode", "code"}     # coming back: its identity must be free again
     await product_codes.ensure_identity_free(
-        db, current.org_id, exclude_part_id=part.id, fields=set(payload), **{
-            k: payload.get(k) for k in ("name", "sku", "barcode", "code")})
+        db, current.org_id, exclude_part_id=part.id, fields=checks, **{
+            k: payload.get(k, getattr(part, k)) for k in ("name", "sku", "barcode", "code")})
     for k, v in payload.items():
         setattr(part, k, v)
     await db.commit()
@@ -241,43 +281,67 @@ async def adjust_stock(
     current: Employee = Depends(require_perm("can_manage_inventory")),
 ):
     _guard_qty(data.qty)
-    # A manual adjustment is always a positive count of units moving in the named direction: a
-    # negative "receive" used to take stock out (and a negative write-off put it back in).
-    if not data.qty or data.qty <= 0:
+    # Receive and write-off are a positive count of units moving in the named direction (a negative
+    # "receive" used to take stock out, and a negative write-off put it back in). A correction
+    # ("adjust") can go either way: down goes out through the write-off path below.
+    if not data.qty or (data.qty < 0 and data.movement_type != "adjust"):
         raise HTTPException(422, "Quantity must be greater than zero")
     if data.movement_type not in _ADJUST_TYPES:
         raise HTTPException(422, "movement_type must be one of: " + ", ".join(sorted(_ADJUST_TYPES)))
     result = await db.execute(select(Part).where(Part.id == part_id, Part.org_id == current.org_id))
-    if not result.scalar_one_or_none():
+    part = result.scalar_one_or_none()
+    if not part:
         raise HTTPException(404, "Part not found")
+    stock_rows.check_whole(part, data.qty)
     # Build 89: the warehouse must permit this action, and this employee must be
     # allowed to perform it here (per-employee access beats the role-level scope).
     from backend.services import warehouses as _wh
     _action = "writeoff" if data.movement_type == "writeoff" else \
               "transfer" if data.movement_type == "transfer" else "post"
+    await require_location(db, current.org_id, data.location_id)
     _w = await _wh.guard_action(db, current, _action, location_id=data.location_id)
 
-    if data.movement_type in ("receive", "adjust"):
-        # Into the location's main row; a first receipt creates it tagged with the warehouse it came through.
-        has_main = any(r.bin_id is None for r in await stock_rows.rows(db, part_id, data.location_id))
-        await stock_rows.add(db, part_id, data.location_id, data.qty,
-                             warehouse_id=None if has_main or not _w else _w.id)
-    moved = data.qty
-    if data.movement_type == "writeoff":
-        # Never below zero (the old clamp): take what is there, across bins — and log exactly that,
-        # as a negative movement, so the movement history adds up to on-hand.
-        await stock_rows.rows(db, part_id, data.location_id, lock=True)
-        have, _res = await stock_rows.totals(db, part_id, data.location_id)
-        drawn = min(data.qty, max(have, 0))
-        try:
-            await stock_rows.draw(db, part_id, data.location_id, drawn)
-        except stock_rows.NotEnoughStock:
-            raise HTTPException(409, "Stock changed while writing off — retry")
-        moved = -drawn
+    if data.movement_type in ("receive", "adjust") and data.qty > 0:
+        # Stock coming in is a receipt like any other: quantity, movement, FIFO layer and moving
+        # average through the one inflow path, at a real cost.
+        cost = data.unit_cost if data.unit_cost is not None else (part.avg_cost or part.cost_price or 0)
+        from backend.services import serial_intake
+        serials = await serial_intake.validate_intake(db, current.org_id, part, data.qty, data.serials)
+        await stock_posting.apply_receipt_line(
+            db, org_id=current.org_id, part=part, location_id=data.location_id, qty=data.qty,
+            unit_cost=float(cost), created_by_id=current.id, ref_type=data.movement_type,
+            movement_type=data.movement_type, warehouse_id=_w.id if _w else None,
+            cost_known=data.unit_cost is not None, serials=serials or None)
+        warnings = serial_intake.take_warnings(db)
+        await db.commit()
+        return {"ok": True, "qty_available": (await stock_rows.totals(db, part_id, data.location_id))[0],
+                "warnings": warnings}
+    if data.movement_type == "writeoff" or (data.movement_type in ("receive", "adjust") and data.qty < 0):
+        # Out of stock the one way (services/stock_writeoff): refused beyond what is on hand, FIFO
+        # layers consumed, outflow logged negative. A write-off is sent as a positive quantity.
+        if data.movement_type == "writeoff" and data.qty < 0:
+            raise HTTPException(422, "Send the quantity to write off as a positive number")
+        from backend.services import stock_writeoff
+        if part.serialized:     # QA F2: which units left, so the units match the count
+            stock_rows.check_whole(part, data.qty)
+            if len(data.serials or []) != int(abs(data.qty)):
+                raise HTTPException(422, f"Scan the IMEI / serial of each “{part.name}” to write off "
+                                         f"({len(data.serials or [])} of {abs(data.qty):g} entered)")
+            out = await stock_writeoff.write_off_units(
+                db, part=part, location_id=data.location_id, serials=data.serials, created_by_id=current.id,
+                movement_type=data.movement_type, ref_type=data.movement_type,
+                warehouse_id=_w.id if _w else None, label=data.note)
+        else:
+            out = await stock_writeoff.write_off(
+                db, part=part, location_id=data.location_id, qty=abs(data.qty), created_by_id=current.id,
+                movement_type=data.movement_type, ref_type=data.movement_type,
+                warehouse_id=_w.id if _w else None)
+        await db.commit()
+        return {"ok": True, "qty_available": out["qty_available"]}
 
     movement = StockMovement(
         part_id=part_id, location_id=data.location_id,
-        movement_type=data.movement_type, qty=moved,
+        movement_type=data.movement_type, qty=data.qty,
         created_by_id=current.id,
         warehouse_id=_w.id if _w else None,
     )
@@ -292,6 +356,7 @@ class ScanAdjust(BaseModel):
     qty: float
     movement_type: str = "receive"    # receive|writeoff|adjust
     note: Optional[str] = None
+    serials: Optional[list[SerialStr]] = Field(None, max_length=500)   # QA F2: serialized products
 
 
 @router.post("/scan-adjust")
@@ -307,11 +372,21 @@ async def scan_adjust(
     if not code:
         raise HTTPException(422, "code required")
     part = await product_codes.find_by_code(db, current.org_id, code, active_only=False)
+    serials, qty = data.serials, data.qty
+    if not part:      # QA F2: a phone's IMEI names the product and the unit (writing one off, say)
+        from backend.services.serial_intake import matches as _sn_matches
+        unit = (await db.execute(select(SerializedItem).where(
+            SerializedItem.org_id == current.org_id, _sn_matches(SerializedItem.serial_number, code))
+            .order_by(SerializedItem.status != "in_stock"))).scalars().first()
+        if unit:
+            part = (await db.execute(select(Part).where(
+                Part.id == unit.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
+            serials, qty = [unit.serial_number], 1.0
     if not part:
         raise HTTPException(404, "No part matches that code")
     out = await adjust_stock(part.id, StockAdjust(
-        location_id=data.location_id, qty=data.qty,
-        movement_type=data.movement_type, note=data.note), db, current)
+        location_id=data.location_id, qty=qty,
+        movement_type=data.movement_type, note=data.note, serials=serials), db, current)
     return {**out, "part_id": part.id, "part_name": part.name, "sku": part.sku}
 
 
@@ -353,6 +428,7 @@ async def _do_posting(db, org_id, created_by_id, location_id, supplier_id, lines
             Part.id == pid, Part.org_id == org_id))).scalar_one_or_none()
         if not part:
             raise HTTPException(404, f"Part {pid} not found")
+        stock_rows.check_whole(part, qty)
         cost = float(_g(ln, "purchase_price") or 0.0)
         serials = await serial_intake.validate_intake(db, org_id, part, qty, _g(ln, "serials"), seen_serials)
         from backend.services import inventory_alerts as _alerts
@@ -399,8 +475,10 @@ async def create_posting(
         raise HTTPException(422, "Add at least one product line")
     posted, total_cost = await _do_posting(
         db, current.org_id, current.id, data.location_id, data.supplier_id, data.lines)
+    from backend.services import serial_intake
+    warnings = serial_intake.take_warnings(db)
     await db.commit()
-    return {"ok": True, "lines_posted": posted, "total_cost": total_cost}
+    return {"ok": True, "lines_posted": posted, "total_cost": total_cost, "warnings": warnings}
 
 
 # ── 144bk: bulk-posting front doors (preview + commit) + bulk qty adjust ──────
@@ -521,11 +599,10 @@ class CommitRow(BaseModel):
     qty: float = 1
     purchase_price: Optional[float] = None
     markup_pct: Optional[float] = None
-    serials: Optional[list[SerialStr]] = Field(None, max_length=1000)   # one per unit (serialized products)
+    serials: Optional[list[SerialStr]] = Field(None, max_length=1000)  # one per unit for serial-tracked products
     expiry_date: Optional[date] = None   # dates this delivery's batch (expiry-tracked products)
     lot: Optional[str] = Field(None, max_length=40)   # ii144b: batch / lot, e.g. GS1 (10) from the label
     bin_id: Optional[str] = None         # ii144c: put this row away into a bin
-
     @field_validator("qty")
     @classmethod
     def _qty_cap(cls, v):
@@ -636,7 +713,9 @@ async def commit_posting(
         Part.id.in_(ids), Part.org_id == current.org_id))).scalars()}
     if len(parts) != len(ids):
         raise HTTPException(404, "Product not found")
-    await _check_posting_serials(db, current, lines, parts, data.generate_serials)
+    if data.generate_serials:
+        # fill the missing serials; serial_intake.validate_intake (in _do_posting) still checks every one
+        await _check_posting_serials(db, current, lines, parts, True)
     posted, total_cost = await _do_posting(
         db, current.org_id, current.id, data.location_id, data.supplier_id, lines)
     from backend.routers.catalog_products import commit_mpn_safe
@@ -754,14 +833,17 @@ async def extract_posting(
     image_b64 = media = None
     if file is not None:
         raw = await file.read()
-        if len(raw) > 8 * 1024 * 1024:
-            raise HTTPException(413, "File too large (max 8 MB)")
+        if len(raw) > ai_service.MAX_IMAGE_BYTES:
+            raise HTTPException(413, "That file is too big (max about 3.5 MB). Try a smaller photo or PDF.")
         media = file.content_type or "image/jpeg"
         if not (media.startswith("image/") or media == "application/pdf"):
             raise HTTPException(422, "Upload an image or PDF of the invoice / packing slip")
         image_b64 = _base64.b64encode(raw).decode()
     if image_b64 is None and not (text and text.strip()):
         raise HTTPException(422, "Provide a file or some pasted text")
+    if text and len(text) > ai_service.MAX_TEXT_CHARS:
+        raise HTTPException(413, "That's too much text at once. Paste a shorter part, or split it in two.")
+    await ai_service.enforce_quota(current)
     return await ai_service.extract_posting_rows(text=text, image_b64=image_b64, media_type=media)
 
 
@@ -954,6 +1036,7 @@ async def part_batches(
     expiry. `in_stock` = qty still remaining; used by the All / In stock / Out of stock
     filter on the client."""
     from backend.models import Location, PurchaseOrder, StockItemBatch, Supplier, Warehouse
+    await get_owned_or_404(db, Part, part_id, current.org_id, "product")   # W3-D: not an empty 200
     rows = (await db.execute(
         select(StockItemBatch).where(
             StockItemBatch.org_id == current.org_id, StockItemBatch.part_id == part_id)
@@ -1214,16 +1297,16 @@ async def _po_part_weights(db, po_lines) -> dict:
     return {pid: (w or 0) for pid, w in rows}
 
 
-async def _resolve_received_workflow(db, org_id: str) -> Optional[str]:
-    """The org's 'Received' purchase-order workflow key, if the pipeline has one — used to
-    auto-advance the manual stage on a full receipt. Returns None (leave unchanged) when the
+async def _resolve_received_workflow(db, org_id: str, key: str = "po_received") -> Optional[str]:
+    """The org's purchase-order workflow `key` ('Received' by default), if the pipeline has one —
+    used to move the manual stage along with the receipt state (W3-D: ordered / partly received). Returns None (leave unchanged) when the
     org has renamed/removed that stage, so we never invent a key the pipeline doesn't define."""
     from backend.models import OrderStatus
     from backend.routers.statuses import ensure_seeded
     await ensure_seeded(db, org_id)
     return (await db.execute(select(OrderStatus.key).where(
         OrderStatus.org_id == org_id, OrderStatus.record_type == "purchase_order",
-        OrderStatus.active == True, OrderStatus.key == "po_received"))).scalars().first()  # noqa: E712
+        OrderStatus.active == True, OrderStatus.key == key))).scalars().first()  # noqa: E712
 
 
 def _ser_po(po: PurchaseOrder, lines, part_names, supplier=None) -> dict:
@@ -1308,7 +1391,16 @@ async def create_po(
     sup = (await db.execute(select(Supplier).where(
         Supplier.id == data.supplier_id, Supplier.org_id == current.org_id))).scalar_one_or_none()
     if not sup:
-        raise HTTPException(404, "Supplier not found")
+        # A contact ticked "is supplier" has its own supplier record — name it instead of a bare 404.
+        mirror = (await db.execute(select(Supplier).where(
+            Supplier.org_id == current.org_id, Supplier.client_id == data.supplier_id))).scalars().first()
+        if mirror:
+            raise problem(404, f"Pick {mirror.name} from the supplier list.",
+                          f"supplier_id {data.supplier_id!r} is a contact; its supplier id is {mirror.id!r} "
+                          f"(GET /api/suppliers)", supplier_id=mirror.id)
+        raise problem(404, "That supplier doesn't exist any more. Pick another.",
+                      f"No supplier with id {data.supplier_id!r} (GET /api/suppliers lists them)")
+    await require_location(db, current.org_id, data.location_id)
     total = sum(l.qty_ordered * l.unit_cost for l in data.lines)
     po = PurchaseOrder(supplier_id=data.supplier_id, location_id=data.location_id,
                        org_id=current.org_id, po_number=await next_number(db, current.org_id, "po"),
@@ -1323,7 +1415,7 @@ async def create_po(
         db.add(POLine(po_id=po.id, part_id=l.part_id, qty_ordered=l.qty_ordered, unit_cost=l.unit_cost))
     await db.commit()
     await db.refresh(po)
-    return {"ok": True, "po_id": po.id, "po_number": po.po_number}
+    return {"ok": True, "po_id": po.id, "id": po.id, "po_number": po.po_number}
 
 
 async def _load_po_scoped(db, org_id, po_id):
@@ -1391,12 +1483,13 @@ async def get_po(
         raise HTTPException(404, "Purchase order not found")
     lines = (await db.execute(select(POLine).where(POLine.po_id == po.id))).scalars().all()
     supplier = (await db.execute(select(Supplier).where(Supplier.id == po.supplier_id))).scalar_one_or_none()
-    parts = (await db.execute(select(Part).where(
-        Part.org_id == current.org_id, Part.id.in_({l.part_id for l in lines})))).scalars().all() if lines else []
-    part_names = {p.id: p.name for p in parts}
+    part_names = await names_by_id(db, Part.id, Part.name, [l.part_id for l in lines],
+                                   org_col=Part.org_id, org_id=current.org_id)
     out = _ser_po(po, lines, part_names, supplier=supplier)
     # 16b: receiving asks for a serial per unit on serial-tracked lines
-    serialized = {p.id for p in parts if p.serialized}
+    serialized = set((await db.execute(select(Part.id).where(
+        Part.org_id == current.org_id, Part.id.in_({l.part_id for l in lines}),
+        Part.serialized == True))).scalars().all()) if lines else set()  # noqa: E712
     for ln in out["lines"]:
         ln["serialized"] = ln["part_id"] in serialized
     return out
@@ -1601,7 +1694,7 @@ async def group_pos(
     total = sum(q * c for q, c in merged.values())
     newpo = PurchaseOrder(supplier_id=pos[0].supplier_id, location_id=pos[0].location_id,
                           org_id=current.org_id, po_number=await next_number(db, current.org_id, "po"),
-                          status="ordered", total=total, ordered_at=now_utc())
+                          status="ordered", workflow_status="po_ordered", total=total, ordered_at=now_utc())
     db.add(newpo)
     await db.flush()
     for pid, (q, c) in merged.items():
@@ -1725,11 +1818,15 @@ async def set_po_status(
             raise HTTPException(409, "Only an ordered PO with nothing received can return to draft")
         po.status = "draft"
         po.ordered_at = None
+        if po.workflow_status == "po_ordered":      # W3-D: the stage follows the receipt state
+            po.workflow_status = await _resolve_received_workflow(db, current.org_id, "po_draft") or po.workflow_status
     else:  # ordered
         if cur != "draft":
             raise HTTPException(409, f"Can't move a {cur} purchase order to ordered")
         po.status = "ordered"
         po.ordered_at = po.ordered_at or now_utc()
+        if (po.workflow_status or "po_draft") == "po_draft":
+            po.workflow_status = await _resolve_received_workflow(db, current.org_id, "po_ordered") or po.workflow_status
     from backend.services.po_links import notify_po_change
     await notify_po_change(db, current.org_id, po, "marked ordered" if po.status == "ordered" else f"back to {po.status}",
                            actor_id=current.id)
@@ -1820,6 +1917,7 @@ async def recost_po(
     # Freight that *should* now sit in the units already received, at current charges.
     target = 0.0
     per_part_target: dict[str, float] = {}
+    per_part_recvd: dict[str, float] = {}
     for pl in po_lines:
         recvd = pl.qty_received or 0
         if recvd <= 0:
@@ -1827,25 +1925,40 @@ async def recost_po(
         tline = per_unit_map.get(pl.id, 0.0) * recvd
         target += tline
         per_part_target[pl.part_id] = per_part_target.get(pl.part_id, 0.0) + tline
+        per_part_recvd[pl.part_id] = per_part_recvd.get(pl.part_id, 0.0) + recvd
 
     delta_total = q2(target - (po.freight_capitalised or 0))
     if abs(delta_total) < 0.005:
         await db.commit()
         return {"ok": True, "applied": 0.0, "note": "Already up to date"}
 
-    applied = 0.0
+    # QA fix D: the freight belongs to this PO's units only. What lands on stock is the share of its
+    # units still on hand; the share of units already sold / used is sunk COGS (`expensed`). Both
+    # count as accounted for, so the same bill recosted again applies nothing.
+    applied = expensed = 0.0
     scale = (delta_total / target) if target else 0
     for part_id, tpart in per_part_target.items():
-        part = (await db.execute(select(Part).where(Part.id == part_id))).scalar_one_or_none()
+        part = (await db.execute(select(Part).where(
+            Part.id == part_id, Part.org_id == current.org_id))).scalar_one_or_none()
         if not part:
             continue
         res = await stock_posting.apply_cost_adjustment(
             db, org_id=current.org_id, part=part, add_cost_total=q4(tpart * scale),
-            po_id=po_id, created_by_id=current.id)
+            po_id=po_id, created_by_id=current.id, received_qty=per_part_recvd.get(part_id))
         applied += res["applied"]
-    po.freight_capitalised = q2((po.freight_capitalised or 0) + applied)
+        expensed += res["expensed"]
+    po.freight_capitalised = q2((po.freight_capitalised or 0) + delta_total)
+    if abs(expensed) >= 0.005:
+        # The freight on units already sold or used can't go into stock any more — it's cost of goods
+        # sold now. Record it as a (non-cash) business expense so it reaches profit instead of vanishing.
+        from backend.models import Expense
+        from backend.services.dates import shop_today
+        db.add(Expense(org_id=current.org_id, location_id=po.location_id, category="Cost of goods sold",
+                       recorded_by_id=current.id, amount=q2(expensed),
+                       description=f"Freight on PO {po.po_number}: share of units already sold or used",
+                       expense_date=await shop_today(db, current.org_id)))
     await db.commit()
-    return {"ok": True, "applied": q2(applied), "delta_total": delta_total}
+    return {"ok": True, "applied": q2(applied), "expensed": q2(expensed), "delta_total": delta_total}
 
 
 class POInvoiceIn(BaseModel):
@@ -1925,6 +2038,8 @@ async def receive_po(
         # A draft hasn't been placed yet — receiving must follow "mark as ordered", so stock
         # can never land against an order that was never actually sent to the supplier.
         raise HTTPException(409, "Mark this purchase order as ordered before receiving")
+    if any(r.qty < 0 for r in data.lines):
+        raise HTTPException(422, "A received quantity can't be negative")   # W3-D: was a silent 200
     by_id = {r.po_line_id: r for r in data.lines}
     # Lock the PO's lines for this receive: two concurrent "receive the remainder" calls both read
     # the same qty_received and doubled stock and supplier AP. The loser now waits and sees 0 left.
@@ -1955,9 +2070,15 @@ async def receive_po(
             name = (await db.execute(select(Part.name).where(Part.id == pl.part_id))).scalar_one_or_none() or "a line"
             raise HTTPException(409, f"Receiving {recv:g} of {name}, but only {max(left, 0):g} "
                                      f"{'is' if left == 1 else 'are'} still to come on this order")
-        part = (await db.execute(select(Part).where(Part.id == pl.part_id))).scalar_one_or_none()
+        part = (await db.execute(select(Part).where(
+            Part.id == pl.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
         if not part:
+            if pl.part_id:
+                # A line pointing at a product this shop can't see (another shop's, from data
+                # written before the tenant guards): refuse rather than silently skip it.
+                raise HTTPException(404, "Referenced record not found")
             continue
+        stock_rows.check_whole(part, recv)
         plan.append((pl, recv, part, rline))
 
     # 16b: serial-tracked lines need one valid, unique serial per unit — checked for the whole
@@ -1984,7 +2105,9 @@ async def receive_po(
     for pl, recv, part, rline in plan:
         line_bin = (rline.bin_id if rline and rline.bin_id else data.bin_id)
         pl.qty_received = (pl.qty_received or 0) + recv
-        unit_cost = pl.unit_cost or part.cost_price or 0
+        # The PO line's price is what we pay — an explicit 0 (a free line) is 0, not the catalog cost;
+        # only a line with no price at all (older data) falls back to the catalog.
+        unit_cost = pl.unit_cost if pl.unit_cost is not None else (part.cost_price or 0)
         if allocate_freight:
             fpu = po_freight_pu.get(pl.id, 0.0)
             unit_cost = q4(unit_cost + fpu)
@@ -2000,7 +2123,8 @@ async def receive_po(
             db, org_id=current.org_id, part=part, location_id=po.location_id,
             qty=recv, unit_cost=unit_cost, created_by_id=current.id,
             ref_type="po", ref_id=po_id, bin_id=line_bin, supplier_id=po.supplier_id,
-            serials=checked_serials.get(pl.id) or None, create_batch=True)
+            serials=checked_serials.get(pl.id) or None, create_batch=True,
+            cost_known=pl.unit_cost is not None)
         # 144bo: reset low-stock dedupe + notify any job that was waiting on this part.
         after_oh = await _alerts.global_on_hand(db, part.id)
         await _alerts.on_received(db, current.org_id, part, before_oh, after_oh)
@@ -2035,6 +2159,11 @@ async def receive_po(
         # without stomping a deliberate manual choice.
         if fully and (po.workflow_status or "") not in ("po_received", "po_closed", "po_cancelled"):
             po.workflow_status = await _resolve_received_workflow(db, current.org_id)
+        elif not fully and (po.workflow_status or "po_draft") in ("po_draft", "po_ordered"):
+            # W3-D: a part receipt says so (older pipelines without that stage show Ordered)
+            po.workflow_status = (await _resolve_received_workflow(db, current.org_id, "po_partial")
+                                  or await _resolve_received_workflow(db, current.org_id, "po_ordered")
+                                  or po.workflow_status)
         # Buy-on-credit: increment the supplier's outstanding balance by what we received
         if po.on_credit and received_cost_now > 0:
             sup = (await db.execute(select(Supplier).where(Supplier.id == po.supplier_id))).scalar_one_or_none()
@@ -2065,9 +2194,10 @@ async def receive_po(
                 await adjust_supplier_ap(db, current.org_id, sup, ship_total, entry_type="posting",
                                          note=f"PO {po.po_number} shipment freight",
                                          ref_type="po", ref_id=po.id, created_by_id=current.id)
+    warnings = serial_intake.take_warnings(db)      # IMEI check digits that look wrong (QA wave 3)
     await db.commit()
     return {"ok": True, "status": po.status, "received_cost": received_cost_now,
-            "workflow_status": po.workflow_status}
+            "workflow_status": po.workflow_status, "warnings": warnings}
 
 
 @router.get("/parts/{part_id}/purchase-orders")
@@ -2077,6 +2207,8 @@ async def part_pos(
     current: Employee = Depends(get_current_employee),
 ):
     """POs this part is on (excluding closed) — shown in the product dialog."""
+    from backend.services.owned import get_owned_or_404
+    await get_owned_or_404(db, Part, part_id, current.org_id, "product")
     rows = (await db.execute(
         select(PurchaseOrder, POLine).join(POLine, POLine.po_id == PurchaseOrder.id)
         .join(Supplier, PurchaseOrder.supplier_id == Supplier.id)   # POs are scoped via their supplier
@@ -2227,6 +2359,7 @@ async def _forecast_suggestions(db, org_id: str):
         suggest = daily * (lead + COVER) - free - incoming.get(p.id, 0)
         if suggest <= 0:
             continue
+        suggest = stock_rows.order_qty(p, suggest)     # W3-D: whole items for a pcs product
         cost = p.avg_cost or p.cost_price or 0
         out.append({
             "part_id": p.id, "name": p.name, "sku": p.sku,
@@ -2235,7 +2368,7 @@ async def _forecast_suggestions(db, org_id: str):
             "free": q2(free), "daily_use": q2(daily),
             "days_left": round(free / daily, 1) if daily else None,
             "lead_days": lead, "on_order": q2(incoming.get(p.id, 0)),
-            "suggest_qty": round(suggest, 1), "unit_cost": q2(cost),
+            "suggest_qty": suggest, "unit_cost": q2(cost),
             "est_cost": q2(suggest * cost),
         })
     out.sort(key=lambda r: (r["days_left"] if r["days_left"] is not None else 1e9))
@@ -2301,7 +2434,7 @@ async def create_pos_from_forecast(
         total = sum(q * c for _, q, c in lines)
         po = PurchaseOrder(supplier_id=sup_id, location_id=loc_id,
                            org_id=current.org_id, po_number=await next_number(db, current.org_id, "po"),
-                           status="draft", total=total)
+                           status="draft", workflow_status="po_draft", total=total)
         db.add(po)
         await db.flush()
         for pid, q, c in lines:
@@ -2397,11 +2530,14 @@ async def list_conversions(
     # Same org scoping as the asset list (144do): the old `owner_type == "company"` arm listed
     # every shop's converted company assets.
     client_ids = select(Client.id).where(Client.org_id == current.org_id)
+    # skip_tenant_filter: the read guard hides org-less (legacy) devices from every shop; this
+    # narrow opt-out lists this shop's OWN clients' org-less devices too. The WHERE clause is the
+    # ownership proof: this shop's devices, or org-less ones whose client is this shop's.
     rows = (await db.execute(select(Device).where(
         Device.converted_to_part_id.is_not(None),
         or_(Device.org_id == current.org_id,
             and_(Device.org_id.is_(None), Device.client_id.in_(client_ids))))
-        .order_by(Device.id))).scalars().all()
+        .order_by(Device.id).execution_options(skip_tenant_filter=True))).scalars().all()
     # resolve the converted products so we can show their real sell price
     part_ids = [d.converted_to_part_id for d in rows if d.converted_to_part_id]
     parts = {}
@@ -2522,6 +2658,7 @@ class MarkupIn(BaseModel):
     markup_pct: float          # sell = cost * (1 + markup/100)
     part_ids: Optional[list[str]] = None   # default: every active product
     basis: str = "avg_cost"    # avg_cost|cost_price
+    allow_lower: bool = False  # W3-D: a price the markup would lower is kept unless this is set
 
 
 @router.post("/parts/apply-markup")
@@ -2532,7 +2669,8 @@ async def apply_markup(
 ):
     """Set sell prices from cost + markup (Orderry prices products by markup on
     posting). Uses the moving-average cost by default so pricing tracks what the
-    stock actually cost, not the last quoted price."""
+    stock actually cost, not the last quoted price. W3-D: a sell price is never lowered unless
+    `allow_lower` is set; the answer lists each price changed (from → to) and each one kept."""
     if data.markup_pct < 0:
         raise HTTPException(400, "markup_pct can't be negative")
     if data.basis not in ("avg_cost", "cost_price"):
@@ -2541,15 +2679,25 @@ async def apply_markup(
     if data.part_ids:
         q = q.where(Part.id.in_(data.part_ids))
     parts = (await db.execute(q)).scalars().all()
-    updated = []
+    updated, kept = [], []
     for p in parts:
         base = (p.avg_cost or p.cost_price or 0) if data.basis == "avg_cost" else (p.cost_price or 0)
         if not base:
             continue                      # no cost basis → leave the price alone
-        p.sell_price = q2(base * (1 + data.markup_pct / 100))
-        updated.append({"id": p.id, "name": p.name, "cost": base, "sell_price": p.sell_price})
+        old = q2(p.sell_price or 0)
+        new = q2(base * (1 + data.markup_pct / 100))
+        if new == old:
+            continue
+        if new < old and not data.allow_lower:
+            kept.append({"id": p.id, "name": p.name, "cost": base, "sell_price": old,
+                         "markup_price": new, "reason": "The markup price is lower than the current price"})
+            continue
+        p.sell_price = new
+        updated.append({"id": p.id, "name": p.name, "cost": base, "old_sell_price": old,
+                        "sell_price": new})
     await db.commit()
-    return {"ok": True, "updated": len(updated), "items": updated[:50]}
+    return {"ok": True, "updated": len(updated), "items": updated[:50],
+            "kept": len(kept), "kept_items": kept[:50]}
 
 
 # ── Build 96: bulk product actions ───────────────────────────────────────────
@@ -2558,6 +2706,7 @@ class BulkAction(BaseModel):
     action: str          # set_category|set_min_stock|adjust_price_pct|set_active|set_supplier
     value: Optional[str] = None      # category id / supplier id
     number: Optional[float] = None   # min stock / percent / 0|1
+    write_off_remaining: bool = False   # set_active=0: write off what's still in stock, then archive
 
 
 @router.post("/parts/bulk")
@@ -2584,7 +2733,11 @@ async def bulk_update_parts(
         raise HTTPException(404, "No matching products")
 
     changed = 0
+    blocked: list[dict] = []      # products the action was refused for, and why
     if data.action == "set_category":
+        if data.value:
+            from backend.models import Category
+            await get_owned_or_404(db, Category, data.value, current.org_id, "category")
         for p in parts:
             p.category_id = data.value
             changed += 1
@@ -2605,9 +2758,36 @@ async def bulk_update_parts(
                 p.sell_price = q2(p.sell_price * factor)
                 changed += 1
     elif data.action == "set_active":
+        if data.number is None and data.value is not None:     # sent as text, "0" / "1" (QA wave 3)
+            data.number = {"0": 0, "1": 1, "false": 0, "true": 1}.get(str(data.value).strip().lower())
         if data.number not in (0, 1):
             raise HTTPException(422, "set_active expects 0 or 1")
+        from backend.services import stock_archive
         for p in parts:
+            if not data.number and p.active:
+                why = await product_codes.in_use_blocker(db, current.org_id, p)   # open job / PO: keep its stock
+                if why:
+                    blocked.append({"id": p.id, "name": p.name, "reason": why})
+                    continue
+                if data.write_off_remaining:
+                    try:   # per product: a write-off refused halfway leaves nothing behind
+                        async with db.begin_nested():
+                            await stock_archive.write_off_remaining(db, current, p)
+                    except HTTPException as e:
+                        blocked.append({"id": p.id, "name": p.name, "reason": e.detail})
+                        continue
+                why = await stock_archive.archive_blocker(db, current.org_id, p)   # still stocked → not archived
+                if why:
+                    blocked.append({"id": p.id, "name": p.name, "reason": why})
+                    continue
+            elif data.number and not p.active:
+                try:
+                    await product_codes.ensure_identity_free(
+                        db, current.org_id, exclude_part_id=p.id, name=p.name, sku=p.sku,
+                        barcode=p.barcode, code=p.code)
+                except HTTPException as e:
+                    blocked.append({"id": p.id, "name": p.name, "reason": e.detail})
+                    continue
             p.active = bool(data.number)
             changed += 1
     elif data.action == "set_supplier":
@@ -2620,7 +2800,7 @@ async def bulk_update_parts(
         raise HTTPException(422, f"Unknown action “{data.action}”")
 
     await db.commit()
-    return {"ok": True, "changed": changed, "action": data.action}
+    return {"ok": True, "changed": changed, "action": data.action, "blocked": blocked}
 
 
 async def _atomic_add(db, obj, attr, delta, *, round_to=None):

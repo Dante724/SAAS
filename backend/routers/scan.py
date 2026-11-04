@@ -47,7 +47,7 @@ async def resolve(data: ScanIn, db: AsyncSession = Depends(get_db),
     code = scan.text.strip()           # ii144b: AIM prefix / control characters removed, GS1 read
     if not code:
         raise HTTPException(422, "code required")
-    res, by = await _resolve(db, current, code)
+    res, by = await _resolve(db, current, code, serial=scan.serial)
     if res.get("type") == "product":
         res["scan"] = scan.as_dict()   # ii144b: batch, expiry and serial from a GS1 label
     # every scan is a job lookup for the Go pilot report (the code itself isn't kept)
@@ -58,7 +58,7 @@ async def resolve(data: ScanIn, db: AsyncSession = Depends(get_db),
     return res
 
 
-async def _resolve(db: AsyncSession, current: Employee, code: str):
+async def _resolve(db: AsyncSession, current: Employee, code: str, serial: str | None = None):
     up = code.upper()
     org = current.org_id
 
@@ -109,6 +109,18 @@ async def _resolve(db: AsyncSession, current: Employee, code: str):
     if b:
         return _bin_hit(b)
 
+    # 3b) a serialized unit in stock (an IMEI / serial on the shelf) — the till already finds these
+    from backend.models import SerializedItem
+    from backend.services.serial_intake import matches as _sn_matches
+    si = (await db.execute(select(SerializedItem).where(
+        SerializedItem.org_id == org, SerializedItem.status.notin_(("sold", "written_off", "converted_to_asset")),
+        or_(*[_sn_matches(SerializedItem.serial_number, t) for t in {serial, code} if t])))).scalars().first()
+    if si:
+        p = (await db.execute(select(Part).where(Part.id == si.part_id, Part.org_id == org))).scalar_one_or_none()
+        if p:
+            return {"matched": True, "type": "product", "id": p.id, "route": "/inventory", "label": p.name,
+                    "serial_id": si.id, "serial": si.serial_number, "serial_status": si.status}, "part"
+
     # 4) asset — serial / imei / vin(upper) / hin(upper)
     from backend.services import identifiers as _ids
     conds = [col == v for col, v in ((Device.serial, _ids.normalize("serial", code)),
@@ -119,6 +131,18 @@ async def _resolve(db: AsyncSession, current: Employee, code: str):
     if d:
         label = " ".join(x for x in [d.brand, d.model] if x) or (d.serial or d.imei or "Asset")
         return {"matched": True, "type": "asset", "id": d.id, "route": "/assets", "label": label}, "asset"
+
+    # 5) a unit that has left the shop (sold, written off): the product, saying so. Scanning a sold
+    #    phone found nothing (QA wave 3); its history is what the desk wants for a warranty claim.
+    gone = (await db.execute(select(SerializedItem).where(
+        SerializedItem.org_id == org, SerializedItem.status.in_(("sold", "written_off", "converted_to_asset")),
+        or_(*[_sn_matches(SerializedItem.serial_number, t) for t in {serial, code} if t]))
+        .order_by(SerializedItem.created_at.desc()))).scalars().first()
+    if gone:
+        p = (await db.execute(select(Part).where(Part.id == gone.part_id, Part.org_id == org))).scalar_one_or_none()
+        if p:
+            return {"matched": True, "type": "product", "id": p.id, "route": "/inventory", "label": p.name,
+                    "serial_id": gone.id, "serial": gone.serial_number, "serial_status": gone.status}, "part"
 
     return {"matched": False, "code": code}, "none"
 
