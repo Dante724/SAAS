@@ -3482,7 +3482,7 @@ async def _archive_order(db, current, order_id, reason, do_refund):
     if order.archived:
         raise HTTPException(400, "Order is already archived")
 
-    from backend.models import Account, Payment, Refund
+    from backend.models import Account, Payment
 
     # Issued credit notes on this order's invoices put credit on the client's ledger; archiving
     # zeroes the order's charge, so leaving them would hand the client phantom credit. They are
