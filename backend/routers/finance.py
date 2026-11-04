@@ -419,8 +419,10 @@ async def create_invoice(
             Order.id.in_(order_ids), Order.org_id == current.org_id))).scalars().all())
         order_ids = [o for o in order_ids if o in valid]
 
-    discount_pct = data.discount_pct if data.discount_pct is not None else data.discount
-    tax_pct = data.tax_pct if data.tax_pct is not None else data.tax
+    # None when the caller sent no percentage: new_invoice then keeps the tax the jobs already
+    # carry instead of treating "no percentage" as "0% tax" (which billed a taxed job with tax 0).
+    discount_pct = data.discount_pct if data.discount_pct is not None else (data.discount or None)
+    tax_pct = data.tax_pct if data.tax_pct is not None else (data.tax or None)
     if not (0 <= (discount_pct or 0) <= 100) or (tax_pct or 0) < 0:
         raise HTTPException(422, "Discount must be 0–100% and tax can't be negative")
 
@@ -473,7 +475,7 @@ async def create_invoice(
     inv = await new_invoice(
         db, org_id=current.org_id, orders=[by_id[o] for o in order_ids], lines=rest,
         client_id=data.client_id, free_lines=[l.model_dump() for l in (data.lines or [])],
-        subtotal=data.subtotal or None, discount_pct=discount_pct or 0, tax_pct=tax_pct or 0,
+        subtotal=data.subtotal or None, discount_pct=discount_pct, tax_pct=tax_pct,
         display_mode=mode if mode in DISPLAY_MODES else "detailed",
         issued_at=_pdate(data.issued_at), due_at=_pdate(data.due_at),
         payer_client_id=data.payer_client_id, comment=(data.comment or "")[:1000])
