@@ -1737,7 +1737,9 @@ async def lookup_order(data: LookupIn, request: Request, db: AsyncSession = Depe
     # resolution via the shop slug (exactly like the /appointment/{slug} routes); when no
     # shop is supplied we fall back to scoping by the client whose phone actually
     # matches, so we still never return an order the caller can't prove is theirs.
-    q = select(Order).where(Order.order_number == num)
+    # Until the phone pins one shop this may span shops, so it reads columns only (ids, shop ids,
+    # phone digits): no other shop's order or client is loaded into the session (tenancy rule).
+    q = select(Order.id, Order.org_id, Order.client_id).where(Order.order_number == num)
     if data.shop:
         org = (await db.execute(select(_Org).where(_Org.subdomain == data.shop))).scalar_one_or_none()
         if not org:
@@ -1749,21 +1751,22 @@ async def lookup_order(data: LookupIn, request: Request, db: AsyncSession = Depe
         set_tenant(db, org.id)   # shop named: only its orders and clients are read from here on
     await aenforce("lookup_num", f"{org.id if data.shop else '*'}:{ip}:{num}", 5, 3600)
 
-    candidates = (await db.execute(q)).scalars().all()
-    order = None
-    for cand in candidates:
-        if not cand.client_id:
+    candidates = (await db.execute(q)).all()
+    match = None
+    for cand_id, cand_org, cand_client in candidates:
+        if not cand_client:
             continue
-        client = (await db.execute(select(Client).where(
-            Client.id == cand.client_id, Client.org_id == cand.org_id))).scalar_one_or_none()
-        on_file = "".join(ch for ch in (client.phone or "") if ch.isdigit())[-10:] if client else ""
+        on_file = (await db.execute(select(Client.phone).where(
+            Client.id == cand_client, Client.org_id == cand_org))).scalar_one_or_none()
+        on_file = "".join(ch for ch in (on_file or "") if ch.isdigit())[-10:]
         if on_file and on_file == phone:
-            order = cand   # the phone match pins the tenant when no slug was given
+            match = (cand_id, cand_org)   # the phone match pins the tenant when no slug was given
             break
-    if not order:
+    if not match:
         # same 404 whether the shop, number or phone is wrong — don't confirm a number exists
         raise HTTPException(404, "No matching order — check the number and phone")
-    set_tenant(db, order.org_id)
+    set_tenant(db, match[1])
+    order = (await db.execute(select(Order).where(Order.id == match[0]))).scalar_one()
 
     if not order.public_token:
         import secrets

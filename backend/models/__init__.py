@@ -29,7 +29,7 @@ from sqlalchemy.orm import Mapped, Session, mapped_column, relationship, validat
 
 from backend.core.client_source import current_client
 from backend.db.database import Base
-from backend.db.tenancy import OrgScoped, OrgScopedLegacyNull  # read-side shop isolation
+from backend.db.tenancy import OrgScoped  # read-side shop isolation
 from backend.db.secret_json import SecretFieldsJSON   # passcode-like custom fields, encrypted
 from backend.services.dates import now_utc
 
@@ -494,7 +494,7 @@ class ClientPortalLink(OrgScoped, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
-class Device(OrgScopedLegacyNull, Base):
+class Device(OrgScoped, Base):
     __tablename__ = "devices"
     # Intake / scan look a device up by identifier within the shop (values stored normalized,
     # see services/identifiers.py).
@@ -1379,7 +1379,7 @@ class Supplier(OrgScoped, Base):
     client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"), index=True)
     purchase_orders: Mapped[list["PurchaseOrder"]] = relationship(back_populates="supplier")
 
-class PurchaseOrder(OrgScopedLegacyNull, Base):
+class PurchaseOrder(OrgScoped, Base):
     __tablename__ = "purchase_orders"
     # PO numbers are per shop like order numbers (migration ls144r2): a global unique made the
     # second shop's first PO-00001 a 500.

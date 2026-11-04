@@ -29,19 +29,32 @@ Background jobs, migrations and the platform console don't set a tenant, so they
 original behaviour. Public token pages, check-in and inbound webhooks set it with ``set_tenant``
 as soon as they know which shop the request is for.
 
-**Reads (architecture hardening, tenant read guard).** Every model whose rows belong to exactly
-one shop is marked ``OrgScoped``. While a session has a tenant, every ORM SELECT gets
-``WHERE <model>.org_id = :tenant`` for each OrgScoped entity in it (joins and aliases included),
-so ``db.get(Part, other_shops_id)`` is None and a query that forgets its ``org_id`` filter
-returns only this shop's rows instead of every shop's. The hand-written filters stay: this is
-the safety net under them, not a replacement.
+**Reads and bulk writes (architecture hardening, tenant read guard).** Every model whose rows
+belong to one shop is marked ``OrgScoped``. While a session has a tenant, every ORM SELECT, and
+every ORM bulk ``update(Model)`` / ``delete(Model)``, gets ``WHERE <model>.org_id = :tenant`` for
+each OrgScoped entity in it (joins and aliases included). So ``db.get(Part, other_shops_id)`` is
+None, ``update(Client).where(Client.id == other_shops_id)`` changes 0 rows, and a query that
+forgets its ``org_id`` filter returns only this shop's rows. The hand-written filters stay: this
+is the safety net under them, not a replacement. A row whose org_id is NULL (devices and POs
+still allow it, from an old backfill: migration trg01 fills what it can) is visible to no shop.
 
 - Not filtered: sessions with no tenant; refreshes of rows already loaded; and statements that
   opt out with ``.execution_options(skip_tenant_filter=True)``. Each such call site says why
   (global uniqueness checks such as sign-in emails and order barcodes).
-- ``OrgScopedLegacyNull``: tables whose org_id is still nullable for an old backfill. Their
-  legacy NULL rows stay visible; another shop's rows don't.
 - ``UNSCOPED_ORG_TABLES`` lists the tables with an org_id that are deliberately not filtered.
+
+Known gaps (the guard only sees ORM entities, through SQL it actually runs):
+
+- ``text()`` SQL, ``select(...).from_statement(...)``, statements on plain ``Table`` objects or
+  ``Model.__table__`` columns, and Core constructs that never name the mapped class (a bare
+  ``exists()`` over table columns) are not filtered. The flush guard's owner lookup below
+  relies on exactly that (it reads ``target.c.org_id``) and also opts out explicitly.
+- ``session.get`` answers from the identity map without SQL, so a row loaded earlier in the same
+  session (before the tenant was set, or through an opt-out) comes back unfiltered.
+- Rule that follows: a read made through an opt-out, or before ``set_tenant``, selects columns
+  (ids, org ids), not whole rows, so no other shop's row lands in the session. The only entity
+  opt-outs are the two legacy device reads (industry scan-resolve, inventory conversions), whose
+  own WHERE clause limits them to this shop's rows and this shop's clients' org-less rows.
 - ``MODE`` (setting ``TENANT_READ_GUARD``): "enforce" (default), "report" (filter nothing, record
   and log every other-shop row loaded: a rollout/diagnostic switch) or "off".
 """
@@ -50,7 +63,7 @@ from functools import cache
 
 from fastapi import HTTPException
 from sqlalchemy import column as sa_column
-from sqlalchemy import event, inspect, or_, select
+from sqlalchemy import event, inspect, select
 from sqlalchemy.orm import Mapper, ORMExecuteState, Session, with_loader_criteria
 
 log = logging.getLogger("tekly.tenancy")
@@ -68,12 +81,6 @@ class _TemplateOrgId:
 class OrgScoped:
     """Marker mixin: every row belongs to exactly one shop through a non-null ``org_id``. Reads
     in a session with a tenant only see that shop's rows."""
-    org_id = _TemplateOrgId()
-
-
-class OrgScopedLegacyNull:
-    """Marker mixin: shop-owned rows whose ``org_id`` is still nullable (pre-backfill legacy).
-    Reads with a tenant see that shop's rows and the legacy NULL ones, never another shop's."""
     org_id = _TemplateOrgId()
 
 
@@ -110,27 +117,27 @@ def set_tenant(db, org_id) -> None:
 
 
 @event.listens_for(Session, "do_orm_execute")
-def _scope_reads_to_tenant(state: ORMExecuteState) -> None:
+def _scope_to_tenant(state: ORMExecuteState) -> None:
     tenant = state.session.info.get("tenant_org")
-    if not tenant or MODE != "enforce" or not state.is_select:
+    if not tenant or MODE != "enforce":
+        return
+    # ORM bulk UPDATE / DELETE (``update(Model).where(...)``) never pass through the flush guard,
+    # so they get the same criteria as reads: another shop's row matches nothing (rowcount 0).
+    if not (state.is_select or state.is_update or state.is_delete):
         return
     # Column loads refresh rows this session already holds; relationship loads inherit the
     # criteria from the query that loaded their parent (propagate_to_loaders).
-    if state.is_column_load or state.is_relationship_load:
+    if state.is_select and (state.is_column_load or state.is_relationship_load):
         return
     if state.execution_options.get("skip_tenant_filter"):
         return
     state.statement = state.statement.options(
-        with_loader_criteria(OrgScoped, lambda cls: cls.org_id == tenant, include_aliases=True),
-        with_loader_criteria(OrgScopedLegacyNull,
-                             lambda cls: or_(cls.org_id == tenant, cls.org_id.is_(None)),
-                             include_aliases=True),
-    )
+        with_loader_criteria(OrgScoped, lambda cls: cls.org_id == tenant, include_aliases=True))
 
 
 @event.listens_for(Mapper, "load")
 def _note_cross_org_load(obj, context) -> None:
-    if MODE == "off" or not isinstance(obj, (OrgScoped, OrgScopedLegacyNull)):
+    if MODE == "off" or not isinstance(obj, OrgScoped):
         return
     session = context.session
     tenant = session.info.get("tenant_org") if session is not None else None
@@ -246,7 +253,9 @@ def _guard_cross_tenant_references(session: Session, flush_context, instances) -
             owners = {i: known[(target.name, i)] for i in refs if (target.name, i) in known}
             missing = [i for i in refs if i not in owners]
             if missing:
-                # skip_tenant_filter: this check exists to SEE another shop's owner and refuse.
+                # This check exists to SEE another shop's owner and refuse. It selects plain table
+                # columns, which the read guard doesn't filter anyway; skip_tenant_filter is belt and
+                # braces, so a later refactor to ORM attributes can't silently disable the guard.
                 for i, o in session.execute(select(pk, target.c.org_id).where(pk.in_(missing))
                                             .execution_options(skip_tenant_filter=True)).all():
                     owners[i] = o
