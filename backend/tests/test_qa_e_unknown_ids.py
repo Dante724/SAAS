@@ -69,6 +69,24 @@ async def test_po_create_with_warehouse_id_is_422(client, tenant):
 
 
 @pytest.mark.asyncio
+async def test_tax_rules_reject_unknown_and_foreign_tax(client, tenant, db):
+    before = (await client.get("/api/settings/tax-rules", headers=tenant)).json()["stacks"]
+    r = await client.put("/api/settings/tax-rules", json={
+        "doc_family": "tickets_sales", "tax_ids": ["not-a-real-tax"]}, headers=tenant)
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"] == "Unknown tax in tax_ids"
+    foreign = await _foreign_tax(db)
+    r = await client.put("/api/settings/tax-rules", json={
+        "doc_family": "tickets_sales", "tax_ids": [foreign]}, headers=tenant)
+    assert r.status_code == 422, r.text
+    assert r.json()["detail"] == "Unknown tax in tax_ids"
+    # the existing stack is left as it was
+    stacks = (await client.get("/api/settings/tax-rules", headers=tenant)).json()["stacks"]
+    assert foreign not in stacks.get("tickets_sales", [])
+    assert stacks == before
+
+
+@pytest.mark.asyncio
 async def test_tax_groups_and_exceptions_reject_foreign_tax(client, tenant, db):
     foreign = await _foreign_tax(db)
     r = await client.post("/api/settings/tax-groups", json={

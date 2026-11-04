@@ -1,7 +1,7 @@
 // Pure helpers behind the Total profit view and the remembered report filters (unit-tested).
 
 export type ProfitRow = {
-  kind: "job" | "dropped" | "sale"; id: string; number: string; date: string;
+  kind: "job" | "dropped" | "sale" | "other"; id: string | null; number: string | null; date: string;
   location_id?: string | null; employee_id?: string | null; location_name?: string | null;
   employee_name?: string | null; client_name?: string | null; reason?: string | null;
   revenue: number; tax: number; cogs?: number; labour_cost: number; commission: number;
@@ -23,14 +23,14 @@ export function trend(cur: number, prev: number): Trend {
 
 export type Drill = { kind?: ProfitRow["kind"]; location_id?: string; employee_id?: string };
 
-// The rows behind a clicked number: a bucket (jobs / dropped / sales), a location or a technician.
+// The rows behind a clicked number: a bucket (jobs / dropped / sales / other), a location or a technician.
 export function drillRows(rows: ProfitRow[], d: Drill): ProfitRow[] {
   return rows.filter((r) => (!d.kind || r.kind === d.kind)
     && (d.location_id === undefined || (r.location_id ?? "") === d.location_id)
     && (d.employee_id === undefined || (r.employee_id ?? "") === d.employee_id));
 }
 
-export const KIND_LABEL: Record<ProfitRow["kind"], string> = { job: "Job", dropped: "Dropped job", sale: "Counter sale" };
+export const KIND_LABEL: Record<ProfitRow["kind"], string> = { job: "Job", dropped: "Dropped job", sale: "Counter sale", other: "Refunds and other" };
 
 // ── report filters ──────────────────────────────────────────────────────────
 export type ReportFilters = { movement: "with" | "without" | "all"; hideZero: boolean; status: string; typeId: string };

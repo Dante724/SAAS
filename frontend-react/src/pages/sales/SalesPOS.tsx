@@ -29,6 +29,9 @@ type Receipt = {
   sale_number: string; shop_name: string; total: number; discount?: number; tax?: number; gift_card?: number; paid: boolean; created_at?: string | null;
   lines: { description: string; qty: number; total: number; serials?: string[] }[];
   client_email?: string | null; client_phone?: string | null; text: string;
+  // GST / VAT inside the prices, and the shop's ABN / VAT number (a tax invoice shows both)
+  tax_lines?: { name: string; rate: number; amount: number; included: boolean }[];
+  shop_tax_id?: { label: string; value: string } | null;
 };
 
 const tileCls = "text-left bg-white rounded-xl border border-slate-200 p-3 hover:border-primary/40 hover:bg-slate-50/60 active:bg-slate-100/70 transition-colors focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-primary/30";
@@ -561,9 +564,11 @@ function ReceiptSheet({ saleId, change, onClose, onFlash }: { saleId: string; ch
     } catch { /* fall back to the built-in receipt */ }
     const rows = rc.lines.map((l) => `<tr><td>${l.qty !== 1 ? `${l.qty} × ` : ""}${escapeHtml(l.description)}${(l.serials || []).map((sn) => `<br><small>IMEI / SN ${escapeHtml(sn)}</small>`).join("")}</td><td class="r">${escapeHtml(money(l.total))}</td></tr>`).join("");
     const css = "body{font-family:Inter,system-ui,sans-serif;margin:0;padding:18px;color:#14213f;font-size:13px}h1{font-size:15px;margin:0}p{margin:2px 0 12px;color:#5b6b8c}table{width:100%;border-collapse:collapse}td{padding:4px 0}.r{text-align:right}.t td{border-top:1px dashed #c9d3ea;padding-top:8px;font-weight:700;font-size:15px}";
+    const included = (rc.tax_lines || []).filter((t) => t.included).map((t) => `<tr><td><small>Includes ${escapeHtml(t.name)} ${t.rate}%</small></td><td class="r"><small>${escapeHtml(money(t.amount))}</small></td></tr>`).join("");
     printHtmlInFrame(`<html><head><title>${escapeHtml(rc.sale_number)}</title><style>${css}</style></head><body><h1>${escapeHtml(rc.shop_name)}</h1>`
+      + (rc.shop_tax_id ? `<p style="margin:2px 0">${escapeHtml(rc.shop_tax_id.label)} ${escapeHtml(rc.shop_tax_id.value)}</p>` : "")
       + `<p>Receipt ${escapeHtml(rc.sale_number)}${rc.created_at ? " · " + escapeHtml(new Date(rc.created_at + (rc.created_at.endsWith("Z") ? "" : "Z")).toLocaleString()) : ""}</p>`
-      + `<table>${rows}${rc.discount ? `<tr><td>Discount</td><td class="r">−${escapeHtml(money(rc.discount))}</td></tr>` : ""}${rc.tax ? `<tr><td>Tax</td><td class="r">${escapeHtml(money(rc.tax))}</td></tr>` : ""}<tr class="t"><td>Total</td><td class="r">${escapeHtml(money(rc.total))}</td></tr>${rc.gift_card ? `<tr><td>Gift card</td><td class="r">−${escapeHtml(money(rc.gift_card))}</td></tr>` : ""}</table>`
+      + `<table>${rows}${rc.discount ? `<tr><td>Discount</td><td class="r">−${escapeHtml(money(rc.discount))}</td></tr>` : ""}${rc.tax ? `<tr><td>Tax</td><td class="r">${escapeHtml(money(rc.tax))}</td></tr>` : ""}<tr class="t"><td>Total</td><td class="r">${escapeHtml(money(rc.total))}</td></tr>${included}${rc.gift_card ? `<tr><td>Gift card</td><td class="r">−${escapeHtml(money(rc.gift_card))}</td></tr>` : ""}</table>`
       + `<p style="margin-top:12px">${rc.paid ? "Paid" : "Not paid yet"} · Thank you!</p></body></html>`);
   }
   async function sendEmail() {

@@ -62,6 +62,7 @@ export default function DateField({
   className = "",
   placeholder,
   min,
+  max,
   disabled = false,
   label: ariaName,
 }: {
@@ -71,6 +72,7 @@ export default function DateField({
   className?: string;
   placeholder?: string;
   min?: string; // "YYYY-MM-DD" lower bound for date selection
+  max?: string; // "YYYY-MM-DD" upper bound for date selection
   disabled?: boolean;
   label?: string; // accessible name when the field has no visible <label>
 }) {
@@ -198,7 +200,7 @@ export default function DateField({
                   const iso = `${cur.y}-${pad(cur.m + 1)}-${pad(d)}`;
                   const sel = iso === date;
                   const isToday = iso === todayIso;
-                  const off = min ? iso < min : false;
+                  const off = (min ? iso < min : false) || (max ? iso > max : false);
                   return (
                     <button
                       key={i}

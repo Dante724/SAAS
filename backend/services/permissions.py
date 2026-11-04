@@ -212,8 +212,10 @@ TEMPLATES = {
     "Partner": {"can_manage_settings": False, "can_manage_roles": False,
                 "can_manage_employees": False, "can_make_calls": False, **_NOT_FOR_STAFF,
                 "can_manage_membership_plans": False, "can_change_memberships": False},
+    # QA wave 3: a technician added a line to a delivered, paid job and it owed money again.
+    # Reopening or changing a finished job is the desk's call (migration ce144w3).
     "Specialist": {"can_manage_settings": False, "can_manage_roles": False,
-                   "can_manage_employees": False, **_NOT_FOR_STAFF,
+                   "can_manage_employees": False, **_NOT_FOR_STAFF, "can_edit_closed_ticket": False,
                    "can_manage_membership_plans": False, "can_change_memberships": False},
 }
 

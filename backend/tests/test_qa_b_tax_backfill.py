@@ -26,7 +26,7 @@ async def _set_flags(default_id, other_ids):
 @pytest.mark.asyncio
 async def test_backfill_three_shops(client):
     # A: legacy shop with a 5% default and no job stack (charges nothing today)
-    a = await _shop(client, "bf-a@qa.dev", region="ca", country="CA")
+    a = await _shop(client, "bf-a@qa.dev", region="ca", country="CA", province="BC")
     await client.put("/api/settings/tax-rules", headers=a, json={"doc_family": "tickets_sales", "tax_ids": []})
     gst_a = (await _taxes(client, a))["GST"]
     assert await _line_tax(client, a) == (0.0, 100.0)            # an existing job, before
@@ -43,7 +43,7 @@ async def test_backfill_three_shops(client):
     assert await _stack(client, b) == [seeded_b["id"]]
 
     # C: the shop chose a 13% stack (its GST still carries the old default flag)
-    c = await _shop(client, "bf-c@qa.dev", region="ca", country="CA")
+    c = await _shop(client, "bf-c@qa.dev", region="ca", country="CA", province="BC")
     hst = (await client.post("/api/catalog/taxes", headers=c, json={"name": "HST", "rate": 13})).json()
     await client.put("/api/settings/tax-rules", headers=c, json={"doc_family": "tickets_sales", "tax_ids": [hst["id"]]})
 
@@ -69,7 +69,7 @@ async def test_backfill_three_shops(client):
 
 @pytest.mark.asyncio
 async def test_restore_keeps_a_stack_the_owner_changed_since(client):
-    a = await _shop(client, "bf-d@qa.dev", region="ca", country="CA")
+    a = await _shop(client, "bf-d@qa.dev", region="ca", country="CA", province="BC")
     await client.put("/api/settings/tax-rules", headers=a, json={"doc_family": "tickets_sales", "tax_ids": []})
     await _run(tax_backfill.backfill)
     pst = (await client.post("/api/catalog/taxes", headers=a, json={"name": "PST", "rate": 7})).json()

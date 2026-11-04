@@ -187,8 +187,8 @@ async def test_total_profit_csv_matches_the_page_and_dates_the_other_row_in_rang
     rows = list(csv.reader(io.StringIO(r.text)))
     head, total = rows[0], rows[-1]
     assert total[0] == "Total"
-    got = {k: float(total[head.index(k)]) for k in ("Sales (ex tax)", "Tax", "Parts cost")}
-    assert got == pytest.approx({"Sales (ex tax)": REVENUE, "Tax": TAX, "Parts cost": COGS}), got
+    got = {k: float(total[head.index(k)]) for k in ("Sales", "Tax", "Parts cost")}
+    assert got == pytest.approx({"Sales": REVENUE, "Tax": TAX, "Parts cost": COGS}), got
     today = now_utc().date().isoformat()
     for row in rows[1:-1]:
         assert row[2] <= today, row          # QA N17: "Refunds and other" was dated tomorrow
