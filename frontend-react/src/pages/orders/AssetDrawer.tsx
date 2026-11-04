@@ -108,7 +108,7 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
             <div><div className="text-base font-bold text-ink-primary">{creating ? `New ${assetNoun(a, term).toLowerCase()}` : title}{!creating && a.color ? ` (${a.color})` : ""}</div><div className="text-xs text-ink-tertiary">{creating ? `Register a ${assetNoun(a, term).toLowerCase()}` : (a.owner_name ? `Owned by ${a.owner_name}` : "Company-owned")}</div></div>
           </div>
           <div className="flex gap-6 text-xs font-semibold">
-            {(creating ? [TABS[0]] : TABS).map((t, i) => <button key={t} onClick={() => setTab(i)} className={`py-3 border-b-2 transition-colors ${tab === i ? "text-primary border-primary font-bold" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{t}</button>)}
+            {(creating ? [TABS[0]] : TABS).map((t, i) => <button key={t} onClick={() => setTab(i)} className={`py-3 border-b-2 transition-colors ${tab === i ? "text-primary border-primary" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{t}</button>)}
           </div>
         </header>
         <div className="flex-1 overflow-y-auto p-6 bg-canvas space-y-4">

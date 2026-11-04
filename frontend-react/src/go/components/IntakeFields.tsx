@@ -15,7 +15,9 @@ export function intakeFieldsFrom(items: LayoutItem[]): IntakeField[] {
 }
 
 const field = "w-full min-h-[3rem] rounded-xl border border-slate-200 bg-white px-4 text-go-body text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/15";
-const chip = (on: boolean) => `min-h-[2.75rem] px-4 rounded-full border text-go-body font-medium inline-flex items-center gap-1.5 ${on ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`;
+// A chip that shows a tick when picked keeps 11px of extra padding on each side while unpicked, the
+// same width as the 16px tick plus its 6px gap, so picking one never pushes its neighbours.
+const chip = (on: boolean, ticked = false) => `min-h-[2.75rem] ${ticked && !on ? "px-[27px]" : "px-4"} rounded-full border text-go-body font-medium inline-flex items-center gap-1.5 ${on ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`;
 
 export default function IntakeFields({ fields, values, onChange, missing }: {
   fields: IntakeField[]; values: Record<string, unknown>; onChange: (key: string, v: unknown) => void; missing?: Set<string>;
@@ -50,7 +52,7 @@ export default function IntakeFields({ fields, values, onChange, missing }: {
                 {f.options.map((o) => {
                   const on = multi ? list.includes(o) : v === o;
                   return (
-                    <button key={o} onClick={() => onChange(f.key, multi ? (on ? list.filter((x) => x !== o) : [...list, o]) : on ? "" : o)} aria-pressed={on} className={chip(on)}>
+                    <button key={o} onClick={() => onChange(f.key, multi ? (on ? list.filter((x) => x !== o) : [...list, o]) : on ? "" : o)} aria-pressed={on} className={chip(on, true)}>
                       {on && <Check size={16} />}{o}
                     </button>
                   );
