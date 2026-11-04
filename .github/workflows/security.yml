@@ -23,6 +23,7 @@ jobs:
   python-deps:
     name: pip-audit (locked dependencies)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -36,6 +37,7 @@ jobs:
   secrets:
     name: gitleaks (full history)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -49,6 +51,7 @@ jobs:
   lint-correctness:
     name: ruff correctness rules (whole backend)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
@@ -64,6 +67,7 @@ jobs:
   npm-deps:
     name: npm audit (production dependencies)
     runs-on: ubuntu-latest
+    timeout-minutes: 10
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
