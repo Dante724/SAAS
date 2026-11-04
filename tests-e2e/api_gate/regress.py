@@ -1560,18 +1560,30 @@ def w3e_6():
 
 
 def w3e_7():
-    """An AU till receipt shows the GST line and the ABN."""
+    """An AU till receipt shows the GST it includes and the shop's ABN.
+
+    GST is included in AU shelf prices, so the receipt's top-level `tax` (tax added on top) is 0;
+    the included GST is a `tax_lines` entry and an "Includes GST 10%" line in the text. The ABN
+    comes from the shop's default legal entity."""
     b = CTX.b
-    must(b.owner.put("/api/staff/company", {"company_details": "ABN 51 824 753 556"}), "ABN")
+    abn = "51 824 753 556"
+    must(b.owner.post("/api/settings/legal-entities", {"name": "Gate Shop Pty", "vat_no": abn, "is_default": True}),
+         "legal entity with ABN")
     pid = b.part(qty=2, price=110)
     sd = sale(b, pid, qty=1, price=110)
     r = must(b.owner.get(f"/api/sales/{sd['id']}/receipt"), "receipt")
-    text = str(r)
-    tax = r.get("tax")
-    check(tax and float(tax) > 0, f"AU receipt tax {tax} on a 110 sale with GST included")
-    check("GST" in text, "AU receipt has no GST line")
-    check("ABN" in text or "51 824 753 556" in text, "AU receipt has no ABN")
-    return f"GST {tax}"
+    text = r.get("text") or ""
+    gst = [t for t in r.get("tax_lines") or [] if "GST" in (t.get("name") or "")]
+    check(gst, f"AU receipt has no GST tax line on a 110 sale with GST included: tax_lines {r.get('tax_lines')}")
+    g = gst[0]
+    check(money(g.get("amount")) == 10 and money(g.get("rate")) == 10 and g.get("included") is True,
+          f"AU receipt GST line {g} (want GST 10% included, amount 10)")
+    check("GST" in text, f"AU receipt text has no GST line: {text[:200]!r}")
+    tid = r.get("shop_tax_id") or {}
+    check(tid.get("label") == "ABN" and tid.get("value") == abn, f"AU receipt shop_tax_id {r.get('shop_tax_id')}")
+    check(abn in text and "ABN" in text, f"AU receipt text has no ABN: {text[:200]!r}")
+    check(money(r.get("total")) == 110, f"AU receipt total {r.get('total')} (want 110, GST inside)")
+    return f"GST {g.get('amount')} included, ABN {abn}"
 
 
 # ====================================================================== registry

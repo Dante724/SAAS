@@ -8,8 +8,9 @@ run:            ## run the API (dev)
 	ENVIRONMENT=$${ENVIRONMENT:-development} uvicorn main:app --reload
 test:           ## run the backend test suite (parallel)
 	pytest -q -n auto
-test-pg:        ## run the suite against Postgres: make test-pg PG=postgresql+asyncpg://user:pass@localhost:5432/repairos_test
-	TEST_DATABASE_URL=$(PG) DATABASE_URL=$(PG) ENVIRONMENT=test SEED_DEMO=false pytest -q -p no:xdist
+test-pg:        ## suite on a throwaway Postgres 16 (scripts/test_pg.sh); or on your own server: make test-pg PG=postgresql+asyncpg://user:pass@localhost:5432/repairos_test
+	@if [ -n "$(PG)" ]; then TEST_DATABASE_URL=$(PG) DATABASE_URL=$(PG) ENVIRONMENT=test SEED_DEMO=false pytest -q -n 4; \
+	else scripts/test_pg.sh; fi
 lint:           ## lint core + tests (pinned ruff)
 	ruff check main.py backend/config.py backend/core backend/db backend/tests
 fmt:            ## auto-fix lint issues (safe fixes only)
@@ -26,9 +27,10 @@ ci: ci-backend ci-frontend ci-security   ## run the CI gates locally for free (P
 
 ci-backend:     ## backend gates: lint → migrations from scratch → tests
 	ruff check main.py backend/config.py backend/core backend/db backend/tests
-	rm -f ci_test*.db && $(CI_ENV) alembic -c backend/alembic.ini upgrade head
-	rm -f ci_test*.db && $(CI_ENV) pytest -q -n auto --cov --cov-report=term:skip-covered
-	rm -f ci_test*.db
+	@# Its own file name per run, never a shared ci_test*.db: a `rm -f` glob here used to delete the
+	@# database of another run going on in the same folder. The test suite isolates itself (conftest).
+	db=ci_migrate_$$$$.db; $(CI_ENV:ci_test.db=$$db) alembic -c backend/alembic.ini upgrade head; rc=$$?; rm -f $$db; exit $$rc
+	$(CI_ENV) pytest -q -n auto --cov --cov-report=term:skip-covered
 
 ci-frontend:    ## frontend gates: typecheck → ui-text lint → unit tests → build
 	cd frontend-react && npx tsc --noEmit && npm run lint:uitext && npm run test:coverage && npm run build

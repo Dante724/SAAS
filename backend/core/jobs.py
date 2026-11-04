@@ -114,7 +114,13 @@ async def run_exclusive(name: str, fn: Callable[[], Awaitable[None]]) -> bool:
         await fn()
         return True
     key = _lock_key(name)
-    async with engine.connect() as conn:
+    # AUTOCOMMIT: the lock connection must not sit "idle in transaction" while fn() runs on other
+    # connections, or idle_in_transaction_session_timeout (DB_IDLE_IN_TX_TIMEOUT_MS) kills it and
+    # the session lock goes with it, letting a second worker run the same sweep concurrently.
+    # Session-level advisory locks need a real session: a direct connection or PgBouncer in
+    # session pooling mode, never transaction pooling (see DEPLOY.md).
+    async with engine.connect() as raw:
+        conn = await raw.execution_options(isolation_level="AUTOCOMMIT")
         got = (await conn.execute(text("SELECT pg_try_advisory_lock(:k)"), {"k": key})).scalar()
         if not got:
             log.debug("periodic job '%s' already running elsewhere; skipping this tick", name)
@@ -123,7 +129,27 @@ async def run_exclusive(name: str, fn: Callable[[], Awaitable[None]]) -> bool:
             await fn()
             return True
         finally:
-            await conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})
+            await _unlock(conn, name, key)
+
+
+async def _unlock(conn, name: str, key: int) -> None:
+    """Release the advisory lock. If the connection has died (DB restart, network) the server has
+    already released the lock with the session: log it and never raise, so the job's own result or
+    exception is what the caller sees."""
+    from sqlalchemy import text
+    try:
+        released = (await conn.execute(text("SELECT pg_advisory_unlock(:k)"), {"k": key})).scalar()
+        if not released:
+            log.warning("periodic job '%s': advisory unlock found no lock held (session reset?)", name)
+    except asyncio.CancelledError:
+        raise
+    except Exception as exc:  # noqa: BLE001
+        log.warning("periodic job '%s': advisory unlock failed, lock connection lost (%s); "
+                    "the server released the lock with the session", name, type(exc).__name__)
+        try:
+            await conn.invalidate()
+        except Exception:  # noqa: BLE001
+            pass
 
 
 # Module-level singleton imported by main.py and call sites.
