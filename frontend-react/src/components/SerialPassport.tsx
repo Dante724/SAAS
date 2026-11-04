@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { M } from "./Shell";
+import DateField from "./DateField";
 import { api } from "../api/client";
 import { useMe } from "../context/Me";
 import { money } from "../pages/inventory/types";
@@ -58,7 +59,7 @@ export default function SerialPassport({ unitId, onClose }: { unitId: string; on
               {p.unit_cost != null && <div className={row}><span className="text-ink-tertiary">Purchase price</span><span className="text-ink-primary tabular-nums">{money(p.unit_cost)}</span></div>}
               <div className={row}><span className="text-ink-tertiary">Supplier warranty</span>
                 {editW != null ? (
-                  <span className="flex items-center gap-1.5"><input type="date" value={editW} onChange={(e) => setEditW(e.target.value)} aria-label="Supplier warranty until" className="border border-slate-200 rounded-lg px-2 py-1 text-xs" />
+                  <span className="flex items-center gap-1.5"><DateField mode="date" value={editW} onChange={setEditW} label="Supplier warranty until" className="w-40" />
                     <button onClick={saveWarranty} className="text-primary font-semibold">Save</button><button onClick={() => setEditW(null)} className="text-ink-tertiary">Cancel</button></span>
                 ) : (
                   <span className="text-right">
