@@ -3425,6 +3425,9 @@ async def reserve_stock_for_order(
         if want <= 0:
             continue
         from backend.services import stock_rows
+        # lock the rows before counting (stock_consume.lock_rows order): two jobs reserving the
+        # last unit at once both used to get it
+        await stock_rows.rows(db, part_id, order.location_id, lock=True)
         free = await stock_rows.free(db, part_id, order.location_id)
         take = min(want, max(free, 0))
         if take <= 0:
