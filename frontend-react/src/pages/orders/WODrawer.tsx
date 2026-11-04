@@ -716,7 +716,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
               {((d as any).written_off > 0 || !!droppedStatus(statuses as any[], d.status || "")) && (
                 <div role="note" className="flex items-start gap-2 rounded-xl border border-slate-200 bg-slate-50/80 px-3 py-2.5 text-xs text-ink-secondary">
                   <M n="block" c="text-base text-ink-tertiary" />
-                  <span>Dropped{(d as any).cancel_reason ? `: ${(d as any).cancel_reason}` : ""}.{(d as any).written_off > 0 ? ` ${money((d as any).written_off)} the customer didn't pay was written off. It's not a debt and not in sales.` : ""}</span>
+                  <span>Dropped{(d as any).cancel_reason ? `: ${(d as any).cancel_reason}` : ""}.{(d as any).nothing_done ? " Nothing was done and the parts went back on the shelf, so nothing is owed." : (d as any).written_off > 0 ? ` ${money((d as any).written_off)} the customer didn't pay was written off. It's not a debt and not in sales.` : ""}</span>
                 </div>
               )}
               <LinkedJobs orderId={order.id} />
@@ -752,7 +752,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             </div>
           )}
           {tab === "checklists" && <ChecklistsTab orderId={order.id} typeId={(d as any).type_id} />}
-          {tab === "invoices" && <InvoicesTab onChanged={reload} orderId={order.id} total={d.total} writtenOff={(d as any).written_off || 0} deposit={(d as any).deposit_amount} currencyCode={(d as any).currency_code} fxRate={(d as any).fx_rate} currencySymbol={(d as any).currency_symbol} onCurrencyChange={(code, rate, symbol) => setD({ ...d, currency_code: code, fx_rate: rate, currency_symbol: symbol } as any)} onFlash={flash} />}
+          {tab === "invoices" && <InvoicesTab onChanged={reload} orderId={order.id} total={d.total} writtenOff={(d as any).written_off || 0} nothingDone={!!(d as any).nothing_done} deposit={(d as any).deposit_amount} currencyCode={(d as any).currency_code} fxRate={(d as any).fx_rate} currencySymbol={(d as any).currency_symbol} onCurrencyChange={(code, rate, symbol) => setD({ ...d, currency_code: code, fx_rate: rate, currency_symbol: symbol } as any)} onFlash={flash} />}
           {/* G3 — one customer conversation: ActivityTab shows the shared thread and its message box */}
           {tab === "activity" && (
             <ActivityTab orderId={order.id} clientName={c.name} clientPhone={c.phone} onFlash={flash}
@@ -1887,7 +1887,7 @@ type PayCtx = { order_total: number; already_paid: number; prepaid: number; rema
 // Every account from the payment context in one list, each tagged with the method it sits under.
 const ctxAccounts = (c: PayCtx | null): PayAccount[] =>
   c ? Object.entries(c.accounts_by_method || {}).flatMap(([k, list]) => (list || []).map((a) => ({ ...a, payment_option: a.payment_option || k }))) : [];
-export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyCode, fxRate, currencySymbol, onCurrencyChange, onFlash, onChanged }: { orderId: string; total?: number; writtenOff?: number; deposit?: number; currencyCode?: string; fxRate?: number; currencySymbol?: string; onCurrencyChange?: (code: string, rate: number, symbol: string) => void; onFlash: Flash; onChanged?: () => void }) {
+export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = false, deposit, currencyCode, fxRate, currencySymbol, onCurrencyChange, onFlash, onChanged }: { orderId: string; total?: number; writtenOff?: number; nothingDone?: boolean; deposit?: number; currencyCode?: string; fxRate?: number; currencySymbol?: string; onCurrencyChange?: (code: string, rate: number, symbol: string) => void; onFlash: Flash; onChanged?: () => void }) {
   const { base, opts: curOpts, multi: multiCurrency } = useCurrencies();
   const { can } = useMe();
   const changeCurrency = async (code: string) => {
@@ -1995,7 +1995,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyC
         const tone = {
           due: { edge: "bg-amber-400", pill: "bg-amber-50 text-amber-800 ring-amber-200", dot: "bg-amber-500", label: "Balance due" },
           settled: { edge: "bg-emerald-500", pill: "bg-emerald-50 text-emerald-700 ring-emerald-200", dot: "bg-emerald-500", label: "Settled" },
-          written_off: { edge: "bg-slate-300", pill: "bg-slate-100 text-ink-secondary ring-slate-200", dot: "bg-slate-400", label: "Written off" },
+          written_off: { edge: "bg-slate-300", pill: "bg-slate-100 text-ink-secondary ring-slate-200", dot: "bg-slate-400", label: nothingDone ? "Nothing owed" : "Written off" },
           empty: { edge: "bg-slate-200", pill: "bg-slate-100 text-ink-secondary ring-slate-200", dot: "bg-slate-400", label: "Nothing to pay yet" },
         }[state];
         const shown = money(due);
@@ -2023,7 +2023,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, deposit, currencyC
             )}
             <p className="mt-2 text-xs text-ink-tertiary tabular-nums">
               <span className="font-medium text-ink-secondary">{money(paid)}</span> of <span className="font-medium text-ink-secondary">{money(t)}</span> collected
-              {writtenOff > 0 && <> · <span className="font-medium text-ink-secondary">{money(writtenOff)}</span> written off</>}
+              {writtenOff > 0 && (nothingDone ? <> · nothing was done, so nothing is owed</> : <> · <span className="font-medium text-ink-secondary">{money(writtenOff)}</span> written off</>)}
             </p>
         {isForeign && (
           <p className="text-xs text-ink-secondary mt-1 tabular-nums">≈ {currencySymbol}{conv(due).toFixed(2)} {currencyCode} <span className="text-ink-tertiary">(1 {currencyCode} = {fxRate && (1 / fxRate).toFixed(4)} {base?.code})</span></p>

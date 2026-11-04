@@ -990,6 +990,9 @@ async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDe
     from backend.routers.recommendations import approve_recommendation
     approve = list(dict.fromkeys(data.approve_ids or []))
     later = list(dict.fromkeys((data.later_ids or []) + (data.decline_ids or [])))
+    # Declining is stored as "not now" too, but the reply counts what the customer chose: one
+    # "later" and one "decline" used to come back as 2 and 2 (QA wave 3).
+    declined_ids = set(data.decline_ids or []) - set(data.later_ids or [])
     if set(approve) & set(later):
         raise HTTPException(400, "An item can't be both added and saved for later")
     ids = approve + later
@@ -1004,7 +1007,7 @@ async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDe
     rows = {r.id: r for r in (await db.execute(select(_R).where(
         _R.order_id == order.id, _R.org_id == order.org_id, _R.id.in_(ids))
         .with_for_update().execution_options(populate_existing=True))).scalars().all()}
-    approved = later_n = 0
+    approved = later_n = declined_n = 0
     new_lines: list[str] = []
     skipped: list[str] = []
     for rid in approve:
@@ -1034,6 +1037,7 @@ async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDe
         r.remind_after = remind_on
         r.decided_by_name = name
         later_n += 1
+        declined_n += rid in declined_ids
     decided = approved + later_n
     if decided:
         order.rec_unread = (order.rec_unread or 0) + decided
@@ -1053,7 +1057,7 @@ async def _decide_recommendations(db: AsyncSession, order: "Order", data: "RecDe
             await customer_approved_work(db, order, name or "Customer")
         # Who confirmed and when is kept on each item (decided_by_name / decided_at); the signed
         # estimate/work-order record is left alone, so adding an extra never reads as "signed".
-    return {"approved": approved, "saved_for_later": later_n, "declined": later_n, "skipped": skipped,
+    return {"approved": approved, "saved_for_later": later_n - declined_n, "declined": declined_n, "skipped": skipped,
             "total": q2(float(order.total or 0))}
 
 

@@ -1394,6 +1394,18 @@ async def get_order(
         # invoice keeps its balance until the shop credits it.
         from backend.services.order_money import balance_due as _bd
         data["payment_due"] = await _bd(db, order) > 0
+    # QA wave 3: a dropped job whose parts all went back on the shelf and had no work on it isn't
+    # a loss. Its balance is still cleared (written_off), but the job says nothing was done
+    # instead of "the full bill, tax included, was written off".
+    data["nothing_done"] = False
+    if not order.is_estimate:
+        grp = (await db.execute(select(OrderStatus.status_group).where(
+            OrderStatus.org_id == current.org_id, OrderStatus.key == order.status,
+            OrderStatus.record_type == "work_order"))).scalars().first()
+        if grp == "dropped":
+            data["nothing_done"] = all(
+                (ln.kind == "product" and float(ln.pending_stock or 0) >= float(ln.qty or 0) - 1e-9)
+                for ln in order.lines if ln.kind != "refund")
     # 144bj: prior-visit count for this device (repeat-repair signal on the WO card).
     if order.device_id and data.get("device"):
         vc = (await db.execute(select(func.count()).select_from(Order).where(

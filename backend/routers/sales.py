@@ -1012,8 +1012,55 @@ def sale_tax_added(sale: Sale, lines: list) -> float:
     return tax if tax > 0.005 else 0.0
 
 
+async def receipt_taxes(db, org, lines: list) -> list[dict]:
+    """The tax on a receipt, one row per tax: name, rate, amount and whether it is inside the
+    prices. A GST / VAT price-included sale used to print no tax at all (QA wave 3), and a tax
+    invoice must show it. A line keeps its rate and mode; the name is the shop's tax at that rate."""
+    from backend.models import Tax
+    from backend.services.regions import COUNTRY_TAX
+    rows: dict = {}
+    for ln in lines:
+        amt = float(ln.tax or 0)
+        if abs(amt) < 0.005 or not ln.tax_rate:
+            continue
+        key = (round(float(ln.tax_rate), 4), (ln.tax_mode or "imposed") == "included")
+        rows[key] = rows.get(key, 0.0) + amt
+    if not rows:
+        return []
+    taxes = (await db.execute(select(Tax).where(Tax.org_id == org.id).order_by(
+        Tax.is_default.desc(), Tax.active.desc()))).scalars().all() if org else []
+    fallback = COUNTRY_TAX.get((getattr(org, "country", None) or "").upper(), ("Tax",))[0]
+
+    def name(rate):
+        return next((t.name for t in taxes if abs(float(t.rate or 0) - rate) < 1e-6), None) or fallback
+    return [{"name": name(rate), "rate": rate, "amount": q2(amt), "included": inc}
+            for (rate, inc), amt in sorted(rows.items(), key=lambda kv: (not kv[0][1], -kv[0][0]))]
+
+
+async def shop_tax_id(db, org) -> Optional[dict]:
+    """The shop's own tax number for receipts ({label, value}), from its default legal entity;
+    None when it hasn't set one. Australia calls it the ABN."""
+    if not org:
+        return None
+    from backend.models import LegalEntity
+    le = (await db.execute(select(LegalEntity).where(
+        LegalEntity.org_id == org.id, LegalEntity.active == True).order_by(  # noqa: E712
+        LegalEntity.is_default.desc(), LegalEntity.created_at))).scalars().first()
+    value = ((le.vat_no or le.tax_id) if le else None) or None
+    if not value:
+        return None
+    country = (getattr(org, "country", None) or "").upper()
+    if country == "AU":
+        label = "ABN"
+    else:
+        from backend.services.regions import COUNTRY_TAX
+        label = f"{COUNTRY_TAX.get(country, ('Tax',))[0]} no." if country in COUNTRY_TAX else "Tax no."
+    return {"label": label, "value": value.strip()}
+
+
 def receipt_text(org_name: str, sale: Sale, lines: list, sym: str, tz: Optional[str] = None,
-                 serials: Optional[dict] = None, gift_card: float = 0) -> str:
+                 serials: Optional[dict] = None, gift_card: float = 0,
+                 taxes: Optional[list] = None, tax_id: Optional[dict] = None) -> str:
     """The customer's receipt in plain words — what was bought and what was paid. Never cost
     or profit (that's the shop's business, not the customer's)."""
     def m(v):
@@ -1029,7 +1076,8 @@ def receipt_text(org_name: str, sale: Sale, lines: list, sym: str, tz: Optional[
         except Exception:
             pass
         when = at.strftime("%d %b %Y, %H:%M")
-    out = [org_name, f"Receipt {sale.sale_number}" + (f" · {when}" if when else ""), ""]
+    out = [org_name] + ([f"{tax_id['label']} {tax_id['value']}"] if tax_id else []) \
+        + [f"Receipt {sale.sale_number}" + (f" · {when}" if when else ""), ""]
     for ln in lines:
         qty = ln.qty or 1
         qty_s = f"{qty:g} × " if qty != 1 else ""
@@ -1042,6 +1090,9 @@ def receipt_text(org_name: str, sale: Sale, lines: list, sym: str, tz: Optional[
     if tax:
         out.append(f"Tax  {m(tax)}")
     out += ["", f"Total  {m(sale.total)}"]
+    for t in taxes or []:
+        if t["included"]:
+            out.append(f"Includes {t['name']} {t['rate']:g}%  {m(t['amount'])}")
     if gift_card:
         out.append(f"Gift card  −{m(gift_card)}")
     out += ["Paid" if sale.paid else "Not paid yet", "", "Thank you!"]
@@ -1068,16 +1119,19 @@ async def sale_receipt(
     sym = _base(org)["symbol"]
     serials = await _line_serials(db, current.org_id, lines)
     gift = await sale_gift_card_paid(db, sale.id)
+    taxes = await receipt_taxes(db, org, lines)
+    tax_id = await shop_tax_id(db, org)
     return {
         "sale_number": sale.sale_number, "shop_name": org.name if org else "",
         "total": sale.total, "discount": sale.discount, "paid": sale.paid,
         "tax": sale_tax_added(sale, lines), "gift_card": gift,
+        "tax_lines": taxes, "shop_tax_id": tax_id,     # QA wave 3: GST / VAT inside the prices, ABN / VAT no.
         "created_at": utc_iso(sale.created_at),   # launch B6: "Z" so the browser reads UTC
         "lines": [{"description": ln.description, "qty": ln.qty, "total": ln.total, "tax": ln.tax,
                    "serials": serials.get(ln.id, [])} for ln in lines],
         "client_email": client.email if client else None, "client_phone": client.phone if client else None,
         "text": receipt_text(org.name if org else "", sale, lines, sym, getattr(org, "timezone", None),
-                             serials=serials, gift_card=gift),
+                             serials=serials, gift_card=gift, taxes=taxes, tax_id=tax_id),
     }
 
 

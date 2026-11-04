@@ -147,6 +147,14 @@ async def _lock_shop_intake(db, org_id: str) -> None:
         await db.execute(text("SELECT pg_advisory_xact_lock(hashtext(:k))"), {"k": f"serial-intake:{org_id}"})
 
 
+WARNINGS_KEY = "serial_intake_warnings"
+
+
+def take_warnings(db) -> list[dict]:
+    """The serial warnings this request's intake collected (and forget them)."""
+    return db.info.pop(WARNINGS_KEY, [])
+
+
 def summary(rows: list[dict]) -> dict:
     return {s: sum(1 for r in rows if r["status"] == s) for s in ("ok", "warn", "block")}
 
@@ -184,6 +192,11 @@ async def validate_intake(db, org_id: str, part, qty: float, serials: Optional[l
                                      "Remove it, or write the old unit off first.")
         if r["status"] == "block":
             raise HTTPException(422, f"A serial for “{name}” is empty.")
+        if r["status"] == "warn":
+            # Posts, but the screen says so: an IMEI with a wrong check digit is usually a typo
+            # (QA wave 3: it went in silently). The endpoint returns these as `warnings`.
+            db.info.setdefault(WARNINGS_KEY, []).append(
+                {"serial": r["serial"], "reason": r["reason"], "message": r["message"], "product": name})
         out.append(r["serial"])
     if seen is not None:
         seen.update(out)

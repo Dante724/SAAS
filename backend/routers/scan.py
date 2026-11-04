@@ -132,6 +132,18 @@ async def _resolve(db: AsyncSession, current: Employee, code: str, serial: str |
         label = " ".join(x for x in [d.brand, d.model] if x) or (d.serial or d.imei or "Asset")
         return {"matched": True, "type": "asset", "id": d.id, "route": "/assets", "label": label}, "asset"
 
+    # 5) a unit that has left the shop (sold, written off): the product, saying so. Scanning a sold
+    #    phone found nothing (QA wave 3); its history is what the desk wants for a warranty claim.
+    gone = (await db.execute(select(SerializedItem).where(
+        SerializedItem.org_id == org, SerializedItem.status.in_(("sold", "written_off", "converted_to_asset")),
+        or_(*[_sn_matches(SerializedItem.serial_number, t) for t in {serial, code} if t]))
+        .order_by(SerializedItem.created_at.desc()))).scalars().first()
+    if gone:
+        p = (await db.execute(select(Part).where(Part.id == gone.part_id, Part.org_id == org))).scalar_one_or_none()
+        if p:
+            return {"matched": True, "type": "product", "id": p.id, "route": "/inventory", "label": p.name,
+                    "serial_id": gone.id, "serial": gone.serial_number, "serial_status": gone.status}, "part"
+
     return {"matched": False, "code": code}, "none"
 
 
