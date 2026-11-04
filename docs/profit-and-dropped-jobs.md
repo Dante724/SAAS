@@ -23,7 +23,7 @@ contacts/Go/public API (C).
    figure: "vs 1 Sep – 30 Sep"), and a click-through to the jobs and sales behind each number.
    The cards add up to the total. Export downloads the same rows as CSV
    (`GET /api/reports/total-profit.csv`, same date, location and technician filters; needs
-   "Export the sales" as well).
+   "Export the sales" as well; the button is hidden without it).
 3. **Dropped jobs** (the old "Cancellations by reason" upgraded): one row per
    dropped job with paid, written off, cost, commission, tax and profit; filter by job type and
    status; totals by reason stay.

@@ -10,6 +10,8 @@ vi.mock("../../api/client", () => ({
   openAuthedDoc: (...a: any[]) => openAuthedDoc(...a),
 }));
 vi.mock("../../lib/dialog", () => ({ alertDialog: vi.fn() }));
+let canExport = true;
+vi.mock("../../context/Me", () => ({ useMe: () => ({ can: (c: string) => c !== "can_export_sales" || canExport }) }));
 
 const b = (revenue: number, profit: number | undefined, count = 1) => ({
   count, revenue, tax: 0, cogs: profit === undefined ? undefined : revenue - profit, labour_cost: 0, commission: 0, profit, written_off: 0,
@@ -37,7 +39,7 @@ function report(costs = true) {
 const parse = (s: string) => Number(s.replace(/[^\d.−-]/g, "").replace("−", "-"));
 
 beforeEach(() => {
-  get.mockReset(); openAuthedDoc.mockReset();
+  get.mockReset(); openAuthedDoc.mockReset(); canExport = true;
 });
 
 function mount(rep: any, locs = [{ id: "L1", name: "Main" }, { id: "L2", name: "Annex" }]) {
@@ -111,5 +113,13 @@ describe("TotalProfit", () => {
     // the page's own query uses the same filters
     const last = get.mock.calls.map((c) => c[0] as string).filter((u) => u.startsWith("/reports/total-profit?")).pop()!;
     expect(last.split("?")[1]).toBe(url.split("?")[1]);
+  });
+
+  it("hides Export for a role that can't export sales", async () => {
+    canExport = false;
+    mount(report());
+    await screen.findByTestId("profit-card-jobs");
+    expect(screen.queryByText("Export")).toBeNull();
+    expect(screen.getByText("Show")).toBeInTheDocument();
   });
 });

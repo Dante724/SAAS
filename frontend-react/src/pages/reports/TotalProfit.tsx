@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { api, openAuthedDoc } from "../../api/client";
 import { alertDialog } from "../../lib/dialog";
+import { useMe } from "../../context/Me";
 import DateField from "../../components/DateField";
 import { M } from "../../components/Shell";
 import { money } from "../orders/types";
@@ -35,6 +36,7 @@ function TrendChip({ cur, prev }: { cur: number | null; prev: number | null }) {
 
 export default function TotalProfit({ locs }: { locs: { id: string; name: string }[] }) {
   const nav = useNavigate();
+  const { can } = useMe();
   const [from, setFrom] = useState(iso(new Date(Date.now() - 29 * 864e5)));
   const [to, setTo] = useState(iso(new Date()));
   const [locId, setLocId] = useState("");
@@ -93,8 +95,11 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
         <span className="text-ink-tertiary">→</span>
         <DateField mode="date" value={to} onChange={setTo} className="w-36" />
         <button onClick={() => load()} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110">Show</button>
-        <button type="button" onClick={exportCsv}
-          className="px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-ink-secondary hover:bg-slate-50 text-xs font-bold flex items-center gap-1.5 shadow-clay-sm"><M n="download" c="text-sm" />Export</button>
+        {/* the CSV route also checks this permission */}
+        {can("can_export_sales") && (
+          <button type="button" onClick={exportCsv}
+            className="px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-ink-secondary hover:bg-slate-50 text-xs font-bold flex items-center gap-1.5 shadow-clay-sm"><M n="download" c="text-sm" />Export</button>
+        )}
       </div>
 
       {err && <div role="alert" className="text-xs text-rose-600">{err}</div>}
