@@ -82,8 +82,8 @@ export default function WalkinsView() {
   }
 
   const canConvert = can("can_create_tickets");
-  const btn = "h-8 px-3 rounded-lg text-[11px] font-semibold border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 disabled:opacity-50";
-  const primary = "h-8 px-3 rounded-lg text-[11px] font-semibold bg-primary text-white hover:brightness-110 disabled:opacity-50";
+  const btn = "h-9 px-3 rounded-xl text-xs font-semibold border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 disabled:opacity-50";
+  const primary = "h-9 px-3 rounded-xl text-xs font-semibold bg-primary text-white hover:brightness-110 disabled:opacity-50";
 
   return (
     <div className="flex-1 overflow-y-auto px-6 pb-6 space-y-4">
@@ -91,11 +91,11 @@ export default function WalkinsView() {
         <form onSubmit={openByCode} className="flex items-center gap-2">
           <label htmlFor="walkin-code" className="sr-only">Customer's check-in code</label>
           <input id="walkin-code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="Scan the customer's code"
-            className="glass-input h-8 w-56 px-3 rounded-lg text-xs" />
+            className="glass-input h-9 w-56 rounded-xl px-3 py-2 text-sm" />
           <button type="submit" className={btn}>Open</button>
         </form>
-        <a href="/settings?section=public" className="text-[11px] font-semibold text-primary hover:underline flex items-center gap-1"><M n="qr_code_2" c="text-sm" />Check-in QR codes</a>
-        {msg && <p role="status" className="text-[11px] text-ink-secondary">{msg}</p>}
+        <a href="/settings?section=public" className="text-xs font-semibold text-primary hover:underline flex items-center gap-1"><M n="qr_code_2" c="text-sm" />Check-in QR codes</a>
+        {msg && <p role="status" className="text-xs text-ink-secondary">{msg}</p>}
       </div>
 
       {!q && <div className="text-xs text-ink-tertiary">Loading…</div>}
@@ -117,7 +117,7 @@ export default function WalkinsView() {
             {q.called.map((w) => (
               <Row key={w.id} w={w}>
                 <button className={btn} disabled={busy === w.id} onClick={() => noShow(w)}>No-show</button>
-                {canConvert && <button className={primary} disabled={busy === w.id} onClick={() => convert(w)}>Convert to work order</button>}
+                {canConvert && <button className={primary} disabled={busy === w.id} onClick={() => convert(w)}>Create work order</button>}
               </Row>
             ))}
           </section>
@@ -128,7 +128,7 @@ export default function WalkinsView() {
             <div className="px-4 py-2.5 text-xs font-bold text-ink-primary border-b border-slate-100">Overnight drop-offs <span className="font-normal text-ink-tertiary">· {q.key_drops.length}</span></div>
             {q.key_drops.map((w) => (
               <Row key={w.id} w={w}>
-                {canConvert && <button className={primary} disabled={busy === w.id} onClick={() => convert(w)}>Start job</button>}
+                {canConvert && <button className={primary} disabled={busy === w.id} onClick={() => convert(w)}>Create work order</button>}
               </Row>
             ))}
           </section>

@@ -3,6 +3,7 @@ import { createPortal } from "react-dom";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
+import Switch from "../../components/Switch";
 import { friendlyDate } from "../orders/look";
 import { tint, hueText } from "../../lib/tint";
 import { Drawer, ErrorNote, MoreMenu, btnDanger, btnGhost, btnPrimary, inputCls, labelCls } from "../invoices/billing";
@@ -98,12 +99,10 @@ export default function WebhooksSettings() {
 
   return (
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-      <div className="p-3.5 border-b border-slate-100 flex items-center justify-between gap-2">
-        <div className="min-w-0">
-          <h3 className="text-sm font-semibold text-ink-primary">Webhooks</h3>
-          {data && <div className="text-xs text-ink-tertiary mt-0.5 tabular-nums">{items.length} of {data.max_endpoints ?? 10} endpoints</div>}
-        </div>
-        {items.length > 0 && <button onClick={() => setOpen("new")} disabled={atCap} className={`${btnGhost} bg-white`}><M n="add" c="text-sm" />Add endpoint</button>}
+      <div className="p-3.5 border-b border-slate-100">
+        <h3 className="text-sm font-semibold text-ink-primary">Webhooks</h3>
+        {data && <div className="text-xs text-ink-tertiary mt-0.5 tabular-nums">{items.length} of {data.max_endpoints ?? 10} endpoints</div>}
+        {items.length > 0 && <div className="mt-3">{addBtn}</div>}
       </div>
 
       {!data && !err && <div className="p-4 text-xs text-ink-tertiary">Loading webhooks…</div>}
@@ -235,9 +234,9 @@ export function EndpointDrawer({ endpoint, catalogue, onClose, onSaved, onDelete
       </fieldset>
 
       {endpoint && (
-        <label className="flex items-center gap-2 text-sm text-ink-primary">
-          <input type="checkbox" checked={active} onChange={(e) => setActive(e.target.checked)} />Send events to this endpoint
-        </label>
+        <div className="flex items-center gap-3 text-sm text-ink-primary">
+          <Switch label="Send events to this endpoint" on={active} onChange={setActive} />Send events to this endpoint
+        </div>
       )}
       <ErrorNote msg={err} />
 
