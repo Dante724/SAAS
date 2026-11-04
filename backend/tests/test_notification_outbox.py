@@ -425,3 +425,29 @@ async def test_shutdown_warns_about_unfinished_account_email_retries(monkeypatch
     task.cancel()
     msg = " ".join(r.getMessage() for r in caplog.records)
     assert "1 account email" in msg and "@" not in msg
+
+
+async def test_each_shop_is_delivered_in_a_session_scoped_to_that_shop(client, tenant, db, provider, monkeypatch):
+    """Tenant read guard (#94): the per-shop sweep session carries the shop as its tenant, so its
+    reads and claim UPDATEs can only ever touch that shop's rows."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from backend.core import scheduled
+    org = await _org_id(client, tenant)
+    r = await client.post("/api/auth/register", json={"org_name": "Other", "name": "O",
+                                                      "email": "other-ntf@test.dev", "password": "pw-test-12345"})
+    other = (await client.get("/api/auth/me",
+                              headers={"Authorization": f"Bearer {r.json()['access_token']}"})).json()["org_id"]
+    ids = [await _due_sms(db, org), await _due_sms(db, other)]
+    monkeypatch.setattr("backend.db.database.AsyncSessionLocal",
+                        async_sessionmaker(db.bind, expire_on_commit=False))
+    seen = []
+    real = nr.run_due
+
+    async def run_due(session, *, org_id, now=None):
+        seen.append(session.sync_session.info.get("tenant_org") == org_id)
+        return await real(session, org_id=org_id, now=now)
+    monkeypatch.setattr(nr, "run_due", run_due)
+    await scheduled.deliver_notifications()
+    assert seen == [True, True]
+    assert {(await _row(db, i)).status for i in ids} == {"sent"}

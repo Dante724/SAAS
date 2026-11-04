@@ -62,6 +62,7 @@ async def sweep_notifications() -> None:
     single cross-org query if the org count ever makes this hot.
     """
     from backend.db.database import AsyncSessionLocal
+    from backend.db.tenancy import set_tenant
     from backend.models import Organisation
     from backend.services import notification_rules as nr
 
@@ -76,6 +77,7 @@ async def sweep_notifications() -> None:
             # A session per org: a DB error leaves its session unusable until rolled back, and with
             # one shared session every org after the failing one failed too (512 orgs, 510 failed).
             async with AsyncSessionLocal() as db:
+                set_tenant(db, oid)             # this session is this shop's only
                 try:
                     queued += await nr.queue_reminders(db, org_id=oid)
                     queued += await nr.queue_appointment_reminders(db, org_id=oid)
@@ -104,6 +106,7 @@ async def deliver_notifications() -> None:
     session, and one shop's error never stops the others. Skips the tick while the slower
     notification-sweep is delivering (one deliverer at a time)."""
     from backend.db.database import AsyncSessionLocal
+    from backend.db.tenancy import set_tenant
     from backend.services import notification_rules as nr
 
     async def tick() -> None:
@@ -112,6 +115,7 @@ async def deliver_notifications() -> None:
         totals = {"sent": 0, "retrying": 0, "dead": 0}
         for oid in org_ids:
             async with AsyncSessionLocal() as db:
+                set_tenant(db, oid)             # this session is this shop's only
                 try:
                     res = await nr.run_due(db, org_id=oid)
                     for k in totals:
