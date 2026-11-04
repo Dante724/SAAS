@@ -44,7 +44,9 @@ async def unique_order_code(db: AsyncSession) -> str:
     for _ in range(25):
         # 12 digits, first digit 2 so it never starts with 0 and stays EAN-13-friendly
         code = "2" + "".join(secrets.choice("0123456789") for _ in range(11))
-        exists = (await db.execute(select(Order.id).where(Order.barcode == code))).first()
+        # skip_tenant_filter: barcodes are unique across every shop (uq_orders_barcode).
+        exists = (await db.execute(select(Order.id).where(Order.barcode == code)
+                                   .execution_options(skip_tenant_filter=True))).first()
         if not exists:
             return code
     # astronomically unlikely fallback: widen to 16 digits
@@ -58,7 +60,9 @@ async def unique_public_token(db: AsyncSession) -> str:
     A DB-wide unique index on orders.public_token is the hard guarantee."""
     for _ in range(25):
         tok = secrets.token_urlsafe(16)  # ~22 url-safe chars, fits the 40-char column
-        exists = (await db.execute(select(Order.id).where(Order.public_token == tok))).first()
+        # skip_tenant_filter: track-link tokens are unique across every shop's orders.
+        exists = (await db.execute(select(Order.id).where(Order.public_token == tok)
+                                   .execution_options(skip_tenant_filter=True))).first()
         if not exists:
             return tok
     return secrets.token_urlsafe(24)  # widen on the astronomically unlikely streak
@@ -3999,8 +4003,10 @@ async def set_order_code(
     if not want:
         order.barcode = await unique_order_code(db)   # never leave a WO codeless
     else:
+        # skip_tenant_filter: barcodes are unique across every shop (uq_orders_barcode); only the
+        # fact of a clash is read, never the other order.
         clash = (await db.execute(select(Order.id).where(
-            Order.barcode == want, Order.id != order.id))).first()
+            Order.barcode == want, Order.id != order.id).execution_options(skip_tenant_filter=True))).first()
         if clash:
             raise HTTPException(409, "That code is already used by another work order")
         order.barcode = want

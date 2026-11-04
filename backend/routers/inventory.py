@@ -1938,7 +1938,8 @@ async def recost_po(
     applied = expensed = 0.0
     scale = (delta_total / target) if target else 0
     for part_id, tpart in per_part_target.items():
-        part = (await db.execute(select(Part).where(Part.id == part_id))).scalar_one_or_none()
+        part = (await db.execute(select(Part).where(
+            Part.id == part_id, Part.org_id == current.org_id))).scalar_one_or_none()
         if not part:
             continue
         res = await stock_posting.apply_cost_adjustment(
@@ -2069,8 +2070,13 @@ async def receive_po(
             name = (await db.execute(select(Part.name).where(Part.id == pl.part_id))).scalar_one_or_none() or "a line"
             raise HTTPException(409, f"Receiving {recv:g} of {name}, but only {max(left, 0):g} "
                                      f"{'is' if left == 1 else 'are'} still to come on this order")
-        part = (await db.execute(select(Part).where(Part.id == pl.part_id))).scalar_one_or_none()
+        part = (await db.execute(select(Part).where(
+            Part.id == pl.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
         if not part:
+            if pl.part_id:
+                # A line pointing at a product this shop can't see (another shop's, from data
+                # written before the tenant guards): refuse rather than silently skip it.
+                raise HTTPException(404, "Referenced record not found")
             continue
         stock_rows.check_whole(part, recv)
         plan.append((pl, recv, part, rline))
@@ -2522,11 +2528,14 @@ async def list_conversions(
     # Same org scoping as the asset list (144do): the old `owner_type == "company"` arm listed
     # every shop's converted company assets.
     client_ids = select(Client.id).where(Client.org_id == current.org_id)
+    # skip_tenant_filter: the read guard hides org-less (legacy) devices from every shop; this
+    # narrow opt-out lists this shop's OWN clients' org-less devices too. The WHERE clause is the
+    # ownership proof: this shop's devices, or org-less ones whose client is this shop's.
     rows = (await db.execute(select(Device).where(
         Device.converted_to_part_id.is_not(None),
         or_(Device.org_id == current.org_id,
             and_(Device.org_id.is_(None), Device.client_id.in_(client_ids))))
-        .order_by(Device.id))).scalars().all()
+        .order_by(Device.id).execution_options(skip_tenant_filter=True))).scalars().all()
     # resolve the converted products so we can show their real sell price
     part_ids = [d.converted_to_part_id for d in rows if d.converted_to_part_id]
     parts = {}

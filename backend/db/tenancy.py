@@ -25,14 +25,130 @@ the rule above:
 - the plain-string catalog references on job and sale lines (``ref_id``) are checked the same
   way against products, services and bundles.
 
-Public pages, webhooks, background jobs and the platform console don't set a tenant, so they
-keep the original behaviour.
+Background jobs, migrations and the platform console don't set a tenant, so they keep the
+original behaviour. Public token pages, check-in and inbound webhooks set it with ``set_tenant``
+as soon as they know which shop the request is for.
+
+**Reads and bulk writes (architecture hardening, tenant read guard).** Every model whose rows
+belong to one shop is marked ``OrgScoped``. While a session has a tenant, every ORM SELECT, and
+every ORM bulk ``update(Model)`` / ``delete(Model)``, gets ``WHERE <model>.org_id = :tenant`` for
+each OrgScoped entity in it (joins and aliases included). So ``db.get(Part, other_shops_id)`` is
+None, ``update(Client).where(Client.id == other_shops_id)`` changes 0 rows, and a query that
+forgets its ``org_id`` filter returns only this shop's rows. The hand-written filters stay: this
+is the safety net under them, not a replacement. A row whose org_id is NULL (devices and POs
+still allow it, from an old backfill: migration trg01 fills what it can) is visible to no shop,
+so a new device or PO saved without one takes its shop from its links before flush.
+
+- Not filtered: sessions with no tenant; refreshes of rows already loaded; and statements that
+  opt out with ``.execution_options(skip_tenant_filter=True)``. Each such call site says why
+  (global uniqueness checks such as sign-in emails and order barcodes).
+- ``UNSCOPED_ORG_TABLES`` lists the tables with an org_id that are deliberately not filtered.
+
+Known gaps (the guard only sees ORM entities, through SQL it actually runs):
+
+- ``text()`` SQL, ``select(...).from_statement(...)``, statements on plain ``Table`` objects or
+  ``Model.__table__`` columns, and Core constructs that never name the mapped class (a bare
+  ``exists()`` over table columns) are not filtered. The flush guard's owner lookup below
+  relies on exactly that (it reads ``target.c.org_id``) and also opts out explicitly.
+- ``session.get`` answers from the identity map without SQL, so a row loaded earlier in the same
+  session (before the tenant was set, or through an opt-out) comes back unfiltered.
+- Rule that follows: a read made through an opt-out, or before ``set_tenant``, selects columns
+  (ids, org ids), not whole rows, so no other shop's row lands in the session. The only entity
+  opt-outs are the two legacy device reads (industry scan-resolve, inventory conversions), whose
+  own WHERE clause limits them to this shop's rows and this shop's clients' org-less rows.
+- ``MODE`` (setting ``TENANT_READ_GUARD``): "enforce" (default), "report" (filter nothing, record
+  and log every other-shop row loaded: a rollout/diagnostic switch) or "off".
 """
+import logging
 from functools import cache
 
 from fastapi import HTTPException
+from sqlalchemy import column as sa_column
 from sqlalchemy import event, inspect, select
-from sqlalchemy.orm import Mapper, Session
+from sqlalchemy.orm import Mapper, ORMExecuteState, Session, with_loader_criteria
+
+log = logging.getLogger("tekly.tenancy")
+
+
+class _TemplateOrgId:
+    """``Mixin.org_id`` for with_loader_criteria, which calls its lambda once with the mixin itself
+    to build a cached template. Each model declares its own real ``org_id`` column (FKs, indexes
+    and ondelete differ), which shadows this; declarative ignores it (not a SQL object)."""
+
+    def __get__(self, obj, owner):
+        return sa_column("org_id")
+
+
+class OrgScoped:
+    """Marker mixin: every row belongs to exactly one shop through a non-null ``org_id``. Reads
+    in a session with a tenant only see that shop's rows."""
+    org_id = _TemplateOrgId()
+
+
+# Tables that carry an org_id but are not tenant-filtered, and why. A test fails when a new model
+# with an org_id is neither marked nor listed here.
+UNSCOPED_ORG_TABLES = {
+    "order_statuses": "org_id NULL = the platform's default status set, read by every shop",
+    "admin_action_log": "platform console audit trail; org_id is the shop acted on, nullable",
+    "billing_events": "Stripe Billing webhook ledger (platform), org_id nullable",
+    "role_permission_backups": "written and read by migrations only",
+}
+
+
+def _configured_mode() -> str:
+    from backend.config import settings
+    mode = (getattr(settings, "TENANT_READ_GUARD", "") or "enforce").strip().lower()
+    return mode if mode in ("enforce", "report", "off") else "enforce"
+
+
+MODE = _configured_mode()
+
+# (table, row's org, request's tenant) for every other-shop row an OrgScoped load returned while a
+# tenant was set. Report mode fills it; in enforce mode only an explicit opt-out can. A bounded
+# test/diagnostic hook, not an audit log.
+cross_org_reads: list = []
+_MAX_RECORDED = 1000
+
+
+def set_tenant(db, org_id) -> None:
+    """Scope this request's session to one shop (reads filtered, writes guarded). Public pages,
+    check-in and webhooks call it as soon as they know which shop the request is for."""
+    if org_id:
+        getattr(db, "sync_session", db).info["tenant_org"] = org_id
+
+
+@event.listens_for(Session, "do_orm_execute")
+def _scope_to_tenant(state: ORMExecuteState) -> None:
+    tenant = state.session.info.get("tenant_org")
+    if not tenant or MODE != "enforce":
+        return
+    # ORM bulk UPDATE / DELETE (``update(Model).where(...)``) never pass through the flush guard,
+    # so they get the same criteria as reads: another shop's row matches nothing (rowcount 0).
+    if not (state.is_select or state.is_update or state.is_delete):
+        return
+    # Column loads refresh rows this session already holds; relationship loads inherit the
+    # criteria from the query that loaded their parent (propagate_to_loaders).
+    if state.is_select and (state.is_column_load or state.is_relationship_load):
+        return
+    if state.execution_options.get("skip_tenant_filter"):
+        return
+    state.statement = state.statement.options(
+        with_loader_criteria(OrgScoped, lambda cls: cls.org_id == tenant, include_aliases=True))
+
+
+@event.listens_for(Mapper, "load")
+def _note_cross_org_load(obj, context) -> None:
+    if MODE == "off" or not isinstance(obj, OrgScoped):
+        return
+    session = context.session
+    tenant = session.info.get("tenant_org") if session is not None else None
+    org = obj.__dict__.get("org_id")
+    if tenant and org and org != tenant:
+        table = type(obj).__table__.name
+        if len(cross_org_reads) < _MAX_RECORDED:
+            cross_org_reads.append((table, org, tenant))
+        if MODE == "report":
+            log.warning("tenant read guard (report only): a %s row of another shop was read", table)
 
 
 class CrossTenantReference(HTTPException):
@@ -85,9 +201,40 @@ def _soft_targets(obj, attr: str = "ref_id") -> tuple:
     return (t["part"], t["service"], t["bundle"])
 
 
+# Tables whose org_id is still nullable (old backfill): a new row written without one takes its
+# shop from these links, in this order (the same rules as migration trg01), so no new row is ever
+# org-less, and so invisible to every shop. Falls back to the request's shop.
+_ORG_FROM_LINKS = {
+    "devices": ("client_id", "location_id", "warehouse_id"),
+    "purchase_orders": ("location_id", "supplier_id"),
+}
+
+
+def _fill_missing_org(session: Session, tenant) -> None:
+    for obj in session.new:
+        links = _ORG_FROM_LINKS.get(getattr(getattr(obj, "__table__", None), "name", None))
+        if not links or getattr(obj, "org_id", None):
+            continue
+        org = None
+        for attr in links:
+            val = getattr(obj, attr, None)
+            if not val:
+                continue
+            col = obj.__table__.c[attr]
+            target = next(iter(col.foreign_keys)).column.table
+            # Plain table columns, explicit opt-out: only the linked row's shop id is read.
+            with session.no_autoflush:
+                org = session.execute(select(target.c.org_id).where(target.c.id == val)
+                                      .execution_options(skip_tenant_filter=True)).scalar()
+            if org:
+                break
+        obj.org_id = org or tenant
+
+
 @event.listens_for(Session, "before_flush")
 def _guard_cross_tenant_references(session: Session, flush_context, instances) -> None:
     tenant = session.info.get("tenant_org")
+    _fill_missing_org(session, tenant)
     if tenant:
         for obj in session.deleted:
             org = getattr(obj, "org_id", None)
@@ -138,7 +285,11 @@ def _guard_cross_tenant_references(session: Session, flush_context, instances) -
             owners = {i: known[(target.name, i)] for i in refs if (target.name, i) in known}
             missing = [i for i in refs if i not in owners]
             if missing:
-                for i, o in session.execute(select(pk, target.c.org_id).where(pk.in_(missing))).all():
+                # This check exists to SEE another shop's owner and refuse. It selects plain table
+                # columns, which the read guard doesn't filter anyway; skip_tenant_filter is belt and
+                # braces, so a later refactor to ORM attributes can't silently disable the guard.
+                for i, o in session.execute(select(pk, target.c.org_id).where(pk.in_(missing))
+                                            .execution_options(skip_tenant_filter=True)).all():
                     owners[i] = o
                     if o:
                         known[(target.name, i)] = o

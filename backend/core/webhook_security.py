@@ -46,6 +46,7 @@ async def verify_org_webhook(db: AsyncSession, org_id: str, request: Request) ->
     ok = hmac.compare_digest(presented.encode(), (expected or "\0" * 32).encode())
     if not (org and expected and presented and ok):
         raise HTTPException(401, _BAD_TOKEN)
+    db.sync_session.info["tenant_org"] = org.id   # proven this shop's: scope the rest of the request
 
 
 # ── Provider-signed webhooks (Stripe, Square, Meta, Twilio) ──────────────────

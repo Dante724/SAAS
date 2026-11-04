@@ -90,8 +90,10 @@ async def create_config(
             raise HTTPException(422, f"{domain} is a public mail provider and can't be routed to SSO")
         # One shop per domain: otherwise a second shop could claim yours and intercept the
         # "Sign in with SSO" routing for your staff (and discover() would 500 on duplicates).
+        # skip_tenant_filter: the check is about OTHER shops' connections; only an id is read.
         taken = (await db.execute(select(SsoConnection.id).where(
-            SsoConnection.email_domain == domain, SsoConnection.org_id != current.org_id))).first()
+            SsoConnection.email_domain == domain, SsoConnection.org_id != current.org_id)
+            .execution_options(skip_tenant_filter=True))).first()
         if taken:
             raise HTTPException(409, f"{domain} is already linked to another account")
     from backend.services.crypto import encrypt

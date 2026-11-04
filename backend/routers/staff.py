@@ -253,7 +253,9 @@ async def create_employee(
     import secrets
 
     data.email = norm_email(data.email)
-    existing = await db.execute(select(Employee).where(func.lower(Employee.email) == data.email))
+    # skip_tenant_filter: sign-in emails are unique across every shop (one email = one login).
+    existing = await db.execute(select(Employee.id).where(func.lower(Employee.email) == data.email)
+                                .execution_options(skip_tenant_filter=True))
     if existing.scalar_one_or_none():
         raise HTTPException(400, "Email already in use")
     if data.password is not None and len(data.password) < MIN_PASSWORD_LEN:
@@ -362,8 +364,10 @@ async def update_employee(
             # Changing your own sign-in email then resetting the password is an account takeover
             # for anyone holding a session token, so it needs the password too.
             await _assert_current_password(current, current_password)
-        dupe = (await db.execute(select(Employee).where(
-            func.lower(Employee.email) == payload["email"], Employee.id != emp.id))).scalar_one_or_none()
+        # skip_tenant_filter: sign-in emails are unique across every shop (one email = one login).
+        dupe = (await db.execute(select(Employee.id).where(
+            func.lower(Employee.email) == payload["email"], Employee.id != emp.id)
+            .execution_options(skip_tenant_filter=True))).scalar_one_or_none()
         if dupe:
             raise HTTPException(400, "Email already in use")
         emp.email_verified = False   # the new address hasn't been proven yet
@@ -511,8 +515,12 @@ async def create_invite(data: InviteIn, db: AsyncSession = Depends(get_db),
     await _assert_can_assign_role(db, current, data.role_id)
     from backend.services.billing import assert_can_add
     await assert_can_add(db, current.org_id, "team_members")
-    dupe = (await db.execute(select(Employee).where(func.lower(Employee.email) == email))).scalar_one_or_none()
-    if dupe and dupe.org_id == current.org_id:
+    # skip_tenant_filter: sign-in emails are unique across every shop (one email = one login), so
+    # an address already used at another shop can't be invited either. Only its shop id is read.
+    dupe_org = (await db.execute(select(Employee.org_id).where(func.lower(Employee.email) == email)
+                                 .execution_options(skip_tenant_filter=True))).scalar_one_or_none()
+    dupe = dupe_org is not None
+    if dupe and dupe_org == current.org_id:
         raise HTTPException(400, "Someone with that email is already on the team")
     if dupe:
         # One email = one Tekly login today; accepting would fail on the unique email.

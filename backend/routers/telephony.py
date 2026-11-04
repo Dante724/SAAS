@@ -239,6 +239,7 @@ async def aircall_webhook(request: Request, org_id: str = Query(..., max_length=
         # Only failed attempts count against the shop, so junk can't crowd out Aircall's real events.
         await ratelimit.aenforce("aircall-hook-bad", org_id, 30, 60)
         raise HTTPException(403, "Invalid Aircall token")
+    db.sync_session.info["tenant_org"] = org_id   # proven this shop's: scope the rest of the request
     cfg = await _cfg(db, org_id)
     if not (cfg and cfg.enabled and cfg.provider == "aircall"):
         return {"ok": True, "ignored": "aircall is not the active provider"}

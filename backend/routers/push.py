@@ -2,7 +2,7 @@
 
 from fastapi import APIRouter, Depends
 from pydantic import BaseModel
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
@@ -38,17 +38,20 @@ async def subscribe(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
-    existing = (await db.execute(select(PushSubscription).where(
-        PushSubscription.endpoint == data.endpoint))).scalar_one_or_none()
-    if existing:
-        existing.employee_id = current.id
-        existing.org_id = current.org_id
-        existing.p256dh = data.keys.p256dh
-        existing.auth = data.keys.auth
-        existing.user_agent = data.user_agent
-        existing.last_used_at = now_utc()
+    # A push endpoint is one browser. Whoever subscribes it last owns it, whichever shop had it
+    # before: otherwise a browser that signed in at shop B and then at shop A keeps getting B's
+    # notifications. skip_tenant_filter: the earlier owner may be another shop; only its id is
+    # read, and the row is then deliberately handed to this shop and employee.
+    existing_id = (await db.execute(select(PushSubscription.id).where(
+        PushSubscription.endpoint == data.endpoint).order_by(PushSubscription.id)
+        .execution_options(skip_tenant_filter=True))).scalars().first()
+    if existing_id:
+        await db.execute(update(PushSubscription).where(PushSubscription.endpoint == data.endpoint)
+                         .values(employee_id=current.id, org_id=current.org_id, p256dh=data.keys.p256dh,
+                                 auth=data.keys.auth, user_agent=data.user_agent, last_used_at=now_utc())
+                         .execution_options(skip_tenant_filter=True, synchronize_session=False))
         await db.commit()
-        return {"ok": True, "id": existing.id, "updated": True}
+        return {"ok": True, "id": existing_id, "updated": True}
     sub = PushSubscription(
         org_id=current.org_id, employee_id=current.id, endpoint=data.endpoint,
         p256dh=data.keys.p256dh, auth=data.keys.auth, user_agent=data.user_agent)

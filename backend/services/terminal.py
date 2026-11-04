@@ -218,9 +218,12 @@ async def register_reader(db: AsyncSession, org_id: str, *, provider: str, label
         PaymentTerminal.reader_id == reader_id))).scalar_one_or_none()
     if t and t.active:
         raise TerminalError(409, "That reader is already registered.")
+    # skip_tenant_filter: a live reader belongs to one shop across the platform
+    # (uq_payment_terminal_live_reader); only the fact that another shop has it is read.
     if not test and (await db.execute(select(PaymentTerminal.id).where(
             PaymentTerminal.provider == provider, PaymentTerminal.reader_id == reader_id,
-            PaymentTerminal.org_id != org_id, PaymentTerminal.test_mode == False))).first():  # noqa: E712
+            PaymentTerminal.org_id != org_id, PaymentTerminal.test_mode == False)  # noqa: E712
+            .execution_options(skip_tenant_filter=True))).first():
         # Review P8: a real reader is one shop's (sandbox test devices are shared by design).
         raise TerminalError(409, "That reader is registered to another shop.")
     if not t:
