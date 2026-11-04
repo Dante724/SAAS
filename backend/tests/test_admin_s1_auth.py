@@ -163,3 +163,56 @@ async def test_weak_admin_passwords_are_refused(client):
     r = await client.post("/api/admin/admins", json={"email": "new@t.dev", "name": "N", "password": "short", "role": "support"},
                           headers=hdr)
     assert r.status_code == 422
+
+
+# ── Restored from the audit M6 file (test_audit_m6_platform_admin.py, dropped in sync 3a0d86da) ──
+
+@pytest.mark.asyncio
+async def test_too_many_wrong_2step_codes_give_429_even_for_a_right_code(client):
+    """admin_mfa: 10 code checks per admin per 5 minutes, then 429 before the code is looked at."""
+    from backend.services import ratelimit
+    email = await seed_admin()
+    await login(client, email)                       # enrols (its confirm counts in the same bucket)
+    ratelimit._HITS.clear()                          # start the 2-step bucket from zero
+    ticket = (await _ticket(client, email))["ticket"]
+    for _ in range(10):
+        r = await client.post("/api/admin/login/mfa", json={"ticket": ticket, "code": "000000"})
+        assert r.status_code == 401, r.text
+    r = await client.post("/api/admin/login/mfa", json={"ticket": ticket, "code": code_for(email, offset=30)})
+    assert r.status_code == 429, r.text
+
+
+@pytest.mark.asyncio
+async def test_two_step_secret_is_encrypted_at_rest(client, monkeypatch):
+    from cryptography.fernet import Fernet
+
+    from backend.services import crypto
+    monkeypatch.setattr(settings, "TOKEN_ENCRYPTION_KEY", Fernet.generate_key().decode())
+    email = await seed_admin()
+    await login(client, email)
+    secret = _SECRETS[email]
+    async with AsyncSessionLocal() as db:
+        stored = (await db.execute(select(PlatformAdmin.mfa_secret)
+                                   .where(PlatformAdmin.email == email))).scalar_one()
+    assert stored and stored.startswith(crypto._PREFIX) and crypto.is_encrypted(stored)
+    assert secret not in stored
+    assert crypto.decrypt(stored) == secret
+    # and the encrypted secret still signs in
+    assert (await login(client, email))["Authorization"].startswith("Bearer ")
+
+
+@pytest.mark.asyncio
+async def test_unknown_email_still_runs_the_password_check(client, monkeypatch):
+    """An unknown email pays the same bcrypt check (against _DUMMY_HASH) as a wrong password."""
+    from backend.routers import admin as admin_router
+    calls = []
+    real = admin_router.verify_password
+
+    def spy(pw, h):
+        calls.append(h)
+        return real(pw, h)
+
+    monkeypatch.setattr(admin_router, "verify_password", spy)
+    r = await client.post("/api/admin/login", json={"email": "nobody@nowhere.dev", "password": "wrong-password-xx"})
+    assert r.status_code == 401
+    assert calls == [admin_router._DUMMY_HASH]
