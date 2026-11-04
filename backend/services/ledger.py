@@ -17,6 +17,7 @@ Rows are written through :func:`post_contact_ledger` only, so the ledger and the
 
 Entry types used across the app:
     charge          a completed work order's total is billed to the client   (+)
+                    (ref_type "invoice_payment": invoice money paid for no job)
     income          a payment received against an order                      (-)
     prepayment      money taken before the work is billed                    (-)
     refund          an over-payment handed back to the client                (+)
@@ -131,21 +132,63 @@ async def available_credit(db: AsyncSession, org_id: str, client_id: Optional[st
     """Client money the shop already holds that can pay for something (B3).
 
     The ledger balance already nets this job's charge and the money taken for it, so credit used
-    on a job is the balance *without* that job. A "pay from balance" moves no money and posts no
-    ledger row: it only marks the job paid out of credit the ledger already shows."""
+    on a job is the balance *without* that job. A "pay from balance" on a job moves no money and
+    posts no ledger row: the job's charge takes the credit when the job closes. Until then the
+    ledger reads money paid for a job not billed yet (an open job) as credit, so it is held back
+    here: each such job keeps what was paid for it, up to its total, by any method, and this job
+    keeps what was already paid for it from balance. Without that the same 100 paid for two open
+    jobs (B3 recheck). Job-less invoice money posts its own charge (``charge_jobless_invoice_money``)."""
     if not client_id:
         return 0.0
+    # The client row is held so two payments from balance (on different jobs) take turns and the
+    # second sees the first. The callers write next, under the same transaction.
     bal = (await db.execute(select(Client.balance).where(
-        Client.id == client_id, Client.org_id == org_id))).scalar() or 0
-    job = 0.0
+        Client.id == client_id, Client.org_id == org_id).with_for_update())).scalar() or 0
+    from sqlalchemy import case
+
+    from backend.models import Order, Payment
+    from backend.services.order_money import net_paid
+    job = spent_here = 0.0
     if order_id:
-        from backend.models import Payment
         pay_ids = select(Payment.id).where(Payment.order_id == order_id)
         job = (await db.execute(select(func.coalesce(func.sum(ClientLedgerEntry.amount), 0)).where(
             ClientLedgerEntry.client_id == client_id,
             ((ClientLedgerEntry.ref_type == "order") & (ClientLedgerEntry.ref_id == order_id))
             | ((ClientLedgerEntry.ref_type == "payment") & ClientLedgerEntry.ref_id.in_(pay_ids))))).scalar() or 0
-    return q2(max(0.0, -(float(bal) - float(job))))
+        # credit already spent on this job (balance payments, net of any given back)
+        spent_here = max(float((await db.execute(select(func.coalesce(func.sum(case(
+            (Payment.kind == "refund", -func.abs(Payment.amount)), else_=Payment.amount)), 0)).where(
+            Payment.order_id == order_id, Payment.method == "balance"))).scalar() or 0), 0.0)
+    held = 0.0
+    paid_jobs = select(Payment.order_id).where(Payment.order_id.isnot(None))
+    others = (await db.execute(select(Order.id, Order.total, Order.written_off).where(
+        Order.org_id == org_id, Order.client_id == client_id, Order.id.in_(paid_jobs),
+        Order.id != (order_id or "")))).all()
+    for oid, total, written_off in others:
+        billable = float(total or 0) - float(written_off or 0)
+        charged = await order_charge_net(db, client_id, oid)
+        if charged >= billable - 0.005:
+            continue                     # billed in full: its payments are already netted against it
+        held += max(min(await net_paid(db, oid), billable) - charged, 0.0)
+    return q2(max(0.0, -(float(bal) - float(job)) - spent_here - held))
+
+
+async def charge_jobless_invoice_money(db: AsyncSession, org_id: str, inv, payments,
+                                       created_by_id: str | None = None) -> None:
+    """Bill the part of an invoice payment that belongs to no job (B3 recheck).
+
+    A job is billed to the ledger when it closes; an invoice's own lines (a standalone invoice, or
+    free lines beside its jobs) never are. So money taken for them read as client credit, and a
+    "pay from balance" for them never used any credit up. Each job-less payment is billed as it
+    is paid (cash nets to zero against its income row, a balance payment uses the credit), and
+    change handed back (a job-less refund row) takes its share off again. Caller commits."""
+    for p in payments:
+        if p is None or p.order_id or not inv.client_id:
+            continue
+        amt = -abs(float(p.amount or 0)) if p.kind == "refund" else float(p.amount or 0)
+        await post_contact_ledger(db, org_id, inv.client_id, "charge", amt,
+                                  note=f"Invoice {inv.invoice_number or ''}".strip(), ref_type="invoice_payment",
+                                  ref_id=p.id, created_by_id=created_by_id)
 
 
 async def _has_ref(db: AsyncSession, client_id: str, ref_type: str, ref_id: str) -> bool:
