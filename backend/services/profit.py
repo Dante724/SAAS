@@ -180,7 +180,10 @@ async def _period(db, org_id, df, dt, **flt) -> tuple[dict, dict, list]:
     other = await _reconciling(db, org_id, df, dt, rows, **flt)
     if other:
         _add(buckets["other"], other)
-        rows.append({"kind": "other", "id": None, "number": None, "date": dt.isoformat(), "location_id": None,
+        # dated at the period's end, but never after today (an open "to" runs to tomorrow)
+        from backend.services.dates import now_utc
+        at = max(df, min(dt, now_utc()))
+        rows.append({"kind": "other", "id": None, "number": None, "date": at.isoformat(), "location_id": None,
                      "employee_id": None, "client_id": None, "type_id": None, "status": None,
                      "reason": "Refunds, returns and credit notes in this period not inside a job above, "
                                "and invoices that bill no job", **_pick(other)})

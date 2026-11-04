@@ -8,7 +8,8 @@ job totals with tax inside), receivables four ways, and an order refund showed u
     billed on an invoice staff issued (sent to the customer), whichever came first. A payment on
     an open job doesn't earn it: the invoice a payment makes for itself was never issued. A line's
     total always carries its tax (added on top or already in the price), so its net is
-    total / (1 + rate). Estimates and deleted jobs never count. Job profitability uses this date too.
+    total / (1 + rate). Estimates and deleted jobs never count, nor do refunds of a deleted job's
+    money (deleting it hands the money back). Job profitability uses this date too.
   + dropped jobs: only the money the shop kept (paid less refunds, capped at the bill), ex tax,
     on the day the job was dropped. What was written off when it was dropped is never revenue.
   + counter sales (POS), on the day of the sale. Deleted (voided) sales never count.
@@ -25,11 +26,12 @@ counter sales' cost, and the costed lines of manual invoices.
 
 **Cash collected** is a different figure, labelled "Paid": money in (job payments, deposits, paid
 counter sales) minus money handed back, on the day it moved. Paying from a client's balance
-moves no new money and isn't counted.
+moves no new money and isn't counted. Money back includes the till's: cash refunds for goods
+returned to the counter and card refunds of counter sales. Deleted sales and refunds never count.
 
 **Receivables (owed to you)**: what customers still owe on work orders, by the job screen's own
 rule (order_money.balance_due: total − written off − money paid net of refunds − credit notes, never below 0;
-estimates and dropped jobs excluded), plus the balance of issued manual invoices. Client balances (`ar`) come from the contact ledger: a different measure.
+estimates, dropped and deleted jobs excluded), plus the balance of issued manual invoices. Client balances (`ar`) come from the contact ledger: a different measure.
 
 **Operating expenses**: expense records plus expense cash transactions. A refund to a customer
 is never an expense, even where a path posts it as one against an order, invoice or sale.
@@ -276,6 +278,7 @@ async def net_sales(db: AsyncSession, org_id: str, df: Optional[datetime] = None
     # refunds paid in the period, on any job (closed or not): their revenue share, ex tax
     rq = (select(Payment.order_id, func.sum(Payment.amount)).join(Order, Order.id == Payment.order_id)
           .where(Order.org_id == org_id, Payment.kind == "refund", *_in(Payment.paid_at, df, dt),
+                 Order.archived == False,  # noqa: E712  (a deleted job is out of revenue, its refund too)
                  *([Order.status.notin_(dropped)] if dropped else []))
           .group_by(Payment.order_id))
     if location_id:
@@ -395,6 +398,20 @@ async def cash_collected(db: AsyncSession, org_id: str, df: Optional[datetime] =
         sq = sq.where(Sale.location_id == location_id)
     money_in = float(paid_in or 0) + float((await db.execute(sq)).scalar() or 0)
     back = abs(float(paid_back or 0))
+    # Money handed back at the till moves no Payment: a till return's cash refund (a Refund with no
+    # payment of its own; deleted ones put the cash back) and card refunds of counter sales.
+    tq = select(func.coalesce(func.sum(Refund.amount), 0)).outerjoin(
+        ClientReturn, ClientReturn.id == Refund.return_id).where(
+        Refund.org_id == org_id, Refund.payment_id.is_(None), Refund.voided_at.is_(None),
+        *_in(Refund.created_at, df, dt))
+    if location_id:
+        tq = tq.where(ClientReturn.location_id == location_id)
+    srq = select(func.coalesce(func.sum(func.abs(Transaction.amount)), 0)).where(
+        Transaction.org_id == org_id, Transaction.status == "active", Transaction.ref_type == "sale",
+        Transaction.txn_type.in_(("expense", "refund")), *_in(Transaction.actual_date, df, dt))
+    if location_id:
+        srq = srq.where(Transaction.ref_id.in_(select(Sale.id).where(Sale.location_id == location_id)))
+    back += float((await db.execute(tq)).scalar() or 0) + float((await db.execute(srq)).scalar() or 0)
     return {"in": q2(money_in), "refunds": q2(back), "net": q2(money_in - back)}
 
 
@@ -405,7 +422,7 @@ async def receivables(db: AsyncSession, org_id: str, location_id: Optional[str] 
     dropped = await _dropped_keys(db, org_id)
     due = balances_due(org_id)
     q = select(func.coalesce(func.sum(due.c.owed), 0)).select_from(due).join(Order, Order.id == due.c.order_id).where(
-        Order.org_id == org_id, Order.is_estimate == False)  # noqa: E712
+        Order.org_id == org_id, Order.is_estimate == False, Order.archived == False)  # noqa: E712
     if dropped:
         q = q.where(Order.status.notin_(dropped))
     if location_id:
