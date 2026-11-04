@@ -1986,18 +1986,23 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
             await db.refresh(order, ["lines"])
             await eng.accrue_on_status(order, order.status)
 
-    # Customer/staff messages are queued in the SAME transaction as the status change (outbox):
-    # they exist only if the change does, and the notification sweep sends them. Nothing here
-    # calls Twilio/SMTP, so a provider outage can't slow or fail this request. The savepoint keeps
-    # a rule error from undoing the status change; the error is logged, not swallowed. Staff web
-    # pushes are collected and sent only after the commit (sending commits, and blocks on HTTP).
+    # Customer/staff messages are queued (outbox), never sent here: nothing in this request calls
+    # Twilio/SMTP, and the notification sweep delivers them. Order of work:
+    #   1. commit the status change. (CommissionEngine above already commits it for jobs; this
+    #      makes it explicit, and the place where a failed save is reported as such.)
+    #   2. queue the messages in a short transaction of their own, in this request's session.
+    #      Not in a savepoint opened before the rules' reads: on SQLite that transaction keeps a
+    #      read snapshot, and when another connection commits meanwhile (the webhook outbox, a
+    #      second request on the job) its first insert fails with "database is locked".
+    #      A rule error rolls back only the queueing and is logged; the status change stands.
+    #   3. send staff web pushes, after everything is committed (sending writes and blocks).
     import logging
     from backend.services import notification_rules as _nr
     from backend.services import push as _push
     _ev = "closed" if is_closing else "status_changed"
     _pushes: list = []
     try:
-        _sp = await db.begin_nested()   # flushes the status change itself first
+        await db.commit()
     except Exception:
         logging.getLogger("tekly.notifications").exception(
             "status change failed for org %s order %s (%s to %s)", current.org_id, order.id, _ev, data.status)
@@ -2009,18 +2014,17 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
                                      event=_ev, status_key=data.status, actor_id=current.id,
                                      commit=False, push_later=_pushes)
-        await _sp.commit()
-    except Exception:  # noqa: BLE001 — never fails the status change
-        if _sp.is_active:
-            await _sp.rollback()
-        _pushes.clear()                 # their bell items were rolled back with the savepoint
+        # No legacy fallback: the old "templates when no rule matched and the status has
+        # triggers_notification" path is gone so one setting (Settings › Notifications) decides
+        # what the customer gets. Flagged statuses were converted to equivalent per-status rules.
+        await db.commit()
+    except Exception:  # noqa: BLE001 — never fails the status change, which is already saved
+        await db.rollback()
+        _pushes.clear()                 # their bell items were rolled back too
         logging.getLogger("tekly.notifications").exception(
             "notification rules failed for org %s order %s (%s to %s); status change kept",
             current.org_id, order.id, _ev, data.status)
-    # No legacy fallback: the old "templates when no rule matched and the status has
-    # triggers_notification" path is gone so one setting (Settings › Notifications) decides
-    # what the customer gets. Flagged statuses were converted to equivalent per-status rules.
-    await db.commit()   # the status change and its queued messages, together
+        await db.refresh(order)         # the rollback expired it; the code below reads it
     await _push.dispatch_deferred(db, _pushes)
 
     # Notify the assigned technician their job's status moved (unless they did it).

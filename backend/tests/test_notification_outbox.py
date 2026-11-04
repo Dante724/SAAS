@@ -236,6 +236,34 @@ async def test_a_rule_evaluation_error_is_logged_not_swallowed(client, tenant, d
     assert hits and hits[0].exc_info, [rec.getMessage() for rec in caplog.records]
 
 
+async def test_a_concurrent_writer_does_not_lose_the_queued_message(client, tenant, db, monkeypatch, caplog):
+    """CI #95: another connection commits while the status request is queueing its messages
+    (the webhook outbox delivering, or a second request on the same job). The queueing must not
+    run in a transaction that took its read snapshot before that commit: on SQLite the first
+    insert then fails at once with "database is locked" and the message is lost."""
+    from sqlalchemy import text
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+    org, oid, key = await _status_setup(client, tenant, db)
+    Other = async_sessionmaker(db.bind, expire_on_commit=False)
+    real = nr.evaluate
+
+    async def evaluate_with_a_writer_in_between(session, **kw):
+        await session.execute(select(NotificationLog.id).limit(1))     # the rule's first reads
+        async with Other() as other:                                    # someone else commits
+            await other.execute(text("UPDATE organisations SET name = name WHERE id = :o"), {"o": org})
+            await other.commit()
+        return await real(session, **kw)
+    monkeypatch.setattr(nr, "evaluate", evaluate_with_a_writer_in_between)
+    with caplog.at_level(logging.ERROR, logger="tekly.notifications"):
+        r = await client.patch(f"/api/orders/{oid}/status", json={"status": key}, headers=tenant)
+    assert r.status_code == 200, r.text
+    assert not [rec for rec in caplog.records if rec.name == "tekly.notifications"], caplog.text
+    db.expire_all()
+    logs = (await db.execute(select(NotificationLog).where(
+        NotificationLog.order_id == oid, NotificationLog.trigger_event == "status_changed"))).scalars().all()
+    assert [lg.status for lg in logs] == ["scheduled"]
+
+
 # ── history API ──────────────────────────────────────────────────────────────────────────────
 async def test_history_shows_a_dead_message_as_failed(client, tenant, db, provider):
     provider.script = [BAD_NUMBER]
