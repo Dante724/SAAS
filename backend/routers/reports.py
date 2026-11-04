@@ -1433,7 +1433,7 @@ async def total_profit_csv(
     await assert_perm(db, current, "can_export_sales")
     out = await _total_profit_for(db, current, date_from, date_to, location_id, technician_id)
     kinds = {"job": "Job", "dropped": "Dropped job", "sale": "Counter sale", "other": "Refunds and other"}
-    fields = [("Sales (ex tax)", "revenue"), ("Tax", "tax"), ("Parts cost", "cogs"),
+    fields = [("Sales", "revenue"), ("Tax", "tax"), ("Parts cost", "cogs"),
               ("Labour cost", "labour_cost"), ("Commission", "commission"), ("Profit", "profit"),
               ("Written off", "written_off")]
     fields = [(label, key) for label, key in fields if any(key in r for r in out["rows"]) or not out["rows"]]
