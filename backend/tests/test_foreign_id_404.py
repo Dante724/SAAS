@@ -153,3 +153,37 @@ async def test_foreign_id_is_404_and_own_id_still_works(client, db, name, method
     assert own.status_code == 200, f"{name}: shop A's own call failed: {own.text}"
     if method == "DELETE":
         assert own.json() == {"ok": True}
+
+
+@pytest.mark.asyncio
+async def test_set_price_item_on_foreign_type_is_404_and_stores_nothing(client, db):
+    """PUT /api/pricing/types/{id}/items with another shop's price type and a valid body: 404 from
+    the price-type lookup, and no price row is written in either shop."""
+    from backend.models import PriceTypeItem
+    ha = await _register(client, "Shop A")
+    hb = await _register(client, "Shop B")
+    ids = await _seed(client, ha)
+    b_part = (await _ok(await client.post("/api/inventory/parts",
+                                          json={"name": "B part", "sku": f"B-{uuid.uuid4().hex[:6]}"},
+                                          headers=hb)))["id"]
+    url = f"/api/pricing/types/{ids['price_type']}/items"
+    before = await _ok(await client.get(url, headers=ha))
+
+    r = await client.put(url, json={"item_type": "product", "item_id": b_part, "price": 7}, headers=hb)
+    assert r.status_code == 404, r.text
+    # The shop-scoped lookup answers, before anything is written (not a guard tripping on flush).
+    detail = r.json()["detail"]
+    assert isinstance(detail, dict) and detail.get("message") == \
+        "That price type doesn't exist any more. Pick another.", r.text
+
+    # Nothing stored in either shop: A's type still has only its seeded row, and B's part has no price.
+    on_type = (await db.execute(select(PriceTypeItem.item_id).where(
+        PriceTypeItem.price_type_id == ids["price_type"]))).scalars().all()
+    assert on_type == [ids["part"]]
+    assert (await db.execute(select(func.count()).select_from(PriceTypeItem).where(
+        PriceTypeItem.item_id == b_part))).scalar() == 0
+    assert await _ok(await client.get(url, headers=ha)) == before
+
+    # Same shop, same type: still saves.
+    own = await client.put(url, json={"item_type": "product", "item_id": ids["part"], "price": 11}, headers=ha)
+    assert own.status_code == 200 and own.json() == {"ok": True}, own.text

@@ -337,6 +337,7 @@ async def set_type_item(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
+    await get_owned_or_404(db, PriceType, type_id, current.org_id, "price type")
     if data.item_type not in ("product", "service"):
         raise HTTPException(422, "item_type must be product|service")
     row = (await db.execute(select(PriceTypeItem).where(
