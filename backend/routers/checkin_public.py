@@ -12,7 +12,7 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
-from sqlalchemy import select
+from sqlalchemy import select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -27,7 +27,10 @@ MAX_PHOTO = 7_000_000            # data-URL characters (~5 MB image)
 MAX_PHOTOS = 3
 MAX_PER_POINT_DAY = 150          # new check-ins a point takes per queue day
 MAX_PER_ORG_DAY = 500            # new check-ins a shop takes per 24 h, all points
-MAX_PHONES_PER_IP = 5            # distinct numbers one IP may check in per 24 h (each one is a text)
+MAX_PHONES_PER_IP = 5            # distinct numbers one IP may check in per 24 h at a point (each one is a text)
+MAX_SUBMITS_PER_IP = 6           # check-ins one IP makes at a point per 5 min (kiosks: no limit)
+MAX_TRIES_PER_IP = 30            # any submit, valid or not, per point and IP per 5 min (flood guard)
+DOUBLE_TAP_MIN = 10              # the same form sent again within this many minutes is one check-in
 PNG_MAGIC = b"\x89PNG\r\n\x1a\n"
 
 
@@ -41,14 +44,46 @@ def _ip(request: Request) -> str:
     return client_ip(request)
 
 
-async def _limit_phones_per_ip(ip: str, phone: str) -> None:
-    """Counts each distinct number once per IP: the first sight of (ip, phone) bumps the IP's
-    count, repeats of the same number don't."""
+async def _limit_phones_per_ip(point_id: str, ip: str, phone: str) -> None:
+    """Counts each distinct number once per IP at this point: the first sight of (ip, phone)
+    bumps the IP's count, repeats of the same number don't. Per point, so one shop's walk-ins
+    never use up another shop's (or point's) allowance on a shared Wi-Fi."""
     try:
-        await _limit("checkin_ip_phone_seen", f"{ip}:{phone}", 1, 86400)
+        await _limit("checkin_ip_phone_seen", f"{point_id}:{ip}:{phone}", 1, 86400)
     except HTTPException:
         return                                   # seen already: not a new number
-    await _limit("checkin_ip_phones", ip, MAX_PHONES_PER_IP, 86400)
+    await _limit("checkin_ip_phones", f"{point_id}:{ip}", MAX_PHONES_PER_IP, 86400)
+
+
+async def _limits(point: CheckinPoint, ip: str, phone_digits: str) -> None:
+    """Counted only once the form is valid, so a customer fixing a mistake isn't locked out.
+    A kiosk is one shared device: every walk-in comes from its IP, so only the per-number,
+    per-point and per-shop caps apply to it."""
+    await _limit("checkin_phone", f"{point.id}:{phone_digits}", 3, 1800)
+    if point.kiosk:
+        return
+    await _limit("checkin_submit", f"{point.id}:{ip}", MAX_SUBMITS_PER_IP, 300)
+    await _limit_phones_per_ip(point.id, ip, phone_digits)
+
+
+async def _double_tap(db: AsyncSession, point: CheckinPoint, day, data: "CheckinIn",
+                      inquiry: str) -> Optional[Checkin]:
+    """The check-in this exact form already made a moment ago (a double tap or a retry), if any.
+    The signature must match too, so a phone number alone never finds someone else's."""
+    return (await db.execute(select(Checkin).join(Lead, Lead.id == Checkin.lead_id).where(
+        Checkin.point_id == point.id, Checkin.queue_day == day, Checkin.state.in_(("waiting", "called")),
+        Checkin.created_at >= datetime.utcnow() - timedelta(minutes=DOUBLE_TAP_MIN),
+        Lead.phone == data.phone.strip(), Lead.name == data.name.strip(), Lead.inquiry == inquiry,
+        Checkin.signature_png == data.signature).order_by(Checkin.queue_no))).scalars().first()
+
+
+async def _answer(db: AsyncSession, point: CheckinPoint, c: Checkin, texted: str, updated: bool) -> dict:
+    ahead = await svc.ahead_of(db, c)
+    wait = None
+    if point.show_wait and c.kind == "walk_in":
+        wait = svc.round_wait((ahead + 1) * await svc.minutes_per_person(db, point.org_id, point.location_id))
+    return {"status_token": c.status_token, "queue_no": c.queue_no, "kind": c.kind, "ahead": ahead,
+            "wait_min": wait, "texted": texted == "sent", "updated": updated}
 
 
 def _is_png(data_url: str) -> bool:
@@ -225,6 +260,14 @@ class CheckinIn(BaseModel):
     website: Optional[str] = None            # honeypot: people never fill it in
 
 
+async def _own_checkin(db: AsyncSession, point: CheckinPoint, day, data: CheckinIn) -> Optional[Checkin]:
+    """Updating a check-in needs its status token (only its owner has it); a phone number alone
+    never reaches someone else's place, token or signature: that's a new check-in."""
+    return (await db.execute(select(Checkin).join(Lead, Lead.id == Checkin.lead_id).where(
+        Checkin.status_token == data.status_token, Checkin.point_id == point.id, Checkin.queue_day == day,
+        Checkin.state == "waiting", Lead.phone == data.phone.strip()))).scalars().first()
+
+
 @router.post("/{token}", status_code=201)
 async def submit_checkin(token: str, data: CheckinIn, request: Request, db: AsyncSession = Depends(get_db)):
     from backend.services import identifiers as ids
@@ -232,7 +275,7 @@ async def submit_checkin(token: str, data: CheckinIn, request: Request, db: Asyn
     from backend.services.call_contacts import digits
     point = await svc.point_by_token(db, token)
     ip = _ip(request)
-    await _limit("checkin_submit", f"{point.id}:{ip}", 6, 300)
+    await _limit("checkin_tries", f"{point.id}:{ip}", MAX_TRIES_PER_IP, 300)
     if data.website:
         raise HTTPException(422, "Couldn't check you in. Please ask at the counter.")
     name = data.name.strip()
@@ -276,9 +319,17 @@ async def submit_checkin(token: str, data: CheckinIn, request: Request, db: Asyn
         if not p.startswith("data:image/") or len(p) > MAX_PHOTO:
             raise HTTPException(422, "Photos must be images under 5 MB")
 
-    # Counted only once the form is valid, so a customer fixing a mistake isn't locked out.
-    await _limit("checkin_phone", f"{point.id}:{phone_digits}", 3, 1800)
-    await _limit_phones_per_ip(ip, phone_digits)
+    jt_name = next((t["name"] for t in form["job_types"] if t["id"] == job_type_id), None)
+    inquiry = " · ".join(x for x in [jt_name, issue] if x)[:2000]
+    day = await svc.queue_day(db, point.org_id, point.location_id)
+    if not data.status_token and (dup := await _double_tap(db, point, day, data, inquiry)):
+        return await _answer(db, point, dup, "skipped", False)
+    existing = None
+    if data.status_token:
+        existing = await _own_checkin(db, point, day, data)
+    if not existing:
+        await _check_caps(db, point, day)
+    await _limits(point, ip, phone_digits)
 
     decoded = None
     if ident_value and ident_kind in ("vin", "hin", "imei"):
@@ -287,25 +338,27 @@ async def submit_checkin(token: str, data: CheckinIn, request: Request, db: Asyn
                lookups.decode_hin(ident_value) if ident_kind == "hin" else await lookups.decode_imei(ident_value))
         decoded = {k: _name_case(dec.get(k)) for k in ("make", "model", "model_year", "manufacturer") if dec.get(k)}
     reading_kind = form["reading"]["key"] if form["reading"] and data.reading is not None else None
-    day = await svc.queue_day(db, point.org_id, point.location_id)
 
-    # Updating a check-in needs its status token (only its owner has it); a phone number alone
-    # never reaches someone else's place, token or signature: that's a new check-in.
-    existing = None
-    if data.status_token:
-        existing = (await db.execute(select(Checkin).join(Lead, Lead.id == Checkin.lead_id).where(
-            Checkin.status_token == data.status_token, Checkin.point_id == point.id, Checkin.queue_day == day,
-            Checkin.state == "waiting", Lead.phone == data.phone.strip()))).scalars().first()
-    if not existing:
-        await _check_caps(db, point, day)
+    # One submit at a time per point (a no-op UPDATE: a row lock on Postgres, the write lock on
+    # SQLite), then look again: of two taps sent at once, the second sees the first's check-in.
+    await db.execute(update(CheckinPoint).where(CheckinPoint.id == point.id)
+                     .values(submits=CheckinPoint.submits).execution_options(synchronize_session=False))
+    await db.refresh(point)
+    if not data.status_token and (dup := await _double_tap(db, point, day, data, inquiry)):
+        return await _answer(db, point, dup, "skipped", False)
+    if existing:
+        existing = await _own_checkin(db, point, day, data)
+        if not existing:
+            raise HTTPException(409, "This check-in has just been closed. Please ask at the counter.")
 
     terms_hash = hashlib.sha256(form["terms"].encode()).hexdigest()
-    jt_name = next((t["name"] for t in form["job_types"] if t["id"] == job_type_id), None)
-    inquiry = " · ".join(x for x in [jt_name, issue] if x)[:2000]
     if existing:
         c = existing
         lead = (await db.execute(select(Lead).where(Lead.id == c.lead_id))).scalar_one()
-        lead.name, lead.email, lead.inquiry = name, (data.email or lead.email), inquiry
+        lead.name, lead.email = name, (data.email or lead.email)
+        # Adding to what they wrote, never replacing it: the first issue is often the real one.
+        if issue.lower() not in (lead.inquiry or "").lower():
+            lead.inquiry = "\n".join(x for x in [lead.inquiry, issue] if x)[:2000]
     else:
         lead = Lead(org_id=point.org_id, location_id=point.location_id, name=name, phone=data.phone.strip(),
                     email=(data.email or "").strip() or None, source="walk_in", inquiry=inquiry,
@@ -363,9 +416,4 @@ async def submit_checkin(token: str, data: CheckinIn, request: Request, db: Asyn
     else:
         texted = "skipped"
     await db.commit()
-    ahead = await svc.ahead_of(db, c)
-    wait = None
-    if point.show_wait and mode == "walk_in":
-        wait = svc.round_wait((ahead + 1) * await svc.minutes_per_person(db, point.org_id, point.location_id))
-    return {"status_token": c.status_token, "queue_no": c.queue_no, "kind": c.kind, "ahead": ahead,
-            "wait_min": wait, "texted": texted == "sent", "updated": bool(existing)}
+    return await _answer(db, point, c, texted, bool(existing))
