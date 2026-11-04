@@ -1937,7 +1937,8 @@ async def recost_po(
     # count as accounted for, so the same bill recosted again applies nothing.
     applied = expensed = 0.0
     scale = (delta_total / target) if target else 0
-    for part_id, tpart in per_part_target.items():
+    await stock_posting.lock_parts(db, per_part_target)   # id order: no deadlock with a receive
+    for part_id, tpart in sorted(per_part_target.items()):
         part = (await db.execute(select(Part).where(
             Part.id == part_id, Part.org_id == current.org_id))).scalar_one_or_none()
         if not part:
@@ -2045,6 +2046,7 @@ async def receive_po(
     # the same qty_received and doubled stock and supplier AP. The loser now waits and sees 0 left.
     po_lines = (await db.execute(select(POLine).where(POLine.po_id == po_id)
                                  .with_for_update())).scalars().all()
+    await stock_posting.lock_parts(db, [pl.part_id for pl in po_lines])   # id order: no deadlock
     basis = po.alloc_basis if po.alloc_basis in _ALLOC_BASES else "value"
     weights = await _po_part_weights(db, po_lines) if basis == "weight" else {}
     # Build 144al — landed cost: when the PO opts in, spread its charges (shipping/transit/custom)

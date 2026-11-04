@@ -40,3 +40,30 @@ async def test_concurrent_receipts_both_move_avg_cost(client, tenant, db):
                                  .execution_options(populate_existing=True))).scalar_one()
         # 10 @10 + 10 @20 + 10 @40 -> 700 / 30, whichever receipt lands first
         assert abs(float(part.avg_cost) - 23.3333) < 0.01, part.avg_cost
+
+
+@pytest.mark.asyncio
+async def test_two_pos_with_the_same_products_in_opposite_order_both_receive(client, tenant, db):
+    """Receiving locks each product before moving its average. Two POs holding the same products
+    in opposite line order must not deadlock (one would roll back with a 500)."""
+    loc = (await client.get("/api/staff/locations", headers=tenant)).json()["items"][0]["id"]
+    sup = (await client.post("/api/suppliers", json={"name": "Acme"}, headers=tenant)).json()["id"]
+    for _ in range(3):
+        p1, p2 = [(await client.post("/api/inventory/parts", headers=tenant, json={
+            "name": f"P-{uuid.uuid4().hex[:6]}", "sku": f"SKU-{uuid.uuid4().hex[:6]}"})).json()["id"]
+            for _ in range(2)]
+        pos = []
+        for a, b in ((p1, p2), (p2, p1)):
+            r = await client.post("/api/inventory/po", headers=tenant, json={
+                "supplier_id": sup, "location_id": loc,
+                "lines": [{"part_id": a, "qty_ordered": 5, "unit_cost": 10},
+                          {"part_id": b, "qty_ordered": 5, "unit_cost": 30}]})
+            assert r.status_code == 201, r.text
+            pos.append(r.json()["po_id"])
+        r1, r2 = await asyncio.gather(*[client.post(f"/api/inventory/po/{po}/receive", headers=tenant, json={})
+                                        for po in pos])
+        assert (r1.status_code, r2.status_code) == (200, 200), (r1.text[:300], r2.text[:300])
+        for pid in (p1, p2):
+            part = (await db.execute(select(Part).where(Part.id == pid)
+                                     .execution_options(populate_existing=True))).scalar_one()
+            assert abs(float(part.avg_cost) - 20) < 0.01, part.avg_cost      # 5 @10 + 5 @30

@@ -22,6 +22,14 @@ async def _lock_part(db, part: Part) -> None:
                      .with_for_update().execution_options(populate_existing=True))
 
 
+async def lock_parts(db, part_ids) -> None:
+    """Row-lock several parts in id order before a multi-line receipt or recost, so two documents
+    holding the same products in a different line order can't deadlock on `_lock_part`."""
+    ids = sorted({p for p in part_ids if p})
+    if ids:
+        await db.execute(select(Part.id).where(Part.id.in_(ids)).order_by(Part.id).with_for_update())
+
+
 async def apply_receipt_line(
     db, *, org_id: str, part: Part, location_id: str, qty: float, unit_cost: float,
     created_by_id: str | None = None, ref_type: str = "posting", ref_id: str | None = None,
