@@ -30,7 +30,8 @@ EXCLUDE_PREFIXES = ("/api/public/", "/api/admin/", "/api/sso/authorize/", "/api/
                     "/api/comms/calls/webhook")
 METHOD_ORDER = {"get": 0, "post": 1, "put": 1, "patch": 1, "delete": 2}
 VOLATILE = ("minutes_in_status", "waited_min", "status_sla_overdue", "overdue_by_date", "days_left",
-            "last_seen", "updated_at", "age_days", "days_open")
+            "last_seen", "updated_at", "age_days", "days_open",
+            "duration_min", "duration_sec")   # a running timer keeps counting during the sweep
 
 
 # ---------------------------------------------------------------- seed shop A
