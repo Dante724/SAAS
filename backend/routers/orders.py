@@ -3567,7 +3567,7 @@ async def _archive_order(db, current, order_id, reason, do_refund):
             took = (await db.execute(select(func.coalesce(func.sum(Transaction.amount), 0)).where(
                 Transaction.org_id == current.org_id, Transaction.account_id == acc_id,
                 Transaction.ref_type == "order", Transaction.ref_id == order_id,
-                Transaction.txn_type == "invoice_payment", Transaction.status == "active"))).scalar() or 0
+                Transaction.txn_type == "invoice_payment", Transaction.status != "deleted"))).scalar() or 0
             if q2(float(took)) > 0:
                 raise HTTPException(409, f"{amt:.2f} has to go back to the customer from the “{acct.name}” drawer, "
                                          f"but it holds only {float(acct.balance or 0):.2f}. Put the cash back in "

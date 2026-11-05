@@ -850,7 +850,7 @@ async def _expected_cash(db, shift: CashShift) -> dict:
     # income +, expense −). Linked at post time via Transaction.shift_id.
     from backend.models import Transaction
     manual_cash = (await db.execute(select(func.coalesce(func.sum(Transaction.amount), 0.0)).where(
-        Transaction.shift_id == shift.id, Transaction.status == "active",
+        Transaction.shift_id == shift.id, Transaction.status != "deleted",
         Transaction.txn_type.in_(("income", "expense"))))).scalar() or 0.0
     # Decimal throughout: opening_float and the drawer movements read back as Decimal (audit R4).
     expected = d2(dec(shift.opening_float) + dec(cash_in) - abs(dec(cash_refunds))
@@ -931,10 +931,10 @@ async def reconciliation(
             select(func.coalesce(func.sum(Transaction.amount), 0.0))
             .join(Account, Transaction.account_id == Account.id)
             .where(Transaction.org_id == org, Transaction.txn_type == "invoice_payment",
-                   Transaction.status == "active", Account.payment_option.in_(("card", "cashless"))))).scalar() or 0.0
+                   Transaction.status != "deleted", Account.payment_option.in_(("card", "cashless"))))).scalar() or 0.0
         fees = (await db.execute(
             select(func.coalesce(func.sum(func.abs(Transaction.amount)), 0.0)).where(
-                Transaction.org_id == org, Transaction.txn_type == "fee", Transaction.status == "active"))).scalar() or 0.0
+                Transaction.org_id == org, Transaction.txn_type == "fee", Transaction.status != "deleted"))).scalar() or 0.0
         expected = q2(float(card_in) - float(fees))
         gap = q2(expected - payouts_net)
         if abs(gap) >= 1.0:
@@ -1231,7 +1231,7 @@ async def accountant_export(
         select(Transaction, Account.name, CashFlowItem.name)
         .join(Account, Transaction.account_id == Account.id)
         .outerjoin(CashFlowItem, Transaction.cash_flow_item_id == CashFlowItem.id)
-        .where(Transaction.org_id == current.org_id, Transaction.status == "active",
+        .where(Transaction.org_id == current.org_id, Transaction.status != "deleted",
                Transaction.actual_date >= df, Transaction.actual_date <= dt)
         .order_by(Transaction.actual_date))).all()
     # Combine cashbox transactions with business expenses (Expense model — rent/utilities that never
