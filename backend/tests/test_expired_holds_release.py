@@ -2,6 +2,8 @@
 hold kept `StockLevel.qty_reserved` high and every `free()` path (manual reserve, job reserve,
 transfer "ready") read it as still blocking until someone happened to open that screen.
 """
+import asyncio
+import os
 import uuid
 from datetime import timedelta
 
@@ -117,3 +119,47 @@ async def test_live_hold_still_blocks(client, tenant, db):
     r = await client.patch(f"/api/transfers/{t}/status", json={"status": "ready"}, headers=tenant)
     assert r.status_code == 409, r.text
     assert await _reserved(db, pid) == 2
+
+
+_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL", "")
+
+
+@pytest.mark.skipif(not _URL.startswith("postgresql"), reason="row-lock race needs Postgres")
+@pytest.mark.asyncio
+async def test_sweep_does_not_drop_the_job_lock_of_a_double_reserve_click(client, tenant, db, monkeypatch):
+    """The expiry sweep commits. Run after the job's row lock (#108), that commit dropped the lock,
+    so with any expired hold in the shop two reserve clicks at once each read "nothing held yet"
+    and held the job's need twice. The sweep runs before the job is loaded. The window is forced:
+    the first click pauses after reading the job's holds."""
+    from backend.routers import orders as orders_router
+    loc = await _loc(client, tenant)
+    other = await _part(client, tenant)
+    await _receive(client, tenant, loc, other, 2)
+    await _expired_hold(client, tenant, db, loc, other, 2)      # gives the sweep something to commit
+    pid = await _part(client, tenant)
+    await _receive(client, tenant, loc, pid, 5)
+    cid = (await client.post("/api/clients", json={"name": "Cust"}, headers=tenant)).json()["id"]
+    r = await client.post("/api/orders", json={
+        "client_id": cid, "location_id": loc, "is_estimate": True,
+        "lines": [{"line_type": "part", "kind": "product", "ref_id": pid, "description": "x", "qty": 1,
+                   "unit_price": 1}]}, headers=tenant)
+    assert r.status_code == 201, r.text
+    job = r.json()["id"]
+    orig = orders_router.names_by_id
+    calls = []
+
+    async def paused(*a, **kw):
+        res = await orig(*a, **kw)
+        calls.append(1)
+        if len(calls) == 1:
+            await asyncio.sleep(0.5)
+        return res
+    monkeypatch.setattr(orders_router, "names_by_id", paused)
+    r1, r2 = await asyncio.gather(
+        client.post(f"/api/orders/{job}/reserve-stock", json={"hold_days": 7}, headers=tenant),
+        client.post(f"/api/orders/{job}/reserve-stock", json={"hold_days": 7}, headers=tenant))
+    assert (r1.status_code, r2.status_code) == (201, 201), (r1.text[:300], r2.text[:300])
+    held = sum(x["qty"] for r in (r1, r2) for x in r.json()["reserved"])
+    db.expire_all()
+    assert held == 1 and await _reserved(db, pid) == 1, f"held={held} reserved={await _reserved(db, pid)}"
+    assert await _reserved(db, other) == 0
