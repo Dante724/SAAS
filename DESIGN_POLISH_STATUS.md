@@ -4,9 +4,9 @@ Updated: 2026-11-05 ~17:30 UTC (cloud session). Base branch: `roadmap/orderry-pa
 This branch only carries this file. It is a report, not something to merge.
 
 ## Blocker
-**#122 (Phase 3 brand) is not merged yet** (checked 2026-11-05 ~18:40 UTC). A is ready on `fix/design-polish-a`.
+**#122 (Phase 3 brand) is not merged yet** (checked 2026-11-05 ~19:20 UTC). A is ready on `fix/design-polish-a`.
 Its PR opens after #122 merges and A is rebased onto the beta branch. B is prepared on `fix/design-polish-b`
-(on top of A for now) and C on `fix/design-polish-c` (on top of B). Each PR opens after the one before it
+(on top of A for now), C on `fix/design-polish-c` (on top of B) and D on `fix/design-polish-d` (on top of C). Each PR opens after the one before it
 merges, rebased onto the beta branch. No PRs are stacked.
 
 ## How it's measured
@@ -23,7 +23,7 @@ The numbers below replace them.
 | A | `fix/design-polish-a` | ready; waiting on #122 | 38 → **0** | 5 → **0** | 49 → 52 (see note) | 0 → 0 | 34/34 | 756/756 | not run (no PR) |
 | B | `fix/design-polish-b` | ready; waiting on A | 0 → 0 | 0 → 0 | 49 → **42** | 0 → 0 | 34/34 | 757/757 | not run (no PR) |
 | C | `fix/design-polish-c` | ready; waiting on B | 0 → 0 | 0 → 0 | 42 → 42 | 0 → 0 | 34/34 | 760/760 | not run (no PR) |
-| D | — | not started | | | | | | | |
+| D | `fix/design-polish-d` | ready; waiting on C | 0 → 0 | 0 → 0 | 42 → 42 | 0 → 0 | 34/34 (+ visual 44/44) | 760/760 | not run (no PR) |
 
 A's +3 buttons come from demo data: those job lines only rendered in the after run's database. B fixes them.
 
@@ -67,3 +67,22 @@ A's +3 buttons come from demo data: those job lines only rendered in the after r
 - One `PageSkeleton` replaces the blank "Loading…" screen for a page or settings section that is
   still downloading.
 - Tests: 3 new tests in `AppFrame.test.tsx` (vitest 760/760); tsc, lints and build pass.
+
+## Notes on D
+- `tests-e2e/visual.spec.js` takes one screenshot of each of 22 staff screens at 1440 and 390 and
+  compares it with a committed baseline (44 PNGs, 3.5 MB).
+- It's strict on purpose. I checked by changing the shared button's corners from 12px to 8px: 6–13
+  pixels changed per screen, and the check failed. Unchanged reruns differ by 0 pixels, including
+  against a freshly seeded database.
+- Steady from day to day: fixed browser clock; dates, times and weekdays replaced with `##`; UTC; no
+  animations. Playwright is pinned to 1.63.0 (it was `^1.45`, which pulled a new Chromium each run).
+- E2E workflow: the visual check runs first, on the fresh seed. The tab-shift and PWA specs change
+  data, for example a supplier appears in Contacts after tab-shift. On failure the run uploads diff
+  images. "Run workflow" → "Record new visual baselines" records new ones as an artifact.
+  `tests-e2e/README-visual.md` explains it.
+- One shared sign-in for the specs (`admin-token.js`) keeps CI under the server's 10 sign-ins per
+  5 minutes. tab-shift uses it too; its checks are unchanged.
+- **Risk:** the baselines were recorded in this Linux container, not on GitHub's runner. If the
+  first CI run differs only by font rendering, I'll record new ones with the workflow's button,
+  commit them, and say so in the PR. D also has to be recorded again after A–C are rebased onto
+  the beta branch, so its pictures match what's merged.
