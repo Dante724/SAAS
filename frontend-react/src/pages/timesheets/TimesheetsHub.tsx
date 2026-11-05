@@ -100,7 +100,7 @@ export default function TimesheetsHub() {
           { label: "Regular / overtime", value: num(`${sheet?.straight_hours ?? 0}h / ${sheet?.overtime_hours ?? 0}h`) },
           { label: "Charged to jobs", value: num(`${Math.round((sheet?.billable_sec || 0) / 360) / 10}h`) },
           { label: "Share charged to jobs", value: num(`${Math.round((sheet?.utilization || 0) * 100)}%`) },
-          { label: "Labour cost", value: num(money(sheet?.labor_cost)) },
+          { label: "Labor cost", value: num(money(sheet?.labor_cost)) },
         ]} />
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
