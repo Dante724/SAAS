@@ -148,4 +148,6 @@ async def test_prepay_and_invoice_payment_together(client, tenant):
     assert inv["amount_paid"] == pytest.approx(100), inv
     assert inv["status"] == "paid", inv
     c = (await client.get(f"/api/clients/{cid}", headers=tenant)).json()
-    assert c["balance"] == pytest.approx(0), c    # 100 owed, 40 + 60 received
+    # Both receipts reach the ledger once: 100 received on a job that isn't closed yet (its charge
+    # posts when it closes), the same -100 the two payments leave when made one after the other.
+    assert c["balance"] == pytest.approx(-100), c["balance"]
