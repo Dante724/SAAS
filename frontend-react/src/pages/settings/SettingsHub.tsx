@@ -2412,9 +2412,11 @@ function FormsDesigner({ types, onAddType, onDeleteType, onAdvanced, onChanged }
       <Tabs label="Forms" value={cur?.id || ""} onChange={setPick} tabs={choices.map((c) => ({ id: c.id, label: c.label }))} />
       {cur?.type && (
         <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-tertiary">
-          <span>New orders start as <span className="font-semibold text-ink-secondary">{cur.type.initial_status || "new"}</span>{cur.type.is_default ? " · default type" : ""}</span>
+          {/* The links come first and the delete link stays (greyed on the default type), so nothing
+              slides when you pick a different form. */}
           <Button variant="link" onClick={() => onAdvanced(cur.type)}>Advanced rules (show only when, upsell, block status)</Button>
-          {!cur.type.is_default && <Button variant="link" onClick={() => onDeleteType(cur.type)} className="!text-rose-600">Delete this type</Button>}
+          <Button variant="link" onClick={() => onDeleteType(cur.type)} disabled={!!cur.type.is_default} title={cur.type.is_default ? "The default type can't be deleted" : undefined} className="!text-rose-600">Delete this type</Button>
+          <span>New orders start as <span className="font-semibold text-ink-secondary">{cur.type.initial_status || "new"}</span>{cur.type.is_default ? " · default type" : ""}</span>
         </div>
       )}
       {cur?.type && <CloseRules type={cur.type} onChanged={onChanged} />}
