@@ -139,7 +139,7 @@ export default function ApiKeysCard() {
             </details>
           )}
           <p className="text-xs text-ink-tertiary leading-relaxed">
-            Send the key as <span className="font-mono">Authorization: Bearer rok_…</span>. The full reference is at <a href="/api/v1/openapi.json" target="_blank" rel="noreferrer" className="font-semibold text-primary hover:underline">/api/v1/openapi.json</a> and, for API v2 (inquiries, tags, services, bundles, locations, staff, contact search, job status changes, invoice lines and webhooks), <a href="/api/v2/openapi.json" target="_blank" rel="noreferrer" className="font-semibold text-primary hover:underline">/api/v2/openapi.json</a>.
+            Send the key as <span className="font-mono">Authorization: Bearer tk_…</span>. The full reference is at <a href="/api/v1/openapi.json" target="_blank" rel="noreferrer" className="font-semibold text-primary hover:underline">/api/v1/openapi.json</a> and, for API v2 (inquiries, tags, services, bundles, locations, staff, contact search, job status changes, invoice lines and webhooks), <a href="/api/v2/openapi.json" target="_blank" rel="noreferrer" className="font-semibold text-primary hover:underline">/api/v2/openapi.json</a>.
           </p>
         </div>
       )}
