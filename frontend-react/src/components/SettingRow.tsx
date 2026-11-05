@@ -4,16 +4,18 @@ import { M } from "./Shell";
 // a card of groups, each a list of rows — label + one line of help on the left, the control on the
 // right — and a number field with its unit inside ("25 %", "90 days") instead of a box mid-sentence.
 
-export function SettingRow({ label, help, htmlFor, children, dim }: {
-  label: string; help?: string; htmlFor?: string; children: React.ReactNode; dim?: boolean;
+// `stack`: on phones (under 640px) the control drops under its label at full width, so a wide
+// input or select never squeezes the label. Leave it off for a switch, which fits beside it.
+export function SettingRow({ label, help, htmlFor, children, dim, stack = false }: {
+  label: string; help?: string; htmlFor?: string; children: React.ReactNode; dim?: boolean; stack?: boolean;
 }) {
   return (
-    <div className={`flex items-center gap-6 py-4 first:pt-0 last:pb-0 ${dim ? "opacity-60" : ""}`}>
+    <div className={`flex items-center gap-6 py-4 first:pt-0 last:pb-0 ${stack ? "max-sm:flex-col max-sm:items-stretch max-sm:gap-2" : ""} ${dim ? "opacity-60" : ""}`}>
       <div className="min-w-0 flex-1">
         <label htmlFor={htmlFor} className="block text-sm font-medium text-ink-primary">{label}</label>
         {help && <p className="mt-0.5 text-xs text-ink-tertiary leading-relaxed">{help}</p>}
       </div>
-      <div className="shrink-0">{children}</div>
+      <div className={stack ? "shrink-0 max-sm:w-full" : "shrink-0"}>{children}</div>
     </div>
   );
 }

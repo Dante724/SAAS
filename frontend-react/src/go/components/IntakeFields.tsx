@@ -3,6 +3,8 @@
 // Values go into the job's custom_data, exactly as the web form saves them.
 import { Check } from "lucide-react";
 import type { IntakeField } from "../lib/newJob";
+import Chip from "./Chip";
+import { goArea, goField } from "./ui";
 
 type LayoutItem = { kind: string; key: string; label: string; visible: boolean; require?: string;
   field?: { field_type: string; options?: string[] } };
@@ -14,8 +16,7 @@ export function intakeFieldsFrom(items: LayoutItem[]): IntakeField[] {
     .map((i) => ({ key: i.key, label: i.label, field_type: i.field!.field_type, options: i.field!.options || [], required: i.require === "intake" }));
 }
 
-const field = "w-full min-h-[3rem] rounded-xl border border-slate-200 bg-white px-4 text-go-body text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/15";
-const chip = (on: boolean) => `min-h-[2.75rem] px-4 rounded-full border text-go-body font-medium inline-flex items-center gap-1.5 ${on ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`;
+const field = goField();
 
 export default function IntakeFields({ fields, values, onChange, missing }: {
   fields: IntakeField[]; values: Record<string, unknown>; onChange: (key: string, v: unknown) => void; missing?: Set<string>;
@@ -50,9 +51,9 @@ export default function IntakeFields({ fields, values, onChange, missing }: {
                 {f.options.map((o) => {
                   const on = multi ? list.includes(o) : v === o;
                   return (
-                    <button key={o} onClick={() => onChange(f.key, multi ? (on ? list.filter((x) => x !== o) : [...list, o]) : on ? "" : o)} aria-pressed={on} className={chip(on)}>
-                      {on && <Check size={16} />}{o}
-                    </button>
+                    <Chip key={o} on={on} tick onClick={() => onChange(f.key, multi ? (on ? list.filter((x) => x !== o) : [...list, o]) : on ? "" : o)}>
+                      {o}
+                    </Chip>
                   );
                 })}
               </div>
@@ -67,7 +68,7 @@ export default function IntakeFields({ fields, values, onChange, missing }: {
                 <option value="">Choose…</option>{f.options.map((o) => <option key={o} value={o}>{o}</option>)}
               </select>
             ) : f.field_type === "textarea" || f.field_type === "address" ? (
-              <textarea value={(v as string) || ""} onChange={(e) => onChange(f.key, e.target.value)} aria-label={f.label} aria-invalid={bad || undefined} rows={2} className={`${field} py-3 min-h-[5rem] resize-none`} />
+              <textarea value={(v as string) || ""} onChange={(e) => onChange(f.key, e.target.value)} aria-label={f.label} aria-invalid={bad || undefined} rows={2} className={goArea("min-h-[5rem]")} />
             ) : (
               <input value={(v as string) ?? ""} onChange={(e) => onChange(f.key, f.field_type === "number" ? (e.target.value === "" ? "" : Number(e.target.value)) : e.target.value)}
                 type={f.field_type === "number" ? "number" : f.field_type === "date" ? "date" : f.field_type === "datetime" ? "datetime-local" : f.field_type === "link" ? "url" : "text"}

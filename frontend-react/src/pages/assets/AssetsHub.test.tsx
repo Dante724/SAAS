@@ -33,9 +33,9 @@ describe("AssetsHub state filter", () => {
     render(<MemoryRouter><AssetsHub /></MemoryRouter>);
     expect(await screen.findByText("Bosch Drill")).toBeTruthy();
     expect(urls.find((x) => x.startsWith("/api/assets"))).toContain("state=active");
-    expect(screen.getByRole("tab", { name: /^Active/ }).getAttribute("aria-selected")).toBe("true");
+    expect(screen.getByRole("button", { name: /^Active/ }).getAttribute("aria-pressed")).toBe("true");
 
-    await u.click(screen.getByRole("tab", { name: /^Written off/ }));
+    await u.click(screen.getByRole("button", { name: /^Written off/ }));
     expect(await screen.findByText("Bosch Saw")).toBeTruthy();
     expect(urls.filter((x) => x.startsWith("/api/assets")).pop()).toContain("state=written_off");
     expect(screen.getAllByText(/Written off/).length).toBeGreaterThan(1);   // the filter + the row pill

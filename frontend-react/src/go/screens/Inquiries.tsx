@@ -5,7 +5,7 @@ import { useSearchParams, useNavigate } from "react-router-dom";
 import { AlertTriangle, ArrowRight, Inbox, Phone, PhoneMissed, Play, RefreshCw, Search, XCircle } from "lucide-react";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
-import { Empty, Group, Page, QuietRow, Sheet, SkeletonRows } from "../components/ui";
+import { Empty, GoButton, Group, IconButton, Page, PrimaryButton, QuietRow, Sheet, SkeletonRows, goButtonClass, goField } from "../components/ui";
 import { INQUIRIES_CHANGED } from "../components/InquirySheet";
 import { goQueue } from "../lib/offlineQueue";
 import { announceChange, useToast } from "../lib/useGo";
@@ -108,37 +108,34 @@ function Detail({ i, onClose, onChanged }: { i: Inquiry | null; onClose: () => v
         {isOpen && (
           <div className="space-y-2 pt-1">
             {tel && (
-              <a href={tel} className="min-h-[3.25rem] w-full rounded-xl border-[0.5px] border-slate-200 bg-white px-5 text-go-body font-semibold text-ink-primary active:bg-slate-50 inline-flex items-center justify-center gap-2">
+              <a href={tel} className={goButtonClass("secondary", { main: true, extra: "w-full" })}>
                 <Phone size={18} className="text-primary" />Call {i.phone}
               </a>
             )}
             <div className={`grid gap-2 ${i.status === "new" ? "grid-cols-2" : "grid-cols-1"}`}>
               {i.status === "new" && (
-                <button onClick={() => status("in_progress")} disabled={!!busy}
-                  className="min-h-[3.25rem] rounded-xl border-[0.5px] border-slate-200 bg-white text-go-body font-semibold text-ink-primary active:bg-slate-50 inline-flex items-center justify-center gap-2 disabled:opacity-50">
-                  <Play size={17} />{busy === "start" ? "Starting…" : "Start"}
-                </button>
+                <GoButton main onClick={() => status("in_progress")} disabled={!!busy}>
+                  <Play size={18} />{busy === "start" ? "Starting…" : "Start"}
+                </GoButton>
               )}
-              <button onClick={() => status("lost")} disabled={!!busy}
-                className="min-h-[3.25rem] rounded-xl border-[0.5px] border-slate-200 bg-white text-go-body font-semibold text-rose-700 active:bg-slate-50 inline-flex items-center justify-center gap-2 disabled:opacity-50">
-                <XCircle size={17} />{busy === "lost" ? "Saving…" : "Mark lost"}
-              </button>
+              <GoButton variant="danger" main onClick={() => status("lost")} disabled={!!busy}>
+                <XCircle size={18} />{busy === "lost" ? "Saving…" : "Mark lost"}
+              </GoButton>
             </div>
             {can("can_create_tickets") && (
               <>
-                <button onClick={convert} disabled={!!busy || !online}
-                  className="min-h-[3.25rem] w-full rounded-xl bg-primary px-5 text-go-body font-semibold text-white active:bg-primary-container transition-colors disabled:opacity-50 inline-flex items-center justify-center gap-2">
+                <PrimaryButton onClick={convert} disabled={!!busy || !online}>
                   {busy === "convert" ? "Making the job…" : <>Convert to job<ArrowRight size={18} /></>}
-                </button>
+                </PrimaryButton>
                 {!online && <p className="px-1 text-go-sub text-ink-secondary">Making a job needs a connection.</p>}
               </>
             )}
           </div>
         )}
         {i.status === "won" && i.converted_order_id && (
-          <button onClick={() => nav(`/job/${encodeURIComponent(i.converted_order_id!)}`)} className="min-h-[3.25rem] w-full rounded-xl bg-primary text-go-body font-semibold text-white inline-flex items-center justify-center gap-2">
+          <PrimaryButton onClick={() => nav(`/job/${encodeURIComponent(i.converted_order_id!)}`)}>
             Open job {i.converted_order_number || ""}<ArrowRight size={18} />
-          </button>
+          </PrimaryButton>
         )}
       </div>
     </Sheet>
@@ -210,9 +207,7 @@ export default function Inquiries() {
 
   const late = (items || []).filter((i) => replyBy(i)?.late).length;
   const refresh = (
-    <button onClick={() => load(q)} aria-label="Refresh" className="h-11 w-11 -mr-2 inline-flex items-center justify-center rounded-full text-ink-secondary active:bg-slate-100">
-      <RefreshCw size={20} className={busy ? "animate-spin" : ""} />
-    </button>
+    <IconButton label="Refresh" onClick={() => load(q)} className="-mr-2" icon={<RefreshCw size={20} className={busy ? "animate-spin" : ""} />} />
   );
   const sorted = items ? sortInquiries(items) : [];
 
@@ -222,9 +217,9 @@ export default function Inquiries() {
       <label className="relative mb-4 block">
         <Search size={18} className="pointer-events-none absolute left-3.5 top-1/2 -translate-y-1/2 text-ink-tertiary" />
         <input value={q} onChange={(e) => setQ(e.target.value)} type="search" placeholder="Name, phone or serial" aria-label="Search inquiries"
-          className="w-full min-h-[2.75rem] rounded-xl border-[0.5px] border-slate-200 bg-white pl-10 pr-4 text-go-body text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/15" />
+          className={goField("pl-10")} />
       </label>
-      {err && !items && <Empty icon={<AlertTriangle size={22} />} title="Couldn't load" body={err} action={<button onClick={() => load(q)} className="font-semibold text-primary min-h-[2.75rem] px-4">Try again</button>} />}
+      {err && !items && <Empty icon={<AlertTriangle size={22} />} title="Couldn't load" body={err} action={<GoButton variant="link" onClick={() => load(q)}>Try again</GoButton>} />}
       {err && items && <p className="mb-3 rounded-xl bg-amber-50 border-[0.5px] border-amber-200 px-3 py-2 text-go-sub text-amber-800">{err}</p>}
       {!items && !err && <SkeletonRows />}
       {items && !sorted.length && (q
@@ -232,9 +227,9 @@ export default function Inquiries() {
         : <Empty icon={<Inbox size={22} />} title="No open inquiries" body="Missed calls and questions about a repair show up here. Add one with +." />)}
       {sorted.length > 0 && <Group>{sorted.map((i) => <InquiryRow key={i.id} i={i} onOpen={setOpen} />)}</Group>}
       {more && (
-        <button onClick={next} disabled={busy} className="mt-3 w-full min-h-[2.75rem] font-semibold text-primary disabled:opacity-50">
+        <GoButton variant="link" onClick={next} disabled={busy} className="mt-3 w-full">
           {busy ? "Loading…" : `Show more (${total - (items?.length || 0)} left)`}
-        </button>
+        </GoButton>
       )}
       <Detail i={open} onClose={close} onChanged={changed} />
     </Page>
