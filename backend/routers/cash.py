@@ -793,8 +793,9 @@ async def _prepay_order(order_id: str, data: PrepayIn, db: AsyncSession, current
         raise HTTPException(404, "Order not found")
     # The job's lock (a real one on SQLite too), then a fresh read: two prepayments at once both
     # count in prepayment_total below.
-    from backend.services.invoice_money import lock_order
+    from backend.services.invoice_money import lock_invoices_of, lock_order
     await lock_order(db, o.id)
+    await lock_invoices_of(db, o.id)     # then its invoices, before the till and the ledger (M22)
     await db.refresh(o)
     if data.amount <= 0:
         raise HTTPException(400, "Amount must be positive")
