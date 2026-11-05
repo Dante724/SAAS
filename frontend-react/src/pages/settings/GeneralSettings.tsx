@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import CurrencyManager from "../../components/CurrencyManager";
 import Switch from "../../components/Switch";
@@ -270,7 +271,7 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
             <div className="min-w-0">
               <div className="text-sm text-ink-primary">Recalculate balances</div>
               <div className="text-xs text-ink-tertiary">Rebuilds every customer and supplier balance from history. Safe to run any time.</div>
-              <button onClick={onRebuild} disabled={rebuilding} className="mt-3 h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 disabled:opacity-60">{rebuilding ? "Working…" : "Recalculate"}</button>
+              <button onClick={onRebuild} disabled={rebuilding} className={buttonClass("secondary", "md", "mt-3")}>{rebuilding ? "Working…" : "Recalculate"}</button>
             </div>
           </div>
         </div>

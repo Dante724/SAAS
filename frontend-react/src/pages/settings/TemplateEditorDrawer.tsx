@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { buttonClass } from "../../components/Button";
 import LabelBarcodePicker, { LABEL_DOC_TYPES } from "./LabelBarcodePicker";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
@@ -388,7 +389,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
         <button onClick={() => setRail((r) => r === "vars" ? null : "vars")} className={`h-9 px-3 rounded-lg border text-xs font-semibold flex items-center gap-1 ${rail === "vars" ? "border-primary text-primary bg-primary/5" : "border-slate-200 text-ink-secondary hover:bg-slate-100"}`}><M n="data_object" c="text-[16px]" /> Variables</button>
         {flash && <span className="text-xs text-emerald-600 font-semibold">{flash}</span>}
         <button aria-label="Print at exact size" onClick={printDoc} title="Print at exact size" className="w-9 h-9 rounded-lg border border-slate-200 hover:bg-slate-100 flex items-center justify-center text-ink-secondary"><M n="print" c="text-lg" /></button>
-        <button onClick={save} disabled={busy} className="h-9 px-4 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : "Save"}</button>
+        <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save"}</button>
       </div>
 
       {/* formatting toolbar (edit only) */}

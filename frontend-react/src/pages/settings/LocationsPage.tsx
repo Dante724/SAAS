@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import { buttonClass } from "../../components/Button";
 import DateField from "../../components/DateField";
 import { M } from "../../components/Shell";
 import Switch from "../../components/Switch";
@@ -297,7 +298,7 @@ function LocationDetail({ loc, companyTz, resources, onSaved, onResChanged, onCa
                 <select value={nr.kind} onChange={(e) => setNr({ ...nr, kind: e.target.value })} aria-label="Kind" className="glass-input rounded-xl px-3 py-2 text-sm">
                   {[["bay", "Bay / lift"], ["room", "Room"], ["equipment", "Equipment"], ["other", "Other"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                 </select>
-                <button onClick={addRes} disabled={!nr.name.trim()} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90 disabled:opacity-50">Add</button>
+                <button onClick={addRes} disabled={!nr.name.trim()} className={buttonClass("primary", "md")}>Add</button>
               </div>
             </>)}
           </div>

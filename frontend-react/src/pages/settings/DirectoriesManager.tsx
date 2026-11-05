@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api, openAuthedDoc } from "../../api/client";
 import { alertDialog, confirmDialog, promptDialog, selectDialog } from "../../lib/dialog";
@@ -50,7 +51,7 @@ export default function DirectoriesManager() {
       <div className="mb-5">
         <h2 className="text-base font-semibold text-ink-primary">Directories</h2>
         <p className="text-xs text-ink-tertiary">The lists your team picks from: where customers came from, why a job was cancelled, and any list a form field uses.</p>
-        <button onClick={newList} className="mt-3 inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90"><M n="add" c="text-sm" />New list</button>
+        <button onClick={newList} className={buttonClass("primary", "md", "mt-3")}><M n="add" c="text-sm" />New list</button>
       </div>
       <div className="grid grid-cols-1 md:grid-cols-[240px_minmax(0,1fr)] gap-4 items-start">
         <nav aria-label="Lists" className="space-y-1.5">
@@ -204,7 +205,7 @@ function ListEditor({ dir, onChanged, onDelete }: { dir: Dir; onChanged: () => v
         <div className="flex gap-2">
           <input value={nv} onChange={(e) => setNv(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }} placeholder="Add an option and press Enter" aria-label="New option"
             className="glass-input flex-1 rounded-xl px-3 py-2 text-sm" />
-          <button onClick={add} disabled={!nv.trim()} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90 disabled:opacity-40">Add</button>
+          <button onClick={add} disabled={!nv.trim()} className={buttonClass("primary", "md")}>Add</button>
         </div>
         <div className="flex flex-wrap items-center gap-3 text-[11px] font-semibold">
           <button onClick={() => setPaste(paste === null ? "" : null)} className="text-primary hover:underline">Paste a list</button>
@@ -227,7 +228,7 @@ function ListEditor({ dir, onChanged, onDelete }: { dir: Dir; onChanged: () => v
         {paste !== null && (
           <div className="space-y-1.5">
             <textarea autoFocus value={paste} onChange={(e) => setPaste(e.target.value)} placeholder={"One option per line\nNextdoor\nRadio ad"} className="glass-input w-full h-28 rounded-xl px-3 py-2 text-sm" />
-            <button onClick={addPasted} disabled={!paste.trim()} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90 disabled:opacity-40">Add {paste.split(/\r?\n/).filter((l) => l.trim()).length || ""} options</button>
+            <button onClick={addPasted} disabled={!paste.trim()} className={buttonClass("primary", "md")}>Add {paste.split(/\r?\n/).filter((l) => l.trim()).length || ""} options</button>
           </div>
         )}
         {active.length > 8 && (

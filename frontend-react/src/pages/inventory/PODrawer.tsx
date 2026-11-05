@@ -1,4 +1,5 @@
 import { humanize } from "../../lib/humanize";
+import { buttonClass } from "../../components/Button";
 import { Fragment, useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { api, openAuthedDoc } from "../../api/client";
@@ -527,7 +528,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                         <input type="number" min={0} value={freight} onChange={(e) => setFreight(e.target.value)} placeholder="Shipping / customs amount"
                           className="glass-input rounded-xl px-3 py-2 text-xs w-full tabular-nums" />
                       </div>
-                      <button onClick={addFreightRecost} disabled={busy || !freight} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50">Add &amp; recost stock</button>
+                      <button onClick={addFreightRecost} disabled={busy || !freight} className={buttonClass("primary", "md")}>Add &amp; recost stock</button>
                     </div>
                   )}
                   {anyRecvd && <div className="text-[11px] text-ink-tertiary">Spreads the freight into the cost of stock you've already received. Inventory value updates straight away.</div>}
@@ -597,7 +598,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
         {/* edit action bar */}
         {po && editing && (
           <div className="px-6 py-3 border-t border-slate-100 flex items-center gap-2 bg-raised">
-            <button onClick={saveEdit} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50 flex items-center gap-1.5"><M n="check" c="text-sm" />{busy ? "Saving…" : "Save changes"}</button>
+            <button onClick={saveEdit} disabled={busy} className={buttonClass("primary", "md")}><M n="check" c="text-sm" />{busy ? "Saving…" : "Save changes"}</button>
             <button onClick={() => { setEditing(false); setEd(null); }} className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50">Cancel</button>
           </div>
         )}

@@ -1,4 +1,5 @@
 import { askCancelReason, droppedStatus } from "../../lib/cancelReason";
+import { buttonClass } from "../../components/Button";
 import { fmtDay } from "../../lib/serverTime";
 import { tint } from "../../lib/tint";
 import PageSummary, { type SummaryStat } from "../../components/PageSummary";
@@ -92,7 +93,7 @@ export default function WorkOrdersHub() {
   const [menu, setMenu] = useState<null | "filter" | "cols" | "views">(null);
   const toggleMenu = (m: "filter" | "cols" | "views") => setMenu((cur) => (cur === m ? null : m));
   const closeMenu = () => setMenu(null);
-  const toolBtn = "h-9 px-3 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100 border border-slate-200 bg-white flex items-center gap-1.5 whitespace-nowrap flex-shrink-0";
+  const toolBtn = buttonClass("secondary", "md", "flex-shrink-0");
   const [fAssignee, setFAssignee] = useState("");              // "" any · "__none" unassigned · else employee id
   const [fPriority, setFPriority] = useState("");              // "" any · "0"|"1"|"2" · "urgent" = 1 or 2
   const [kpis, setKpis] = useState<Kpis | null>(null);
@@ -272,7 +273,7 @@ export default function WorkOrdersHub() {
   const emptyState = filtersOn ? (
     <div className="text-center text-xs text-ink-tertiary space-y-3">
       <p>No work orders match these filters.</p>
-      <button onClick={clearFilters} className="h-9 px-3.5 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">Clear filters</button>
+      <button onClick={clearFilters} className={buttonClass("secondary", "md")}>Clear filters</button>
     </div>
   ) : (
     <div className="text-center text-xs text-ink-tertiary space-y-3">

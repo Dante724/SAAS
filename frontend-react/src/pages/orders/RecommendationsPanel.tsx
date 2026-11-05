@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { confirmDialog, promptDialog } from "../../lib/dialog";
@@ -193,7 +194,7 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
               </div>
               <div className="ml-auto flex gap-2">
                 <button type="button" onClick={() => setForm(null)} className="h-9 px-3.5 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>
-                <button type="button" disabled={busy || !form.title.trim()} onClick={save} className="h-9 px-4 rounded-xl bg-primary text-white text-xs font-semibold shadow-sm hover:brightness-110 disabled:opacity-40 disabled:shadow-none">Save draft</button>
+                <button type="button" disabled={busy || !form.title.trim()} onClick={save} className={buttonClass("primary", "md")}>Save draft</button>
               </div>
             </div>
           </div>

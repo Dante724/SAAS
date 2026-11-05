@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import Switch from "../../components/Switch";
 import { api } from "../../api/client";
@@ -83,8 +84,8 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
       {/* Actions sit under the tabs, so the tab bar stays put on Sign-in (which has none). */}
       {tab !== "signin" && (
         <div className="flex flex-wrap items-center gap-2">
-          <button onClick={primary.on} className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90"><M n={primary.icon} c="text-sm" />{primary.label}</button>
-          {tab === "people" && <button onClick={onNewPerson} className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50">Add without invite</button>}
+          <button onClick={primary.on} className={buttonClass("primary", "md")}><M n={primary.icon} c="text-sm" />{primary.label}</button>
+          {tab === "people" && <button onClick={onNewPerson} className={buttonClass("secondary", "md")}>Add without invite</button>}
         </div>
       )}
 

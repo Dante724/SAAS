@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import Switch from "../../components/Switch";
@@ -11,7 +12,7 @@ import SaveFooter from "../../components/SaveFooter";
    adding or editing a price level / warehouse still opens the hub's editor drawer. */
 
 const inp = "glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary";
-const addBtn = "inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90";
+const addBtn = buttonClass("primary", "md");
 
 // `actions` sit under the title on the left, main action first.
 function Card({ icon, title, hint, actions, children }: { icon: string; title: string; hint?: string; actions?: ReactNode; children?: ReactNode }) {

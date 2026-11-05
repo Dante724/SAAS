@@ -12,7 +12,6 @@
     "raw-hex": 1
   },
   "pages/appointments/AppointmentsHub.tsx": {
-    "button-look": 1,
     "text-px": 19,
     "blur": 2
   },
@@ -94,7 +93,7 @@
     "text-px": 54
   },
   "pages/inventory/InventoryHub.tsx": {
-    "button-look": 7,
+    "button-look": 1,
     "text-px": 49
   },
   "pages/inventory/NewPODrawer.tsx": {
@@ -102,7 +101,6 @@
     "text-px": 5
   },
   "pages/inventory/PODrawer.tsx": {
-    "button-look": 2,
     "text-px": 45
   },
   "pages/inventory/PasteImport.tsx": {
@@ -110,7 +108,7 @@
     "text-px": 7
   },
   "pages/inventory/PurchasingCockpit.tsx": {
-    "text-px": 4
+    "text-px": 3
   },
   "pages/inventory/StocktakeDrawer.tsx": {
     "button-look": 2,
@@ -131,12 +129,10 @@
     "text-px": 3
   },
   "pages/memberships/MembershipsView.tsx": {
-    "button-look": 1,
     "text-px": 4,
     "blur": 1
   },
   "pages/memberships/PlansTab.tsx": {
-    "button-look": 1,
     "text-px": 8,
     "blur": 1
   },
@@ -144,20 +140,16 @@
     "text-px": 5
   },
   "pages/memberships/shared.tsx": {
-    "button-look": 1,
     "text-px": 14,
     "blur": 1
   },
   "pages/orders/AssetDrawer.tsx": {
-    "button-look": 1,
     "text-px": 12
   },
   "pages/orders/ClientDrawer.tsx": {
-    "button-look": 4,
     "text-px": 21
   },
   "pages/orders/ConversationPanel.tsx": {
-    "button-look": 1,
     "text-px": 4
   },
   "pages/orders/CreateOrderDrawer.tsx": {
@@ -195,7 +187,6 @@
     "text-px": 11
   },
   "pages/orders/RecommendationsPanel.tsx": {
-    "button-look": 1,
     "text-px": 12
   },
   "pages/orders/WODrawer.tsx": {
@@ -220,7 +211,6 @@
     "text-px": 15
   },
   "pages/sales/SalesPOS.tsx": {
-    "button-look": 2,
     "text-px": 15
   },
   "pages/settings/ApiKeysCard.tsx": {
@@ -230,7 +220,6 @@
     "text-px": 14
   },
   "pages/settings/CheckinPointsSettings.tsx": {
-    "button-look": 1,
     "text-px": 1
   },
   "pages/settings/ChecklistSettings.tsx": {
@@ -238,7 +227,6 @@
     "text-px": 16
   },
   "pages/settings/DirectoriesManager.tsx": {
-    "button-look": 3,
     "text-px": 15
   },
   "pages/settings/DocumentTemplatesPage.tsx": {
@@ -256,14 +244,14 @@
     "text-px": 3
   },
   "pages/settings/LocationsPage.tsx": {
-    "button-look": 2,
+    "button-look": 1,
     "text-px": 19
   },
   "pages/settings/ModePill.tsx": {
     "text-px": 1
   },
   "pages/settings/NotificationsPage.tsx": {
-    "button-look": 2,
+    "button-look": 1,
     "text-px": 27,
     "blur": 1
   },
@@ -277,7 +265,7 @@
     "button-look": 1
   },
   "pages/settings/SettingsHub.tsx": {
-    "button-look": 8,
+    "button-look": 7,
     "text-px": 50,
     "blur": 6
   },
@@ -285,16 +273,16 @@
     "text-px": 4
   },
   "pages/settings/StatusesSettings.tsx": {
-    "button-look": 2,
+    "button-look": 1,
     "text-px": 15,
     "blur": 1
   },
   "pages/settings/TeamSettings.tsx": {
-    "button-look": 2,
+    "button-look": 1,
     "text-px": 10
   },
   "pages/settings/TemplateEditorDrawer.tsx": {
-    "button-look": 3,
+    "button-look": 2,
     "text-px": 36
   },
   "pages/settings/WebhooksSettings.tsx": {

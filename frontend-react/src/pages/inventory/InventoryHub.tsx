@@ -1,4 +1,5 @@
 import SkeletonRows from "../../components/SkeletonRows";
+import { buttonClass } from "../../components/Button";
 import { useEffect, useState, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
@@ -82,8 +83,8 @@ export function StockLoadError({ onRetry }: { onRetry: () => void }) {
   );
 }
 
-const primaryBtn = "h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:bg-primary-container flex items-center gap-1.5";
-const ghostBtn = "h-9 px-3.5 rounded-xl bg-white border border-slate-200 text-ink-secondary text-xs font-semibold hover:bg-slate-50 flex items-center gap-1.5";
+const primaryBtn = buttonClass("primary", "md");
+const ghostBtn = buttonClass("secondary", "md");
 
 // Empty history tab: why it's worth having, and (when the header has no button) the first step.
 const AUDIT_EMPTY: Record<string, { why: string; action?: string }> = {
@@ -751,7 +752,7 @@ export default function InventoryHub() {
             <input type="number" min={1} max={500} value={labelCopies} onChange={(e) => setLabelCopies(Math.max(1, +e.target.value || 1))} className="w-full glass-input rounded-xl px-3 py-2 text-xs mb-4" />
             {labelErr && <div role="alert" className="mb-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{labelErr}</div>}
             <div className="flex items-center gap-2">
-              <button onClick={printLabels} disabled={!labelTplId} className="h-9 px-3.5 rounded-xl bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60 flex items-center gap-1"><M n="print" c="text-[15px]" /> Print {labelSelCount * labelCopies} label{labelSelCount * labelCopies === 1 ? "" : "s"}</button>
+              <button onClick={printLabels} disabled={!labelTplId} className={buttonClass("primary", "md")}><M n="print" c="text-[15px]" /> Print {labelSelCount * labelCopies} label{labelSelCount * labelCopies === 1 ? "" : "s"}</button>
               <button onClick={() => setLabelDlg(false)} className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50">Cancel</button>
             </div>
           </div>
@@ -892,8 +893,8 @@ function ActionModal({ kind, products, preselected, onClose, onDone }:
             <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} className="w-full glass-input rounded-xl px-3 py-2 text-xs" /></div>
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
-          <button onClick={save} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : title.replace("New ", "Create ")}</button>
-          <button onClick={onClose} className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50">Cancel</button>
+          <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : title.replace("New ", "Create ")}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
         </div>
       </div>
     </div>
@@ -955,7 +956,7 @@ function ConversionModal({ onClose, onDone }: { onClose: () => void; onDone: () 
           {stockUnit && <div><label className={lbl}>Location</label><select value={locId} onChange={(e) => setLocId(e.target.value)} className={fld}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>}
           <div><label className={lbl}>Note</label><textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} className={fld} /></div>
         </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2"><button onClick={save} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Converting…" : "Convert"}</button><button onClick={onClose} className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50">Cancel</button></div>
+        <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2"><button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Converting…" : "Convert"}</button><button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button></div>
       </div>
     </div>
   );
@@ -1039,8 +1040,8 @@ function ReorderModal({ onClose, onCreated }: { onClose: () => void; onCreated?:
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-3">
           <div className="flex gap-2">
-            {mode === "forecast" && <button onClick={createPOs} disabled={busy || chosen.length === 0} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50">{busy ? "Creating…" : `Create draft POs (${chosen.filter((i) => i.supplier_id).length})`}</button>}
-            <button onClick={onClose} className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50">Close</button>
+            {mode === "forecast" && <button onClick={createPOs} disabled={busy || chosen.length === 0} className={buttonClass("primary", "md")}>{busy ? "Creating…" : `Create draft POs (${chosen.filter((i) => i.supplier_id).length})`}</button>}
+            <button onClick={onClose} className={buttonClass("secondary", "md")}>Close</button>
           </div>
           <span className="ml-auto text-[11px] text-ink-tertiary text-right">{msg || (mode === "forecast" && noSupplier ? `${noSupplier} selected have no default supplier and will be skipped.` : "")}</span>
         </div>
@@ -1311,9 +1312,9 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
           {!review
-            ? <button onClick={doPreview} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Matching…" : "Review and match"}</button>
+            ? <button onClick={doPreview} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Matching…" : "Review and match"}</button>
             : <button onClick={doCommit} disabled={busy || (!genSerials && needSerials.length > 0) || badSerials.length > 0} title={needSerials.length && !genSerials ? "Enter a serial for each unit first" : undefined} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Posting…" : "Post stock"}</button>}
-          <button onClick={review ? backToEdit : onClose} className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50">{review ? "Back" : "Cancel"}</button>
+          <button onClick={review ? backToEdit : onClose} className={buttonClass("secondary", "md")}>{review ? "Back" : "Cancel"}</button>
         </div>
       </div>
     </div>
@@ -1367,7 +1368,7 @@ function BulkAdjustModal({ items, onClose, onDone }: { items: Product[]; onClose
           </div>
           <div><label className={lbl2}>Reason / note</label><input value={note} onChange={(e) => setNote(e.target.value)} placeholder="Recount, correction…" className={`${fld} w-full`} /></div>
         </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2"><button onClick={save} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-60">{busy ? "Adjusting…" : "Apply adjustments"}</button><button onClick={onClose} className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50">Cancel</button></div>
+        <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2"><button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Adjusting…" : "Apply adjustments"}</button><button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button></div>
       </div>
     </div>
   );
@@ -1441,7 +1442,7 @@ function PartsToOrderModal({ onClose, onCreated }: { onClose: () => void; onCrea
             </div>
           ))}
         </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex items-center"><button onClick={onClose} className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50">Close</button></div>
+        <div className="px-5 py-4 border-t border-slate-200 flex items-center"><button onClick={onClose} className={buttonClass("secondary", "md")}>Close</button></div>
       </div>
     </div>
   );
