@@ -79,6 +79,8 @@ function audit() {
   }
   const opacityOf = (el) => { let o = 1; for (let n = el; n && n.nodeType === 1; n = n.parentElement) o *= Number(getComputedStyle(n).opacity); return o; };
 
+  // The app frame: sidebar, the header bar and anything outside the page and its drawers.
+  const isFrame = (el) => !!el.closest('main.app-main > header, aside, nav') || !el.closest('main.app-main, [role=dialog]');
   const contrast = [];
   const seen = new Set();
   const walker = document.createTreeWalker(document.body, NodeFilter.SHOW_TEXT);
@@ -101,7 +103,7 @@ function audit() {
     const large = size >= 24 || (size >= 18.66 && weight >= 700);
     const need = large ? 3 : 4.5;
     const r = ratio(fg, bg);
-    if (r + 0.005 < need) contrast.push({ frame: !el.closest('main.app-main, [role=dialog]'), text: text.slice(0, 50), fg: hex(fg), bg: hex(bg), ratio: Math.round(r * 100) / 100, need, size, cls: cls(el).slice(0, 160) });
+    if (r + 0.005 < need) contrast.push({ frame: isFrame(el), text: text.slice(0, 50), fg: hex(fg), bg: hex(bg), ratio: Math.round(r * 100) / 100, need, size, cls: cls(el).slice(0, 160) });
   }
 
   // Buttons that don't look like the shared one.
@@ -115,12 +117,18 @@ function audit() {
     if (!label) continue;
     const filled = (parse(s.backgroundColor)?.a || 0) > 0 || parseFloat(s.borderTopWidth) > 0;
     if (!filled) continue;                               // text links and bare icons are not "buttons" here
-    const h = Math.round(el.getBoundingClientRect().height);
+    if (el.matches('.glass-input')) continue;            // a field that opens a picker, not a button
+    const box = el.getBoundingClientRect();
+    const h = Math.round(box.height);
+    if (h > 60) continue;                                // a clickable card or row, not a button
+    const radii = [s.borderTopLeftRadius, s.borderTopRightRadius, s.borderBottomRightRadius, s.borderBottomLeftRadius].map(parseFloat);
+    if (Math.max(...radii) >= h / 2 - 1) continue;       // a pill or a circle: chips, tags, avatars
     const why = [];
-    if (Math.round(parseFloat(s.borderTopLeftRadius)) !== 12 && !(s.borderTopLeftRadius.endsWith('%') || parseFloat(s.borderTopLeftRadius) > 100)) why.push(`radius ${s.borderTopLeftRadius}`);
+    // 12px corners; one half of a split button keeps 12px on its outer side only
+    if (!radii.some((r) => Math.round(r) === 12) || radii.some((r) => r && Math.round(r) !== 12)) why.push(`radius ${s.borderTopLeftRadius}`);
     if (![32, 36, 44].includes(h)) why.push(`height ${h}`);
     if ((Number(s.fontWeight) || 400) < 600) why.push(`weight ${s.fontWeight}`);
-    if (why.length) buttons.push({ frame: !el.closest('main.app-main, [role=dialog]'), label: label.slice(0, 40), why: why.join(', '), cls: cls(el).slice(0, 160) });
+    if (why.length) buttons.push({ frame: isFrame(el), label: label.slice(0, 40), why: why.join(', '), cls: cls(el).slice(0, 160) });
   }
 
   const de = document.scrollingElement || document.documentElement;
@@ -165,7 +173,19 @@ async function captureScreen(browser, token, screen, theme, vpName) {
       const row = page.locator(open);
       if (await row.count()) {
         await row.click().catch(() => {}); await settle(page);
-        if (await page.locator('[role=dialog]').count()) states.push({ state: `${screen} › drawer`, ...(await page.evaluate(audit)) });
+        if (await page.locator('[role=dialog]').count()) {
+          states.push({ state: `${screen} › drawer`, ...(await page.evaluate(audit)) });
+          // and each tab inside the drawer (a job's Parts, Payments, Activity…)
+          const dtabs = page.locator('[role=dialog] [role=tablist]').first().locator('[role=tab]');
+          const dn = Math.min(await dtabs.count(), 12);
+          for (let i = 1; i < dn; i++) {
+            const t = dtabs.nth(i);
+            if (!(await t.isVisible().catch(() => false)) || (await t.isDisabled())) continue;
+            const name = (await t.innerText()).replace(/\s+/g, ' ').trim();
+            await t.click().catch(() => {}); await settle(page);
+            states.push({ state: `${screen} › drawer › ${name}`, ...(await page.evaluate(audit)) });
+          }
+        }
       }
     }
   } catch (e) {

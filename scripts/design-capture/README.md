@@ -1,14 +1,14 @@
 # Design capture
 
 Before / after numbers for design PRs. `capture.js` opens every staff screen of a running app,
-and each tab on it (plus a record drawer on Work orders, Inventory, Contacts and Invoices). It
+and each tab on it, plus a record drawer (and each of its tabs) on Work orders, Inventory, Contacts and Invoices. It
 checks each one in light and dark, at desktop (1440) and phone (390) widths. It changes nothing
 in the app.
 
 | Measure | What counts |
 |---|---|
 | Text below AA contrast (light, dark) | Visible, enabled text under 4.5:1 against its real background, or under 3:1 for large text (24px+, or 18.66px+ bold). Disabled controls and rows marked `aria-disabled` are exempt, as WCAG allows. Text that only shows on hover is skipped. |
-| Off-design buttons | Filled or outlined buttons that don't look like the shared `<Button>`: corners other than 12px, a height other than 32 / 36 / 44px, or text lighter than semibold. Tabs, switches, menus and segmented controls are left out. |
+| Off-design buttons | Filled or outlined buttons that don't look like the shared `<Button>`: corners other than 12px (a split button may square off its inner side), a height other than 32 / 36 / 44px, or text lighter than semibold. Tabs, switches, menus, segmented controls, pills and circles (chips, tags, avatars), fields and clickable cards are left out. |
 | Sideways scroll on a phone | Screens where the page or its main column is wider than a 390px screen. |
 
 A "spot" is one element on one screen or tab. An element that fails at both widths counts once.
