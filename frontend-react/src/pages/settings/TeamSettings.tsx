@@ -5,6 +5,15 @@ import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
 import { Avatar } from "../orders/look";
 import { clickable } from "../../lib/clickable";
+import SettingsPage from "../../components/SettingsPage";
+import Tabs from "../../components/Tabs";
+import Button, { IconButton } from "../../components/Button";
+import Drawer from "../../components/Drawer";
+import Section, { sectionCard } from "../../components/Section";
+import EmptyState from "../../components/EmptyState";
+import { Badge } from "../../components/Card";
+import { Field, Input, Select } from "../../components/Field";
+import { SettingRow } from "../../components/SettingRow";
 
 /* Settings › Team & roles — people (with pending invites), roles (who has each one and what it
    can see), and commission rules. Same endpoints as before; the drawers for people and
@@ -61,44 +70,30 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
   // Commissions are part of payroll, a Pro feature.
   const tabs: [Tab, string, number | undefined][] = [["people", "People", people.length], ["roles", "Roles", roles?.length],
     ...(showPay ? [["pay", "Commissions", rules?.length] as [Tab, string, number | undefined]] : []), ["signin", "Sign-in", undefined]];
-  const primary = tab === "people" ? { label: "Invite someone", icon: "person_add", on: onInvite }
-    : tab === "roles" ? { label: "New role", icon: "add", on: onNewRole } : { label: "New rule", icon: "add", on: onNewRule };
 
   return (
-    <div className="max-w-3xl space-y-4">
-      <div>
-        <h2 className="text-base font-semibold text-ink-primary">Your team</h2>
-        <p className="text-xs text-ink-tertiary">Who works here, what they can do, and how commission is paid.</p>
-      </div>
-
-      <div className="inline-flex rounded-xl bg-slate-100 p-1">
-        {tabs.map(([id, label, n]) => (
-          <button key={id} onClick={() => setTab(id)} aria-pressed={tab === id}
-            className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${tab === id ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>
-            {label}{n != null && <span className="ml-1.5 text-ink-tertiary font-normal">{n}</span>}
-          </button>
-        ))}
-      </div>
-
-      {/* Actions sit under the tabs, so the tab bar stays put on Sign-in (which has none). */}
-      {tab !== "signin" && (
-        <div className="flex flex-wrap items-center gap-2">
-          <button onClick={primary.on} className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90"><M n={primary.icon} c="text-sm" />{primary.label}</button>
-          {tab === "people" && <button onClick={onNewPerson} className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50">Add without invite</button>}
-        </div>
-      )}
+    <SettingsPage wide title="Team & roles" sub="Who works here, what they can do, and how commission is paid."
+      actions={<>
+        {/* Every action is always here, whatever the tab, so nothing above the tabs moves. */}
+        <Button variant="primary" icon={<M n="person_add" c="text-sm" />} onClick={onInvite}>Invite someone</Button>
+        <Button onClick={onNewPerson}>Add without invite</Button>
+        <Button icon={<M n="add" c="text-sm" />} onClick={onNewRole}>New role</Button>
+        {showPay && <Button icon={<M n="add" c="text-sm" />} onClick={onNewRule}>New rule</Button>}
+      </>}>
+      <Tabs label="Team sections" value={tab} onChange={setTab}
+        tabs={tabs.map(([id, label, n]) => ({ id, label, count: n ?? null }))} />
 
       {tab === "people" && (
-        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-2">
-          <div className="flex items-center gap-2 px-2 pt-1 pb-2">
-            <div className="relative flex-1">
+        <div className={`${sectionCard} p-2`}>
+          <div className="flex flex-wrap items-center gap-2 px-2 pt-1 pb-2">
+            <div className="relative flex-1 min-w-[12rem]">
               <M n="search" c="absolute left-3 top-2.5 text-base text-ink-tertiary pointer-events-none" />
-              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by name, email, role…" aria-label="Search people"
-                className="w-full bg-slate-50 border border-transparent focus:border-slate-200 focus:bg-white rounded-xl pl-9 pr-3 py-2 text-sm outline-none" />
+              <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search by name, email, role…" aria-label="Search people" className="pl-9" />
             </div>
-            {blocked > 0 && (
-              <button onClick={() => setShowBlocked((v) => !v)} aria-pressed={showBlocked} className={`px-3 py-2 rounded-xl text-xs font-semibold ${showBlocked ? "bg-slate-100 text-ink-primary" : "text-ink-tertiary hover:text-ink-secondary"}`}>{showBlocked ? "Hide" : "Show"} blocked ({blocked})</button>
-            )}
+            {/* Stays in place (disabled) when no one is blocked, so the search box never changes width. */}
+            <Button variant="ghost" onClick={() => setShowBlocked((v) => !v)} aria-pressed={showBlocked} disabled={blocked === 0}>
+              {showBlocked ? "Hide" : "Show"} blocked ({blocked})
+            </Button>
           </div>
 
           {(invites || []).length > 0 && !ql && (
@@ -106,32 +101,32 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
               {(invites || []).map((i) => (
                 <div key={i.id} className="group flex items-center gap-3 px-3 py-2.5 rounded-xl hover:bg-slate-50">
                   <span className="w-9 h-9 rounded-full border-2 border-dashed border-slate-300 grid place-items-center text-ink-tertiary flex-shrink-0"><M n="mail" c="text-sm" /></span>
-                  <span className="min-w-0">
+                  <span className="min-w-0 flex-1">
                     <span className="block text-sm text-ink-primary truncate">{i.name || i.email}</span>
                     <span className="block text-xs text-ink-tertiary truncate">{i.name ? `${i.email} · ` : ""}{roleName(i.role_id) || "No role yet"}</span>
                   </span>
-                  <span className={`ml-auto text-[11px] font-semibold px-2 py-0.5 rounded-md ${i.expired ? "bg-rose-50 text-rose-600" : "bg-amber-50 text-amber-700"}`}>{i.expired ? "Invite expired" : "Invited"}</span>
-                  <button onClick={() => cancelInvite(i)} aria-label={`Cancel invite for ${i.email}`} className="w-7 h-7 rounded-lg grid place-items-center text-ink-tertiary hover:bg-rose-50 hover:text-rose-600 opacity-0 group-hover:opacity-100 focus:opacity-100"><M n="close" c="text-base" /></button>
+                  <Badge tone={i.expired ? "danger" : "warning"}>{i.expired ? "Invite expired" : "Invited"}</Badge>
+                  <IconButton label={`Cancel invite for ${i.email}`} onClick={() => cancelInvite(i)} icon={<M n="close" c="text-base" />} className="hover:!bg-rose-50 hover:!text-rose-600" />
                 </div>
               ))}
               <div className="mx-3 my-1 border-t border-slate-100" />
             </div>
           )}
 
-          {team == null && <div className="p-4 text-xs text-ink-tertiary">Loading your team…</div>}
-          {team && shown.length === 0 && <div className="p-6 text-center text-xs text-ink-tertiary">{ql ? `No one matches "${q}".` : "No one here yet. Invite your first teammate."}</div>}
+          {team == null && <div className="p-4 text-xs text-ink-tertiary" role="status">Loading your team…</div>}
+          {team && shown.length === 0 && <EmptyState size="section" title={ql ? `No one matches "${q}"` : "No one here yet"} body={ql ? "Try another name, email or role." : "Invite your first teammate with the button above."} />}
           {shown.map((p) => (
             <div key={p.id} {...clickable(() => onEditPerson(p))} className={`flex items-center gap-3 px-3 py-2.5 rounded-xl cursor-pointer hover:bg-slate-50 ${p.active === false ? "opacity-60" : ""}`}>
               <Avatar name={p.name} />
-              <span className="min-w-0">
+              <span className="min-w-0 flex-1">
                 <span className="block text-sm font-medium text-ink-primary truncate">{p.name}</span>
                 <span className="block text-xs text-ink-tertiary truncate">{[p.position, p.email].filter(Boolean).join(" · ")}</span>
               </span>
-              <span className="ml-auto flex items-center gap-2 flex-shrink-0">
+              <span className="flex items-center gap-2 flex-shrink-0 max-w-[45%] min-w-0">
                 {roleName(p.role_id)
-                  ? <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-slate-100 text-ink-secondary">{roleName(p.role_id)}</span>
-                  : <span className="text-[11px] px-2 py-0.5 rounded-md border border-dashed border-slate-300 text-ink-tertiary">No role</span>}
-                {p.active === false && <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-rose-50 text-rose-600">Blocked</span>}
+                  ? <Badge className="max-sm:hidden truncate">{roleName(p.role_id)}</Badge>
+                  : <span className="max-sm:hidden text-2xs px-2 py-0.5 rounded-full border border-dashed border-slate-300 text-ink-tertiary whitespace-nowrap">No role</span>}
+                {p.active === false && <Badge tone="danger">Blocked</Badge>}
                 <M n="chevron_right" c="text-base text-ink-tertiary" />
               </span>
             </div>
@@ -140,25 +135,28 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
       )}
 
       {tab === "roles" && (
+        roles == null ? <div className="text-xs text-ink-tertiary" role="status">Loading roles…</div>
+        : roles.length === 0 ? <div className={sectionCard}><EmptyState title="No roles yet" body="A role decides what someone can do and see. Create one with New role above." /></div>
+        : (
         <div className="grid sm:grid-cols-2 gap-3">
-          {(roles || []).map((r) => {
+          {roles.map((r) => {
             const members = people.filter((p) => p.role_id === r.id && p.active !== false);
             const denied = liveCodes.filter((c) => (r.permissions || {})[c] === false).length;
             const allowedN = totalPerms ? totalPerms - denied : null;
             const limits = [r.order_scope === "own" && "Only their own jobs", r.contact_scope === "own" && "Only their own customers",
               r.location_scope && r.location_scope !== "all" && "Some locations", (r.hidden_status_keys || []).length > 0 && "Some statuses hidden"].filter(Boolean) as string[];
             return (
-              <button key={r.id} onClick={() => onEditRole(r)} className="text-left bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4 hover:border-slate-300 transition-colors">
+              <button key={r.id} onClick={() => onEditRole(r)} className={`${sectionCard} text-left p-4 hover:border-slate-300 transition-colors`}>
                 <div className="flex items-center gap-2">
-                  <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center"><M n="badge" c="text-lg" /></span>
+                  <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n="badge" c="text-lg" /></span>
                   <span className="min-w-0">
                     <span className="block text-sm font-semibold text-ink-primary truncate">{r.name}</span>
                     <span className="block text-xs text-ink-tertiary">{allowedN == null ? "" : denied === 0 ? "Can do everything" : `Can do ${allowedN} of ${totalPerms} things`}</span>
                   </span>
                 </div>
                 {totalPerms > 0 && <div className="mt-3 h-1.5 rounded-full bg-slate-100 overflow-hidden"><div className="h-full rounded-full bg-primary" style={{ width: `${Math.round(((allowedN ?? 0) / totalPerms) * 100)}%` }} /></div>}
-                <div className="flex flex-wrap gap-1 mt-3 min-h-[22px]">
-                  {limits.length ? limits.map((l) => <span key={l} className="text-[11px] px-2 py-0.5 rounded-md bg-amber-50 text-amber-700">{l}</span>)
+                <div className="flex flex-wrap gap-1 mt-3 min-h-[24px]">
+                  {limits.length ? limits.map((l) => <Badge key={l} tone="warning">{l}</Badge>)
                     : <span className="text-xs text-ink-tertiary">Sees all records</span>}
                 </div>
                 <div className="flex items-center gap-2 mt-3 pt-3 border-t border-slate-100">
@@ -168,22 +166,16 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
               </button>
             );
           })}
-          <button onClick={onNewRole} className="rounded-2xl border border-dashed border-slate-300 p-4 text-xs font-semibold text-ink-secondary hover:bg-white hover:border-slate-400 grid place-items-center min-h-[150px]">
-            <span className="flex flex-col items-center gap-1.5"><M n="add_circle" c="text-xl" />New role</span>
-          </button>
         </div>
-      )}
+      ))}
 
       {tab === "signin" && <DeviceLimitCard onFlash={onFlash} />}
 
       {tab === "pay" && (
-        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-2">
-          {(rules || []).length === 0 && (
-            <div className="p-6 text-center">
-              <div className="text-sm text-ink-primary">No commission rules yet</div>
-              <div className="text-xs text-ink-tertiary mt-0.5 mb-3">Pay a percent or a flat amount when work is done or a part is sold.</div>
-              <button onClick={onNewRule} className="px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-ink-primary hover:bg-slate-50">Create a rule</button>
-            </div>
+        <div className={`${sectionCard} p-2`}>
+          {rules == null && <div className="p-4 text-xs text-ink-tertiary" role="status">Loading commission rules…</div>}
+          {rules && rules.length === 0 && (
+            <EmptyState title="No commission rules yet" body="Pay a percent or a flat amount when work is done or a part is sold. Add one with New rule above." />
           )}
           {(rules || []).map((r) => {
             const who = people.find((p) => p.id === r.employee_id);
@@ -191,18 +183,18 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
             return (
               <div key={r.id} {...clickable(() => onEditRule(r))} className="flex items-center gap-3 px-3 py-3 rounded-xl cursor-pointer hover:bg-slate-50">
                 <span className="w-9 h-9 rounded-xl bg-emerald-50 text-emerald-700 grid place-items-center flex-shrink-0"><M n="payments" c="text-lg" /></span>
-                <span className="min-w-0">
+                <span className="min-w-0 flex-1">
                   <span className="block text-sm font-medium text-ink-primary truncate">{r.name}</span>
                   <span className="block text-xs text-ink-tertiary truncate">{l.event} · {who ? who.name : "Everyone it applies to"}</span>
                 </span>
-                <span className="ml-auto text-sm font-semibold text-ink-primary whitespace-nowrap">{l.amount}</span>
+                <span className="text-sm font-semibold tabular-nums text-ink-primary whitespace-nowrap">{l.amount}</span>
                 <M n="chevron_right" c="text-base text-ink-tertiary" />
               </div>
             );
           })}
         </div>
       )}
-    </div>
+    </SettingsPage>
   );
 }
 
@@ -236,10 +228,6 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
   useEffect(() => { api.get<any>("/staff/locations").then((r) => setLocations(r.items || r || [])).catch(() => setLocations([])); }, []);
   useEffect(() => { api.get<any>("/staff/employees").then((r) => setPeople((r.items || r || []).map((e: any) => ({ id: e.id, name: e.name })))).catch(() => setPeople([])); }, []);
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
-    window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
-  }, [onClose]);
 
   // Saved roles are allow-lists on the server: a code they don't list is off, so show it off
   // (otherwise a permission added later looks granted here while the API refuses it).
@@ -285,13 +273,8 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
     catch (e: any) { setErr(e?.message || "Couldn't delete the role"); setBusy(false); }
   }
 
-  const Choice = ({ value, set, options }: { value: string; set: (v: string) => void; options: [string, string][] }) => (
-    <div className="inline-flex flex-wrap max-w-full gap-0.5 rounded-xl bg-slate-100 p-1">
-      {options.map(([v, l]) => (
-        <button key={v} type="button" onClick={() => set(v)} aria-pressed={value === v}
-          className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${value === v ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>{l}</button>
-      ))}
-    </div>
+  const Choice = ({ value, set, options, label }: { value: string; set: (v: string) => void; options: [string, string][]; label: string }) => (
+    <Tabs look="segmented" label={label} value={value} onChange={set} tabs={options.map(([id, l]) => ({ id, label: l }))} />
   );
   const Row = ({ icon, title, hint, children }: { icon: string; title: string; hint?: string; children: React.ReactNode }) => (
     <div className="flex items-start gap-3 py-3.5 border-t border-slate-100 first:border-0">
@@ -305,29 +288,21 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/30" aria-hidden="true" onClick={onClose} />
-      <div role="dialog" aria-label={isNew ? "New role" : `Edit ${name}`} className="relative w-[560px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.28s_cubic-bezier(.16,1,.3,1)]">
-        <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
-        <div className="px-5 pt-5 pb-3">
-          <div className="flex items-center gap-3">
-            <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n="badge" c="text-lg" /></span>
-            <div className="flex-1 min-w-0">
-              <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Role name, like Front desk" autoFocus={isNew} aria-label="Role name"
-                className="w-full text-lg font-semibold text-ink-primary bg-transparent outline-none placeholder:text-ink-tertiary placeholder:font-normal border-b border-transparent focus:border-slate-200 py-0.5" />
-              <div className="text-xs text-ink-tertiary">{isNew && preset ? `Starts like ${preset}` : `Can do ${totalOn} of ${all.length} things`}</div>
-            </div>
-            <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 grid place-items-center text-ink-tertiary flex-shrink-0"><M n="close" c="text-base" /></button>
-          </div>
-          <div className="mt-4 inline-flex rounded-xl bg-slate-100 p-1">
-            {([["can", "What they can do"], ["sees", "What they see"], ["home", "Their home screen"]] as [typeof tab, string][]).map(([id, l]) => (
-              <button key={id} onClick={() => setTab(id)} aria-pressed={tab === id}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${tab === id ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>{l}</button>
-            ))}
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-5 pb-5 space-y-3">
+    <Drawer size="md" label={isNew ? "New role" : `Edit ${name}`} onClose={onClose}
+      title={isNew ? "New role" : (name.trim() || "Role")}
+      sub={isNew && preset ? `Starts like ${preset}` : `Can do ${totalOn} of ${all.length} things`}
+      footer={<>
+        <Button variant="primary" onClick={save} busy={busy}>{busy ? "Saving…" : isNew ? "Create role" : "Save"}</Button>
+        <Button onClick={onClose}>Cancel</Button>
+        {!isNew && (members > 0
+          ? <span className="ml-auto text-xs text-ink-tertiary">{members} {members === 1 ? "person has" : "people have"} this role</span>
+          : <Button variant="danger" className="ml-auto" onClick={remove} disabled={busy}>Delete role</Button>)}
+      </>}>
+      <Field label="Role name" htmlFor="role-name">
+        <Input id="role-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Role name, like Front desk" autoFocus={isNew} />
+      </Field>
+      <Tabs look="segmented" label="Role settings" value={tab} onChange={setTab}
+        tabs={[{ id: "can", label: "What they can do" }, { id: "sees", label: "What they see" }, { id: "home", label: "Their home screen" }]} />
           {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
 
           {tab === "can" && (<>
@@ -350,11 +325,10 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
             <div className="flex items-center gap-2 pt-1">
               <div className="relative flex-1">
                 <M n="search" c="absolute left-3 top-2.5 text-base text-ink-tertiary pointer-events-none" />
-                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a permission…" aria-label="Find a permission"
-                  className="w-full bg-slate-50 border border-transparent focus:border-slate-200 focus:bg-white rounded-xl pl-9 pr-3 py-2 text-sm outline-none" />
+                <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a permission…" aria-label="Find a permission" className="pl-9" />
               </div>
-              <button type="button" onClick={() => grantAll(all, true)} className="px-3 py-2 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100 whitespace-nowrap">Allow all</button>
-              <button type="button" onClick={() => grantAll(all, false)} className="px-3 py-2 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100 whitespace-nowrap">Allow none</button>
+              <Button variant="ghost" onClick={() => grantAll(all, true)}>Allow all</Button>
+              <Button variant="ghost" onClick={() => grantAll(all, false)}>Allow none</Button>
             </div>
             {filtered.length === 0 && <div className="text-xs text-ink-tertiary py-4 text-center">Nothing matches "{q}".</div>}
             {filtered.map(([group, codes]) => {
@@ -363,21 +337,21 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
               const onCount = live.filter((c) => allowed(c.code)).length;
               const allOn = live.length > 0 && onCount === live.length;
               return (
-                <div key={group} className="rounded-2xl border border-slate-200 overflow-hidden">
+                <div key={group} className="rounded-2xl border border-slate-200 overflow-hidden bg-white">
                   <div className="flex items-center gap-3 px-4 py-3">
                     <button type="button" onClick={() => setOpen((o) => ({ ...o, [group]: !isOpen }))} aria-expanded={isOpen} className="flex items-center gap-2 min-w-0 flex-1 text-left">
                       <M n={isOpen ? "expand_more" : "chevron_right"} c="text-base text-ink-tertiary" />
                       <span className="text-sm text-ink-primary capitalize truncate">{group.replace(/_/g, " ")}</span>
-                      {live.length > 0 && <span className={`text-[11px] px-1.5 py-0.5 rounded-md ${onCount === 0 ? "bg-slate-100 text-ink-tertiary" : allOn ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>{allOn ? "All" : onCount === 0 ? "None" : `${onCount} of ${live.length}`}</span>}
+                      {live.length > 0 && <Badge tone={onCount === 0 ? "neutral" : allOn ? "success" : "warning"}>{allOn ? "All" : onCount === 0 ? "None" : `${onCount} of ${live.length}`}</Badge>}
                     </button>
-                    {live.length > 0 && <Switch size="sm" on={allOn} onChange={() => grantAll(live, !allOn)} label={`${allOn ? "Turn off" : "Turn on"} all ${group.replace(/_/g, " ")}`} />}
+                    {live.length > 0 && <Switch on={allOn} onChange={() => grantAll(live, !allOn)} label={`${allOn ? "Turn off" : "Turn on"} all ${group.replace(/_/g, " ")}`} />}
                   </div>
                   {isOpen && (
                     <div className="border-t border-slate-100 bg-slate-50/50">
                       {codes.map((c) => (
                         <div key={c.code} className="flex items-center gap-3 pl-11 pr-4 py-2.5 border-t border-slate-100 first:border-0">
                           <span className="text-xs flex-1 text-ink-primary">{c.label}</span>
-                          <Switch size="sm" on={allowed(c.code)} onChange={() => toggle(c.code)} label={c.label} />
+                          <Switch on={allowed(c.code)} onChange={() => toggle(c.code)} label={c.label} />
                         </div>
                       ))}
                     </div>
@@ -390,13 +364,13 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
           {tab === "sees" && (
             <div>
               <Row icon="assignment_late" title="Work orders">
-                <Choice value={orderScope} set={setOrderScope} options={[["all", "All jobs"], ["own", "Only jobs assigned to them"]]} />
+                <Choice value={orderScope} set={setOrderScope} options={[["all", "All jobs"], ["own", "Only jobs assigned to them"]]} label="Which work orders" />
               </Row>
               <Row icon="contacts" title="Customers">
-                <Choice value={contactScope} set={setContactScope} options={[["all", "All customers"], ["own", "Only their own"]]} />
+                <Choice value={contactScope} set={setContactScope} options={[["all", "All customers"], ["own", "Only their own"]]} label="Which customers" />
               </Row>
               <Row icon="storefront" title="Locations" hint={locations.length < 2 ? "You have one location, so this only matters once you add another." : undefined}>
-                <Choice value={locScope === "all" ? "all" : "some"} set={(v) => setLocScope(v === "all" ? "all" : "selected")} options={[["all", "All locations"], ["some", "Only some"]]} />
+                <Choice value={locScope === "all" ? "all" : "some"} set={(v) => setLocScope(v === "all" ? "all" : "selected")} options={[["all", "All locations"], ["some", "Only some"]]} label="Which locations" />
                 {locScope !== "all" && (
                   <div className="flex flex-wrap gap-1.5 mt-2">
                     {locations.map((l) => { const on = locIds.includes(l.id); return (
@@ -409,7 +383,7 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
                 )}
               </Row>
               <Row icon="group" title="Whose pay" hint="Whose pay they can see. Their own pay is set below.">
-                <Choice value={payrollScope} set={setPayrollScope} options={[["all", "Everyone"], ["own", "Only themselves"], ["selected", "Only some people"]]} />
+                <Choice value={payrollScope} set={setPayrollScope} options={[["all", "Everyone"], ["own", "Only themselves"], ["selected", "Only some people"]]} label="Whose pay" />
                 {payrollScope === "selected" && (
                   <div className="flex flex-wrap gap-1.5 mt-2" role="group" aria-label="People whose pay they can see">
                     {people.length === 0 && <span className="text-xs text-ink-tertiary">No team members yet.</span>}
@@ -424,8 +398,7 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
               </Row>
               <Row icon="payments" title="Pay history" hint="How far back they can see payroll. Leave empty for all of it.">
                 <div className="flex items-center gap-2">
-                  <input type="number" min={0} value={payrollDays} onChange={(e) => setPayrollDays(e.target.value)} placeholder="All" aria-label="Days of pay history"
-                    className="w-24 bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-primary" />
+                  <Input type="number" min={0} value={payrollDays} onChange={(e) => setPayrollDays(e.target.value)} placeholder="All" aria-label="Days of pay history" className="!w-24 tabular-nums" />
                   <span className="text-xs text-ink-secondary">days</span>
                 </div>
               </Row>
@@ -447,10 +420,9 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
           {tab === "home" && (
             <div>
               <Row icon="dashboard" title="Opens on" hint="Where someone with this role lands when they open the app.">
-                <select value={homeRoute} onChange={(e) => setHomeRoute(e.target.value)} aria-label="Landing page"
-                  className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-primary">
+                <Select value={homeRoute} onChange={(e) => setHomeRoute(e.target.value)} aria-label="Landing page">
                   {LANDING_PAGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                </select>
+                </Select>
               </Row>
               <Row icon="notifications" title="Alerts on Home" hint="Pick what shows up. Pick none to show everything.">
                 <div className="flex flex-wrap gap-1.5">
@@ -464,17 +436,7 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
               </Row>
             </div>
           )}
-        </div>
-
-        <div className="px-5 py-4 border-t border-slate-100 flex items-center gap-2">
-          {!isNew && (members > 0
-            ? <span className="text-xs text-ink-tertiary">{members} {members === 1 ? "person has" : "people have"} this role</span>
-            : <button onClick={remove} disabled={busy} className="px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50">Delete role</button>)}
-          <button onClick={onClose} className="ml-auto px-4 py-2 rounded-xl border border-slate-200 text-ink-secondary hover:bg-slate-50 font-semibold text-xs">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-xl bg-ink-primary text-white font-semibold text-xs hover:opacity-90 disabled:opacity-60">{busy ? "Saving…" : isNew ? "Create role" : "Save"}</button>
-        </div>
-      </div>
-    </div>
+    </Drawer>
   );
 }
 
@@ -499,20 +461,15 @@ export function DeviceLimitCard({ onFlash }: { onFlash: (m: string) => void }) {
     finally { setBusy(false); }
   }
   return (
-    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-5">
-      <div className="flex flex-wrap items-start gap-4">
-        <div className="min-w-[220px] flex-1">
-          <label htmlFor="device-limit" className="block text-sm font-semibold text-ink-primary">Devices per person</label>
-          <p className="mt-1 text-xs text-ink-tertiary">How many devices one login can use at the same time. When someone hits the limit,
-            they pick a device to sign out before they can sign in somewhere new. The phone app counts as a device.</p>
-        </div>
-        <select id="device-limit" value={value ?? ""} disabled={value === null || busy} onChange={(e) => save(e.target.value)}
-          className="glass-input rounded-xl px-3 py-2 text-sm font-semibold text-ink-primary">
+    <Section title="Signing in" description="Changes here save right away.">
+      <SettingRow stack htmlFor="device-limit" label="Devices per person"
+        help="How many devices one login can use at the same time. When someone hits the limit, they pick a device to sign out before they can sign in somewhere new. The phone app counts as a device.">
+        <Select id="device-limit" value={value ?? ""} disabled={value === null || busy} onChange={(e) => save(e.target.value)} className="sm:!w-48">
           {LIMITS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-        </select>
-      </div>
-      <p className="mt-3 text-xs text-ink-tertiary">People already over a new limit stay signed in until they sign out.
+        </Select>
+      </SettingRow>
+      <p className="mt-4 text-xs text-ink-tertiary">People already over a new limit stay signed in until they sign out.
         Each person can see and sign out their devices under Security &amp; sign-in.</p>
-    </div>
+    </Section>
   );
 }

@@ -2,9 +2,9 @@
 // what they asked for. Saved through the offline queue with one idempotency key per form, so a
 // retry (or a replay after being offline) never makes a second inquiry.
 import { useEffect, useRef, useState } from "react";
-import { Check } from "lucide-react";
 import { api } from "../../api/client";
-import { PrimaryButton, Sheet } from "./ui";
+import { PrimaryButton, Sheet, goArea, goField } from "./ui";
+import Chip from "./Chip";
 import { goQueue } from "../lib/offlineQueue";
 import { newKey } from "../lib/photos";
 import { useToast } from "../lib/useGo";
@@ -20,10 +20,7 @@ function loadTypes() {
   return typeCache;
 }
 
-const field = "w-full min-h-[3rem] rounded-xl border border-slate-200 bg-white px-4 text-go-body text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/15";
-// A chip that shows a tick when picked keeps 11px of extra padding on each side while unpicked, the
-// same width as the 16px tick plus its 6px gap, so picking one never pushes its neighbours.
-const chip = (on: boolean, ticked = false) => `min-h-[2.75rem] ${ticked && !on ? "px-[27px]" : "px-4"} rounded-full border text-go-body font-medium inline-flex items-center gap-1.5 ${on ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`;
+const field = goField();
 const Label = ({ children }: { children: string }) => <span className="mb-1.5 block px-1 text-go-sub font-semibold text-ink-tertiary">{children}</span>;
 
 export default function InquirySheet({ open, onClose }: { open: boolean; onClose: () => void }) {
@@ -70,7 +67,7 @@ export default function InquirySheet({ open, onClose }: { open: boolean; onClose
             <div className="flex flex-wrap gap-2">
               {types.map((t) => {
                 const on = d.typeId === t.id;
-                return <button key={t.id} type="button" aria-pressed={on} onClick={() => setD((x) => ({ ...x, typeId: on ? "" : t.id }))} className={chip(on, true)}>{on && <Check size={16} />}{t.name}</button>;
+                return <Chip key={t.id} on={on} tick onClick={() => setD((x) => ({ ...x, typeId: on ? "" : t.id }))}>{t.name}</Chip>;
               })}
             </div>
           </div>
@@ -80,9 +77,9 @@ export default function InquirySheet({ open, onClose }: { open: boolean; onClose
           <label><Label>Model</Label><input value={d.model} onChange={set("model")} placeholder="iPhone 14" autoComplete="off" className={field} /></label>
         </div>
         <label className="block"><Label>Serial or IMEI</Label>
-          <input value={d.serial} onChange={set("serial")} placeholder="Optional" autoComplete="off" autoCapitalize="characters" className={`${field} font-mono`} /></label>
+          <input value={d.serial} onChange={set("serial")} placeholder="Optional" autoComplete="off" autoCapitalize="characters" className={goField("font-mono")} /></label>
         <label className="block"><Label>What they asked for</Label>
-          <textarea value={d.inquiry} onChange={set("inquiry")} rows={3} placeholder="Screen price, how long it takes…" className={`${field} py-3 min-h-[5.5rem]`} /></label>
+          <textarea value={d.inquiry} onChange={set("inquiry")} rows={3} placeholder="Screen price, how long it takes…" className={goArea("min-h-[5.5rem]")} /></label>
         <PrimaryButton onClick={save} disabled={!d.name.trim() || busy}>{busy ? "Saving…" : "Add inquiry"}</PrimaryButton>
       </div>
     </Sheet>

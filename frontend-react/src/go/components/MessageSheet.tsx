@@ -8,7 +8,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { MessageCircle, MessageSquareText, Send } from "lucide-react";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
-import { PrimaryButton, Sheet } from "./ui";
+import { GoButton, PrimaryButton, Sheet, goArea } from "./ui";
+import Chip from "./Chip";
 import { goQueue } from "../lib/offlineQueue";
 import { smsLink, smsSegments, waLink } from "../lib/messaging";
 import { utc } from "../lib/time";
@@ -139,8 +140,8 @@ export default function MessageSheet({ open, onClose, orderId, onRead }: {
             <p className="text-go-body font-semibold text-ink-primary">Did the {asked?.channel === "whatsapp" ? "WhatsApp" : "text"} go?</p>
             <p className="mt-1 text-go-sub text-ink-secondary">If yes, it's added to the job and the customer's tracking page.</p>
             <div className="mt-4 flex gap-2">
-              <button onClick={() => markSent(false)} className="min-h-[3.25rem] flex-1 rounded-xl border border-slate-200 bg-white font-semibold text-ink-primary">Not sent</button>
               <PrimaryButton onClick={() => markSent(true)} className="flex-1">Sent</PrimaryButton>
+              <GoButton main onClick={() => markSent(false)} className="flex-1">Not sent</GoButton>
             </div>
           </div>
         ) : tab === "chat" ? (
@@ -162,9 +163,9 @@ export default function MessageSheet({ open, onClose, orderId, onRead }: {
             </div>
             <div className="mt-2 flex items-end gap-2">
               <textarea value={reply} onChange={(e) => setReply(e.target.value)} rows={1} placeholder="Reply on their tracking page"
-                className="flex-1 min-h-[3rem] max-h-32 rounded-xl border border-slate-200 bg-white px-4 py-3 text-go-body text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary resize-none" />
+                className={goArea("flex-1 min-h-11 max-h-32 !py-2.5")} />
               <button onClick={sendReply} disabled={!reply.trim() || sending} aria-label="Send reply"
-                className="h-12 w-12 shrink-0 rounded-full bg-primary text-white inline-flex items-center justify-center disabled:opacity-40"><Send size={20} /></button>
+                className="h-11 w-11 shrink-0 rounded-full bg-primary text-white inline-flex items-center justify-center active:bg-primary-container disabled:opacity-50"><Send size={20} /></button>
             </div>
           </>
         ) : (
@@ -176,29 +177,27 @@ export default function MessageSheet({ open, onClose, orderId, onRead }: {
                 {ctx.templates.length > 0 && (
                   <div className="mb-2 flex gap-2 overflow-x-auto pb-1">
                     {ctx.templates.map((t) => (
-                      <button key={t.id} onClick={() => { setTplId(t.id); setBody(t.body); }}
-                        className={`min-h-[2.5rem] shrink-0 px-3.5 rounded-full border text-go-sub font-medium ${tplId === t.id ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`}>{t.name}</button>
+                      <Chip key={t.id} on={tplId === t.id} onClick={() => { setTplId(t.id); setBody(t.body); }} className="shrink-0 whitespace-nowrap">{t.name}</Chip>
                     ))}
                   </div>
                 )}
                 <textarea value={body} onChange={(e) => { setBody(e.target.value); }} rows={5} placeholder="Write a message"
-                  className="w-full rounded-xl border border-slate-200 bg-white px-4 py-3 text-go-body text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary resize-none" />
+                  className={goArea()} />
                 <p className="mt-1 px-1 text-go-sub text-ink-tertiary">To {ctx.client?.name} · {ctx.to_e164 || phone}{segs > 1 ? ` · ${segs} texts` : ""}</p>
                 <div className="mt-3 space-y-2">
                   {consent?.sms
                     ? <PrimaryButton onClick={() => openIn("sms")} disabled={!body.trim()}>Open in Messages</PrimaryButton>
                     : <p className="rounded-xl bg-amber-50 border border-amber-200 px-3 py-2 text-go-sub text-amber-800">This customer asked not to be texted.</p>}
                   {consent?.whatsapp === true && ctx.to_e164 && (
-                    <button onClick={() => openIn("whatsapp")} disabled={!body.trim()}
-                      className="w-full min-h-[3.25rem] rounded-xl bg-[#1fa855] font-semibold text-white disabled:opacity-50">Open in WhatsApp</button>
+                    <GoButton main onClick={() => openIn("whatsapp")} disabled={!body.trim()} className="w-full">Open in WhatsApp</GoButton>
                   )}
                   {consent?.whatsapp === true && !ctx.to_e164 && <p className="text-go-sub text-ink-secondary">WhatsApp needs the number with its country code. Edit the customer's phone in Tekly.</p>}
                   {consent?.whatsapp == null && (
                     <div className="rounded-xl border border-slate-200 bg-white p-3">
                       <p className="text-go-body text-ink-primary">Is WhatsApp OK with {ctx.client?.name?.split(" ")[0] || "the customer"}? Ask them, then tap.</p>
                       <div className="mt-2 flex gap-2">
-                        <button onClick={() => setWhatsApp(false)} className="min-h-[2.75rem] flex-1 rounded-xl border border-slate-200 font-semibold text-ink-primary">No</button>
-                        <button onClick={() => setWhatsApp(true)} className="min-h-[2.75rem] flex-1 rounded-xl bg-[#1fa855] font-semibold text-white">Yes, WhatsApp is OK</button>
+                        <GoButton variant="primary" onClick={() => setWhatsApp(true)} className="flex-1">Yes, WhatsApp is OK</GoButton>
+                        <GoButton onClick={() => setWhatsApp(false)} className="flex-1">No</GoButton>
                       </div>
                     </div>
                   )}
