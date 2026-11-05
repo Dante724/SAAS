@@ -4,6 +4,8 @@ disabled, Tekly Go's queue replay) added the line twice: for a product, qty 2 an
 the shelf. orders.create and orders.finish already used services/idempotency.idem_begin; add_line
 now does the same, so the retry gets the first answer back and nothing runs twice.
 """
+import asyncio
+import os
 import uuid
 
 import pytest
@@ -12,6 +14,9 @@ from sqlalchemy import select
 from backend.models import OrderLine, StockLevel
 
 pytestmark = pytest.mark.asyncio
+
+_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL", "")
+pg_only = pytest.mark.skipif(not _URL.startswith("postgresql"), reason="real parallel sessions need Postgres")
 
 
 async def _loc(client, h):
@@ -91,3 +96,21 @@ async def test_a_key_used_for_a_create_is_refused_on_add_line(client, tenant):
     r = await client.post(f"/api/orders/{oid}/lines", json={
         "line_type": "labour", "description": "Fix", "qty": 1, "unit_price": 100}, headers={**tenant, **key})
     assert r.status_code == 422, r.text
+
+
+@pg_only
+async def test_a_double_tap_sent_at_once_adds_once(client, tenant, db):
+    """Two requests with one key at the same moment (a double tap): one adds the line, the other
+    gets the first answer or a 409 to retry; the stock moves once."""
+    pid, loc = await _part_in_stock(client, tenant)
+    oid = await _order(client, tenant)
+    key = {"Idempotency-Key": f"line-{uuid.uuid4()}"}
+    body = {"description": "Screen", "kind": "product", "line_type": "part", "ref_id": pid, "qty": 1, "unit_price": 10}
+    rs = await asyncio.gather(*[client.post(f"/api/orders/{oid}/lines", json=body, headers={**tenant, **key}) for _ in range(2)])
+    codes = sorted(r.status_code for r in rs)
+    assert codes in ([201, 201], [201, 409]), [r.text for r in rs]
+    lines = (await db.execute(select(OrderLine).where(OrderLine.order_id == oid))).scalars().all()
+    assert len(lines) == 1 and float(lines[0].qty) == 1, [float(ln.qty) for ln in lines]
+    sl = (await db.execute(select(StockLevel).where(StockLevel.part_id == pid, StockLevel.location_id == loc))).scalars().first()
+    await db.refresh(sl)
+    assert sl.qty_available == 4, f"on hand {sl.qty_available} (was 5)"

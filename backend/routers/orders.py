@@ -4420,9 +4420,9 @@ async def _catalog_warranty(db, org_id, kind, ref_id) -> int:
 async def add_line(
     order_id: str,
     data: LineIn,
-    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
+    request: Request = None,   # last and optional: in-process callers keep add_line(oid, data, db, emp)
 ):
     """Add a service/product/fee to an existing order (Orderry Services & Products tab).
 
@@ -4430,6 +4430,8 @@ async def add_line(
     queue replay) with the same Idempotency-Key gets the first answer back instead of adding the
     line again and taking stock twice, the same way orders.create and orders.finish work."""
     from backend.services.idempotency import idem_begin
+    if request is None:
+        return await _add_line(order_id, data, db, current)
     claim = await idem_begin(db, current.org_id, request, "orders.add_line")
     if claim.replay is not None:
         return claim.replay
