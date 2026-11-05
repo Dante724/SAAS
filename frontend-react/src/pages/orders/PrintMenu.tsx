@@ -148,13 +148,13 @@ export default function PrintMenu({ orderId, status, canInvoices = true, onStick
   const autoOn = (id: string) => (autoTpls || []).some((t) => t.id === id && (t.auto_print_events || []).includes("close"));
   // Which listed document the "List every kit item" switch belongs to: the default work order (or estimate).
   const itemisedAnchor = (listed.find((t) => t.doc_type === itemisedType && t.is_default) || listed.find((t) => t.doc_type === itemisedType))?.id;
-  const row = "flex w-full min-h-10 items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] text-ink-primary hover:bg-slate-50";
+  const row = "flex w-full min-h-10 items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-ink-primary hover:bg-slate-50";
   const tag = "shrink-0 rounded-full px-1.5 py-px text-[10px] font-semibold";
   const printRow = (id: string, label: string, opts?: { auto?: boolean }) => (
     <button key={id} type="button" onClick={() => print(id)} className={row}>
       <span className="min-w-0 flex-1 truncate">{label}</span>
       {opts?.auto && <span className={`${tag} bg-primary/10 text-primary`} title="Prints automatically when a job closes">Auto</span>}
-      {(id === last || (id === itemisedAnchor && last === ITEMISED)) && <span className="shrink-0 text-[11px] text-ink-tertiary">Last used</span>}
+      {(id === last || (id === itemisedAnchor && last === ITEMISED)) && <span className="shrink-0 text-2xs text-ink-tertiary">Last used</span>}
     </button>
   );
   return (
@@ -165,13 +165,13 @@ export default function PrintMenu({ orderId, status, canInvoices = true, onStick
       <button type="button" data-print-menu={orderId} aria-label="Choose what to print" aria-expanded={open}
         onClick={() => setOpen((v) => !v)} disabled={busy}
         className="h-9 px-2 text-ink-secondary hover:text-ink-primary border border-l-0 border-slate-200 rounded-r-xl bg-white hover:bg-slate-50">
-        <M n="expand_more" c="text-[14px]" /></button>
+        <M n="expand_more" c="text-sm" /></button>
       {open && (
         <FloatingMenu anchorSel={`[data-print-menu="${orderId}"]`} onClose={() => { setOpen(false); setUndo(null); }} width={300}>
           <div className="-m-1.5">
             {/* Print now: click a row and it prints. The sticker sits in the same list. */}
             <div className="p-1.5">
-              <div className="px-3 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-tertiary">Print now</div>
+              <div className="px-3 pb-1 pt-1.5 text-2xs font-semibold uppercase tracking-wide text-ink-tertiary">Print now</div>
               {listed.map((t) => (<Fragment key={t.id}>
                 {printRow(onItemised && t.id === itemisedAnchor && kitItems ? ITEMISED : t.id, t.name, { auto: autoOn(t.id) })}
                 {/* The itemised copy isn't another document: it's this one with every kit item listed. */}
@@ -198,16 +198,16 @@ export default function PrintMenu({ orderId, status, canInvoices = true, onStick
             {autoPrint && autoTpls && autoTpls.length > 0 && (
               <div className="rounded-b-xl border-t border-slate-200 bg-slate-50 px-1.5 pb-2 pt-2">
                 <div className="flex items-baseline justify-between px-3 pb-1">
-                  <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-tertiary">Automatic</span>
-                  <span className="text-[11px] text-ink-tertiary">Applies to every job</span>
+                  <span className="text-2xs font-semibold uppercase tracking-wide text-ink-tertiary">Automatic</span>
+                  <span className="text-2xs text-ink-tertiary">Applies to every job</span>
                 </div>
                 {autoTpls.map((t) => {
                   const on = (t.auto_print_events || []).includes("close");
                   return (
                     <div key={t.id} className="flex min-h-10 items-center gap-3 px-3 py-1.5">
                       <span className="min-w-0 flex-1">
-                        <span className="block truncate text-[13px] text-ink-primary">{t.name}</span>
-                        <span className="block text-[11px] text-ink-tertiary">when a job closes</span>
+                        <span className="block truncate text-sm text-ink-primary">{t.name}</span>
+                        <span className="block text-2xs text-ink-tertiary">when a job closes</span>
                       </span>
                       <Switch size="sm" on={on} disabled={!autoPrint.canChange || autoSaving === t.id} onChange={() => toggleAuto(t)}
                         label={`Print ${t.name} automatically when a job closes`} />
@@ -215,12 +215,12 @@ export default function PrintMenu({ orderId, status, canInvoices = true, onStick
                   );
                 })}
                 {undo ? (
-                  <p role="status" className="mx-1.5 mt-1 flex items-center gap-2 rounded-lg bg-white px-2.5 py-2 text-[11px] text-ink-secondary ring-1 ring-slate-200">
+                  <p role="status" className="mx-1.5 mt-1 flex items-center gap-2 rounded-lg bg-white px-2.5 py-2 text-2xs text-ink-secondary ring-1 ring-slate-200">
                     <span className="flex-1">{undo.text}</span>
                     <button type="button" disabled={!!autoSaving} onClick={async () => { if (await saveAuto(undo.t, undo.prev)) setUndo(null); }} className="font-semibold text-primary hover:underline disabled:opacity-50">Undo</button>
                   </p>
                 ) : !autoPrint.canChange && (
-                  <p className="px-3 pt-1 text-[11px] text-ink-tertiary">Only a manager can change this.</p>
+                  <p className="px-3 pt-1 text-2xs text-ink-tertiary">Only a manager can change this.</p>
                 )}
               </div>
             )}
