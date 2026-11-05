@@ -6,12 +6,23 @@ import { useDebounced, useServerPage } from "../../hooks/useServerPage";
 import AssetDrawer from "../orders/AssetDrawer";
 import { useTerminology, assetNoun } from "../../lib/useTerminology";
 import Pager from "../../components/Pager";
-import AssetStateTabs, { AssetCounts, useAssetState } from "../../components/AssetStateTabs";
+import { type AssetCounts, type AssetState, useAssetState } from "../../components/AssetStateTabs";
+import PageLayout, { Toolbar } from "../../components/PageLayout";
+import Button from "../../components/Button";
+import Tabs from "../../components/Tabs";
+import Card, { Badge } from "../../components/Card";
+import { tableClass, theadRowClass, Th, Td } from "../../components/Table";
+import { ErrorState, TableEmpty } from "../../components/EmptyState";
+import SearchBox from "../orders/SearchBox";
 import { clickableRow } from "../../lib/clickable";
 import ImportDrawer from "../../components/ImportDrawer";
 import { useMe } from "../../context/Me";
 
 type Asset = { id: string; asset_status?: string; asset_type?: string; asset_label?: string; template_key?: string; brand?: string; model?: string; serial?: string; imei?: string; owner_type?: string; owner_name?: string; condition?: string; order_count?: number };
+
+const STATES: { id: AssetState; label: string }[] = [
+  { id: "active", label: "Active" }, { id: "written_off", label: "Written off" }, { id: "all", label: "All" },
+];
 
 export default function AssetsHub() {
   const term = useTerminology();
@@ -42,43 +53,46 @@ export default function AssetsHub() {
 
   return (
     <Shell title={term.assets}>
-      <div className="flex-1 overflow-y-auto p-6 space-y-4">
-        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 flex flex-wrap items-center justify-between gap-3">
-          <div className="flex items-center gap-2">
-            <button onClick={() => setCreating(true)} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><M n="add" c="text-sm font-bold" />New {term.asset.toLowerCase()}</button>
-            {can("can_view_asset_info") && <button onClick={() => setImporting(true)} className="px-4 py-2 rounded-xl bg-white border border-slate-200 text-ink-secondary text-xs font-semibold hover:bg-slate-50 flex items-center gap-1.5"><M n="upload" c="text-sm" />Import</button>}
-          </div>
-          <div className="flex flex-wrap items-center gap-3">
-            <AssetStateTabs value={state} onChange={setState} counts={sp_.extra?.counts} />
-            <div className="relative w-72"><M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" /><input value={q} onChange={(e) => setQ(e.target.value)} aria-label={`Search ${term.assets.toLowerCase()}`} className="glass-input w-full pl-8 pr-3 py-1.5 text-xs rounded-lg font-medium" placeholder="Search by name, serial, IMEI or plate…" /></div>
-          </div>
-        </div>
-        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
-          <table className="w-full text-left border-collapse text-xs">
-            <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
-              <th className="py-3 px-4">Type</th><th className="py-3 px-4">{term.asset}</th><th className="py-3 px-4">Serial / IMEI</th>
-              <th className="py-3 px-4">Owner</th><th className="py-3 px-4">Condition</th><th className="py-3 px-4">Orders</th><th className="py-3 px-4 w-12 text-center">Action</th>
+      <PageLayout>
+        <Toolbar
+          actions={<>
+            <Button variant="primary" onClick={() => setCreating(true)} icon={<M n="add" c="text-sm" />}>New {term.asset.toLowerCase()}</Button>
+            {can("can_view_asset_info") && <Button onClick={() => setImporting(true)} icon={<M n="upload" c="text-sm" />}>Import</Button>}
+          </>}
+          filters={<Tabs look="chips" label={`Show ${term.assets.toLowerCase()}`} value={state} onChange={setState}
+            tabs={STATES.map((o) => ({ ...o, count: sp_.extra?.counts ? sp_.extra.counts[o.id] : null }))} />}
+          search={<SearchBox value={q} onChange={setQ} label={`Search ${term.assets.toLowerCase()}`} placeholder="Search by name, serial, IMEI or plate…" />}
+        />
+        <Card padded={false}>
+          <div className="overflow-x-auto">
+          <table className={tableClass}>
+            <thead><tr className={theadRowClass}>
+              <Th>Type</Th><Th>{term.asset}</Th><Th>Serial / IMEI</Th>
+              <Th>Owner</Th><Th>Condition</Th><Th num>Orders</Th><Th className="w-12"><span className="sr-only">Open</span></Th>
             </tr></thead>
             <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
-              {err && <tr><td colSpan={7} className="py-6 px-4 text-status-overdue-ink">Error: {err}</td></tr>}
+              {err && <tr><td colSpan={7} className="p-0"><ErrorState body={err} onRetry={reload} /></td></tr>}
               {!rows && !err && <SkeletonRows cols={7} />}
-              {rows && rows.length === 0 && !err && <tr><td colSpan={7} className="py-6 px-4 text-ink-tertiary">{dq ? `Nothing matches “${dq}”.` : state === "written_off" ? `No written-off ${term.assets.toLowerCase()}.` : `No ${term.assets.toLowerCase()} yet.`}</td></tr>}
+              {rows && rows.length === 0 && !err && <TableEmpty cols={7} icon={<M n="devices" c="text-lg" />}
+                title={dq ? `Nothing matches “${dq}”` : state === "written_off" ? `No written-off ${term.assets.toLowerCase()}` : `No ${term.assets.toLowerCase()} yet`}
+                body={dq ? "Try a different name, serial or IMEI." : undefined} />}
               {pageRows.map((a) => (
                 <tr key={a.id} className="hover:bg-blue-50/40 cursor-pointer transition-colors group" {...clickableRow(() => setOpen(a.id))}>
-                  <td className="py-3 px-4 text-ink-tertiary">{a.asset_type && a.asset_type !== "Device" ? a.asset_type : assetNoun(a, term)}</td>
-                  <td className="py-3 px-4 font-bold text-ink-primary">{[a.brand, a.model].filter(Boolean).join(" ") || "—"}{a.asset_status === "written_off" && <span className="ml-2 px-1.5 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-ink-tertiary border border-slate-200">Written off</span>}</td>
-                  <td className="py-3 px-4 font-mono text-[11px]">{a.imei || a.serial || "—"}</td>
-                  <td className="py-3 px-4"><span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-blue-100 text-blue-800 border border-blue-200">{a.owner_type === "company" ? "Company" : a.owner_name || "Client"}</span></td>
-                  <td className="py-3 px-4">{a.condition || "—"}</td>
-                  <td className="py-3 px-4 tabular-nums font-semibold text-ink-primary">{a.order_count ?? 0}</td>
-                  <td className="py-3 px-4 text-center"><button aria-label="Next" className="p-1.5 rounded text-ink-tertiary hover:text-ink-primary hover:bg-slate-100"><M n="chevron_right" c="text-sm" /></button></td>
+                  <Td className="text-ink-tertiary">{a.asset_type && a.asset_type !== "Device" ? a.asset_type : assetNoun(a, term)}</Td>
+                  <Td className="font-semibold text-ink-primary">{[a.brand, a.model].filter(Boolean).join(" ") || "—"}{a.asset_status === "written_off" && <Badge className="ml-2">Written off</Badge>}</Td>
+                  <Td className="font-mono text-2xs">{a.imei || a.serial || "—"}</Td>
+                  <Td>{a.owner_type === "company" ? "Company" : a.owner_name || "Client"}</Td>
+                  <Td>{a.condition || "—"}</Td>
+                  <Td num className="font-semibold text-ink-primary">{a.order_count ?? 0}</Td>
+                  <Td className="text-center"><M n="chevron_right" c="text-sm text-ink-tertiary" /></Td>
                 </tr>
               ))}
             </tbody>
           </table>
+          </div>
           {rows && total > 0 && <Pager total={total} page={page} pageSize={PAGE_SIZE} onPage={setPage} noun={term.assets.toLowerCase()} />}
-        </div>
-      </div>
+        </Card>
+      </PageLayout>
       {open && <AssetDrawer assetId={open} onClose={() => setOpen(null)} onSaved={reload} />}
       {creating && <AssetDrawer onClose={() => setCreating(false)} onSaved={reload} />}
       {importing && <ImportDrawer kind="assets" onClose={() => setImporting(false)} onDone={reload} />}

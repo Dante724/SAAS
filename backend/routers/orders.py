@@ -2126,7 +2126,7 @@ async def convert_estimate_endpoint(
     job needs the same permission as creating one at the counter, and the record must be
     within the person's access (E1)."""
     est = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
-        .options(selectinload(Order.lines)).with_for_update(of=Order))).scalar_one_or_none()
+        .options(selectinload(Order.lines)).with_for_update(of=Order, key_share=True))).scalar_one_or_none()
     if not est:
         raise HTTPException(404, "Estimate not found")
     await _guard_order_access(db, current, est)
@@ -3391,9 +3391,13 @@ async def reserve_stock_for_order(
     from datetime import timedelta
     from backend.models import Part, StockReservation
 
+    # Lock the job first (Order FOR NO KEY UPDATE, then its stock rows sorted by product): two
+    # reserve clicks at once each read "nothing held yet" and together held twice what the job
+    # needs. NO KEY UPDATE, like the money paths, so rows that only reference the job by FK
+    # (invoices, holds) don't queue behind it.
     order = (await db.execute(
         select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
-        .options(selectinload(Order.lines)))).scalar_one_or_none()
+        .options(selectinload(Order.lines)).with_for_update(of=Order, key_share=True))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, order)
@@ -3423,11 +3427,16 @@ async def reserve_stock_for_order(
     reserved, short = [], []
     part_names = await names_by_id(db, Part.id, Part.name, list(need),
                                    org_col=Part.org_id, org_id=current.org_id)
-    for part_id, qty_needed in need.items():
+    # product-id order, so two jobs needing the same products lock their stock rows the same way
+    # round (a job needing [X, Y] and one needing [Y, X] deadlocked)
+    for part_id, qty_needed in sorted(need.items()):
         want = qty_needed - held.get(part_id, 0)      # still to hold for this job
         if want <= 0:
             continue
         from backend.services import stock_rows
+        # lock the rows before counting (stock_consume.lock_rows order): two jobs reserving the
+        # last unit at once both used to get it
+        await stock_rows.rows(db, part_id, order.location_id, lock=True)
         free = await stock_rows.free(db, part_id, order.location_id)
         take = min(want, max(free, 0))
         if take <= 0:
@@ -3570,7 +3579,7 @@ async def _archive_order(db, current, order_id, reason, do_refund):
             took = (await db.execute(select(func.coalesce(func.sum(Transaction.amount), 0)).where(
                 Transaction.org_id == current.org_id, Transaction.account_id == acc_id,
                 Transaction.ref_type == "order", Transaction.ref_id == order_id,
-                Transaction.txn_type == "invoice_payment", Transaction.status == "active"))).scalar() or 0
+                Transaction.txn_type == "invoice_payment", Transaction.status != "deleted"))).scalar() or 0
             if q2(float(took)) > 0:
                 raise HTTPException(409, f"{amt:.2f} has to go back to the customer from the “{acct.name}” drawer, "
                                          f"but it holds only {float(acct.balance or 0):.2f}. Put the cash back in "

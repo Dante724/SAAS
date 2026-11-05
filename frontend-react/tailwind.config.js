@@ -12,6 +12,8 @@ export default {
   theme: {
     extend: {
       colors: {
+        // Printed-document previews (receipts, estimates) stay white paper in dark mode too.
+        paper: "#ffffff",
         surface: "#faf8ff",
         "surface-dim": "#cdd9ff",
         "surface-bright": "#faf8ff",
@@ -55,6 +57,11 @@ export default {
       },
       // Tekly Go's five type steps (size/line-height): large title, title, body, subhead, caption.
       fontSize: {
+        // Web app steps between Tailwind's own (xs 12, sm 14, base 16, xl 20, 2xl 24).
+        "2xs": ["11px", { lineHeight: "16px" }],
+        md: ["15px", { lineHeight: "22px" }],
+        title: ["17px", { lineHeight: "24px" }],
+        display: ["28px", { lineHeight: "34px" }],
         "go-display": ["28px", { lineHeight: "34px" }],
         "go-title": ["20px", { lineHeight: "25px" }],
         "go-body": ["16px", { lineHeight: "22px" }],

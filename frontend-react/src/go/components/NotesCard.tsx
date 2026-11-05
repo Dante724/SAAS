@@ -4,11 +4,11 @@
 import { useEffect, useState } from "react";
 import { NotebookPen } from "lucide-react";
 import { api } from "../../api/client";
-import { Card, PrimaryButton, Sheet } from "./ui";
+import { Card, GoButton, PrimaryButton, Sheet, goArea } from "./ui";
 import { haptic } from "../lib/scanner";
 import { useToast } from "../lib/useGo";
 
-const area = "w-full min-h-[7rem] rounded-xl border border-slate-200 bg-white px-4 py-3 text-go-body text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/15 resize-none";
+const area = goArea("min-h-[7rem]");
 
 export default function NotesCard({ orderId, techNotes, conclusion, readOnly, onSaved }: {
   orderId: string; techNotes?: string | null; conclusion?: string | null; readOnly?: boolean;
@@ -46,9 +46,9 @@ export default function NotesCard({ orderId, techNotes, conclusion, readOnly, on
           </div>
         )}
         {!readOnly && (
-          <button onClick={() => setOpen(true)} className="mt-3 min-h-[2.75rem] inline-flex items-center gap-2 font-semibold text-primary">
+          <GoButton variant="link" onClick={() => setOpen(true)} className="mt-3">
             <NotebookPen size={18} />{empty ? "Add notes" : "Edit notes"}
-          </button>
+          </GoButton>
         )}
       </Card>
       <Sheet open={open} onClose={() => setOpen(false)} title="Bench notes">

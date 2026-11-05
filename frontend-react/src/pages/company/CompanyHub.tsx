@@ -1,6 +1,6 @@
 import SkeletonRows from "../../components/SkeletonRows";
 import PageSummary, { type SummaryStat } from "../../components/PageSummary";
-import { useEffect, useState } from "react";
+import { useEffect, useState, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { useMe } from "../../context/Me";
@@ -11,17 +11,17 @@ import { Product, Service, Bundle, money } from "../inventory/types";
 import CategoryManager from "../../components/CategoryManager";
 import Pager from "../../components/Pager";
 import { useServerPage } from "../../hooks/useServerPage";
-import { inputCls } from "../invoices/billing";
+import CatalogToolbar, { usePhone, type CatOption } from "../catalog/CatalogToolbar";
+import Button from "../../components/Button";
+import Card, { Badge } from "../../components/Card";
+import EmptyState, { ErrorState, TableEmpty } from "../../components/EmptyState";
+import { tableClass, theadRowClass, Th, Td } from "../../components/Table";
 import { clickable, clickableRow } from "../../lib/clickable";
 import ImportDrawer from "../../components/ImportDrawer";
+import PageLayout from "../../components/PageLayout";
 
 const CO_PAGE = 50;
 
-// Catalog toolbar look: a filter that is set reads as active in the primary tint.
-const filterCls = (on: boolean) => `h-9 text-xs font-semibold rounded-xl border px-3 cursor-pointer ${on ? "bg-primary/10 text-primary border-primary/30" : "bg-white text-ink-secondary border-slate-200 hover:bg-slate-50"}`;
-const primaryBtn = "h-9 bg-primary text-white text-xs font-semibold px-3.5 rounded-xl hover:bg-primary-container flex items-center gap-1.5";
-const ghostBtn = "h-9 bg-white border border-slate-200 text-ink-secondary text-xs font-semibold px-3.5 rounded-xl hover:bg-slate-50 flex items-center gap-1.5";
-const thCls = "border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary";
 
 export type RowMenuItem = { label: string; icon: string; onClick: () => void; danger?: boolean };
 /* The "⋮" at the end of a row. The row itself opens the record; this holds the extra actions.
@@ -106,11 +106,9 @@ export default function CompanyHub() {
 
   return (
     <Shell title="Home">
-      <div className="flex-1 overflow-y-auto">
-        <div className="p-6">
-          <Dashboard />
-        </div>
-      </div>
+      <PageLayout>
+        <Dashboard />
+      </PageLayout>
     </Shell>
   );
 }
@@ -171,10 +169,8 @@ function Dashboard() {
   ];
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-xl font-semibold text-ink-primary">Today</h2>
-        <p className="text-sm text-ink-tertiary">{new Date().toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}</p>
-      </div>
+      {/* The page title ("Home") is in the top bar; this line only says which day it is. */}
+      <p className="text-sm text-ink-tertiary">{new Date().toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}</p>
 
       <MorningBriefCard onOpen={(to) => navigate(to)} />
       <WatchdogPanel />
@@ -205,32 +201,31 @@ function Dashboard() {
               className="w-full flex items-center gap-2 py-0.5 text-left focus:outline-none">
               <M n={expanded ? "expand_more" : "chevron_right"} c="text-ink-tertiary text-base" />
               <h3 className="text-sm font-semibold text-ink-primary">Needs you</h3>
-              {n > 0 && <span className="text-[11px] font-bold bg-rose-100 text-rose-600 rounded-full px-1.5 py-0.5 leading-none">{n}</span>}
-              {feed.ok && <span className="text-[11px] font-semibold text-emerald-600 flex items-center gap-1"><M n="check_circle" c="text-xs" />All caught up</span>}
+              {n > 0 && <Badge tone="danger" className="tabular-nums">{n}</Badge>}
+              {feed.ok && <Badge tone="success"><M n="check_circle" c="text-xs" />All caught up</Badge>}
             </button>
             {expanded && (
               feed.ok ? (
-                <div className="flex items-center gap-2 text-sm text-ink-tertiary py-2 mt-1"><M n="check_circle" c="text-base text-emerald-500" />Nothing needs attention right now.</div>
+                <EmptyState size="inline" className="mt-1" title="Nothing needs attention right now." />
               ) : (
                 <div className="space-y-1.5 mt-2.5">
                   {shown.map((it) => {
                     const a = FEED_ACTIONS[it.key] || { label: "Review", icon: "chevron_right" };
+                    // One look for every row: the colour lives in the icon tile only; the action is the
+                    // standard small secondary button whatever the signal is.
                     return (
                       <div key={it.key}
-                        className="w-full flex items-center gap-3 rounded-xl border border-slate-200/70 hover:border-primary/50 hover:bg-blue-50/30 px-3 py-2 transition-all">
+                        className="w-full flex items-center gap-3 rounded-xl border border-slate-200/70 hover:border-primary/50 hover:bg-blue-50/30 px-3 py-2 transition-colors">
                         <span className={`w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 ${feedTone[it.kind] || feedTone.info}`}><M n={it.icon} c="text-sm" /></span>
                         <button onClick={() => navigate(it.to)} className="flex-1 py-1 text-sm font-medium text-ink-primary text-left focus:outline-none">{it.title}</button>
-                        <button onClick={() => navigate(it.to)}
-                          className={`shrink-0 inline-flex items-center gap-1 text-xs font-semibold rounded-full border px-2.5 py-1 ${feedTone[it.kind] || feedTone.info} hover:brightness-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40`}>
-                          <M n={a.icon} c="text-sm" />{a.label}
-                        </button>
+                        <Button size="sm" onClick={() => navigate(it.to)} icon={<M n={a.icon} c="text-sm" />}>{a.label}</Button>
                       </div>
                     );
                   })}
                   {n > FEED_CAP && (
-                    <button onClick={() => setFeedShowAll((v) => !v)} className="text-[11px] font-semibold text-primary hover:underline px-1 pt-1">
+                    <Button variant="link" className="px-1 pt-1" onClick={() => setFeedShowAll((v) => !v)}>
                       {feedShowAll ? "Show less" : `Show ${n - FEED_CAP} more`}
-                    </button>
+                    </Button>
                   )}
                 </div>
               )
@@ -239,11 +234,11 @@ function Dashboard() {
         );
       })()}
 
-      {err && <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-700 text-sm px-4 py-3">Couldn't load dashboard metrics right now.</div>}
+      {err && <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 text-amber-700 text-sm px-4 py-3">Couldn't load dashboard metrics right now.</div>}
       <PageSummary stats={stats} />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-sm p-5">
-          <h3 className="text-sm font-bold text-ink-primary mb-3">This month</h3>
+          <h3 className="text-sm font-semibold text-ink-primary mb-3">This month</h3>
           <div className="grid grid-cols-2 gap-4 text-sm">
             <Metric l="Jobs in" v={String(m.work_orders_created ?? 0)} loading={loading} />
             <Metric l="Jobs finished" v={String(m.work_orders_won ?? 0)} loading={loading} />
@@ -254,11 +249,11 @@ function Dashboard() {
           </div>
         </div>
         <div className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-sm p-5">
-          <h3 className="text-sm font-bold text-ink-primary mb-3">Open jobs by stage</h3>
+          <h3 className="text-sm font-semibold text-ink-primary mb-3">Open jobs by stage</h3>
           {loading ? (
             <div className="space-y-2" aria-hidden>{[0, 1, 2].map((i) => <div key={i} className="h-5 flex items-center"><span className="sk h-3.5 w-40" /></div>)}</div>
           ) : (d?.status_mix ?? []).length === 0 ? (
-            <p className="text-sm text-ink-tertiary">No open orders.</p>
+            <EmptyState size="inline" title="No open orders." />
           ) : (
             <div className="space-y-2">
               {(d?.status_mix ?? []).map((s) => (
@@ -290,52 +285,72 @@ export function EmployeeHours() {
   const onClock = (roster ?? []).filter((r) => r.on_shift);
   const entTotal = ep.total;
   const pageEntries = entries || [];
+  // No heading here: the Timesheets tab above already says "Employee hours", and the other tab
+  // starts straight with its content too.
   return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="text-xl font-bold text-ink-primary">Employee hours</h2>
-        <p className="text-sm text-ink-tertiary">Who's on the clock and recent labour time entries.</p>
-      </div>
-      <div className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-sm p-5">
-        <h3 className="text-sm font-bold text-ink-primary mb-3">On the clock now</h3>
-        {!roster ? <p className="text-sm text-ink-tertiary">Loading…</p> :
-          onClock.length === 0 ? <p className="text-sm text-ink-tertiary">Nobody is currently clocked in.</p> :
+    <div className="space-y-4">
+      <Card>
+        <h2 className="text-sm font-semibold text-ink-primary mb-3">On the clock now</h2>
+        {!roster ? <div aria-hidden className="flex gap-3"><span className="sk block h-9 w-40 rounded-xl" /><span className="sk block h-9 w-40 rounded-xl" /></div> :
+          onClock.length === 0 ? <EmptyState size="inline" className="!py-0" title="Nobody is currently clocked in." /> :
           <div className="flex flex-wrap gap-3">
             {onClock.map((r, i) => (
               <div key={i} className="flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span className="w-2 h-2 rounded-full bg-emerald-500" />
                 <span className="text-sm font-semibold text-ink-primary">{r.employee_name}</span>
                 <span className="text-xs tabular-nums text-emerald-700">{hm((r.elapsed_sec ?? 0) / 60)}</span>
               </div>
             ))}
           </div>}
-      </div>
-      <div className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-card overflow-hidden">
-        <table className="w-full text-left border-collapse">
-          <thead className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary "><tr>
-            <th className="py-3 px-5">Employee</th><th className="py-3 px-3">Work order</th><th className="py-3 px-3">Type</th>
-            <th className="py-3 px-3">Started</th><th className="py-3 px-3 text-right">Duration</th><th className="py-3 px-3">Status</th>
+      </Card>
+      <Card padded={false}>
+        <div className="overflow-x-auto">
+        <table className={tableClass}>
+          <thead><tr className={theadRowClass}>
+            <Th className="!px-5">Employee</Th><Th className="!px-3">Work order</Th><Th className="!px-3">Type</Th>
+            <Th className="!px-3">Started</Th><Th num className="!px-3">Duration</Th><Th className="!px-3">Status</Th>
           </tr></thead>
           <tbody className="divide-y divide-slate-100 text-xs">
             {!entries && <SkeletonRows cols={6} />}
-            {entries?.length === 0 && <tr><td colSpan={6} className="py-6 px-5 text-ink-tertiary">No time entries yet.</td></tr>}
+            {entries?.length === 0 && <TableEmpty cols={6} icon={<M n="schedule" c="text-lg" />} title="No time entries yet" body="Clock-ins and added entries show up here." />}
             {pageEntries.map((e) => (
               <tr key={e.id} className="hover:bg-blue-50/30">
-                <td className="py-3 px-5 font-bold text-ink-primary">{e.employee_name || "—"}</td>
-                <td className="py-3 px-3 text-primary font-mono">{e.order_number || "—"}</td>
-                <td className="py-3 px-3 text-ink-secondary capitalize">{e.category || "—"}</td>
-                <td className="py-3 px-3 text-ink-secondary">{e.started_at ? new Date(e.started_at).toLocaleString() : "—"}</td>
-                <td className="py-3 px-3 text-right tabular-nums font-bold text-ink-primary">{hm(e.duration_min)}</td>
-                <td className="py-3 px-3">{e.running
-                  ? <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-700">Running</span>
-                  : <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-ink-secondary">Done</span>}</td>
+                <Td className="!px-5 font-semibold text-ink-primary">{e.employee_name || "—"}</Td>
+                <Td className="!px-3 text-primary font-mono">{e.order_number || "—"}</Td>
+                <Td className="!px-3 text-ink-secondary capitalize">{e.category || "—"}</Td>
+                <Td className="!px-3 text-ink-secondary">{e.started_at ? new Date(e.started_at).toLocaleString() : "—"}</Td>
+                <Td num className="!px-3 font-semibold text-ink-primary">{hm(e.duration_min)}</Td>
+                <Td className="!px-3">{e.running ? <Badge tone="success">Running</Badge> : <Badge>Done</Badge>}</Td>
               </tr>
             ))}
           </tbody>
         </table>
+        </div>
         {entries && entTotal > 0 && <Pager total={entTotal} page={ep.page} pageSize={CO_PAGE} onPage={ep.setPage} noun="time entries" />}
-      </div>
+      </Card>
     </div>
+  );
+}
+
+/* ── Catalog tabs (Services, Products, Job kits): each renders the same CatalogToolbar, so
+   nothing moves between tabs, and a phone gets one card per item with its price instead of a
+   table that hides the money columns off-screen. ── */
+const thCls = theadRowClass;
+function useCats(entity: "service" | "product") {
+  const [cats, setCats] = useState<CatOption[]>([]);
+  const loadCats = () => {
+    const flat: CatOption[] = [];
+    const walk = (ns: any[], d: number) => (ns || []).forEach((n) => { flat.push({ id: n.id, name: n.name, depth: d }); if (n.children?.length) walk(n.children, d + 1); });
+    api.get<any>(`/catalog/categories?entity_type=${entity}`).then((r) => { walk(r.tree || [], 0); setCats(flat); }).catch(() => setCats([]));
+  };
+  return [cats, loadCats] as const;
+}
+function PhoneRow({ title, sub, value, extra, onOpen }: { title: ReactNode; sub: ReactNode; value: ReactNode; extra?: ReactNode; onOpen: () => void }) {
+  return (
+    <li><button type="button" onClick={onOpen} className="w-full text-left px-4 py-3 flex items-start gap-3 hover:bg-slate-50/80">
+      <span className="min-w-0 flex-1"><span className="block text-sm font-semibold text-ink-primary truncate">{title}</span><span className="block text-xs text-ink-tertiary truncate">{sub}</span></span>
+      <span className="text-right shrink-0"><span className="block text-sm font-semibold tabular-nums text-ink-primary">{value}</span>{extra && <span className="block text-xs tabular-nums text-ink-tertiary">{extra}</span>}</span>
+    </button></li>
   );
 }
 
@@ -346,12 +361,8 @@ export function Services({ onOpen, refresh }: { onOpen: (s?: Service) => void; r
   const [cat, setCat] = useState(false);
   const [page, setPage] = useState(1);
   const [catFilter, setCatFilter] = useState("");
-  const [cats, setCats] = useState<{ id: string; name: string; depth: number }[]>([]);
-  const loadCats = () => {
-    const flat: { id: string; name: string; depth: number }[] = [];
-    const walk = (ns: any[], d: number) => (ns || []).forEach((n) => { flat.push({ id: n.id, name: n.name, depth: d }); if (n.children?.length) walk(n.children, d + 1); });
-    api.get<any>("/catalog/categories?entity_type=service").then((r) => { walk(r.tree || [], 0); setCats(flat); }).catch(() => setCats([]));
-  };
+  const [cats, loadCats] = useCats("service");
+  const phone = usePhone();
   const { can } = useMe();
   const [importing, setImporting] = useState(false);
   const [err, setErr] = useState(false);
@@ -363,47 +374,41 @@ export function Services({ onOpen, refresh }: { onOpen: (s?: Service) => void; r
   useEffect(() => { setPage(1); }, [q, catFilter]);
   const pages = Math.max(1, Math.ceil(rows.length / CO_PAGE));
   const pageRows = rows.slice((Math.min(page, pages) - 1) * CO_PAGE, Math.min(page, pages) * CO_PAGE);
+  const empty = items && !err && rows.length === 0
+    ? (items.length ? { title: "No services match", body: "Try another name, or clear the category filter." }
+      : { title: "No services yet", body: "Services are the work you charge for. Add one to put it on jobs, sales and online booking." })
+    : null;
   return (
     <div className="space-y-4">
       {cat && <CategoryManager entity="service" onClose={() => setCat(false)} onChanged={() => { load(); loadCats(); }} />}
       {importing && <ImportDrawer kind="services" onClose={() => setImporting(false)} onDone={() => { load(); loadCats(); }} />}
-      <div className="flex items-center gap-3 flex-wrap">
-        <button onClick={() => onOpen()} className={primaryBtn}><M n="add" c="text-sm" />New service</button>
-        {can("can_edit_labors") && <button onClick={() => setImporting(true)} className={ghostBtn}><M n="upload" c="text-sm" />Import</button>}
-        <button onClick={() => setCat(true)} className={ghostBtn}><M n="inventory" c="text-sm" />Categories</button>
-        <select aria-label="Category" value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className={filterCls(!!catFilter)}>
-          <option value="">Category: All</option>
-          {cats.map((c) => <option key={c.id} value={c.id}>{`${"  ".repeat(c.depth)}${c.name}`}</option>)}
-        </select>
-        <div className="relative flex-1 min-w-[240px] max-w-md">
-          <M n="search" c="absolute left-3 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search services…" aria-label="Search services" className={`${inputCls} pl-9`} />
-        </div>
-      </div>
-      <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
-        <div className="overflow-x-auto">
-        <table className="w-full min-w-[560px] text-left border-collapse">
-          <thead className={thCls}><tr>
-            <th className="py-3 px-5 font-semibold">Service</th><th className="py-3 px-3 font-semibold">Category</th><th className="py-3 px-3 text-right font-semibold">Duration</th><th className="py-3 px-3 text-right font-semibold">Price</th><th className="py-3 pr-4 w-12"><span className="sr-only">Actions</span></th>
+      <CatalogToolbar newLabel="New service" onNew={() => onOpen()} onCategories={() => setCat(true)}
+        third={<Button icon={<M n="upload" c="text-sm" />} onClick={() => setImporting(true)} disabled={!can("can_edit_labors")}>Import</Button>}
+        cats={cats} catFilter={catFilter} onCatFilter={setCatFilter} q={q} onQ={setQ} searchLabel="Search services" placeholder="Search services…" />
+      <Card padded={false}>
+        {items && err ? <ErrorState title="Couldn't load services" onRetry={load} /> : <>
+        {phone ? <ul className="divide-y divide-slate-100" aria-label="Services">
+          {!items && <li className="p-4 text-xs text-ink-tertiary">Loading services…</li>}
+          {empty && <li><EmptyState {...empty} /></li>}
+          {pageRows.map((s) => <PhoneRow key={s.id} onOpen={() => onOpen(s)} title={s.name} sub={s.category_name || s.category || "No category"}
+            value={money(s.price)} extra={s.duration_min ? `${s.duration_min} min` : undefined} />)}
+        </ul> : <div className="overflow-x-auto">
+        <table className={`${tableClass} min-w-[560px]`}>
+          <thead><tr className={thCls}>
+            <th className="py-3 px-5">Service</th><th className="py-3 px-3">Category</th><th className="py-3 px-3 text-right">Duration</th><th className="py-3 px-3 text-right">Price</th><th className="py-3 pr-4 w-12"><span className="sr-only">Actions</span></th>
           </tr></thead>
-          <tbody className="divide-y divide-slate-100 text-xs">
+          <tbody className="divide-y divide-slate-100">
             {!items && <SkeletonRows cols={5} />}
-            {items && err && <tr><td colSpan={5} className="py-6 px-5 text-rose-600">Couldn't load services. <button onClick={load} className="font-semibold underline">Try again</button></td></tr>}
-            {items && !err && rows.length === 0 && <tr><td colSpan={5} className="py-12 px-5 text-center">
-              {items.length
-                ? <><div className="text-sm font-semibold text-ink-primary">No services match</div><div className="text-xs text-ink-tertiary mt-1">Try another name, or clear the category filter.</div></>
-                : <><div className="text-sm font-semibold text-ink-primary">No services yet</div><div className="text-xs text-ink-tertiary mt-1">Services are the work you charge for. Add one to put it on jobs, sales and online booking.</div>
-                    <button onClick={() => onOpen()} className={`${primaryBtn} mx-auto mt-3`}><M n="add" c="text-sm" />New service</button></>}
-            </td></tr>}
+            {empty && <TableEmpty cols={5} {...empty} />}
             {pageRows.map((s) => (
               <tr key={s.id} className="hover:bg-slate-50 cursor-pointer" {...clickableRow(() => onOpen(s))}>
                 <td className="py-3 px-5">
                   <span className="font-semibold text-ink-primary">{s.name}</span>
-                  {s.bookable === false && <span title="Clients can't pick this service when they book online" className="block text-[11px] text-ink-tertiary mt-0.5">Not bookable online</span>}
+                  {s.bookable === false && <span title="Clients can't pick this service when they book online" className="block text-2xs text-ink-tertiary mt-0.5">Not bookable online</span>}
                 </td>
                 <td className="py-3 px-3 text-ink-secondary">{s.category_name || s.category || <span className="text-ink-tertiary">—</span>}</td>
-                <td className="py-3 px-3 text-right text-ink-secondary tabular-nums">{s.duration_min ? `${s.duration_min} min` : "—"}</td>
-                <td className="py-3 px-3 text-right font-semibold text-ink-primary tabular-nums">{money(s.price)}</td>
+                <td className="py-3 px-3 text-right tabular-nums whitespace-nowrap text-ink-secondary">{s.duration_min ? `${s.duration_min} min` : "—"}</td>
+                <td className="py-3 px-3 text-right tabular-nums whitespace-nowrap font-semibold text-ink-primary">{money(s.price)}</td>
                 <td className="py-3 pr-4 text-right"><RowMenu label={`More actions for ${s.name}`} items={[
                   { label: "Edit", icon: "edit", onClick: () => onOpen(s) },
                   { label: "Duplicate", icon: "content_copy", onClick: () => onOpen({ ...s, id: undefined as unknown as string, name: `${s.name || ""} (copy)` }) },
@@ -412,9 +417,10 @@ export function Services({ onOpen, refresh }: { onOpen: (s?: Service) => void; r
             ))}
           </tbody>
         </table>
-        </div>
+        </div>}
         {items && rows.length > 0 && <Pager total={rows.length} page={Math.min(page, pages)} pageSize={CO_PAGE} onPage={setPage} noun="services" />}
-      </div>
+        </>}
+      </Card>
     </div>
   );
 }
@@ -426,12 +432,8 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
   const [page, setPage] = useState(1);
   const [catFilter, setCatFilter] = useState("");          // selected category_id ("" = all)
   const [cat, setCat] = useState(false);                   // Categories manager open
-  const [cats, setCats] = useState<{ id: string; name: string; depth: number }[]>([]);
-  const loadCats = () => {
-    const flat: { id: string; name: string; depth: number }[] = [];
-    const walk = (ns: any[], d: number) => (ns || []).forEach((n) => { flat.push({ id: n.id, name: n.name, depth: d }); if (n.children?.length) walk(n.children, d + 1); });
-    api.get<any>("/catalog/categories?entity_type=product").then((r) => { walk(r.tree || [], 0); setCats(flat); }).catch(() => setCats([]));
-  };
+  const [cats, loadCats] = useCats("product");
+  const phone = usePhone();
   const { can } = useMe();
   const [importing, setImporting] = useState(false);
   const [err, setErr] = useState(false);
@@ -445,47 +447,44 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
   useEffect(() => { setPage(1); }, [q, catFilter]);
   const pages = Math.max(1, Math.ceil(rows.length / CO_PAGE));
   const pageRows = rows.slice((Math.min(page, pages) - 1) * CO_PAGE, Math.min(page, pages) * CO_PAGE);
+  const canImport = can("can_create_products") || can("can_edit_products") || can("can_manage_inventory");
+  const empty = items && !err && rows.length === 0
+    ? (items.length ? { title: "No products match", body: "Search by name, SKU, MPN or barcode, or clear the category filter." }
+      : { title: "No products yet", body: "Products are the parts and items you sell. Add one to use it on jobs and at the till." })
+    : null;
+  const stockCls = (p: Product) => (p.qty_available ?? 0) <= 0 ? "text-ink-tertiary" : p.low_stock ? "text-amber-700 font-semibold" : "text-ink-primary";
   return (
     <div className="space-y-4">
       {cat && <CategoryManager entity="product" onClose={() => setCat(false)} onChanged={loadCats} />}
       {importing && <ImportDrawer kind="products" onClose={() => setImporting(false)} onDone={() => { load(); loadCats(); }} />}
-      <div className="flex items-center gap-3 flex-wrap">
-        <button onClick={() => onOpen()} className={primaryBtn}><M n="add" c="text-sm" />New product</button>
-        {(can("can_create_products") || can("can_edit_products") || can("can_manage_inventory")) && <button onClick={() => setImporting(true)} className={ghostBtn}><M n="upload" c="text-sm" />Import</button>}
-        <button onClick={() => setCat(true)} className={ghostBtn}><M n="inventory" c="text-sm" />Categories</button>
-        <select aria-label="Category" value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className={filterCls(!!catFilter)}>
-          <option value="">Category: All</option>
-          {cats.map((c) => <option key={c.id} value={c.id}>{`${"  ".repeat(c.depth)}${c.name}`}</option>)}
-        </select>
-        <div className="relative flex-1 min-w-[240px] max-w-md">
-          <M n="search" c="absolute left-3 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" />
-          <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search products, SKU, MPN…" aria-label="Search products" className={`${inputCls} pl-9`} />
-        </div>
-      </div>
-      <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
-        <div className="overflow-x-auto">
-        <table className="w-full min-w-[720px] text-left border-collapse">
-          <thead className={thCls}><tr>
-            <th className="py-3 px-5 font-semibold">Product</th><th className="py-3 px-3 font-semibold">Category</th><th className="py-3 px-3 font-semibold">SKU</th><th className="py-3 px-3 font-semibold">MPN</th><th className="py-3 px-3 text-right font-semibold">Cost</th><th className="py-3 px-3 text-right font-semibold">Sell price</th><th className="py-3 px-3 text-right font-semibold">In stock</th><th className="py-3 pr-4 w-12"><span className="sr-only">Actions</span></th>
+      <CatalogToolbar newLabel="New product" onNew={() => onOpen()} onCategories={() => setCat(true)}
+        third={<Button icon={<M n="upload" c="text-sm" />} onClick={() => setImporting(true)} disabled={!canImport}>Import</Button>}
+        cats={cats} catFilter={catFilter} onCatFilter={setCatFilter} q={q} onQ={setQ} searchLabel="Search products" placeholder="Search products, SKU, MPN…" />
+      <Card padded={false}>
+        {items && err ? <ErrorState title="Couldn't load products" onRetry={load} /> : <>
+        {phone ? <ul className="divide-y divide-slate-100" aria-label="Products">
+          {!items && <li className="p-4 text-xs text-ink-tertiary">Loading products…</li>}
+          {empty && <li><EmptyState {...empty} /></li>}
+          {pageRows.map((p) => <PhoneRow key={p.id} onOpen={() => onOpen(p)} title={p.name}
+            sub={[p.sku || p.code, p.category_id ? catName[p.category_id] : "Uncategorized"].filter(Boolean).join(" · ")}
+            value={money(p.sell_price)} extra={<span className={stockCls(p)}>{p.qty_available ?? 0} in stock</span>} />)}
+        </ul> : <div className="overflow-x-auto">
+        <table className={`${tableClass} min-w-[720px]`}>
+          <thead><tr className={thCls}>
+            <th className="py-3 px-5">Product</th><th className="py-3 px-3">Category</th><th className="py-3 px-3">SKU</th><th className="py-3 px-3">MPN</th><th className="py-3 px-3 text-right">Cost</th><th className="py-3 px-3 text-right">Sell price</th><th className="py-3 px-3 text-right">In stock</th><th className="py-3 pr-4 w-12"><span className="sr-only">Actions</span></th>
           </tr></thead>
-          <tbody className="divide-y divide-slate-100 text-xs">
+          <tbody className="divide-y divide-slate-100">
             {!items && <SkeletonRows cols={8} />}
-            {items && err && <tr><td colSpan={8} className="py-6 px-5 text-rose-600">Couldn't load products. <button onClick={load} className="font-semibold underline">Try again</button></td></tr>}
-            {items && !err && rows.length === 0 && <tr><td colSpan={8} className="py-12 px-5 text-center">
-              {items.length
-                ? <><div className="text-sm font-semibold text-ink-primary">No products match</div><div className="text-xs text-ink-tertiary mt-1">Search by name, SKU, MPN or barcode, or clear the category filter.</div></>
-                : <><div className="text-sm font-semibold text-ink-primary">No products yet</div><div className="text-xs text-ink-tertiary mt-1">Products are the parts and items you sell. Add one to use it on jobs and at the till.</div>
-                    <button onClick={() => onOpen()} className={`${primaryBtn} mx-auto mt-3`}><M n="add" c="text-sm" />New product</button></>}
-            </td></tr>}
+            {empty && <TableEmpty cols={8} {...empty} />}
             {pageRows.map((p) => (
               <tr key={p.id} className="hover:bg-slate-50 cursor-pointer" {...clickableRow(() => onOpen(p))}>
                 <td className="py-3 px-5 font-semibold text-ink-primary">{p.name}</td>
                 <td className="py-3 px-3 text-ink-secondary">{p.category_id ? (catName[p.category_id] || "—") : <span className="text-ink-tertiary">Uncategorized</span>}</td>
-                <td className="py-3 px-3 text-ink-secondary font-mono">{p.sku || p.code || "—"}</td>
-                <td className="py-3 px-3 text-ink-tertiary font-mono">{p.mpn || "—"}</td>
-                <td className="py-3 px-3 text-right text-ink-secondary tabular-nums">{money(p.cost_price)}</td>
-                <td className="py-3 px-3 text-right font-semibold text-ink-primary tabular-nums">{money(p.sell_price)}</td>
-                <td className={`py-3 px-3 text-right tabular-nums ${(p.qty_available ?? 0) <= 0 ? "text-ink-tertiary" : p.low_stock ? "text-amber-700 font-semibold" : "text-ink-primary"}`}>{p.qty_available ?? 0}</td>
+                <td className="py-3 px-3 text-ink-secondary tabular-nums">{p.sku || p.code || "—"}</td>
+                <td className="py-3 px-3 text-ink-tertiary tabular-nums">{p.mpn || "—"}</td>
+                <td className="py-3 px-3 text-right tabular-nums whitespace-nowrap text-ink-secondary">{money(p.cost_price)}</td>
+                <td className="py-3 px-3 text-right tabular-nums whitespace-nowrap font-semibold text-ink-primary">{money(p.sell_price)}</td>
+                <td className={`py-3 px-3 text-right tabular-nums whitespace-nowrap ${stockCls(p)}`}>{p.qty_available ?? 0}</td>
                 <td className="py-3 pr-4 text-right"><RowMenu label={`More actions for ${p.name}`} items={[
                   { label: "Edit", icon: "edit", onClick: () => onOpen(p) },
                   { label: "Duplicate", icon: "content_copy", onClick: () => onOpen({ ...p, id: undefined as unknown as string, name: `${p.name || ""} (copy)`, sku: undefined, code: undefined, barcode: undefined, mpn: undefined }) },
@@ -494,9 +493,10 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
             ))}
           </tbody>
         </table>
-        </div>
+        </div>}
         {items && rows.length > 0 && <Pager total={rows.length} page={Math.min(page, pages)} pageSize={CO_PAGE} onPage={setPage} noun="products" />}
-      </div>
+        </>}
+      </Card>
     </div>
   );
 }
@@ -506,33 +506,33 @@ export function Bundles({ onOpen, refresh }: { onOpen: (b?: Bundle) => void; ref
   const { can } = useMe();
   const [items, setItems] = useState<Bundle[] | null>(null);
   const [cat, setCat] = useState(false);
+  const [q, setQ] = useState("");
   const load = () => api.get<{ items: Bundle[] }>("/bundles").then((r) => setItems(r.items || [])).catch(() => setItems([]));
   useEffect(() => { load(); }, [refresh]); // eslint-disable-line
+  const shown = (items || []).filter((b) => !q || (b.name || "").toLowerCase().includes(q.toLowerCase()));
   return (
     <div className="space-y-4">
       {cat && <CategoryManager entity="bundle" onClose={() => setCat(false)} onChanged={load} />}
-      <div className="flex items-center gap-3">
-        {can("can_manage_bundles") && <button onClick={() => onOpen()} className={primaryBtn}><M n="add" c="text-sm" />New job kit</button>}
-        <button onClick={() => setCat(true)} className={ghostBtn}><M n="inventory" c="text-sm" />Categories</button>
-      </div>
-      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-6 space-y-3">
-        {!items && <p className="text-xs text-ink-tertiary">Loading job kits…</p>}
-        {items?.length === 0 && (
-          <div className="flex flex-col items-start gap-3">
-            <p className="text-xs text-ink-tertiary">No job kits yet. A job kit sells a set of parts and services together at one price, like "Screen replacement".</p>
-            {can("can_manage_bundles") && <button onClick={() => onOpen()} className={primaryBtn}><M n="add" c="text-sm" />Create your first job kit</button>}
-          </div>
-        )}
-        {items?.map((bd) => (
-          <div key={bd.id} {...clickable(() => onOpen(bd))} className="border border-slate-200/80 rounded-xl p-4 bg-white flex items-center justify-between shadow-clay-sm hover:border-primary/40 cursor-pointer transition-all">
-            <div><div className="font-bold text-ink-primary text-sm flex items-center gap-1.5">{bd.name}{bd.broken && <span className="text-[11px] font-bold bg-amber-100 text-amber-800 px-1.5 py-0.5 rounded">Needs fixing</span>}</div><div className="text-[11px] text-ink-tertiary">{(bd.components || []).length} components{bd.broken ? " · an item no longer exists" : ""}</div></div>
-            <div className="text-right">
-              <span className="tabular-nums font-bold text-ink-primary text-sm">{money(bd.price)}</span>
-              {bd.total_std && bd.total_std > (bd.price || 0) && <span className="text-[11px] text-emerald-600 block font-semibold">Save {money(bd.total_std - (bd.price || 0))}</span>}
-            </div>
-          </div>
-        ))}
-      </div>
+      {/* Job kits have no import and no category filter yet: both stay in place, greyed. */}
+      <CatalogToolbar newLabel="New job kit" onNew={() => onOpen()} canNew={can("can_manage_bundles")} onCategories={() => setCat(true)}
+        third={<Button icon={<M n="upload" c="text-sm" />} disabled>Import</Button>}
+        q={q} onQ={setQ} searchLabel="Search job kits" placeholder="Search job kits…" />
+      <Card padded={false}>
+        {!items && <p className="p-5 text-xs text-ink-tertiary">Loading job kits…</p>}
+        {items?.length === 0 && <EmptyState icon={<M n="inventory_2" c="text-xl" />} title="No job kits yet" body={'A job kit sells a set of parts and services together at one price, like "Screen replacement".'} />}
+        {items && items.length > 0 && shown.length === 0 && <EmptyState title="No job kits match" body="Try another name." />}
+        {shown.length > 0 && <ul className="divide-y divide-slate-100">
+          {shown.map((bd) => (
+            <li key={bd.id} {...clickable(() => onOpen(bd))} className="px-5 py-3.5 flex items-center justify-between gap-3 hover:bg-slate-50 cursor-pointer">
+              <div className="min-w-0"><div className="font-semibold text-ink-primary text-sm flex items-center gap-1.5">{bd.name}{bd.broken && <Badge tone="warning">Needs fixing</Badge>}</div><div className="text-xs text-ink-tertiary">{(bd.components || []).length} components{bd.broken ? " · an item no longer exists" : ""}</div></div>
+              <div className="text-right shrink-0">
+                <span className="tabular-nums font-semibold text-ink-primary text-sm">{money(bd.price)}</span>
+                {bd.total_std && bd.total_std > (bd.price || 0) && <span className="text-xs text-emerald-600 block font-semibold tabular-nums">Save {money(bd.total_std - (bd.price || 0))}</span>}
+              </div>
+            </li>
+          ))}
+        </ul>}
+      </Card>
     </div>
   );
 }

@@ -27,7 +27,7 @@ function SplitView({ jobOpen }: { jobOpen: boolean }) {
       <div className="flex-1 min-w-0 h-full">
         {jobOpen ? <Job /> : (
           <div className="h-full flex flex-col items-center justify-center gap-3 text-center px-8 text-ink-tertiary">
-            <MousePointerClick size={36} strokeWidth={1.5} />
+            <MousePointerClick size={36} />
             <p className="text-go-body">Pick a job to see it here</p>
           </div>
         )}
