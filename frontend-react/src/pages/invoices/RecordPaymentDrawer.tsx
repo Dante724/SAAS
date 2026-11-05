@@ -3,7 +3,8 @@ import DateField from "../../components/DateField";
 import { api, idempotencyKey } from "../../api/client";
 import { useMe } from "../../context/Me";
 import AccountPicker, { type PayAccount, type PaymentOption, accountsFor } from "../../components/AccountPicker";
-import { Drawer, ErrorNote, btnGhost, btnPrimary, cash, inputCls, labelCls, round2, todayIso, type InvoiceDetail } from "./billing";
+import Button from "../../components/Button";
+import { Drawer, ErrorNote, cash, inputCls, labelCls, round2, todayIso, type InvoiceDetail } from "./billing";
 
 /* Record payment against an invoice → POST /finance/invoices/{id}/pay.
    Partial amounts are fine. When the amount is more than the balance the user picks what happens
@@ -76,16 +77,16 @@ export default function RecordPaymentDrawer({ invoice, onClose, onPaid }: { invo
   return (
     <Drawer z={60} width={440} label="Record payment" onClose={onClose}
       title="Record payment" sub={<>Invoice {invoice.invoice_number} · balance due <span className="font-semibold text-ink-primary">{cash(due)}</span></>}
-      footer={<><button onClick={onClose} className={btnGhost}>Cancel</button>
-        <button onClick={save} disabled={busy || !!problem} className={btnPrimary}>{busy ? "Saving…" : `Record ${cash(amt)}`}</button></>}>
+      footer={<><Button variant="primary" onClick={save} disabled={busy || !!problem}>{busy ? "Saving…" : `Record ${cash(amt)}`}</Button>
+        <Button onClick={onClose}>Cancel</Button></>}>
       <ErrorNote msg={err} />
       <div>
         <label htmlFor="pay-amount" className={labelCls}>Amount</label>
         <input id="pay-amount" type="number" inputMode="decimal" min={0} step="0.01" value={amount}
           onChange={(e) => setAmount(e.target.value)} className={`${inputCls} text-right tabular-nums`} />
         <div className="flex gap-2 mt-1.5">
-          <button type="button" onClick={() => setAmount(String(due))} className="text-xs font-semibold text-primary">Full balance</button>
-          {due > 0 && <button type="button" onClick={() => setAmount(String(round2(due / 2)))} className="text-xs font-semibold text-primary">Half</button>}
+          <Button variant="link" onClick={() => setAmount(String(due))}>Full balance</Button>
+          {due > 0 && <Button variant="link" onClick={() => setAmount(String(round2(due / 2)))}>Half</Button>}
         </div>
       </div>
       <div>

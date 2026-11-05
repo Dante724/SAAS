@@ -3,13 +3,19 @@ import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { Supplier, money } from "../inventory/types";
 import { loadFailed } from "../../lib/notice";
+import Drawer from "../../components/Drawer";
+import Button from "../../components/Button";
+import Tabs from "../../components/Tabs";
+import { StatTile } from "../../components/Card";
+import EmptyState from "../../components/EmptyState";
+import { Field, Input, Select, labelClass } from "../../components/Field";
 
 /** Phase 1 E — supplier detail: an editable header, a Balance ledger (bills we owe /
  * returns as a running statement), and a price-list import that reuses the backend's
  * column-mapping engine with a dry-run preview before it rewrites any cost basis. */
 type Entry = { id: string; entry_type: string; amount: number; note?: string; created_at: string };
 type Ledger = { supplier_balance: number; entries: Entry[] };
-type Field = "" | "sku" | "barcode" | "name" | "cost_price" | "sell_price";
+type MapField = "" | "sku" | "barcode" | "name" | "cost_price" | "sell_price";
 type ImportResult = { dry_run: boolean; updated: number; created: number; skipped: number; errors: { row: number; error: string }[] };
 
 // tiny CSV parse — comma-separated, optional double-quotes. Good enough for pasted price lists.
@@ -48,60 +54,39 @@ export default function SupplierDrawer({ supplier, onClose, onSaved }: { supplie
     } catch (e: any) { flash(e.message || "Couldn't save"); } finally { setBusy(false); }
   }
 
-  const fld = "glass-input rounded-xl px-3 py-2 text-sm w-full";
-  const lbl = "block text-[11px] font-bold  text-ink-tertiary mb-1";
-
-  return (
-    <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
-      <div className="relative h-full w-full max-w-[680px] bg-raised shadow-clay-card flex flex-col border-l border-slate-200/90">
-        {/* header */}
-        <div className="px-6 pt-5 border-b border-slate-100">
-          <div className="flex items-start justify-between">
-            <div className="flex items-center gap-2.5">
-              <div className="w-10 h-10 rounded-xl bg-blue-50 text-primary grid place-items-center"><M n="local_shipping" c="text-xl" /></div>
-              <div><h2 className="font-bold text-ink-primary text-lg leading-tight">{f.name || "Supplier"}</h2>
-                <span className="text-[11px] text-ink-tertiary">Supplier · balance {money(led?.supplier_balance ?? f.balance ?? 0)}</span></div>
-            </div>
-            <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-full grid place-items-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100"><M n="close" c="text-lg" /></button>
-          </div>
-          <div role="tablist" className="flex gap-1 mt-4">
-            {(["ledger", "price"] as const).map((t) => (
-              <button key={t} role="tab" aria-selected={tab === t} onClick={() => setTab(t)} className={`px-3 py-2 text-sm font-semibold -mb-px border-b-2 transition-colors ${tab === t ? "text-primary border-primary" : "text-ink-tertiary border-transparent hover:text-ink-primary"}`}>
-                {t === "ledger" ? "Balance & details" : "Price list"}</button>
-            ))}
-          </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+  return (<>
+    <Drawer size="lg" label={f.name || "Supplier"} onClose={onClose}
+      title={<span className="flex items-center gap-2 min-w-0"><M n="local_shipping" c="text-lg text-primary flex-shrink-0" /><span className="truncate">{f.name || "Supplier"}</span></span>}
+      sub={<>Supplier · balance <span className="tabular-nums">{money(led?.supplier_balance ?? f.balance ?? 0)}</span></>}
+      tabs={<Tabs label="Supplier sections" value={tab} onChange={setTab} tabs={[{ id: "ledger", label: "Balance & details" }, { id: "price", label: "Price list" }]} />}
+      footer={tab === "ledger" ? <Button variant="primary" onClick={saveHeader} busy={busy}>{busy ? "Saving…" : "Save details"}</Button> : undefined}>
           {tab === "ledger" && (
             <>
               <div className="grid grid-cols-2 gap-3">
                 {([["name", "Supplier name"], ["contact_name", "Contact person"], ["phone", "Phone"], ["email", "Email"]] as const).map(([k, l]) => (
-                  <div key={k}><label className={lbl}>{l}</label>
-                    <input value={(f as any)[k] || ""} onChange={(e) => setF({ ...f, [k]: e.target.value })} className={fld} /></div>
+                  <Field key={k} label={l} htmlFor={`sup-${k}`}>
+                    <Input id={`sup-${k}`} value={(f as any)[k] || ""} onChange={(e) => setF({ ...f, [k]: e.target.value })} /></Field>
                 ))}
-                <div><label className={lbl}>Lead time (days)</label>
-                  <input type="number" value={f.lead_days ?? ""} onChange={(e) => setF({ ...f, lead_days: e.target.value === "" ? undefined : Number(e.target.value) })} className={fld} /></div>
+                <Field label="Lead time (days)" htmlFor="sup-lead">
+                  <Input id="sup-lead" type="number" value={f.lead_days ?? ""} onChange={(e) => setF({ ...f, lead_days: e.target.value === "" ? undefined : Number(e.target.value) })} className="tabular-nums" /></Field>
               </div>
-              <div className="flex justify-end"><button onClick={saveHeader} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : "Save details"}</button></div>
 
               {perf && perf.total_pos > 0 && (
                 <div className="rounded-2xl border border-slate-200/80 p-4 space-y-3">
-                  <span className="text-[11px] font-bold text-ink-tertiary flex items-center gap-1.5"><M n="insights" c="text-sm text-primary" />Performance</span>
-                  <div className="grid grid-cols-4 gap-2 text-center">
+                  <h3 className="text-xs font-semibold text-ink-secondary flex items-center gap-1.5"><M n="insights" c="text-sm text-primary" />Performance</h3>
+                  <div className="grid grid-cols-2 sm:grid-cols-4 gap-4">
                     {[["Spend", money(perf.total_spend)], ["On-time", perf.on_time_pct == null ? "—" : `${perf.on_time_pct}%`], ["Open POs", String(perf.open_pos)], ["POs", String(perf.total_pos)]].map(([l, v]) => (
-                      <div key={l} className="rounded-xl bg-slate-50/70 py-2"><div className="text-sm font-bold text-ink-primary">{v}</div><div className="text-[11px] text-ink-tertiary ">{l}</div></div>
+                      <StatTile key={l} label={l} value={v} />
                     ))}
                   </div>
                   {perf.price_trend?.length > 0 && (
                     <div className="space-y-1">
-                      <div className="text-[11px] font-bold text-ink-tertiary">Price trend</div>
+                      <h4 className="text-xs font-semibold text-ink-secondary">Price trend</h4>
                       {perf.price_trend.map((t: any, i: number) => (
-                        <div key={i} className="flex items-center justify-between text-[11px]">
+                        <div key={i} className="flex items-center justify-between text-2xs">
                           <span className="text-ink-secondary truncate flex-1">{t.part}</span>
                           <span className="tabular-nums text-ink-tertiary">{money(t.first)} → {money(t.latest)}</span>
-                          <span className={`tabular-nums font-bold w-14 text-right ${t.change_pct > 0 ? "text-rose-600" : "text-emerald-600"}`}>{t.change_pct > 0 ? "+" : ""}{t.change_pct}%</span>
+                          <span className={`tabular-nums font-semibold w-14 text-right ${t.change_pct > 0 ? "text-rose-600" : "text-emerald-600"}`}>{t.change_pct > 0 ? "+" : ""}{t.change_pct}%</span>
                         </div>
                       ))}
                     </div>
@@ -111,17 +96,17 @@ export default function SupplierDrawer({ supplier, onClose, onSaved }: { supplie
 
               <div className="rounded-2xl bg-slate-50/70 border border-slate-200/80 p-4">
                 <div className="flex items-baseline justify-between mb-3">
-                  <span className="text-[11px] font-bold text-ink-tertiary ">Statement</span>
-                  <span className="text-lg font-bold text-ink-primary">{money(led?.supplier_balance ?? 0)}</span>
+                  <h3 className="text-xs font-semibold text-ink-secondary">Statement</h3>
+                  <span className="text-lg font-bold tabular-nums text-ink-primary">{money(led?.supplier_balance ?? 0)}</span>
                 </div>
-                {!led ? <div className="text-xs text-ink-tertiary py-4">Loading…</div>
-                  : led.entries.length === 0 ? <div className="text-xs text-ink-tertiary py-4">No ledger activity yet. Received POs and returns for this supplier will post here.</div>
+                {!led ? <div aria-hidden className="space-y-2 py-2"><span className="sk block h-4 w-2/3 rounded" /><span className="sk block h-4 w-1/2 rounded" /></div>
+                  : led.entries.length === 0 ? <EmptyState size="inline" title="Nothing here yet. Bills and returns from this supplier show up here." />
                     : <div className="divide-y divide-slate-100">
                       {led.entries.map((e) => (
                         <div key={e.id} className="flex items-center gap-3 py-2 text-xs">
                           <span className="text-ink-tertiary tabular-nums w-[92px] shrink-0">{(e.created_at || "").slice(0, 10)}</span>
                           <span className="text-ink-secondary flex-1 truncate">{e.note || e.entry_type}</span>
-                          <span className={`tabular-nums font-bold ${e.amount < 0 ? "text-rose-600" : "text-emerald-600"}`}>{money(e.amount)}</span>
+                          <span className={`tabular-nums font-semibold ${e.amount < 0 ? "text-rose-600" : "text-emerald-600"}`}>{money(e.amount)}</span>
                         </div>
                       ))}
                     </div>}
@@ -130,19 +115,16 @@ export default function SupplierDrawer({ supplier, onClose, onSaved }: { supplie
           )}
 
           {tab === "price" && <PriceListTab supplierId={supplier.id} onDone={(m) => flash(m)} />}
-        </div>
-
-        {toast && <div className="absolute bottom-5 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2 rounded-lg shadow-clay-card">{toast}</div>}
-      </div>
-    </div>
-  );
+    </Drawer>
+    {toast && <div role="status" className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-clay-drawer z-[70]">{toast}</div>}
+  </>);
 }
 
 function PriceListTab({ supplierId, onDone }: { supplierId: string; onDone: (m: string) => void }) {
   const [raw, setRaw] = useState("");
   const [rows, setRows] = useState<string[][] | null>(null);
   const [headers, setHeaders] = useState<string[]>([]);
-  const [map, setMap] = useState<Record<number, Field>>({});
+  const [map, setMap] = useState<Record<number, MapField>>({});
   const [matchOn, setMatchOn] = useState<"sku" | "barcode">("sku");
   const [createMissing, setCreateMissing] = useState(false);
   const [res, setRes] = useState<ImportResult | null>(null);
@@ -154,7 +136,7 @@ function PriceListTab({ supplierId, onDone }: { supplierId: string; onDone: (m: 
     const hs = parsed[0];
     setHeaders(hs); setRows(parsed.slice(1)); setRes(null);
     // best-effort auto-map by header name
-    const guess: Record<number, Field> = {};
+    const guess: Record<number, MapField> = {};
     hs.forEach((h, i) => {
       const k = h.toLowerCase();
       if (/sku|code|part\s*no/.test(k)) guess[i] = "sku";
@@ -180,46 +162,46 @@ function PriceListTab({ supplierId, onDone }: { supplierId: string; onDone: (m: 
     } catch (e: any) { onDone(e.message || "Import failed"); } finally { setBusy(false); }
   }
 
-  const opts: Field[] = ["", "sku", "barcode", "name", "cost_price", "sell_price"];
-  const lbl = "block text-[11px] font-bold  text-ink-tertiary mb-1";
+  const opts: MapField[] = ["", "sku", "barcode", "name", "cost_price", "sell_price"];
+  const lbl = labelClass;
 
   return (
     <div className="space-y-4">
       <p className="text-xs text-ink-tertiary">Paste the supplier's price list as CSV (first row = column headers). Match on SKU or barcode — costs are updated on the matching products. Preview shows exactly what changes before anything is written.</p>
       <div>
         <label className={lbl}>Price list (CSV)</label>
-        <textarea value={raw} onChange={(e) => setRaw(e.target.value)} rows={5} placeholder="sku,name,cost&#10;OF-77,Oil filter,4.20" className="glass-input rounded-lg px-3 py-2 text-xs w-full font-mono" />
+        <textarea value={raw} onChange={(e) => setRaw(e.target.value)} rows={5} placeholder="sku,name,cost&#10;OF-77,Oil filter,4.20" className="glass-input rounded-xl px-3 py-2 text-xs w-full font-mono text-ink-primary" />
       </div>
-      <button onClick={analyze} disabled={!raw.trim()} className="px-3 py-2 rounded-lg bg-slate-100 text-ink-primary text-xs font-bold hover:bg-slate-200 disabled:opacity-50">Read columns</button>
+      <Button onClick={analyze} disabled={!raw.trim()}>Read columns</Button>
 
       {rows && (
         <>
           <div className="rounded-xl border border-slate-200/80 p-3 space-y-2">
-            <span className="text-[11px] font-bold text-ink-tertiary">Map columns ({rows.length} rows)</span>
+            <h3 className="text-xs font-semibold text-ink-secondary">Map columns ({rows.length} rows)</h3>
             {headers.map((h, i) => (
               <div key={i} className="flex items-center gap-2 text-xs">
                 <span className="tabular-nums text-ink-secondary flex-1 truncate">{h || `col ${i + 1}`}</span>
                 <span className="text-ink-tertiary">→</span>
-                <select value={map[i] || ""} onChange={(e) => setMap({ ...map, [i]: e.target.value as Field })} className="glass-input rounded-lg px-2 py-1 text-xs">
+                <Select aria-label={`Column ${h || i + 1}`} value={map[i] || ""} onChange={(e) => setMap({ ...map, [i]: e.target.value as MapField })} className="!w-40">
                   {opts.map((o) => <option key={o} value={o}>{o === "" ? "— ignore —" : o}</option>)}
-                </select>
+                </Select>
               </div>
             ))}
           </div>
           <div className="flex items-center gap-4 text-xs">
-            <span className="text-ink-tertiary font-bold text-[11px]">Match on</span>
+            <span className="text-ink-secondary font-semibold">Match on</span>
             {(["sku", "barcode"] as const).map((m) => (
               <label key={m} className="flex items-center gap-1 cursor-pointer"><input type="radio" checked={matchOn === m} onChange={() => setMatchOn(m)} />{m}</label>
             ))}
             <label className="flex items-center gap-1 cursor-pointer ml-auto"><input type="checkbox" checked={createMissing} onChange={(e) => setCreateMissing(e.target.checked)} />Create missing products</label>
           </div>
           <div className="flex gap-2">
-            <button onClick={() => run(true)} disabled={busy} className="px-3 py-2 rounded-lg bg-slate-100 text-ink-primary text-xs font-bold hover:bg-slate-200 disabled:opacity-50">{busy ? "…" : "Preview"}</button>
-            <button onClick={() => run(false)} disabled={busy || !res} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-50">Apply import</button>
+            <Button variant="primary" onClick={() => run(false)} disabled={busy || !res}>Apply import</Button>
+            <Button onClick={() => run(true)} busy={busy}>{busy ? "…" : "Preview"}</Button>
           </div>
           {res && (
             <div className="rounded-xl bg-slate-50/70 border border-slate-200/80 p-3 text-xs space-y-1">
-              <div className="font-bold text-ink-primary">{res.dry_run ? "Preview" : "Imported"} — {res.updated} updated · {res.created} created · {res.skipped} skipped</div>
+              <div className="font-semibold text-ink-primary">{res.dry_run ? "Preview" : "Imported"} — {res.updated} updated · {res.created} created · {res.skipped} skipped</div>
               {res.errors.length > 0 && <div className="text-rose-600">{res.errors.slice(0, 5).map((e) => `Row ${e.row}: ${e.error}`).join(" · ")}{res.errors.length > 5 ? " …" : ""}</div>}
             </div>
           )}
