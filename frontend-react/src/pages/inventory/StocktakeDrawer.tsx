@@ -219,7 +219,7 @@ export default function StocktakeDrawer({ id, onClose, onDone }:
                     {lines?.map((l) => (
                       <tr key={l.id}>
                         <td className="py-2 px-3"><span className="font-semibold text-ink-primary">{l.part_name}</span>{l.sku && <span className="ml-1.5 tabular-nums text-ink-tertiary">{l.sku}</span>}
-                          {l.is_unknown && <span className="ml-1.5 px-1.5 rounded bg-amber-50 text-amber-700 text-[10px] font-bold">New</span>}
+                          {l.is_unknown && <span className="ml-1.5 px-1.5 rounded bg-amber-50 text-amber-700 text-2xs font-semibold">New</span>}
                           {l.serial_mismatch && <div className="text-2xs text-amber-700">{l.note || "Serial is somewhere else in the system"}</div>}</td>
                         {showBin && <td className="py-2 px-3">{l.bin || "No bin"}</td>}
                         <td className="py-2 px-3 text-right tabular-nums">{hideBook ? "•" : l.system_qty}</td>

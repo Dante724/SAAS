@@ -471,8 +471,8 @@ export default function ReportsHub() {
     { label: "Jobs and estimates", value: dash?.total_orders ?? "—", onClick: () => nav("/orders") },
     { label: "Still open", value: dash?.open_orders ?? "—", onClick: () => nav("/orders") },
     { label: "Customers", value: dash?.total_clients ?? "—", onClick: () => nav("/clients") },
-    { label: "Sales", value: money(dash?.revenue), hint: "Sales after returns and refunds. Money collected is under Paid on Home.", onClick: () => nav("/finance") },
-    { label: "Still owed to you", value: money(dash?.outstanding), onClick: () => nav("/invoices") },
+    { label: "Sales", value: dash ? money(dash.revenue) : "—", hint: "Sales after returns and refunds. Money collected is under Paid on Home.", onClick: () => nav("/finance") },
+    { label: "Still owed to you", value: dash ? money(dash.outstanding) : "—", onClick: () => nav("/invoices") },
   ];
 
   const colLabel = (c: any) => typeof c === "string" ? c : (c.label || c.key);

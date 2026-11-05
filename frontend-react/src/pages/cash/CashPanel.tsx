@@ -31,6 +31,7 @@ const iconFor = (a: Account) => a.icon || (a.payment_option === "cash" ? "paymen
 export default function CashPanel() {
   const { can } = useMe();
   const [accounts, setAccounts] = useState<Account[]>([]);
+  const [loaded, setLoaded] = useState(false);   // no "Add your first cashbox" before the list arrives
   const [sel, setSel] = useState<Account | null>(null);
   const [flow, setFlow] = useState<FlowItem[]>([]);
   const [menu, setMenu] = useState<string | null>(null);
@@ -45,7 +46,7 @@ export default function CashPanel() {
       const items = r.items || []; setAccounts(items);
       setSel((cur) => keepSel && cur ? items.find((a) => a.id === cur.id) || items[0] || null : items[0] || null);
       return items;
-    }).catch(() => setAccounts([]));
+    }).catch(() => setAccounts([])).finally(() => setLoaded(true));
   }
   useEffect(() => { loadAccounts(false); api.get<{ items: FlowItem[] }>("/cash/flow-items").then((r) => setFlow(r.items || [])).catch(loadFailed("cash flow items")); }, []);
   // The ledger pages on the server; its totals come from the same request (SQL over every row),
@@ -135,7 +136,7 @@ export default function CashPanel() {
 
         {/* RIGHT: hero + drawer controls + activity */}
         <div className="flex-1 min-w-0 md:overflow-y-auto px-6 py-5 space-y-4">
-          {!accounts.length ? (
+          {!accounts.length ? (loaded &&
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-12 flex flex-col items-center text-center">
               <div className="w-14 h-14 rounded-2xl bg-primary text-white flex items-center justify-center shadow-clay-sm mb-3"><M n="point_of_sale" c="text-3xl" /></div>
               <h3 className="text-base font-semibold text-ink-primary">Add your first cashbox</h3>

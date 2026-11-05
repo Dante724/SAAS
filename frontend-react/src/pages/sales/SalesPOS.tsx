@@ -107,9 +107,11 @@ export default function SalesPOS() {
   const [recentKey, setRecentKey] = useState(0);   // bumped after a charge so the list re-reads
   const saleRows = useRef<Record<string, SaleRow>>({});
 
-  const loadProducts = () => api.get<{ items: Product[] }>("/catalog/products").then((r) => setProducts(r.items || [])).catch(loadFailed("products"));
+  // Until the lists arrive the grid shows nothing, not a false "No products yet".
+  const [ready, setReady] = useState({ products: false, services: false });
+  const loadProducts = () => api.get<{ items: Product[] }>("/catalog/products").then((r) => setProducts(r.items || [])).catch(loadFailed("products")).finally(() => setReady((x) => ({ ...x, products: true })));
   useEffect(() => { loadProducts(); }, []);
-  useEffect(() => { api.get<{ items: Service[] }>("/catalog/services").then((r) => setServices(r.items || [])).catch(loadFailed("services")); }, []);
+  useEffect(() => { api.get<{ items: Service[] }>("/catalog/services").then((r) => setServices(r.items || [])).catch(loadFailed("services")).finally(() => setReady((x) => ({ ...x, services: true }))); }, []);
   useEffect(() => { api.get<{ items: Account[] }>("/cash/accounts").then((r) => { setAccounts(r.items || []); setAccountId(defaultAccount(r.items || [])); }).catch(loadFailed("cash accounts")); }, []);
   const [receiptFor, setReceiptFor] = useState<{ id: string; change: number | null } | null>(null);   // the after-sale receipt choices
   const [returnFor, setReturnFor] = useState<string | null>(null);
@@ -355,7 +357,7 @@ export default function SalesPOS() {
                   <div className="flex items-center justify-between mt-1"><span className="text-sm font-semibold tabular-nums text-ink-primary">{cash(s.price)}</span>{s.duration_min ? <span className="text-2xs text-ink-tertiary tabular-nums">{s.duration_min} min</span> : null}</div>
                 </button>
               ))}
-              {grid.length === 0 && (
+              {grid.length === 0 && ready[mode] && (
                 <div className="col-span-full py-12 text-center">
                   <div className="text-sm font-semibold text-ink-primary">{q.trim() ? `No ${mode} match "${q.trim()}"` : `No ${mode} yet`}</div>
                   <div className="text-xs text-ink-tertiary mt-1">{q.trim() ? "Check the spelling, or scan the barcode instead." : mode === "products" ? "Add products in Catalog to sell them here." : "Add services in Catalog to sell them here."}</div>

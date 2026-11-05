@@ -98,7 +98,7 @@ export default function BinsPanel() {
               <Fragment key={b.id}>
                 <tr id={`bin-${b.id}`} className={open === b.id ? "bg-blue-50/40" : ""}>
                   <td className="py-2.5 pl-4"><input type="checkbox" aria-label={`Select bin ${b.name}`} checked={sel.has(b.id)} onChange={() => { const n = new Set(sel); n.has(b.id) ? n.delete(b.id) : n.add(b.id); setSel(n); }} /></td>
-                  <td className="py-2.5 px-3 font-bold text-ink-primary">
+                  <td className="py-2.5 px-3 font-semibold text-ink-primary">
                     <button onClick={() => toggleOpen(b.id)} className="inline-flex items-center gap-1 hover:text-primary"><M n={open === b.id ? "expand_less" : "expand_more"} c="text-sm text-ink-tertiary" />{b.name}</button>
                     {b.is_default && <span className="ml-2 px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/70 text-[10px] font-bold">Default</span>}
                   </td>
@@ -136,7 +136,7 @@ export default function BinsPanel() {
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4" role="dialog" aria-modal="true" aria-label="Edit bin">
           <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={() => setEdit(null)} />
           <div className="relative w-full max-w-sm bg-white rounded-2xl shadow-drawer border border-slate-200 p-5 space-y-3">
-            <h3 className="font-bold text-ink-primary">Edit bin</h3>
+            <h3 className="text-sm font-semibold text-ink-primary">Edit bin</h3>
             <div><label className="block text-2xs font-semibold text-ink-tertiary mb-1">Name</label><input autoFocus value={edit.name} onChange={(e) => setEdit({ ...edit, name: e.target.value })} aria-label="Bin name" className={`${fld} w-full`} />
               <p className="mt-1 text-2xs text-ink-tertiary">Renaming keeps the label code, so labels already on the shelf still scan.</p></div>
             <div className="grid grid-cols-3 gap-2">
