@@ -3,10 +3,8 @@
 // we click each tab at desktop (1440) and phone (390) widths and compare where those controls sit.
 // A control may be disabled on a tab that doesn't use it, but it must not move.
 const { test, expect } = require('@playwright/test');
-const { demoAdminPassword } = require('./demo-credentials');
+const { adminToken } = require('./admin-token');
 
-const EMAIL = process.env.E2E_ADMIN_EMAIL || 'admin@repairos.dev';
-const PASS = process.env.E2E_ADMIN_PASS || demoAdminPassword();
 
 const SCREENS = [
   '/orders', '/clients', '/catalog', '/invoices', '/finance', '/reports', '/marketing', '/timesheets',
@@ -22,11 +20,7 @@ const VIEWPORTS = [
 const TOLERANCE = 1;   // px
 
 let token;
-test.beforeAll(async ({ request }) => {
-  const r = await request.post('/api/auth/token', { form: { username: EMAIL, password: PASS } });
-  expect(r.ok(), `sign-in failed: ${r.status()}`).toBeTruthy();
-  token = (await r.json()).access_token;
-});
+test.beforeAll(async ({ request, baseURL }) => { token = await adminToken(request, baseURL); });
 
 // Runs in the page: tags every tab bar (role=tablist) and every switch or filter group (a
 // role=group of 2+ pressable buttons, the shared Tabs' segmented and chips looks).

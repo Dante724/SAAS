@@ -51,6 +51,7 @@ test-results/
 playwright-report/
 playwright/.cache/
 **/e2e/.auth/
+tests-e2e/.e2e-admin-token
 
 # Editor / OS / tooling
 .DS_Store

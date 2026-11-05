@@ -8,7 +8,7 @@
     "install-browsers": "playwright install --with-deps chromium"
   },
   "devDependencies": {
-    "@playwright/test": "^1.45.0",
+    "@playwright/test": "1.63.0",
     "playwright-lighthouse": "^4.0.0",
     "lighthouse": "^12.0.0",
     "jsdom": "^24.0.0"
