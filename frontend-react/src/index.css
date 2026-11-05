@@ -69,8 +69,8 @@ table[data-density="compact"] > tbody > tr > td { padding-top: .4rem; padding-bo
 /* Dark mode — every surface, border, text colour, the primary and the soft tints come from
    theme tokens (theme.tokens.js → CSS variables on :root / .dark), so nothing needs a patch
    here. What's left is the few things a utility can't express. */
-:root { --tint-boost: 1; --hue-lift: 0%; }
-.dark { --tint-boost: 1.8; --hue-lift: 35%; }
+:root { --tint-boost: 1; --hue-lift: 0%; --hue-sink: 45%; }
+.dark { --tint-boost: 1.8; --hue-lift: 35%; --hue-sink: 0%; }
 body { background: rgb(var(--c-canvas)); color: rgb(var(--c-ink-primary)); }
 ::selection { background: rgb(var(--c-primary-fill) / .25); }
 .dark ::selection { background: rgb(147 184 255 / .3); }
