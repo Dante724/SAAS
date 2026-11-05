@@ -3,6 +3,8 @@
 // edit drawer as before — only the location changed.
 import { useState } from "react";
 import Shell from "../../components/Shell";
+import PageLayout from "../../components/PageLayout";
+import Tabs from "../../components/Tabs";
 import { useMe } from "../../context/Me";
 import InventoryDrawer, { DrawerKind } from "../inventory/InventoryDrawer";
 import { Services, Products, Bundles } from "../company/CompanyHub";
@@ -25,30 +27,16 @@ export default function CatalogHub() {
 
   return (
     <Shell title="Catalog">
-      <div className="flex-1 overflow-y-auto">
-        <div className="px-6 pt-4 flex items-center gap-1 border-b border-slate-200/70">
-          {tabs.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
-              className={`px-3 py-2 text-sm font-semibold rounded-t-lg -mb-px border-b-2 whitespace-nowrap ${
-                tab === t.id
-                  ? "text-primary border-primary"
-                  : "text-ink-tertiary border-transparent hover:text-ink-primary"
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
-
-        <div className="p-6">
-          {tab === "services" && can("can_view_labors") && <Services refresh={refresh} onOpen={(s) => setDrawer({ kind: "service", id: s?.id, initial: s })} />}
-          {tab === "products" && <Products refresh={refresh} onOpen={(p) => setDrawer({ kind: "product", id: p?.id, initial: p })} />}
-          {tab === "plans" && <PlansTab />}
-          {tab === "bundles" && <Bundles refresh={refresh} onOpen={(b) => setDrawer({ kind: "bundle", id: b?.id, initial: b })} />}
-        </div>
+      {/* The section tabs stay put above the scroll area; every tab opens with the same toolbar. */}
+      <div className="px-6 flex-shrink-0">
+        <Tabs look="underline" label="Catalog sections" value={tab} onChange={setTab} tabs={tabs} />
       </div>
+      <PageLayout>
+        {tab === "services" && can("can_view_labors") && <Services refresh={refresh} onOpen={(s) => setDrawer({ kind: "service", id: s?.id, initial: s })} />}
+        {tab === "products" && <Products refresh={refresh} onOpen={(p) => setDrawer({ kind: "product", id: p?.id, initial: p })} />}
+        {tab === "plans" && <PlansTab />}
+        {tab === "bundles" && <Bundles refresh={refresh} onOpen={(b) => setDrawer({ kind: "bundle", id: b?.id, initial: b })} />}
+      </PageLayout>
 
       {drawer && (
         <InventoryDrawer
