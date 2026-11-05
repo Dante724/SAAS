@@ -92,6 +92,18 @@ async def invoices_for_order(db: AsyncSession, order_id: str) -> list[Invoice]:
     )).scalars().all())
 
 
+async def lock_invoices_of(db: AsyncSession, order_id: str) -> None:
+    """Lock the job's live invoices (ids sorted) right after the job's own lock and BEFORE the
+    cashbox and client ledger postings: Order -> Invoice -> Client, the order every money-in
+    path follows (M22). A prepayment or a settling pay link that took the till and the client's
+    row first and then wrote the shared invoice deadlocked against Invoices › Record payment,
+    which holds that invoice while it posts to the same till and client. No-op without
+    invoices; FOR UPDATE is a no-op on SQLite."""
+    ids = sorted(i.id for i in await invoices_for_order(db, order_id))
+    if ids:
+        await db.execute(select(Invoice.id).where(Invoice.id.in_(ids)).order_by(Invoice.id).with_for_update())
+
+
 async def _billed_rows(db: AsyncSession, inv: Invoice) -> list[InvoiceLine]:
     return list((await db.execute(select(InvoiceLine).where(
         InvoiceLine.invoice_id == inv.id, InvoiceLine.order_line_id.isnot(None)))).scalars().all())
