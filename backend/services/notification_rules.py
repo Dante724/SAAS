@@ -401,9 +401,12 @@ async def run_due(db: AsyncSession, *, org_id: str, now: Optional[datetime] = No
             from backend.services.sense_agents import email_headers
             h = email_headers(log)
             extra = {"headers": h} if h else {}   # no template: plain text, nothing to look up
+        if is_marketing_event(log.trigger_event):
+            # Win-back / birthday: the marketing part of the operator's daily text budget. (Agent
+            # texts carry no log here, so _send can't tell from it; everything else is transactional.)
+            extra["transactional"] = False
         result = await _send(db, org_id, log.channel,
-            recipient=log.recipient, subject=log.subject, body=log.body,
-            transactional=not is_marketing_event(log.trigger_event), **extra)
+            recipient=log.recipient, subject=log.subject, body=log.body, **extra)
         log.status = result["status"]
         log.error = result.get("error")
         await db.commit()

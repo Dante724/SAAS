@@ -274,3 +274,30 @@ async def test_parallel_sends_at_cap_minus_one_let_exactly_one_through(client, t
     assert sum(1 for r in results if r["status"] == "sent") == 1, results
     assert sum(1 for r in results if r.get("capped")) == 11
     assert len(operator_twilio.sent) == 6
+
+
+async def test_scheduled_win_back_texts_use_the_marketing_budget(client, tenant, operator_twilio, db, monkeypatch):
+    """The worker tick (run_due) sends approved agent messages without their log: a win-back text
+    still counts against the marketing budget, a payment reminder may use the reserve."""
+    from backend.models import NotificationLog
+    from backend.services import notification_rules, sense_agents
+    monkeypatch.setattr(settings, "OPERATOR_SMS_DAILY_CAP", 5)
+    monkeypatch.setattr(settings, "OPERATOR_SMS_RESERVE_PCT", 40)   # 2 of 5 kept back
+
+    async def go(*a, **kw):
+        return "go", None
+    monkeypatch.setattr(sense_agents, "send_check", go)
+    org = await _org(db)
+    org.sub_status = "active"
+    for i, ev in enumerate(["agent.win_back:a", "agent.win_back:b", "agent.win_back:c", "agent.win_back:d",
+                            "agent.collections:e", "agent.collections:f"]):
+        db.add(NotificationLog(org_id=org.id, scope="client", channel="sms", trigger_event=ev,
+                               recipient=f"+1555000900{i}", body="x", status="scheduled",
+                               send_at=datetime(2020, 1, 1)))
+    await db.commit()
+    await notification_rules.run_due(db, org_id=org.id)
+    rows = {r.trigger_event: r.status for r in (await db.execute(select(NotificationLog).where(
+        NotificationLog.org_id == org.id))).scalars()}
+    assert sorted(rows.values()).count("sent") == 5, rows
+    assert [rows[f"agent.win_back:{k}"] for k in "abcd"].count("sent") == 3, rows
+    assert rows["agent.collections:e"] == rows["agent.collections:f"] == "sent", rows
