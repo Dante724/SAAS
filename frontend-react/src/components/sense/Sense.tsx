@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { M } from "../Shell";
-import { api } from "../../api/client";
+import { api, idempotencyKey } from "../../api/client";
 import { useMe } from "../../context/Me";
 import { money, currencySymbol } from "../../pages/orders/types";
 import Switch from "../Switch";
@@ -443,6 +443,9 @@ export function TogetherChips({ orderId, linesKey, onFlash, onChanged }: { order
   const on = useSenseOn("added_together");
   const [items, setItems] = useState<Together[]>([]);
   const [hidden, setHidden] = useState<string[]>([]);
+  // Council M13: one Idempotency-Key per suggestion until its add goes through, so a retry after
+  // a lost connection can't add the line (and take the stock) twice.
+  const addKeys = useRef<Record<string, string>>({});
   useEffect(() => {
     if (!allowed || !on || !linesKey) { setItems([]); return; }
     api.get<any>(`/sense/orders/${orderId}/together`).then((r) => setItems(r.items || [])).catch(() => setItems([]));
@@ -453,8 +456,10 @@ export function TogetherChips({ orderId, linesKey, onFlash, onChanged }: { order
     setHidden((h) => [...h, i.description]);
     try {
       const kind = i.kind || "service";
-      await api.post(`/orders/${orderId}/lines`, { description: i.description, kind, line_type: i.line_type || (kind === "service" ? "labour" : "part"),
-        ref_id: i.ref_id || undefined, qty: 1, unit_price: i.unit_price || 0 });
+      const key = (addKeys.current[i.description] ||= idempotencyKey());
+      await api.postOnce(`/orders/${orderId}/lines`, { description: i.description, kind, line_type: i.line_type || (kind === "service" ? "labour" : "part"),
+        ref_id: i.ref_id || undefined, qty: 1, unit_price: i.unit_price || 0 }, key);
+      delete addKeys.current[i.description];
       onFlash("Line added"); onChanged?.();
     } catch (e: any) { setHidden((h) => h.filter((x) => x !== i.description)); onFlash(e.message || "Couldn't add the line"); }
   };
