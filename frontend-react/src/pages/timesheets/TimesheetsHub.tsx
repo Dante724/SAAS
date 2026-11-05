@@ -11,6 +11,14 @@ import { isoDate, isoDateTimeLocal } from "../../lib/localDate";
 import { EmployeeHours } from "../company/CompanyHub";
 import { fmtServerTime } from "../../lib/serverTime";
 import { loadFailed } from "../../lib/notice";
+import PageLayout, { Toolbar } from "../../components/PageLayout";
+import Button, { IconButton } from "../../components/Button";
+import Tabs from "../../components/Tabs";
+import Card, { Badge, StatTile, type BadgeTone } from "../../components/Card";
+import Drawer from "../../components/Drawer";
+import EmptyState, { ErrorState, TableEmpty } from "../../components/EmptyState";
+import { Field, Input, Select, labelClass } from "../../components/Field";
+import { tableClass, theadRowClass, Th, Td } from "../../components/Table";
 
 // Timesheets — React port of legacy timesheets.js. Per-employee grid + approve,
 // manual entry add/void/reopen, and a live "who's on the clock" roster.
@@ -38,8 +46,10 @@ export default function TimesheetsHub() {
   const [addSched, setAddSched] = useState(false);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 1800); };
 
-  useEffect(() => { api.get<any>("/staff/employees").then((r) => { const it = r.items || r || []; setEmps(it); if (it[0] && !empId) setEmpId(it[0].id); }).catch(loadFailed("the staff list")); }, []);
-  const load = () => { if (empId) api.get<Sheet>(`/timeclock/timesheet?employee_id=${empId}&date_from=${from}&date_to=${to}`).then(setSheet).catch(() => setSheet(null)); };
+  const [empsLoaded, setEmpsLoaded] = useState(false);
+  const [sheetErr, setSheetErr] = useState(false);
+  useEffect(() => { api.get<any>("/staff/employees").then((r) => { const it = r.items || r || []; setEmps(it); if (it[0] && !empId) setEmpId(it[0].id); }).catch(loadFailed("the staff list")).finally(() => setEmpsLoaded(true)); }, []);
+  const load = () => { if (empId) api.get<Sheet>(`/timeclock/timesheet?employee_id=${empId}&date_from=${from}&date_to=${to}`).then((r) => { setSheet(r); setSheetErr(false); }).catch(() => { setSheet(null); setSheetErr(true); }); };
   const loadRoster = () => api.get<any>("/timeclock/roster").then((r) => setRoster(r.on_shift || [])).catch(() => setRoster([]));
   useEffect(() => { load(); }, [empId, from, to]);
   useVisibleInterval(loadRoster, 30000);
@@ -55,109 +65,119 @@ export default function TimesheetsHub() {
   async function voidEntry(id: string) { if (!(await confirmDialog("Void this entry?", { danger: true, confirmLabel: "Void" }))) return; try { await api.del(`/timeclock/entries/${id}`); load(); } catch (e: any) { flash(e.message); } }
   async function reopen(id: string) { try { await api.post(`/timeclock/entries/${id}/reopen`, {}); load(); } catch (e: any) { flash(e.message); } }
 
+  // Still waiting for the first timesheet: show placeholders, never "0h" / "₹0".
+  const sheetLoading = !sheet && !sheetErr && (!empsLoaded || emps.length > 0);
+  const num = (v: string) => (sheetLoading ? <span className="sk inline-block h-7 w-16 align-middle" aria-hidden /> : sheet ? v : "—");
+  const onHours = topTab === "hours";
+  const STATE_TONE: Record<string, BadgeTone> = { approved: "success", running: "info", logged: "neutral" };
+
   return (
     <Shell title="Timesheets">
-      <div className="px-6 pt-4 flex items-center gap-1 border-b border-slate-200/70">
-        {([["timesheet", "Timesheet"], ["hours", "Employee hours"]] as [typeof topTab, string][]).map(([id, label]) => (
-          <button key={id} onClick={() => setTopTab(id)}
-            className={`px-3 py-2 text-sm font-semibold rounded-t-lg -mb-px border-b-2 ${topTab === id ? "text-primary border-primary" : "text-ink-tertiary border-transparent hover:text-ink-primary"}`}>{label}</button>
-        ))}
+      <div className="px-6 pt-5 flex-shrink-0">
+        <Tabs label="Timesheet sections" value={topTab} onChange={setTopTab} tabs={[{ id: "timesheet", label: "Timesheet" }, { id: "hours", label: "Employee hours" }]} />
       </div>
-      {topTab === "hours" ? (
-        <div className="flex-1 overflow-y-auto px-6 py-5"><EmployeeHours /></div>
-      ) : (
-      <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
-        {/* controls */}
-        <div className="flex flex-wrap items-end gap-3">
-          <button onClick={approve} className="h-[38px] px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110">Approve range</button>
-          <button onClick={() => setAdd(true)} className="h-[38px] px-3.5 rounded-xl bg-white border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50 flex items-center gap-1.5"><M n="add" c="text-sm" />Add entry</button>
-          <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Employee</label>
-            <select value={empId} onChange={(e) => setEmpId(e.target.value)} className="glass-input rounded-lg px-3 py-2 text-sm font-semibold text-ink-primary">{emps.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select></div>
-          <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">From</label><DateField mode="date" value={from} onChange={setFrom} className="w-40" /></div>
-          <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">To</label><DateField mode="date" value={to} onChange={setTo} className="w-40" /></div>
-        </div>
-
+      <PageLayout>
+        {/* The same toolbar on both tabs. Employee hours covers everyone, so the employee and date
+            filters and Approve range stay in place there, greyed out. */}
+        <Toolbar
+          actions={<>
+            <Button variant="primary" onClick={approve} disabled={onHours || !empId}>Approve range</Button>
+            <Button onClick={() => setAdd(true)} icon={<M n="add" c="text-sm" />}>Add entry</Button>
+          </>}
+          filters={<>
+            <Select aria-label="Employee" value={empId} onChange={(e) => setEmpId(e.target.value)} disabled={onHours} className="sm:!w-44">{emps.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</Select>
+            <div className="flex items-center gap-1.5">
+              <DateField mode="date" value={from} onChange={setFrom} className="w-36" label="From" disabled={onHours} />
+              <span className="text-xs text-ink-tertiary" aria-hidden>to</span>
+              <DateField mode="date" value={to} onChange={setTo} className="w-36" label="To" disabled={onHours} />
+            </div>
+          </>}
+        />
+      {onHours ? <EmployeeHours /> : (<>
         {/* summary */}
         <PageSummary stats={[
-          { label: "Hours worked", value: `${sheet?.total_hours ?? 0}h` },
-          { label: "Regular / overtime", value: `${sheet?.straight_hours ?? 0}h / ${sheet?.overtime_hours ?? 0}h` },
-          { label: "Charged to jobs", value: `${Math.round((sheet?.billable_sec || 0) / 360) / 10}h` },
-          { label: "Share charged to jobs", value: `${Math.round((sheet?.utilization || 0) * 100)}%` },
-          { label: "Labor cost", value: money(sheet?.labor_cost) },
+          { label: "Hours worked", value: num(`${sheet?.total_hours ?? 0}h`) },
+          { label: "Regular / overtime", value: num(`${sheet?.straight_hours ?? 0}h / ${sheet?.overtime_hours ?? 0}h`) },
+          { label: "Charged to jobs", value: num(`${Math.round((sheet?.billable_sec || 0) / 360) / 10}h`) },
+          { label: "Share charged to jobs", value: num(`${Math.round((sheet?.utilization || 0) * 100)}%`) },
+          { label: "Labour cost", value: num(money(sheet?.labor_cost)) },
         ]} />
 
         <div className="grid grid-cols-1 lg:grid-cols-3 gap-5">
           {/* entries */}
-          <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-            <div className="p-3.5 border-b border-slate-100 flex items-center justify-between"><span className="text-xs font-bold text-ink-primary ">Entries</span><span className="text-[11px] text-ink-tertiary">{sheet?.entry_count ?? 0} · {sheet?.approved_count ?? 0} approved</span></div>
-            <table className="w-full text-xs">
-              <thead className="bg-slate-50/70 text-ink-tertiary text-[11px] font-bold"><tr><th className="text-left py-2.5 px-4">Started</th><th className="text-left py-2.5 px-4">For</th><th className="text-right py-2.5 px-4">Duration</th><th className="text-left py-2.5 px-4">State</th><th className="py-2.5 px-4"></th></tr></thead>
+          <Card padded={false} className="lg:col-span-2">
+            <div className="px-4 py-3 border-b border-slate-100 flex items-center justify-between"><h2 className="text-xs font-semibold text-ink-primary">Entries</h2><span className="text-2xs text-ink-tertiary tabular-nums">{sheet?.entry_count ?? 0} · {sheet?.approved_count ?? 0} approved</span></div>
+            <div className="overflow-x-auto">
+            <table className={tableClass}>
+              <thead><tr className={theadRowClass}><Th>Started</Th><Th>For</Th><Th num>Duration</Th><Th>State</Th><Th><span className="sr-only">Actions</span></Th></tr></thead>
               <tbody className="divide-y divide-slate-100">
-                {sheet == null && <SkeletonRows cols={5} />}
-                {sheet?.entries?.length === 0 && <tr><td colSpan={5} className="py-6 text-center text-ink-tertiary">No entries in this range.</td></tr>}
+                {sheet == null && !sheetErr && <SkeletonRows cols={5} />}
+                {sheetErr && <tr><td colSpan={5} className="p-0"><ErrorState onRetry={load} /></td></tr>}
+                {sheet?.entries?.length === 0 && <TableEmpty cols={5} icon={<M n="schedule" c="text-lg" />} title="No entries in this range" body="Clock-ins and added entries for this employee show up here." />}
                 {sheet?.entries?.map((e) => (
                   <tr key={e.id}>
-                    <td className="py-2.5 px-4 text-ink-secondary">{fmtServerTime(e.started_at) || "—"}</td>
-                    <td className="py-2.5 px-4 font-semibold text-ink-primary">{e.order_number || e.category || "—"}{e.billable ? "" : <span className="ml-1 text-[11px] text-ink-tertiary">Not billable</span>}</td>
-                    <td className="py-2.5 px-4 text-right tabular-nums">{hm(e.duration_min)}</td>
-                    <td className="py-2.5 px-4"><span className={`text-[11px]  font-bold px-1.5 py-0.5 rounded ${e.state === "approved" ? "bg-emerald-100 text-emerald-700" : e.state === "running" ? "bg-blue-100 text-primary" : "bg-slate-100 text-ink-secondary"}`}>{STATE_LABEL[e.state || "logged"] || e.state}</span></td>
-                    <td className="py-2.5 px-4 text-right whitespace-nowrap">{e.state === "approved" ? <button onClick={() => reopen(e.id)} className="text-primary font-semibold">Reopen</button> : <button onClick={() => voidEntry(e.id)} className="text-rose-600 font-semibold">Void</button>}</td>
+                    <Td className="text-ink-secondary">{fmtServerTime(e.started_at) || "—"}</Td>
+                    <Td className="font-semibold text-ink-primary">{e.order_number || e.category || "—"}{e.billable ? "" : <span className="ml-1 text-2xs font-normal text-ink-tertiary">Not billable</span>}</Td>
+                    <Td num>{hm(e.duration_min)}</Td>
+                    <Td><Badge tone={STATE_TONE[e.state || "logged"] || "neutral"}>{STATE_LABEL[e.state || "logged"] || e.state}</Badge></Td>
+                    <Td className="text-right whitespace-nowrap">{e.state === "approved" ? <Button variant="link" onClick={() => reopen(e.id)}>Reopen</Button> : <Button variant="link" className="!text-rose-600" onClick={() => voidEntry(e.id)}>Void</Button>}</Td>
                   </tr>
                 ))}
               </tbody>
             </table>
-          </div>
+            </div>
+          </Card>
 
           {/* roster */}
-          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden h-fit">
-            <div className="p-3.5 border-b border-slate-100 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-500" /><span className="text-xs font-bold text-ink-primary ">On the clock now</span></div>
+          <Card padded={false} className="h-fit">
+            <div className="px-4 py-3 border-b border-slate-100 flex items-center gap-2"><span className="w-2 h-2 rounded-full bg-emerald-500" /><h2 className="text-xs font-semibold text-ink-primary">On the clock now</h2></div>
             <div className="divide-y divide-slate-100">
-              {roster.length === 0 && <div className="p-5 text-xs text-ink-tertiary">Nobody clocked in.</div>}
+              {roster.length === 0 && <EmptyState size="inline" className="px-4" title="Nobody clocked in." />}
               {roster.map((r) => (
                 <div key={r.employee_id} className="px-4 py-2.5 flex items-center justify-between text-xs">
-                  <div><div className="font-bold text-ink-primary">{r.employee_name}</div><div className="text-[11px] text-ink-tertiary">{r.location_name}</div></div>
+                  <div><div className="font-semibold text-ink-primary">{r.employee_name}</div><div className="text-2xs text-ink-tertiary">{r.location_name}</div></div>
                   <span className="tabular-nums font-semibold text-emerald-700">{Math.floor((r.elapsed_sec || 0) / 3600)}h {Math.floor(((r.elapsed_sec || 0) % 3600) / 60)}m</span>
                 </div>
               ))}
             </div>
-          </div>
+          </Card>
         </div>
 
         {/* Planned shifts (schedule) — the plan the clock-ins are measured against */}
-        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-          <div className="p-3.5 border-b border-slate-100 flex items-center justify-between">
-            <div><span className="text-xs font-bold text-ink-primary ">Planned shifts</span><span className="text-[11px] text-ink-tertiary ml-2">what actual hours are measured against</span></div>
-            <button onClick={() => setAddSched(true)} className="text-xs font-semibold text-primary flex items-center gap-1"><M n="add" c="text-sm" />Add shift / absence</button>
+        <Card padded={false}>
+          <div className="px-4 py-3 border-b border-slate-100 flex flex-wrap items-center gap-x-3 gap-y-2">
+            <div className="min-w-0 flex-1"><h2 className="inline text-xs font-semibold text-ink-primary">Planned shifts</h2><span className="text-2xs text-ink-tertiary ml-2">what actual hours are measured against</span></div>
+            <Button size="sm" onClick={() => setAddSched(true)} icon={<M n="add" c="text-sm" />}>Add shift or absence</Button>
           </div>
           {cmp && (
-            <div className="grid grid-cols-3 divide-x divide-slate-100 border-b border-slate-100 text-center">
-              <div className="py-3"><div className="text-[11px] font-bold text-ink-tertiary">Planned</div><div className="text-base font-bold text-ink-primary tabular-nums">{cmp.planned_hours}h</div></div>
-              <div className="py-3"><div className="text-[11px] font-bold text-ink-tertiary">Actual</div><div className="text-base font-bold text-ink-primary tabular-nums">{cmp.actual_hours}h</div></div>
-              <div className="py-3"><div className="text-[11px] font-bold text-ink-tertiary">Variance</div><div className={`text-base font-bold tabular-nums ${cmp.variance_hours < 0 ? "text-rose-600" : cmp.variance_hours > 0 ? "text-amber-600" : "text-emerald-600"}`}>{cmp.variance_hours > 0 ? "+" : ""}{cmp.variance_hours}h</div></div>
+            <div className="grid grid-cols-3 gap-4 px-4 py-3 border-b border-slate-100">
+              <StatTile label="Planned" value={`${cmp.planned_hours}h`} />
+              <StatTile label="Actual" value={`${cmp.actual_hours}h`} />
+              <StatTile label="Variance" tone={cmp.variance_hours < 0 ? "bad" : cmp.variance_hours === 0 ? "good" : "neutral"} value={`${cmp.variance_hours > 0 ? "+" : ""}${cmp.variance_hours}h`} />
             </div>
           )}
           <div className="divide-y divide-slate-100 text-xs">
-            {sched == null && <div className="p-5 text-ink-tertiary">Loading planned shifts…</div>}
-            {sched?.length === 0 && <div className="p-6 text-center text-ink-tertiary">No planned shifts in this range. Add one to compare against actual hours.</div>}
+            {sched == null && <div aria-hidden className="p-4 space-y-2.5"><span className="sk block h-4 w-1/3 rounded" /><span className="sk block h-4 w-1/2 rounded" /></div>}
+            {sched?.length === 0 && <EmptyState icon={<M n="calendar_month" c="text-lg" />} title="No planned shifts in this range" body="Add one to compare against actual hours." />}
             {sched?.map((w) => (
               <div key={w.id} className="px-4 py-2.5 flex items-center justify-between">
                 <div className="flex items-center gap-3">
                   <span className="tabular-nums text-ink-secondary w-28">{new Date(w.day).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}</span>
                   {w.kind === "shift"
-                    ? <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-blue-50 text-primary border border-blue-200/60 tabular-nums">{w.start}–{w.end} · {w.planned_hours}h</span>
-                    : <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200/60 capitalize">{w.kind.replace(/_/g, " ")}</span>}
+                    ? <Badge tone="info" className="tabular-nums">{w.start}–{w.end} · {w.planned_hours}h</Badge>
+                    : <Badge tone="warning" className="capitalize">{w.kind.replace(/_/g, " ")}</Badge>}
                   {w.note && <span className="text-ink-tertiary">{w.note}</span>}
                 </div>
-                <button aria-label="Remove" onClick={() => delSched(w.id)} title="Remove" className="text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>
+                <IconButton label="Remove" size="sm" onClick={() => delSched(w.id)} icon={<M n="close" c="text-sm" />} />
               </div>
             ))}
           </div>
-        </div>
-      </div>
-      )}
+        </Card>
+      </>)}
+      </PageLayout>
       {add && <ManualEntryDrawer employees={emps} defaultEmp={empId} onClose={() => setAdd(false)} onDone={() => { setAdd(false); load(); }} />}
       {addSched && <ScheduleDrawer employees={emps} defaultEmp={empId} onClose={() => setAddSched(false)} onDone={() => { setAddSched(false); loadSched(); }} />}
-      {toast && <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-clay-drawer z-[70]">{toast}</div>}
+      {toast && <div role="status" className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-clay-drawer z-[70]">{toast}</div>}
     </Shell>
   );
 }
@@ -172,27 +192,19 @@ function ManualEntryDrawer({ employees, defaultEmp, onClose, onDone }: { employe
     try { await api.post("/timeclock/entries", { employee_id: f.employee_id, category: f.category, started_at: new Date(f.started_at).toISOString(), duration_min: Number(f.duration_min) || 0, billable: f.billable, note: f.note || null }); onDone(); }
     catch (e: any) { setErr(e.message || "Could not add"); setBusy(false); }
   }
-  const fld = "glass-input rounded-lg px-3 py-2 text-sm w-full";
-  const lbl = "block text-[11px] font-bold text-ink-tertiary  mb-1";
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
-      <div className="relative w-[460px] max-w-full bg-white h-full shadow-drawer flex flex-col">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200"><h2 className="font-bold text-ink-primary">Add time entry</h2><button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
-        <div className="flex-1 overflow-y-auto p-5 space-y-4">
-          {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
-          <div><label className={lbl}>Employee</label><select value={f.employee_id} onChange={(e) => set("employee_id", e.target.value)} className={fld}>{employees.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select></div>
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className={lbl}>Category</label><select value={f.category} onChange={(e) => set("category", e.target.value)} className={fld}><option value="job">Job</option><option value="admin">Admin</option><option value="break">Break</option></select></div>
-            <div><label className={lbl}>Duration (min)</label><input type="number" min={0} value={f.duration_min} onChange={(e) => set("duration_min", Number(e.target.value))} className={fld} /></div>
-          </div>
-          <div><label className={lbl}>Started at</label><DateField mode="datetime" value={f.started_at} onChange={(v) => set("started_at", v)} /></div>
-          <label className="flex items-center gap-2 text-xs font-medium text-ink-secondary"><input type="checkbox" checked={f.billable} onChange={(e) => set("billable", e.target.checked)} className="accent-primary" />Billable</label>
-          <div><label className={lbl}>Note</label><textarea value={f.note} onChange={(e) => set("note", e.target.value)} rows={2} className={fld} /></div>
-        </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2"><button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Cancel</button><button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Saving…" : "Add entry"}</button></div>
+    <Drawer size="sm" label="Add time entry" title="Add time entry" onClose={onClose}
+      footer={<><Button variant="primary" onClick={save} busy={busy}>{busy ? "Saving…" : "Add entry"}</Button><Button onClick={onClose}>Cancel</Button></>}>
+      {err && <div role="alert" className="rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
+      <Field label="Employee" htmlFor="te-emp"><Select id="te-emp" value={f.employee_id} onChange={(e) => set("employee_id", e.target.value)}>{employees.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</Select></Field>
+      <div className="grid grid-cols-2 gap-3">
+        <Field label="Category" htmlFor="te-cat"><Select id="te-cat" value={f.category} onChange={(e) => set("category", e.target.value)}><option value="job">Job</option><option value="admin">Admin</option><option value="break">Break</option></Select></Field>
+        <Field label="Duration (min)" htmlFor="te-dur"><Input id="te-dur" type="number" min={0} value={f.duration_min} onChange={(e) => set("duration_min", Number(e.target.value))} className="tabular-nums" /></Field>
       </div>
-    </div>
+      <div><span className={labelClass}>Started at</span><DateField mode="datetime" value={f.started_at} onChange={(v) => set("started_at", v)} label="Started at" /></div>
+      <label className="flex items-center gap-2 text-xs font-medium text-ink-secondary"><input type="checkbox" checked={f.billable} onChange={(e) => set("billable", e.target.checked)} className="w-4 h-4 accent-primary" />Billable</label>
+      <Field label="Note" htmlFor="te-note"><textarea id="te-note" value={f.note} onChange={(e) => set("note", e.target.value)} rows={2} className="glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary" /></Field>
+    </Drawer>
   );
 }
 
@@ -211,30 +223,22 @@ function ScheduleDrawer({ employees, defaultEmp, onClose, onDone }: { employees:
       onDone();
     } catch (e: any) { setErr(e.message || "Could not save (managers only)"); setBusy(false); }
   }
-  const fld = "glass-input rounded-lg px-3 py-2 text-sm w-full";
-  const lbl = "block text-[11px] font-bold text-ink-tertiary  mb-1";
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
-      <div className="relative w-[460px] max-w-full bg-white h-full shadow-drawer flex flex-col">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200"><h2 className="font-bold text-ink-primary">Add planned shift</h2><button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
-        <div className="flex-1 overflow-y-auto p-5 space-y-4">
-          {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
-          <div><label className={lbl}>Employee</label><select value={f.employee_id} onChange={(e) => set("employee_id", e.target.value)} className={fld}>{employees.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select></div>
-          <div className="grid grid-cols-2 gap-3">
-            <div><label className={lbl}>Day</label><DateField mode="date" value={f.day} onChange={(v) => set("day", v)} /></div>
-            <div><label className={lbl}>Type</label><select value={f.kind} onChange={(e) => set("kind", e.target.value)} className={fld}><option value="shift">Shift</option><option value="day_off">Day off</option><option value="vacation">Vacation</option><option value="sick">Sick</option></select></div>
-          </div>
-          {isShift && (
-            <div className="grid grid-cols-2 gap-3">
-              <div><label className={lbl}>Start</label><DateField mode="time" value={f.start} onChange={(v) => set("start", v)} label="Start" /></div>
-              <div><label className={lbl}>End</label><DateField mode="time" value={f.end} onChange={(v) => set("end", v)} label="End" /></div>
-            </div>
-          )}
-          <div><label className={lbl}>Note</label><input value={f.note} onChange={(e) => set("note", e.target.value)} placeholder="Optional" className={fld} /></div>
-        </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2"><button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Cancel</button><button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Saving…" : "Add to schedule"}</button></div>
+    <Drawer size="sm" label="Add planned shift" title="Add planned shift" onClose={onClose}
+      footer={<><Button variant="primary" onClick={save} busy={busy}>{busy ? "Saving…" : "Add to schedule"}</Button><Button onClick={onClose}>Cancel</Button></>}>
+      {err && <div role="alert" className="rounded-xl bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
+      <Field label="Employee" htmlFor="ws-emp"><Select id="ws-emp" value={f.employee_id} onChange={(e) => set("employee_id", e.target.value)}>{employees.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</Select></Field>
+      <div className="grid grid-cols-2 gap-3">
+        <div><span className={labelClass}>Day</span><DateField mode="date" value={f.day} onChange={(v) => set("day", v)} label="Day" /></div>
+        <Field label="Type" htmlFor="ws-kind"><Select id="ws-kind" value={f.kind} onChange={(e) => set("kind", e.target.value)}><option value="shift">Shift</option><option value="day_off">Day off</option><option value="vacation">Vacation</option><option value="sick">Sick</option></Select></Field>
       </div>
-    </div>
+      {isShift && (
+        <div className="grid grid-cols-2 gap-3">
+          <div><span className={labelClass}>Start</span><DateField mode="time" value={f.start} onChange={(v) => set("start", v)} label="Start" /></div>
+          <div><span className={labelClass}>End</span><DateField mode="time" value={f.end} onChange={(v) => set("end", v)} label="End" /></div>
+        </div>
+      )}
+      <Field label="Note" htmlFor="ws-note"><Input id="ws-note" value={f.note} onChange={(e) => set("note", e.target.value)} placeholder="Optional" /></Field>
+    </Drawer>
   );
 }

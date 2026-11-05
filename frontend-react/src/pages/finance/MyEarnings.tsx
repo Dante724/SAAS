@@ -5,6 +5,10 @@ import { api } from "../../api/client";
 import { money } from "../orders/types";
 import { isoDate } from "../../lib/localDate";
 import EarningsBreakdown, { type BreakdownRule } from "./EarningsBreakdown";
+import PageLayout, { Toolbar } from "../../components/PageLayout";
+import Tabs from "../../components/Tabs";
+import Card, { Badge, type BadgeTone } from "../../components/Card";
+import EmptyState, { ErrorState } from "../../components/EmptyState";
 
 /* My earnings — what the signed-in person earned in a period, and where every amount came
    from. Reached from the account menu and from Finance. Only ever their own figures
@@ -29,11 +33,11 @@ function monthRange(offset: number): [string, string] {
   return [isoDate(first), isoDate(last)];
 }
 
-const STATUS: Record<Earnings["accrual_status"], { label: string; hint: string; cls: string }> = {
-  not_accrued: { label: "Not accrued yet", hint: "These are live figures. They're final once your manager accrues the period.", cls: "bg-slate-100 text-ink-secondary" },
-  draft: { label: "Draft", hint: "Your manager has drafted this period but not accrued it yet.", cls: "bg-amber-50 text-amber-800" },
-  accrued: { label: "Accrued", hint: "This period is accrued and waiting to be paid.", cls: "bg-blue-50 text-primary" },
-  paid: { label: "Paid", hint: "This period has been paid out.", cls: "bg-emerald-50 text-emerald-700" },
+const STATUS: Record<Earnings["accrual_status"], { label: string; hint: string; tone: BadgeTone }> = {
+  not_accrued: { label: "Not accrued yet", hint: "These are live figures. They're final once your manager accrues the period.", tone: "neutral" },
+  draft: { label: "Draft", hint: "Your manager has drafted this period but not accrued it yet.", tone: "warning" },
+  accrued: { label: "Accrued", hint: "This period is accrued and waiting to be paid.", tone: "info" },
+  paid: { label: "Paid", hint: "This period has been paid out.", tone: "success" },
 };
 
 const longDate = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
@@ -89,10 +93,10 @@ export function EarningsView({ data }: { data: Earnings }) {
         <div className="px-5 pt-5 pb-4 flex flex-wrap items-start gap-x-6 gap-y-3">
           <div className="min-w-0">
             <p className="text-xs font-medium text-ink-tertiary">Earned {rangeText(data.period_start, data.period_end)}</p>
-            <p className="mt-1 text-[32px] leading-none font-semibold tracking-tight tabular-nums text-ink-primary" data-testid="earnings-total">{signed(data.total)}</p>
+            <p className="mt-1 text-display font-bold tracking-tight tabular-nums text-ink-primary" data-testid="earnings-total">{signed(data.total)}</p>
           </div>
           <div className="sm:ml-auto sm:text-right max-w-xs">
-            <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold ${st.cls}`}>{st.label}</span>
+            <Badge tone={st.tone}>{st.label}</Badge>
             <p className="text-xs text-ink-tertiary mt-1.5">{st.hint}</p>
           </div>
         </div>
@@ -121,7 +125,7 @@ export function EarningsView({ data }: { data: Earnings }) {
           <h3 className="text-sm font-semibold text-ink-primary">Bonuses and penalties</h3>
           {adjustments.length > 0 && <span className="ml-auto text-sm font-semibold tabular-nums text-ink-primary">{net > 0 ? "+" : ""}{signed(net)}</span>}
         </div>
-        {adjustments.length === 0 ? <div className="px-4 py-6 text-xs text-ink-tertiary text-center">None in this period.</div> : (
+        {adjustments.length === 0 ? <EmptyState size="inline" className="px-4" title="None in this period." /> : (
           <ul className="divide-y divide-slate-100">
             {adjustments.map((a) => (
               <li key={a.id} className="px-4 py-3 flex items-center gap-3 text-sm">
@@ -136,7 +140,7 @@ export function EarningsView({ data }: { data: Earnings }) {
 
       <section aria-label="Pay runs" className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
         <div className="px-4 py-3.5 border-b border-slate-100"><h3 className="text-sm font-semibold text-ink-primary">Pay runs</h3></div>
-        {data.accruals.length === 0 ? <div className="px-4 py-6 text-xs text-ink-tertiary text-center">Nothing accrued for this period yet.</div> : (
+        {data.accruals.length === 0 ? <EmptyState size="inline" className="px-4" title="Nothing accrued for this period yet." /> : (
           <ul className="divide-y divide-slate-100">
             {data.accruals.map((r) => {
               const at = runStage(r.status);
@@ -188,39 +192,30 @@ export default function MyEarnings() {
 
   return (
     <Shell title="My earnings">
-      <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-4 max-w-4xl w-full mx-auto">
-        <div className="flex flex-wrap items-center gap-2">
-          <div className="inline-flex rounded-xl bg-slate-100 p-1" role="group" aria-label="Period">
-            {([["this", "This month"], ["last", "Last month"], ["custom", "Custom"]] as [Preset, string][]).map(([v, l]) => (
-              <button key={v} type="button" onClick={() => pick(v)} aria-pressed={preset === v}
-                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${preset === v ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>{l}</button>
-            ))}
-          </div>
-          {preset === "custom" && (
-            <div className="flex items-center gap-1.5">
-              <DateField mode="date" value={from} onChange={(v) => setRange([v, to])} placeholder="From" className="w-36" />
-              <span className="text-ink-tertiary text-xs" aria-hidden>–</span>
-              <DateField mode="date" value={to} onChange={(v) => setRange([from, v])} placeholder="To" className="w-36" />
-            </div>
-          )}
-        </div>
-        {badRange && <div className="text-xs text-rose-600">The start date is after the end date.</div>}
+      {/* A reading-width column, left-aligned like every other page. The custom dates are always
+          there (greyed unless Custom is picked), so choosing Custom never pushes the page down. */}
+      <PageLayout narrow>
+        <Toolbar
+          view={<Tabs look="segmented" label="Period" value={preset} onChange={pick}
+            tabs={[{ id: "this", label: "This month" }, { id: "last", label: "Last month" }, { id: "custom", label: "Custom" }]} />}
+          filters={<div className="flex items-center gap-1.5">
+            <DateField mode="date" value={from} onChange={(v) => setRange([v, to])} placeholder="From" label="From" className="w-36" disabled={preset !== "custom"} />
+            <span className="text-ink-tertiary text-xs" aria-hidden>–</span>
+            <DateField mode="date" value={to} onChange={(v) => setRange([from, v])} placeholder="To" label="To" className="w-36" disabled={preset !== "custom"} />
+          </div>}
+        />
+        {badRange && <div role="alert" className="text-xs text-rose-600">The start date is after the end date.</div>}
 
         {loading && !data && (
           <div className="space-y-4" aria-busy="true" aria-label="Loading your earnings">
-            <div className="h-40 rounded-2xl bg-slate-100 animate-pulse" />
-            <div className="h-56 rounded-2xl bg-slate-100 animate-pulse" />
-            <div className="h-24 rounded-2xl bg-slate-100 animate-pulse" />
+            <div className="sk h-40 rounded-2xl" />
+            <div className="sk h-56 rounded-2xl" />
+            <div className="sk h-24 rounded-2xl" />
           </div>
         )}
-        {err && !loading && (
-          <div role="alert" className="rounded-2xl border border-rose-200 bg-rose-50 p-6 text-center">
-            <p className="text-sm text-rose-700">{err}</p>
-            <button onClick={() => load(from, to)} className="mt-3 px-3.5 py-1.5 rounded-lg bg-white border border-rose-200 text-xs font-semibold text-rose-700 hover:bg-rose-100">Try again</button>
-          </div>
-        )}
+        {err && !loading && <Card padded={false}><ErrorState title="Your earnings didn't load" body={err} onRetry={() => load(from, to)} /></Card>}
         {data && <div className={loading ? "opacity-60 transition-opacity" : ""}><EarningsView data={data} /></div>}
-      </div>
+      </PageLayout>
     </Shell>
   );
 }

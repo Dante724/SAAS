@@ -14,6 +14,11 @@ import { useServerPage } from "../../hooks/useServerPage";
 import { inputCls } from "../invoices/billing";
 import { clickable, clickableRow } from "../../lib/clickable";
 import ImportDrawer from "../../components/ImportDrawer";
+import PageLayout from "../../components/PageLayout";
+import Button from "../../components/Button";
+import Card, { Badge } from "../../components/Card";
+import EmptyState, { TableEmpty } from "../../components/EmptyState";
+import { tableClass, theadRowClass, Th, Td } from "../../components/Table";
 
 const CO_PAGE = 50;
 
@@ -106,11 +111,9 @@ export default function CompanyHub() {
 
   return (
     <Shell title="Home">
-      <div className="flex-1 overflow-y-auto">
-        <div className="p-6">
-          <Dashboard />
-        </div>
-      </div>
+      <PageLayout>
+        <Dashboard />
+      </PageLayout>
     </Shell>
   );
 }
@@ -171,10 +174,8 @@ function Dashboard() {
   ];
   return (
     <div className="space-y-6">
-      <div>
-        <h2 className="text-xl font-semibold text-ink-primary">Today</h2>
-        <p className="text-sm text-ink-tertiary">{new Date().toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}</p>
-      </div>
+      {/* The page title ("Home") is in the top bar; this line only says which day it is. */}
+      <p className="text-sm text-ink-tertiary">{new Date().toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}</p>
 
       <MorningBriefCard onOpen={(to) => navigate(to)} />
       <WatchdogPanel />
@@ -205,32 +206,31 @@ function Dashboard() {
               className="w-full flex items-center gap-2 py-0.5 text-left focus:outline-none">
               <M n={expanded ? "expand_more" : "chevron_right"} c="text-ink-tertiary text-base" />
               <h3 className="text-sm font-semibold text-ink-primary">Needs you</h3>
-              {n > 0 && <span className="text-[11px] font-bold bg-rose-100 text-rose-600 rounded-full px-1.5 py-0.5 leading-none">{n}</span>}
-              {feed.ok && <span className="text-[11px] font-semibold text-emerald-600 flex items-center gap-1"><M n="check_circle" c="text-xs" />All caught up</span>}
+              {n > 0 && <Badge tone="danger" className="tabular-nums">{n}</Badge>}
+              {feed.ok && <Badge tone="success"><M n="check_circle" c="text-xs" />All caught up</Badge>}
             </button>
             {expanded && (
               feed.ok ? (
-                <div className="flex items-center gap-2 text-sm text-ink-tertiary py-2 mt-1"><M n="check_circle" c="text-base text-emerald-500" />Nothing needs attention right now.</div>
+                <EmptyState size="inline" className="mt-1" title="Nothing needs attention right now." />
               ) : (
                 <div className="space-y-1.5 mt-2.5">
                   {shown.map((it) => {
                     const a = FEED_ACTIONS[it.key] || { label: "Review", icon: "chevron_right" };
+                    // One look for every row: the colour lives in the icon tile only; the action is the
+                    // standard small secondary button whatever the signal is.
                     return (
                       <div key={it.key}
-                        className="w-full flex items-center gap-3 rounded-xl border border-slate-200/70 hover:border-primary/50 hover:bg-blue-50/30 px-3 py-2 transition-all">
+                        className="w-full flex items-center gap-3 rounded-xl border border-slate-200/70 hover:border-primary/50 hover:bg-blue-50/30 px-3 py-2 transition-colors">
                         <span className={`w-7 h-7 rounded-lg border flex items-center justify-center shrink-0 ${feedTone[it.kind] || feedTone.info}`}><M n={it.icon} c="text-sm" /></span>
                         <button onClick={() => navigate(it.to)} className="flex-1 py-1 text-sm font-medium text-ink-primary text-left focus:outline-none">{it.title}</button>
-                        <button onClick={() => navigate(it.to)}
-                          className={`shrink-0 inline-flex items-center gap-1 text-xs font-semibold rounded-full border px-2.5 py-1 ${feedTone[it.kind] || feedTone.info} hover:brightness-95 focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40`}>
-                          <M n={a.icon} c="text-sm" />{a.label}
-                        </button>
+                        <Button size="sm" onClick={() => navigate(it.to)} icon={<M n={a.icon} c="text-sm" />}>{a.label}</Button>
                       </div>
                     );
                   })}
                   {n > FEED_CAP && (
-                    <button onClick={() => setFeedShowAll((v) => !v)} className="text-[11px] font-semibold text-primary hover:underline px-1 pt-1">
+                    <Button variant="link" className="px-1 pt-1" onClick={() => setFeedShowAll((v) => !v)}>
                       {feedShowAll ? "Show less" : `Show ${n - FEED_CAP} more`}
-                    </button>
+                    </Button>
                   )}
                 </div>
               )
@@ -239,11 +239,11 @@ function Dashboard() {
         );
       })()}
 
-      {err && <div className="rounded-xl border border-amber-200 bg-amber-50 text-amber-700 text-sm px-4 py-3">Couldn't load dashboard metrics right now.</div>}
+      {err && <div role="alert" className="rounded-xl border border-amber-200 bg-amber-50 text-amber-700 text-sm px-4 py-3">Couldn't load dashboard metrics right now.</div>}
       <PageSummary stats={stats} />
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-sm p-5">
-          <h3 className="text-sm font-bold text-ink-primary mb-3">This month</h3>
+          <h3 className="text-sm font-semibold text-ink-primary mb-3">This month</h3>
           <div className="grid grid-cols-2 gap-4 text-sm">
             <Metric l="Jobs in" v={String(m.work_orders_created ?? 0)} loading={loading} />
             <Metric l="Jobs finished" v={String(m.work_orders_won ?? 0)} loading={loading} />
@@ -254,11 +254,11 @@ function Dashboard() {
           </div>
         </div>
         <div className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-sm p-5">
-          <h3 className="text-sm font-bold text-ink-primary mb-3">Open jobs by stage</h3>
+          <h3 className="text-sm font-semibold text-ink-primary mb-3">Open jobs by stage</h3>
           {loading ? (
             <div className="space-y-2" aria-hidden>{[0, 1, 2].map((i) => <div key={i} className="h-5 flex items-center"><span className="sk h-3.5 w-40" /></div>)}</div>
           ) : (d?.status_mix ?? []).length === 0 ? (
-            <p className="text-sm text-ink-tertiary">No open orders.</p>
+            <EmptyState size="inline" title="No open orders." />
           ) : (
             <div className="space-y-2">
               {(d?.status_mix ?? []).map((s) => (
@@ -290,51 +290,49 @@ export function EmployeeHours() {
   const onClock = (roster ?? []).filter((r) => r.on_shift);
   const entTotal = ep.total;
   const pageEntries = entries || [];
+  // No heading here: the Timesheets tab above already says "Employee hours", and the other tab
+  // starts straight with its content too.
   return (
-    <div className="space-y-6">
-      <div>
-        <h2 className="text-xl font-bold text-ink-primary">Employee hours</h2>
-        <p className="text-sm text-ink-tertiary">Who's on the clock and recent labour time entries.</p>
-      </div>
-      <div className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-sm p-5">
-        <h3 className="text-sm font-bold text-ink-primary mb-3">On the clock now</h3>
-        {!roster ? <p className="text-sm text-ink-tertiary">Loading…</p> :
-          onClock.length === 0 ? <p className="text-sm text-ink-tertiary">Nobody is currently clocked in.</p> :
+    <div className="space-y-4">
+      <Card>
+        <h2 className="text-sm font-semibold text-ink-primary mb-3">On the clock now</h2>
+        {!roster ? <div aria-hidden className="flex gap-3"><span className="sk block h-9 w-40 rounded-xl" /><span className="sk block h-9 w-40 rounded-xl" /></div> :
+          onClock.length === 0 ? <EmptyState size="inline" className="!py-0" title="Nobody is currently clocked in." /> :
           <div className="flex flex-wrap gap-3">
             {onClock.map((r, i) => (
               <div key={i} className="flex items-center gap-2 px-3 py-2 rounded-xl bg-emerald-50 border border-emerald-200">
-                <span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />
+                <span className="w-2 h-2 rounded-full bg-emerald-500" />
                 <span className="text-sm font-semibold text-ink-primary">{r.employee_name}</span>
                 <span className="text-xs tabular-nums text-emerald-700">{hm((r.elapsed_sec ?? 0) / 60)}</span>
               </div>
             ))}
           </div>}
-      </div>
-      <div className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-card overflow-hidden">
-        <table className="w-full text-left border-collapse">
-          <thead className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary "><tr>
-            <th className="py-3 px-5">Employee</th><th className="py-3 px-3">Work order</th><th className="py-3 px-3">Type</th>
-            <th className="py-3 px-3">Started</th><th className="py-3 px-3 text-right">Duration</th><th className="py-3 px-3">Status</th>
+      </Card>
+      <Card padded={false}>
+        <div className="overflow-x-auto">
+        <table className={tableClass}>
+          <thead><tr className={theadRowClass}>
+            <Th className="!px-5">Employee</Th><Th className="!px-3">Work order</Th><Th className="!px-3">Type</Th>
+            <Th className="!px-3">Started</Th><Th num className="!px-3">Duration</Th><Th className="!px-3">Status</Th>
           </tr></thead>
           <tbody className="divide-y divide-slate-100 text-xs">
             {!entries && <SkeletonRows cols={6} />}
-            {entries?.length === 0 && <tr><td colSpan={6} className="py-6 px-5 text-ink-tertiary">No time entries yet.</td></tr>}
+            {entries?.length === 0 && <TableEmpty cols={6} icon={<M n="schedule" c="text-lg" />} title="No time entries yet" body="Clock-ins and added entries show up here." />}
             {pageEntries.map((e) => (
               <tr key={e.id} className="hover:bg-blue-50/30">
-                <td className="py-3 px-5 font-bold text-ink-primary">{e.employee_name || "—"}</td>
-                <td className="py-3 px-3 text-primary font-mono">{e.order_number || "—"}</td>
-                <td className="py-3 px-3 text-ink-secondary capitalize">{e.category || "—"}</td>
-                <td className="py-3 px-3 text-ink-secondary">{e.started_at ? new Date(e.started_at).toLocaleString() : "—"}</td>
-                <td className="py-3 px-3 text-right tabular-nums font-bold text-ink-primary">{hm(e.duration_min)}</td>
-                <td className="py-3 px-3">{e.running
-                  ? <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-700">Running</span>
-                  : <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-ink-secondary">Done</span>}</td>
+                <Td className="!px-5 font-semibold text-ink-primary">{e.employee_name || "—"}</Td>
+                <Td className="!px-3 text-primary font-mono">{e.order_number || "—"}</Td>
+                <Td className="!px-3 text-ink-secondary capitalize">{e.category || "—"}</Td>
+                <Td className="!px-3 text-ink-secondary">{e.started_at ? new Date(e.started_at).toLocaleString() : "—"}</Td>
+                <Td num className="!px-3 font-semibold text-ink-primary">{hm(e.duration_min)}</Td>
+                <Td className="!px-3">{e.running ? <Badge tone="success">Running</Badge> : <Badge>Done</Badge>}</Td>
               </tr>
             ))}
           </tbody>
         </table>
+        </div>
         {entries && entTotal > 0 && <Pager total={entTotal} page={ep.page} pageSize={CO_PAGE} onPage={ep.setPage} noun="time entries" />}
-      </div>
+      </Card>
     </div>
   );
 }
