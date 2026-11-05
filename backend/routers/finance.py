@@ -852,6 +852,12 @@ async def _expected_cash(db, shift: CashShift) -> dict:
     manual_cash = (await db.execute(select(func.coalesce(func.sum(Transaction.amount), 0.0)).where(
         Transaction.shift_id == shift.id, Transaction.status == "active",
         Transaction.txn_type.in_(("income", "expense"))))).scalar() or 0.0
+    # M9: a POS return's cash leg is a "refund" Transaction on the till (sales have no Payment
+    # row), linked to the shift at post time; job refunds carry the shift on their Payment above.
+    pos_refunds = (await db.execute(select(func.coalesce(func.sum(Transaction.amount), 0.0)).where(
+        Transaction.shift_id == shift.id, Transaction.status == "active",
+        Transaction.txn_type == "refund"))).scalar() or 0.0
+    cash_refunds = abs(dec(cash_refunds)) + abs(dec(pos_refunds))
     # Decimal throughout: opening_float and the drawer movements read back as Decimal (audit R4).
     expected = d2(dec(shift.opening_float) + dec(cash_in) - abs(dec(cash_refunds))
                   + dec(pay_in) - dec(pay_out) + dec(manual_cash))
