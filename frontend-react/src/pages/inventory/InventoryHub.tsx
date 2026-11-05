@@ -429,17 +429,32 @@ export default function InventoryHub() {
               {primaryTabs.map(tabBtn)}
               {overflowTabs.length > 0 && (
                 <div className="relative">
-                  <button onClick={() => setNavMore((o) => !o)} className={`pb-3 whitespace-nowrap flex items-center gap-1 border-b-2 transition-colors ${inOverflow ? "text-primary font-semibold border-primary" : "text-ink-secondary hover:text-ink-primary border-transparent"}`}>
-                    {inOverflow ? tabLabel(overflowTabs.find((t) => t.id === tab)!) : "More"}<M n="expand_more" c="text-sm" />
+                  <button onClick={() => setNavMore((o) => !o)} aria-haspopup="menu" aria-expanded={navMore} className={`pb-3 whitespace-nowrap flex items-center gap-1 border-b-2 transition-colors ${inOverflow ? "text-primary font-semibold border-primary" : `${navMore ? "text-ink-primary" : "text-ink-secondary"} hover:text-ink-primary border-transparent`}`}>
+                    {inOverflow ? tabLabel(overflowTabs.find((t) => t.id === tab)!) : "More"}
+                    <M n="expand_more" c={`text-sm transition-transform duration-200 ${navMore ? "rotate-180" : ""}`} />
                   </button>
                   {navMore && (<>
                     <div className="fixed inset-0 z-30" aria-hidden="true" onClick={() => setNavMore(false)} />
-                    <div className="absolute left-0 mt-1 w-52 bg-white rounded-xl border border-slate-200 shadow-drawer z-40 py-1.5 text-xs">
-                      {overflowTabs.map((t) => (
-                        <button key={t.id} onClick={() => { setTab(t.id); setNavMore(false); }} className={`w-full flex items-center gap-2 px-3 py-2 text-left hover:bg-slate-50 ${tab === t.id ? "text-primary font-semibold" : "text-ink-secondary"}`}>
-                          {tabLabel(t)}
-                        </button>
-                      ))}
+                    {/* A rich menu (icon, name, one line on what it holds) that opens under More; the tabs never move. */}
+                    <div role="menu" className="absolute left-0 top-full mt-1 w-[24rem] max-w-[calc(100vw-2rem)] bg-white rounded-2xl border border-slate-200/90 shadow-drawer ring-1 ring-black/[0.02] z-40 p-1.5">
+                      <p className="px-3 pt-2 pb-1.5 text-2xs font-semibold uppercase tracking-wider text-ink-tertiary">Stock records</p>
+                      {overflowTabs.map((t) => {
+                        const meta = AUDIT[t.id];
+                        const on = tab === t.id;
+                        return (
+                          <button key={t.id} role="menuitem" onClick={() => { setTab(t.id); setNavMore(false); }}
+                            className={`group w-full flex items-start gap-3 px-3 py-2 rounded-xl text-left transition-colors ${on ? "bg-primary/[0.06]" : "hover:bg-slate-50"}`}>
+                            <span className={`mt-0.5 w-8 h-8 shrink-0 rounded-lg grid place-items-center border transition-colors ${on ? "bg-white border-primary/20 text-primary" : "bg-slate-50 border-slate-200/80 text-ink-tertiary group-hover:text-ink-secondary group-hover:bg-white"}`}>
+                              <M n={meta?.icon || "inventory_2"} c="text-base" />
+                            </span>
+                            <span className="min-w-0 flex-1">
+                              <span className={`block text-xs font-semibold ${on ? "text-primary" : "text-ink-primary"}`}>{tabLabel(t)}</span>
+                              {meta?.sub && <span className="block text-2xs font-normal leading-snug text-ink-tertiary mt-0.5">{meta.sub}</span>}
+                            </span>
+                            <M n="check" c={`text-sm mt-1 text-primary ${on ? "" : "invisible"}`} />
+                          </button>
+                        );
+                      })}
                     </div>
                   </>)}
                 </div>
