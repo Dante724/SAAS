@@ -4,9 +4,10 @@ Updated: 2026-11-05 ~17:30 UTC (cloud session). Base branch: `roadmap/orderry-pa
 This branch only carries this file. It is a report, not something to merge.
 
 ## Blocker
-**#122 (Phase 3 brand) is not merged yet** (checked 2026-11-05 ~17:30 UTC). A is ready on `fix/design-polish-a`.
+**#122 (Phase 3 brand) is not merged yet** (checked 2026-11-05 ~18:40 UTC). A is ready on `fix/design-polish-a`.
 Its PR opens after #122 merges and A is rebased onto the beta branch. B is prepared on `fix/design-polish-b`
-(on top of A for now); its PR opens after A merges, rebased onto the beta branch. No PRs are stacked.
+(on top of A for now) and C on `fix/design-polish-c` (on top of B). Each PR opens after the one before it
+merges, rebased onto the beta branch. No PRs are stacked.
 
 ## How it's measured
 `scripts/design-capture/capture.js` (added in A, with a README) checks every staff screen and tab, plus a
@@ -21,7 +22,7 @@ The numbers below replace them.
 |---|---|---|---|---|---|---|---|---|---|
 | A | `fix/design-polish-a` | ready; waiting on #122 | 38 → **0** | 5 → **0** | 49 → 52 (see note) | 0 → 0 | 34/34 | 756/756 | not run (no PR) |
 | B | `fix/design-polish-b` | ready; waiting on A | 0 → 0 | 0 → 0 | 49 → **42** | 0 → 0 | 34/34 | 757/757 | not run (no PR) |
-| C | — | not started | | | | | | | |
+| C | `fix/design-polish-c` | ready; waiting on B | 0 → 0 | 0 → 0 | 42 → 42 | 0 → 0 | 34/34 | 760/760 | not run (no PR) |
 | D | — | not started | | | | | | | |
 
 A's +3 buttons come from demo data: those job lines only rendered in the after run's database. B fixes them.
@@ -51,3 +52,18 @@ A's +3 buttons come from demo data: those job lines only rendered in the after r
   stays at the same position on both tabs.
 - Type: settings section and summary titles are 14px, below the 16px page title. Section labels lose
   CSS capitals, and report group names show in sentence case through a new tested `sentenceCase` helper.
+
+## Notes on C
+- Shell is now a layout route (`AppFrame`), so the sidebar, header and badges stay mounted while pages
+  change. Pages still name themselves with `<Shell title>`, and a Shell rendered on its own (as in
+  the existing tests) still draws the full frame. No page files changed.
+- Measured by clicking through all 17 sidebar links (desktop):
+  - sidebar remounted: B 16 of 17 → C **0 of 17**;
+  - header titles correct on every page; no page errors;
+  - badge API calls: 16 + 16 → 17 + 17. That's the same per navigation; the extra call is the first
+    page load, which this run counted.
+- Navigation does what a remount used to do: open menus and panels close, and badges refresh once
+  (the old number stays until the new one arrives, which is the end of the flicker).
+- One `PageSkeleton` replaces the blank "Loading…" screen for a page or settings section that is
+  still downloading.
+- Tests: 3 new tests in `AppFrame.test.tsx` (vitest 760/760); tsc, lints and build pass.
