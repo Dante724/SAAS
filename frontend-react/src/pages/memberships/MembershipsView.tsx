@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
@@ -124,7 +125,7 @@ export function MembershipDrawer({ id, onClose, onChanged }: { id: string; onClo
     }, "Payment link copied");
   }
 
-  const btn = "h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 disabled:opacity-50";
+  const btn = buttonClass("secondary", "md");
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 55 }}>
       <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
@@ -172,7 +173,7 @@ export function MembershipDrawer({ id, onClose, onChanged }: { id: string; onClo
         </div>
         {m && ["scheduled", "active", "paused"].includes(m.status) && (
           <footer className="border-t border-slate-200/90 p-4 bg-white flex flex-wrap gap-2">
-            {m.unpaid && can("can_create_payment_links") && <button disabled={busy} onClick={link} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm">Copy payment link</button>}
+            {m.unpaid && can("can_create_payment_links") && <button disabled={busy} onClick={link} className={buttonClass("primary", "md")}>Copy payment link</button>}
             {canChange && <button disabled={busy} className={btn} onClick={() => act(() => api.post(`/memberships/${m.id}/billing`, { billing: m.billing === "monthly" ? "yearly" : "monthly" }), `Switches to ${m.billing === "monthly" ? "yearly" : "monthly"} from the next payment`)}>
               Switch to {m.billing === "monthly" ? "yearly" : "monthly"}</button>}
             {canChange && (!m.renews || m.status === "paused") && <button disabled={busy} className={btn} onClick={() => act(() => api.post(`/memberships/${m.id}/resume`, {}), "Back on")}>Resume</button>}

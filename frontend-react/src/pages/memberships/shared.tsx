@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { buttonClass } from "../../components/Button";
 import { createPortal } from "react-dom";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
@@ -242,7 +243,7 @@ export function SellPlanDialog({ clientId, deviceId, devices, orderId, presetPla
           )}
           {err && <p role="alert" className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">{err}</p>}
           <button onClick={save} disabled={busy || !plan || (!deviceId && !device)}
-            className="mt-5 h-11 w-full rounded-xl bg-primary text-white text-sm font-semibold shadow-clay-sm disabled:opacity-50">
+            className={buttonClass("primary", "lg", "mt-5 w-full")}>
             {busy ? "Adding…" : plan && price ? `Add ${plan.name} · ${money(price)}${billing === "yearly" ? "/yr" : "/mo"}` : "Add plan"}
           </button>
           <p className="mt-2 text-center text-[11px] text-ink-tertiary">{orderId ? "Added to this job's bill." : "An invoice is created for the first payment."}</p>

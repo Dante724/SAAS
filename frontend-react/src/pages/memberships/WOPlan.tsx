@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { money } from "../orders/types";
@@ -35,7 +36,7 @@ export function PlanBanner({ orderId, refreshKey, onChanged }: { orderId: string
                 <div className="text-[11px] text-ink-secondary">Since {fmtDate(m.starts_on)}{m.saved ? ` · saved ${money(m.saved)} this plan year` : ""}{discount ? ` · ${discount.text}` : ""}</div>
               </div>
               {d.coverable > 0 && (d.can_apply
-                ? <button onClick={apply} disabled={busy} className="h-8 px-3 rounded-lg bg-white border border-slate-200 text-xs font-semibold text-ink-primary hover:bg-slate-50">Apply plan to {d.coverable} line{d.coverable > 1 ? "s" : ""}</button>
+                ? <button onClick={apply} disabled={busy} className={buttonClass("secondary", "sm")}>Apply plan to {d.coverable} line{d.coverable > 1 ? "s" : ""}</button>
                 : <span className="text-[11px] text-ink-tertiary">{d.coverable} line{d.coverable > 1 ? "s" : ""} could be covered. Ask a manager.</span>)}
             </div>
             {services.length > 0 && (

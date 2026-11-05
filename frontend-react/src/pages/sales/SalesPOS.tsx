@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import { buttonClass } from "../../components/Button";
 import Shell, { M } from "../../components/Shell";
 import { api, idempotencyKey } from "../../api/client";
 import { useMe } from "../../context/Me";
@@ -441,10 +442,10 @@ export default function SalesPOS() {
                 </div>
                 {payAccount?.payment_option === "cash" && <div className="flex items-center justify-between gap-3 text-xs"><label htmlFor="pos-pay-cash" className="text-ink-secondary">Cash received</label><div className="w-28"><input id="pos-pay-cash" type="number" min={0} inputMode="decimal" value={payCash} onChange={(e) => setPayCash(e.target.value)} className={`${inputCls} text-right tabular-nums`} /></div></div>}
                 {payTendered != null && payTendered >= pending.due && row("Change due", cash(payTendered - pending.due), true)}
-                <button onClick={payPending} disabled={busy || !payAccount || (payTendered != null && payTendered + 0.005 < pending.due)} className="w-full h-11 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary-container disabled:opacity-50 tabular-nums">Take payment {cash(pending.due)}</button>
+                <button onClick={payPending} disabled={busy || !payAccount || (payTendered != null && payTendered + 0.005 < pending.due)} className={buttonClass("primary", "lg", "w-full tabular-nums")}>Take payment {cash(pending.due)}</button>
                 <div className="flex gap-2">
                   {can("can_take_card_payments") && pending.due > 0 && <button onClick={() => setReaderFor(pending)} disabled={busy} className="flex-1 h-9 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50 flex items-center justify-center gap-1.5"><M n="contactless" c="text-sm text-ink-tertiary" />Try the card again</button>}
-                  {can("can_delete_sales") && <button onClick={deletePending} disabled={busy} className="h-9 px-3 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50">Delete sale</button>}
+                  {can("can_delete_sales") && <button onClick={deletePending} disabled={busy} className={buttonClass("secondary", "md", "text-rose-700")}>Delete sale</button>}
                   {!pending.fromCart && <button onClick={() => setPending(null)} className="h-9 px-3 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Not now</button>}
                 </div>
               </div>
@@ -593,10 +594,10 @@ function ReceiptSheet({ saleId, change, onClose, onFlash }: { saleId: string; ch
         {change ? <div data-testid="receipt-change" className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 flex items-baseline justify-between"><span className="text-xs font-semibold text-emerald-900">Give change</span><span className="text-xl font-semibold tabular-nums text-emerald-900">{cash(change)}</span></div> : null}
         <div className="mt-4 text-xs font-semibold text-ink-tertiary">Give the customer a receipt</div>
         <div className="mt-2 space-y-2.5">
-          <button onClick={print} disabled={!rc} className="w-full h-9 flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-primary hover:bg-slate-50 disabled:opacity-50"><M n="print" c="text-base" />Print receipt</button>
+          <button onClick={print} disabled={!rc} className={buttonClass("secondary", "md", "w-full")}><M n="print" c="text-base" />Print receipt</button>
           <div className="flex gap-2">
             <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" placeholder="Customer email" aria-label="Customer email" className={`${inputCls} min-w-0 flex-1`} />
-            <button onClick={sendEmail} disabled={!rc || sending || !email.includes("@")} className="flex-shrink-0 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50 flex items-center gap-1.5"><M n="mail" c="text-sm" />{sending ? "Sending…" : "Email"}</button>
+            <button onClick={sendEmail} disabled={!rc || sending || !email.includes("@")} className={buttonClass("primary", "md", "flex-shrink-0")}><M n="mail" c="text-sm" />{sending ? "Sending…" : "Email"}</button>
           </div>
           <div className="flex gap-2">
             <input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="WhatsApp number with country code" aria-label="WhatsApp number" className={`${inputCls} min-w-0 flex-1`} />

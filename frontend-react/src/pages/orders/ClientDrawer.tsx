@@ -1,4 +1,5 @@
 import DirectorySelect from "../../components/DirectorySelect";
+import { buttonClass } from "../../components/Button";
 import { humanize } from "../../lib/humanize";
 import { balanceView } from "../../lib/balance";
 import { useEffect, useState } from "react";
@@ -187,7 +188,7 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
                   {!can("can_make_client_payments") ? null : creditOpen ? (
                     <div className="flex items-center gap-2">
                       <input autoFocus aria-label="Credit amount" value={creditVal} onChange={(e) => setCreditVal(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addCredit(); if (e.key === "Escape") { setCreditOpen(false); setCreditVal(""); } }} inputMode="decimal" placeholder="Amount" className="w-28 glass-input rounded-xl px-3 py-2 text-sm tabular-nums" />
-                      <button onClick={addCredit} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50">Add</button>
+                      <button onClick={addCredit} disabled={busy} className={buttonClass("primary", "md")}>Add</button>
                       <button onClick={() => { setCreditOpen(false); setCreditVal(""); }} className="h-9 px-3 rounded-xl text-xs font-semibold text-ink-tertiary hover:text-ink-primary">Cancel</button>
                     </div>
                   ) : (
@@ -246,8 +247,8 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
           )}
         </div>
         <footer className="px-6 py-3.5 border-t border-slate-200/90 bg-white flex items-center gap-2">
-          <button onClick={save} disabled={busy} className="h-9 px-4 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Saving…" : "Save"}</button>
-          <button onClick={onClose} className="h-9 px-3.5 rounded-xl text-xs font-semibold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50">Cancel</button>
+          <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
           {can("can_delete_clients") && <button onClick={removeClient} disabled={busy} className="ml-auto h-9 px-3 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50">Delete customer</button>}
         </footer>
         {toast && <div className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-drawer">{toast}</div>}
@@ -472,7 +473,7 @@ function CommsTab({ clientId }: { clientId: string }) {
           <button onClick={suggest} disabled={busy} className={GHOST}><M n="auto_awesome" c="text-sm" />Suggest</button>
         </div>
         <textarea aria-label="Message" value={body} onChange={(e) => setBody(e.target.value)} placeholder="Write a message…" className="glass-input rounded-xl px-3 py-2 text-sm w-full text-ink-primary h-20 resize-none" />
-        <div className="flex"><button onClick={send} disabled={busy || !body.trim()} className="h-9 px-4 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm disabled:opacity-50">{busy ? "Sending…" : "Send"}</button></div>
+        <div className="flex"><button onClick={send} disabled={busy || !body.trim()} className={buttonClass("primary", "md")}>{busy ? "Sending…" : "Send"}</button></div>
       </div>
       {!msgs ? <Loading /> : msgs.length === 0 ? <Empty t="No messages exchanged yet." /> : (
         <div className="space-y-2">
@@ -532,7 +533,7 @@ function GdprCard({ clientId, onErased }: { clientId: string; onErased: () => vo
           : <div className="w-full rounded-xl border border-rose-200 bg-rose-50/60 p-3 space-y-2">
               <p className="text-xs text-rose-700">This removes this customer's name, contact details and address for good. It can't be undone.</p>
               <div className="flex items-center gap-2">
-                <button onClick={erase} disabled={busy} className="h-9 px-3.5 rounded-xl bg-rose-600 text-white text-xs font-semibold disabled:opacity-50">{busy ? "Deleting…" : "Delete personal data"}</button>
+                <button onClick={erase} disabled={busy} className={buttonClass("dangerSolid", "md")}>{busy ? "Deleting…" : "Delete personal data"}</button>
                 <button onClick={() => setConfirmErase(false)} className={GHOST}>Cancel</button>
               </div>
             </div>}

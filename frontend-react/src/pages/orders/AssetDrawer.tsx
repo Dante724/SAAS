@@ -1,4 +1,5 @@
 import NameSuggestInput from "../../components/NameSuggestInput";
+import { buttonClass } from "../../components/Button";
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { balanceView } from "../../lib/balance";
@@ -221,8 +222,8 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
           )}
         </div>
         <footer className="px-6 py-3.5 border-t border-slate-200/90 bg-white flex items-center gap-2">
-          <button onClick={save} disabled={busy} className="h-9 px-4 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Saving…" : creating ? `Create ${assetNoun(a, term).toLowerCase()}` : "Save"}</button>
-          <button onClick={onClose} className="h-9 px-3.5 rounded-xl text-xs font-semibold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50">Cancel</button>
+          <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : creating ? `Create ${assetNoun(a, term).toLowerCase()}` : "Save"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
           {!creating && <button onClick={archive} disabled={busy} className="ml-auto h-9 px-3 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50">Archive {assetNoun(a, term).toLowerCase()}</button>}
         </footer>
         {toast && <div className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-drawer">{toast}</div>}

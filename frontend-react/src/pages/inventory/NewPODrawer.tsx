@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import DateField from "../../components/DateField";
@@ -251,7 +252,7 @@ export default function NewPODrawer({ products, onClose, onCreated }:
         <div className="px-6 py-3 border-t border-slate-100 flex items-center gap-2">
           <button onClick={() => save(false)} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50 flex items-center gap-1.5"><M n="check" c="text-sm" />{busy ? "Creating…" : "Create and order"}</button>
           <button onClick={() => save(true)} disabled={busy} className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50">Save as draft</button>
-          <button onClick={onClose} className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50">Cancel</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
           <span className="ml-auto text-sm font-semibold text-ink-primary tabular-nums">Total {money(total)}</span>
         </div>
       </div>

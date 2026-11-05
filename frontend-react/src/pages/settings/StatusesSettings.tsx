@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import Switch from "../../components/Switch";
 import { api } from "../../api/client";
@@ -103,7 +104,7 @@ export function StatusList({ statuses, recordType, onRecordType, onOpen, onAdd, 
   return (
     <div className="max-w-3xl space-y-4">
       <div className="flex items-center gap-2 flex-wrap">
-        <button onClick={onAdd} className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90"><M n="add" c="text-sm" />Add status</button>
+        <button onClick={onAdd} className={buttonClass("primary", "md")}><M n="add" c="text-sm" />Add status</button>
         <div className="inline-flex items-center bg-slate-100 rounded-xl p-1">
           {RECORD_TYPES.slice(0, 2).map(([rt, label]) => (
             <button key={rt} onClick={() => onRecordType(rt)}

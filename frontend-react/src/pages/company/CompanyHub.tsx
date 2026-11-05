@@ -1,4 +1,5 @@
 import SkeletonRows from "../../components/SkeletonRows";
+import { buttonClass } from "../../components/Button";
 import PageSummary, { type SummaryStat } from "../../components/PageSummary";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
@@ -19,8 +20,8 @@ const CO_PAGE = 50;
 
 // Catalog toolbar look: a filter that is set reads as active in the primary tint.
 const filterCls = (on: boolean) => `h-9 text-xs font-semibold rounded-xl border px-3 cursor-pointer ${on ? "bg-primary/10 text-primary border-primary/30" : "bg-white text-ink-secondary border-slate-200 hover:bg-slate-50"}`;
-const primaryBtn = "h-9 bg-primary text-white text-xs font-semibold px-3.5 rounded-xl hover:bg-primary-container flex items-center gap-1.5";
-const ghostBtn = "h-9 bg-white border border-slate-200 text-ink-secondary text-xs font-semibold px-3.5 rounded-xl hover:bg-slate-50 flex items-center gap-1.5";
+const primaryBtn = buttonClass("primary", "md");
+const ghostBtn = buttonClass("secondary", "md");
 const thCls = "border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary";
 
 export type RowMenuItem = { label: string; icon: string; onClick: () => void; danger?: boolean };

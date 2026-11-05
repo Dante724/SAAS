@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api, openAuthedDoc } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
@@ -90,7 +91,7 @@ function PointRow({ p, types, canEdit, onSaved, onFlash }: { p: Point; types: Jo
           </span>
           <span className="block text-xs text-ink-tertiary truncate">{MODE_HINT[p.mode]} · {p.scans} scans · {p.submits} check-ins</span>
         </button>
-        <button onClick={poster} className="h-9 px-3 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 flex items-center gap-1.5"><M n="print" c="text-sm" />Print poster</button>
+        <button onClick={poster} className={buttonClass("secondary", "md")}><M n="print" c="text-sm" />Print poster</button>
         <div ref={menuRef} className="relative">
           <button type="button" aria-label={`More for ${p.name}`} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((m) => !m)}
             className="h-9 w-9 rounded-xl border border-slate-200 bg-white grid place-items-center text-ink-secondary hover:bg-slate-50"><M n="more_horiz" c="text-base" /></button>
@@ -204,7 +205,7 @@ export default function CheckinPointsSettings() {
             <input id="new-pt-name" value={add.name} onChange={(e) => setAdd({ ...add, name: e.target.value })} placeholder="Key box" className="glass-input rounded-xl px-3 py-2 text-sm" /></div>
           <div><label htmlFor="new-pt-mode" className="block text-sm font-medium text-ink-primary mb-1.5">How it works</label>
             <select id="new-pt-mode" value={add.mode} onChange={(e) => setAdd({ ...add, mode: e.target.value as Point["mode"] })} className="glass-input rounded-xl px-3 py-2 text-sm">{MODES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></div>
-          <button onClick={create} disabled={!add.name.trim()} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90 disabled:opacity-40">Add</button>
+          <button onClick={create} disabled={!add.name.trim()} className={buttonClass("primary", "md")}>Add</button>
           <button onClick={() => setAdd(null)} className="h-9 px-3.5 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>
         </div>
       )}

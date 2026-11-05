@@ -1,4 +1,5 @@
 import { askCancelReason, droppedStatus } from "../../lib/cancelReason";
+import { buttonClass } from "../../components/Button";
 import { PlanBanner, CheckoutOffer } from "../memberships/WOPlan";
 import RecommendationsPanel from "./RecommendationsPanel";
 import { DeferredWork, MarginNote, ReadyWhy, ServiceDue, TogetherChips } from "../../components/sense/Sense";
@@ -71,8 +72,8 @@ type Timing = {
 type Tab = "general" | "services" | "checklists" | "invoices" | "activity";
 
 // House button and input looks, shared across the drawer.
-const btnPrimary = "h-9 px-3.5 rounded-xl text-xs font-semibold bg-primary text-white hover:brightness-110 transition-all disabled:bg-slate-200 disabled:text-ink-tertiary disabled:hover:brightness-100 inline-flex items-center gap-1.5";
-const btnSecondary = "h-9 px-3.5 rounded-xl text-xs font-semibold bg-white text-ink-primary border border-slate-200 hover:bg-slate-50 transition-colors disabled:opacity-50 inline-flex items-center gap-1.5";
+const btnPrimary = buttonClass("primary", "md");
+const btnSecondary = buttonClass("secondary", "md");
 const btnGhost = "h-9 px-3.5 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100 transition-colors";
 const houseInput = "glass-input rounded-xl px-3 py-2 text-sm";
 const menuRow = "w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-slate-50";

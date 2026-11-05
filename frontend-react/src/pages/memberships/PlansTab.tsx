@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
@@ -260,7 +261,7 @@ function PlanEditor({ plan, onClose, onSaved }: { plan: Omit<Plan, "id" | "membe
         </div>
         <footer className="border-t border-slate-200/90 p-4 bg-white">
           {err && <p role="alert" className="mb-2 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">{err}</p>}
-          <button onClick={save} disabled={busy || !p.name.trim()} className="h-11 w-full rounded-xl bg-primary text-white text-sm font-semibold shadow-clay-sm disabled:opacity-50">{busy ? "Saving…" : "Save plan"}</button>
+          <button onClick={save} disabled={busy || !p.name.trim()} className={buttonClass("primary", "lg", "w-full")}>{busy ? "Saving…" : "Save plan"}</button>
         </footer>
       </div>
     </div>

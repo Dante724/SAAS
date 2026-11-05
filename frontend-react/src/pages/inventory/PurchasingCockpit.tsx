@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { money } from "./types";
@@ -67,7 +68,7 @@ export default function PurchasingCockpit({ onClose, onOpenPO, onReorder }: {
               {(r) => (<>{poCell(r)}<span className="font-mono text-ink-tertiary">{money(r.total)}</span>{openBtn(r.po_id, "Add invoice")}</>)}
             </Section>
             <Section k="below_min" title="Below minimum, not on order" icon="inventory_2" tone="bg-orange-50 text-orange-700">
-              {(r) => (<><span className="font-semibold text-ink-primary truncate">{r.name}</span><span className="text-ink-tertiary">{r.available}/{r.min_stock}</span><button onClick={onReorder} className="ml-auto h-8 px-3 rounded-xl border border-slate-200 bg-white text-primary text-[11px] font-semibold hover:bg-slate-50 whitespace-nowrap">Create PO</button></>)}
+              {(r) => (<><span className="font-semibold text-ink-primary truncate">{r.name}</span><span className="text-ink-tertiary">{r.available}/{r.min_stock}</span><button onClick={onReorder} className={buttonClass("secondary", "sm", "ml-auto text-primary")}>Create PO</button></>)}
             </Section>
             <Section k="supplier_balances" title="Supplier balances owed" icon="account_balance_wallet" tone="bg-slate-100 text-ink-secondary">
               {(r) => (<><span className="font-semibold text-ink-primary truncate">{r.name}</span><span className="ml-auto tabular-nums font-semibold text-rose-600">{money(r.balance)}</span></>)}
