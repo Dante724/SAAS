@@ -7,7 +7,7 @@ import { Link, useParams } from "react-router-dom";
 import { AlertTriangle, ChevronRight, Clock3, Pause, PhoneIncoming, RefreshCw, Timer } from "lucide-react";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
-import { Empty, Group, Page, QuietRow, Section, SkeletonRows, StatusDot } from "../components/ui";
+import { Empty, GoButton, Group, IconButton, Page, QuietRow, Section, SkeletonRows, StatusDot } from "../components/ui";
 import { useOnChange, useStatuses, type StatusMeta } from "../lib/useGo";
 import { inferRole, savedRole, type GoRole } from "../lib/role";
 import { hm, utc } from "../lib/time";
@@ -133,14 +133,12 @@ export default function Today() {
   const first = me?.name?.split(" ")[0];
   const greeting = (() => { const h = new Date().getHours(); return h < 12 ? "Good morning" : h < 18 ? "Good afternoon" : "Good evening"; })();
   const refresh = (
-    <button onClick={load} aria-label="Refresh" className="h-11 w-11 -mr-2 inline-flex items-center justify-center rounded-full text-ink-secondary active:bg-slate-100">
-      <RefreshCw size={20} className={busy ? "animate-spin" : ""} />
-    </button>
+    <IconButton label="Refresh" onClick={load} className="-mr-2" icon={<RefreshCw size={20} className={busy ? "animate-spin" : ""} />} />
   );
 
   let body;
   if (err && !dash && !board) {
-    body = <Empty icon={<AlertTriangle size={22} />} title="Couldn't load" body={err} action={<button onClick={load} className="font-semibold text-primary min-h-[2.75rem] px-4">Try again</button>} />;
+    body = <Empty icon={<AlertTriangle size={22} />} title="Couldn't load" body={err} action={<GoButton variant="link" onClick={load}>Try again</GoButton>} />;
   } else if (role === "tech") {
     if (!dash) body = <SkeletonRows />;
     else {
@@ -172,7 +170,7 @@ export default function Today() {
                 <span className="block font-semibold text-blue-900 truncate">Working on {running.order_number || running.task_title || "a job"}</span>
                 <span className="block text-go-sub tabular-nums text-blue-900/80">{hm((running.duration_sec || 0) + since)}</span>
               </Link>
-              <button onClick={async () => { await pause(); load(); }} disabled={pausing} className="min-h-[2.75rem] rounded-xl bg-white px-3.5 text-go-body font-semibold text-blue-800 inline-flex items-center gap-1.5 border-[0.5px] border-blue-200"><Pause size={16} />Pause</button>
+              <GoButton onClick={async () => { await pause(); load(); }} disabled={pausing} className="shrink-0"><Pause size={16} />Pause</GoButton>
             </div>
           )}
           <Section title="My queue" count={queue.length}>

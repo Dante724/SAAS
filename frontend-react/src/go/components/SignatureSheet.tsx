@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
 import { Eraser } from "lucide-react";
 import { api } from "../../api/client";
-import { PrimaryButton, Sheet } from "./ui";
+import { GoButton, PrimaryButton, Sheet } from "./ui";
 import { haptic } from "../lib/scanner";
 import { useToast } from "../lib/useGo";
 
@@ -105,8 +105,8 @@ export default function SignatureSheet({ open, onClose, orderId, customer, onSav
           <div className="pointer-events-none absolute inset-x-6 bottom-8 border-b border-slate-300" />
         </div>
         <div className="mt-3 flex gap-2">
-          <button onClick={clear} className="min-h-[3.25rem] px-5 rounded-xl border border-slate-200 bg-white font-semibold text-ink-primary inline-flex items-center gap-2"><Eraser size={18} />Clear</button>
           <PrimaryButton onClick={save} disabled={!inked || busy} className="flex-1">{busy ? "Saving…" : doneLabel}</PrimaryButton>
+          <GoButton main onClick={clear}><Eraser size={18} />Clear</GoButton>
         </div>
       </div>
     </Sheet>
