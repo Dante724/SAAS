@@ -3,7 +3,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router-dom";
 import { AlertTriangle, Bell, BellOff, Check, ChevronRight, CloudOff, ExternalLink, KeyRound, Lock, LogOut, Monitor, Moon, PhoneIncoming, RefreshCw, ScanFace, Sun } from "lucide-react";
 import { useMe } from "../../context/Me";
-import { Card, Page, Section } from "../components/ui";
+import { Card, GoButton, IconButton, Page, Section } from "../components/ui";
 import { goQueue, type Conflict } from "../lib/offlineQueue";
 import { inferRole, ROLE_LABEL, savedRole, saveRole, type GoRole } from "../lib/role";
 import { useQueueStatus } from "../lib/useGo";
@@ -25,7 +25,12 @@ function Choice<T extends string>({ value, current, onPick, children }: { value:
   );
 }
 
-const labelFor = (c: Conflict) => /\/status$/.test(c.url) ? "Status change" : `${c.method} ${c.url.replace(/^\/api\//, "")}`;
+// What the change was, in words (never the raw method and URL).
+const labelFor = (c: Conflict) => /\/status$/.test(c.url) ? "A status change"
+  : /\/tasks\b/.test(c.url) ? "A task change"
+  : /\/leads\b/.test(c.url) ? "An inquiry change"
+  : /photo/.test(c.url) ? "A photo"
+  : "A change";
 
 export default function More() {
   const { me } = useMe();
@@ -94,9 +99,8 @@ export default function More() {
                 {q.held && <span className="block text-go-sub text-amber-800">This shop only accepts changes from its own network. They'll send on shop Wi-Fi.</span>}
               </p>
               {q.pending > 0 && q.online && (
-                <button onClick={() => goQueue().flush()} aria-label="Send now" className="h-11 w-11 inline-flex items-center justify-center rounded-full text-primary active:bg-slate-100">
-                  <RefreshCw size={20} className={q.syncing ? "animate-spin" : ""} />
-                </button>
+                <IconButton label="Send now" tone="primary" onClick={() => goQueue().flush()}
+                  icon={<RefreshCw size={20} className={q.syncing ? "animate-spin" : ""} />} />
               )}
             </div>
             {conflicts.map((c) => (
@@ -104,8 +108,8 @@ export default function More() {
                 <p className="flex items-center gap-2 font-semibold text-amber-800"><AlertTriangle size={16} />{labelFor(c)} didn't go through</p>
                 <p className="mt-0.5 text-go-sub text-amber-800">{c.detail}</p>
                 <div className="mt-2 flex gap-2">
-                  <button onClick={() => goQueue().resolveConflict(c.id, "discard")} className="min-h-[2.75rem] flex-1 rounded-xl border border-amber-300 bg-white font-semibold text-ink-primary">Discard</button>
-                  <button onClick={() => goQueue().resolveConflict(c.id, "retry")} className="min-h-[2.75rem] flex-1 rounded-xl bg-primary font-semibold text-white">Try again</button>
+                  <GoButton variant="primary" onClick={() => goQueue().resolveConflict(c.id, "retry")} className="flex-1">Try again</GoButton>
+                  <GoButton onClick={() => goQueue().resolveConflict(c.id, "discard")} className="flex-1">Discard</GoButton>
                 </div>
               </div>
             ))}

@@ -1,4 +1,10 @@
 import { useEffect, useState, type ReactElement } from "react";
+import Drawer from "../../components/Drawer";
+import Button, { IconButton, buttonClass } from "../../components/Button";
+import Tabs from "../../components/Tabs";
+import { Badge } from "../../components/Card";
+import EmptyState from "../../components/EmptyState";
+import { fieldClass } from "../../components/Field";
 import { sectionCard } from "../../components/Section";
 import HexTile from "../../components/HexTile";
 import { Avatar } from "./look";
@@ -201,7 +207,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
   const reqKeys = new Set((layout || []).filter((i) => i.kind === "system" && i.visible && i.required).map((i) => i.key));
   const closeKeys = new Set((layout || []).filter((i) => i.kind === "system" && i.visible && i.require === "close").map((i) => i.key));
   const star = (k: string) => (reqKeys.has(k) ? <span className="text-rose-500"> *</span>
-    : closeKeys.has(k) ? <span className="ml-1.5 px-1.5 py-px rounded bg-amber-50 text-[11px] font-semibold normal-case tracking-normal text-amber-700">Needed to close</span> : null);
+    : closeKeys.has(k) ? <span className="ml-1.5 px-1.5 py-px rounded bg-amber-50 text-2xs font-semibold normal-case tracking-normal text-amber-700">Needed to close</span> : null);
   function missingRequired(): string | null {
     const filled: Record<string, boolean> = {
       client: !!client, complaint: !!complaint.trim(), manager: !!managerId, assignee: !!assigneeId,
@@ -236,7 +242,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                       {cOpen && (<>
                         <div className="fixed inset-0 z-[9]" aria-hidden="true" onClick={() => setCOpen(false)} />
                         <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5 max-h-72 overflow-y-auto">
-                          {!q.trim() && results.length > 0 && <div className="px-2.5 pt-1 pb-0.5 text-[11px] text-ink-tertiary">Recent customers</div>}
+                          {!q.trim() && results.length > 0 && <div className="px-2.5 pt-1 pb-0.5 text-2xs text-ink-tertiary">Recent customers</div>}
                           {q.trim() && results.length === 0 && <div className="px-2.5 py-2 text-xs text-ink-tertiary">No customer matches "{q.trim()}"</div>}
                           {results.map((r) => <button key={r.id} onClick={() => { setClient(r); setCOpen(false); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-sm"><span className="font-semibold text-ink-primary">{r.name}</span><span className="text-ink-tertiary font-mono text-xs">{r.phone}</span></button>)}
                           <button onClick={() => { setNewClient(true); setCOpen(false); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-sm text-primary font-bold border-t border-slate-100 mt-1"><M n="person_add" c="text-base" />New customer{q.trim() ? ` "${q.trim()}"` : ""}</button>
@@ -285,15 +291,15 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                       <input type="file" accept="image/*" multiple className="hidden" onChange={(e) => { addIntakePhotos(e.target.files); e.currentTarget.value = ""; }} />
                       <div className="w-10 h-10 rounded-full bg-white text-ink-secondary ring-1 ring-slate-200 shadow-sm flex items-center justify-center mb-2 group-hover:text-primary transition-colors"><M n="photo_camera" c="text-lg" /></div>
                       <p className="text-xs font-semibold text-ink-primary">{upBusy ? "Uploading…" : "Condition photos"}</p>
-                      <p className="text-[11px] text-ink-tertiary mt-0.5">How it arrived · drop or <span className="text-primary">browse</span></p>
+                      <p className="text-2xs text-ink-tertiary mt-0.5">How it arrived · drop or <span className="text-primary">browse</span></p>
                     </label>
                     {intakePhotos.length > 0 && (
                       <div className="flex flex-wrap gap-1.5">
                         {intakePhotos.map((p) => (
                           <span key={p.id} className="relative group">
                             <AuthedImage src={p.url} alt="intake" onClick={() => setAnnoPhoto(p)} className="w-12 h-12 rounded-lg object-cover border border-slate-200 bg-slate-100 cursor-pointer" />
-                            <button type="button" onClick={() => setAnnoPhoto(p)} className="absolute bottom-0.5 left-0.5 w-4 h-4 rounded bg-ink-primary/85 text-white flex items-center justify-center opacity-0 group-hover:opacity-100" title="Mark up"><M n="edit" c="text-[11px]" /></button>
-                            <button type="button" onClick={() => setIntakePhotos((cur) => cur.filter((x) => x.id !== p.id))} className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-ink-primary text-white text-[11px] leading-none opacity-0 group-hover:opacity-100" title="Remove">×</button>
+                            <button type="button" onClick={() => setAnnoPhoto(p)} className="absolute bottom-0.5 left-0.5 w-4 h-4 rounded bg-ink-primary/85 text-white flex items-center justify-center opacity-0 group-hover:opacity-100" title="Mark up"><M n="edit" c="text-2xs" /></button>
+                            <button type="button" onClick={() => setIntakePhotos((cur) => cur.filter((x) => x.id !== p.id))} className="absolute -top-1.5 -right-1.5 w-4 h-4 rounded-full bg-ink-primary text-white text-2xs leading-none opacity-0 group-hover:opacity-100" title="Remove">×</button>
                           </span>
                         ))}
                       </div>
@@ -314,14 +320,14 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                     <IdentifyHint value={idState[primaryId.kind][0]} kind={primaryId.kind} clientId={client?.id} usingId={deviceId}
                       onUse={pickExisting} onUndo={() => setDeviceId(null)} />
                     <div className="space-y-1">
-                      <label htmlFor="intake-passcode" className="block text-[11px] font-bold text-ink-tertiary">Device passcode <span className="font-normal">(optional)</span></label>
+                      <label htmlFor="intake-passcode" className="block text-2xs font-bold text-ink-tertiary">Device passcode <span className="font-normal">(optional)</span></label>
                       <div className="flex items-center space-x-1.5">
                         <input id="intake-passcode" type={showPass ? "text" : "password"} autoComplete="off" value={passcode} onChange={(e) => setPasscode(e.target.value)}
                           className="glass-input font-mono block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder="So the technician can test it" />
                         <button type="button" onClick={() => setShowPass((v) => !v)} aria-label={showPass ? "Hide passcode" : "Show passcode"} title={showPass ? "Hide" : "Show"}
                           className="shrink-0 w-8 h-8 rounded-lg border border-slate-200 text-ink-tertiary hover:text-ink-primary hover:bg-slate-50 grid place-items-center"><M n={showPass ? "visibility_off" : "visibility"} c="text-sm" /></button>
                       </div>
-                      <p className="text-[11px] text-ink-tertiary">Kept locked on the {term.asset.toLowerCase()}. Only staff who are allowed can see it.</p>
+                      <p className="text-2xs text-ink-tertiary">Kept locked on the {term.asset.toLowerCase()}. Only staff who are allowed can see it.</p>
                     </div>
                   </div>
                 </div>
@@ -333,8 +339,8 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                 ) : (
                   <div className="rounded-xl bg-slate-50/70 border border-slate-200/80 p-4 space-y-3">
                     <div className="flex items-center justify-between">
-                      <span className="text-[11px] font-bold text-ink-tertiary">More {term.asset.toLowerCase()} details</span>
-                      <button type="button" onClick={() => setMoreOpen(false)} className="text-[11px] font-semibold text-ink-tertiary hover:text-ink-primary">Hide</button>
+                      <span className="text-2xs font-bold text-ink-tertiary">More {term.asset.toLowerCase()} details</span>
+                      <button type="button" onClick={() => setMoreOpen(false)} className="text-2xs font-semibold text-ink-tertiary hover:text-ink-primary">Hide</button>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div className="space-y-1"><label className="block text-xs font-medium text-ink-secondary">Condition</label>
@@ -406,56 +412,54 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
     ))}</>;
   }
 
-  return (
-    <div className="fixed inset-0 flex justify-end" style={{ zIndex: 45 }}>
-      <div className="absolute inset-0 bg-ink-primary/30 backdrop-blur-[2.5px]" aria-hidden="true" onClick={onClose} />
-      <div className="intake relative h-full w-full max-w-[780px] bg-slate-50 shadow-clay-drawer flex flex-col border-l border-slate-200/80 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
-        <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
-
-        {/* Header */}
-        <header className="px-7 pt-5 pb-4 flex items-center justify-between bg-white">
-          <div className="flex items-center gap-3">
-            <h2 className="text-xl font-semibold tracking-tight text-ink-primary">New {estimate ? "estimate" : "work order"}</h2>
-            {estimate && <span className="rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-800 ring-1 ring-inset ring-amber-200">Not billed until approved</span>}
-          </div>
-          <div className="flex items-center gap-1">
-            {canCustomize && typeId && (
-              <a href={`/settings?section=forms&form=type:${typeId}`} target="_blank" rel="noopener" title="Reorder, add or hide fields on this form"
-                className="text-xs font-semibold text-ink-tertiary hover:text-primary flex items-center gap-1 px-2 py-1 rounded-lg hover:bg-slate-100"><M n="tune" c="text-sm" />Customize form</a>
-            )}
-            <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100 transition-all"><M n="close" c="text-lg" /></button>
-          </div>
-        </header>
-
+  const title = `New ${estimate ? "estimate" : "work order"}`;
+  return (<>
+    <Drawer size="lg" z={45} label={title} onClose={onClose}
+      title={<span className="flex items-center gap-3">{title}{estimate && <Badge tone="warning">Not billed until approved</Badge>}</span>}
+      tabs={<div className="pb-3 space-y-3">
+        {canCustomize && typeId && (
+          <a href={`/settings?section=forms&form=type:${typeId}`} target="_blank" rel="noopener" title="Reorder, add or hide fields on this form"
+            className={buttonClass("link", "md", "gap-1")}><M n="tune" c="text-sm" />Customize form</a>
+        )}
         {/* Stepper */}
-        <nav className="px-7 pb-4 bg-white border-b border-slate-200/80 flex items-center justify-between text-xs">
+        <nav aria-label="Steps" className="flex items-center justify-between text-xs">
           <div className="flex items-center space-x-3 w-full">
-            <button type="button" onClick={() => setStep(1)} className="flex items-center space-x-2 cursor-pointer">
-              <span className={`w-6 h-6 rounded-full font-semibold flex items-center justify-center text-[11px] transition-all ${step === 1 ? "bg-primary text-white" : "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"}`}>{step === 1 ? "1" : <M n="check" c="text-[13px]" />}</span>
+            <button type="button" onClick={() => setStep(1)} className="hit44 flex items-center space-x-2 cursor-pointer">
+              <span className={`w-6 h-6 rounded-full font-semibold flex items-center justify-center text-2xs transition-colors ${step === 1 ? "bg-primary text-white" : "bg-emerald-50 text-emerald-700 ring-1 ring-emerald-200"}`}>{step === 1 ? "1" : <M n="check" c="text-sm" />}</span>
               <span className={`font-semibold transition-colors ${step === 1 ? "text-ink-primary" : "text-ink-secondary"}`}>General info</span>
             </button>
             <div className={`flex-1 h-px mx-3 transition-colors ${step === 2 ? "bg-primary/40" : "bg-slate-200"}`} />
-            <button type="button" onClick={next} className="flex items-center space-x-2 cursor-pointer">
-              <span className={`w-6 h-6 rounded-full font-semibold flex items-center justify-center text-[11px] transition-all ${step === 2 ? "bg-primary text-white" : "bg-white text-ink-tertiary ring-1 ring-slate-200"}`}>2</span>
-              <span className={`transition-colors ${step === 2 ? "font-semibold text-ink-primary" : "font-medium text-ink-tertiary hover:text-ink-primary"}`}>Services and products</span>
+            <button type="button" onClick={next} className="hit44 flex items-center space-x-2 cursor-pointer">
+              <span className={`w-6 h-6 rounded-full font-semibold flex items-center justify-center text-2xs transition-colors ${step === 2 ? "bg-primary text-white" : "bg-white text-ink-tertiary ring-1 ring-slate-200"}`}>2</span>
+              <span className={`font-semibold transition-colors ${step === 2 ? "text-ink-primary" : "text-ink-tertiary hover:text-ink-primary"}`}>Services and products</span>
             </button>
           </div>
         </nav>
-
-        {/* Body */}
-        <div className="flex-1 overflow-y-auto overflow-x-hidden px-7 py-6 space-y-4">
+      </div>}
+      footer={<>
+        {/* Errors sit just above the buttons, where the user is looking, not at the end of a long form. */}
+        {err && (
+          <div role="alert" className="w-full flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-semibold text-status-overdue-ink">
+            <M n="error" c="text-sm" /><span className="min-w-0 flex-1">{err}</span>
+            <IconButton size="sm" label="Dismiss" onClick={() => setErr(null)} icon={<M n="close" c="text-sm" />} />
+          </div>
+        )}
+        {step === 1 ? (<>
+          <Button variant="primary" onClick={next}><span>Next: services and products</span><M n="arrow_forward" c="text-sm" /></Button>
+          <Button onClick={onClose}>Cancel</Button>
+        </>) : (<>
+          <Button variant="primary" disabled={busy} onClick={() => submit(false)}>{busy ? "Creating…" : `Create ${estimate ? "estimate" : "work order"}`}</Button>
+          <Button className="hidden sm:inline-flex" disabled={busy} onClick={() => submit(true)}>Save and create another</Button>
+          <Button onClick={() => setStep(1)} icon={<M n="arrow_back" c="text-sm" />}>Back</Button>
+          {!estimate && <span className="ml-auto"><AutoPrintPicker event="create" /></span>}
+        </>)}
+      </>}>
           {step === 1 && (
             <section className="space-y-4">
               <div className={`${sectionCard} p-5`}>
                 <h3 className="mb-3 flex items-center gap-2 text-sm font-semibold text-ink-primary"><HexTile icon="label" />{estimate ? "Estimate" : "Work order"} type</h3>
-                <div className="flex flex-wrap items-center gap-2">
-                  {(woTypes.length ? woTypes.map((t) => ({ t: t.name, dot: "", color: t.color })) : TYPES.map((x) => ({ ...x, color: null }))).map((tp) => (
-                    <button key={tp.t} type="button" onClick={() => setType(tp.t)}
-                      className={`h-9 px-3.5 rounded-xl text-sm font-medium flex items-center gap-2 border transition-all ${type === tp.t ? "border-primary/40 bg-primary/[0.06] text-primary ring-1 ring-primary/20" : "border-slate-200 bg-white text-ink-secondary hover:border-slate-300 hover:text-ink-primary"}`}>
-                      <span className={`w-2 h-2 rounded-full ${type === tp.t ? "bg-primary" : "bg-slate-300"}`} /><span>{tp.t}</span>
-                    </button>
-                  ))}
-                </div>
+                <Tabs look="chips" label={`${estimate ? "Estimate" : "Work order"} type`} value={type} onChange={setType}
+                  tabs={(woTypes.length ? woTypes.map((t) => t.name) : TYPES.map((x) => x.t)).map((t) => ({ id: t, label: t }))} />
               </div>
 
               {renderLayout()}
@@ -469,12 +473,8 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                 <div><h3 className="text-sm font-semibold text-ink-primary">Services and products</h3>
                   <p className="text-xs text-ink-tertiary">Add them now, or create the {estimate ? "estimate" : "job"} and add them later at the bench.</p></div>
               </div>
-              <div role="group" aria-label="Show in search" className="inline-flex items-center gap-0.5 rounded-xl bg-slate-100 p-0.5">
-                {([["all", "All"], ["service", "Services"], ["product", "Products"]] as const).map(([k, l]) => (
-                  <button key={k} type="button" aria-pressed={pickType === k} onClick={() => setPickType(k)}
-                    className={`h-7 px-3 text-xs rounded-[10px] font-medium transition ${pickType === k ? "bg-white text-ink-primary shadow-sm ring-1 ring-slate-200/70" : "text-ink-secondary hover:text-ink-primary"}`}>{l}</button>
-                ))}
-              </div>
+              <Tabs look="segmented" label="Show in search" value={pickType} onChange={setPickType}
+                tabs={([["all", "All"], ["service", "Services"], ["product", "Products"]] as const).map(([k, l]) => ({ id: k, label: l }))} />
               <div className="flex items-center justify-between mb-1.5">
                 <span className="text-xs font-medium text-ink-secondary">Line items</span>
                 {aiDraft && <button type="button" onClick={async () => {
@@ -484,7 +484,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                     const add = (r.lines || []).map((l: any) => ({ id: Math.random().toString(36).slice(2), description: l.description, kind: "service", price: l.unit_price || 0 }));
                     if (add.length) setLines((ls) => [...ls, ...add]);
                   } catch (e: any) { await alertDialog(e.message || "Couldn't draft lines from the complaint. Add them from the search instead."); }
-                }} className="h-8 rounded-lg px-2.5 text-xs font-semibold text-primary hover:bg-primary/5 flex items-center gap-1"><M n="auto_awesome" c="text-sm" />Draft from the complaint</button>}
+                }} className={buttonClass("ghost", "sm", "!text-primary")}><M n="auto_awesome" c="text-sm" />Draft from the complaint</button>}
               </div>
               <JobSuggestions complaint={issueText()} deviceId={deviceId}
                 onAdd={(i) => setLines((ls) => [...ls, { id: Math.random().toString(36).slice(2), description: i.description, kind: i.kind, price: i.price }])} />
@@ -492,7 +492,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
 
               <div className="space-y-2.5">
                 {lines.length > 0 && <div className="flex items-center justify-between text-xs font-medium text-ink-tertiary px-1"><span>Added</span><span>Price</span></div>}
-                {lines.length === 0 && <p className="rounded-xl border border-dashed border-slate-200 px-4 py-5 text-center text-xs text-ink-tertiary">Nothing added yet. Search above, or add a line of your own.</p>}
+                {lines.length === 0 && <EmptyState size="inline" className="rounded-xl border border-dashed border-slate-200 px-4 text-center" title="Nothing added yet. Search above, or add a line of your own." />}
                 {lines.map((l) => (
                   <div key={l.id} className="flex items-center justify-between gap-3 px-3.5 py-3 rounded-xl bg-white border border-slate-200 hover:border-slate-300 transition-all">
                     <div className="flex min-w-0 flex-1 items-center gap-3">
@@ -502,20 +502,18 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                     </div>
                     <div className="flex items-center space-x-3">
                       <input type="number" value={l.price} onChange={(e) => setLines((ls) => ls.map((x) => x.id === l.id ? { ...x, price: Number(e.target.value) } : x))} className="glass-input w-28 h-9 px-2.5 text-sm font-medium tabular-nums text-ink-primary rounded-xl text-right" />
-                      <button aria-label="Delete" type="button" onClick={() => setLines((ls) => ls.filter((x) => x.id !== l.id))} className="text-ink-tertiary hover:text-rose-600 p-1 transition-colors"><M n="delete" c="text-base" /></button>
+                      <IconButton label="Delete" size="sm" onClick={() => setLines((ls) => ls.filter((x) => x.id !== l.id))} className="hover:!text-rose-600" icon={<M n="delete" c="text-base" />} />
                     </div>
                   </div>
                 ))}
-                {can("can_add_custom_service") && <button type="button" onClick={addCustomLine} className="flex h-9 items-center gap-1.5 rounded-xl px-2.5 text-xs font-semibold text-primary hover:bg-primary/5">
-                  <M n="add" c="text-sm" />Add a line of your own
-                </button>}
+                {can("can_add_custom_service") && <Button variant="ghost" className="!text-primary" onClick={addCustomLine} icon={<M n="add" c="text-sm" />}>Add a line of your own</Button>}
               </div>
 
               <div className="rounded-xl bg-slate-50 p-4 ring-1 ring-slate-200/70 space-y-2">
                 {multiCurrency && (
                   <div className="flex items-center justify-between pb-2 mb-1 border-b border-slate-200">
                     <span className="text-xs font-medium text-ink-secondary">Document currency</span>
-                    <select value={curCode} onChange={(e) => setCurCode(e.target.value)} className="glass-input py-1 px-2 text-xs font-semibold text-ink-primary rounded-lg">
+                    <select aria-label="Document currency" value={curCode} onChange={(e) => setCurCode(e.target.value)} className={fieldClass("!w-auto pr-8 text-xs")}>
                       <option value="">Customer default</option>{curOpts.map(([c, l]) => <option key={c} value={c}>{l}</option>)}
                     </select>
                   </div>
@@ -524,43 +522,14 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                 <div className="pt-2 border-t border-slate-200 flex justify-between items-baseline"><span className="text-sm font-semibold text-ink-primary">Total <span className="text-xs font-normal text-ink-tertiary">before tax</span></span><span className="text-xl font-semibold tabular-nums tracking-tight text-ink-primary">{money(total)}</span></div>
                 {showConv && docCur && (
                   <div className="pt-2 border-t border-dashed border-slate-200 flex justify-between items-baseline">
-                    <span className="text-[11px] text-ink-tertiary">≈ in {docCur.code} <span className="font-mono">(1 {docCur.code} = {docCur.rate} {base?.code})</span></span>
-                    <span className="text-sm font-bold tabular-nums text-ink-secondary">{docCur.symbol}{conv(total).toFixed(2)}</span>
+                    <span className="text-2xs text-ink-tertiary">≈ in {docCur.code} <span className="font-mono">(1 {docCur.code} = {docCur.rate} {base?.code})</span></span>
+                    <span className="text-sm font-semibold tabular-nums text-ink-secondary">{docCur.symbol}{conv(total).toFixed(2)}</span>
                   </div>
                 )}
               </div>
             </section>
           )}
-        </div>
-
-        {/* Errors sit just above the buttons, where the user is looking, not at the end of a long form. */}
-        {err && (
-          <div role="alert" className="mx-7 mb-0 mt-2 flex items-start gap-2 rounded-xl border border-rose-200 bg-rose-50 px-3.5 py-2.5 text-xs font-semibold text-status-overdue-ink">
-            <M n="error" c="text-sm" /><span className="min-w-0 flex-1">{err}</span>
-            <button type="button" aria-label="Dismiss" onClick={() => setErr(null)} className="text-ink-tertiary hover:text-ink-primary"><M n="close" c="text-sm" /></button>
-          </div>
-        )}
-
-        {/* Footer */}
-        <footer className="px-7 py-3.5 border-t border-slate-200/80 bg-white flex items-center justify-between">
-          {step === 1 ? (
-            <div className="w-full flex items-center justify-between">
-              <button type="button" onClick={onClose} className="h-10 px-4 rounded-xl text-sm font-medium text-ink-secondary border border-slate-200 bg-white hover:bg-slate-50 transition-colors">Cancel</button>
-              <button type="button" onClick={next} className="h-10 px-5 rounded-xl bg-primary text-white text-sm font-semibold shadow-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><span>Next: services and products</span><M n="arrow_forward" c="text-sm" /></button>
-            </div>
-          ) : (
-            <div className="w-full flex items-center justify-between">
-              <button type="button" onClick={() => setStep(1)} className="h-10 px-4 rounded-xl text-sm font-medium text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 transition-colors flex items-center gap-1.5"><M n="arrow_back" c="text-sm" /><span>Back</span></button>
-              <div className="flex items-center space-x-2">
-                {!estimate && <AutoPrintPicker event="create" />}
-                <button type="button" disabled={busy} onClick={() => submit(true)} className="hidden sm:inline-flex h-10 items-center px-4 rounded-xl text-sm font-medium text-ink-primary bg-white border border-slate-200 hover:bg-slate-50 transition-colors">Save and create another</button>
-                <button type="button" disabled={busy} onClick={() => submit(false)} className="h-10 px-5 rounded-xl bg-primary text-white text-sm font-semibold shadow-sm hover:brightness-110 transition-all">{busy ? "Creating…" : `Create ${estimate ? "estimate" : "work order"}`}</button>
-              </div>
-            </div>
-          )}
-        </footer>
-      </div>
+    </Drawer>
       {newClient && <NewClientDrawer prefillName={q.trim()} onClose={() => setNewClient(false)} onCreated={(c) => { setClient(c); setNewClient(false); setQ(""); }} />}
-    </div>
-  );
+  </>);
 }
