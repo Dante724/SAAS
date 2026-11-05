@@ -501,10 +501,10 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
               </div>
             )}
             <div ref={edRef} contentEditable={mode === "edit"} suppressContentEditableWarning onInput={refreshBlocks} onKeyUp={saveSel} onMouseUp={saveSel}
-              className={`doc-canvas bg-paper shadow-lg outline-none text-sm text-[#14213f] ${mode === "edit" ? "editing" : ""}`}
+              className={`doc-canvas bg-paper shadow-lg outline-none text-sm text-paper-ink ${mode === "edit" ? "editing" : ""}`}
               style={{ width: pageW, maxWidth: "100%", minHeight: pageMinH, padding: padPx, fontFamily: meta.font_family || "Inter", lineHeight: 1.5, display: mode === "edit" ? "block" : "none" }} />
             {mode === "preview" && (
-              <div className="doc-canvas bg-paper shadow-lg text-sm text-[#14213f]" style={{ width: pageW, maxWidth: "100%", minHeight: pageMinH, padding: padPx, fontFamily: meta.font_family || "Inter", lineHeight: 1.5 }} dangerouslySetInnerHTML={{ __html: preview ? sanitizeHtml(preview) : "<p style='color:#999'>Loading preview…</p>" }} />
+              <div className="doc-canvas bg-paper shadow-lg text-sm text-paper-ink" style={{ width: pageW, maxWidth: "100%", minHeight: pageMinH, padding: padPx, fontFamily: meta.font_family || "Inter", lineHeight: 1.5 }} dangerouslySetInnerHTML={{ __html: preview ? sanitizeHtml(preview) : "<p style='color:#999'>Loading preview…</p>" }} />
             )}
           </div>
           {mode === "preview" && sample && <div className="absolute top-3 left-1/2 -translate-x-1/2 text-2xs text-ink-tertiary bg-white/80 border border-slate-200 rounded-full px-3 py-1">Preview using {sample}</div>}

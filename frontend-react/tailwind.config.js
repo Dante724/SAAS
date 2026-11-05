@@ -14,6 +14,7 @@ export default {
       colors: {
         // Printed-document previews (receipts, estimates) stay white paper in dark mode too.
         paper: "#ffffff",
+        "paper-ink": "#14213f",   // text on a paper preview: stays dark in dark mode too
         surface: "#faf8ff",
         "surface-dim": "#cdd9ff",
         "surface-bright": "#faf8ff",

@@ -471,7 +471,7 @@ export default function Job() {
             <div className="absolute inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+1rem)] flex justify-center gap-1.5 px-3" onClick={(e) => e.stopPropagation()} role="group" aria-label="What this photo shows">
               {PHOTO_LABELS.map((l) => (
                 <button key={l.key} onClick={() => relabel(photo, photo.label === l.key ? null : l.key)} aria-pressed={photo.label === l.key}
-                  className={`min-h-[2.75rem] rounded-full px-4 text-go-sub font-semibold ${photo.label === l.key ? "bg-[#fff] text-[#14213f]" : "bg-[#fff]/15 text-[#fff]"}`}>{l.name}</button>
+                  className={`min-h-[2.75rem] rounded-full px-4 text-go-sub font-semibold ${photo.label === l.key ? "bg-[#fff] text-paper-ink" : "bg-[#fff]/15 text-[#fff]"}`}>{l.name}</button>
               ))}
             </div>
           )}
