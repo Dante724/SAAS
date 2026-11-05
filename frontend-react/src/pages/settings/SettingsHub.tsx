@@ -971,8 +971,8 @@ function RichTextEditor({ value, onChange, registerInsert }: {
       <div className="flex flex-wrap items-center gap-0.5 border-b border-slate-200 bg-slate-50 px-2 py-1">
         <select title="Font" onMouseDown={saveSel} onChange={(e) => applyFont(e.target.value)} defaultValue="" className="h-8 border border-slate-200 rounded-md text-xs px-1.5 bg-white text-ink-secondary"><option value="" disabled>Font</option>{fonts.map((ff) => <option key={ff} value={ff} style={{ fontFamily: ff }}>{ff}</option>)}</select>
         <select title="Size" onMouseDown={saveSel} onChange={(e) => applySize(Number(e.target.value))} defaultValue="" className="h-8 border border-slate-200 rounded-md text-xs px-1.5 bg-white text-ink-secondary w-16"><option value="" disabled>Size</option>{sizes.map((s) => <option key={s} value={s}>{s}px</option>)}</select>
-        <label className={btn + " relative cursor-pointer"} title="Text colour"><M n="format_color_text" c="text-[18px]" /><input type="color" onMouseDown={saveSel} onChange={(e) => applyColor(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" /></label>
-        <label className={btn + " relative cursor-pointer"} title="Highlight"><M n="format_ink_highlighter" c="text-[18px]" /><input type="color" onMouseDown={saveSel} onChange={(e) => applyHilite(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" /></label>
+        <label className={btn + " relative cursor-pointer"} title="Text colour"><M n="format_color_text" c="text-lg" /><input type="color" onMouseDown={saveSel} onChange={(e) => applyColor(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" /></label>
+        <label className={btn + " relative cursor-pointer"} title="Highlight"><M n="format_ink_highlighter" c="text-lg" /><input type="color" onMouseDown={saveSel} onChange={(e) => applyHilite(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" /></label>
         <span className="w-px h-5 bg-slate-200 mx-1" />
         <TB cmd="bold" icon="format_bold" title="Bold" />
         <TB cmd="italic" icon="format_italic" title="Italic" />
@@ -1708,7 +1708,7 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
             </div>
             {/* When to show */}
             <div className="flex flex-wrap items-center gap-2 text-xs text-ink-secondary pt-1 border-t border-slate-100">
-              <span className="font-semibold"><M n="visibility" c="text-[13px] align-middle" /> Show only when</span>
+              <span className="font-semibold"><M n="visibility" c="text-xs align-middle" /> Show only when</span>
               <select value={nf.show_when_field_key} onChange={(e) => setNf({ ...nf, show_when_field_key: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
                 <option value="">always</option>
                 {(fields || []).map((f) => <option key={f.id} value={f.field_key}>{f.field_label}</option>)}
@@ -1722,7 +1722,7 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
             </div>
             {/* What it does — upsell rule (shared engine with checklist) */}
             <div className="flex flex-wrap items-center gap-2 text-xs text-ink-secondary pt-1 border-t border-slate-100">
-              <label className="font-semibold flex items-center gap-1"><input type="checkbox" checked={nf.upsell_on} onChange={(e) => setNf({ ...nf, upsell_on: e.target.checked })} className="w-4 h-4 rounded border-slate-300 text-primary" /><M n="sell" c="text-[13px] align-middle" /> Draft upsell when value</label>
+              <label className="font-semibold flex items-center gap-1"><input type="checkbox" checked={nf.upsell_on} onChange={(e) => setNf({ ...nf, upsell_on: e.target.checked })} className="w-4 h-4 rounded border-slate-300 text-primary" /><M n="sell" c="text-xs align-middle" /> Draft upsell when value</label>
               {nf.upsell_on && <>
                 <select value={nf.upsell_comparator} onChange={(e) => setNf({ ...nf, upsell_comparator: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
                   <option value="lt">&lt;</option><option value="gt">&gt;</option><option value="is">is</option><option value="is_not">is not</option>
@@ -1736,7 +1736,7 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
             </div>
             {/* Gate a status — a value can block entering a status */}
             <div className="flex flex-wrap items-center gap-2 text-xs text-ink-secondary pt-1 border-t border-slate-100">
-              <label className="font-semibold flex items-center gap-1"><input type="checkbox" checked={nf.gate_on} onChange={(e) => setNf({ ...nf, gate_on: e.target.checked })} className="w-4 h-4 rounded border-slate-300 text-primary" /><M n="block" c="text-[13px] align-middle" /> Block status</label>
+              <label className="font-semibold flex items-center gap-1"><input type="checkbox" checked={nf.gate_on} onChange={(e) => setNf({ ...nf, gate_on: e.target.checked })} className="w-4 h-4 rounded border-slate-300 text-primary" /><M n="block" c="text-xs align-middle" /> Block status</label>
               {nf.gate_on && <>
                 <select value={nf.gate_status_key} onChange={(e) => setNf({ ...nf, gate_status_key: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
                   <option value="">choose…</option>{statuses.map((s) => <option key={s.id} value={s.key}>{s.name}</option>)}

@@ -292,7 +292,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                         className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border ${editable2 ? "hover:brightness-95" : "cursor-default"}`}
                         style={wf ? { backgroundColor: wf.color + "22", color: wf.color, borderColor: wf.color + "55" } : undefined}>
                         {wf?.name || po.workflow_status || "Draft"}
-                        {editable2 && <M n="expand_more" c="text-[13px]" />}
+                        {editable2 && <M n="expand_more" c="text-xs" />}
                       </button>
                       {statusMenu && (
                         <div className="absolute left-0 top-8 z-20 w-52 max-h-72 overflow-y-auto bg-raised rounded-xl shadow-clay-card border border-slate-200/80 py-1 text-xs">
@@ -312,12 +312,12 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                 })()}
                 {/* Receipt state (auto, read-only) — never hand-set; driven by actual receiving. */}
                 {po && st !== "draft" && (
-                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border ${stCls(st)}`} title="Receipt state. Updates as you receive stock.">
-                    <M n={st === "received" ? "check_circle" : "local_shipping"} c="text-[13px]" />{stLabel[st] || po.status}</span>
+                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-2xs font-semibold border ${stCls(st)}`} title="Receipt state. Updates as you receive stock.">
+                    <M n={st === "received" ? "check_circle" : "local_shipping"} c="text-xs" />{stLabel[st] || po.status}</span>
                 )}
                 {po?.match && MATCH[po.match.status] && (
-                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border ${MATCH[po.match.status].cls}`}>
-                    <M n={MATCH[po.match.status].icon} c="text-[13px]" />{MATCH[po.match.status].label}</span>
+                  <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-2xs font-semibold border ${MATCH[po.match.status].cls}`}>
+                    <M n={MATCH[po.match.status].icon} c="text-xs" />{MATCH[po.match.status].label}</span>
                 )}
               </div>
               <span className="text-[11px] text-ink-tertiary">{[po?.supplier?.name, po?.ordered_at && `ordered ${d(po.ordered_at)}`, po?.expected_at && `expected ${d(po.expected_at)}`].filter(Boolean).join(" · ")}</span>

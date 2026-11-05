@@ -99,9 +99,9 @@ export default function BinsPanel() {
                   <td className="py-2.5 pl-4"><input type="checkbox" aria-label={`Select bin ${b.name}`} checked={sel.has(b.id)} onChange={() => { const n = new Set(sel); n.has(b.id) ? n.delete(b.id) : n.add(b.id); setSel(n); }} /></td>
                   <td className="py-2.5 px-3 font-bold text-ink-primary">
                     <button onClick={() => toggleOpen(b.id)} className="inline-flex items-center gap-1 hover:text-primary"><M n={open === b.id ? "expand_less" : "expand_more"} c="text-sm text-ink-tertiary" />{b.name}</button>
-                    {b.is_default && <span className="ml-2 px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/70 text-[10px] font-bold">Default</span>}
+                    {b.is_default && <span className="ml-2 px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/70 text-2xs font-bold">Default</span>}
                   </td>
-                  <td className="py-2.5 px-3 font-mono text-ink-secondary">{b.barcode || "—"}<span className="ml-1.5 text-[10px] text-ink-tertiary font-sans">{barcodeTypeLabel(b.barcode_type)}</span></td>
+                  <td className="py-2.5 px-3 tabular-nums text-ink-secondary">{b.barcode || "—"}<span className="ml-1.5 text-2xs text-ink-tertiary font-sans">{barcodeTypeLabel(b.barcode_type)}</span></td>
                   <td className="py-2.5 px-3 text-ink-secondary">{locName(b.location_id)}</td>
                   <td className="py-2.5 px-3 text-ink-tertiary">{[b.zone, b.shelf, b.bin_number].filter(Boolean).join(" / ") || "—"}</td>
                   <td className="py-2.5 px-3 text-right tabular-nums font-semibold text-ink-primary">{b.qty_on_hand ?? 0}</td>

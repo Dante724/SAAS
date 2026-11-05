@@ -403,7 +403,7 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
                     {locations.map((l) => { const on = locIds.includes(l.id); return (
                       <button key={l.id} type="button" onClick={() => setLocIds((s) => (on ? s.filter((x) => x !== l.id) : [...s, l.id]))} aria-pressed={on}
                         className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border ${on ? "bg-white border-primary/40 text-ink-primary shadow-sm" : "border-dashed border-slate-300 text-ink-tertiary"}`}>
-                        {on && <M n="check" c="text-[12px] text-primary" />}{l.name}
+                        {on && <M n="check" c="text-xs text-primary" />}{l.name}
                       </button>
                     ); })}
                   </div>
@@ -417,7 +417,7 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
                     {people.map((p) => { const on = payrollIds.includes(p.id); return (
                       <button key={p.id} type="button" onClick={() => setPayrollIds((s) => (on ? s.filter((x) => x !== p.id) : [...s, p.id]))} aria-pressed={on}
                         className={`inline-flex items-center gap-1.5 pl-1 pr-2.5 py-1 rounded-full text-xs border ${on ? "bg-white border-primary/40 text-ink-primary shadow-sm" : "border-dashed border-slate-300 text-ink-tertiary"}`}>
-                        <span aria-hidden="true" className="contents"><Avatar name={p.name} size={16} /></span>{p.name}{on && <M n="check" c="text-[13px] text-primary -mr-0.5" />}
+                        <span aria-hidden="true" className="contents"><Avatar name={p.name} size={16} /></span>{p.name}{on && <M n="check" c="text-xs text-primary -mr-0.5" />}
                       </button>
                     ); })}
                   </div>
@@ -436,7 +436,7 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
                     {statuses.map((s) => { const on = hiddenStatuses.includes(s.key); return (
                       <button key={s.key} type="button" onClick={() => setHiddenStatuses((h) => (on ? h.filter((k) => k !== s.key) : [...h, s.key]))} aria-pressed={on}
                         className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border ${on ? "bg-rose-50 border-rose-200 text-rose-700" : "border-slate-200 text-ink-secondary hover:border-slate-300"}`}>
-                        {on ? <M n="visibility_off" c="text-[12px]" /> : <span className="w-2 h-2 rounded-full" style={{ background: s.color }} />}{s.name}
+                        {on ? <M n="visibility_off" c="text-xs" /> : <span className="w-2 h-2 rounded-full" style={{ background: s.color }} />}{s.name}
                       </button>
                     ); })}
                   </div>
@@ -458,7 +458,7 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
                   {FEED_SIGNALS.map(([key, label]) => { const on = feedSources.includes(key); return (
                     <button key={key} type="button" onClick={() => setFeedSources((s) => (on ? s.filter((k) => k !== key) : [...s, key]))} aria-pressed={on}
                       className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border ${on ? "bg-white border-primary/40 text-ink-primary shadow-sm" : "border-slate-200 text-ink-secondary hover:border-slate-300"}`}>
-                      {on && <M n="check" c="text-[12px] text-primary" />}{label}
+                      {on && <M n="check" c="text-xs text-primary" />}{label}
                     </button>
                   ); })}
                 </div>

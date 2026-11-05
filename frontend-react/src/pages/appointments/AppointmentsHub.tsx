@@ -201,7 +201,7 @@ export default function AppointmentsHub() {
                     <div key={h} onDragOver={(e) => e.preventDefault()} onDrop={() => { if (drag) { moveToHour(drag, h); setDrag(null); } }} className="flex gap-3 px-5 py-2 min-h-[52px] hover:bg-blue-50/20">
                       <div className="w-14 flex-shrink-0 text-[11px] tabular-nums font-bold text-ink-tertiary pt-1.5">{pad(h)}:00</div>
                       <div className="flex-1 flex flex-wrap gap-2">
-                        {cards.length === 0 && <div className="text-[11px] text-ink-placeholder pt-1.5">—</div>}
+                        {cards.length === 0 && <div className="text-2xs text-ink-tertiary pt-1.5">—</div>}
                         {cards.map((b) => (
                           <div key={b.id} draggable onDragStart={() => setDrag(b.id)} onDragEnd={() => setDrag(null)} {...clickable(() => { setSel(b); setReDate(""); setReTime(""); })} className={`bg-white rounded-xl border border-slate-200/80 shadow-clay-sm px-3 py-1.5 cursor-pointer hover:border-primary/40 ${drag === b.id ? "opacity-50" : ""}`}>
                             <div className="text-xs font-bold text-ink-primary">{b.service_name || "Appointment"} · {time(b.scheduled_for)}</div>

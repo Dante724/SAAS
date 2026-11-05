@@ -511,7 +511,7 @@ export default function InventoryHub() {
             {savedViews.map((v) => (
               <span key={v.name} className={`group inline-flex items-center rounded-full border font-semibold ${viewActive(v) ? "bg-primary/10 text-primary border-primary/40" : "bg-white text-ink-secondary border-slate-200 hover:bg-slate-50"}`}>
                 <button onClick={() => applyView(v)} className="pl-3 pr-1.5 py-1.5">{v.name}</button>
-                <button aria-label="Delete view" onClick={() => deleteView(v.name)} title="Delete view" className="pr-2 pl-0.5 py-1.5 text-ink-tertiary hover:text-rose-600"><M n="close" c="text-[13px]" /></button>
+                <button aria-label="Delete view" onClick={() => deleteView(v.name)} title="Delete view" className="pr-2 pl-0.5 py-1.5 text-ink-tertiary hover:text-rose-600"><M n="close" c="text-xs" /></button>
               </span>
             ))}
             <button onClick={saveCurrentView} className="px-2.5 py-1.5 rounded-full border border-dashed border-slate-300 text-ink-tertiary hover:text-primary hover:border-primary/40 font-semibold flex items-center gap-1"><M n="bookmark_add" c="text-sm" />Save view</button>
@@ -1291,7 +1291,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
                         <span className="font-semibold text-ink-secondary">Serials / IMEIs</span>
                         {missing > 0 ? <span className="text-amber-700 font-semibold">Needs {missing} more</span>
                           : units !== Number(r.qty) ? <span className="text-rose-700 font-semibold">Quantity must be a whole number</span>
-                          : <span className="text-emerald-700 font-semibold flex items-center gap-0.5"><M n="check" c="text-[13px]" />All units entered</span>}
+                          : <span className="text-emerald-700 font-semibold flex items-center gap-0.5"><M n="check" c="text-xs" />All units entered</span>}
                       </div>
                       <SerialEntry value={r.serials} target={units} partId={isNew ? null : r.chosen}
                         others={review.flatMap((x, j) => j !== i && rowSerialized(x) ? x.serials : [])}

@@ -46,7 +46,6 @@ function Thumb({ t }: { t: any }) {
           className="absolute top-0 left-0 origin-top-left pointer-events-none border-0"
           style={{ width: label ? 520 : 794, height: label ? 300 : 1123, transform: `scale(${label ? 0.4 : 0.3})` }} />
       )}
-      <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-white to-transparent" />
     </div>
   );
 }

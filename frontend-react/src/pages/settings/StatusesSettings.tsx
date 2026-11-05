@@ -261,7 +261,7 @@ function MovesPanel({ statuses, onFlash }: { statuses: any[]; onFlash: (m: strin
                         return (
                           <button key={t.id} onClick={() => toggle(fr.id, t.id)} disabled={busy} aria-pressed={on}
                             className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border transition-colors disabled:opacity-60 ${on ? "bg-white border-primary/40 text-ink-primary shadow-sm" : "border-dashed border-slate-300 text-ink-tertiary hover:border-slate-400 hover:text-ink-secondary"}`}>
-                            {on ? <M n="check" c="text-[12px] text-primary" /> : <Dot c={t.color} />}{t.name}
+                            {on ? <M n="check" c="text-xs text-primary" /> : <Dot c={t.color} />}{t.name}
                           </button>
                         );
                       })}
