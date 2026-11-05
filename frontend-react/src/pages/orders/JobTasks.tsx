@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { api } from "../../api/client";
 import { M } from "../../components/Shell";
 import { Avatar } from "./look";
+import { buttonClass } from "../../components/Button";
 
 // J4 — the job's tasks, on the job: add one, assign it, tick it off.
 type Task = { id: string; title: string; status?: string; assigned_to_id?: string | null; assignee_name?: string | null; due_at?: string | null; completed_at?: string | null; overdue?: boolean };
@@ -54,7 +55,7 @@ export default function JobTasks({ orderId, emps, onFlash }: { orderId: string; 
             <option value="">Nobody yet</option>
             {emps.filter((e) => e.in_assignees !== false).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
           </select>
-          <button type="button" onClick={add} disabled={busy || !title.trim()} className="px-3 py-2 rounded-xl text-xs font-bold text-white bg-primary disabled:opacity-50">{busy ? "Adding…" : "Add"}</button>
+          <button type="button" onClick={add} disabled={busy || !title.trim()} className={buttonClass("primary", "md")}>{busy ? "Adding…" : "Add"}</button>
           <button type="button" onClick={() => { setAdding(false); setTitle(""); }} className="px-3 py-2 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-50">Cancel</button>
         </div>
       )}

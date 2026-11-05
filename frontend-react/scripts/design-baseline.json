@@ -13,11 +13,9 @@
     "text-px": 15
   },
   "pages/cash/DenomCountModal.tsx": {
-    "button-look": 1,
     "text-px": 1
   },
   "pages/cash/NewAccountDrawer.tsx": {
-    "button-look": 1,
     "text-px": 3,
     "blur": 1
   },
@@ -28,17 +26,14 @@
     "text-px": 6
   },
   "pages/clients/ClientsHub.tsx": {
-    "button-look": 2,
     "text-px": 8,
     "blur": 2
   },
   "pages/clients/SupplierDrawer.tsx": {
-    "button-look": 1,
     "text-px": 10,
     "blur": 1
   },
   "pages/clients/SupplierPanel.tsx": {
-    "button-look": 2,
     "text-px": 11
   },
   "pages/clients/TagFilterChip.tsx": {
@@ -57,12 +52,10 @@
     "text-px": 1
   },
   "pages/inbox/InquiriesHub.tsx": {
-    "button-look": 1,
     "text-px": 12,
     "blur": 2
   },
   "pages/inbox/InquiryDrawer.tsx": {
-    "button-look": 2,
     "text-px": 9,
     "blur": 1
   },
@@ -73,33 +66,27 @@
     "text-px": 4
   },
   "pages/inventory/BinsPanel.tsx": {
-    "button-look": 2,
     "text-px": 10
   },
   "pages/inventory/InventoryDrawer.tsx": {
-    "button-look": 2,
     "text-px": 52
   },
   "pages/inventory/InventoryHub.tsx": {
-    "button-look": 1,
     "text-px": 47
   },
   "pages/inventory/NewPODrawer.tsx": {
-    "button-look": 3,
     "text-px": 5
   },
   "pages/inventory/PODrawer.tsx": {
     "text-px": 40
   },
   "pages/inventory/PasteImport.tsx": {
-    "button-look": 2,
     "text-px": 7
   },
   "pages/inventory/PurchasingCockpit.tsx": {
     "text-px": 3
   },
   "pages/inventory/StocktakeDrawer.tsx": {
-    "button-look": 2,
     "text-px": 9
   },
   "pages/invoices/CreditNotesList.tsx": {
@@ -113,7 +100,6 @@
     "blur": 1
   },
   "pages/marketing/MarketingHub.tsx": {
-    "button-look": 1,
     "text-px": 3
   },
   "pages/memberships/MembershipsView.tsx": {
@@ -149,22 +135,18 @@
     "text-px": 2
   },
   "pages/orders/JobTasks.tsx": {
-    "button-look": 1,
     "text-px": 3
   },
   "pages/orders/KitGroupHeader.tsx": {
     "text-px": 7
   },
   "pages/orders/NotesPanel.tsx": {
-    "button-look": 1,
     "text-px": 3
   },
   "pages/orders/PartsPOPanel.tsx": {
-    "button-look": 1,
     "text-px": 16
   },
   "pages/orders/PhotoAnnotator.tsx": {
-    "button-look": 1,
     "text-px": 2
   },
   "pages/orders/PrintMenu.tsx": {
@@ -174,7 +156,6 @@
     "text-px": 12
   },
   "pages/orders/WODrawer.tsx": {
-    "button-look": 4,
     "text-px": 70
   },
   "pages/orders/WorkOrdersHub.tsx": {
@@ -184,7 +165,6 @@
     "text-px": 5
   },
   "pages/reports/ReportsHub.tsx": {
-    "button-look": 1,
     "text-px": 29,
     "gradient": 1
   },
@@ -204,7 +184,6 @@
     "text-px": 1
   },
   "pages/settings/ChecklistSettings.tsx": {
-    "button-look": 1,
     "text-px": 16
   },
   "pages/settings/DirectoriesManager.tsx": {
@@ -214,7 +193,6 @@
     "text-px": 8
   },
   "pages/settings/FinanceNumbering.tsx": {
-    "button-look": 3,
     "text-px": 20
   },
   "pages/settings/GeneralSettings.tsx": {
@@ -224,14 +202,12 @@
     "text-px": 3
   },
   "pages/settings/LocationsPage.tsx": {
-    "button-look": 1,
     "text-px": 19
   },
   "pages/settings/ModePill.tsx": {
     "text-px": 1
   },
   "pages/settings/NotificationsPage.tsx": {
-    "button-look": 1,
     "text-px": 27,
     "blur": 1
   },
@@ -241,11 +217,8 @@
   "pages/settings/PublicPagesSettings.tsx": {
     "text-px": 5
   },
-  "pages/settings/RetentionCard.tsx": {
-    "button-look": 1
-  },
   "pages/settings/SettingsHub.tsx": {
-    "button-look": 7,
+    "button-look": 1,
     "text-px": 45,
     "blur": 6
   },
@@ -253,12 +226,10 @@
     "text-px": 4
   },
   "pages/settings/StatusesSettings.tsx": {
-    "button-look": 1,
     "text-px": 14,
     "blur": 1
   },
   "pages/settings/TeamSettings.tsx": {
-    "button-look": 1,
     "text-px": 6
   },
   "pages/settings/TemplateEditorDrawer.tsx": {
@@ -269,7 +240,6 @@
     "text-px": 3
   },
   "pages/tasks/TasksHub.tsx": {
-    "button-look": 1,
     "text-px": 17,
     "blur": 2
   },
@@ -281,7 +251,6 @@
     "text-px": 22
   },
   "pages/timesheets/TimesheetsHub.tsx": {
-    "button-look": 3,
     "text-px": 16,
     "blur": 2
   }

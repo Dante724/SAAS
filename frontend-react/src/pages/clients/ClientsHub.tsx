@@ -23,6 +23,7 @@ import MembershipsView from "../memberships/MembershipsView";
 import { hueText, tint } from "../../lib/tint";
 import { clickableRow } from "../../lib/clickable";
 import ImportDrawer from "../../components/ImportDrawer";
+import { buttonClass } from "../../components/Button";
 
 type Client = { id: string; name?: string; phone?: string; email?: string; loyalty_tier?: string; balance?: number; devices?: any[]; order_count?: number };
 type Tab = "clients" | "memberships" | "suppliers";
@@ -318,8 +319,8 @@ function MergePreviewDialog({ preview, busy, onCancel, onConfirm }: { preview: a
           <div className="flex items-start gap-1.5 p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-[11px] text-ink-secondary"><M n="history" c="text-sm mt-0.5" /><span>The source contacts are removed, but you can undo this right after if it's wrong.</span></div>
         </div>
         <div className="p-4 border-t border-slate-200 flex justify-end gap-2">
-          <button onClick={onCancel} disabled={busy} className="px-4 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50">Cancel</button>
-          <button onClick={onConfirm} disabled={busy} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-50">{busy ? "Merging…" : "Merge contacts"}</button>
+          <button onClick={onCancel} disabled={busy} className={buttonClass("secondary", "md")}>Cancel</button>
+          <button onClick={onConfirm} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Merging…" : "Merge contacts"}</button>
         </div>
       </div>
     </div>
@@ -361,8 +362,8 @@ function NewSupplierDrawer({ onClose, onCreated }: { onClose: () => void; onCrea
           ))}
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : "Create supplier"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
+          <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Create supplier"}</button>
         </div>
       </div>
     </div>

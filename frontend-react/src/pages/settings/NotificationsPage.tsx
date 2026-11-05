@@ -504,10 +504,10 @@ function MessageEditor({ row, rt, channels, rules, templates, shopName, flash, s
         </div>
 
         <div className="px-5 py-4 border-t border-slate-100 flex items-center gap-2">
-          <button onClick={sendSample} className="inline-flex items-center gap-1.5 px-3 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50"><M n="send" c="text-sm" />Send me a sample</button>
+          <button onClick={sendSample} className={buttonClass("secondary", "md")}><M n="send" c="text-sm" />Send me a sample</button>
           {body.trim() && <button onClick={() => setBody("")} className="px-3 py-2 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Use standard wording</button>}
-          <button onClick={onClose} className="ml-auto px-4 py-2 rounded-xl border border-slate-200 text-ink-secondary hover:bg-slate-50 font-semibold text-xs">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-xl bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : "Save"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md", "ml-auto")}>Cancel</button>
+          <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save"}</button>
         </div>
       </div>
     </div>

@@ -4,6 +4,7 @@ import { api } from "../../api/client";
 import { money } from "./types";
 import { analyzePaste, gridToRows, loadRememberedMap, saveRememberedMap, FIELD_LABELS, FIELD_ORDER } from "./pasteMap";
 import type { PasteField, PostRow } from "./pasteMap";
+import { buttonClass } from "../../components/Button";
 
 /** 13b — paste a supplier's sheet into a purchase order. Same pipeline as stock postings:
  * columns are detected (and fixable), each row is matched to the catalog by SKU / barcode /
@@ -93,7 +94,7 @@ export default function PasteImport({ onAdd, onClose, canCreate }: { onAdd: (lin
         <p className="text-[11px] text-ink-tertiary">Paste rows from the supplier's sheet — SKU or barcode, name, quantity, cost. A header row is optional.</p>
         <textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} aria-label="Pasted rows"
           placeholder={"SKU\tName\tQty\tCost\nSCR-IP13\tiPhone 13 screen\t10\t60"} className={`${fld} w-full font-mono`} />
-        <div className="flex justify-end"><button type="button" onClick={readPaste} disabled={busy || !text.trim()} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold disabled:opacity-50">{busy ? "Matching…" : "Match to catalog"}</button></div>
+        <div className="flex justify-end"><button type="button" onClick={readPaste} disabled={busy || !text.trim()} className={buttonClass("primary", "sm")}>{busy ? "Matching…" : "Match to catalog"}</button></div>
       </>)}
       {map && grid && review && (
         <div className="flex gap-2 overflow-x-auto pb-1" aria-label="Column mapping">
@@ -138,7 +139,7 @@ export default function PasteImport({ onAdd, onClose, canCreate }: { onAdd: (lin
             <span className="text-[11px] text-ink-secondary">{newCount > 0 ? `${newCount} new product${newCount === 1 ? "" : "s"} will be added to the catalog.` : "Every row matches the catalog."}</span>
             <div className="flex gap-2">
               <button type="button" onClick={() => { setReview(null); setGrid(null); setMap(null); }} className="px-3 py-1.5 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold bg-white">Back</button>
-              <button type="button" onClick={add} disabled={busy || !picked.length} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold disabled:opacity-50">{busy ? "Adding…" : `Add ${picked.length} line${picked.length === 1 ? "" : "s"}`}</button>
+              <button type="button" onClick={add} disabled={busy || !picked.length} className={buttonClass("primary", "sm")}>{busy ? "Adding…" : `Add ${picked.length} line${picked.length === 1 ? "" : "s"}`}</button>
             </div>
           </div>
         </div>

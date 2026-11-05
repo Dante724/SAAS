@@ -937,7 +937,7 @@ function JobItems({ orderId, onFlash, onChanged }: { orderId: string; onFlash: (
           </div>
           <textarea value={complaint} onChange={(e) => setComplaint(e.target.value)} rows={2} placeholder="What's wrong with it?" aria-label="Problem" className="glass-input w-full rounded-lg px-3 py-2 text-xs" />
           <div className="flex gap-2">
-            <button onClick={add} disabled={!pickAsset && !label.trim()} className="px-3.5 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-40">Add item</button>
+            <button onClick={add} disabled={!pickAsset && !label.trim()} className={buttonClass("primary", "sm")}>Add item</button>
             <button onClick={() => setAdding(false)} className="px-3 py-1.5 rounded-lg text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>
           </div>
         </div>
@@ -1310,8 +1310,8 @@ function CustomLineForm({ orderId, forItem, kitId, onFlash, onClose, onAdded }: 
         </div>
       )}
       <div className="flex justify-end gap-2">
-        <button type="button" onClick={onClose} className="px-3 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Cancel</button>
-        <button type="button" onClick={submit} disabled={busy || !name.trim()} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50">{busy ? "Adding…" : save && canSave ? "Add and save" : "Add"}</button>
+        <button type="button" onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
+        <button type="button" onClick={submit} disabled={busy || !name.trim()} className={buttonClass("primary", "md")}>{busy ? "Adding…" : save && canSave ? "Add and save" : "Add"}</button>
       </div>
     </div>
   );
@@ -2218,7 +2218,7 @@ export function JobNotes({ orderId, filter, onFlash }: { orderId: string; filter
         <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} aria-label="Add a note" placeholder="Add a note, e.g. ordered the screen, back Thursday"
           className="glass-input w-full py-2 px-3 text-xs rounded-xl resize-none" />
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={addNote} disabled={busy || !text.trim()} className="px-3.5 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-40">Add note</button>
+          <button type="button" onClick={addNote} disabled={busy || !text.trim()} className={buttonClass("primary", "sm")}>Add note</button>
           <label className={`px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50 flex items-center gap-1 cursor-pointer ${busy ? "opacity-50 pointer-events-none" : ""}`}>
             <input type="file" multiple className="hidden" aria-label="Attach photo or file" onChange={(e) => { attach(e.target.files); e.currentTarget.value = ""; }} />
             <M n="attach_file" c="text-sm" />Attach photo or file
@@ -2351,7 +2351,7 @@ function ActivityTab({ orderId, clientPhone, onFlash, threadKey, onSent }: { ord
           <div className="flex items-center gap-2 pt-1">
             <ChannelPicker id={`act-ch-${orderId}`} value={channel} onChange={setChannel} />
             <input value={msg} onChange={(e) => setMsg(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} aria-label="Message to the customer" className="glass-input flex-1 py-2 px-3 text-xs rounded-xl" placeholder="Send the customer an update…" />
-            <button onClick={send} disabled={busy || !msg.trim()} className="px-3.5 py-2 rounded-xl bg-primary text-white text-xs font-bold hover:brightness-110 flex items-center gap-1 disabled:opacity-40"><span>{busy ? "Sending…" : "Send"}</span><M n="send" c="text-xs" /></button>
+            <button onClick={send} disabled={busy || !msg.trim()} className={buttonClass("primary", "md")}><span>{busy ? "Sending…" : "Send"}</span><M n="send" c="text-xs" /></button>
           </div>
           <DeliveryNote note={note} />
         </div>

@@ -8,6 +8,7 @@ import InquiryFields from "./InquiryFields";
 import WalkinsView from "./WalkinsView";
 import { callsLabel, channelLabel, deviceLine, fmt, newIdempotencyKey, sla, SRC_ICON, type Column, type Lead, type LeadType } from "./inquiries";
 import { clickableRow } from "../../lib/clickable";
+import { buttonClass } from "../../components/Button";
 
 const COL_ACCENT: Record<string, string> = { new: "bg-blue-500", in_progress: "bg-amber-500", won: "bg-emerald-500", lost: "bg-slate-400" };
 const STATUS_LABEL: Record<string, string> = { new: "New", in_progress: "In progress", won: "Won", lost: "Lost" };
@@ -196,7 +197,7 @@ export default function InquiriesHub() {
             <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70"><h3 className="text-base font-bold text-ink-primary">New inquiry</h3><button aria-label="Close" onClick={() => setCreate(false)} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
             <div className="flex-1 overflow-y-auto p-6"><InquiryFields value={cf} onChange={setCf} types={types} creating showSla /></div>
             {createErr && <p role="alert" className="mx-6 mb-2 p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-[11px] font-semibold">{createErr}</p>}
-            <div className="p-4 border-t border-slate-100 bg-slate-50/70 flex items-center justify-end gap-2"><button onClick={() => setCreate(false)} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button><button onClick={createLead} disabled={saving} className="px-5 py-2 rounded-lg bg-primary text-white font-bold text-xs shadow-clay-sm disabled:opacity-50">Log inquiry</button></div>
+            <div className="p-4 border-t border-slate-100 bg-slate-50/70 flex items-center justify-end gap-2"><button onClick={() => setCreate(false)} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button><button onClick={createLead} disabled={saving} className={buttonClass("primary", "md")}>Log inquiry</button></div>
           </div>
         </div>
       )}
