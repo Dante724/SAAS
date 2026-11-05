@@ -1,5 +1,6 @@
 import { Fragment, useEffect, useState } from "react";
 import { M } from "../../components/Shell";
+import { buttonClass } from "../../components/Button";
 import FloatingMenu from "../../components/FloatingMenu";
 import { api } from "../../api/client";
 import { printHtmlInFrame } from "../../lib/safeHtml";
@@ -160,18 +161,18 @@ export default function PrintMenu({ orderId, status, canInvoices = true, onStick
   return (
     <div className="flex items-stretch">
       <button type="button" onClick={() => print(choice)} disabled={busy}
-        className="h-9 px-3.5 text-xs text-ink-primary font-semibold flex items-center gap-1.5 border border-slate-200 rounded-l-xl bg-white hover:bg-slate-50 disabled:opacity-60">
+        className={buttonClass("secondary", "md", "rounded-r-none !text-ink-primary")}>
         <M n="print" c="text-sm" />{busy ? "Preparing…" : `Print ${nameOf(choice)}`}</button>
       <button type="button" data-print-menu={orderId} aria-label="Choose what to print" aria-expanded={open}
         onClick={() => setOpen((v) => !v)} disabled={busy}
-        className="h-9 px-2 text-ink-secondary hover:text-ink-primary border border-l-0 border-slate-200 rounded-r-xl bg-white hover:bg-slate-50">
+        className={buttonClass("secondary", "md", "rounded-l-none border-l-0 !px-2")}>
         <M n="expand_more" c="text-sm" /></button>
       {open && (
         <FloatingMenu anchorSel={`[data-print-menu="${orderId}"]`} onClose={() => { setOpen(false); setUndo(null); }} width={300}>
           <div className="-m-1.5">
             {/* Print now: click a row and it prints. The sticker sits in the same list. */}
             <div className="p-1.5">
-              <div className="px-3 pb-1 pt-1.5 text-2xs font-semibold uppercase tracking-wide text-ink-tertiary">Print now</div>
+              <div className="px-3 pb-1 pt-1.5 text-2xs font-semibold text-ink-tertiary">Print now</div>
               {listed.map((t) => (<Fragment key={t.id}>
                 {printRow(onItemised && t.id === itemisedAnchor && kitItems ? ITEMISED : t.id, t.name, { auto: autoOn(t.id) })}
                 {/* The itemised copy isn't another document: it's this one with every kit item listed. */}
@@ -198,7 +199,7 @@ export default function PrintMenu({ orderId, status, canInvoices = true, onStick
             {autoPrint && autoTpls && autoTpls.length > 0 && (
               <div className="rounded-b-xl border-t border-slate-200 bg-slate-50 px-1.5 pb-2 pt-2">
                 <div className="flex items-baseline justify-between px-3 pb-1">
-                  <span className="text-2xs font-semibold uppercase tracking-wide text-ink-tertiary">Automatic</span>
+                  <span className="text-2xs font-semibold text-ink-tertiary">Automatic</span>
                   <span className="text-2xs text-ink-tertiary">Applies to every job</span>
                 </div>
                 {autoTpls.map((t) => {

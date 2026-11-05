@@ -7,7 +7,7 @@ import { X } from "lucide-react";
 // sm 440 (a short form), md 560 (default), lg 840 (a record with tabs). Escape closes it.
 const WIDTH = { sm: 440, md: 560, lg: 840 } as const;
 
-export default function Drawer({ title, sub, label, onClose, children, footer, tabs, size = "md", z = 50 }: {
+export default function Drawer({ title, sub, label, onClose, children, footer, tabs, actions, size = "md", z = 50 }: {
   title: ReactNode;
   sub?: ReactNode;
   label: string;          // accessible name, e.g. "Edit client"
@@ -15,6 +15,7 @@ export default function Drawer({ title, sub, label, onClose, children, footer, t
   children: ReactNode;
   footer?: ReactNode;     // main button first
   tabs?: ReactNode;       // optional <Tabs> row under the header, outside the scrolling body
+  actions?: ReactNode;    // optional icon buttons in the header, just before Close
   size?: keyof typeof WIDTH;
   z?: number;             // lets a drawer open on top of another
 }) {
@@ -40,7 +41,10 @@ export default function Drawer({ title, sub, label, onClose, children, footer, t
             <h2 className="text-title font-semibold text-ink-primary truncate">{title}</h2>
             {sub && <div className="text-xs text-ink-tertiary mt-0.5">{sub}</div>}
           </div>
-          <IconButton label="Close" onClick={onClose} icon={<X size={18} aria-hidden />} />
+          <div className="flex items-center gap-1 shrink-0">
+            {actions}
+            <IconButton label="Close" onClick={onClose} icon={<X size={18} aria-hidden />} />
+          </div>
         </div>
         {tabs && <div className="px-5 flex-shrink-0">{tabs}</div>}
         <div className="flex-1 overflow-y-auto p-5 space-y-4">{children}</div>

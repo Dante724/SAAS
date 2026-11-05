@@ -1,6 +1,6 @@
 // Vitest: humanize — raw enum/key → human label for display.
 import { describe, it, expect } from "vitest";
-import { humanize } from "./humanize";
+import { humanize, sentenceCase } from "./humanize";
 
 describe("humanize", () => {
   it("empty/nullish → ''", () => {
@@ -28,5 +28,16 @@ describe("humanize", () => {
 
   it("single word", () => {
     expect(humanize("booked")).toBe("Booked");
+  });
+});
+
+describe("sentenceCase", () => {
+  it("lower-cases every word after the first, keeping acronyms", () => {
+    expect(sentenceCase("Work Orders")).toBe("Work orders");
+    expect(sentenceCase("Activity Log")).toBe("Activity log");
+    expect(sentenceCase("VAT And SMS Reports")).toBe("VAT and SMS reports");
+    expect(sentenceCase("finance")).toBe("Finance");
+    expect(sentenceCase("")).toBe("");
+    expect(sentenceCase(null)).toBe("");
   });
 });

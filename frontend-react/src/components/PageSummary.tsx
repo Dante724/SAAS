@@ -25,7 +25,7 @@ export default function PageSummary({ title, subtitle, actions, stats, className
       {(title || subtitle || actions) && (
         <div className="flex flex-wrap items-start gap-3 px-5 pt-4">
           <div className="min-w-0">
-            {title && <h2 className="text-base font-semibold text-ink-primary">{title}</h2>}
+            {title && <h2 className="text-sm font-semibold text-ink-primary">{title}</h2>}
             {subtitle && <p className="text-xs text-ink-tertiary">{subtitle}</p>}
           </div>
           {actions && <div className="ml-auto flex items-center gap-2">{actions}</div>}

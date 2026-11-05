@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { M } from "../../components/Shell";
 import { buttonClass } from "../../components/Button";
+import Drawer from "../../components/Drawer";
 import { api } from "../../api/client";
 import DateField from "../../components/DateField";
 import { Product, Supplier, money } from "./types";
@@ -143,18 +144,13 @@ export default function NewPODrawer({ products, onClose, onCreated }:
   const lbl = "block text-2xs font-semibold text-ink-tertiary mb-1";
 
   return (
-    <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
-      <div className="relative h-full w-full max-w-[840px] bg-white shadow-clay-drawer flex flex-col">
-        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
-          <div className="flex items-center gap-2.5">
-            
-            <h2 className="text-title font-semibold text-ink-primary">New purchase order</h2>
-          </div>
-          <button aria-label="Close" onClick={onClose} className={buttonClass("ghost", "md", "w-9 !px-0 shrink-0 text-ink-tertiary")}><M n="close" c="text-lg" /></button>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+    <Drawer size="lg" title="New purchase order" label="New purchase order" onClose={onClose}
+      footer={<>
+          <button onClick={() => save(false)} disabled={busy} className={buttonClass("primary", "md")}><M n="check" c="text-sm" />{busy ? "Creating…" : "Create and order"}</button>
+          <button onClick={() => save(true)} disabled={busy} className={buttonClass("secondary", "md")}>Save as draft</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
+          <span className="ml-auto text-sm font-semibold text-ink-primary tabular-nums">Total {money(total)}</span>
+      </>}>
           <div className="grid grid-cols-2 gap-3">
             <div>
               <div className="flex items-center justify-between mb-1"><label className={lbl} style={{ margin: 0 }}>Supplier *</label>
@@ -247,15 +243,6 @@ export default function NewPODrawer({ products, onClose, onCreated }:
             </div>
           )}
           {err && <div className="text-xs text-rose-600 font-semibold">{err}</div>}
-        </div>
-
-        <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
-          <button onClick={() => save(false)} disabled={busy} className={buttonClass("primary", "md")}><M n="check" c="text-sm" />{busy ? "Creating…" : "Create and order"}</button>
-          <button onClick={() => save(true)} disabled={busy} className={buttonClass("secondary", "md")}>Save as draft</button>
-          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
-          <span className="ml-auto text-sm font-semibold text-ink-primary tabular-nums">Total {money(total)}</span>
-        </div>
-      </div>
-    </div>
+    </Drawer>
   );
 }

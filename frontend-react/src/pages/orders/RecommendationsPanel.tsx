@@ -122,7 +122,7 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
           {drafts.length > 1 && (
             <Gate perm="can_publish_recommend">
               <button disabled={busy} onClick={() => call(() => api.post(`/orders/${orderId}/recommendations/publish-all`, {}), (r) => flashDelivery(onFlash, r?.delivery, `${Array.isArray(r?.published) ? r.published.length : (r?.published ?? drafts.length)} shown on the customer's tracking page`))}
-                className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-primary hover:bg-slate-50">Send all {drafts.length}</button>
+                className={buttonClass("secondary")}>Send all {drafts.length}</button>
             </Gate>
           )}
         </div>
@@ -235,24 +235,24 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
                     )}
                     {r.status === "draft" && can("can_publish_recommend") && (
                       <button disabled={busy} onClick={() => call(() => api.post(`/orders/${orderId}/recommendations/${r.id}/publish`, {}), (res) => flashDelivery(onFlash, res?.delivery, "Shown on the customer's tracking page"))}
-                        className="h-8 rounded-lg bg-primary px-2.5 text-xs font-semibold text-white hover:brightness-110">Send to customer</button>
+                        className={buttonClass("primary", "sm")}>Send to customer</button>
                     )}
                     {r.status === "sent" && can("can_publish_recommend") && (
                       <button disabled={busy} onClick={() => call(() => api.post(`/orders/${orderId}/recommendations/${r.id}/unpublish`, {}), "Taken back to draft")}
-                        className="h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-ink-secondary hover:bg-slate-50">Unsend</button>
+                        className={buttonClass("secondary", "sm")}>Unsend</button>
                     )}
                     {(r.status === "sent" || r.status === "declined" || r.status === "draft") && can("can_approve_rec_for_customer") && (
                       <button disabled={busy} onClick={async () => {
                         const name = await promptDialog("Who said yes? (the customer's name)", { title: "Customer said yes", confirmLabel: `Add ${money(total)} to the job` });
                         if (name === null) return;
                         await call(() => api.post(`/orders/${orderId}/recommendations/${r.id}/approve-for-customer`, { how: "phone", customer_name: name || null }), `${r.title} added to the job`);
-                      }} className="h-8 rounded-lg border border-slate-200 bg-white px-2.5 text-xs font-semibold text-ink-primary hover:bg-slate-50">Customer said yes</button>
+                      }} className={buttonClass("secondary", "sm")}>Customer said yes</button>
                     )}
                     {r.status !== "approved" && can("can_recommend") && (
                       <button disabled={busy} aria-label={`Delete ${r.title}`} onClick={async () => {
                         if (!(await confirmDialog(`Delete "${r.title}"?`, { title: "Delete recommendation", confirmLabel: "Delete", danger: true }))) return;
                         await call(() => api.del(`/orders/${orderId}/recommendations/${r.id}`), "Deleted");
-                      }} className="h-8 rounded-lg px-2 text-xs font-semibold text-ink-tertiary hover:text-rose-600">Delete</button>
+                      }} className={buttonClass("ghost", "sm", "text-ink-tertiary hover:!text-rose-700")}>Delete</button>
                     )}
                   </div>
                 </div>

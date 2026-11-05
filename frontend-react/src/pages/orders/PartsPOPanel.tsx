@@ -210,7 +210,7 @@ export default function PartsPOPanel({ orderId, lines, canBuy, isEstimate, onClo
                     <span className="text-xs text-ink-primary truncate flex-1">{l.description || "Part"}</span>
                     <span className="text-xs tabular-nums text-amber-700">{n(l.pending_stock || 0)} owed</span>
                     {canBuy && <button type="button" onClick={() => writeOff(l)} disabled={busy !== null}
-                      className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-2xs font-semibold text-ink-primary hover:bg-slate-50 disabled:opacity-50">{busy === `w${l.id}` ? "Using…" : "Use from stock"}</button>}
+                      className={buttonClass("secondary", "sm")}>{busy === `w${l.id}` ? "Using…" : "Use from stock"}</button>}
                   </div>
                 ))}
               </div>

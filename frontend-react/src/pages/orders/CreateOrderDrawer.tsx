@@ -230,7 +230,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                   <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50/70 px-3 py-2.5">
                     <Avatar name={client.name} size={36} />
                     <span className="min-w-0 flex-1"><span className="block truncate text-sm font-semibold text-ink-primary">{client.name}</span><span className="block text-xs text-ink-tertiary tabular-nums">{client.phone || "No phone"}</span></span>
-                    <button type="button" className="h-8 rounded-lg px-2.5 text-xs font-semibold text-primary hover:bg-white" onClick={() => { setClient(null); setQ(""); }}>Change</button>
+                    <button type="button" className={buttonClass("ghost", "sm", "!text-primary")} onClick={() => { setClient(null); setQ(""); }}>Change</button>
                   </div>
                 ) : (
                   <div className="flex items-center gap-2">
@@ -325,7 +325,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                         <input id="intake-passcode" type={showPass ? "text" : "password"} autoComplete="off" value={passcode} onChange={(e) => setPasscode(e.target.value)}
                           className="glass-input font-mono block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg" placeholder="So the technician can test it" />
                         <button type="button" onClick={() => setShowPass((v) => !v)} aria-label={showPass ? "Hide passcode" : "Show passcode"} title={showPass ? "Hide" : "Show"}
-                          className="shrink-0 w-8 h-8 rounded-lg border border-slate-200 text-ink-tertiary hover:text-ink-primary hover:bg-slate-50 grid place-items-center"><M n={showPass ? "visibility_off" : "visibility"} c="text-sm" /></button>
+                          className={buttonClass("secondary", "sm", "w-8 !px-0 text-ink-tertiary")}><M n={showPass ? "visibility_off" : "visibility"} c="text-sm" /></button>
                       </div>
                       <p className="text-2xs text-ink-tertiary">Kept locked on the {term.asset.toLowerCase()}. Only staff who are allowed can see it.</p>
                     </div>
