@@ -89,7 +89,7 @@ None. No finding lets one shop read or alter another shop's data, and none loses
 | M19 | If Redis is configured but unreachable, rate limits silently fall back to per-process counters | `ratelimit.py:84-124`; no log line, no readiness signal | WARN log; report the rate-limit store in `/readyz` | observability |
 | M20 | The "REDIS_URL required when WEB_CONCURRENCY > 1" guard is bypassed by `--workers N` and by replicas | `config.py:380` reads only the env var | Require Redis whenever deployed, or count workers in the DB | config |
 | M21 | `status-sla-sweep` loads every open order of every shop every 10 minutes | `sla.py:43-70`: 1.9 s / 52.7k rows at 103 shops, about 19 s at 1,000 | Skip shops with no SLA; do the breach test in SQL | services/sla |
-| M22 | Invoice → Order vs Order → Invoice lock-order cycle | `finance.py:669,804` vs `invoice_money.py:248` (architect) | Lock invoice(s) → order → client everywhere. #111 does this for `cash._pay_order`; still to do: `_prepay_order`, the terminal/webhook paths and `credit_notes.py:58` | invoicing |
+| M22 | Invoice → Order vs Order → Invoice lock-order cycle | `finance.py:669,804` vs `invoice_money.py:248` (architect) | Order locked `FOR NO KEY UPDATE`, then Invoice, then Client, everywhere. #111's revision covers `_pay_order`, `lock_order`, terminal capture, refunds and `refund_overpayment` | invoicing |
 
 ### Low
 
@@ -150,7 +150,10 @@ Baseline, all on Postgres 16:
   - H2's first fix deadlocked two POs (reproduced, then fixed with id-ordered locks).
   - H3's first fix still double-paid hours (reproduced, then fixed).
   - H7's fix, as delivered, deadlocked two payments on a shared invoice. The chair traced it in the Postgres log and fixed it by taking the invoice locks before the job.
-  - Lock order: the architect proposed Order → Invoice → Client. The chair's deadlock trace showed that the existing `finance._record_payment` order, **Invoice → Order → Client**, is the one every path must follow. Prefer atomic `add_to_column` to new `FOR UPDATE` locks.
+  - Lock order (corrected after the PM's independent review): **Order → Invoice → Client**, with Order locked `FOR NO KEY UPDATE` (`with_for_update(key_share=True)`).
+    - Root cause of the shared-invoice deadlock: `invoices.order_id` is an FK. An invoice UPDATE therefore takes FOR KEY SHARE on its job, which a plain `FOR UPDATE` on Order blocks.
+    - The chair's first fix (lock invoices before the job) caused a new pay-vs-prepay deadlock and is being reverted in #111.
+    - Prefer atomic `add_to_column` to new `FOR UPDATE` locks.
 
 ## Hardening plan (excluding in-flight work)
 
@@ -169,7 +172,7 @@ In-flight work that this plan does not duplicate:
 
 **First beta week:**
 1. Drawer correctness: M9 POS refund leg, M10 one open drawer, Low-1 guards after the shift has closed.
-2. Lock order Invoice → Order → Client on the remaining paths (M22). Mechanical pass converting the remaining read-modify-writes to `add_to_column` (Low list).
+2. Lock order: Order (FOR NO KEY UPDATE) → Invoice → Client on every money path (M22, being done in #111). Mechanical pass converting the remaining read-modify-writes to `add_to_column` (Low list).
 3. Stock cost layers: M3 stocktake/transfer, M5, M8, M6, M7. PO edit guard (M4).
 4. Shop-day reports (M12). Line-edit audit trail (M16).
 5. Web client: request timeout and "no connection" message; keys on add-line and job-create (M13).
@@ -221,7 +224,7 @@ The chair's review changed three of the PRs, each with a test:
 | H4 void legs posted atomically | High | #103 | |
 | H5 client balance moved through `add_to_column` | High | #105 | |
 | H6 balance-pay spends the credit at once | High | #109 | **Most invasive.** Early `charge` row plus a guarded balance UPDATE; review the reopen semantics carefully |
-| H7 `Invoice.amount_paid` moved atomically | High | #111 | `add_to_column` at 7 sites. **Chair fixed a deadlock** (the test returned 500 three times out of three): `_pay_order` now locks invoices before the job. 180 related tests pass |
+| H7 `Invoice.amount_paid` moved atomically | High | #111 | `add_to_column` at 7 sites. The test deadlocked (500, 3/3). The chair's invoice-first lock fixed that but **added a pay-vs-prepay deadlock**, which the PM's review found. **Do not merge as is.** It is being revised to use FOR NO KEY UPDATE on Order |
 | H8 invoice keeps the job's tax | High | #106 | |
 | H9 reserve locks rows; qty > 0 | High | #108 | |
 | H10 `/bins/batches` goes through stock posting; `consume` and `allocate-serial` removed | High | #104 | No UI callers. Two route lines dropped from `ungated_write_routes.txt` |
