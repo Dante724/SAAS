@@ -4420,10 +4420,29 @@ async def _catalog_warranty(db, org_id, kind, ref_id) -> int:
 async def add_line(
     order_id: str,
     data: LineIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
-    """Add a service/product/fee to an existing order (Orderry Services & Products tab)."""
+    """Add a service/product/fee to an existing order (Orderry Services & Products tab).
+
+    Council M13: a retried add (double tap, a phone timeout that did reach the server, Tekly Go's
+    queue replay) with the same Idempotency-Key gets the first answer back instead of adding the
+    line again and taking stock twice, the same way orders.create and orders.finish work."""
+    from backend.services.idempotency import idem_begin
+    claim = await idem_begin(db, current.org_id, request, "orders.add_line")
+    if claim.replay is not None:
+        return claim.replay
+    try:
+        result = await _add_line(order_id, data, db, current)
+    except BaseException:
+        await claim.release(db)
+        raise
+    await claim.finish(db, result)
+    return result
+
+
+async def _add_line(order_id: str, data: LineIn, db: AsyncSession, current: Employee):
     order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
