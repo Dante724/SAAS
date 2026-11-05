@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Clock, Loader2 } from "lucide-react";
+import { Check, ChevronDown, Clock, Loader2, X } from "lucide-react";
 import ScanButton from "../components/ScanButton";
 import Button, { buttonClass } from "../components/Button";
-import { ErrorState } from "../components/EmptyState";
+import EmptyState from "../components/EmptyState";
 import PublicLayout, { Field as Float, PublicTitle, accentFill, inputCls, onColor, publicCard, selectCls, shopAccent, textareaCls } from "./PublicLayout";
 
 // Self check-in (docs/SPEC_self_checkin.md). /c/<token> is a check-in point's QR: the form comes
@@ -212,7 +212,7 @@ export default function PublicCheckin({ token }: { token: string }) {
     return () => clearTimeout(t);
   }, [done, page]);
 
-  if (gone) return <Shell><div className={card}><ErrorState size="page" title="This check-in code isn't working" body={gone} /></div></Shell>;
+  if (gone) return <Shell><div role="alert" className={card}><EmptyState size="page" icon={<X size={20} />} title="This check-in code isn't working" body={gone} /></div></Shell>;
   if (!page) return <Shell shop={null}><div className="mt-8 flex justify-center text-ink-tertiary"><Loader2 className="animate-spin" /></div></Shell>;
 
   const { form, shop } = page;
@@ -471,7 +471,7 @@ export function PublicCheckinStatus({ token }: { token: string }) {
     setS((x) => (x ? { ...x, state: "cancelled" } : x));
   }
 
-  if (err) return <Shell><div className={card}><ErrorState size="page" title={err} body="The link may be old or mistyped. Ask at the counter and the shop will find your place." /></div></Shell>;
+  if (err) return <Shell><div role="alert" className={card}><EmptyState size="page" icon={<X size={20} />} title={err} body="The link may be old or mistyped. Ask at the counter and the shop will find your place." /></div></Shell>;
   if (!s) return <Shell shop={null}><div className="mt-8 flex justify-center text-ink-tertiary"><Loader2 className="animate-spin" /></div></Shell>;
   const accent = shopAccent(s.shop?.color);
   const head = s.state === "called" ? "You're up. Please come to the counter."
