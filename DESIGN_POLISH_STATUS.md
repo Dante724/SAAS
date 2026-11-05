@@ -4,25 +4,34 @@ Updated: 2026-11-05 ~17:30 UTC (cloud session). Base branch: `roadmap/orderry-pa
 This branch only carries this file. It is a report, not something to merge.
 
 ## Blocker
-**#122 (Phase 3 brand) is not merged yet** (checked 2026-11-05 ~20:45 UTC). A is ready on `fix/design-polish-a`.
+**#122 (Phase 3 brand) is not merged yet** (merged 2026-11-05; see the update below). A is ready on `fix/design-polish-a`.
 Its PR opens after #122 merges and A is rebased onto the beta branch. B is prepared on `fix/design-polish-b`
 (on top of A for now), C on `fix/design-polish-c` (on top of B) and D on `fix/design-polish-d` (on top of C). Each PR opens after the one before it
 merges, rebased onto the beta branch. No PRs are stacked.
 
-## Waiting on a decision: force-push blocked
-The beta branch moved (#142: Work orders and Inventory layouts restored; Settings › General save bar).
-I rebased A→D onto it locally: no conflicts. On the new base, tsc, both lints, vitest 760/760 and build
-pass; tab-shift is 34/34; visual is 44/44. I recorded D's baselines again and masked countdowns
-("7090h left"), which change every hour.
+## Update 2026-11-05 21:35 UTC: #122 merged; the beta branch moved past these branches
+The beta branch is now `cb1e9e13`. Since these branches were made, it has gained:
+- #144: the pre-Phase-2 page layouts restored, so the `lint:design` baseline is back to 969;
+- #139: the audit's design-capture tooling (`scripts/design-capture/capture.mjs`);
+- #153: A's contrast fixes, ported by the PM session onto the restored layouts, with my token values;
+- #154 and #155: 112 hand-made buttons moved onto the shared Button.
 
-Pushing the rebased branches needs a force-push, and this session's permission check blocked it. The
-pushed `fix/design-polish-a..d` are still the earlier, pre-rebase versions. The rebased commits exist
-on GitHub under new names, pushed normally with no history rewritten: `fix/design-polish-a-rebased` (9f27ebaa),
-`-b-rebased` (8c5818ea), `-c-rebased` (08a5cff1) and `-d-rebased` (1262d4e3).
+So:
+- **A: done on the beta branch through #153.** I'm not opening a PR for it; it would duplicate #153 and
+  undo pages the PM session chose to keep.
+- **B: partly done.** Its button work landed in #154 and #155. Not yet on the beta branch:
+  - PO, new-PO and stock-take panels on the shared Drawer (Escape);
+  - the Send menu off bold;
+  - the Reports 44px phone row;
+  - type hierarchy: settings title 16px → 14px, and 10 places still use CSS capitals.
+- **C** (persistent frame and shared skeleton) and **D** (pixel screenshot checks): not on the beta branch.
 
-Opening each PR on top of the beta branch will need the same kind of push. Options:
-1. allow force-push to `fix/design-polish-*` for this session; or
-2. open each PR from its `-rebased` branch, which is already pushed, and leave the old branches as they are.
+B, C and D were built on the Phase-2 layouts and conflict with the restored ones, so each would be
+rebuilt on the current beta branch, not rebased. I'm holding until the owner or PM decides:
+1. rebuild B's remaining items, then C, then D, one PR at a time on the current beta branch; or
+2. the PM session ports them itself, as it did with A; the branches are reference copies
+   (`fix/design-polish-*-rebased`); or
+3. drop the parts that no longer fit the restored layouts.
 
 ## How it's measured
 `scripts/design-capture/capture.js` (added in A, with a README) checks every staff screen and tab, plus a
