@@ -2126,7 +2126,7 @@ async def convert_estimate_endpoint(
     job needs the same permission as creating one at the counter, and the record must be
     within the person's access (E1)."""
     est = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
-        .options(selectinload(Order.lines)).with_for_update(of=Order))).scalar_one_or_none()
+        .options(selectinload(Order.lines)).with_for_update(of=Order, key_share=True))).scalar_one_or_none()
     if not est:
         raise HTTPException(404, "Estimate not found")
     await _guard_order_access(db, current, est)
@@ -3391,11 +3391,13 @@ async def reserve_stock_for_order(
     from datetime import timedelta
     from backend.models import Part, StockReservation
 
-    # Lock the job first (Order, then its stock rows): two reserve clicks at once each read
-    # "nothing held yet" and together held twice what the job needs.
+    # Lock the job first (Order FOR NO KEY UPDATE, then its stock rows sorted by product): two
+    # reserve clicks at once each read "nothing held yet" and together held twice what the job
+    # needs. NO KEY UPDATE, like the money paths, so rows that only reference the job by FK
+    # (invoices, holds) don't queue behind it.
     order = (await db.execute(
         select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
-        .options(selectinload(Order.lines)).with_for_update(of=Order))).scalar_one_or_none()
+        .options(selectinload(Order.lines)).with_for_update(of=Order, key_share=True))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, order)
