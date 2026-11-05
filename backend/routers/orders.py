@@ -3398,6 +3398,9 @@ async def reserve_stock_for_order(
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, order)
     hold_days = max(1, min(int(data.hold_days or 7), 180))
+    # council M7: holds past their date used to block until someone opened the reservations list
+    from backend.routers.inventory import _release_expired
+    await _release_expired(db, current.org_id)
 
     # how much is already actively held for this order, per part (don't double-reserve)
     held: dict[str, float] = {}

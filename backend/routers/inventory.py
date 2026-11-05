@@ -1173,6 +1173,8 @@ async def reserve_stock(
 ):
     """Reserve stock for an order. Reserved qty is excluded from available."""
     from backend.models import Location
+    # council M7: holds past their date used to block until someone opened the reservations list
+    await _release_expired(db, current.org_id)
     part = (await db.execute(select(Part.id).where(
         Part.id == data.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
     loc = (await db.execute(select(Location.id).where(
