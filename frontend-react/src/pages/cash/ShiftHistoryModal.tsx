@@ -3,7 +3,6 @@
 // surface (the GET /shifts endpoint requires can_view_finance).
 import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
-import { buttonClass } from "../../components/Button";
 import { api } from "../../api/client";
 import { money } from "../orders/types";
 
@@ -27,11 +26,11 @@ export default function ShiftHistoryModal({ sym, onClose }: { sym?: string; onCl
   }, []);
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-ink-primary/40 p-4" role="presentation" onClick={onClose}>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30 p-4" role="presentation" onClick={onClose}>
       <div className="relative bg-white rounded-2xl shadow-clay-drawer border border-slate-200 w-full max-w-2xl p-5" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-3">
-          <h3 className="text-sm font-semibold text-ink-primary flex items-center gap-2"><M n="history" c="text-base text-primary" />Drawer history &amp; reconciliation</h3>
-          <button aria-label="Close" onClick={onClose} className={buttonClass("ghost", "sm", "w-8 !px-0 text-ink-tertiary")}><M n="close" c="text-base" /></button>
+          <h3 className="text-sm font-bold text-ink-primary flex items-center gap-2"><M n="history" c="text-base text-primary" />Drawer history &amp; reconciliation</h3>
+          <button aria-label="Close" onClick={onClose} className="w-7 h-7 rounded-full flex items-center justify-center text-ink-tertiary hover:bg-slate-100"><M n="close" c="text-base" /></button>
         </div>
         {err && <p className="text-xs text-rose-600 py-4">{err}</p>}
         {!rows && !err && <p className="text-xs text-ink-tertiary py-6 text-center">Loading…</p>}
@@ -39,7 +38,7 @@ export default function ShiftHistoryModal({ sym, onClose }: { sym?: string; onCl
         {rows && !!rows.length && (
           <div className="overflow-y-auto max-h-96 -mx-1">
             <table className="w-full text-xs">
-              <thead><tr className="text-2xs font-semibold text-ink-tertiary text-left border-b border-slate-200">
+              <thead><tr className="text-[11px] font-bold text-ink-tertiary text-left border-b border-slate-200">
                 <th className="py-2 px-2">Opened</th><th className="px-2">By</th><th className="px-2 text-right">Opening</th>
                 <th className="px-2 text-right">Expected</th><th className="px-2 text-right">Counted</th>
                 <th className="px-2 text-right">Diff</th><th className="px-2 text-right">Status</th></tr></thead>
@@ -54,7 +53,7 @@ export default function ShiftHistoryModal({ sym, onClose }: { sym?: string; onCl
                       <td className="px-2 text-right tabular-nums">{s.expected_cash != null ? money(s.expected_cash, sym) : "—"}</td>
                       <td className="px-2 text-right tabular-nums">{s.closing_float != null ? money(s.closing_float, sym) : "—"}</td>
                       <td className={`px-2 text-right tabular-nums font-bold ${s.discrepancy == null ? "text-ink-tertiary" : Math.abs(s.discrepancy) < 0.01 ? "text-emerald-600" : "text-rose-600"}`}>{s.discrepancy != null ? (s.discrepancy > 0 ? "+" : "") + money(s.discrepancy, sym) : "—"}</td>
-                      <td className="px-2 text-right"><span className={`text-2xs px-1.5 py-0.5 rounded-full font-semibold ${st.cls}`}>{st.label}</span></td>
+                      <td className="px-2 text-right"><span className={`text-[11px] px-1.5 py-0.5 rounded font-bold ${st.cls}`}>{st.label}</span></td>
                     </tr>
                   );
                 })}

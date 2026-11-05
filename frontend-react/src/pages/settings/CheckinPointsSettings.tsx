@@ -6,11 +6,6 @@ import { printHtmlInFrame } from "../../lib/safeHtml";
 import { useMe } from "../../context/Me";
 import Switch from "../../components/Switch";
 import SaveFooter from "../../components/SaveFooter";
-import Section from "../../components/Section";
-import Button, { IconButton } from "../../components/Button";
-import { fieldClass, labelClass } from "../../components/Field";
-import { SettingRow } from "../../components/SettingRow";
-import { rowField } from "./kit";
 
 // Settings › Public pages › Self check-in: the check-in points of each location. Every point has
 // its own QR (unique, replaceable), a mode and the job types it offers; the form itself comes
@@ -33,9 +28,17 @@ const MODE_HINT: Record<Point["mode"], string> = {
   key_drop: "Key drop only",
 };
 
-// One setting: label and why on the left, its control on the right (under it on phones).
+// One setting: label and why on the left, its control on the right.
 function Row({ label, help, htmlFor, children }: { label: string; help?: string; htmlFor?: string; children: React.ReactNode }) {
-  return <div className="py-3"><SettingRow stack label={label} help={help} htmlFor={htmlFor}>{children}</SettingRow></div>;
+  return (
+    <div className="flex items-center gap-6 py-3">
+      <div className="min-w-0 flex-1">
+        <label htmlFor={htmlFor} className="block text-sm font-medium text-ink-primary">{label}</label>
+        {help && <p className="mt-0.5 text-xs text-ink-tertiary">{help}</p>}
+      </div>
+      <div className="shrink-0">{children}</div>
+    </div>
+  );
 }
 
 function PointRow({ p, types, canEdit, onSaved, onFlash }: { p: Point; types: JobType[]; canEdit: boolean; onSaved: (p: Point) => void; onFlash: (m: string) => void }) {
@@ -74,24 +77,23 @@ function PointRow({ p, types, canEdit, onSaved, onFlash }: { p: Point; types: Jo
     try { await navigator.clipboard.writeText(p.url || window.location.origin + p.path); onFlash("Link copied"); } catch { onFlash(p.url || p.path); }
   }
   const item = "w-full flex items-center gap-2.5 px-3 py-2 rounded-lg text-sm text-ink-primary hover:bg-slate-50 text-left";
-  const inp = fieldClass();
+  const inp = "glass-input rounded-xl px-3 py-2 text-sm";
 
   return (
     <div className={p.active ? "" : "bg-slate-50/60"}>
-      {/* On phones the buttons wrap under the name instead of squeezing it to nothing. */}
-      <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-3">
+      <div className="flex items-center gap-3 px-5 py-4">
         <span className={`h-10 w-10 shrink-0 rounded-xl grid place-items-center ${p.active ? "bg-primary/10 text-primary" : "bg-slate-100 text-ink-tertiary"}`}><M n="qr_code_2" c="text-xl" /></span>
-        <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="min-w-0 flex-1 basis-40 text-left">
-          <span className="flex items-center gap-2 min-w-0">
+        <button type="button" onClick={() => setOpen((o) => !o)} aria-expanded={open} className="min-w-0 flex-1 text-left">
+          <span className="flex items-center gap-2">
             <span className="text-sm font-semibold text-ink-primary truncate">{p.name}</span>
-            <span className={`shrink-0 text-2xs font-semibold px-1.5 py-0.5 rounded-md ${p.active ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-ink-tertiary"}`}>{p.active ? "Active" : "Off"}</span>
+            <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded-md ${p.active ? "bg-emerald-50 text-emerald-700" : "bg-slate-100 text-ink-tertiary"}`}>{p.active ? "Active" : "Off"}</span>
           </span>
           <span className="block text-xs text-ink-tertiary truncate">{MODE_HINT[p.mode]} · {p.scans} scans · {p.submits} check-ins</span>
         </button>
-        <div className="flex items-center gap-2 max-sm:w-full max-sm:pl-[3.25rem]">
-        <Button onClick={poster} icon={<M n="print" c="text-sm" />}>Print poster</Button>
+        <button onClick={poster} className="h-9 px-3 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 flex items-center gap-1.5"><M n="print" c="text-sm" />Print poster</button>
         <div ref={menuRef} className="relative">
-          <IconButton variant="secondary" label={`More for ${p.name}`} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((m) => !m)} icon={<M n="more_horiz" c="text-base" />} />
+          <button type="button" aria-label={`More for ${p.name}`} aria-haspopup="menu" aria-expanded={menu} onClick={() => setMenu((m) => !m)}
+            className="h-9 w-9 rounded-xl border border-slate-200 bg-white grid place-items-center text-ink-secondary hover:bg-slate-50"><M n="more_horiz" c="text-base" /></button>
           {menu && (
             <div role="menu" className="absolute right-0 top-full mt-1.5 z-40 w-52 bg-raised rounded-xl border border-slate-200/80 shadow-clay-card p-1">
               <button role="menuitem" className={item} onClick={() => { setMenu(false); openAuthedDoc(`/api/checkins/points/${p.id}/qr.svg`).catch(() => onFlash("Couldn't download the QR")); }}><M n="download" c="text-base text-ink-tertiary" />Download QR</button>
@@ -102,20 +104,20 @@ function PointRow({ p, types, canEdit, onSaved, onFlash }: { p: Point; types: Jo
             </div>
           )}
         </div>
-        <Button variant="ghost" aria-label={open ? `Close ${p.name}` : `Edit ${p.name}`} onClick={() => setOpen((o) => !o)}>
+        <button type="button" aria-label={open ? `Close ${p.name}` : `Edit ${p.name}`} onClick={() => setOpen((o) => !o)}
+          className="h-9 px-3 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100 flex items-center gap-1">
           {open ? "Close" : "Edit"}<M n={open ? "expand_less" : "expand_more"} c="text-base" />
-        </Button>
-        </div>
+        </button>
       </div>
 
       {open && (
-        <div className="px-4 pb-4">
+        <div className="px-5 pb-4">
           <div className="rounded-xl border border-slate-200/80 bg-white px-4 divide-y divide-slate-100">
             <Row label="Name" htmlFor={`name-${p.id}`} help="Printed on the poster, e.g. Front door or Key box.">
-              <input id={`name-${p.id}`} aria-label="Point name" value={f.name} disabled={!canEdit} onChange={(e) => set({ name: e.target.value })} className={`${inp} ${rowField} sm:w-56`} />
+              <input id={`name-${p.id}`} aria-label="Point name" value={f.name} disabled={!canEdit} onChange={(e) => set({ name: e.target.value })} className={`${inp} w-56`} />
             </Row>
             <Row label="How it works" htmlFor={`mode-${p.id}`} help={f.mode === "auto" ? "Walk-in queue while you're open, key drop when you're closed." : undefined}>
-              <select id={`mode-${p.id}`} value={f.mode} disabled={!canEdit} onChange={(e) => set({ mode: e.target.value as Point["mode"] })} className={`${inp} ${rowField} sm:w-56`}>
+              <select id={`mode-${p.id}`} value={f.mode} disabled={!canEdit} onChange={(e) => set({ mode: e.target.value as Point["mode"] })} className={`${inp} w-56`}>
                 {MODES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
               </select>
             </Row>
@@ -184,41 +186,39 @@ export default function CheckinPointsSettings() {
   const byLoc = new Map<string, Point[]>();
   for (const p of points || []) byLoc.set(p.location || "", [...(byLoc.get(p.location || "") || []), p]);
 
-  const label = (id: string, text: string) => <label htmlFor={id} className={labelClass}>{text}</label>;
   return (
-    <Section label="Self check-in" icon="qr_code_2" title="Self check-in"
-      description="Customers scan a QR at the door, key box or counter and check themselves in. Check-ins appear in Inquiries › Walk-ins."
-      actions={canEdit && <Button variant="primary" onClick={() => setAdd({ location_id: locs[0]?.id || "", name: "", mode: "walk_in" })} disabled={!!add} icon={<M n="add" c="text-sm" />}>Add check-in point</Button>}>
-      <div className="space-y-4">
+    <section className="max-w-4xl space-y-4 pb-10">
+      <div className="flex flex-col items-start gap-3">
+        <div className="min-w-0">
+          <h2 className="text-base font-semibold text-ink-primary">Self check-in</h2>
+          <p className="mt-0.5 text-sm text-ink-tertiary">Customers scan a QR at the door, key box or counter and check themselves in. Check-ins appear in Inquiries › Walk-ins.</p>
+        </div>
+        {canEdit && <button onClick={() => setAdd({ location_id: locs[0]?.id || "", name: "", mode: "walk_in" })} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90 flex-shrink-0 flex items-center gap-1.5"><M n="add" c="text-sm" />Add check-in point</button>}
+      </div>
       {msg && <p role="status" className="text-xs text-ink-secondary">{msg}</p>}
       {add && (
-        <div className="rounded-xl border border-slate-200 bg-white p-4 space-y-3">
-          <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-            <div>{label("new-pt-loc", "Location")}
-              <select id="new-pt-loc" value={add.location_id} onChange={(e) => setAdd({ ...add, location_id: e.target.value })} className={fieldClass("pr-8")}>{locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
-            <div>{label("new-pt-name", "Name")}
-              <input id="new-pt-name" value={add.name} onChange={(e) => setAdd({ ...add, name: e.target.value })} placeholder="Key box" className={fieldClass()} /></div>
-            <div>{label("new-pt-mode", "How it works")}
-              <select id="new-pt-mode" value={add.mode} onChange={(e) => setAdd({ ...add, mode: e.target.value as Point["mode"] })} className={fieldClass("pr-8")}>{MODES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></div>
-          </div>
-          <div className="flex flex-wrap gap-2">
-            <Button variant="primary" onClick={create} disabled={!add.name.trim()}>Add</Button>
-            <Button onClick={() => setAdd(null)}>Cancel</Button>
-          </div>
+        <div className="rounded-2xl border border-slate-200 bg-white p-4 flex flex-wrap items-end gap-2 text-xs">
+          <div><label htmlFor="new-pt-loc" className="block text-sm font-medium text-ink-primary mb-1.5">Location</label>
+            <select id="new-pt-loc" value={add.location_id} onChange={(e) => setAdd({ ...add, location_id: e.target.value })} className="glass-input rounded-xl px-3 py-2 text-sm">{locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+          <div><label htmlFor="new-pt-name" className="block text-sm font-medium text-ink-primary mb-1.5">Name</label>
+            <input id="new-pt-name" value={add.name} onChange={(e) => setAdd({ ...add, name: e.target.value })} placeholder="Key box" className="glass-input rounded-xl px-3 py-2 text-sm" /></div>
+          <div><label htmlFor="new-pt-mode" className="block text-sm font-medium text-ink-primary mb-1.5">How it works</label>
+            <select id="new-pt-mode" value={add.mode} onChange={(e) => setAdd({ ...add, mode: e.target.value as Point["mode"] })} className="glass-input rounded-xl px-3 py-2 text-sm">{MODES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></div>
+          <button onClick={create} disabled={!add.name.trim()} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90 disabled:opacity-40">Add</button>
+          <button onClick={() => setAdd(null)} className="h-9 px-3.5 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>
         </div>
       )}
-      {points === null && <div className="sk h-16 rounded-xl" aria-busy="true" />}
+      {points === null && <p className="text-xs text-ink-tertiary">Loading…</p>}
       {[...byLoc.entries()].map(([loc, list]) => (
         <div key={loc} className="space-y-2">
-          <div className="flex items-center gap-1.5 text-xs font-semibold text-ink-secondary"><M n="location_on" c="text-sm text-ink-tertiary" />{loc}</div>
-          <div className="rounded-xl border border-slate-200/90 bg-white divide-y divide-slate-100 overflow-visible">
+          <div className="flex items-center gap-1.5 px-1 text-xs font-semibold uppercase tracking-wide text-ink-tertiary"><M n="location_on" c="text-sm" />{loc}</div>
+          <div className="rounded-2xl border border-slate-200/90 bg-white shadow-clay-sm divide-y divide-slate-100 overflow-visible">
             {list.map((p) => <PointRow key={p.id} p={p} types={types} canEdit={canEdit} onFlash={flash}
               onSaved={(np) => setPoints((ps) => (ps || []).map((x) => (x.id === np.id ? np : x)))} />)}
           </div>
         </div>
       ))}
-      <p className="text-xs text-ink-tertiary">To ask job-specific questions at check-in, tick "Self check-in" on a field in Settings › Forms.</p>
-      </div>
-    </Section>
+      <p className="px-1 text-xs text-ink-tertiary">To ask job-specific questions at check-in, tick "Self check-in" on a field in Settings › Forms.</p>
+    </section>
   );
 }

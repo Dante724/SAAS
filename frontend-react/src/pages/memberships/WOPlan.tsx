@@ -1,6 +1,5 @@
 import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
-import Button from "../../components/Button";
 import { api } from "../../api/client";
 import { money } from "../orders/types";
 import { tint, hueText } from "../../lib/tint";
@@ -33,16 +32,16 @@ export function PlanBanner({ orderId, refreshKey, onChanged }: { orderId: string
               <div className="h-8 w-8 rounded-lg grid place-items-center bg-white/75" style={{ color: hueText(m.color) }}><M n="workspace_premium" c="text-base" /></div>
               <div className="min-w-0 flex-1">
                 <div className="text-xs font-semibold text-ink-primary">{m.plan} member{m.status === "paused" ? " · paused until paid" : ""}</div>
-                <div className="text-2xs text-ink-secondary">Since {fmtDate(m.starts_on)}{m.saved ? ` · saved ${money(m.saved)} this plan year` : ""}{discount ? ` · ${discount.text}` : ""}</div>
+                <div className="text-[11px] text-ink-secondary">Since {fmtDate(m.starts_on)}{m.saved ? ` · saved ${money(m.saved)} this plan year` : ""}{discount ? ` · ${discount.text}` : ""}</div>
               </div>
               {d.coverable > 0 && (d.can_apply
-                ? <Button size="sm" onClick={apply} disabled={busy}>Apply plan to {d.coverable} line{d.coverable > 1 ? "s" : ""}</Button>
-                : <span className="text-2xs text-ink-tertiary">{d.coverable} line{d.coverable > 1 ? "s" : ""} could be covered. Ask a manager.</span>)}
+                ? <button onClick={apply} disabled={busy} className="h-8 px-3 rounded-lg bg-white border border-slate-200 text-xs font-semibold text-ink-primary hover:bg-slate-50">Apply plan to {d.coverable} line{d.coverable > 1 ? "s" : ""}</button>
+                : <span className="text-[11px] text-ink-tertiary">{d.coverable} line{d.coverable > 1 ? "s" : ""} could be covered. Ask a manager.</span>)}
             </div>
             {services.length > 0 && (
               <div className="flex flex-wrap gap-x-4 gap-y-2 bg-white px-3 py-2.5">
                 {services.map((i) => (
-                  <span key={i.id} className="inline-flex items-center gap-2 text-2xs text-ink-secondary">
+                  <span key={i.id} className="inline-flex items-center gap-2 text-[11px] text-ink-secondary">
                     <Ring left={Math.round(i.left ?? 0)} of={Math.round(i.of ?? 0)} color={m.color} size={26} />
                     {i.text.replace(/ × \d+$/, "")}
                   </span>
@@ -73,15 +72,15 @@ export function CheckoutOffer({ orderId, onJoined }: { orderId: string; onJoined
       <div className="flex items-start gap-3">
         <div className="h-9 w-9 shrink-0 rounded-lg grid place-items-center bg-white text-emerald-700"><M n="workspace_premium" c="text-base" /></div>
         <div className="min-w-0 flex-1">
-          <div className="text-2xs font-semibold text-emerald-800">{o.name} saves this customer</div>
+          <div className="text-[11px] font-semibold text-emerald-800">{o.name} saves this customer</div>
           <div className="text-2xl font-semibold tracking-tight tabular-nums text-emerald-700 leading-tight">{money(o.saving)} today</div>
-          {now > 0 && <div className="mt-0.5 text-xs text-ink-secondary tabular-nums">Today <s className="text-ink-tertiary">{money(now)}</s> → <span className="font-semibold text-ink-primary">{money(withPlan)}</span> with the plan{withPlan <= now ? ", and it pays for itself today" : ""}</div>}
+          {now > 0 && <div className="mt-0.5 text-xs text-ink-secondary tabular-nums">Today <s className="text-ink-tertiary">{money(now)}</s> → <b className="text-ink-primary">{money(withPlan)}</b> with the plan{withPlan <= now ? ", and it pays for itself today" : ""}</div>}
         </div>
       </div>
-      <div className="mt-2.5 flex flex-wrap gap-1.5 pl-12">{o.includes.map((t) => <span key={t} className="rounded-full bg-white px-2 py-0.5 text-2xs font-medium text-emerald-800">{t}</span>)}</div>
+      <div className="mt-2.5 flex flex-wrap gap-1.5 pl-12">{o.includes.map((t) => <span key={t} className="rounded-full bg-white px-2 py-0.5 text-[11px] font-medium text-emerald-800">{t}</span>)}</div>
       <div className="mt-3 flex gap-2 pl-12">
-        <Button variant="primary" onClick={() => setSell(true)}>Join · {money(planPrice)}{yearly ? "/yr" : "/mo"}</Button>
-        <Button variant="ghost" onClick={() => { setHidden(true); api.post(`/memberships/order/${orderId}/snooze`, {}).catch(saveFailed("snooze the plan suggestion")); }}>Not now</Button>
+        <button onClick={() => setSell(true)} className="h-9 px-4 rounded-lg bg-emerald-600 text-white text-xs font-semibold whitespace-nowrap shadow-clay-sm">Join · {money(planPrice)}{yearly ? "/yr" : "/mo"}</button>
+        <button onClick={() => { setHidden(true); api.post(`/memberships/order/${orderId}/snooze`, {}).catch(saveFailed("snooze the plan suggestion")); }} className="h-9 px-3 rounded-lg text-xs font-semibold text-ink-tertiary hover:bg-white whitespace-nowrap">Not now</button>
       </div>
       {sell && <SellPlanDialog clientId={d.client_id} deviceId={d.device_id || undefined} orderId={orderId} presetPlanId={o.plan_id}
         onClose={() => setSell(false)} onDone={() => { setSell(false); setHidden(true); onJoined(); }} />}

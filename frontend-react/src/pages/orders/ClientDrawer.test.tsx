@@ -48,7 +48,7 @@ describe("ClientDrawer", () => {
 
   it("a work order row opens that work order", async () => {
     const onClose = open();
-    fireEvent.click(await screen.findByRole("tab", { name: /Work orders/ }));
+    fireEvent.click(await screen.findByRole("button", { name: /Work orders/ }));
     fireEvent.click(await screen.findByRole("button", { name: "Open work order WO-00009" }));
     expect(screen.getByTestId("where")).toHaveTextContent("/orders?open=o9");
     expect(onClose).toHaveBeenCalled();

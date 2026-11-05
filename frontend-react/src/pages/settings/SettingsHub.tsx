@@ -16,21 +16,12 @@ import { Avatar } from "../orders/look";
 import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
 import RetentionCard from "./RetentionCard";
 import Switch from "../../components/Switch";
+import Tabs from "../../components/Tabs";
 import SaveFooter from "../../components/SaveFooter";
 import { SettingRow, SettingGroup, NumField } from "../../components/SettingRow";
 import { money } from "../orders/types";
 import { loadFailed } from "../../lib/notice";
 import { clickable, clickableRow } from "../../lib/clickable";
-import SettingsPage from "../../components/SettingsPage";
-import Section, { sectionCard } from "../../components/Section";
-import Button, { IconButton } from "../../components/Button";
-import Tabs from "../../components/Tabs";
-import Drawer from "../../components/Drawer";
-import { Input, Select, Field as FieldBox, labelClass, fieldClass } from "../../components/Field";
-import EmptyState, { TableEmpty } from "../../components/EmptyState";
-import SkeletonRows from "../../components/SkeletonRows";
-import { theadRowClass } from "../../components/Table";
-import { rowField, onSettingsToast, settingsToast } from "./kit";
 
 // Each settings page is its own chunk, fetched when its section opens (the hub was one ~470 kB file).
 const TemplateEditorDrawer = lazy(() => import("./TemplateEditorDrawer"));
@@ -58,7 +49,7 @@ const BillingPage = lazy(() => import("./BillingPage"));
 const CheckinPointsSettings = lazy(() => import("./CheckinPointsSettings"));
 const MembershipSettings = lazy(() => import("./MembershipSettings"));
 const WebhooksSettings = lazy(() => import("./WebhooksSettings"));
-const sectionLoading = <div className="py-6" aria-busy="true" />;
+const sectionLoading = <div className="text-xs text-ink-tertiary py-6">Loading…</div>;
 
 // Full section set = the registry sections + a few that have no nav entry of their own.
 type Section = SectionId | "overview" | "automation" | "payroll-rules";
@@ -73,10 +64,10 @@ const MOVED_SECTIONS: Record<string, { to: Section; note: string }> = {
   ...(FEATURES.ecommerce ? {} : { ecommerce: { to: "integrations" as Section, note: "Online store sync isn't switched on yet. Your other connections are here." } }),
 };
 
-const lbl = labelClass;
-const field = fieldClass();
-// Every id the settings page knows; an unknown ?section= value opens the Overview instead of a blank page.
-const KNOWN_SECTIONS = new Set<string>(["overview", ...ALL_NAV.map((n) => n.id)]);
+const lbl = "block text-sm font-medium text-ink-primary mb-1.5";
+const field = "glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary";
+const btnPrimary = "h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90 disabled:opacity-50 inline-flex items-center gap-1.5";
+const btnSecondary = "h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-ink-secondary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50 inline-flex items-center gap-1.5";
 
 // Plain-word labels for the stored option values shown in settings (events, actions, kinds…).
 const OPT_LABELS: Record<string, string> = {
@@ -174,11 +165,7 @@ export default function SettingsHub() {
   // ?section=… deep-links a section (e.g. "Manage options" in a directory dropdown). Old links to
   // sections that moved (or are switched off) open their new home instead of a blank page.
   const [movedFrom] = useState(() => { const raw = new URLSearchParams(window.location.search).get("section") || ""; return Object.prototype.hasOwnProperty.call(MOVED_SECTIONS, raw) ? raw : ""; });
-  const [sec, setSec] = useState<Section>(() => {
-    const raw = new URLSearchParams(window.location.search).get("section") || "overview";
-    if (Object.prototype.hasOwnProperty.call(MOVED_SECTIONS, raw)) return MOVED_SECTIONS[raw].to;
-    return KNOWN_SECTIONS.has(raw) ? (raw as Section) : "overview";
-  });
+  const [sec, setSec] = useState<Section>(() => { const raw = new URLSearchParams(window.location.search).get("section") || "overview"; return Object.prototype.hasOwnProperty.call(MOVED_SECTIONS, raw) ? MOVED_SECTIONS[raw].to : (raw as Section); });
   const [q, setQ] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [co, setCo] = useState<any>(null);
@@ -198,7 +185,6 @@ export default function SettingsHub() {
   const [toast, setToast] = useState<string | null>(null);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2200); };
   useEffect(() => { if (movedFrom) flash(MOVED_SECTIONS[movedFrom].note); }, [movedFrom]);  // eslint-disable-line react-hooks/exhaustive-deps
-  useEffect(() => onSettingsToast((m) => flash(m)), []);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const coSaved = useRef<any>(null);   // last saved company settings (General shows a save bar when they differ)
   useEffect(() => { api.get<any>("/staff/company").then((c) => { coSaved.current = c; setCo(c); }).catch(() => setCo({})); }, []);
@@ -382,7 +368,7 @@ export default function SettingsHub() {
             const hits = searchSections(q).filter((n) => NAV.includes(n));
             if (!hits.length) return <div className="text-xs text-ink-tertiary px-2.5 py-3">No settings match “{q}”.</div>;
             return hits.map((n) => (
-              <button key={n.id} onClick={() => { setSec(n.id); setQ(""); }} className="w-full text-left px-2.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-2.5 mb-0.5 text-ink-secondary hover:bg-slate-100"><M n={n.icon} c="text-base" />{n.label}<span className="ml-auto text-2xs text-ink-tertiary font-medium">{CATS.find((c) => c.id === SEC_CAT[n.id])?.label}</span></button>
+              <button key={n.id} onClick={() => { setSec(n.id); setQ(""); }} className="w-full text-left px-2.5 py-2 rounded-lg text-xs font-semibold flex items-center gap-2.5 mb-0.5 text-ink-secondary hover:bg-slate-100"><M n={n.icon} c="text-base" />{n.label}<span className="ml-auto text-[11px] text-ink-tertiary font-medium">{CATS.find((c) => c.id === SEC_CAT[n.id])?.label}</span></button>
             ));
           })() : CATS.map((cat) => {
             const items = NAV.filter((n) => SEC_CAT[n.id] === cat.id);
@@ -390,7 +376,7 @@ export default function SettingsHub() {
             const col = !!collapsed[cat.id];
             return (
               <div key={cat.id} className="mb-1">
-                <button onClick={() => setCollapsed((s) => ({ ...s, [cat.id]: !s[cat.id] }))} className="w-full flex items-center gap-1.5 px-2 py-1.5 text-2xs font-semibold text-ink-tertiary hover:text-ink-secondary">
+                <button onClick={() => setCollapsed((s) => ({ ...s, [cat.id]: !s[cat.id] }))} className="w-full flex items-center gap-1.5 px-2 py-1.5 text-[11px] font-bold text-ink-tertiary hover:text-ink-secondary">
                   {cat.label}<M n="expand_more" c={`text-sm ml-auto transition-transform ${col ? "-rotate-90" : ""}`} />
                 </button>
                 {!col && items.map((n) => (
@@ -401,47 +387,53 @@ export default function SettingsHub() {
           })}
         </aside>
 
-        {/* One scroll area with the standard page margin. pb-80: scroll room below the last card
-            so dropdowns near the bottom (e.g. the Public-pages status pickers) can open downward. */}
-        <div className="flex-1 min-w-0 overflow-y-auto [scrollbar-gutter:stable] px-6 py-5 pb-80">
+        {/* pb-80: scroll room below the last card so dropdowns near the bottom
+            (e.g. the Public-pages status pickers) have space to open downward. */}
+        <div className="flex-1 min-w-0 overflow-y-auto p-6 pb-80">
           <Suspense fallback={sectionLoading}>
           {/* Narrow screens hide the section list; the Overview's category cards are the menu. */}
           {sec !== "overview" && (
-            <Button variant="link" onClick={() => setSec("overview")} icon={<M n="arrow_back" c="text-sm" />} className="md:hidden mb-3 h-11">All settings</Button>
+            <button onClick={() => setSec("overview")} className="md:hidden mb-3 -ml-1 flex items-center gap-1.5 px-1 py-2 text-xs font-semibold text-primary"><M n="arrow_back" c="text-sm" />All settings</button>
           )}
           {sec === "overview" && (
-            <SettingsPage title="Overview" sub="Set up your shop once, change anything later.">
+            <div className="max-w-3xl space-y-5">
+              <p className="text-sm text-ink-secondary">Set up your shop once, change anything later.</p>
               <SetupChecklist goSection={setSec} navigate={(to) => navigate(to)} />
               <div className="relative">
-                <M n="search" c="absolute left-3 top-2.5 text-base text-ink-tertiary pointer-events-none" />
-                <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a setting: tax, invoice number, reminder, technician…" aria-label="Find a setting" className="pl-9" />
+                <M n="search" c="absolute left-4 top-3.5 text-lg text-ink-tertiary pointer-events-none" />
+                <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Find a setting: tax, invoice number, reminder, technician…" aria-label="Find a setting"
+                  className="w-full bg-white border border-slate-200 rounded-2xl pl-11 pr-4 py-3 text-sm outline-none focus:border-primary focus:ring-2 focus:ring-primary/10 shadow-clay-card" />
               </div>
               <div className="grid sm:grid-cols-2 gap-3">
                 {CATS.map((cat) => {
                   const items = NAV.filter((n) => SEC_CAT[n.id] === cat.id);
                   if (!items.length) return null;
                   return (
-                    <Section key={cat.id} icon={cat.icon} title={cat.label}>
-                      <div className="flex flex-col -mx-2">
+                    <div key={cat.id} className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4">
+                      <div className="flex items-center gap-2.5 mb-2">
+                        <span className="w-8 h-8 rounded-lg bg-primary/10 text-primary grid place-items-center"><M n={cat.icon} c="text-base" /></span>
+                        <span className="text-sm font-semibold text-ink-primary">{cat.label}</span>
+                      </div>
+                      <div className="flex flex-col">
                         {items.map((n) => (
-                          <button key={n.id} type="button" onClick={() => setSec(n.id)} className="group flex items-center gap-2.5 px-2 min-h-11 sm:min-h-9 rounded-lg text-left hover:bg-slate-50">
-                            <M n={n.icon} c="text-base text-ink-tertiary group-hover:text-primary" />
-                            <span className="text-sm sm:text-xs text-ink-secondary group-hover:text-ink-primary">{n.label}</span>
-                            <M n="chevron_right" c="ml-auto text-sm text-ink-tertiary sm:opacity-0 group-hover:opacity-100" />
+                          <button key={n.id} onClick={() => setSec(n.id)} className="group flex items-center gap-2.5 px-2 py-1.5 -mx-1 rounded-lg text-left hover:bg-slate-50">
+                            <M n={n.icon} c="text-[15px] text-ink-tertiary group-hover:text-primary" />
+                            <span className="text-xs text-ink-secondary group-hover:text-ink-primary">{n.label}</span>
+                            <M n="chevron_right" c="ml-auto text-sm text-ink-tertiary opacity-0 group-hover:opacity-100" />
                           </button>
                         ))}
                       </div>
-                    </Section>
+                    </div>
                   );
                 })}
               </div>
-            </SettingsPage>
+            </div>
           )}
           {sec === "general" && co && (
             <GeneralSettings co={co} setCo={setCo} saved={coSaved} onSave={saveCompany} rebuilding={rebuilding} onRebuild={rebuildBalances}
-              opts={{ countries: COUNTRY_META, timezones: TIMEZONES, currencies: CURRENCIES, docLangs: DOC_LANGS, industries: INDUSTRIES }}
-              after={<RetentionCard />} />
+              opts={{ countries: COUNTRY_META, timezones: TIMEZONES, currencies: CURRENCIES, docLangs: DOC_LANGS, industries: INDUSTRIES }} />
           )}
+          {sec === "general" && co && <div className="max-w-4xl mt-5"><RetentionCard Card={SectionCard} /></div>}
 
           {sec === "statuses" && (
             <StatusList statuses={statuses} recordType={statusRT} onRecordType={(rt) => { setStatusRT(rt); setStatuses([]); }}
@@ -490,25 +482,16 @@ export default function SettingsHub() {
               onChanged={() => reloadSec("templates")} onFlash={flash} />
           )}
 
+          {sec === "finance" && <InvoiceSettings />}
           {sec === "memberships" && <MembershipSettings />}
-          {sec === "finance" && <FinanceNumbering currency={co?.currency || "$"} shop={{ name: co?.name, address: co?.company_address, phone: co?.company_phone, email: co?.company_email, logo: co?.logo_data }} before={<InvoiceSettings />} />}
+          {sec === "finance" && <FinanceNumbering currency={co?.currency || "$"} shop={{ name: co?.name, address: co?.company_address, phone: co?.company_phone, email: co?.company_email, logo: co?.logo_data }} />}
           {sec === "ecommerce" && FEATURES.ecommerce && <EcommerceSettings />}
           {sec === "sso" && proOk("sso") && <SsoSettings />}
           {sec === "billing" && <BillingPage />}
           {sec === "approvals" && <ApprovalsSettings />}
 
-          {/* A section the shop's plan doesn't include: say so instead of showing a blank page. */}
-          {me && ((sec === "warehouses" && !proOk("inventory")) || (sec === "notifications" && !proOk("notification_rules")) || (sec === "sso" && !proOk("sso"))) && (
-            <SettingsPage title={ALL_NAV.find((n) => n.id === sec)?.label || "Settings"}>
-              <Section title="Not on your plan">
-                <EmptyState size="inline" title="This part of Settings comes with a bigger plan." />
-                <Button variant="primary" onClick={() => setSec("billing")}>See plans</Button>
-              </Section>
-            </SettingsPage>
-          )}
-
           {sec === "forms" && (
-            <FormsDesigner types={lists.forms || []} onAddType={() => setEditing({ sec: "forms", row: null })}
+            <FormsDesigner types={lists.forms || []} onAddType={() => setEditing({ sec: "forms", row: null })} onEditType={(r) => setEditing({ sec: "forms", row: r })}
               onDeleteType={(r) => delRow("forms", r)} onAdvanced={(t) => setFormFieldsFor(t)} onChanged={() => reloadSec("forms")} />
           )}
 
@@ -518,11 +501,11 @@ export default function SettingsHub() {
           )}
 
           {sec === "industry" && (
-            <SettingsPage wide title="Industry & assets" sub="The groups, brands, models and ID rules your jobs use. They follow what your shop repairs.">
+            <div className="max-w-4xl space-y-5">
               <IndustryNote onChange={() => setSec("general")} />
-              <MultiAssetSwitch onFlash={flash} />
+              <MultiAssetSwitch />
               <AssetCatalog />
-            </SettingsPage>
+            </div>
           )}
 
 
@@ -533,16 +516,17 @@ export default function SettingsHub() {
 
           {sec === "directories" && <DirectoriesManager />}
 
-          {sec === "public" && <PublicPagesSettings shopName={co?.name || ""} logo={co?.logo_data} StatusPicker={(pp) => <StatusMultiSelect value={pp.value} list={pp.list} onChange={pp.onChange} />} after={<CheckinPointsSettings />} />}
+          {sec === "public" && <PublicPagesSettings shopName={co?.name || ""} logo={co?.logo_data} StatusPicker={(pp) => <StatusMultiSelect value={pp.value} list={pp.list} onChange={pp.onChange} />} />}
+          {sec === "public" && <div className="mt-8"><CheckinPointsSettings /></div>}
 
           {sec === "integrations" && (
-            <SettingsPage title="Integrations" sub="Connect Tekly to the tools you already use. Each one starts working as soon as it's set up.">
+            <div className="max-w-4xl space-y-5">
               <IntegrationsHub data={integrations} goSection={setSec} reload={() => setIntegrations(null)} pro={{ accounting: proOk("accounting_sync"), api: proOk("api_keys") }} />
               <CardReadersCard />
               <TelephonySettings />
               {proOk("api_keys") && <ApiKeysCard />}
               <WebhooksCard />
-            </SettingsPage>
+            </div>
           )}
           </Suspense>
         </div>
@@ -590,7 +574,7 @@ export default function SettingsHub() {
         <ChecklistEditor tpl={checklistEdit} onClose={() => setChecklistEdit(undefined)} onSaved={() => { setChecklistEdit(undefined); reloadSec("checklists"); }} />
       )}
       </Suspense>
-      {toast && <div role="status" className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-clay-drawer z-[70]">{toast}</div>}
+      {toast && <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-clay-drawer z-[70]">{toast}</div>}
     </Shell>
   );
 }
@@ -607,16 +591,16 @@ function DeliveryStatusBanner() {
   const anySim = order.some((k) => ch[k] === "simulated");
   return (
     <div className={"rounded-xl border p-4 " + (anySim ? "border-amber-300 bg-amber-50" : "border-emerald-300 bg-emerald-50")}>
-      <div className="text-sm font-semibold text-ink-primary">Message delivery</div>
+      <div className="text-[13px] font-bold text-ink-primary">Message delivery</div>
       <div className="mt-2 flex flex-wrap gap-2">
         {order.map((k) => (
-          <span key={k} className={"inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium " + (ch[k] === "live" ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-ink-secondary")}>
+          <span key={k} className={"inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-semibold " + (ch[k] === "live" ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-ink-secondary")}>
             <span className={"h-1.5 w-1.5 rounded-full " + (ch[k] === "live" ? "bg-emerald-500" : "bg-slate-400")} />
             {k === "whatsapp" ? "WhatsApp" : k === "push" ? "Push" : k.toUpperCase()} · {ch[k] === "simulated" ? "practice mode" : ch[k]}
           </span>
         ))}
       </div>
-      {anySim && <div className="mt-2 text-xs text-ink-tertiary">Channels in <span className="font-semibold">practice mode</span> are logged, not delivered. Add provider credentials (SMTP / Twilio / VAPID) or connect an email account to go live.</div>}
+      {anySim && <div className="mt-2 text-[12px] text-ink-tertiary">Channels marked <b>simulated</b> are logged, not delivered. Add provider credentials (SMTP / Twilio / VAPID) or connect an email account to go live.</div>}
     </div>
   );
 }
@@ -692,52 +676,73 @@ function NotificationsSettings({ fixedView, rules, templates, automations, reloa
   const modLabel = mods.find((m) => m.key === module)?.label || module;
 
   return (
-    // No width of its own: the Notifications page frame sets it, so every tab has the same width.
-    <div className="space-y-4">
+    <div className="max-w-3xl space-y-5">
       {!fixedView && <DeliveryStatusBanner />}
 
       {/* External / Internal / Automations */}
-      {!fixedView && (
-        <Tabs label="Notification kinds" value={view} onChange={setView}
-          tabs={[{ id: "external", label: "External (clients)" }, { id: "internal", label: "Internal (staff)" }, { id: "automations", label: "Automations" }]} />
-      )}
+      {!fixedView && <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
+        {([["external", "External (clients)"], ["internal", "Internal (staff)"], ["automations", "Automations"]] as const).map(([v, label]) => (
+          <button key={v} onClick={() => setView(v)}
+            className={"px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors " + (view === v ? "bg-white text-ink-primary shadow-clay-sm" : "text-ink-tertiary hover:text-ink-secondary")}>
+            {label}
+          </button>
+        ))}
+      </div>}
 
       {view === "automations" ? (
-        <SectionCard title="Automation rules" count={automations?.length} onAdd={() => onEditAutomation(null)}
-          description="Trigger an action when something happens: create a task, assign a tech, add a tag, call a webhook, or send a notification. Also runs on overdue orders and low stock.">
-          <SecTable rows={automations} onRowClick={(r) => onEditAutomation(r)} onDelete={onDeleteAutomation} empty="No automation rules yet."
-            cols={[["Rule", (r) => r.name || "—"], ["Event", (r) => (r.event ? optLabel(r.event) : "—")], ["Action", (r) => (r.action_type ? ACTION_LABELS[r.action_type] || humanize(r.action_type) : "—")], ["Status", (r) => (r?.active ? "Active" : "Off")]]} />
-        </SectionCard>
+        <>
+          <SectionCard title="Automation rules" count={automations?.length} onAdd={() => onEditAutomation(null)}>
+            <p className="px-3.5 pt-3 text-[11px] text-ink-tertiary">Trigger an action when something happens — create a task, assign a tech, add a tag, call a webhook, or fire a notification. Also runs on overdue orders and low stock.</p>
+            <SecTable rows={automations} onRowClick={(r) => onEditAutomation(r)} onDelete={onDeleteAutomation}
+              cols={[["Rule", (r) => r.name || "—"], ["Event", (r) => (r.event ? optLabel(r.event) : "—")], ["Action", (r) => (r.action_type ? ACTION_LABELS[r.action_type] || humanize(r.action_type) : "—")], ["Status", (r) => (r?.active ? "Active" : "Off")]]} />
+          </SectionCard>
+        </>
       ) : (
         <>
-          {/* What the rules are for. Jobs / Estimates only applies to Workflows: it stays in place, greyed, for the others. */}
-          <div className="flex flex-wrap items-center gap-2">
-            <Tabs look="segmented" label="Notifications for" value={module} onChange={setModule}
-              tabs={mods.map((m) => ({ id: m.key, label: m.label }))} />
-            <Tabs look="segmented" label="Record type" value={recType} onChange={setRecType}
-              tabs={([["work_order", "Jobs"], ["estimate", "Estimates"]] as const).map(([id, label]) => ({ id, label, disabled: module !== "order" }))} />
+          {/* Per-module tabs */}
+          <div className="flex flex-wrap gap-1.5">
+            {mods.map((m) => (
+              <button key={m.key} onClick={() => setModule(m.key)}
+                className={"px-3 py-1.5 rounded-full text-xs font-semibold transition-colors " + (module === m.key ? "bg-primary text-white" : "bg-slate-100 text-ink-secondary hover:bg-slate-200/70")}>
+                {m.label}
+              </button>
+            ))}
           </div>
+
+          {/* Workflows splits into Jobs vs Estimates (Orderry parity) */}
+          {module === "order" && (
+            <div className="flex gap-4 text-xs font-semibold border-b border-slate-200">
+              {([["work_order", "Jobs"], ["estimate", "Estimates"]] as const).map(([k, l]) => (
+                <button key={k} onClick={() => setRecType(k)}
+                  className={"py-2 border-b-2 transition-colors " + (recType === k ? "text-primary border-primary" : "text-ink-tertiary border-transparent hover:text-ink-secondary")}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          )}
 
           <SectionCard
             title={`${module === "order" ? (recType === "estimate" ? "Estimates" : "Jobs") : modLabel} notifications`}
             count={eventRules.length}
-            onAdd={() => setRuleEdit("new")}
-            description={isInternal
-              ? "Keep your team informed: the assigned technician and the order's manager get these."
-              : "Clients receive notifications only if they've given consent (set per contact, or defaulted in Settings › General)."}>
-            <SecTable rows={eventRules} onRowClick={(r) => setRuleEdit(r)} onDelete={delRule} cols={ruleCols} empty="No notifications here yet." />
+            onAdd={() => setRuleEdit("new")}>
+            <p className="px-3.5 pt-3 text-[11px] text-ink-tertiary">
+              {isInternal
+                ? "Keep your team informed — the assigned technician and the order's manager get these."
+                : "Clients receive notifications only if they've given consent (set per contact, or defaulted in Settings › General)."}
+            </p>
+            <SecTable rows={eventRules} onRowClick={(r) => setRuleEdit(r)} onDelete={delRule} cols={ruleCols} />
           </SectionCard>
 
           {remindersAllowed && (
-            <SectionCard title="Reminders" count={reminderRules.length} onAdd={() => setRuleEdit({ __reminder: true })}
-              description="Remind clients ahead of a scheduled appointment.">
-              <SecTable rows={reminderRules} onRowClick={(r) => setRuleEdit(r)} onDelete={delRule} empty="No reminders yet."
+            <SectionCard title="Reminders" count={reminderRules.length} onAdd={() => setRuleEdit({ __reminder: true })}>
+              <p className="px-3.5 pt-3 text-[11px] text-ink-tertiary">Remind clients ahead of a scheduled appointment.</p>
+              <SecTable rows={reminderRules} onRowClick={(r) => setRuleEdit(r)} onDelete={delRule}
                 cols={[["Before", (r) => `${r.reminder_offset_min || 0} min`], ["Send via", (r) => String(r.channel || "—").toUpperCase()], ["Template", (r) => tplName(r.template_id)], ["Location", (r) => (r.location_id ? "Selected" : "All")], ["Status", (r) => (r?.active ? "Active" : "Off")]]} />
             </SectionCard>
           )}
 
           <SectionCard title="Message templates" count={templates?.length ?? undefined} onAdd={() => setTplEdit("new")}>
-            <SecTable rows={templates} onRowClick={(r) => setTplEdit(r)} empty="No message templates yet."
+            <SecTable rows={templates} onRowClick={(r) => setTplEdit(r)}
               onDelete={async (r) => { if (await confirmDialog("Delete this template?", { danger: true, confirmLabel: "Delete" })) { try { await api.del(`/notifications/templates/${r.id}`); flash("Deleted"); reloadTemplates(); } catch (e: any) { flash(`Failed: ${e.message}`); } } }}
               cols={[["Title", (t) => t.name || (t.trigger_event ? optLabel(t.trigger_event) : "—")], ["Type", (t) => (t.channel === "email" ? "Email" : t.channel === "sms" ? "SMS" : String(t.channel || "—").toUpperCase())], ["Status", (t) => (t?.active ? "Active" : "Off")]]} />
           </SectionCard>
@@ -825,13 +830,18 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
     : (EXTERNAL_MODULES.concat(INTERNAL_MODULES).find((m) => m.key === module)?.label || module);
 
   return (
-    <Drawer size="sm" label={rule?.id ? "Edit notification" : isReminder ? "New reminder" : "New notification"}
-      title={rule?.id ? "Edit notification" : isReminder ? "New reminder" : "New notification"} sub={`${scopeLabel} · ${modLabel}`} onClose={onClose}
-      footer={<>
-        <Button variant="primary" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save"}</Button>
-        <Button onClick={onClose}>Cancel</Button>
-      </>}>
-          {err && <div role="alert" className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="relative w-[440px] max-w-full bg-white h-full shadow-drawer flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+          <div>
+            <span className="text-[11px] font-bold text-primary block">{scopeLabel} · {modLabel}</span>
+            <h2 className="font-bold text-ink-primary">{rule?.id ? "Edit notification" : isReminder ? "New reminder" : "New notification"}</h2>
+          </div>
+          <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
           {!isReminder && (
             <div><label className={lbl}>Event</label>
               <select value={f.event} onChange={(e) => set("event", e.target.value)} className={field}>
@@ -844,7 +854,7 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
                 value={f.trigger_status_key}
                 list={statuses.map((s: any) => ({ key: s.key || s.id, name: s.name, status_group: s.status_group, color: s.color }))}
                 onChange={(v) => set("trigger_status_key", v)} />
-              <div className="mt-1 text-xs text-ink-tertiary">Leave "Any" to fire on every status change, or pick a specific status.</div></div>
+              <div className="mt-1 text-[11px] text-ink-tertiary">Leave "Any" to fire on every status change, or pick a specific status.</div></div>
           )}
           {!isReminder && f.event === "status_changed" && !statusRT && (
             <div><label className={lbl}>Only when the status is (optional)</label>
@@ -860,7 +870,7 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
                 <option value="">Default message</option>
                 {tplOpts.map((t) => <option key={t.id} value={t.id}>{t.name || optLabel(t.trigger_event)}</option>)}
               </select>
-              <div className="mt-1 text-xs text-ink-tertiary">With no template, a sensible default message is sent.</div>
+              <div className="mt-1 text-[11px] text-ink-tertiary">No template → a sensible default message is sent.</div>
             </div>
           )}
           {isReminder && (
@@ -886,12 +896,16 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
                 {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
               </select></div>
           )}
-          <div className="divide-y divide-slate-100 border-t border-slate-100 pt-4">
-            <ToggleRow label="Only send during working hours" on={f.working_hours_only} onToggle={() => set("working_hours_only", !f.working_hours_only)} />
-            {!internal && <ToggleRow label="Try the client's latest chat first" on={f.chat_first} onToggle={() => set("chat_first", !f.chat_first)} />}
-            <ToggleRow label="Active" on={f.active} onToggle={() => set("active", !f.active)} />
-          </div>
-    </Drawer>
+          <ToggleRow label="Only send during working hours" on={f.working_hours_only} onToggle={() => set("working_hours_only", !f.working_hours_only)} />
+          {!internal && <ToggleRow label="Try the client's latest chat first" on={f.chat_first} onToggle={() => set("chat_first", !f.chat_first)} />}
+          <ToggleRow label="Active" on={f.active} onToggle={() => set("active", !f.active)} />
+        </div>
+        <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
+          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs ml-auto">Cancel</button>
+          <button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : "Save"}</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -947,9 +961,9 @@ function RichTextEditor({ value, onChange, registerInsert }: {
   }
   const fonts = ["Inter", "Arial", "Helvetica", "Georgia", "Times New Roman", "Courier New", "Verdana", "Tahoma"];
   const sizes = [10, 11, 12, 14, 16, 18, 20, 24, 28, 32];
-  const btn = "w-8 h-8 rounded-xl hover:bg-slate-100 text-ink-tertiary flex items-center justify-center";
+  const btn = "w-8 h-8 rounded hover:bg-slate-200/70 text-ink-secondary flex items-center justify-center";
   const TB = ({ cmd, val, icon, title }: { cmd: string; val?: string; icon: string; title: string }) => (
-    <IconButton size="sm" label={title} onMouseDown={(e) => { e.preventDefault(); exec(cmd, val); }} icon={<M n={icon} c="text-lg" />} />
+    <button type="button" aria-label={title} title={title} onMouseDown={(e) => { e.preventDefault(); exec(cmd, val); }} className={btn}><M n={icon} c="text-[18px]" /></button>
   );
   return (
     <div className="border border-slate-200 rounded-lg overflow-hidden bg-white">
@@ -970,11 +984,11 @@ function RichTextEditor({ value, onChange, registerInsert }: {
         <TB cmd="justifyRight" icon="format_align_right" title="Align right" />
         <TB cmd="insertHorizontalRule" icon="horizontal_rule" title="Divider" />
         <span className="w-px h-5 bg-slate-200 mx-1" />
-        <IconButton size="sm" label="Insert link" onMouseDown={async (e) => { e.preventDefault(); saveSel(); const u = await promptDialog("Link URL"); if (u) exec("createLink", u); }} icon={<M n="link" c="text-lg" />} />
-        <IconButton size="sm" label="Insert image" onMouseDown={async (e) => { e.preventDefault(); saveSel(); const u = await promptDialog("Image URL"); if (u) insertHtml(`<img src="${escapeHtml(u)}" alt="" style="max-width:100%" />`); }} icon={<M n="image" c="text-lg" />} />
-        <IconButton size="sm" label="Insert table" onMouseDown={(e) => { e.preventDefault(); saveSel(); insertHtml(notifTableHTML()); }} icon={<M n="table" c="text-lg" />} />
-        {logo && <Button variant="ghost" size="sm" title="Insert company logo" onMouseDown={(e) => { e.preventDefault(); saveSel(); insertHtml(`<img src="${logo}" alt="logo" style="max-height:64px" />`); }} icon={<M n="image" c="text-base" />}>Logo</Button>}
-        <IconButton size="sm" label="Edit HTML source" aria-pressed={code !== null} onClick={toggleCode} className={`ml-auto ${code !== null ? "!bg-primary/10 !text-primary" : ""}`} icon={<M n="code" c="text-lg" />} />
+        <button aria-label="Insert link" type="button" className={btn} title="Insert link" onMouseDown={async (e) => { e.preventDefault(); saveSel(); const u = await promptDialog("Link URL"); if (u) exec("createLink", u); }}><M n="link" c="text-[18px]" /></button>
+        <button aria-label="Insert image" type="button" className={btn} title="Insert image" onMouseDown={async (e) => { e.preventDefault(); saveSel(); const u = await promptDialog("Image URL"); if (u) insertHtml(`<img src="${escapeHtml(u)}" alt="" style="max-width:100%" />`); }}><M n="image" c="text-[18px]" /></button>
+        <button aria-label="Insert table" type="button" className={btn} title="Insert table" onMouseDown={(e) => { e.preventDefault(); saveSel(); insertHtml(notifTableHTML()); }}><M n="table" c="text-[18px]" /></button>
+        {logo && <button type="button" className="h-8 px-2 rounded hover:bg-slate-200/70 text-xs font-semibold text-primary flex items-center gap-1" title="Insert company logo" onMouseDown={(e) => { e.preventDefault(); saveSel(); insertHtml(`<img src="${logo}" alt="logo" style="max-height:64px" />`); }}><M n="image" c="text-[16px]" /> Logo</button>}
+        <button aria-label="Edit HTML source" type="button" title="Edit HTML source" onClick={toggleCode} className={"w-8 h-8 rounded flex items-center justify-center ml-auto " + (code !== null ? "bg-primary/10 text-primary" : "hover:bg-slate-200/70 text-ink-secondary")}><M n="code" c="text-[18px]" /></button>
       </div>
       {code !== null ? (
         <textarea value={code} onChange={(e) => setCode(e.target.value)} spellCheck={false}
@@ -1037,18 +1051,25 @@ function NotifTemplateDrawer({ tpl, module, onClose, onSaved }: {
     } catch (e: any) { setErr(e?.message || "Could not save"); setBusy(false); }
   }
   return (
-    <Drawer size="lg" label={tpl?.id ? "Edit template" : "New template"} title={tpl?.id ? "Edit template" : "New template"} onClose={onClose}
-      footer={<>
-        <Button variant="primary" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save"}</Button>
-        <Button onClick={onClose}>Cancel</Button>
-        <Button variant="ghost" onClick={sendTest} className="ml-auto">Send test</Button>
-        {testMsg && <span role="status" className="w-full text-2xs text-emerald-700 font-medium">{testMsg}</span>}
-      </>}>
-          {err && <div role="alert" className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="relative w-[720px] max-w-full bg-white h-full shadow-drawer flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+          <h2 className="font-bold text-ink-primary">{tpl?.id ? "Edit template" : "New template"}</h2>
+          <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
           {/* Type: SMS vs Email — the editor changes with it */}
-          <div><span className={lbl}>Type</span>
-            <Tabs look="segmented" label="Template type" value={f.channel === "email" ? "email" : "sms"} onChange={(c) => set("channel", c)}
-              tabs={[{ id: "sms", label: "SMS" }, { id: "email", label: "Email" }]} />
+          <div><label className={lbl}>Type</label>
+            <div className="inline-flex rounded-lg border border-slate-200 bg-slate-50 p-1">
+              {(["sms", "email"] as const).map((c) => (
+                <button key={c} type="button" onClick={() => set("channel", c)}
+                  className={"px-4 py-1.5 rounded-md text-xs font-semibold transition-colors " + (f.channel === c ? "bg-white text-ink-primary shadow-clay-sm" : "text-ink-tertiary")}>
+                  {c === "sms" ? "SMS" : "Email"}
+                </button>
+              ))}
+            </div>
           </div>
           <div><label className={lbl}>Title *</label>
             <input value={f.name} onChange={(e) => set("name", e.target.value)} className={field} placeholder={isEmail ? "E-mail: order ready" : "SMS: order ready"} /></div>
@@ -1062,26 +1083,32 @@ function NotifTemplateDrawer({ tpl, module, onClose, onSaved }: {
               {isEmail ? (
                 <RichTextEditor value={f.body_template} onChange={(html) => set("body_template", html)} registerInsert={(fn) => { richInsert.current = fn; }} />
               ) : (
-                <textarea ref={areaRef} value={f.body_template} onChange={(e) => set("body_template", e.target.value)} rows={6} aria-label="Message"
-                  className={fieldClass("h-auto py-2")} />
+                <textarea ref={areaRef} value={f.body_template} onChange={(e) => set("body_template", e.target.value)} rows={6}
+                  className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary tabular-nums" />
               )}
               <VarPicker onInsert={(tok) => (isEmail ? richInsert.current?.(tok) : insertVar(tok))} module={module} />
             </div>
             {!isEmail && <CharCounter text={String(f.body_template ?? "")} sms />}
           </div>
-          <div className="border-t border-slate-100 pt-4">
-            <ToggleRow label="Active" on={f.active} onToggle={() => set("active", !f.active)} />
-          </div>
-    </Drawer>
+          <ToggleRow label="Active" on={f.active} onToggle={() => set("active", !f.active)} />
+        </div>
+        <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
+          <button onClick={sendTest} className="px-3 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Send test</button>
+          {testMsg && <span className="text-[11px] text-emerald-600 font-medium">{testMsg}</span>}
+          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs ml-auto">Cancel</button>
+          <button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : "Save"}</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
-// An on/off row inside a drawer: the shared SettingRow (label left, switch right).
-function ToggleRow({ label, help, on, onToggle }: { label: string; help?: string; on: boolean; onToggle: () => void }) {
+function ToggleRow({ label, on, onToggle }: { label: string; on: boolean; onToggle: () => void }) {
   return (
-    <SettingRow label={label} help={help}>
+    <div className="flex items-center justify-between gap-4">
+      <span className="text-sm font-medium text-ink-primary">{label}</span>
       <Switch on={!!on} onChange={onToggle} label={label} />
-    </SettingRow>
+    </div>
   );
 }
 
@@ -1104,32 +1131,34 @@ function FeedbackSettingsEditor() {
     } catch (e: any) { setMsg({ ok: false, text: e?.message || "Couldn't save" }); }
     setBusy(false);
   }
-  const inp = fieldClass(rowField);
+  const inp = "glass-input w-72 max-w-full rounded-xl px-3 py-2 text-sm text-ink-primary";
   return (
-    <SettingsPage title="Customer feedback" sub="Ask customers how it went after a job, and send happy ones to your public review page.">
-      {!c ? <div className={`${sectionCard} h-64`} aria-busy="true" /> : (
-        <div className={`${sectionCard} divide-y divide-slate-100`}>
+    <div className="max-w-3xl"><SectionCard title="Customer feedback">
+      {!c ? <div className="p-5 text-xs text-ink-tertiary">Loading…</div> : (
+        <>
           <SettingGroup title="When to ask">
             <SettingRow label="Ask for feedback" help="Send a short rating request after a work order closes.">
               <Switch on={!!c.active} onChange={(v) => set("active", v)} label="Ask customers for feedback after a work order closes" />
             </SettingRow>
-            <SettingRow stack label="Rating system" htmlFor="fb-system" dim={!c.active}>
+            <SettingRow label="Rating system" htmlFor="fb-system" dim={!c.active}>
               <select id="fb-system" value={c.system || "five_point"} onChange={(e) => set("system", e.target.value)} className={inp}>{[["five_point", "5-point stars"], ["like", "Like / dislike"], ["nps", "NPS (0–10)"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
             </SettingRow>
           </SettingGroup>
-          <SettingGroup title="What customers see">
-            <SettingRow stack label="Heading" htmlFor="fb-heading"><input id="fb-heading" value={c.heading || ""} onChange={(e) => set("heading", e.target.value)} className={inp} /></SettingRow>
-            <SettingRow stack label="Subheading" htmlFor="fb-sub"><input id="fb-sub" value={c.subheading || ""} onChange={(e) => set("subheading", e.target.value)} className={inp} /></SettingRow>
-            <SettingRow stack label="Question" htmlFor="fb-q"><input id="fb-q" value={c.question || ""} onChange={(e) => set("question", e.target.value)} className={inp} /></SettingRow>
-            <SettingRow stack label="Follow-up question" help="Asked after they rate." htmlFor="fb-clarify"><input id="fb-clarify" value={c.clarify_question || ""} onChange={(e) => set("clarify_question", e.target.value)} className={inp} /></SettingRow>
-            <SettingRow stack label="Public review link" help="Happy customers get a one-tap button to post a public review here." htmlFor="fb-review">
-              <input id="fb-review" value={c.google_review_url || ""} onChange={(e) => set("google_review_url", e.target.value)} placeholder="https://g.page/r/…/review" className={inp} />
-            </SettingRow>
-          </SettingGroup>
-          <SaveFooter dirty={dirty} busy={busy} msg={msg} onSave={save} onDiscard={() => { setC(savedC); setMsg(null); }} />
-        </div>
+          <div className="border-t border-slate-100">
+            <SettingGroup title="What customers see">
+              <SettingRow label="Heading" htmlFor="fb-heading"><input id="fb-heading" value={c.heading || ""} onChange={(e) => set("heading", e.target.value)} className={inp} /></SettingRow>
+              <SettingRow label="Subheading" htmlFor="fb-sub"><input id="fb-sub" value={c.subheading || ""} onChange={(e) => set("subheading", e.target.value)} className={inp} /></SettingRow>
+              <SettingRow label="Question" htmlFor="fb-q"><input id="fb-q" value={c.question || ""} onChange={(e) => set("question", e.target.value)} className={inp} /></SettingRow>
+              <SettingRow label="Follow-up question" help="Asked after they rate." htmlFor="fb-clarify"><input id="fb-clarify" value={c.clarify_question || ""} onChange={(e) => set("clarify_question", e.target.value)} className={inp} /></SettingRow>
+              <SettingRow label="Public review link" help="Happy customers get a one-tap button to post a public review here." htmlFor="fb-review">
+                <input id="fb-review" value={c.google_review_url || ""} onChange={(e) => set("google_review_url", e.target.value)} placeholder="https://g.page/r/…/review" className={inp} />
+              </SettingRow>
+            </SettingGroup>
+          </div>
+          <SaveFooter className="border-t border-slate-100" dirty={dirty} busy={busy} msg={msg} onSave={save} onDiscard={() => { setC(savedC); setMsg(null); }} />
+        </>
       )}
-    </SettingsPage>
+    </SectionCard></div>
   );
 }
 
@@ -1138,13 +1167,7 @@ function FeedbackSettingsEditor() {
    where an endpoint exists, else show the gated/available state honestly. ── */
 function IntegrationsHub({ data, goSection, reload, pro = { accounting: true, api: true } }: { data: any; goSection: (s: Section) => void; reload?: () => void; pro?: { accounting: boolean; api: boolean } }) {
   const [keyProv, setKeyProv] = useState<string | null>(null);
-  // While loading, hold the grid's space so the cards below don't jump down when it arrives.
-  if (!data) return (
-    <div className={`${sectionCard} p-4 grid grid-cols-1 sm:grid-cols-2 gap-3`} aria-busy="true">
-      <span className="sr-only" role="status">Loading integrations…</span>
-      {Array.from({ length: 10 }).map((_, i) => <div key={i} className="sk h-28 rounded-xl" />)}
-    </div>
-  );
+  if (!data) return <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-6 text-xs text-ink-tertiary">Loading integrations…</div>;
   const creds = data.creds || {};
   const srcOf = (p: string) => creds[p]?.source as ("org" | "env" | "none" | "unreadable" | undefined);
   const keyBadge = (p: string): { text: string; tone: "on" | "off" | "neutral" } => {
@@ -1222,14 +1245,18 @@ function IntegrationsHub({ data, goSection, reload, pro = { accounting: true, ap
   const hidden = new Set([...(FEATURES.xero ? [] : ["Xero"]), ...(FEATURES.ecommerce ? [] : ["Shopify / WooCommerce"])]);
   const groups = allGroups.map((g) => ({ ...g, cards: g.cards.filter((c) => !hidden.has(c.name)) })).filter((g) => g.cards.length > 0);
   return (
-    <div className={sectionCard}>
+    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
+      <div className="px-5 pt-4 pb-1">
+        <h3 className="text-sm font-semibold text-ink-primary">Integrations</h3>
+        <p className="text-xs text-ink-tertiary mt-0.5">Connect Tekly to the tools you already use. Each one starts working as soon as it's set up.</p>
+      </div>
       <div className="p-4 space-y-5">
         {groups.map((g) => (
           <div key={g.group}>
-            <h3 className="text-xs font-semibold text-ink-secondary pb-2">{g.group}</h3>
+            <p className="text-xs font-semibold text-ink-tertiary px-1 pb-2">{g.group}</p>
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               {g.cards.map((c) => (
-                <div key={c.name} className="border border-slate-200/90 rounded-xl p-3.5 flex flex-col gap-1.5 bg-white min-w-0">
+                <div key={c.name} className="border border-slate-200/90 rounded-xl p-3.5 flex flex-col gap-1.5 bg-white hover:border-slate-300 transition-colors">
                   <div className="flex items-start justify-between gap-2">
                     <span className="text-sm font-semibold text-ink-primary leading-tight">{c.name}</span>
                     <span className={`px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${B[c.badge.tone]}`}>{c.badge.text}</span>
@@ -1237,7 +1264,7 @@ function IntegrationsHub({ data, goSection, reload, pro = { accounting: true, ap
                   <p className="text-xs text-ink-secondary leading-snug">{c.desc}</p>
                   {c.hint && <p className="text-xs text-ink-tertiary mt-0.5">{c.hint}</p>}
                   {c.webhook && <WebhookUrl {...c.webhook} />}
-                  {c.action && <Button onClick={c.action.onClick} className="mt-1 self-start">{c.action.label}</Button>}
+                  {c.action && <button type="button" onClick={c.action.onClick} className={`mt-1 self-start ${btnSecondary}`}>{c.action.label}</button>}
                 </div>
               ))}
             </div>
@@ -1263,7 +1290,7 @@ function WebhookUrl({ url, help }: { url: string; help: string }) {
       <p className="text-xs font-medium text-ink-secondary">Your webhook address</p>
       <div className="flex items-center gap-1.5">
         <code className="flex-1 min-w-0 truncate text-xs font-mono text-ink-primary" title={url}>{url}</code>
-        <Button size="sm" onClick={copy} aria-label="Copy webhook address" className="shrink-0">{copied ? "Copied" : "Copy"}</Button>
+        <button type="button" onClick={copy} aria-label="Copy webhook address" className={`shrink-0 ${btnSecondary}`}>{copied ? "Copied" : "Copy"}</button>
       </div>
       <p className="text-xs text-ink-tertiary leading-snug">{help}</p>
     </div>
@@ -1298,25 +1325,43 @@ function CredDrawer({ provider, status, onClose, onSaved }: {
     try { await api.del(`/integrations/credentials/${provider}`); onSaved(); }
     catch (e: any) { setErr(e.message || "Failed"); } finally { setBusy(false); }
   }
-  const name = `${label[provider] || provider} keys`;
   return createPortal(
-    <Drawer z={90} size="sm" label={name} title={name} sub="These keys are used only by your shop, never shared with other companies." onClose={onClose}
-      footer={<>
-        <Button variant="primary" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save keys"}</Button>
-        <Button onClick={onClose}>Cancel</Button>
-        {(status?.source === "org" || status?.source === "unreadable") && <Button variant="danger" onClick={clearKeys} disabled={busy} className="ml-auto">Remove keys</Button>}
-      </>}>
-      {fields.map((f) => (
-        <FieldBox key={f.key} label={f.label} htmlFor={`cred-${f.key}`}>
-          <Input id={`cred-${f.key}`}
-            type={f.secret ? "password" : "text"}
-            defaultValue={f.secret ? "" : (f.value || "")}
-            placeholder={f.set ? (f.secret ? "•••• (leave blank to keep)" : f.value) : ""}
-            onChange={(e) => setVals((s) => ({ ...s, [f.key]: e.target.value }))} />
-        </FieldBox>
-      ))}
-      {err && <div role="alert" className="text-xs text-rose-600">{err}</div>}
-    </Drawer>, document.body);
+    <div className="fixed inset-0 z-[90] flex justify-end" onMouseDown={onClose}>
+      <div className="absolute inset-0 bg-black/30" />
+      <div className="relative w-full max-w-md bg-white h-full shadow-drawer flex flex-col animate-[slideIn_.15s_ease]" onMouseDown={(e) => e.stopPropagation()}>
+        <style>{`@keyframes slideIn{from{transform:translateX(24px);opacity:.6}to{transform:none;opacity:1}}`}</style>
+        <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between">
+          <div>
+            <h3 className="text-sm font-bold text-ink-primary">{label[provider] || provider} keys</h3>
+            <p className="text-[11px] text-ink-tertiary mt-0.5">These keys are used only by your shop — never shared with other companies.</p>
+          </div>
+          <button aria-label="Close" onClick={onClose} className="w-8 h-8 grid place-items-center rounded-lg hover:bg-slate-100"><M n="close" /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-5 space-y-3">
+          {fields.map((f) => (
+            <div key={f.key}>
+              <label className="block text-[11px] font-semibold text-ink-tertiary mb-1">{f.label}</label>
+              <input
+                type={f.secret ? "password" : "text"}
+                defaultValue={f.secret ? "" : (f.value || "")}
+                placeholder={f.set ? (f.secret ? "•••• (leave blank to keep)" : f.value) : ""}
+                onChange={(e) => setVals((s) => ({ ...s, [f.key]: e.target.value }))}
+                className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary" />
+            </div>
+          ))}
+          {err && <div className="text-xs text-rose-600">{err}</div>}
+        </div>
+        <div className="px-5 py-3 border-t border-slate-100 flex items-center justify-between">
+          {status?.source === "org" || status?.source === "unreadable"
+            ? <button onClick={clearKeys} disabled={busy} className="text-[12px] font-semibold text-rose-600 hover:underline">Remove keys</button>
+            : <span />}
+          <div className="flex gap-2">
+            <button onClick={onClose} className="px-3 py-2 rounded-lg text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>
+            <button onClick={save} disabled={busy} className="px-3.5 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Saving…" : "Save keys"}</button>
+          </div>
+        </div>
+      </div>
+    </div>, document.body);
 }
 
 /* ── Webhooks → /webhooks (B15: endpoints, events, delivery log, test, secret) ── */
@@ -1324,13 +1369,15 @@ function WebhooksCard() {
   return <WebhooksSettings />;
 }
 
-// A list card in Notifications: title with its count, an Add button on the left under it, then the table.
-function SectionCard({ title, count, onAdd, description, children }: { title: string; count?: number; onAdd?: () => void; description?: React.ReactNode; children: React.ReactNode }) {
+function SectionCard({ title, count, onAdd, children }: { title: string; count?: number; onAdd?: () => void; children: React.ReactNode }) {
   return (
-    <Section flush title={title} meta={count != null ? count : undefined} description={description}
-      actions={onAdd && <Button variant="primary" size="sm" onClick={onAdd} icon={<M n="add" c="text-sm" />}>Add</Button>}>
+    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
+      <div className="p-3.5 border-b border-slate-100">
+        <h3 className="text-sm font-semibold text-ink-primary flex items-center">{title}{count != null && <span className="ml-2 text-xs font-medium bg-slate-100 text-ink-secondary px-2 py-0.5 rounded-full">{count}</span>}</h3>
+        {onAdd && <button type="button" onClick={onAdd} className={`mt-2.5 ${btnPrimary}`}><M n="add" c="text-sm" />Add</button>}
+      </div>
       {children}
-    </Section>
+    </div>
   );
 }
 
@@ -1388,66 +1435,79 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
   async function sendReset() { try { await api.post(`/staff/employees/${emp.id}/send-reset`, {}); onSaved("Reset link emailed"); } catch (e: any) { setErr(e?.message || "Failed"); } }
   async function resetMfa() { try { await api.post(`/staff/employees/${emp.id}/reset-mfa`, {}); onSaved("2FA reset"); } catch (e: any) { setErr(e?.message || "Failed"); } }
 
-  const lblc = labelClass;
-  const fld = fieldClass();
-  const tabs: { id: typeof tab; label: string }[] = [{ id: "general", label: "Profile" }, { id: "access", label: "Access" }, { id: "payroll", label: "Pay" }, ...(isNew ? [] : [{ id: "security" as const, label: "Sign-in" }])];
-  const title = isNew ? "Add a teammate" : (f.name || "Teammate");
+  const lblc = "block text-xs font-medium text-ink-secondary mb-1.5";
+  const fld = "w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-ink-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/10";
   return (
-    <Drawer size="md" label={title} onClose={onClose}
-      title={<span className="flex items-center gap-3 min-w-0">
-        {isNew ? <span className="w-9 h-9 rounded-full bg-slate-100 text-ink-tertiary grid place-items-center flex-shrink-0"><M n="person_add" c="text-base" /></span> : <Avatar name={f.name || "?"} size={36} />}
-        <span className="truncate">{title}</span>
-        {!isNew && f.active === false && <span className="text-2xs font-semibold px-2 py-0.5 rounded-md bg-rose-50 text-rose-600">Blocked</span>}
-      </span>}
-      sub={isNew ? "They get an account to sign in with" : [f.position, f.email].filter(Boolean).join(" · ")}
-      footer={<>
-        <Button variant="primary" onClick={save} disabled={busy}>{busy ? "Saving…" : isNew ? "Add teammate" : "Save"}</Button>
-        <Button onClick={onClose}>Cancel</Button>
-      </>}>
-          <Tabs look="segmented" label="Teammate sections" value={tab} onChange={setTab} tabs={tabs} />
-          {err && <div role="alert" className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="relative w-[540px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
+        <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
+        <div className="px-5 pt-5 pb-3">
+          <div className="flex items-center gap-3">
+            {isNew ? <span className="w-11 h-11 rounded-full bg-slate-100 text-ink-tertiary grid place-items-center flex-shrink-0"><M n="person_add" c="text-lg" /></span> : <Avatar name={f.name || "?"} size={44} />}
+            <div className="flex-1 min-w-0">
+              <div className="text-lg font-semibold text-ink-primary truncate">{isNew ? "Add a teammate" : (f.name || "Teammate")}</div>
+              <div className="text-[11px] text-ink-tertiary truncate">{isNew ? "They get an account to sign in with" : [f.position, f.email].filter(Boolean).join(" · ")}</div>
+            </div>
+            {!isNew && f.active === false && <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-rose-50 text-rose-600">Blocked</span>}
+            <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 grid place-items-center text-ink-tertiary flex-shrink-0"><M n="close" c="text-base" /></button>
+          </div>
+          <div className="mt-4 inline-flex rounded-xl bg-slate-100 p-1">
+            {([["general", "Profile"], ["access", "Access"], ["payroll", "Pay"], ...(isNew ? [] : [["security", "Sign-in"]] as [string, string][])] as [string, string][]).map(([id, label]) => (
+              <button key={id} onClick={() => setTab(id as any)} aria-pressed={tab === id}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${tab === id ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>{label}</button>
+            ))}
+          </div>
+        </div>
+        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
 
           {tab === "general" && (
           <div className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div><label htmlFor="emp-name" className={lblc}>Full name</label><input id="emp-name" value={f.name || ""} onChange={(e) => set("name", e.target.value)} className={fld} /></div>
-              <div><label htmlFor="emp-pos" className={lblc}>Position</label><input id="emp-pos" value={f.position || ""} onChange={(e) => set("position", e.target.value)} className={fld} placeholder="Technician" /></div>
-              <div><label htmlFor="emp-email" className={lblc}>Email</label><input id="emp-email" value={f.email || ""} onChange={(e) => set("email", e.target.value)} className={fld} /></div>
-              <div><label htmlFor="emp-phone" className={lblc}>Phone</label><input id="emp-phone" value={f.phone || ""} onChange={(e) => set("phone", e.target.value)} className={`${fld} tabular-nums`} /></div>
-              <div><label htmlFor="emp-public" className={lblc}>Name on documents</label><input id="emp-public" value={f.public_name || ""} onChange={(e) => set("public_name", e.target.value)} className={fld} /></div>
-              <div><label htmlFor="emp-tax" className={lblc}>Tax ID</label><input id="emp-tax" value={f.tax_id || ""} onChange={(e) => set("tax_id", e.target.value)} className={`${fld} font-mono`} /></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className={lblc}>Full name</label><input value={f.name || ""} onChange={(e) => set("name", e.target.value)} className={fld} /></div>
+              <div><label className={lblc}>Position</label><input value={f.position || ""} onChange={(e) => set("position", e.target.value)} className={fld} placeholder="Technician" /></div>
+              <div><label className={lblc}>Email</label><input value={f.email || ""} onChange={(e) => set("email", e.target.value)} className={fld} /></div>
+              <div><label className={lblc}>Phone</label><input value={f.phone || ""} onChange={(e) => set("phone", e.target.value)} className={`${fld} tabular-nums`} /></div>
+              <div><label className={lblc}>Name on documents</label><input value={f.public_name || ""} onChange={(e) => set("public_name", e.target.value)} className={fld} /></div>
+              <div><label className={lblc}>Tax ID</label><input value={f.tax_id || ""} onChange={(e) => set("tax_id", e.target.value)} className={`${fld} font-mono`} /></div>
               <div><label className={lblc}>Hired date</label><DateField mode="date" value={(f.hired_at || "").slice(0, 10)} onChange={(v) => set("hired_at", v)} /></div>
             </div>
-            <div><label htmlFor="emp-note" className={lblc}>Note</label><textarea id="emp-note" value={f.note || ""} onChange={(e) => set("note", e.target.value)} rows={2} className={fieldClass("h-auto py-2")} /></div>
+            <div><label className={lblc}>Note</label><textarea value={f.note || ""} onChange={(e) => set("note", e.target.value)} rows={2} className={fld} /></div>
           </div>
           )}
 
           {tab === "access" && (
           <div className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div><label htmlFor="emp-role" className={lblc}>Role</label>
-                <select id="emp-role" value={f.role_id || ""} onChange={(e) => set("role_id", e.target.value)} className={fld}><option value="">{me?.is_owner ? "No role (full access)" : "Choose a role…"}</option>{roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
-              <div><label htmlFor="emp-loc" className={lblc}>Home location</label>
-                <select id="emp-loc" value={f.location_id || ""} onChange={(e) => set("location_id", e.target.value)} className={fld}><option value="">All locations</option>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+            <div className="grid grid-cols-2 gap-3">
+              <div><label className={lblc}>Role</label>
+                <select value={f.role_id || ""} onChange={(e) => set("role_id", e.target.value)} className={`${fld} appearance-none`}><option value="">{me?.is_owner ? "— No role (full access) —" : "Choose a role…"}</option>{roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
+              <div><label className={lblc}>Home location</label>
+                <select value={f.location_id || ""} onChange={(e) => set("location_id", e.target.value)} className={`${fld} appearance-none`}><option value="">All locations</option>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
             </div>
             {!isNew && (
-              <ToggleRow label="Active" help="Blocked employees can't sign in." on={f.active !== false} onToggle={() => set("active", !(f.active !== false))} />
+              <label className="flex items-center justify-between py-1 cursor-pointer">
+                <div><div className="text-xs font-semibold text-ink-primary">Active</div><div className="text-[11px] text-ink-tertiary">Blocked employees can't sign in.</div></div>
+                <button type="button" onClick={() => set("active", !(f.active !== false))} className={`w-10 h-6 rounded-full transition-colors flex-shrink-0 ${f.active !== false ? "bg-primary" : "bg-slate-300"} relative`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${f.active !== false ? "left-[18px]" : "left-0.5"}`} /></button>
+              </label>
             )}
           </div>
           )}
 
           {tab === "payroll" && (
           <div className="space-y-4">
-            <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
-              <div><label htmlFor="emp-wage-type" className={lblc}>Wage type</label>
-                <select id="emp-wage-type" value={f.wage_type || "fixed"} onChange={(e) => set("wage_type", e.target.value)} className={fld}><option value="fixed">Fixed salary</option><option value="hourly">Hourly</option></select></div>
-              <div><label htmlFor="emp-wage" className={lblc}>Wage value</label><input id="emp-wage" type="number" value={f.wage_value ?? ""} onChange={(e) => set("wage_value", e.target.value)} className={`${fld} tabular-nums`} /></div>
-              <div><label htmlFor="emp-basis" className={lblc}>Pay hours from</label>
-                <select id="emp-basis" value={f.hourly_basis === "attendance" ? "attendance" : "labour"} onChange={(e) => set("hourly_basis", e.target.value)} className={fld}><option value="labour">Approved job timesheets</option><option value="attendance">Shop clock-in / out</option></select></div>
+            <div className="grid grid-cols-3 gap-3">
+              <div><label className={lblc}>Wage type</label>
+                <select value={f.wage_type || "fixed"} onChange={(e) => set("wage_type", e.target.value)} className={`${fld} appearance-none`}><option value="fixed">Fixed salary</option><option value="hourly">Hourly</option></select></div>
+              <div><label className={lblc}>Wage value</label><input type="number" value={f.wage_value ?? ""} onChange={(e) => set("wage_value", e.target.value)} className={`${fld} font-mono`} /></div>
+              <div><label className={lblc}>Pay hours from</label>
+                <select value={f.hourly_basis === "attendance" ? "attendance" : "labour"} onChange={(e) => set("hourly_basis", e.target.value)} className={`${fld} appearance-none`}><option value="labour">Approved job timesheets</option><option value="attendance">Shop clock-in / out</option></select></div>
             </div>
             <div className="divide-y divide-slate-100">
-              <ToggleRow label="Work-order / job timer" on={f.track_job_hours !== false} onToggle={() => set("track_job_hours", !(f.track_job_hours !== false))} />
-              <ToggleRow label="Shop attendance clock" on={f.track_attendance !== false} onToggle={() => set("track_attendance", !(f.track_attendance !== false))} />
+              <label className="flex items-center justify-between py-2 cursor-pointer"><span className="text-xs font-semibold text-ink-primary">Work-order / job timer</span>
+                <button type="button" onClick={() => set("track_job_hours", !(f.track_job_hours !== false))} className={`w-10 h-6 rounded-full flex-shrink-0 ${f.track_job_hours !== false ? "bg-primary" : "bg-slate-300"} relative`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${f.track_job_hours !== false ? "left-[18px]" : "left-0.5"}`} /></button></label>
+              <label className="flex items-center justify-between py-2 cursor-pointer"><span className="text-xs font-semibold text-ink-primary">Shop attendance clock</span>
+                <button type="button" onClick={() => set("track_attendance", !(f.track_attendance !== false))} className={`w-10 h-6 rounded-full flex-shrink-0 ${f.track_attendance !== false ? "bg-primary" : "bg-slate-300"} relative`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${f.track_attendance !== false ? "left-[18px]" : "left-0.5"}`} /></button></label>
             </div>
           </div>
 
@@ -1455,23 +1515,29 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
 
           {tab === "security" && !isNew && (
             <div className="space-y-4">
-              <div className="flex items-end gap-2">
-                <div className="flex-1"><label htmlFor="emp-pw" className={lblc}>Set new password</label><input id="emp-pw" value={pw} onChange={(e) => setPw(e.target.value)} type="text" placeholder="Min 8 chars" className={fld} /></div>
-                <Button onClick={resetPassword} disabled={!pw.trim()}>Set</Button>
+                <div className="flex items-end gap-2">
+                <div className="flex-1"><label className={lblc}>Set new password</label><input value={pw} onChange={(e) => setPw(e.target.value)} type="text" placeholder="Min 8 chars" className={fld} /></div>
+                <button onClick={resetPassword} disabled={!pw.trim()} className="px-3 py-2 rounded-lg border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50 disabled:opacity-50">Set</button>
               </div>
-              <div className="flex flex-wrap gap-2">
-                <Button onClick={sendReset}>Email reset link</Button>
-                <Button onClick={resetMfa}>Reset 2FA</Button>
+              <div className="flex gap-2">
+                <button onClick={sendReset} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">Email reset link</button>
+                <button onClick={resetMfa} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">Reset 2FA</button>
               </div>
               {!isSelf && (
                 <div className="border-t border-slate-100 pt-4">
-                  <span className={lblc}>Signed-in devices</span>
+                  <label className={lblc}>Signed-in devices</label>
                   <DeviceList base={`/staff/employees/${emp.id}/sessions`} person={(f.name || emp.name || "This person").split(" ")[0]} />
                 </div>
               )}
             </div>
           )}
-    </Drawer>
+        </div>
+        <div className="px-5 py-4 border-t border-slate-100 flex items-center gap-2">
+          <button onClick={onClose} className="ml-auto px-4 py-2 rounded-xl border border-slate-200 text-ink-secondary hover:bg-slate-50 font-semibold text-xs">Cancel</button>
+          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-xl bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : isNew ? "Add teammate" : "Save"}</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1506,20 +1572,23 @@ function PayrollRuleDrawer({ rule, employees, statuses, onClose, onSaved }: { ru
     try { await api.del(`/payroll/rules/${rule.id}`); onSaved("Rule deleted"); } catch (e: any) { setErr(e?.message || "Failed"); }
   }
 
-  const lblc = labelClass;
-  const fld = fieldClass();
+  const lblc = "block text-[11px] font-bold text-ink-tertiary  mb-1";
+  const fld = "glass-input w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-lg";
   const isPct = f.calc_type === "percent";
-  const title = isNew ? "New commission rule" : (f.name || "Commission rule");
   return (
-    <Drawer size="md" label={title} title={title} sub="Team & roles › Commissions" onClose={onClose}
-      footer={<>
-        <Button variant="primary" onClick={save} disabled={busy}>{busy ? "Saving…" : isNew ? "Add rule" : "Save"}</Button>
-        <Button onClick={onClose}>Cancel</Button>
-        {!isNew && <Button variant="danger" onClick={del} className="ml-auto">Delete</Button>}
-      </>}>
-          {err && <div role="alert" className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="relative w-[520px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
+        <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
+          <div><span className="text-[11px] font-bold text-primary block">Team › Payroll rules</span><h2 className="font-bold text-ink-primary">{isNew ? "New commission rule" : f.name}</h2></div>
+          <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
 
-          <Section title="Trigger"><div className="space-y-3">
+          <div className="bg-white rounded-xl border border-slate-200/90 shadow-clay-card p-4 space-y-3">
+            <h3 className="text-xs font-bold text-ink-primary">Trigger</h3>
             <div><label className={lblc}>Rule name</label><input value={f.name || ""} onChange={(e) => set("name", e.target.value)} className={fld} /></div>
             <div><label className={lblc}>Pays when this happens (event)</label>
               <select value={f.event} onChange={(e) => set("event", e.target.value)} className={fld}>
@@ -1530,46 +1599,57 @@ function PayrollRuleDrawer({ rule, employees, statuses, onClose, onSaved }: { ru
                 <option value="">All employees (or by role default)</option>
                 {employees.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
               </select></div>
-          </div></Section>
+          </div>
 
-          <Section title="Amount">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="bg-white rounded-xl border border-slate-200/90 shadow-clay-card p-4 space-y-3">
+            <h3 className="text-xs font-bold text-ink-primary">Amount</h3>
+            <div className="grid grid-cols-2 gap-3">
               <div><label className={lblc}>Type</label>
                 <select value={f.calc_type} onChange={(e) => set("calc_type", e.target.value)} className={fld}><option value="percent">Percentage</option><option value="flat">Flat amount</option></select></div>
-              <div><label className={lblc}>{isPct ? "Percent (%)" : "Amount"}</label><input type="number" value={f.amount ?? ""} onChange={(e) => set("amount", e.target.value)} className={`${fld} tabular-nums`} /></div>
+              <div><label className={lblc}>{isPct ? "Percent (%)" : "Amount"}</label><input type="number" value={f.amount ?? ""} onChange={(e) => set("amount", e.target.value)} className={`${fld} font-mono`} /></div>
               {isPct && (
                 <div><label className={lblc}>Percentage of</label>
                   <select value={f.percent_basis} onChange={(e) => set("percent_basis", e.target.value)} className={fld}><option value="total">Line / order total</option><option value="margin">Gross profit (margin)</option></select></div>
               )}
-              <div><label className={lblc}>Coefficient (×)</label><input type="number" step="0.1" value={f.coefficient ?? ""} onChange={(e) => set("coefficient", e.target.value)} className={`${fld} tabular-nums`} /></div>
+              <div><label className={lblc}>Coefficient (×)</label><input type="number" step="0.1" value={f.coefficient ?? ""} onChange={(e) => set("coefficient", e.target.value)} className={`${fld} font-mono`} /></div>
             </div>
-          </Section>
+          </div>
 
-          <Section title="Conditions">
-            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+          <div className="bg-white rounded-xl border border-slate-200/90 shadow-clay-card p-4 space-y-3">
+            <h3 className="text-xs font-bold text-ink-primary">Conditions</h3>
+            <div className="grid grid-cols-2 gap-3">
               <div><label className={lblc}>Accrue</label>
                 <select value={f.calc_timing} onChange={(e) => set("calc_timing", e.target.value)} className={fld}>{PAYROLL_TIMINGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
               {f.calc_timing === "on_status" && (
                 <div><label className={lblc}>At status</label>
-                  <select value={f.trigger_status_key || ""} onChange={(e) => set("trigger_status_key", e.target.value)} className={fld}><option value="">Pick a status</option>{statuses.map((s) => <option key={s.key} value={s.key}>{s.name}</option>)}</select></div>
+                  <select value={f.trigger_status_key || ""} onChange={(e) => set("trigger_status_key", e.target.value)} className={fld}><option value="">— pick —</option>{statuses.map((s) => <option key={s.key} value={s.key}>{s.name}</option>)}</select></div>
               )}
               <div><label className={lblc}>Only for orders</label>
                 <select value={f.term_condition} onChange={(e) => set("term_condition", e.target.value)} className={fld}>{PAYROLL_TERMS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
               <div><label className={lblc}>Level</label>
                 <select value={f.rule_level} onChange={(e) => set("rule_level", e.target.value)} className={fld}>{PAYROLL_LEVELS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
               {f.rule_level === "category" && (
-                <div className="sm:col-span-2"><label className={lblc}>Category name</label><input value={f.category || ""} onChange={(e) => set("category", e.target.value)} className={fld} placeholder="e.g. Screens" /></div>
+                <div className="col-span-2"><label className={lblc}>Category name</label><input value={f.category || ""} onChange={(e) => set("category", e.target.value)} className={fld} placeholder="e.g. Screens" /></div>
               )}
               {(f.rule_level === "product" || f.rule_level === "service") && (
-                <div className="sm:col-span-2"><label className={lblc}>{f.rule_level === "product" ? "Product" : "Service"} ID</label><input value={(f.rule_level === "product" ? f.product_id : f.service_id) || ""} onChange={(e) => set(f.rule_level === "product" ? "product_id" : "service_id", e.target.value)} className={`${fld} font-mono`} placeholder="Paste the catalog item ID" /></div>
+                <div className="col-span-2"><label className={lblc}>{f.rule_level === "product" ? "Product" : "Service"} ID</label><input value={(f.rule_level === "product" ? f.product_id : f.service_id) || ""} onChange={(e) => set(f.rule_level === "product" ? "product_id" : "service_id", e.target.value)} className={`${fld} font-mono`} placeholder="Paste the catalog item ID" /></div>
               )}
             </div>
-            <div className="mt-4 border-t border-slate-100 pt-4">
-              <ToggleRow label="Reverse if the order is deleted" help="Claws back the commission when the source record is removed."
-                on={f.cancel_if_deleted !== false} onToggle={() => set("cancel_if_deleted", !(f.cancel_if_deleted !== false))} />
-            </div>
-          </Section>
-    </Drawer>
+            <label className="flex items-center justify-between py-1 cursor-pointer">
+              <div><div className="text-xs font-semibold text-ink-primary">Reverse if the order is deleted</div><div className="text-[11px] text-ink-tertiary">Claws back the commission when the source record is removed.</div></div>
+              <button type="button" onClick={() => set("cancel_if_deleted", !(f.cancel_if_deleted !== false))} className={`w-10 h-6 rounded-full flex-shrink-0 relative transition-colors ${f.cancel_if_deleted !== false ? "bg-primary" : "bg-slate-300"}`}><span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${f.cancel_if_deleted !== false ? "left-[18px]" : "left-0.5"}`} /></button>
+            </label>
+          </div>
+        </div>
+        <div className="px-5 py-4 border-t border-slate-100 flex items-center justify-between gap-2 bg-slate-50/60">
+          {!isNew ? <button onClick={del} className="px-3 py-2 rounded-lg text-xs font-bold text-rose-600 hover:bg-rose-50">Delete</button> : <span />}
+          <div className="flex gap-2">
+            <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button>
+            <button onClick={save} disabled={busy} className="px-5 py-2 rounded-lg bg-primary text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Saving…" : isNew ? "Add rule" : "Save"}</button>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1596,28 +1676,34 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
   }
   async function del(id: string) { try { await api.del(`/forms/fields/${id}`); load(); onChanged(); } catch { /* ignore */ } }
   return (
-    <Drawer size="sm" label="Custom fields" title="Custom fields" sub={type.name || type.label} onClose={onClose}>
-          <Section flush title="Fields on this form" meta={fields?.length}>
-            <div className="divide-y divide-slate-100">
-            {!fields && <div className="p-4" aria-busy="true"><span className="sk block h-3 w-1/2 rounded" /></div>}
-            {fields?.length === 0 && <EmptyState size="inline" className="px-4" title="No custom fields yet." />}
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="relative w-[480px] max-w-full bg-white h-full shadow-drawer flex flex-col">
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+          <div><h2 className="font-bold text-ink-primary">Custom fields</h2><p className="text-[11px] text-ink-tertiary">{type.name || type.label}</p></div>
+          <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          <div className="rounded-xl border border-slate-200 divide-y divide-slate-100">
+            {!fields && <div className="p-4 text-xs text-ink-tertiary">Loading…</div>}
+            {fields?.length === 0 && <div className="p-4 text-xs text-ink-tertiary">No custom fields yet.</div>}
             {fields?.map((f) => (
-              <div key={f.id} className="flex items-center justify-between gap-2 px-4 py-2 text-xs">
-                <div className="min-w-0 flex flex-wrap items-center gap-1"><span className="font-semibold text-ink-primary">{f.field_label}</span><span className="text-2xs bg-slate-100 text-ink-tertiary px-1.5 py-0.5 rounded">{f.field_type}</span>{f.required && <span className="text-2xs text-rose-600 font-semibold">required</span>}{f.show_when_field_key && <span className="text-2xs text-primary font-semibold">conditional</span>}{f.upsell_comparator && <span className="text-2xs text-amber-700 font-semibold">upsell</span>}{f.gate_status_key && <span className="text-2xs text-rose-600 font-semibold">gate</span>}</div>
-                <Button variant="link" onClick={() => del(f.id)} className="!text-rose-600 shrink-0">Delete</Button>
+              <div key={f.id} className="flex items-center justify-between px-4 py-2.5 text-xs">
+                <div><span className="font-bold text-ink-primary">{f.field_label}</span><span className="ml-2 text-[11px] bg-slate-100 text-ink-tertiary px-1.5 py-0.5 rounded">{f.field_type}</span>{f.required && <span className="ml-1 text-[11px] text-rose-600 font-semibold">required</span>}{f.show_when_field_key && <span className="ml-1 text-[11px] text-primary font-semibold">conditional</span>}{f.upsell_comparator && <span className="ml-1 text-[11px] text-amber-700 font-semibold">upsell</span>}{f.gate_status_key && <span className="ml-1 text-[11px] text-rose-600 font-semibold">gate</span>}</div>
+                <button onClick={() => del(f.id)} className="text-rose-600 font-semibold hover:underline">Delete</button>
               </div>
             ))}
-            </div>
-          </Section>
-          <Section title="Add a field"><div className="space-y-3">
-            <Input value={nf.field_label} onChange={(e) => setNf({ ...nf, field_label: e.target.value })} placeholder="Field label" aria-label="Field label" />
-            <div className="flex flex-wrap items-center gap-3">
-              <select value={nf.field_type} onChange={(e) => setNf({ ...nf, field_type: e.target.value })} aria-label="Field type" className={fieldClass("!w-auto pr-8")}>
+          </div>
+          <div className="rounded-xl border border-slate-200 p-4 space-y-3">
+            <div className="text-[11px] font-bold text-ink-tertiary">Add a field</div>
+            <input value={nf.field_label} onChange={(e) => setNf({ ...nf, field_label: e.target.value })} placeholder="Field label" className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary" />
+            <div className="flex items-center gap-3">
+              <select value={nf.field_type} onChange={(e) => setNf({ ...nf, field_type: e.target.value })} className="bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 capitalize">
                 {/* "bool" is the server's yes/no type — the old "checkbox" option was rejected with a 400 */}
                 {[["text", "Short text"], ["textarea", "Long text"], ["number", "Number"], ["select", "Pick one"], ["multiselect", "Pick several"], ["bool", "Yes / no"], ["date", "Date"], ["link", "Link"]].map(([t, l]) => <option key={t} value={t}>{l}</option>)}
               </select>
               <label className="flex items-center gap-1.5 text-xs text-ink-secondary"><input type="checkbox" checked={nf.required} onChange={(e) => setNf({ ...nf, required: e.target.checked })} className="w-4 h-4 rounded border-slate-300 text-primary" />Required</label>
-              <Button variant="primary" onClick={add} disabled={busy} className="ml-auto">Add</Button>
+              <button onClick={add} disabled={busy} className="ml-auto px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-60">Add</button>
             </div>
             {/* When to show */}
             <div className="flex flex-wrap items-center gap-2 text-xs text-ink-secondary pt-1 border-t border-slate-100">
@@ -1663,29 +1749,30 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
                   : <input value={nf.gate_value} onChange={(e) => setNf({ ...nf, gate_value: e.target.value })} placeholder="value" className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 w-24" />}
               </>}
             </div>
-          </div></Section>
-    </Drawer>
+          </div>
+        </div>
+      </div>
+    </div>
   );
 }
 
-function SecTable({ rows, cols, onRowClick, onDelete, empty = "Nothing here yet." }: { rows: any[] | null | undefined; cols: [string, (o: any) => string][]; onRowClick?: (r: any) => void; onDelete?: (r: any) => void; empty?: string }) {
-  const n = cols.length + (onRowClick || onDelete ? 1 : 0);
+function SecTable({ rows, cols, onRowClick, onDelete }: { rows: any[] | null | undefined; cols: [string, (o: any) => string][]; onRowClick?: (r: any) => void; onDelete?: (r: any) => void }) {
+  if (rows == null) return <div className="p-5 text-xs text-ink-tertiary">Loading…</div>;
+  if (rows.length === 0) return <div className="p-5 text-xs text-ink-tertiary">Nothing here yet.</div>;
   return (
     <table className="w-full text-left border-collapse text-xs">
-      <thead><tr className={theadRowClass}>
-        {cols.map(([h]) => <th key={h} className="py-2.5 px-4 font-semibold">{h}</th>)}
-        {(onRowClick || onDelete) && <th className="py-2.5 px-4 text-right font-semibold">Actions</th>}
+      <thead><tr className="bg-slate-50/60 border-b border-slate-100 text-ink-tertiary text-[11px] font-bold ">
+        {cols.map(([h]) => <th key={h} className="py-2.5 px-4">{h}</th>)}
+        {(onRowClick || onDelete) && <th className="py-2.5 px-4 text-right">Actions</th>}
       </tr></thead>
       <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
-        {rows == null ? <SkeletonRows cols={n} rows={3} />
-          : rows.length === 0 ? <TableEmpty cols={n} size="inline" title={empty} className="px-4" />
-          : rows.map((r, i) => (
-          <tr key={r?.id || i} className={`hover:bg-slate-50 ${onRowClick ? "cursor-pointer" : ""}`} {...clickableRow(onRowClick ? () => onRowClick(r) : undefined)}>
-            {cols.map(([h, fn], j) => <td key={h} className={`py-2.5 px-4 ${j === 0 ? "font-semibold text-ink-primary" : ""}`}>{fn(r)}</td>)}
+        {rows.map((r, i) => (
+          <tr key={r?.id || i} className={`hover:bg-blue-50/30 ${onRowClick ? "cursor-pointer" : ""}`} {...clickableRow(onRowClick ? () => onRowClick(r) : undefined)}>
+            {cols.map(([h, fn], j) => <td key={h} className={`py-2.5 px-4 ${j === 0 ? "font-bold text-ink-primary" : ""}`}>{fn(r)}</td>)}
             {(onRowClick || onDelete) && (
               <td className="py-2.5 px-4 text-right whitespace-nowrap" onClick={(e) => e.stopPropagation()}>
-                {onRowClick && <Button variant="link" onClick={() => onRowClick(r)} className="mr-3">Edit</Button>}
-                {onDelete && <Button variant="link" onClick={() => onDelete(r)} className="!text-rose-600">Delete</Button>}
+                {onRowClick && <button onClick={() => onRowClick(r)} className="text-primary font-semibold hover:underline mr-3">Edit</button>}
+                {onDelete && <button onClick={() => onDelete(r)} className="text-rose-600 font-semibold hover:underline">Delete</button>}
               </td>
             )}
           </tr>
@@ -1720,8 +1807,8 @@ function VarPicker({ onInsert, module }: { onInsert: (tok: string) => void; modu
   return (
     <div className="border border-slate-200 rounded-lg bg-slate-50/60 flex flex-col max-h-[460px]">
       <div className="p-2 border-b border-slate-200">
-        <div className="text-2xs font-semibold text-ink-tertiary mb-1 px-1">Insert variable</div>
-        <Input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search variables…" aria-label="Search variables" className="h-8 text-xs" />
+        <div className="text-[11px] font-semibold text-ink-tertiary mb-1 px-1">Insert variable</div>
+        <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search variables…" className="w-full bg-white border border-slate-200 rounded-md text-xs px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary" />
       </div>
       <div className="flex-1 overflow-y-auto p-1.5 space-y-1">
         {shown.length === 0 && <div className="text-xs text-ink-tertiary px-2 py-3">No matches.</div>}
@@ -1731,14 +1818,14 @@ function VarPicker({ onInsert, module }: { onInsert: (tok: string) => void; modu
             <div key={g.group}>
               <button type="button" onClick={() => setOpen((o) => ({ ...o, [g.group]: !isOpen }))}
                 className="w-full flex items-center justify-between px-2 py-1.5 rounded-md hover:bg-slate-200/60 text-left">
-                <span className="text-2xs font-semibold text-ink-secondary">{g.group}</span>
+                <span className="text-[11px] font-bold text-ink-secondary ">{g.group}</span>
                 <M n={isOpen ? "expand_less" : "expand_more"} c="text-sm text-ink-tertiary" />
               </button>
               {isOpen && (
                 <div className="flex flex-wrap gap-1 px-1.5 pb-1.5">
                   {g.items.map((tok) => (
                     <button key={tok} type="button" onClick={() => onInsert(tok)} title={`Insert ${tok}`}
-                      className="text-2xs px-1.5 py-0.5 rounded border border-slate-200 bg-white hover:bg-primary/10 hover:text-primary hover:border-primary/30 transition-colors">
+                      className="text-[11px] tabular-nums px-1.5 py-0.5 rounded border border-slate-200 bg-white hover:bg-primary hover:text-white hover:border-primary transition-colors">
                       {tok.replace(/^\{|\}$/g, "")}
                     </button>
                   ))}
@@ -1763,13 +1850,13 @@ function CharCounter({ text, sms }: { text: string; sms: boolean }) {
   const len = text.length;
   const seg = smsSegments(len);
   return (
-    <div className="mt-1 flex flex-wrap items-center gap-2 text-2xs text-ink-tertiary">
+    <div className="mt-1 flex items-center gap-2 text-[11px] text-ink-tertiary">
       <span>{len} character{len === 1 ? "" : "s"}</span>
       {sms && (
         <>
           <span className="text-slate-300">·</span>
           <span className={seg > 1 ? "text-amber-600 font-medium" : ""}>{seg} SMS segment{seg === 1 ? "" : "s"}</span>
-          {seg > 1 && <span className="text-ink-tertiary">Variable values can push this higher.</span>}
+          {seg > 1 && <span className="text-ink-tertiary">— variable values can push this higher</span>}
         </>
       )}
     </div>
@@ -1782,7 +1869,7 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
   const set = (k: string) => (e: any) => setV({ ...v, [k]: e.target.type === "checkbox" ? e.target.checked : e.target.value });
   const hasVars = fields.some((f) => f.vars);
-  const edInp = fieldClass();
+  const edInp = "glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary";
   const areaRefs = useRef<Record<string, HTMLTextAreaElement | null>>({});
   // insert a {Token} at the caret of the field's textarea (append if not focused)
   function insertVar(k: string, tok: string) {
@@ -1801,19 +1888,24 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
     try { await onSave(v); } catch (e: any) { setErr(e?.message || "Could not save"); setBusy(false); }
   }
   return (
-    <Drawer size={hasVars ? "lg" : "sm"} label={title} title={title} onClose={onClose}
-      footer={<>
-        <Button variant="primary" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save"}</Button>
-        <Button onClick={onClose}>Cancel</Button>
-        {onDelete && initial?.id && <Button variant="danger" className="ml-auto" onClick={async () => { if (await confirmDialog("Delete this item?", { danger: true, confirmLabel: "Delete" })) { await onDelete(); } }}>Delete</Button>}
-      </>}>
-          {err && <div role="alert" className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className={`relative ${hasVars ? "w-[720px]" : "w-[440px]"} max-w-full bg-white h-full shadow-drawer flex flex-col`}>
+        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
+          <h2 className="font-bold text-ink-primary">{title}</h2>
+          <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+          {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
           {fields.map((f) => (
             f.type === "checkbox" ? (
-              <ToggleRow key={f.k} label={f.label} on={!!v[f.k]} onToggle={() => setV({ ...v, [f.k]: !v[f.k] })} />
+              <div key={f.k} className="flex items-center justify-between gap-4">
+                <span className="text-sm font-medium text-ink-primary">{f.label}</span>
+                <Switch on={!!v[f.k]} onChange={(x) => setV({ ...v, [f.k]: x })} label={f.label} />
+              </div>
             ) : (
             <div key={f.k}>
-              <label htmlFor={`ed-${f.k}`} className={lbl}>{f.label}{f.req ? " *" : ""}</label>
+              <label htmlFor={`ed-${f.k}`} className="block text-sm font-medium text-ink-primary mb-1.5">{f.label}{f.req ? " *" : ""}</label>
               {f.type === "select" && f.choices ? (
                 <select id={`ed-${f.k}`} value={v[f.k]} onChange={set(f.k)} className={edInp}><option value="">Choose…</option>{f.choices.map((o: { value: string; label: string }) => <option key={o.value} value={o.value}>{o.label}</option>)}</select>
               ) : f.type === "select" ? (
@@ -1826,14 +1918,14 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
                 f.vars ? (
                   <div>
                     <div className="grid grid-cols-1 sm:grid-cols-[1fr_260px] gap-3">
-                      <textarea id={`ed-${f.k}`} ref={(el) => { areaRefs.current[f.k] = el; }} value={v[f.k]} onChange={set(f.k)} rows={12} className={fieldClass("h-auto py-2 font-mono")} />
+                      <textarea id={`ed-${f.k}`} ref={(el) => { areaRefs.current[f.k] = el; }} value={v[f.k]} onChange={set(f.k)} rows={12} className={`${edInp} font-mono`} />
                       <VarPicker onInsert={(tok) => insertVar(f.k, tok)} module={varModule} />
                     </div>
                     {f.counter && <CharCounter text={String(v[f.k] ?? "")} sms={v.channel === "sms"} />}
                   </div>
                 ) : (
                   <div>
-                    <textarea id={`ed-${f.k}`} ref={(el) => { areaRefs.current[f.k] = el; }} value={v[f.k]} onChange={set(f.k)} rows={5} className={fieldClass("h-auto py-2 font-mono")} />
+                    <textarea id={`ed-${f.k}`} ref={(el) => { areaRefs.current[f.k] = el; }} value={v[f.k]} onChange={set(f.k)} rows={5} className={`${edInp} font-mono`} />
                     {f.counter && <CharCounter text={String(v[f.k] ?? "")} sms={v.channel === "sms"} />}
                   </div>
                 )
@@ -1841,8 +1933,8 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
                 f.type === "date"
                   ? <DateField value={v[f.k] || ""} onChange={(x) => setV({ ...v, [f.k]: x })} label={f.label} />
                   : f.unit
-                    ? <div className="glass-input h-9 w-40 rounded-xl flex items-center pr-3 focus-within:ring-2 focus-within:ring-primary/30">
-                        <input id={`ed-${f.k}`} type={f.type} value={v[f.k] ?? ""} onChange={set(f.k)} className="w-full min-w-0 bg-transparent pl-3 text-sm tabular-nums text-ink-primary outline-none" />
+                    ? <div className="glass-input w-40 rounded-xl flex items-center pr-3 focus-within:ring-2 focus-within:ring-primary/30">
+                        <input id={`ed-${f.k}`} type={f.type} value={v[f.k] ?? ""} onChange={set(f.k)} className="w-full min-w-0 bg-transparent pl-3 py-2 text-sm tabular-nums text-ink-primary outline-none" />
                         <span className="text-xs text-ink-tertiary shrink-0">{f.unit}</span>
                       </div>
                     : <input id={`ed-${f.k}`} type={f.type} value={v[f.k]} onChange={set(f.k)} className={edInp} />
@@ -1851,7 +1943,14 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
             </div>
             )
           ))}
-    </Drawer>
+        </div>
+        <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
+          {onDelete && initial?.id && <button onClick={async () => { if (await confirmDialog("Delete this item?", { danger: true, confirmLabel: "Delete" })) { await onDelete(); } }} className="h-9 px-3.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 mr-auto">Delete</button>}
+          <button onClick={onClose} className="h-9 px-3.5 rounded-xl border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs ml-auto">Cancel</button>
+          <button onClick={save} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white font-semibold text-xs hover:opacity-90 disabled:opacity-60">{busy ? "Saving…" : "Save"}</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -1927,7 +2026,7 @@ function StatusMultiSelect({ value, list, onChange, single, placeholder }: {
   return (
     <div ref={boxRef}>
       <button type="button" onClick={() => setOpen((o) => !o)}
-        className="glass-input w-full min-h-9 rounded-xl px-2 py-1 flex items-center gap-1.5 flex-wrap text-left">
+        className="w-full min-h-[38px] bg-white border border-slate-200 rounded-lg px-2 py-1.5 flex items-center gap-1.5 flex-wrap text-left hover:border-slate-300 focus:outline-none focus:ring-1 focus:ring-primary">
         {cur.length === 0 && <span className="text-sm text-ink-tertiary px-1">{empty}</span>}
         {cur.map((key) => {
           const s = byStatus(key);
@@ -1936,7 +2035,7 @@ function StatusMultiSelect({ value, list, onChange, single, placeholder }: {
               style={{ background: smsTintBg(s?.color), border: `0.5px solid ${smsTintBorder(s?.color)}`, color: s?.color || SMS_DEFAULT_COLOR }}>
               <span className="w-1.5 h-1.5 rounded-full flex-shrink-0" style={{ background: s?.color || SMS_DEFAULT_COLOR }} />
               {s?.name || key}
-              <span {...clickable((e) => { e.stopPropagation(); pick(key); })} aria-label={`Remove ${s?.name || key}`} className="w-4 h-4 grid place-items-center rounded-full hover:bg-black/5 cursor-pointer"><M n="close" c="text-xs" /></span>
+              <span {...clickable((e) => { e.stopPropagation(); pick(key); })} aria-label={`Remove ${s?.name || key}`} className="w-4 h-4 grid place-items-center rounded-full hover:bg-black/5 cursor-pointer"><M n="close" c="text-[12px]" /></span>
             </span>
           );
         })}
@@ -1950,20 +2049,20 @@ function StatusMultiSelect({ value, list, onChange, single, placeholder }: {
             <div className="p-1.5 border-b border-slate-100">
               <div className="relative">
                 <M n="search" c="absolute left-2 top-1/2 -translate-y-1/2 text-sm text-ink-tertiary" />
-                <Input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter statuses" aria-label="Filter statuses" className="h-8 text-xs pl-7" />
+                <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Filter statuses" className="w-full bg-white border border-slate-200 rounded-lg text-xs pl-7 pr-2 py-1.5 focus:outline-none focus:border-primary/50" />
               </div>
             </div>
           )}
           <div className="flex-1 min-h-0 overflow-y-auto p-1.5 space-y-0.5">
             {!single && cur.length > 0 && (
               <div className="flex items-center justify-end px-1 pb-0.5">
-                <Button variant="link" onClick={() => setCur([])}>Clear all</Button>
+                <button type="button" onClick={() => setCur([])} className="text-[11px] font-semibold text-primary hover:underline">Clear all</button>
               </div>
             )}
             {shown.length === 0 && <div className="px-2 py-3 text-xs text-ink-tertiary text-center">{list.length === 0 ? "No statuses yet." : "No match"}</div>}
             {groups.map((g) => (
               <div key={g}>
-                <p className="px-2.5 pt-2 pb-0.5 text-2xs font-semibold text-ink-tertiary">{grpLabel(g)}</p>
+                <p className="px-2.5 pt-2 pb-0.5 text-[11px] font-bold text-ink-tertiary ">{grpLabel(g)}</p>
                 {shown.filter((s) => (s.status_group || "other") === g).map((s) => {
                   const sel = cur.includes(s.key);
                   return (
@@ -2002,41 +2101,45 @@ function EcommerceSettings() {
     catch (e: any) { alertDialog(e.message || "Failed"); } finally { setBusy(false); }
   }
   const platformName = (p: string) => (p === "woocommerce" ? "WooCommerce" : p === "shopify" ? "Shopify" : humanize(p));
-  const close = () => { setOpen(false); setF(blank); };
   return (
-    <SettingsPage title="E-commerce" sub="Keep your online store's products, stock and orders in step with Tekly."
-      actions={<Button variant="primary" onClick={() => setOpen(true)} icon={<M n="add" c="text-sm" />}>Connect store</Button>}>
-      <Section flush title="Connected stores" meta={items?.length}>
-        <div className="divide-y divide-slate-100">
-          {!items && <div className="px-4 py-3" aria-busy="true"><span className="sk block h-3 w-1/2 rounded" /></div>}
-          {(items || []).map((i) => (
-            <div key={i.id} className="px-4 py-3 flex flex-wrap items-center gap-2 text-sm">
-              <span className="px-2 py-0.5 rounded-md bg-slate-100 text-xs font-medium text-ink-secondary">{platformName(i.platform)}</span>
-              <span className="font-medium text-ink-primary min-w-0 truncate">{i.store_url || "—"}</span>
-              <span className="text-xs text-ink-tertiary">{[i.sync_products && "Products", i.sync_orders && "Orders"].filter(Boolean).join(" + ")}</span>
-              <span className="sm:ml-auto text-xs text-ink-tertiary">{i.last_synced_at ? `Synced ${new Date(i.last_synced_at).toLocaleDateString()}` : "Never synced"}</span>
-              <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${i.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-ink-secondary"}`}>{i.active ? "Active" : "Off"}</span>
+    <div className="max-w-3xl"><SectionCard title="E-commerce stores" count={items?.length}>
+      <div className="px-5 py-3 border-b border-slate-100">
+        {!open && <button type="button" onClick={() => setOpen(true)} className={btnPrimary}><M n="add" c="text-sm" />Connect store</button>}
+        {open && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-[180px_1fr] gap-3">
+              <div><label htmlFor="ecom-platform" className={lbl}>Platform</label><select id="ecom-platform" value={f.platform} onChange={(e) => setF({ ...f, platform: e.target.value })} className={field}><option value="shopify">Shopify</option><option value="woocommerce">WooCommerce</option></select></div>
+              <div><label htmlFor="ecom-url" className={lbl}>Store address</label><input id="ecom-url" value={f.store_url} onChange={(e) => setF({ ...f, store_url: e.target.value })} placeholder="my-shop.myshopify.com" className={field} /></div>
             </div>
-          ))}
-          {items && items.length === 0 && <EmptyState size="inline" className="px-4" title="No stores connected." />}
-        </div>
-      </Section>
-      {open && (
-        <Drawer size="sm" label="Connect a store" title="Connect a store" onClose={close}
-          footer={<>
-            <Button variant="primary" onClick={add} disabled={busy || !f.store_url.trim()}>{busy ? "Connecting…" : "Connect store"}</Button>
-            <Button onClick={close}>Cancel</Button>
-          </>}>
-          <FieldBox label="Platform" htmlFor="ecom-platform"><Select id="ecom-platform" value={f.platform} onChange={(e) => setF({ ...f, platform: e.target.value })}><option value="shopify">Shopify</option><option value="woocommerce">WooCommerce</option></Select></FieldBox>
-          <FieldBox label="Store address" htmlFor="ecom-url"><Input id="ecom-url" value={f.store_url} onChange={(e) => setF({ ...f, store_url: e.target.value })} placeholder="my-shop.myshopify.com" /></FieldBox>
-          <div className="divide-y divide-slate-100 border-t border-slate-100 pt-4">
-            <ToggleRow label="Sync products" help="Keep your store's products and stock in step with Tekly." on={!!f.sync_products} onToggle={() => setF({ ...f, sync_products: !f.sync_products })} />
-            <ToggleRow label="Sync orders" help="Bring store orders into Tekly." on={!!f.sync_orders} onToggle={() => setF({ ...f, sync_orders: !f.sync_orders })} />
+            <div className="divide-y divide-slate-100">
+              <SettingRow label="Sync products" help="Keep your store's products and stock in step with Tekly.">
+                <Switch on={!!f.sync_products} onChange={(v) => setF({ ...f, sync_products: v })} label="Products" />
+              </SettingRow>
+              <SettingRow label="Sync orders" help="Bring store orders into Tekly.">
+                <Switch on={!!f.sync_orders} onChange={(v) => setF({ ...f, sync_orders: v })} label="Orders" />
+              </SettingRow>
+            </div>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={add} disabled={busy || !f.store_url.trim()} className={btnPrimary}>{busy ? "Connecting…" : "Connect store"}</button>
+              <button type="button" onClick={() => { setOpen(false); setF(blank); }} className={btnSecondary}>Cancel</button>
+            </div>
           </div>
-        </Drawer>
-      )}
-      {msg && <div role="status" className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-drawer z-[70]">{msg}</div>}
-    </SettingsPage>
+        )}
+      </div>
+      <div className="divide-y divide-slate-100">
+        {(items || []).map((i) => (
+          <div key={i.id} className="px-5 py-3 flex items-center gap-2 text-sm">
+            <span className="px-2 py-0.5 rounded-md bg-slate-100 text-xs font-medium text-ink-secondary">{platformName(i.platform)}</span>
+            <span className="font-medium text-ink-primary">{i.store_url || "—"}</span>
+            <span className="text-xs text-ink-tertiary">{[i.sync_products && "Products", i.sync_orders && "Orders"].filter(Boolean).join(" + ")}</span>
+            <div className="flex-1" />
+            <span className="text-xs text-ink-tertiary">{i.last_synced_at ? `Synced ${new Date(i.last_synced_at).toLocaleDateString()}` : "Never synced"}</span>
+            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${i.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-ink-secondary"}`}>{i.active ? "Active" : "Off"}</span>
+          </div>
+        ))}
+        {items && items.length === 0 && <div className="px-5 py-3 text-xs text-ink-tertiary">No stores connected.</div>}
+      </div>
+    </SectionCard>{msg && <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-drawer z-[70]">{msg}</div>}</div>
   );
 }
 
@@ -2056,45 +2159,46 @@ function SsoSettings() {
   }
   async function del(id: string) { try { await api.del(`/sso/config/${id}`); reload(); } catch (e: any) { alertDialog(e.message); } }
   const inp = (k: string, label: string, extra: { placeholder?: string; type?: string } = {}) => (
-    <FieldBox label={label} htmlFor={`sso-${k}`}><Input id={`sso-${k}`} type={extra.type || "text"} value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })} placeholder={extra.placeholder} /></FieldBox>
+    <div><label htmlFor={`sso-${k}`} className={lbl}>{label}</label><input id={`sso-${k}`} type={extra.type || "text"} value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })} placeholder={extra.placeholder} className={field} /></div>
   );
-  const close = () => { setOpen(false); setF(blank); };
   return (
-    <SettingsPage title="Single sign-on" sub="Let staff sign in with your company's Google Workspace, Microsoft or other sign-in provider."
-      actions={<Button variant="primary" onClick={() => setOpen(true)} icon={<M n="add" c="text-sm" />}>Add connection</Button>}>
-      <Section flush title="Sign-in connections" meta={items?.length}>
-        <div className="divide-y divide-slate-100">
-          {!items && <div className="px-4 py-3" aria-busy="true"><span className="sk block h-3 w-1/2 rounded" /></div>}
-          {(items || []).map((s) => (
-            <div key={s.id} className="px-4 py-2.5 flex items-center gap-2 text-sm">
-              <span className="px-2 py-0.5 rounded-md bg-slate-100 text-xs font-medium text-ink-secondary uppercase">{s.protocol}</span>
-              <span className="font-medium text-ink-primary min-w-0 truncate">{s.display_name}</span>
-              {s.email_domain && <span className="text-xs text-ink-tertiary max-sm:hidden">@{s.email_domain}</span>}
-              <span className={`ml-auto px-2 py-0.5 rounded-full text-xs font-medium ${s.enabled ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-ink-secondary"}`}>{s.enabled ? "On" : "Off"}</span>
-              <IconButton label="Delete" onClick={() => del(s.id)} icon={<M n="delete" c="text-sm" />} className="hover:!text-rose-600" />
+    <div className="max-w-3xl"><SectionCard title="SSO connections" count={items?.length}>
+      <div className="px-5 py-3 border-b border-slate-100">
+        {!open && <button type="button" onClick={() => setOpen(true)} className={btnPrimary}><M n="add" c="text-sm" />Add connection</button>}
+        {open && (
+          <div className="space-y-4">
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
+              <div><label htmlFor="sso-protocol" className={lbl}>Protocol</label><select id="sso-protocol" value={f.protocol} onChange={(e) => setF({ ...f, protocol: e.target.value })} className={field}><option value="oidc">OIDC</option><option value="saml">SAML</option></select></div>
+              {inp("display_name", "Display name", { placeholder: "Google Workspace" })}
+              {inp("metadata_url", "Issuer or metadata address", { placeholder: "https://…/.well-known/openid-configuration" })}
+              {inp("email_domain", "Email domain", { placeholder: "company.com" })}
+              {inp("client_id", "Client ID")}
+              {inp("client_secret", "Client secret", { type: "password" })}
             </div>
-          ))}
-          {items && items.length === 0 && <EmptyState size="inline" className="px-4" title="No connections yet. Staff sign in with email and password until one is turned on." />}
-        </div>
-      </Section>
-      {open && (
-        <Drawer size="sm" label="Add a sign-in connection" title="Add a sign-in connection" onClose={close}
-          footer={<>
-            <Button variant="primary" onClick={add} disabled={busy || !f.display_name.trim()}>{busy ? "Adding…" : "Add connection"}</Button>
-            <Button onClick={close}>Cancel</Button>
-          </>}>
-          <FieldBox label="Protocol" htmlFor="sso-protocol"><Select id="sso-protocol" value={f.protocol} onChange={(e) => setF({ ...f, protocol: e.target.value })}><option value="oidc">OpenID Connect (Google, Microsoft, Okta…)</option><option value="saml">SAML (older company sign-in)</option></Select></FieldBox>
-          {inp("display_name", "Display name", { placeholder: "Google Workspace" })}
-          {inp("metadata_url", "Issuer or metadata address", { placeholder: "https://…/.well-known/openid-configuration" })}
-          {inp("email_domain", "Email domain", { placeholder: "company.com" })}
-          {inp("client_id", "Client ID")}
-          {inp("client_secret", "Client secret", { type: "password" })}
-          <div className="border-t border-slate-100 pt-4">
-            <ToggleRow label="Turned on" help="Staff with this email domain can sign in with it." on={!!f.enabled} onToggle={() => setF({ ...f, enabled: !f.enabled })} />
+            <SettingRow label="Enabled" help="Staff with this email domain can sign in with it.">
+              <Switch on={!!f.enabled} onChange={(v) => setF({ ...f, enabled: v })} label="Enabled" />
+            </SettingRow>
+            <div className="flex items-center gap-2">
+              <button type="button" onClick={add} disabled={busy || !f.display_name.trim()} className={btnPrimary}>{busy ? "Adding…" : "Add connection"}</button>
+              <button type="button" onClick={() => { setOpen(false); setF(blank); }} className={btnSecondary}>Cancel</button>
+            </div>
           </div>
-        </Drawer>
-      )}
-    </SettingsPage>
+        )}
+      </div>
+      <div className="divide-y divide-slate-100">
+        {(items || []).map((s) => (
+          <div key={s.id} className="px-5 py-3 flex items-center gap-2 text-sm">
+            <span className="px-2 py-0.5 rounded-md bg-slate-100 text-xs font-medium text-ink-secondary uppercase">{s.protocol}</span>
+            <span className="font-medium text-ink-primary">{s.display_name}</span>
+            {s.email_domain && <span className="text-xs text-ink-tertiary">@{s.email_domain}</span>}
+            <div className="flex-1" />
+            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${s.enabled ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-ink-secondary"}`}>{s.enabled ? "Enabled" : "Disabled"}</span>
+            <button type="button" aria-label="Delete" onClick={() => del(s.id)} className="w-8 h-8 grid place-items-center rounded-lg text-ink-tertiary hover:text-rose-600 hover:bg-rose-50"><M n="delete" c="text-sm" /></button>
+          </div>
+        ))}
+        {items && items.length === 0 && <div className="px-5 py-3 text-xs text-ink-tertiary">No SSO connections. Staff sign in with email and password until one is enabled.</div>}
+      </div>
+    </SectionCard></div>
   );
 }
 
@@ -2112,28 +2216,29 @@ function ApprovalsSettings() {
   }
   const pill = (s: string) => s === "approved" ? "bg-emerald-100 text-emerald-700" : s === "rejected" ? "bg-rose-100 text-rose-700" : "bg-amber-100 text-amber-700";
   return (
-    <SettingsPage title="Approvals" sub="Refunds, discounts and edits to closed jobs that need a manager's yes.">
-      <Tabs look="segmented" label="Which requests" value={filter} onChange={setFilter}
-        tabs={[{ id: "pending", label: "Pending" }, { id: "all", label: "All" }]} />
-      <Section flush title="Approval requests" meta={items?.length}>
-        <div className="divide-y divide-slate-100">
-          {!items && <div className="px-4 py-3" aria-busy="true"><span className="sk block h-3 w-1/2 rounded" /></div>}
-          {items && items.length === 0 && <EmptyState size="inline" className="px-4" title={`No ${filter === "pending" ? "pending " : ""}approval requests.`} />}
-          {(items || []).map((r) => (
-            <div key={r.id} className="px-4 py-3 flex flex-wrap items-center gap-2 text-sm">
-              <span className="px-2 py-0.5 rounded-md bg-slate-100 text-xs font-medium text-ink-secondary">{humanize(r.kind || "")}</span>
-              {r.amount != null && <span className="tabular-nums font-semibold text-ink-primary">{money(Number(r.amount), undefined, true)}</span>}
-              {r.reason && <span className="text-ink-secondary min-w-0 flex-1 truncate">{r.reason}</span>}
-              <div className="ml-auto flex items-center gap-2">
-                {r.status === "pending"
-                  ? <><Button variant="primary" size="sm" onClick={() => decide(r.id, "approve")} disabled={busy}>Approve</Button><Button variant="danger" size="sm" onClick={() => decide(r.id, "reject")} disabled={busy}>Reject</Button></>
-                  : <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${pill(r.status)}`}>{humanize(r.status || "")}</span>}
-              </div>
-            </div>
-          ))}
+    <div className="max-w-3xl"><SectionCard title="Approval requests" count={items?.length}>
+      <div className="px-5 py-2.5 border-b border-slate-100">
+        <div className="inline-flex rounded-xl border border-slate-200 bg-slate-50 p-1">
+          {([["pending", "Pending"], ["all", "All"]] as const).map(([s, l]) => <button key={s} type="button" onClick={() => setFilter(s)} aria-pressed={filter === s}
+            className={"px-4 py-1.5 rounded-lg text-xs font-semibold transition-colors " + (filter === s ? "bg-white text-ink-primary shadow-clay-sm" : "text-ink-tertiary hover:text-ink-secondary")}>{l}</button>)}
         </div>
-      </Section>
-    </SettingsPage>
+      </div>
+      <div className="divide-y divide-slate-100">
+        {!items && <div className="px-5 py-4 text-xs text-ink-tertiary">Loading…</div>}
+        {items && items.length === 0 && <div className="px-5 py-4 text-xs text-ink-tertiary">No {filter === "pending" ? "pending " : ""}approval requests.</div>}
+        {(items || []).map((r) => (
+          <div key={r.id} className="px-5 py-3 flex items-center gap-2 text-sm">
+            <span className="px-2 py-0.5 rounded-md bg-slate-100 text-xs font-medium text-ink-secondary">{humanize(r.kind || "")}</span>
+            {r.amount != null && <span className="tabular-nums font-semibold text-ink-primary">{money(Number(r.amount), undefined, true)}</span>}
+            {r.reason && <span className="text-ink-secondary truncate max-w-[220px]">{r.reason}</span>}
+            <div className="flex-1" />
+            {r.status === "pending"
+              ? <><button type="button" onClick={() => decide(r.id, "approve")} disabled={busy} className={btnPrimary}>Approve</button><button type="button" onClick={() => decide(r.id, "reject")} disabled={busy} className="h-9 px-3.5 rounded-xl border border-rose-200 bg-white text-rose-600 text-xs font-semibold hover:bg-rose-50 disabled:opacity-50">Reject</button></>
+              : <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${pill(r.status)}`}>{humanize(r.status || "")}</span>}
+          </div>
+        ))}
+      </div>
+    </SectionCard></div>
   );
 }
 
@@ -2183,19 +2288,23 @@ function AssetCatalog() {
   async function delRow(kind: "groups" | "brands" | "models", id: string) { if (!(await confirmDialog("Delete this entry?", { danger: true, confirmLabel: "Delete" }))) return; try { await api.del(`/settings/asset-${kind}/${id}`); flash("Deleted"); if (kind === "groups") { loadGroups(tk); if (gsel === id) setGsel(""); } if (kind === "brands") { loadBrands(tk); if (bsel === id) setBsel(""); } if (kind === "models") loadModels(tk); } catch (e: any) { flash(e.message || "Delete failed"); } }
   async function runImport() { if (!csv.trim()) return; setBusy(true); try { const r = await api.post<any>(`/settings/asset-directory/import`, { template_key: tk, csv }); flash(`Imported ${r?.brands ?? 0} brands, ${r?.models ?? 0} models`); setCsv(""); setCsvOpen(false); loadBrands(tk); loadModels(tk); } catch (e: any) { flash(e.message || "Import failed"); } finally { setBusy(false); } }
 
-  const box = `${sectionCard} overflow-hidden min-w-0`;
-  const addInp = fieldClass("flex-1 min-w-0");
-  const add = (onClick: () => void) => <Button onClick={onClick} className="shrink-0">Add</Button>;
+  const box = "bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden";
+  const addInp = "glass-input flex-1 min-w-0 rounded-xl px-3 py-2 text-sm text-ink-primary";
+  const addBtn = `${btnSecondary} shrink-0`;
 
   return (
-    <Section title="Asset catalog" description={<>Groups, brands, models and ID rules for {tkLabel ? <span className="font-medium text-ink-secondary">{tkLabel}</span> : "your shop"}.</>}
-      actions={<Button onClick={() => setCsvOpen((o) => !o)} aria-expanded={csvOpen} icon={<M n="upload" c="text-sm" />}>Import CSV</Button>}>
-      <div className="space-y-4">
+    <div className="space-y-4">
+      <div>
+        <h3 className="text-sm font-semibold text-ink-primary">Asset catalog</h3>
+        <p className="text-xs text-ink-tertiary mt-0.5">Groups, brands, models and ID rules for {tkLabel ? <span className="font-medium text-ink-secondary">{tkLabel}</span> : "your shop"}.</p>
+        <button type="button" onClick={() => setCsvOpen((o) => !o)} className={`mt-2.5 ${btnSecondary}`}><M n={csvOpen ? "close" : "upload"} c="text-sm" />{csvOpen ? "Close import" : "Import CSV"}</button>
+      </div>
+
       {csvOpen && (
-        <div className="rounded-xl bg-slate-50/70 border border-slate-200/80 p-3.5 space-y-2">
+        <div className="rounded-2xl bg-slate-50/70 border border-slate-200/80 p-3.5 space-y-2">
           <div className="text-xs text-ink-tertiary">Bulk import. The first row must be the headers: <span className="font-mono text-ink-secondary">brand,model,group</span></div>
-          <textarea value={csv} onChange={(e) => setCsv(e.target.value)} rows={5} aria-label="CSV to import" className={fieldClass("h-auto py-2 font-mono resize-none")} placeholder={"brand,model,group\nApple,iPhone 15,Phone\nSamsung,Galaxy S24,Phone"} />
-          <div className="flex flex-wrap gap-2"><Button variant="primary" onClick={runImport} disabled={busy}>{busy ? "Importing…" : "Import"}</Button><Button onClick={() => setCsvOpen(false)}>Cancel</Button></div>
+          <textarea value={csv} onChange={(e) => setCsv(e.target.value)} rows={5} aria-label="CSV to import" className="glass-input block w-full rounded-xl px-3 py-2 text-sm font-mono text-ink-primary resize-none" placeholder={"brand,model,group\nApple,iPhone 15,Phone\nSamsung,Galaxy S24,Phone"} />
+          <div><button type="button" onClick={runImport} disabled={busy} className={btnPrimary}>{busy ? "Importing…" : "Import"}</button></div>
         </div>
       )}
 
@@ -2203,58 +2312,57 @@ function AssetCatalog() {
         {/* Groups */}
         <div className={box}>
           <div className="px-4 py-2.5 border-b border-slate-100 text-sm font-semibold text-ink-primary">Groups ({groups.length})</div>
-          <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto">
-            <button type="button" onClick={() => { setGsel(""); setBsel(""); }} className={`w-full text-left px-4 py-2.5 text-xs font-semibold ${!gsel ? "bg-blue-50/60 text-primary" : "text-ink-secondary hover:bg-slate-50"}`}>All groups</button>
+          <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
+            <button type="button" onClick={() => { setGsel(""); setBsel(""); }} className={`w-full text-left px-4 py-2 text-xs font-bold ${!gsel ? "bg-blue-50/60 text-primary" : "text-ink-secondary hover:bg-slate-50"}`}>All groups</button>
             {groups.map((g) => {
               const rule = ruleFor(g.id);
               return (
                 <div key={g.id} className={`px-4 py-2 flex items-center gap-2 ${gsel === g.id ? "bg-blue-50/60" : "hover:bg-slate-50"}`}>
                   <button type="button" onClick={() => { setGsel(g.id); setBsel(""); }} className="flex-1 text-left min-w-0">
-                    <div className="text-xs font-semibold text-ink-primary truncate">{g.label}</div>
+                    <div className="text-xs font-bold text-ink-primary truncate">{g.label}</div>
                     {rule && <div className="text-xs text-ink-tertiary">ID: {(rule.allowed_kinds || []).map((k: string) => ID_LABEL[k] || k).join(" / ") || "—"}</div>}
                   </button>
-                  {!g.is_system && <IconButton size="sm" label={`Delete ${g.label}`} onClick={() => delRow("groups", g.id)} icon={<M n="close" c="text-sm" />} />}
+                  {!g.is_system && <button aria-label="Close" type="button" onClick={() => delRow("groups", g.id)} className="text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>}
                 </div>
               );
             })}
           </div>
-          <div className="p-2.5 flex gap-1.5 border-t border-slate-100"><input value={newGroup} onChange={(e) => setNewGroup(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addGroup()} className={addInp} placeholder="New group" aria-label="New group" />{add(addGroup)}</div>
+          <div className="p-2.5 flex gap-1.5 border-t border-slate-100"><input value={newGroup} onChange={(e) => setNewGroup(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addGroup()} className={addInp} placeholder="New group" /><button type="button" onClick={addGroup} className={addBtn}>Add</button></div>
         </div>
 
         {/* Brands */}
         <div className={box}>
           <div className="px-4 py-2.5 border-b border-slate-100 text-sm font-semibold text-ink-primary">Brands ({shownBrands.length}){gsel ? ` · ${gName(gsel)}` : ""}</div>
-          <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto">
+          <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
             {shownBrands.length === 0 && <p className="px-4 py-3 text-xs text-ink-tertiary">No brands.</p>}
             {shownBrands.map((b) => (
               <div key={b.id} className={`px-4 py-2 flex items-center gap-2 ${bsel === b.id ? "bg-blue-50/60" : "hover:bg-slate-50"}`}>
-                <button type="button" onClick={() => setBsel(b.id)} className="flex-1 min-w-0 text-left text-xs font-semibold text-ink-primary truncate">{b.name}</button>
-                {!b.is_system && <IconButton size="sm" label={`Delete ${b.name}`} onClick={() => delRow("brands", b.id)} icon={<M n="close" c="text-sm" />} />}
+                <button type="button" onClick={() => setBsel(b.id)} className="flex-1 text-left text-xs font-bold text-ink-primary truncate">{b.name}</button>
+                {!b.is_system && <button aria-label="Close" type="button" onClick={() => delRow("brands", b.id)} className="text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>}
               </div>
             ))}
           </div>
-          <div className="p-2.5 flex gap-1.5 border-t border-slate-100"><input value={newBrand} onChange={(e) => setNewBrand(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addBrand()} className={addInp} placeholder={gsel ? `New brand in ${gName(gsel)}` : "New brand"} aria-label="New brand" />{add(addBrand)}</div>
+          <div className="p-2.5 flex gap-1.5 border-t border-slate-100"><input value={newBrand} onChange={(e) => setNewBrand(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addBrand()} className={addInp} placeholder={gsel ? `New brand in ${gName(gsel)}` : "New brand"} /><button type="button" onClick={addBrand} className={addBtn}>Add</button></div>
         </div>
 
         {/* Models */}
         <div className={box}>
           <div className="px-4 py-2.5 border-b border-slate-100 text-sm font-semibold text-ink-primary">Models ({shownModels.length}){bsel ? ` · ${brands.find((b) => b.id === bsel)?.name || ""}` : ""}</div>
-          <div className="divide-y divide-slate-100 max-h-96 overflow-y-auto">
+          <div className="divide-y divide-slate-100 max-h-72 overflow-y-auto">
             {!bsel && <p className="px-4 py-3 text-xs text-ink-tertiary">Pick a brand to see and add its models.</p>}
             {bsel && shownModels.length === 0 && <p className="px-4 py-3 text-xs text-ink-tertiary">No models for this brand.</p>}
             {bsel && shownModels.map((m) => (
               <div key={m.id} className="px-4 py-2 flex items-center gap-2 hover:bg-slate-50">
-                <span className="flex-1 min-w-0 text-xs font-semibold text-ink-primary truncate">{m.name}{(m.year_from || m.year_to) ? <span className="text-ink-tertiary font-normal"> · {m.year_from || "…"}–{m.year_to || "…"}</span> : null}</span>
-                {!m.is_system && <IconButton size="sm" label={`Delete ${m.name}`} onClick={() => delRow("models", m.id)} icon={<M n="close" c="text-sm" />} />}
+                <span className="flex-1 text-xs font-bold text-ink-primary truncate">{m.name}{(m.year_from || m.year_to) ? <span className="text-ink-tertiary font-normal"> · {m.year_from || "…"}–{m.year_to || "…"}</span> : null}</span>
+                {!m.is_system && <button aria-label="Close" type="button" onClick={() => delRow("models", m.id)} className="text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>}
               </div>
             ))}
           </div>
-          {bsel && <div className="p-2.5 flex gap-1.5 border-t border-slate-100"><input value={newModel} onChange={(e) => setNewModel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addModel()} className={addInp} placeholder="New model" aria-label="New model" />{add(addModel)}</div>}
+          {bsel && <div className="p-2.5 flex gap-1.5 border-t border-slate-100"><input value={newModel} onChange={(e) => setNewModel(e.target.value)} onKeyDown={(e) => e.key === "Enter" && addModel()} className={addInp} placeholder="New model" /><button type="button" onClick={addModel} className={addBtn}>Add</button></div>}
         </div>
       </div>
-      {toast && <div role="status" className="text-xs font-semibold text-primary">{toast}</div>}
-      </div>
-    </Section>
+      {toast && <div className="text-xs font-semibold text-primary">{toast}</div>}
+    </div>
   );
 }
 
@@ -2264,33 +2372,45 @@ function IndustryNote({ onChange }: { onChange: () => void }) {
   useEffect(() => { api.get<any>("/settings/industry-template").then(setD).catch(() => setD(null)); }, []);
   const cur = (d?.templates || []).find((t: any) => t.key === d?.current);
   return (
-    <Section icon="handyman" title={cur ? <>Your shop repairs: <span className="font-semibold">{cur.label}</span></> : "What your shop repairs"}
-      description="The brands, models and groups below follow this. Change it in General."
-      actions={<Button onClick={onChange}>Change in General</Button>} />
+    <div className="flex items-center gap-3 bg-white rounded-2xl border border-slate-200/90 shadow-clay-card px-5 py-4">
+      <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n="handyman" c="text-lg" /></span>
+      <div className="min-w-0">
+        <div className="text-sm text-ink-primary">{cur ? <>Your shop repairs: <span className="font-semibold">{cur.label}</span></> : "What your shop repairs"}</div>
+        <div className="text-[11px] text-ink-tertiary">The brands, models and groups below follow this. Change it in General.</div>
+      </div>
+      <button onClick={onChange} className="ml-auto px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50 flex-shrink-0">Change</button>
+    </div>
   );
 }
 
 // Several items per job — only offered to tools, small engine / equipment, phone and computer
 // shops (the server enforces the same list: services/multi_asset.ELIGIBLE). Other industries never see it.
-function MultiAssetSwitch({ onFlash }: { onFlash?: (m: string) => void }) {
+function MultiAssetSwitch() {
   const [st, setSt] = useState<{ available: boolean; on: boolean } | null>(null);
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
   useEffect(() => { api.get<any>("/staff/company").then((c) => setSt({ available: !!c.multi_asset_available, on: !!c.multi_asset_jobs })).catch(() => setSt(null)); }, []);
   if (!st?.available) return null;
-  // A lone switch: it saves the moment it flips and confirms with the page toast.
   async function flip() {
     if (!st) return;
     setBusy(true); setErr(null);
-    try { await api.put("/staff/company", { multi_asset_jobs: !st.on }); setSt({ ...st, on: !st.on }); onFlash?.("Saved"); }
+    try { await api.put("/staff/company", { multi_asset_jobs: !st.on }); setSt({ ...st, on: !st.on }); }
     catch (e: any) { setErr(e?.message || "Couldn't change this"); } finally { setBusy(false); }
   }
   return (
-    <Section title="Jobs">
-      <SettingRow label="Several items per job" help="For customers who drop off a batch, like six tools at once. One job holds every item, each with its own problem and result, and each service or part can be marked for one item.">
-        <Switch on={st.on} onChange={flip} disabled={busy} label="Several items per job" />
-      </SettingRow>
-      {err && <p role="alert" className="mt-2 text-xs text-rose-600">{err}</p>}
-    </Section>
+    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card px-5 py-4">
+      <div className="flex items-start gap-3">
+        <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n="inventory" c="text-lg" /></span>
+        <div className="min-w-0">
+          <div className="text-sm font-semibold text-ink-primary">Several items per job</div>
+          <div className="text-xs text-ink-tertiary leading-relaxed">For customers who drop off a batch, like six tools at once. One job holds every item, each with its own problem and result, and each service or part can be marked for one item.</div>
+          {err && <div className="mt-1 text-xs text-rose-600">{err}</div>}
+        </div>
+        <button type="button" role="switch" aria-checked={st.on} aria-label="Several items per job" disabled={busy} onClick={flip}
+          className={`ml-auto w-10 h-6 rounded-full relative transition-colors flex-shrink-0 disabled:opacity-60 ${st.on ? "bg-primary" : "bg-slate-300"}`}>
+          <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${st.on ? "left-[18px]" : "left-0.5"}`} />
+        </button>
+      </div>
+    </div>
   );
 }
 
@@ -2318,16 +2438,17 @@ function TierManager({ types }: { types: any[] }) {
     const r = await api.get<any>(`/pricing/types/${ptId}/tiers`); setTiers(r.items || []);
   }
   return (
-    <Section title="Quantity break tiers" description="Lower the markup automatically once a line reaches a quantity. The highest matching tier wins.">
-      <div className="space-y-3">
-      <select value={ptId} onChange={(e) => setPtId(e.target.value)} aria-label="Price type" className={fieldClass("sm:max-w-xs pr-8")}>
+    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-5 space-y-3">
+      <div><h4 className="text-sm font-semibold text-ink-primary">Quantity break tiers</h4>
+        <p className="text-xs text-ink-tertiary mt-0.5">Lower the markup automatically once a line reaches a quantity. The highest matching tier wins.</p></div>
+      <select value={ptId} onChange={(e) => setPtId(e.target.value)} aria-label="Price type" className="glass-input rounded-xl px-3 py-2 text-sm max-w-xs">
         <option value="">Choose a price type…</option>{types.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
       {ptId && <div className="space-y-2">
         {tiers.length === 0 && <p className="text-xs text-ink-tertiary">No tiers yet. The type's base markup applies at every quantity.</p>}
         {tiers.map((t) => (
           <div key={t.id} className="flex items-center gap-3 text-sm">
-            <span className="text-ink-secondary">From <span className="font-semibold tabular-nums text-ink-primary">{t.min_qty}</span> or more: markup <span className="font-semibold tabular-nums text-ink-primary">{t.markup_pct}%</span></span>
-            <Button variant="link" onClick={() => del(t.id)} className="!text-rose-600">Remove</Button></div>
+            <span className="text-ink-secondary">From <b className="font-semibold text-ink-primary">{t.min_qty}</b> or more: markup <b className="font-semibold text-ink-primary">{t.markup_pct}%</b></span>
+            <button type="button" onClick={() => del(t.id)} className="text-xs font-semibold text-rose-600 hover:underline">Remove</button></div>
         ))}
         <div className="flex flex-wrap items-end gap-3 pt-1">
           <div><label htmlFor="tier-min" className={lbl}>From quantity</label>
@@ -2339,12 +2460,11 @@ function TierManager({ types }: { types: any[] }) {
                 className="w-full min-w-0 bg-transparent pl-3 text-sm font-medium tabular-nums text-ink-primary outline-none" />
               <span className="text-xs text-ink-tertiary shrink-0">%</span>
             </div></div>
-          <Button onClick={add} disabled={busy}>Add tier</Button>
-          {msg && <span role="alert" className="text-xs text-rose-600 pb-2">{msg}</span>}
+          <button type="button" onClick={add} disabled={busy} className={btnPrimary}>Add tier</button>
+          {msg && <span className="text-xs text-rose-600 pb-2">{msg}</span>}
         </div>
       </div>}
-      </div>
-    </Section>
+    </div>
   );
 }
 
@@ -2357,7 +2477,7 @@ function TierManager({ types }: { types: any[] }) {
 // in FormCustomizer (drag to reorder, click to edit, add a field where it belongs).
 // J1: what a job of this type needs before it can be closed. The type is saved whole (the
 // server's PUT replaces every field), so send its current values with the one switch changed.
-function CloseRules({ type, onChanged }: { type: any; onChanged?: () => void }) {
+function CloseRules({ type, onChanged, inline }: { type: any; onChanged?: () => void; inline?: boolean }) {
   const [v, setV] = useState({ requires_signature: !!type.requires_signature, requires_checklist: !!type.requires_checklist });
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
   useEffect(() => { setV({ requires_signature: !!type.requires_signature, requires_checklist: !!type.requires_checklist }); }, [type.id, type.requires_signature, type.requires_checklist]);
@@ -2372,7 +2492,6 @@ function CloseRules({ type, onChanged }: { type: any; onChanged?: () => void }) 
         ...next,
       });
       onChanged?.();
-      settingsToast("Saved");
     } catch (e: any) { setV(v); setErr(e?.message || "Could not save"); }
     finally { setBusy(false); }
   }
@@ -2380,47 +2499,134 @@ function CloseRules({ type, onChanged }: { type: any; onChanged?: () => void }) 
     ["requires_signature", "Customer must sign before the job can be closed"],
     ["requires_checklist", "All required checklist items must be done before the job can be closed"],
   ];
-  // Each switch saves the moment it flips (it's one setting) and confirms with the page toast.
+  const short: Record<string, string> = { requires_signature: "Customer signs before closing", requires_checklist: "Checklist done before closing" };
+  if (inline) return (
+    <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+      {rows.map(([k, label]) => (
+        <label key={k} className="flex items-center gap-2.5 text-xs text-ink-secondary cursor-pointer">
+          <button type="button" role="switch" aria-checked={v[k]} aria-label={label} disabled={busy} onClick={() => flip(k)}
+            className={`w-9 h-5 rounded-full transition-colors relative shrink-0 disabled:opacity-60 ${v[k] ? "bg-primary" : "bg-slate-300"}`}>
+            <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${v[k] ? "left-[18px]" : "left-0.5"}`} />
+          </button>
+          <span title={label}>{short[k]}</span>
+        </label>
+      ))}
+      {err && <p role="alert" className="text-2xs text-rose-600">{err}</p>}
+    </div>
+  );
   return (
-    <Section title={`Before a ${type.name} job can be closed`}>
-      <div className="divide-y divide-slate-100">
-        {rows.map(([k, label]) => (
-          <SettingRow key={k} label={label}>
-            <Switch on={v[k]} onChange={() => flip(k)} disabled={busy} label={label} />
-          </SettingRow>
-        ))}
-      </div>
-      {err && <p role="alert" className="mt-2 text-xs text-rose-600">{err}</p>}
-    </Section>
+    <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-2">
+      <div className="text-xs font-semibold text-ink-primary">Before a {type.name} job can be closed</div>
+      {rows.map(([k, label]) => (
+        <label key={k} className="flex items-center gap-2.5 text-xs text-ink-secondary cursor-pointer">
+          <button type="button" role="switch" aria-checked={v[k]} aria-label={label} disabled={busy} onClick={() => flip(k)}
+            className={`w-9 h-5 rounded-full transition-colors relative shrink-0 disabled:opacity-60 ${v[k] ? "bg-primary" : "bg-slate-300"}`}>
+            <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${v[k] ? "left-[18px]" : "left-0.5"}`} />
+          </button>
+          <span>{label}</span>
+        </label>
+      ))}
+      {err && <p role="alert" className="text-[11px] text-rose-600">{err}</p>}
+    </div>
   );
 }
 
-function FormsDesigner({ types, onAddType, onDeleteType, onAdvanced, onChanged }: {
-  types: any[]; onAddType: () => void; onDeleteType: (t: any) => void; onAdvanced: (t: any) => void; onChanged?: () => void;
+// Forms & fields (owner's pick "A"): five fixed tabs, one per thing a shop fills in. Work orders and
+// estimates share one form (an estimate is a work order that isn't approved yet). Under that tab, one
+// "Job type" box picks the custom job type (Repair, Warranty claim …) with its start status, closing
+// rules and a ⋯ menu. The box sits in the same spot on every tab, so switching never moves the fields.
+type FormGroup = "order" | "client" | "device" | "product" | "lead";
+const FORM_GROUPS: { id: FormGroup; label: string; icon: string; note: string }[] = [
+  { id: "order", label: "Work orders and estimates", icon: "build", note: "" },
+  { id: "client", label: "Clients", icon: "person", note: "Used when you add or edit a client, at the desk or on Tekly Go." },
+  { id: "device", label: "Devices", icon: "devices", note: "Used for every device or asset a client brings in." },
+  { id: "product", label: "Products", icon: "inventory_2", note: "Used when you add or edit a product in Inventory." },
+  { id: "lead", label: "Inquiries", icon: "mail", note: "Used for walk-ins, calls and web inquiries before they become jobs." },
+];
+
+function FormsDesigner({ types, onAddType, onEditType, onDeleteType, onAdvanced, onChanged }: {
+  types: any[]; onAddType: () => void; onEditType?: (t: any) => void; onDeleteType: (t: any) => void; onAdvanced: (t: any) => void; onChanged?: () => void;
 }) {
-  const want = new URLSearchParams(window.location.search).get("form");
-  const [pick, setPick] = useState<string>(() => want || "");
-  const choices: { id: string; label: string; form: FormKey; typeId?: string; type?: any }[] = [
-    ...types.map((t) => ({ id: `type:${t.id}`, label: `Work order · ${t.name}`, form: "order" as FormKey, typeId: t.id, type: t })),
-    { id: "client", label: "Client", form: "client" }, { id: "device", label: "Device / asset", form: "device" },
-    { id: "product", label: "Product", form: "product" }, { id: "lead", label: "Inquiry", form: "lead" },
-  ];
-  const cur = choices.find((c) => c.id === pick) || choices[0];
+  // ?form= still deep-links: "type:<id>" opens that job type, "client"/"device"/"product"/"lead" a tab.
+  const want = new URLSearchParams(window.location.search).get("form") || "";
+  const [group, setGroup] = useState<FormGroup>(() => (want && !want.startsWith("type:") ? (want as FormGroup) : "order"));
+  const defaultType = types.find((t) => t.is_default) || types[0];
+  const [typeId, setTypeId] = useState<string>(() => (want.startsWith("type:") ? want.slice(5) : ""));
+  const type = types.find((t) => String(t.id) === typeId) || defaultType;
+  const [open, setOpen] = useState<"" | "types" | "more">("");
+  const g = FORM_GROUPS.find((x) => x.id === group) || FORM_GROUPS[0];
+  const isOrder = group === "order";
+  const formKey = (isOrder ? "order" : group) as FormKey;
+  const title = isOrder ? `${type?.name || "Work order"} job` : g.label.replace(/s$/, "");
+  const menu = "absolute top-full mt-1.5 z-40 bg-white rounded-2xl border border-slate-200/90 shadow-drawer p-1.5";
+  const item = "w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left text-xs transition-colors";
   return (
-    <SettingsPage wide title="Forms & fields" sub="Pick a form, then drag fields to reorder them, click one to edit it, or add a field where it belongs."
-      actions={<Button variant="primary" onClick={onAddType} icon={<M n="add" c="text-sm" />}>Work order type</Button>}>
-      <Tabs label="Forms" value={cur?.id || ""} onChange={setPick} tabs={choices.map((c) => ({ id: c.id, label: c.label }))} />
-      {cur?.type && (
-        <div className="flex flex-wrap items-center gap-x-4 gap-y-1 text-xs text-ink-tertiary">
-          {/* The links come first and the delete link stays (greyed on the default type), so nothing
-              slides when you pick a different form. */}
-          <Button variant="link" onClick={() => onAdvanced(cur.type)}>Advanced rules (show only when, upsell, block status)</Button>
-          <Button variant="link" onClick={() => onDeleteType(cur.type)} disabled={!!cur.type.is_default} title={cur.type.is_default ? "The default type can't be deleted" : undefined} className="!text-rose-600">Delete this type</Button>
-          <span>New orders start as <span className="font-semibold text-ink-secondary">{cur.type.initial_status || "new"}</span>{cur.type.is_default ? " · default type" : ""}</span>
-        </div>
-      )}
-      {cur?.type && <CloseRules type={cur.type} onChanged={onChanged} />}
-      {cur && <FormCustomizer key={cur.id} form={cur.form} typeId={cur.typeId} title={cur.label} />}
-    </SettingsPage>
+    <div className="max-w-6xl space-y-4">
+      <Tabs label="Forms" value={group} onChange={(id) => { setGroup(id); setOpen(""); }}
+        tabs={FORM_GROUPS.map((x) => ({ id: x.id, label: x.label, icon: <M n={x.icon} c="text-sm" /> }))} />
+
+      {/* The box: same place and height on every tab. */}
+      <div className="relative rounded-2xl border border-slate-200/90 bg-white shadow-clay-sm px-4 py-3.5 h-[104px] max-md:h-auto max-md:min-h-[104px]">
+        {open && <div className="fixed inset-0 z-30" aria-hidden="true" onClick={() => setOpen("")} />}
+        {isOrder && type ? (<div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-2xs font-semibold uppercase tracking-wider text-ink-tertiary">Job type</span>
+            <div className="relative">
+              <button type="button" onClick={() => setOpen(open === "types" ? "" : "types")} aria-haspopup="menu" aria-expanded={open === "types"}
+                className="h-9 pl-3 pr-2.5 rounded-xl border border-slate-200 bg-white hover:border-slate-300 inline-flex items-center gap-2 text-xs font-semibold text-ink-primary transition-colors">
+                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: type.color || "#2563eb" }} />
+                {type.name}
+                <span className="font-normal text-ink-tertiary">{type.is_default ? "default · " : ""}{types.length} {types.length === 1 ? "type" : "types"}</span>
+                <M n="expand_more" c={`text-sm text-ink-tertiary transition-transform ${open === "types" ? "rotate-180" : ""}`} />
+              </button>
+              {open === "types" && (
+                <div role="menu" className={`${menu} left-0 w-64`}>
+                  {types.map((t) => {
+                    const on = String(t.id) === String(type.id);
+                    return (
+                      <button key={t.id} role="menuitem" onClick={() => { setTypeId(String(t.id)); setOpen(""); }}
+                        className={`${item} ${on ? "bg-primary/[0.06] text-primary font-semibold" : "text-ink-primary hover:bg-slate-50"}`}>
+                        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: t.color || "#2563eb" }} />
+                        <span className="flex-1">{t.name}{t.is_default && <span className="ml-1.5 font-normal text-ink-tertiary">default</span>}</span>
+                        <M n="check" c={`text-sm ${on ? "" : "invisible"}`} />
+                      </button>
+                    );
+                  })}
+                  <div className="my-1 border-t border-slate-100" />
+                  <button role="menuitem" onClick={() => { setOpen(""); onAddType(); }} className={`${item} text-primary font-semibold hover:bg-blue-50`}><M n="add" c="text-sm" />New job type</button>
+                </div>
+              )}
+            </div>
+            <span className="text-xs text-ink-tertiary">Starts as <span className="font-semibold text-ink-secondary">{type.initial_status || "new"}</span></span>
+            <div className="relative ml-auto">
+              <button type="button" onClick={() => setOpen(open === "more" ? "" : "more")} aria-haspopup="menu" aria-expanded={open === "more"}
+                className="h-9 px-3 rounded-xl border border-slate-200 bg-white hover:border-slate-300 inline-flex items-center gap-1.5 text-xs font-semibold text-ink-secondary transition-colors">
+                <M n="more_horiz" c="text-sm" />More
+              </button>
+              {open === "more" && (
+                <div role="menu" className={`${menu} right-0 w-72`}>
+                  {onEditType && <button role="menuitem" onClick={() => { setOpen(""); onEditType(type); }} className={`${item} text-ink-primary hover:bg-slate-50`}><M n="edit" c="text-sm text-ink-tertiary" />Edit name, colour and start status</button>}
+                  <button role="menuitem" onClick={() => { setOpen(""); onAdvanced(type); }} className={`${item} text-ink-primary hover:bg-slate-50`}><M n="tune" c="text-sm text-ink-tertiary" /><span>Advanced rules<span className="block text-2xs font-normal text-ink-tertiary">Show only when, upsell, block status</span></span></button>
+                  <div className="my-1 border-t border-slate-100" />
+                  <button role="menuitem" disabled={!!type.is_default} title={type.is_default ? "The default job type can't be deleted" : undefined}
+                    onClick={() => { setOpen(""); onDeleteType(type); }} className={`${item} text-rose-600 hover:bg-rose-50 disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed`}><M n="delete" c="text-sm" />Delete this job type</button>
+                </div>
+              )}
+            </div>
+          </div>
+          <CloseRules inline type={type} onChanged={onChanged} />
+        </div>) : (
+          <div className="flex items-center gap-3 h-full">
+            <span className="w-9 h-9 rounded-xl grid place-items-center bg-slate-50 border border-slate-200/80 text-ink-tertiary"><M n={g.icon} c="text-base" /></span>
+            <div>
+              <div className="text-xs font-semibold text-ink-primary">One {title.toLowerCase()} form</div>
+              <div className="text-xs text-ink-tertiary mt-0.5">{g.note}</div>
+            </div>
+          </div>
+        )}
+      </div>
+
+      <FormCustomizer key={isOrder ? `type:${type?.id}` : group} form={formKey} typeId={isOrder ? type?.id : undefined} title={isOrder ? `${type?.name || "Work order"} · work orders and estimates` : g.label} />
+    </div>
   );
 }
