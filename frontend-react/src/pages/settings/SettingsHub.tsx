@@ -23,6 +23,7 @@ import { loadFailed } from "../../lib/notice";
 import { clickable, clickableRow } from "../../lib/clickable";
 import SettingsPage from "../../components/SettingsPage";
 import Section, { sectionCard } from "../../components/Section";
+import PageSkeleton from "../../components/PageSkeleton";
 import Button, { IconButton } from "../../components/Button";
 import Tabs from "../../components/Tabs";
 import Drawer from "../../components/Drawer";
@@ -58,7 +59,7 @@ const BillingPage = lazy(() => import("./BillingPage"));
 const CheckinPointsSettings = lazy(() => import("./CheckinPointsSettings"));
 const MembershipSettings = lazy(() => import("./MembershipSettings"));
 const WebhooksSettings = lazy(() => import("./WebhooksSettings"));
-const sectionLoading = <div className="py-6" aria-busy="true" />;
+const sectionLoading = <PageSkeleton rows={4} toolbar={false} />;
 
 // Full section set = the registry sections + a few that have no nav entry of their own.
 type Section = SectionId | "overview" | "automation" | "payroll-rules";

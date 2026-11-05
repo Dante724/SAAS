@@ -1,9 +1,10 @@
-import { ReactNode, useEffect, useRef, useState } from "react";
+import { ReactNode, Suspense, createContext, useContext, useEffect, useLayoutEffect, useRef, useState } from "react";
 import DeviceList from "./DeviceList";
 import { useVisibleInterval } from "../hooks/useVisibleInterval";
 import { toAppPath } from "../lib/deepLink";
 import { TeklyMark } from "./brand/TeklyLogo";
-import { NavLink, useNavigate } from "react-router-dom";
+import { NavLink, Outlet, useLocation, useNavigate } from "react-router-dom";
+import PageSkeleton from "./PageSkeleton";
 import { api, getLocationScope, setLocationScope } from "../api/client";
 import { alertDialog } from "../lib/dialog";
 import { t, getLang, setLang, applyDir } from "../i18n";
@@ -187,7 +188,9 @@ function BillingBanner({ billing }: { billing?: Billing | null }) {
   );
 }
 
-export default function Shell({ title, children }: { title: string; children: ReactNode }) {
+// The app frame: sidebar, header, badges and the panels they open. It is rendered once by the
+// <AppFrame> layout route and stays mounted while pages change, so nothing in it flickers.
+function ShellFrame({ title, children }: { title: string; children: ReactNode }) {
   const { can, me, refresh } = useMe();
   const support = supportContact(me);
   const supportLinkProps = support.external ? { target: "_blank", rel: "noopener noreferrer" } : {};
@@ -223,10 +226,11 @@ export default function Shell({ title, children }: { title: string; children: Re
 
   const liveRef = useRef(true);
   useEffect(() => { liveRef.current = true; return () => { liveRef.current = false; }; }, []);
-  useVisibleInterval(() => {
+  const loadUnread = () => {
     api.get<{ items: any[] }>("/tech/notifications?only_unread=true")
       .then((r) => { if (liveRef.current) setUnread((r.items || []).length); }).catch(() => { /* silent: background unread-count poll; the next tick retries */ });
-  }, 60000);
+  };
+  useVisibleInterval(loadUnread, 60000);
   // Self check-in: people waiting at this location, shown on the Inquiries item.
   const [walkins, setWalkins] = useState(0);
   const loadWalkins = () => {
@@ -243,6 +247,16 @@ export default function Shell({ title, children }: { title: string; children: Re
 
   // Below 900px the sidebar becomes a slide-in drawer opened from the top bar's menu button.
   const [navOpen, setNavOpen] = useState(false);
+
+  // The frame now outlives each page. Moving to another page does what remounting it used to:
+  // open menus and panels close, and the badges refresh (keeping their old number until then).
+  const { pathname } = useLocation();
+  const firstPath = useRef(true);
+  useEffect(() => {
+    if (firstPath.current) { firstPath.current = false; return; }
+    setPalette(false); setNotifOpen(false); setAvatarOpen(false); setNavOpen(false); setSecOpen(false);
+    loadUnread(); loadWalkins();
+  }, [pathname]);   // eslint-disable-line react-hooks/exhaustive-deps
   useEffect(() => {
     if (!navOpen) return;
     const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") setNavOpen(false); };
@@ -825,4 +839,32 @@ function LocationSwitcher({ block = false }: { block?: boolean }) {
       {locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
     </select>
   );
+}
+
+// ── Persistent frame ───────────────────────────────────────────────────────────────────────────
+// Pages keep rendering <Shell title="…">. Inside <AppFrame> (the layout route every staff page sits
+// in), Shell only names the page; the frame is drawn once and stays. Rendered on its own (a test,
+// a page outside the layout), Shell draws the whole frame itself, as it always did.
+type FrameTitle = { path: string; title: string };
+const FrameCtx = createContext<((t: FrameTitle) => void) | null>(null);
+
+export function AppFrame() {
+  const { pathname } = useLocation();
+  const [named, setNamed] = useState<FrameTitle>({ path: "", title: "" });
+  return (
+    <FrameCtx.Provider value={setNamed}>
+      <ShellFrame title={named.path === pathname ? named.title : ""}>
+        <Suspense fallback={<PageSkeleton />}><Outlet /></Suspense>
+      </ShellFrame>
+    </FrameCtx.Provider>
+  );
+}
+
+export default function Shell({ title, children }: { title: string; children: ReactNode }) {
+  const setNamed = useContext(FrameCtx);
+  const { pathname } = useLocation();
+  // Before paint, so the header never shows the previous page's name.
+  useLayoutEffect(() => { setNamed?.({ path: pathname, title }); }, [setNamed, pathname, title]);
+  if (!setNamed) return <ShellFrame title={title}>{children}</ShellFrame>;
+  return <>{children}</>;
 }
