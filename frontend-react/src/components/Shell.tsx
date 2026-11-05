@@ -259,7 +259,7 @@ export default function Shell({ title, children }: { title: string; children: Re
         return (
           <div key={group.name || "home"} className="pb-1">
             {group.name && !collapsed && (
-              <div className="px-2.5 pt-2.5 pb-1 text-[11px] font-bold text-ink-tertiary/80">{t(group.name)}</div>
+              <div className="px-2.5 pt-2.5 pb-1 text-2xs font-bold text-ink-tertiary">{t(group.name)}</div>
             )}
             {group.name && collapsed && <div className="my-1.5 mx-2 border-t border-slate-200/70" />}
             {visible.map((it) => (
@@ -345,7 +345,7 @@ export default function Shell({ title, children }: { title: string; children: Re
               <h1 className="text-base font-bold text-ink-primary tracking-tight whitespace-nowrap truncate">{t(title)}</h1>
               <button onClick={() => setPalette(true)} aria-label={t("Search")} className="relative shrink-0 text-left group w-8 h-8 sm:h-auto sm:w-44 min-[1100px]:w-64">
                 <M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" />
-                <div className="w-full h-8 sm:h-auto bg-slate-100/80 group-hover:bg-white text-xs pl-8 sm:pr-12 py-1.5 rounded-lg border border-slate-200/70 font-medium text-ink-placeholder whitespace-nowrap overflow-hidden text-ellipsis"><span className="hidden sm:inline">{t("Search jobs, customers…")}</span></div>
+                <div className="w-full h-8 sm:h-auto bg-slate-100/80 group-hover:bg-white text-xs pl-8 sm:pr-12 py-1.5 rounded-lg border border-slate-200/70 font-medium text-ink-tertiary whitespace-nowrap overflow-hidden text-ellipsis"><span className="hidden sm:inline">{t("Search jobs, customers…")}</span></div>
                 <span className="hidden sm:inline absolute right-2 top-1.5 text-[11px] bg-white border border-slate-200 text-ink-tertiary font-mono px-1 rounded shadow-2xs">⌘K</span>
               </button>
             </div>

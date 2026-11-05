@@ -329,9 +329,9 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
           <button aria-label="Actions" onClick={() => setActionsOpen((o) => !o)} title="Actions" className="w-9 h-9 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="more_vert" c="text-lg" /></button>
           {actionsOpen && (
             <div className="absolute left-0 top-11 z-20 w-48 bg-white border border-slate-200 rounded-xl shadow-drawer p-1">
-              <button onClick={duplicate} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-100 text-left text-sm text-ink-secondary"><M n="content_copy" c="text-[16px] text-ink-tertiary" /> Duplicate</button>
-              <button onClick={setDefault} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-100 text-left text-sm text-ink-secondary"><M n="check_circle" c="text-[16px] text-ink-tertiary" /> Set as default</button>
-              <button onClick={del} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-rose-50 text-left text-sm text-rose-600"><M n="delete" c="text-[16px]" /> Delete</button>
+              <button onClick={duplicate} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-100 text-left text-sm text-ink-secondary"><M n="content_copy" c="text-ink-tertiary" /> Duplicate</button>
+              <button onClick={setDefault} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-100 text-left text-sm text-ink-secondary"><M n="check_circle" c="text-ink-tertiary" /> Set as default</button>
+              <button onClick={del} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-rose-50 text-left text-sm text-rose-600"><M n="delete" c="" /> Delete</button>
             </div>
           )}
         </div>
@@ -400,8 +400,8 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
           <select title="Size" value={size} onMouseDown={saveSel} onChange={(e) => { const px = Number(e.target.value); setSize(px); applySize(px); }} className="h-8 border border-slate-200 rounded-md text-xs px-1.5 text-ink-secondary bg-white w-16">
             {SIZES.map((s) => <option key={s} value={s}>{s}px</option>)}
           </select>
-          <label title="Text colour" className="w-8 h-8 rounded-md hover:bg-slate-200/70 flex items-center justify-center text-ink-secondary cursor-pointer relative"><M n="format_color_text" c="text-[18px]" /><input type="color" onMouseDown={saveSel} onChange={(e) => applyColor(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" /></label>
-          <label title="Highlight" className="w-8 h-8 rounded-md hover:bg-slate-200/70 flex items-center justify-center text-ink-secondary cursor-pointer relative"><M n="format_ink_highlighter" c="text-[18px]" /><input type="color" onMouseDown={saveSel} onChange={(e) => applyHilite(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" /></label>
+          <label title="Text colour" className="w-8 h-8 rounded-md hover:bg-slate-200/70 flex items-center justify-center text-ink-secondary cursor-pointer relative"><M n="format_color_text" c="text-lg" /><input type="color" onMouseDown={saveSel} onChange={(e) => applyColor(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" /></label>
+          <label title="Highlight" className="w-8 h-8 rounded-md hover:bg-slate-200/70 flex items-center justify-center text-ink-secondary cursor-pointer relative"><M n="format_ink_highlighter" c="text-lg" /><input type="color" onMouseDown={saveSel} onChange={(e) => applyHilite(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" /></label>
           <span className="w-px h-5 bg-slate-200 mx-1" />
           <TB cmd="bold" icon="format_bold" title="Bold" />
           <TB cmd="italic" icon="format_italic" title="Italic" />
@@ -425,7 +425,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
       {/* Smart builder — Tekly's own document intelligence (offline presets + describe) */}
       {mode === "edit" && showSmart && (
         <div className="px-4 py-2 bg-primary/5 border-b border-slate-200 flex items-center gap-2 flex-wrap shrink-0">
-          <span className="inline-flex items-center gap-1 text-[11px] font-semibold text-primary"><M n="bolt" c="text-[15px]" /> Smart builder</span>
+          <span className="inline-flex items-center gap-1 text-2xs font-semibold text-primary"><M n="bolt" c="" /> Smart builder</span>
           {presets.map((p) => (
             <button key={p.key} onClick={() => buildDoc(p.key)} disabled={aiBusy} className="text-[11px] px-2 py-1 rounded-full border border-slate-200 bg-white hover:border-primary hover:text-primary disabled:opacity-60">{p.label}</button>
           ))}
@@ -449,7 +449,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
                 {addOpen && (
                   <div className="absolute right-0 top-7 z-20 w-48 bg-white border border-slate-200 rounded-xl shadow-drawer p-1">
                     {BLOCKS.map((b) => (
-                      <button key={b.key} onClick={() => addBlock(b.key)} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-100 text-left text-sm text-ink-secondary"><M n={b.icon} c="text-[16px] text-ink-tertiary" /> {b.label}</button>
+                      <button key={b.key} onClick={() => addBlock(b.key)} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-100 text-left text-sm text-ink-secondary"><M n={b.icon} c="text-ink-tertiary" /> {b.label}</button>
                     ))}
                   </div>
                 )}
@@ -460,7 +460,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
               {blocks.map((b) => (
                 <div key={b.id} draggable onDragStart={() => { dragId.current = b.id; }} onDragOver={(e) => e.preventDefault()} onDrop={() => { if (dragId.current) moveBlock(dragId.current, b.id); dragId.current = null; }}
                   className="group flex items-center gap-1.5 px-2 py-1.5 rounded-lg border border-slate-200 bg-white hover:border-slate-300 cursor-grab active:cursor-grabbing">
-                  <M n="drag_indicator" c="text-[16px] text-ink-tertiary" />
+                  <M n="drag_indicator" c="text-ink-tertiary" />
                   <button onClick={() => jumpBlock(b.id)} className="flex-1 text-left text-xs font-medium text-ink-primary truncate">{b.label}</button>
                   <button aria-label="Remove" onClick={() => removeBlock(b.id)} title="Remove" className="w-6 h-6 rounded grid place-items-center text-ink-tertiary opacity-0 group-hover:opacity-100 hover:bg-rose-50 hover:text-rose-500"><M n="close" c="text-[13px]" /></button>
                 </div>
@@ -473,7 +473,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
         <div className="relative flex-1 min-w-0 overflow-auto">
           {code !== null && mode === "edit" && (
             <div className="absolute inset-0 z-10 flex flex-col bg-slate-900">
-              <div className="px-4 py-1.5 text-[11px] font-semibold text-slate-300 border-b border-slate-700 flex items-center gap-1"><M n="code" c="text-[14px]" /> HTML source — click the &lt;/&gt; button again to apply</div>
+              <div className="px-4 py-1.5 text-2xs font-semibold text-slate-300 border-b border-slate-700 flex items-center gap-1"><M n="code" c="text-xs" /> HTML source — click the &lt;/&gt; button again to apply</div>
               <textarea value={code} onChange={(e) => setCode(e.target.value)} spellCheck={false}
                 className="flex-1 w-full bg-slate-900 text-slate-100 tabular-nums text-xs p-4 outline-none resize-none" />
             </div>
@@ -520,8 +520,8 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
                 const isOpen = ql ? true : (open[g.group] ?? g.group === "Most used");
                 return (
                   <div key={g.group}>
-                    <button type="button" onClick={() => setOpen((o) => ({ ...o, [g.group]: !isOpen }))} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-200/60 text-left"><M n={GROUP_ICON[g.group] || "label"} c="text-[16px] text-ink-tertiary shrink-0" /><span className="text-[11px] font-bold text-ink-secondary flex-1">{g.group}</span><M n={isOpen ? "expand_less" : "expand_more"} c="text-sm text-ink-tertiary" /></button>
-                    {isOpen && <div className="pb-1">{g.items.map((tok) => (<button key={tok} type="button" title={`Insert ${tok}`} onMouseDown={(e) => { e.preventDefault(); insertVar(tok); }} className="group/var w-full flex items-center gap-1.5 pl-3 pr-2 py-1 text-[13px] text-primary text-left rounded hover:bg-primary/5"><span className="truncate">{tok.replace(/^\{|\}$/g, "")}</span><M n="add" c="text-[13px] text-ink-tertiary opacity-0 group-hover/var:opacity-100 ml-auto shrink-0" /></button>))}</div>}
+                    <button type="button" onClick={() => setOpen((o) => ({ ...o, [g.group]: !isOpen }))} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-200/60 text-left"><M n={GROUP_ICON[g.group] || "label"} c="text-ink-tertiary shrink-0" /><span className="text-2xs font-semibold text-ink-secondary flex-1">{g.group}</span><M n={isOpen ? "expand_less" : "expand_more"} c="text-sm text-ink-tertiary" /></button>
+                    {isOpen && <div className="pb-1">{g.items.map((tok) => (<button key={tok} type="button" title={`Insert ${tok}`} onMouseDown={(e) => { e.preventDefault(); insertVar(tok); }} className="group/var w-full flex items-center gap-1.5 pl-3 pr-2 py-1 text-xs text-primary text-left rounded hover:bg-primary/5"><span className="truncate">{tok.replace(/^\{|\}$/g, "")}</span><M n="add" c="text-xs text-ink-tertiary opacity-0 group-hover/var:opacity-100 ml-auto shrink-0" /></button>))}</div>}
                   </div>
                 );
               })}

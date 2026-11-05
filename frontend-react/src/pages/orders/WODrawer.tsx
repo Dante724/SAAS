@@ -1458,7 +1458,7 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, onFla
     const icon = isServ ? "build" : k.includes("bundle") ? "package_2" : "inventory_2";
     return (
       <div key={l.id} className={`group/row ${rowGrid} px-4 py-3 min-h-[56px] gap-y-1.5 hover:bg-slate-50/50 transition-colors`}>
-        <div className="w-7 h-7 rounded-lg grid place-items-center bg-slate-100 text-ink-secondary"><M n={icon} c="text-[15px]" /></div>
+        <div className="w-7 h-7 rounded-lg grid place-items-center bg-slate-100 text-ink-secondary"><M n={icon} c="" /></div>
         <div className="min-w-0">
           <h5 className="text-[13px] font-medium text-ink-primary truncate" title={full}>{displayName(full, kit?.name)}</h5>
           <p className="text-xs text-ink-secondary tabular-nums">{lineKindLabel(l)}{" · "}
@@ -1529,8 +1529,8 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, onFla
                     const pickTech = (id: string | null) => { patchLine(l.id, { technician_id: id, co_technicians: [] }); setAssignOpen(null); };
                     const q = techQuery.trim().toLowerCase();
                     const list = (emps || []).filter((e) => !q || e.name.toLowerCase().includes(q));
-                    const row = "w-full flex items-center gap-2.5 px-2.5 h-9 rounded-lg text-left text-[13px] hover:bg-slate-50 focus-visible:bg-slate-100 outline-none";
-                    const check = <M n="check" c="ml-auto text-[16px] text-primary" />;
+                    const row = "w-full flex items-center gap-2.5 px-2.5 h-9 rounded-lg text-left text-sm hover:bg-slate-50 focus-visible:bg-slate-100 outline-none";
+                    const check = <M n="check" c="ml-auto text-primary" />;
                     const first = (id?: string | null) => empName(id).split(" ")[0];
                     return (
                       <div className="text-[13px]">
@@ -1542,7 +1542,7 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, onFla
                         )}
                         {!q && (
                           <button type="button" onClick={() => pickTech(null)} className={`${row} text-ink-secondary`}>
-                            <span className="w-6 h-6 rounded-full border border-dashed border-slate-300 grid place-items-center flex-none"><M n="person_off" c="text-[14px] text-ink-tertiary" /></span>
+                            <span className="w-6 h-6 rounded-full border border-dashed border-slate-300 grid place-items-center flex-none"><M n="person_off" c="text-xs text-ink-tertiary" /></span>
                             Unassigned{!l.technician_id && check}
                           </button>
                         )}
@@ -1559,14 +1559,14 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, onFla
                           <div className="mt-1 pt-1 border-t border-slate-100">
                             {co.length > 1 && (
                               <div className="flex items-center gap-2 px-2.5 h-9 text-ink-secondary">
-                                <M n="group" c="text-[16px] text-ink-tertiary" />
+                                <M n="group" c="text-ink-tertiary" />
                                 <span className="truncate">{co.map((c) => `${first(c.employee_id)} ${Math.round((c.share || 0) * 100)}%`).join(" + ")}</span>
                                 <button type="button" onClick={() => { patchLine(l.id, { co_technicians: [] }); setAssignOpen(null); }} className="ml-auto text-[12px] font-semibold text-rose-600 hover:underline">Clear</button>
                               </div>
                             )}
                             <button type="button" onClick={() => setSplitOpen((v) => !v)} aria-expanded={splitOpen} className={`${row} text-ink-secondary`}>
-                              <M n="group_add" c="text-[18px] text-ink-tertiary" />{co.length > 1 ? "Change the split" : "Split the work"}
-                              <M n={splitOpen ? "expand_less" : "expand_more"} c="ml-auto text-[16px] text-ink-tertiary" />
+                              <M n="group_add" c="text-lg text-ink-tertiary" />{co.length > 1 ? "Change the split" : "Split the work"}
+                              <M n={splitOpen ? "expand_less" : "expand_more"} c="ml-auto text-ink-tertiary" />
                             </button>
                             {splitOpen && (
                               <div className="pb-1">
@@ -1633,7 +1633,7 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, onFla
         {/* #4 swimlane toggle */}
         <button type="button" onClick={() => setGroupBy((v) => !v)} title="Group line items by technician"
           aria-pressed={groupBy} className={`ml-auto flex h-8 items-center gap-1.5 px-2.5 rounded-xl text-xs font-medium border ${groupBy ? "bg-slate-100 text-ink-primary border-slate-300" : "bg-white text-ink-secondary border-slate-200 hover:text-ink-primary"}`}>
-          <M n="groups" c="text-[14px]" />By technician</button>
+          <M n="groups" c="text-xs" />By technician</button>
       </div>
 
       {/* Time on the job shows in the header timer and General › Time on this job; clock into a line below. */}
@@ -2007,8 +2007,8 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
             <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-ink-tertiary">Still to pay</span>
             <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-2">
               <h2 className={`flex items-start tabular-nums ${state === "due" ? "text-ink-primary" : "text-ink-tertiary"}`} aria-label={`Still to pay ${shown}`}>
-                {m ? <><span className="mt-1.5 mr-0.5 text-xl font-medium text-ink-tertiary">{m[1].trim()}</span><span className="text-[44px] leading-none font-medium tracking-[-0.035em]">{m[2]}</span></>
-                  : <span className="text-[44px] leading-none font-medium tracking-[-0.035em]">{shown}</span>}
+                {m ? <><span className="mt-1.5 mr-0.5 text-xl font-medium text-ink-tertiary">{m[1].trim()}</span><span className="text-hero leading-none font-medium tracking-[-0.035em]">{m[2]}</span></>
+                  : <span className="text-hero leading-none font-medium tracking-[-0.035em]">{shown}</span>}
               </h2>
               <span className={`inline-flex items-center gap-1.5 h-6 px-2.5 rounded-full text-xs font-semibold ring-1 ring-inset ${tone.pill}`}>
                 <span aria-hidden="true" className={`size-1.5 rounded-full ${tone.dot}`} />{tone.label}
@@ -2122,7 +2122,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
             <div className="text-xs text-ink-secondary">Remaining balance: <b className="tabular-nums">{money(ctx.remaining)}</b></div>
             <div><label className="block text-xs font-medium text-ink-secondary mb-1">Amount <span className="text-ink-tertiary font-normal normal-case">({base?.code || "base"})</span></label><input value={amount} onChange={(e) => setAmount(e.target.value)} type="number" className="glass-input w-full h-10 px-3 text-sm font-semibold tabular-nums rounded-xl" />
               {isForeign && amount && !isNaN(parseFloat(amount)) && (
-                <p className="mt-1 text-[11px] text-ink-tertiary tabular-nums">≈ {currencySymbol}{conv(parseFloat(amount)).toFixed(2)} {currencyCode} <span className="text-ink-placeholder">at the document rate</span></p>
+                <p className="mt-1 text-2xs text-ink-tertiary tabular-nums">≈ {currencySymbol}{conv(parseFloat(amount)).toFixed(2)} {currencyCode} <span className="text-ink-tertiary">at the document rate</span></p>
               )}</div>
             <div className="grid grid-cols-2 gap-3 items-start">
               <div><label className="block text-xs font-medium text-ink-secondary mb-1">Method</label>
@@ -2341,7 +2341,7 @@ function ActivityTab({ orderId, clientPhone, onFlash, threadKey, onSent }: { ord
                 return (
                   <div key={m.id} className={`flex flex-col max-w-[80%] ${staff ? "items-end ml-auto" : "items-start"}`}>
                     <div className={`p-2.5 rounded-2xl shadow-2xs text-xs whitespace-pre-wrap break-words ${staff ? "bg-primary text-white rounded-tr-none" : "bg-white border border-slate-200 text-ink-primary rounded-tl-none"}`}>{m.body}</div>
-                    <span className="text-[11px] text-slate-400 mx-1 mt-0.5 tabular-nums">{m.who || (staff ? "Staff" : "Customer")} · {fmtShort(m.at)}</span>
+                    <span className="text-2xs text-ink-tertiary mx-1 mt-0.5 tabular-nums">{m.who || (staff ? "Staff" : "Customer")} · {fmtShort(m.at)}</span>
                   </div>
                 );
               })}

@@ -8,7 +8,7 @@ import type { Order } from "./types";
 const AVATAR_HUES = ["#378ADD", "#7F77DD", "#185FA5", "#D4537E", "#0E7490", "#6D5BD0", "#475569", "#A855F7"];
 export function Avatar({ name, size = 28 }: { name?: string | null; size?: number }) {
   const n = (name || "").trim();
-  if (!n) return <span className="rounded-full bg-slate-100 grid place-items-center text-ink-tertiary flex-shrink-0" style={{ width: size, height: size }}><M n="person" c="text-[13px]" /></span>;
+  if (!n) return <span className="rounded-full bg-slate-100 grid place-items-center text-ink-tertiary flex-shrink-0" style={{ width: size, height: size }}><M n="person" c="text-xs" /></span>;
   const hue = AVATAR_HUES[[...n].reduce((a, ch) => a + ch.charCodeAt(0), 0) % AVATAR_HUES.length];
   const ini = n.split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
   return <span className="rounded-full grid place-items-center font-semibold flex-shrink-0" style={{ width: size, height: size, background: tint(hue), color: hueText(hue), fontSize: size * 0.38 }}>{ini}</span>;

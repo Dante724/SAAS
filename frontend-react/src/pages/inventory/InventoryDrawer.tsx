@@ -668,8 +668,8 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                       <button type="button" onClick={() => removeComp(idx)} aria-label="Remove line" className="text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>
                     </div>
                     {c.ref_type === "product" && (
-                      <button type="button" onClick={() => toggleVariant(idx)} className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-tertiary hover:text-primary pl-0.5" title="At apply-time, swap this part for the one in its category that fits the work order's device">
-                        <M n={c.device_variant ? "check_box" : "check_box_outline_blank"} c={`text-[15px] ${c.device_variant ? "text-primary" : ""}`} />
+                      <button type="button" onClick={() => toggleVariant(idx)} className="flex items-center gap-1.5 text-2xs font-semibold text-ink-tertiary hover:text-primary pl-0.5" title="At apply-time, swap this part for the one in its category that fits the work order's device">
+                        <M n={c.device_variant ? "check_box" : "check_box_outline_blank"} c={` ${c.device_variant ? "text-primary" : ""}`} />
                         Auto-pick the part that fits the device
                       </button>
                     )}
