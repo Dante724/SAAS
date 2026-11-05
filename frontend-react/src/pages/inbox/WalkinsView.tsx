@@ -4,6 +4,10 @@ import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
 import { autoPrintForJob } from "../../lib/autoPrint";
+import Button, { buttonClass } from "../../components/Button";
+import { Badge } from "../../components/Card";
+import { Input } from "../../components/Field";
+import EmptyState from "../../components/EmptyState";
 
 // Inquiries › Walk-ins (self check-in): today's queue at this location in arrival order, the
 // people called to the counter, and overnight key drops. Call next texts the customer; staff
@@ -24,18 +28,18 @@ function Row({ w, children }: { w: Walkin; children: React.ReactNode }) {
   const reading = w.reading != null ? `${Number(w.reading).toLocaleString()} ${READING[w.reading_kind || ""] || ""}`.trim() : "";
   return (
     <div className="flex flex-wrap items-center gap-3 px-4 py-3 border-t border-slate-100 first:border-t-0">
-      <span className="w-9 text-sm font-bold text-ink-primary tabular-nums">{w.kind === "key_drop" ? <M n="key" c="text-base text-ink-tertiary" /> : `#${w.queue_no}`}</span>
+      <span className="w-9 text-sm font-semibold text-ink-primary tabular-nums">{w.kind === "key_drop" ? <M n="key" c="text-base text-ink-tertiary" /> : `#${w.queue_no}`}</span>
       <div className="min-w-0 flex-1">
         <div className="text-xs font-semibold text-ink-primary flex items-center gap-1.5">
           {w.name}
-          {w.seen_before && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-md bg-blue-50 text-primary">Seen before</span>}
-          {w.point && <span className="text-[11px] font-normal text-ink-tertiary">· {w.point}</span>}
+          {w.seen_before && <Badge tone="info">Seen before</Badge>}
+          {w.point && <span className="text-2xs font-normal text-ink-tertiary">· {w.point}</span>}
         </div>
-        <div className="text-[11px] text-ink-tertiary truncate">
+        <div className="text-2xs text-ink-tertiary truncate">
           {[w.asset, reading, w.key_tag ? `key tag ${w.key_tag}` : "", w.photos ? `${w.photos} photo${w.photos > 1 ? "s" : ""}` : "", w.issue].filter(Boolean).join(" · ")}
         </div>
       </div>
-      <span className="text-[11px] text-ink-tertiary tabular-nums">{w.kind === "key_drop" ? "overnight" : `waiting ${w.waited_min}m`}</span>
+      <span className="text-2xs text-ink-tertiary tabular-nums">{w.kind === "key_drop" ? "overnight" : `waiting ${w.waited_min}m`}</span>
       <div className="flex items-center gap-2">{children}</div>
     </div>
   );
@@ -82,42 +86,39 @@ export default function WalkinsView() {
   }
 
   const canConvert = can("can_create_tickets");
-  const btn = "h-9 px-3 rounded-xl text-xs font-semibold border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 disabled:opacity-50";
-  const primary = "h-9 px-3 rounded-xl text-xs font-semibold bg-primary text-white hover:brightness-110 disabled:opacity-50";
 
   return (
-    <div className="flex-1 overflow-y-auto px-6 pb-6 space-y-4">
+    <div className="flex-1 min-h-0 overflow-y-auto space-y-4">
       <div className="flex flex-wrap items-center gap-3">
         <form onSubmit={openByCode} className="flex items-center gap-2">
           <label htmlFor="walkin-code" className="sr-only">Customer's check-in code</label>
-          <input id="walkin-code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="Scan the customer's code"
-            className="glass-input h-9 w-56 rounded-xl px-3 py-2 text-sm" />
-          <button type="submit" className={btn}>Open</button>
+          <Input id="walkin-code" value={code} onChange={(e) => setCode(e.target.value)} placeholder="Scan the customer's code" className="!w-56" />
+          <Button type="submit">Open</Button>
         </form>
-        <a href="/settings?section=public" className="text-xs font-semibold text-primary hover:underline flex items-center gap-1"><M n="qr_code_2" c="text-sm" />Check-in QR codes</a>
+        <a href="/settings?section=public" className={buttonClass("link", "md", "gap-1")}><M n="qr_code_2" c="text-sm" />Check-in QR codes</a>
         {msg && <p role="status" className="text-xs text-ink-secondary">{msg}</p>}
       </div>
 
-      {!q && <div className="text-xs text-ink-tertiary">Loading…</div>}
+      {!q && <div aria-hidden className="space-y-3"><span className="sk block h-24 rounded-2xl" /><span className="sk block h-16 rounded-2xl" /></div>}
       {q && (<>
         <section className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-          <div className="px-4 py-2.5 text-xs font-bold text-ink-primary border-b border-slate-100">Waiting <span className="font-normal text-ink-tertiary">· {q.waiting.length}</span></div>
-          {q.waiting.length === 0 && <p className="px-4 py-4 text-xs text-ink-tertiary">Nobody waiting. Customers check in by scanning the QR at the door.</p>}
+          <div className="px-4 py-2.5 text-xs font-semibold text-ink-primary border-b border-slate-100">Waiting <span className="font-normal text-ink-tertiary">· {q.waiting.length}</span></div>
+          {q.waiting.length === 0 && <EmptyState size="inline" className="px-4" title="Nobody waiting. Customers check in by scanning the QR at the door." />}
           {q.waiting.map((w, i) => (
             <Row key={w.id} w={w}>
-              <button className={btn} disabled={busy === w.id} onClick={() => noShow(w)}>No-show</button>
-              <button className={i === 0 ? primary : btn} disabled={busy === w.id} onClick={() => call(w)}>Call next</button>
+              <Button variant={i === 0 ? "primary" : "secondary"} disabled={busy === w.id} onClick={() => call(w)}>Call next</Button>
+              <Button disabled={busy === w.id} onClick={() => noShow(w)}>No-show</Button>
             </Row>
           ))}
         </section>
 
         {q.called.length > 0 && (
           <section className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-            <div className="px-4 py-2.5 text-xs font-bold text-ink-primary border-b border-slate-100">Being served</div>
+            <div className="px-4 py-2.5 text-xs font-semibold text-ink-primary border-b border-slate-100">Being served</div>
             {q.called.map((w) => (
               <Row key={w.id} w={w}>
-                <button className={btn} disabled={busy === w.id} onClick={() => noShow(w)}>No-show</button>
-                {canConvert && <button className={primary} disabled={busy === w.id} onClick={() => convert(w)}>Create work order</button>}
+                {canConvert && <Button variant="primary" disabled={busy === w.id} onClick={() => convert(w)}>Create work order</Button>}
+                <Button disabled={busy === w.id} onClick={() => noShow(w)}>No-show</Button>
               </Row>
             ))}
           </section>
@@ -125,10 +126,10 @@ export default function WalkinsView() {
 
         {q.key_drops.length > 0 && (
           <section className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-            <div className="px-4 py-2.5 text-xs font-bold text-ink-primary border-b border-slate-100">Overnight drop-offs <span className="font-normal text-ink-tertiary">· {q.key_drops.length}</span></div>
+            <div className="px-4 py-2.5 text-xs font-semibold text-ink-primary border-b border-slate-100">Overnight drop-offs <span className="font-normal text-ink-tertiary">· {q.key_drops.length}</span></div>
             {q.key_drops.map((w) => (
               <Row key={w.id} w={w}>
-                {canConvert && <button className={primary} disabled={busy === w.id} onClick={() => convert(w)}>Create work order</button>}
+                {canConvert && <Button variant="primary" disabled={busy === w.id} onClick={() => convert(w)}>Create work order</Button>}
               </Row>
             ))}
           </section>
