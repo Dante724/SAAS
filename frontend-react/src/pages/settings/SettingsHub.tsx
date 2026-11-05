@@ -16,6 +16,7 @@ import { Avatar } from "../orders/look";
 import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
 import RetentionCard from "./RetentionCard";
 import Switch from "../../components/Switch";
+import Tabs from "../../components/Tabs";
 import SaveFooter from "../../components/SaveFooter";
 import { SettingRow, SettingGroup, NumField } from "../../components/SettingRow";
 import { money } from "../orders/types";
@@ -490,7 +491,7 @@ export default function SettingsHub() {
           {sec === "approvals" && <ApprovalsSettings />}
 
           {sec === "forms" && (
-            <FormsDesigner types={lists.forms || []} onAddType={() => setEditing({ sec: "forms", row: null })}
+            <FormsDesigner types={lists.forms || []} onAddType={() => setEditing({ sec: "forms", row: null })} onEditType={(r) => setEditing({ sec: "forms", row: r })}
               onDeleteType={(r) => delRow("forms", r)} onAdvanced={(t) => setFormFieldsFor(t)} onChanged={() => reloadSec("forms")} />
           )}
 
@@ -2476,7 +2477,7 @@ function TierManager({ types }: { types: any[] }) {
 // in FormCustomizer (drag to reorder, click to edit, add a field where it belongs).
 // J1: what a job of this type needs before it can be closed. The type is saved whole (the
 // server's PUT replaces every field), so send its current values with the one switch changed.
-function CloseRules({ type, onChanged }: { type: any; onChanged?: () => void }) {
+function CloseRules({ type, onChanged, inline }: { type: any; onChanged?: () => void; inline?: boolean }) {
   const [v, setV] = useState({ requires_signature: !!type.requires_signature, requires_checklist: !!type.requires_checklist });
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
   useEffect(() => { setV({ requires_signature: !!type.requires_signature, requires_checklist: !!type.requires_checklist }); }, [type.id, type.requires_signature, type.requires_checklist]);
@@ -2498,6 +2499,21 @@ function CloseRules({ type, onChanged }: { type: any; onChanged?: () => void }) 
     ["requires_signature", "Customer must sign before the job can be closed"],
     ["requires_checklist", "All required checklist items must be done before the job can be closed"],
   ];
+  const short: Record<string, string> = { requires_signature: "Customer signs before closing", requires_checklist: "Checklist done before closing" };
+  if (inline) return (
+    <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+      {rows.map(([k, label]) => (
+        <label key={k} className="flex items-center gap-2.5 text-xs text-ink-secondary cursor-pointer">
+          <button type="button" role="switch" aria-checked={v[k]} aria-label={label} disabled={busy} onClick={() => flip(k)}
+            className={`w-9 h-5 rounded-full transition-colors relative shrink-0 disabled:opacity-60 ${v[k] ? "bg-primary" : "bg-slate-300"}`}>
+            <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${v[k] ? "left-[18px]" : "left-0.5"}`} />
+          </button>
+          <span title={label}>{short[k]}</span>
+        </label>
+      ))}
+      {err && <p role="alert" className="text-2xs text-rose-600">{err}</p>}
+    </div>
+  );
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-2">
       <div className="text-xs font-semibold text-ink-primary">Before a {type.name} job can be closed</div>
@@ -2515,34 +2531,102 @@ function CloseRules({ type, onChanged }: { type: any; onChanged?: () => void }) 
   );
 }
 
-function FormsDesigner({ types, onAddType, onDeleteType, onAdvanced, onChanged }: {
-  types: any[]; onAddType: () => void; onDeleteType: (t: any) => void; onAdvanced: (t: any) => void; onChanged?: () => void;
+// Forms & fields (owner's pick "A"): five fixed tabs, one per thing a shop fills in. Work orders and
+// estimates share one form (an estimate is a work order that isn't approved yet). Under that tab, one
+// "Job type" box picks the custom job type (Repair, Warranty claim …) with its start status, closing
+// rules and a ⋯ menu. The box sits in the same spot on every tab, so switching never moves the fields.
+type FormGroup = "order" | "client" | "device" | "product" | "lead";
+const FORM_GROUPS: { id: FormGroup; label: string; icon: string; note: string }[] = [
+  { id: "order", label: "Work orders and estimates", icon: "build", note: "" },
+  { id: "client", label: "Clients", icon: "person", note: "Used when you add or edit a client, at the desk or on Tekly Go." },
+  { id: "device", label: "Devices", icon: "devices", note: "Used for every device or asset a client brings in." },
+  { id: "product", label: "Products", icon: "inventory_2", note: "Used when you add or edit a product in Inventory." },
+  { id: "lead", label: "Inquiries", icon: "mail", note: "Used for walk-ins, calls and web inquiries before they become jobs." },
+];
+
+function FormsDesigner({ types, onAddType, onEditType, onDeleteType, onAdvanced, onChanged }: {
+  types: any[]; onAddType: () => void; onEditType?: (t: any) => void; onDeleteType: (t: any) => void; onAdvanced: (t: any) => void; onChanged?: () => void;
 }) {
-  const want = new URLSearchParams(window.location.search).get("form");
-  const [pick, setPick] = useState<string>(() => want || "");
-  const choices: { id: string; label: string; form: FormKey; typeId?: string; type?: any }[] = [
-    ...types.map((t) => ({ id: `type:${t.id}`, label: `Work order · ${t.name}`, form: "order" as FormKey, typeId: t.id, type: t })),
-    { id: "client", label: "Client", form: "client" }, { id: "device", label: "Device / asset", form: "device" },
-    { id: "product", label: "Product", form: "product" }, { id: "lead", label: "Inquiry", form: "lead" },
-  ];
-  const cur = choices.find((c) => c.id === pick) || choices[0];
-  const pill = (on: boolean) => `px-3.5 py-1.5 rounded-full text-xs font-semibold border transition-colors ${on ? "bg-primary text-white border-primary" : "bg-white text-ink-secondary border-slate-200 hover:border-slate-300"}`;
+  // ?form= still deep-links: "type:<id>" opens that job type, "client"/"device"/"product"/"lead" a tab.
+  const want = new URLSearchParams(window.location.search).get("form") || "";
+  const [group, setGroup] = useState<FormGroup>(() => (want && !want.startsWith("type:") ? (want as FormGroup) : "order"));
+  const defaultType = types.find((t) => t.is_default) || types[0];
+  const [typeId, setTypeId] = useState<string>(() => (want.startsWith("type:") ? want.slice(5) : ""));
+  const type = types.find((t) => String(t.id) === typeId) || defaultType;
+  const [open, setOpen] = useState<"" | "types" | "more">("");
+  const g = FORM_GROUPS.find((x) => x.id === group) || FORM_GROUPS[0];
+  const isOrder = group === "order";
+  const formKey = (isOrder ? "order" : group) as FormKey;
+  const title = isOrder ? `${type?.name || "Work order"} job` : g.label.replace(/s$/, "");
+  const menu = "absolute top-full mt-1.5 z-40 bg-white rounded-2xl border border-slate-200/90 shadow-drawer p-1.5";
+  const item = "w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left text-xs transition-colors";
   return (
     <div className="max-w-6xl space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        {choices.map((c) => <button key={c.id} onClick={() => setPick(c.id)} aria-pressed={c.id === cur?.id} className={pill(c.id === cur?.id)}>{c.label}</button>)}
-        <button onClick={onAddType} className="px-3 py-1.5 rounded-full text-xs font-semibold text-primary hover:bg-blue-50 flex items-center gap-1"><M n="add" c="text-sm" />Work order type</button>
+      <Tabs label="Forms" value={group} onChange={(id) => { setGroup(id); setOpen(""); }}
+        tabs={FORM_GROUPS.map((x) => ({ id: x.id, label: x.label, icon: <M n={x.icon} c="text-sm" /> }))} />
+
+      {/* The box: same place and height on every tab. */}
+      <div className="relative rounded-2xl border border-slate-200/90 bg-white shadow-clay-sm px-4 py-3.5 h-[104px] max-md:h-auto max-md:min-h-[104px]">
+        {open && <div className="fixed inset-0 z-30" aria-hidden="true" onClick={() => setOpen("")} />}
+        {isOrder && type ? (<div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-2xs font-semibold uppercase tracking-wider text-ink-tertiary">Job type</span>
+            <div className="relative">
+              <button type="button" onClick={() => setOpen(open === "types" ? "" : "types")} aria-haspopup="menu" aria-expanded={open === "types"}
+                className="h-9 pl-3 pr-2.5 rounded-xl border border-slate-200 bg-white hover:border-slate-300 inline-flex items-center gap-2 text-xs font-semibold text-ink-primary transition-colors">
+                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: type.color || "#2563eb" }} />
+                {type.name}
+                <span className="font-normal text-ink-tertiary">{type.is_default ? "default · " : ""}{types.length} {types.length === 1 ? "type" : "types"}</span>
+                <M n="expand_more" c={`text-sm text-ink-tertiary transition-transform ${open === "types" ? "rotate-180" : ""}`} />
+              </button>
+              {open === "types" && (
+                <div role="menu" className={`${menu} left-0 w-64`}>
+                  {types.map((t) => {
+                    const on = String(t.id) === String(type.id);
+                    return (
+                      <button key={t.id} role="menuitem" onClick={() => { setTypeId(String(t.id)); setOpen(""); }}
+                        className={`${item} ${on ? "bg-primary/[0.06] text-primary font-semibold" : "text-ink-primary hover:bg-slate-50"}`}>
+                        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: t.color || "#2563eb" }} />
+                        <span className="flex-1">{t.name}{t.is_default && <span className="ml-1.5 font-normal text-ink-tertiary">default</span>}</span>
+                        <M n="check" c={`text-sm ${on ? "" : "invisible"}`} />
+                      </button>
+                    );
+                  })}
+                  <div className="my-1 border-t border-slate-100" />
+                  <button role="menuitem" onClick={() => { setOpen(""); onAddType(); }} className={`${item} text-primary font-semibold hover:bg-blue-50`}><M n="add" c="text-sm" />New job type</button>
+                </div>
+              )}
+            </div>
+            <span className="text-xs text-ink-tertiary">Starts as <span className="font-semibold text-ink-secondary">{type.initial_status || "new"}</span></span>
+            <div className="relative ml-auto">
+              <button type="button" onClick={() => setOpen(open === "more" ? "" : "more")} aria-haspopup="menu" aria-expanded={open === "more"}
+                className="h-9 px-3 rounded-xl border border-slate-200 bg-white hover:border-slate-300 inline-flex items-center gap-1.5 text-xs font-semibold text-ink-secondary transition-colors">
+                <M n="more_horiz" c="text-sm" />More
+              </button>
+              {open === "more" && (
+                <div role="menu" className={`${menu} right-0 w-72`}>
+                  {onEditType && <button role="menuitem" onClick={() => { setOpen(""); onEditType(type); }} className={`${item} text-ink-primary hover:bg-slate-50`}><M n="edit" c="text-sm text-ink-tertiary" />Edit name, colour and start status</button>}
+                  <button role="menuitem" onClick={() => { setOpen(""); onAdvanced(type); }} className={`${item} text-ink-primary hover:bg-slate-50`}><M n="tune" c="text-sm text-ink-tertiary" /><span>Advanced rules<span className="block text-2xs font-normal text-ink-tertiary">Show only when, upsell, block status</span></span></button>
+                  <div className="my-1 border-t border-slate-100" />
+                  <button role="menuitem" disabled={!!type.is_default} title={type.is_default ? "The default job type can't be deleted" : undefined}
+                    onClick={() => { setOpen(""); onDeleteType(type); }} className={`${item} text-rose-600 hover:bg-rose-50 disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed`}><M n="delete" c="text-sm" />Delete this job type</button>
+                </div>
+              )}
+            </div>
+          </div>
+          <CloseRules inline type={type} onChanged={onChanged} />
+        </div>) : (
+          <div className="flex items-center gap-3 h-full">
+            <span className="w-9 h-9 rounded-xl grid place-items-center bg-slate-50 border border-slate-200/80 text-ink-tertiary"><M n={g.icon} c="text-base" /></span>
+            <div>
+              <div className="text-xs font-semibold text-ink-primary">One {title.toLowerCase()} form</div>
+              <div className="text-xs text-ink-tertiary mt-0.5">{g.note}</div>
+            </div>
+          </div>
+        )}
       </div>
-      {cur?.type && (
-        <div className="flex flex-wrap items-center gap-3 text-xs text-ink-tertiary">
-          {/* Fixed width, and Delete greys out instead of disappearing, so the links never slide between forms. */}
-          <span className="min-w-[17rem]">New orders start as <span className="font-semibold text-ink-secondary">{cur.type.initial_status || "new"}</span>{cur.type.is_default ? " · default type" : ""}</span>
-          <button onClick={() => onAdvanced(cur.type)} className="font-semibold text-primary hover:underline">Advanced rules (show only when, upsell, block status)</button>
-          <button onClick={() => onDeleteType(cur.type)} disabled={!!cur.type.is_default} title={cur.type.is_default ? "The default type can't be deleted" : undefined} className="font-semibold text-rose-600 hover:underline disabled:opacity-40 disabled:no-underline disabled:cursor-not-allowed">Delete this type</button>
-        </div>
-      )}
-      {cur?.type && <CloseRules type={cur.type} onChanged={onChanged} />}
-      {cur && <FormCustomizer key={cur.id} form={cur.form} typeId={cur.typeId} title={cur.label} />}
+
+      <FormCustomizer key={isOrder ? `type:${type?.id}` : group} form={formKey} typeId={isOrder ? type?.id : undefined} title={isOrder ? `${type?.name || "Work order"} · work orders and estimates` : g.label} />
     </div>
   );
 }
