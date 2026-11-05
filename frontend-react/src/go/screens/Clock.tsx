@@ -6,7 +6,7 @@ import { Link } from "react-router-dom";
 import { Clock3, Timer } from "lucide-react";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
-import { Card, Empty, Page, PrimaryButton, SkeletonRows } from "../components/ui";
+import { Card, Empty, GoButton, Page, PrimaryButton, SkeletonRows } from "../components/ui";
 import { useToast } from "../lib/useGo";
 import { haptic } from "../lib/scanner";
 import { hm, utc } from "../lib/time";
@@ -70,10 +70,10 @@ export default function Clock() {
             </div>
           </div>
           {shift && <p className="mt-4 text-go-display font-bold leading-none tabular-nums tracking-tight text-ink-primary">{hm(shift.elapsed_sec + since)}</p>}
-          <PrimaryButton className={`mt-5 ${shift ? "!bg-ink-primary" : ""}`} disabled={!!busy}
-            onClick={() => shift ? act("shift", "/timeclock/shift/clock-out", undefined, "Clocked out") : act("shift", "/timeclock/shift/clock-in", undefined, "Clocked in")}>
-            {busy === "shift" ? "…" : shift ? "Clock out" : "Clock in"}
-          </PrimaryButton>
+          {/* Clock in is the main (sapphire) button; once clocked in, Clock out is a plain secondary one */}
+          {shift
+            ? <GoButton main className="mt-5 w-full" disabled={!!busy} onClick={() => act("shift", "/timeclock/shift/clock-out", undefined, "Clocked out")}>{busy === "shift" ? "Clocking out…" : "Clock out"}</GoButton>
+            : <PrimaryButton className="mt-5" disabled={!!busy} onClick={() => act("shift", "/timeclock/shift/clock-in", undefined, "Clocked in")}>{busy === "shift" ? "Clocking in…" : "Clock in"}</PrimaryButton>}
         </Card>
       )}
 
@@ -90,7 +90,7 @@ export default function Clock() {
           </div>
           {entry && <p className="mt-4 text-go-display font-bold leading-none tabular-nums tracking-tight text-ink-primary">{hm(entry.duration_sec + since)}</p>}
           {entry
-            ? <PrimaryButton className="mt-5 !bg-ink-primary" disabled={!!busy} onClick={() => act("timer", "/timeclock/stop", {}, "Timer stopped")}>{busy === "timer" ? "…" : "Stop timer"}</PrimaryButton>
+            ? <GoButton main className="mt-5 w-full" disabled={!!busy} onClick={() => act("timer", "/timeclock/stop", {}, "Timer stopped")}>{busy === "timer" ? "Stopping…" : "Stop timer"}</GoButton>
             : <p className="mt-4 text-go-sub text-ink-secondary">Start the timer from a job so the time lands on it.</p>}
         </Card>
       )}
