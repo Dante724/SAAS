@@ -17,11 +17,12 @@ pass; tab-shift is 34/34; visual is 44/44. I recorded D's baselines again and ma
 
 Pushing the rebased branches needs a force-push, and this session's permission check blocked it. The
 pushed `fix/design-polish-a..d` are still the earlier, pre-rebase versions. The rebased commits exist
-only in this container: A 9f27ebaa, B 8c5818ea, C 08a5cff1, D 1262d4e3.
+on GitHub under new names, pushed normally with no history rewritten: `fix/design-polish-a-rebased` (9f27ebaa),
+`-b-rebased` (8c5818ea), `-c-rebased` (08a5cff1) and `-d-rebased` (1262d4e3).
 
 Opening each PR on top of the beta branch will need the same kind of push. Options:
 1. allow force-push to `fix/design-polish-*` for this session; or
-2. I push each rebased branch under a new name (for example `fix/design-polish-a2`) and open the PR from that.
+2. open each PR from its `-rebased` branch, which is already pushed, and leave the old branches as they are.
 
 ## How it's measured
 `scripts/design-capture/capture.js` (added in A, with a README) checks every staff screen and tab, plus a
