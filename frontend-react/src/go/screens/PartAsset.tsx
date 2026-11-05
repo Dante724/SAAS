@@ -4,7 +4,7 @@ import { useNavigate, useParams } from "react-router-dom";
 import { AlertTriangle, ChevronLeft, ExternalLink, Package } from "lucide-react";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
-import { Card, Empty, Group, Page, Section, SkeletonRows } from "../components/ui";
+import { Card, Empty, Group, Page, Section, SkeletonRows, goButtonClass } from "../components/ui";
 import { JobRow } from "./Today";
 import { useStatuses } from "../lib/useGo";
 
@@ -58,7 +58,7 @@ export function Part() {
         <Row k="Code" v={p.code} />
         <Row k="Reorder at" v={p.min_stock || undefined} />
       </Card>
-      <a href={`/inventory?open=${encodeURIComponent(p.id)}`} className="mt-3 min-h-[3rem] w-full rounded-xl border border-slate-200 bg-white inline-flex items-center justify-center gap-2 font-semibold text-ink-primary active:bg-slate-50">
+      <a href={`/inventory?open=${encodeURIComponent(p.id)}`} className={goButtonClass("secondary", { extra: "mt-3 w-full" })}>
         <ExternalLink size={18} />Open in Tekly
       </a>
     </Page>

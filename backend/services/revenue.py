@@ -344,7 +344,7 @@ async def net_sales(db: AsyncSession, org_id: str, df: Optional[datetime] = None
     sales_tax -= till_back_tax
     sales_cost -= till_back_cost
     srq = select(func.coalesce(func.sum(func.abs(Transaction.amount)), 0)).where(
-        Transaction.org_id == org_id, Transaction.status == "active", Transaction.ref_type == "sale",
+        Transaction.org_id == org_id, Transaction.status != "deleted", Transaction.ref_type == "sale",
         Transaction.txn_type.in_(("expense", "refund")), *_in(Transaction.actual_date, df, dt))
     if location_id:
         srq = srq.where(Transaction.ref_id.in_(select(Sale.id).where(Sale.location_id == location_id)))
@@ -407,7 +407,7 @@ async def cash_collected(db: AsyncSession, org_id: str, df: Optional[datetime] =
     if location_id:
         tq = tq.where(ClientReturn.location_id == location_id)
     srq = select(func.coalesce(func.sum(func.abs(Transaction.amount)), 0)).where(
-        Transaction.org_id == org_id, Transaction.status == "active", Transaction.ref_type == "sale",
+        Transaction.org_id == org_id, Transaction.status != "deleted", Transaction.ref_type == "sale",
         Transaction.txn_type.in_(("expense", "refund")), *_in(Transaction.actual_date, df, dt))
     if location_id:
         srq = srq.where(Transaction.ref_id.in_(select(Sale.id).where(Sale.location_id == location_id)))
@@ -443,7 +443,7 @@ async def operating_expenses(db: AsyncSession, org_id: str, df: Optional[datetim
     """Expense records plus expense cash transactions, never a refund to a customer."""
     txn_date = func.coalesce(Transaction.actual_date, Transaction.created_at)
     txns = (await db.execute(select(func.coalesce(func.sum(func.abs(Transaction.amount)), 0)).where(
-        Transaction.org_id == org_id, Transaction.txn_type == "expense", Transaction.status == "active",
+        Transaction.org_id == org_id, Transaction.txn_type == "expense", Transaction.status != "deleted",
         ~is_customer_refund(), *_in(txn_date, df, dt)))).scalar() or 0
     econds = [Expense.org_id == org_id]
     if df is not None:
