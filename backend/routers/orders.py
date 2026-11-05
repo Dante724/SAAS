@@ -3391,9 +3391,11 @@ async def reserve_stock_for_order(
     from datetime import timedelta
     from backend.models import Part, StockReservation
 
+    # Lock the job first (Order, then its stock rows): two reserve clicks at once each read
+    # "nothing held yet" and together held twice what the job needs.
     order = (await db.execute(
         select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
-        .options(selectinload(Order.lines)))).scalar_one_or_none()
+        .options(selectinload(Order.lines)).with_for_update(of=Order))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, order)
@@ -3420,7 +3422,9 @@ async def reserve_stock_for_order(
     reserved, short = [], []
     part_names = await names_by_id(db, Part.id, Part.name, list(need),
                                    org_col=Part.org_id, org_id=current.org_id)
-    for part_id, qty_needed in need.items():
+    # product-id order, so two jobs needing the same products lock their stock rows the same way
+    # round (a job needing [X, Y] and one needing [Y, X] deadlocked)
+    for part_id, qty_needed in sorted(need.items()):
         want = qty_needed - held.get(part_id, 0)      # still to hold for this job
         if want <= 0:
             continue
