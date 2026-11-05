@@ -3,7 +3,7 @@
 This file tracks the hardening council's fix PRs, all against `roadmap/orderry-parity`. It is maintained by the cloud session that took over from the council's hand-over (`HANDOVER.md` on `claude/hardening-council-b6179a`). Nothing here is merged by this session; the PM session reviews and merges.
 
 - **RED:** the test that failed before the fix, run on Postgres 16 unless it says otherwise.
-- **CI:** the result on the PR's current head, checked at 21:00 UTC on 5 Nov.
+- **CI:** the result on the PR's current head, checked at 21:00 and 22:10 UTC on 5 Nov.
 - **Ready** means: review fixes done, RED → GREEN shown, related suites pass locally on Postgres 16, and CI is green with at least 17 checks. It does not mean "approved".
 
 ## Merge order (PM)
@@ -39,23 +39,26 @@ This file tracks the hardening council's fix PRs, all against `roadmap/orderry-p
 | #147 | M4 PO edit can't rewrite a received line | 3 edits returned 200; race left ordered 2 < received 4 | 18/18 green | **yes** |
 | #124 | M5 write-off edit restores layers | council | 18/18 green | **yes** |
 | #134 | M6 serial in transit counts as live | council | 18/18 green | **yes** |
-| #143 | M7 expired holds released on every `free()` path; the sweep runs before the job lock | 409/short on three paths; stacked on #108: held 2 for 1 | 17/18: e2e red at `npm install` (`playwright-core@1.65.0` not resolvable from the registry; infrastructure). Failed job re-run | yes, after #108 and #110 |
+| #143 | M7 expired holds released on every `free()` path; the sweep runs before the job lock | 409/short on three paths; stacked on #108: held 2 for 1 | 18/18 green (the e2e job re-ran after an npm registry failure) | **yes**, after #108 and #110 |
 | #130 | M8 serialized supplier return | council | 18/18 green | **yes** |
 | #125 | M9 POS cash refund on the open shift | council | 18/18 green | **yes** |
 | #129 | M10 one open drawer per location | council | 18/18 green | **yes** |
 | #132 | M11 sub-invoice line tax | council | 18/18 green | **yes** |
 | #131 | M12 reports on the shop's day | council | 18/18 green | **yes** |
 | #148 | M13 backend: add-line Idempotency-Key | Same-key retry added twice; race qty 2 (3/3) | 18/18 green | **yes**. Follow-up after #99: pass `body=` |
-| #149 | M13 web/Go: 25 s timeout, "No connection", `postOnce` | Vitest: no key sent; no timeout | 17/18 green, 1 running | yes, if CI is green |
+| #149 | M13 web/Go: 25 s timeout, "No connection", `postOnce` | Vitest: no key sent; no timeout | 18/18 green | **yes** |
 | #138 | M14 Mac Roman CSV | council | 18/18 green | **yes** |
 | #150 | M15 refuse a byte-identical re-commit | council | 18/18 green | **yes** |
 | #126 | M16 line-edit audit trail | council | 18/18 green | **yes** |
 | #136 | M17 invite rate limit | council | 18/18 green | **yes** |
-| #152 | M18 + M20 boot guards (proxy trust, Redis) | 11 of 20 new tests failed on base | 15/17 green, 2 running | yes, if CI is green. **Deploy impact:** needs config |
+| #152 | M18 + M20 boot guards (proxy trust, Redis) | 11 of 20 new tests failed on base | 18/18 green | **yes**. **Deploy impact:** needs config |
 | #151 | M19 Redis fallback logged and shown in `/readyz` | council | 18/18 green | **yes** |
 
 ## QA items (council)
-#123 (Q8 flaky test), #127 (Q1 coverage greenlet), #133 (Q5 Postgres lock tests) and #137 (Q3 drift gate, migration `nn01`) are done per the council. #123, #127 and #133 are 18/18 green. **#137** was red: `backend-postgres (shard 1)` had 3 setup errors in `test_144eo_migrated_schema.py`, "password authentication failed for user repairos". The fixture built the migrated database's URL with `str(url)`, which masks the password as `***`. Reproduced locally with a password-protected role and fixed with `render_as_string(hide_password=False)` (3106d6e4). It now passes 3/3 runs. CI is pending on the new head.
+#123 (Q8 flaky test), #127 (Q1 coverage greenlet), #133 (Q5 Postgres lock tests) and #137 (Q3 drift gate, migration `nn01`) are done per the council. #123, #127 and #133 are 18/18 green. **#137** was red: `backend-postgres (shard 1)` had 3 setup errors in `test_144eo_migrated_schema.py`, "password authentication failed for user repairos". The fixture built the migrated database's URL with `str(url)`, which masks the password as `***`. Reproduced locally with a password-protected role and fixed with `render_as_string(hide_password=False)` (3106d6e4). It now passes 3/3 runs. On the new head (cb7ea6c4) every Postgres shard is green; 17/18 checks pass. The one red check, `ruff correctness rules (whole backend)`, comes from the **base**: `scripts/design-capture/analyze.py` has an unused `import re` since 8ba3ca32. **#157** fixes it in one line; merge it first, then re-run that job here.
 
 ## Alembic heads
 Four open PRs each add a migration that revises `trg01`: #95 `nob01`, #99 `idg01`, #107 `ot01` and #137 `nn01`. Only the first to merge keeps a single head. Each later one must be re-chained onto the new head, and `alembic heads` checked again, before it merges.
+
+## Base branch
+#157 fixes a red `ruff correctness rules (whole backend)` check on `roadmap/orderry-parity`, from an unused import added in 8ba3ca32. Any PR that merges the base after that commit shows the same red check until #157 lands.
