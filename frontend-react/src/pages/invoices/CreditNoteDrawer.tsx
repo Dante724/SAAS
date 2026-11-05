@@ -146,15 +146,15 @@ export default function CreditNoteDrawer({ id, invoice, clientId, onClose, onCha
       title={<span className="flex items-center gap-2">{title}<StatusPill status={status} label={humanize(status)} /></span>}
       sub={invoiceId ? <>Credits invoice {cn?.invoice_number || invoice?.invoice_number}</> : "Standalone: adds credit to the client's balance"}
       footer={<>
-        <MoreMenu className="mr-auto" align="start" items={[
+        {editable && can("can_issue_credit_notes") && <button onClick={issue} disabled={busy || total <= 0} className={btnPrimary}>Issue {cash(total)}</button>}
+        {editable && <button onClick={() => run(saveDraft)} disabled={busy} className={btnGhost}>{busy ? "Saving…" : "Save draft"}</button>}
+        <MoreMenu className="ml-auto" items={[
           { label: "Download PDF", icon: "download", hidden: !cn, onClick: () => { if (cn) openAuthedDoc(`/print/credit-notes/${cn.id}`).catch(() => alertDialog("Could not open the PDF")); } },
           { label: "Print", icon: "print", hidden: !cn, onClick: () => setPrintOpen(true) },
           { label: "Delete draft", icon: "delete", danger: true, disabled: busy, hidden: !(cn?.status === "draft" && can("can_create_credit_notes")), onClick: remove },
           { label: cn?.status === "issued" ? "Cancel credit note" : "Cancel draft", icon: "block", danger: true, disabled: busy,
             hidden: !(cn && cn.status !== "canceled" && can("can_issue_credit_notes")), onClick: cancel },
         ]} />
-        {editable && <button onClick={() => run(saveDraft)} disabled={busy} className={btnGhost}>{busy ? "Saving…" : "Save draft"}</button>}
-        {editable && can("can_issue_credit_notes") && <button onClick={issue} disabled={busy || total <= 0} className={btnPrimary}>Issue {cash(total)}</button>}
       </>}>
       <ErrorNote msg={err} />
       {cn?.status === "issued" && <div role="note" className="rounded-lg bg-slate-50 border border-slate-200 text-ink-secondary text-xs px-3 py-2">Issued {fmtDate(cn.issued_at)}. Issued credit notes are locked. Cancel it to reverse the credit.</div>}

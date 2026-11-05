@@ -338,7 +338,7 @@ export default function Shell({ title, children }: { title: string; children: Re
 
         {/* MAIN */}
         <main className="app-main flex-1 flex flex-col min-w-0 bg-canvas overflow-hidden">
-          <header className="h-[52px] bg-white/80 backdrop-blur-md border-b border-slate-200/80 px-2 sm:px-4 min-[1100px]:px-6 flex items-center justify-between gap-2 flex-shrink-0 z-10">
+          <header className="h-[52px] bg-white border-b border-slate-200/80 px-2 sm:px-4 min-[900px]:px-6 flex items-center justify-between gap-2 flex-shrink-0 z-10">
             <div className="flex items-center gap-1.5 sm:gap-4 min-w-0">
               <button onClick={() => setNavOpen(true)} aria-label={t("Open menu")} aria-expanded={navOpen} aria-controls="nav-drawer"
                 className="min-[900px]:hidden w-10 h-10 shrink-0 rounded-lg flex items-center justify-center text-ink-secondary hover:bg-slate-100 hover:text-ink-primary"><M n="menu" c="text-xl" /></button>
@@ -520,7 +520,7 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
                   </div>
                 </div>
               )}
-              <button onClick={onClose} className="w-full px-4 py-2 rounded-lg bg-ink-primary text-white text-xs font-bold">Done</button>
+              <button onClick={onClose} className="w-full px-4 py-2 rounded-lg bg-primary text-white hover:bg-primary-container text-xs font-bold">Done</button>
             </>
           )}
           {!forced && (

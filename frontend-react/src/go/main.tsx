@@ -1,6 +1,9 @@
 // Tekly Go entry (served at /go). Reuses the web app's theme (index.css + theme tokens), API client
-// and Me context; adds its own service worker scoped to /go/.
+// and Me context; adds its own service worker scoped to /go/. Geist is bundled the same way as the
+// web app (no third-party font request).
 import React from "react";
+import "@fontsource-variable/geist";
+import "@fontsource-variable/geist-mono";
 import ReactDOM from "react-dom/client";
 import { BrowserRouter } from "react-router-dom";
 import { MeProvider } from "../context/Me";

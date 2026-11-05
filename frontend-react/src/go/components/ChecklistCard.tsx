@@ -8,7 +8,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Check, ExternalLink, ListChecks } from "lucide-react";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
-import { Card } from "./ui";
+import { Card, goButtonClass, goField } from "./ui";
 import { haptic } from "../lib/scanner";
 import { useToast } from "../lib/useGo";
 
@@ -18,7 +18,7 @@ type Cl = { id: string; title?: string | null; items: ClItem[] };
 
 const CHECK: [string, string, string][] = [["pass", "Pass", "bg-emerald-600"], ["caution", "Caution", "bg-amber-500"], ["fail", "Fail", "bg-rose-600"]];
 const FILLABLE = new Set(["check_result", "yes_no", "text", "textarea", "number", "dropdown", "select"]);
-const field = "mt-2 w-full min-h-[2.75rem] rounded-xl border border-slate-200 bg-white px-3 text-go-body text-ink-primary focus:outline-none focus:border-primary";
+const field = goField("mt-2");
 
 export default function ChecklistCard({ orderId, readOnly, onProgress }: { orderId: string; readOnly?: boolean; onProgress?: (left: number) => void }) {
   const { can } = useMe();
@@ -123,7 +123,7 @@ export default function ChecklistCard({ orderId, readOnly, onProgress }: { order
                         </select>
                       )}
                       {!FILLABLE.has(it.field_kind) && (
-                        <a href={`/orders?open=${encodeURIComponent(orderId)}`} className="mt-1 inline-flex min-h-[2.75rem] items-center gap-1.5 text-go-sub font-semibold text-primary">
+                        <a href={`/orders?open=${encodeURIComponent(orderId)}`} className={goButtonClass("link", { extra: "mt-1" })}>
                           <ExternalLink size={15} />Answer in Tekly
                         </a>
                       )}
