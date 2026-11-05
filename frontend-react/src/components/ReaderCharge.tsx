@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import { buttonClass } from "./Button";
 import { createPortal } from "react-dom";
 import { M } from "./Shell";
 import { api, idempotencyKey } from "../api/client";
@@ -113,7 +114,7 @@ export default function ReaderCharge({ orderId, saleId, amount, accountId, title
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="text-sm font-semibold text-ink-primary flex items-center gap-2">{title || "Charge on reader"}
-              {testMode && <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200/70 text-[11px] font-semibold">Test mode</span>}
+              {testMode && <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200/70 text-2xs font-semibold">Test mode</span>}
             </div>
             <div className="text-2xl font-semibold text-ink-primary tabular-nums mt-1">{money(amount)}</div>
           </div>
@@ -171,16 +172,16 @@ export default function ReaderCharge({ orderId, saleId, amount, accountId, title
           <div className="rounded-xl border border-amber-200/70 bg-amber-50/60 p-3 space-y-2">
             <div className="text-xs font-semibold text-amber-900">Test card <span className="font-normal text-amber-800">· nothing is charged</span></div>
             <div className="flex gap-2">
-              <button onClick={() => act("simulate", { outcome: "approve" })} disabled={busy} className="flex-1 h-9 rounded-lg bg-white border border-slate-200 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50">Approve</button>
-              <button onClick={() => act("simulate", { outcome: "decline" })} disabled={busy} className="flex-1 h-9 rounded-lg bg-white border border-slate-200 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50">Decline</button>
+              <button onClick={() => act("simulate", { outcome: "approve" })} disabled={busy} className="flex-1 h-9 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50">Approve</button>
+              <button onClick={() => act("simulate", { outcome: "decline" })} disabled={busy} className="flex-1 h-9 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50">Decline</button>
             </div>
           </div>
         )}
 
         <div className="flex gap-2">
-          {waiting && <button onClick={() => act("cancel")} disabled={busy} className="flex-1 h-10 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50">Cancel charge</button>}
-          {failed && <button onClick={() => { setCharge(null); setErr(null); }} className="flex-1 h-10 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container">Try again</button>}
-          {!locked && <button onClick={() => onClose(charge)} className={`flex-1 h-10 rounded-lg text-xs font-semibold ${st === "succeeded" ? "bg-primary text-white hover:bg-primary-container" : "border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50"}`}>{st === "succeeded" ? "Done" : "Close"}</button>}
+          {waiting && <button onClick={() => act("cancel")} disabled={busy} className={buttonClass("danger", "md", "flex-1")}>Cancel charge</button>}
+          {failed && <button onClick={() => { setCharge(null); setErr(null); }} className={buttonClass("primary", "md", "flex-1")}>Try again</button>}
+          {!locked && <button onClick={() => onClose(charge)} className={buttonClass(st === "succeeded" ? "primary" : "secondary", "md", "flex-1")}>{st === "succeeded" ? "Done" : "Close"}</button>}
         </div>
       </div>
     </div>, document.body);
