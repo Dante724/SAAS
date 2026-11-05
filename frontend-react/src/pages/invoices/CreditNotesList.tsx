@@ -12,7 +12,7 @@ import { StatusPill, cash, fmtDate } from "./billing";
 import Card from "../../components/Card";
 import Button, { IconButton } from "../../components/Button";
 import EmptyState, { ErrorState, TableEmpty } from "../../components/EmptyState";
-import { Td, Th, tableClass, theadRowClass } from "../../components/Table";
+import { Th, tableClass, theadRowClass } from "../../components/Table";
 import { clickableRow } from "../../lib/clickable";
 
 /* Credit notes list (Invoices page tab). Server-paged, filter by status, search by number,
@@ -67,7 +67,7 @@ export default function CreditNotesList({ status, q, creating, onCreatingDone }:
                 <td className="py-2.5 px-4 tabular-nums text-ink-tertiary">{c.invoice_number || "Standalone"}</td>
                 <td className="py-2.5 px-4 whitespace-nowrap tabular-nums">{fmtDate(c.issued_at || c.created_at)}</td>
                 <td className="py-2.5 px-4"><StatusPill status={c.status} label={humanize(c.status)} /></td>
-                <Td num className={`py-2.5 font-semibold ${c.status === "canceled" ? "text-ink-tertiary line-through" : "text-ink-primary"}`}>{cash(c.total)}</Td>
+                <td className={`py-2.5 px-4 text-right tabular-nums whitespace-nowrap font-semibold ${c.status === "canceled" ? "text-ink-tertiary line-through" : "text-ink-primary"}`}>{cash(c.total)}</td>
                 <td className="py-1.5 px-4 text-right" onClick={(e) => e.stopPropagation()}>
                   <IconButton size="sm" label={`PDF of ${c.number || "draft"}`} onClick={() => openAuthedDoc(`/print/credit-notes/${c.id}`).catch(() => alertDialog("Could not open the PDF"))} icon={<M n="print" c="text-base" />} />
                 </td>

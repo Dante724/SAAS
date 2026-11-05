@@ -16,7 +16,7 @@ import Card, { Badge } from "../../components/Card";
 import Drawer from "../../components/Drawer";
 import { Field, Input, Select, fieldClass } from "../../components/Field";
 import { TableEmpty } from "../../components/EmptyState";
-import { Th, Td, tableClass, theadRowClass } from "../../components/Table";
+import { Th, tableClass, theadRowClass } from "../../components/Table";
 
 // Marketing: campaigns (SMS/email blasts by segment) + call log — legacy /comms surface.
 const CHANNEL: Record<string, string> = { sms: "SMS", email: "Email" };
@@ -59,9 +59,11 @@ export default function MarketingHub() {
 
   return (
     <Shell title="Marketing">
-      <PageLayout>
+      <div className="px-6 flex-shrink-0">
         <Tabs look="underline" label="Marketing sections" value={tab} onChange={setTab}
           tabs={[{ id: "campaigns", label: "Campaigns" }, { id: "calls", label: "Call log" }]} />
+      </div>
+      <PageLayout>
         {/* Same toolbar on both tabs, so the table starts at the same height. */}
         <Toolbar actions={<Button variant="primary" icon={<M n="add" c="text-sm" />} disabled={tab !== "campaigns"}
           onClick={() => setDraft({ channel: "sms", segment: "all" })}>New campaign</Button>} />
@@ -79,7 +81,7 @@ export default function MarketingHub() {
                       <td className="py-2.5 px-4">{CHANNEL[c.channel] || humanize(c.channel)}</td>
                       <td className="py-2.5 px-4">{SEGMENT[c.segment] || humanize(c.segment)}</td>
                       <td className="py-2.5 px-4"><Badge tone={c.status === "sent" ? "success" : "warning"}>{humanize(c.status)}</Badge>{c.sent_at ? <span className="block text-2xs text-ink-tertiary mt-0.5">{d(c.sent_at)}</span> : null}</td>
-                      <Td num className="py-2.5">{c.recipients ?? "—"}</Td>
+                      <td className="py-2.5 px-4 text-right tabular-nums whitespace-nowrap">{c.recipients ?? "—"}</td>
                       <td className="py-1.5 px-4 text-right">{c.status !== "sent" && <Button size="sm" variant="primary" onClick={() => send(c)} disabled={busy}>Send</Button>}</td>
                     </tr>
                   ))}
@@ -123,7 +125,7 @@ export default function MarketingHub() {
                         </div>
                       </td>
                       <td className={`py-2.5 px-4 ${missed ? "text-rose-600 font-medium" : ""}`}>{humanize(c.status)}</td>
-                      <Td num className="py-2.5">{c.duration_s != null ? `${Math.floor(c.duration_s / 60)}:${String(c.duration_s % 60).padStart(2, "0")}` : "—"}</Td>
+                      <td className="py-2.5 px-4 text-right tabular-nums whitespace-nowrap">{c.duration_s != null ? `${Math.floor(c.duration_s / 60)}:${String(c.duration_s % 60).padStart(2, "0")}` : "—"}</td>
                       <td className="py-2.5 px-4">{safeHttpsUrl(c.recording_url) ? <a href={safeHttpsUrl(c.recording_url)!} target="_blank" rel="noreferrer noopener" className="inline-flex items-center gap-1 text-primary font-semibold hover:underline"><M n="play_arrow" c="text-sm" />Play</a> : "—"}</td>
                     </tr>
                   );

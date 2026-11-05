@@ -17,7 +17,7 @@ import Tabs from "../../components/Tabs";
 import Button, { IconButton } from "../../components/Button";
 import Card, { Badge } from "../../components/Card";
 import EmptyState, { ErrorState } from "../../components/EmptyState";
-import { Td, Th, tableClass, theadRowClass } from "../../components/Table";
+import { Th, tableClass, theadRowClass } from "../../components/Table";
 import { Avatar } from "../orders/look";
 import { DisplayModes, Drawer, cash, ErrorNote, MoreMenu, SearchBox, StatusPill, daysLate, fmtDate, inputCls, isVoid, labelCls, lateText, sendInvoice, type MenuItem } from "./billing";
 import { loadFailed } from "../../lib/notice";
@@ -95,11 +95,14 @@ export default function InvoicesHub() {
 
   return (
     <Shell title="Invoices">
+      {/* Section tabs sit above the page's scroll area (as on Finance and Reports), so they stay put. */}
+      {seeNotes && (
+        <div className="px-6 flex-shrink-0">
+          <Tabs look="underline" label="Billing documents" value={view} onChange={setView}
+            tabs={[{ id: "invoices", label: "Invoices" }, { id: "credit_notes", label: "Credit notes" }]} />
+        </div>
+      )}
       <PageLayout>
-          {seeNotes && (
-            <Tabs look="underline" label="Billing documents" value={view} onChange={setView}
-              tabs={[{ id: "invoices", label: "Invoices" }, { id: "credit_notes", label: "Credit notes" }]} />
-          )}
           {/* One toolbar for both tabs: what doesn't apply on a tab stays in place, greyed. */}
           <Toolbar
             actions={<>
@@ -155,8 +158,8 @@ export default function InvoicesHub() {
             <div className="hidden sm:block overflow-x-auto">
             <table className={`${tableClass} min-w-[820px]`}>
               <thead><tr className={theadRowClass}>
-                <Th className="pl-4 pr-2 w-10"><input type="checkbox" aria-label="Select all" checked={!!invoices?.length && invoices.every((i) => invSel.has(i.id))} onChange={(e) => setInvSel((s) => { const n = new Set(s); (invoices || []).forEach((i) => (e.target.checked ? n.add(i.id) : n.delete(i.id))); return n; })} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></Th>
-                <Th>Invoice</Th><Th>Customer</Th><Th>Date</Th><Th>Job</Th><Th>Status</Th><Th num>Total</Th><Th num>Paid</Th><Th num>Balance</Th>{einv && <Th>E-invoice</Th>}<Th className="px-2 w-12"><span className="sr-only">Actions</span></Th>
+                <th className="py-3 pl-4 pr-2 w-10"><input type="checkbox" aria-label="Select all" checked={!!invoices?.length && invoices.every((i) => invSel.has(i.id))} onChange={(e) => setInvSel((s) => { const n = new Set(s); (invoices || []).forEach((i) => (e.target.checked ? n.add(i.id) : n.delete(i.id))); return n; })} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
+                <Th>Invoice</Th><Th>Customer</Th><Th>Date</Th><Th>Job</Th><Th>Status</Th><Th num>Total</Th><Th num>Paid</Th><Th num>Balance</Th>{einv && <Th>E-invoice</Th>}<th className="py-3 px-2 w-12"><span className="sr-only">Actions</span></th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 text-ink-secondary">
                 {!invoices && <SkeletonRows cols={cols} />}
@@ -173,12 +176,12 @@ export default function InvoicesHub() {
                       <td className="py-2.5 px-4 whitespace-nowrap tabular-nums">{fmtDate(i.issued_at || i.created_at)}</td>
                       <td className="py-2.5 px-4 tabular-nums text-ink-tertiary">{i.order_number || "—"}</td>
                       <td className="py-2.5 px-4"><StatusPill status={i.status} label={humanize(i.status)} /></td>
-                      <Td num className="py-2.5 font-semibold text-ink-primary">{cash(i.total)}</Td>
-                      <Td num className="py-2.5 text-ink-secondary">{cash(i.amount_paid)}</Td>
-                      <Td num className="py-2.5">
+                      <td className="py-2.5 px-4 text-right tabular-nums whitespace-nowrap font-semibold text-ink-primary">{cash(i.total)}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums whitespace-nowrap text-ink-secondary">{cash(i.amount_paid)}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums whitespace-nowrap">
                         <span data-testid="row-balance" className={`block tabular-nums ${late ? "font-semibold text-rose-600" : owed ? "font-semibold text-ink-primary" : "text-ink-tertiary"}`}>{cash(i.balance_due)}</span>
                         {late > 0 && <span className="block text-xs text-rose-600">{lateText(late)}</span>}
-                      </Td>
+                      </td>
                       {einv && <td className="py-2.5 px-4" onClick={(e) => e.stopPropagation()}>
                         {(!i.einvoice_status || i.einvoice_status === "none") ? (
                           <Button size="sm" onClick={() => issueEinvoice(i.id)} disabled={!!issuingId}>{issuingId === i.id ? "Issuing…" : "Issue e-invoice"}</Button>

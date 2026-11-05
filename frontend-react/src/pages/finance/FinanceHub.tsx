@@ -152,7 +152,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
 
   return (
     <Shell title="Finance">
-      <div className="px-6 bg-white/40 flex-shrink-0">
+      <div className="px-6 flex-shrink-0">
         <Tabs look="underline" label="Finance sections" value={tab} onChange={setTab}
           tabs={([...(can("can_view_cashbox") ? [["cashboxes", "Cashboxes"]] as [Tab, string][] : []), ["overview", "Overview"], ["pnl", "Profit & loss"], ["reconcile", "Reconcile"], ["balances", "Client balances"], ["refunds", "Refunds"], ...(hasFeature(me, "payroll") ? [["payroll", "Payroll"]] as [Tab, string][] : [])] as [Tab, string][]).map(([id, label]) => ({ id, label }))} />
       </div>
