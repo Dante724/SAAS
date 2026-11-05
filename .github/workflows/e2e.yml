@@ -22,7 +22,7 @@ permissions:
 jobs:
   e2e:
     runs-on: ubuntu-latest
-    timeout-minutes: 15
+    timeout-minutes: 20
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     env:
       ENVIRONMENT: development   # unset now means production (audit M5); this job boots on SQLite
@@ -47,6 +47,11 @@ jobs:
         run: |
           npm install
           npx playwright install --with-deps chromium
+      - name: Build the web app (the tab-shift check needs the real screens)
+        working-directory: frontend-react
+        run: |
+          npm ci
+          npm run build
       - name: Launch app for Lighthouse (fixed debug port)
         run: |
           SEED_DEMO=true python3 -m uvicorn main:app --port 8000 &
@@ -56,6 +61,9 @@ jobs:
       - name: Run Playwright e2e (functional)
         working-directory: tests-e2e
         run: npx playwright test pwa.spec.js
+      - name: Tab-shift check (switching tabs never moves the toolbar)
+        working-directory: tests-e2e
+        run: npx playwright test tab-shift.spec.js --project=mobile
       - name: Run Lighthouse PWA audit
         working-directory: tests-e2e
         run: |

@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router-dom";
 import { M } from "../../components/Shell";
 import { money } from "../orders/types";
+import { laborText } from "../../lib/labor";
 
 /* Commissions behind a pay figure, three levels deep: the rule that paid → the work order (or
    task) it paid on → the line item, with each accrual and reversal underneath. Shared by
@@ -23,7 +24,7 @@ const EVENT_LABEL: Record<string, string> = {
 };
 
 export function eventLabel(e?: string | null) {
-  return (e && EVENT_LABEL[e]) || "Commission";
+  return laborText((e && EVENT_LABEL[e]) || "Commission");
 }
 
 export function ruleSummary(r: BreakdownRule) {

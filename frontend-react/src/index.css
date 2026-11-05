@@ -127,3 +127,13 @@ body { background: rgb(var(--c-canvas)); color: rgb(var(--c-ink-primary)); }
 @media (max-width: 899.98px), (pointer: coarse) {
   input[type="checkbox"], input[type="radio"] { width: 1.5rem; height: 1.5rem; flex-shrink: 0; }
 }
+
+/* Shared Button / IconButton: on touch screens every button gets a 44px tap area (WCAG 2.5.5)
+   without growing visually; the invisible hit box is centred on the button. */
+@media (pointer: coarse) {
+  .hit44 { position: relative; }
+  .hit44::before { content: ""; position: absolute; left: 50%; top: 50%; width: max(100%, 44px); height: max(100%, 44px); transform: translate(-50%, -50%); }
+}
+/* Tab strips scroll sideways when they don't fit, with no visible scrollbar. */
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }
