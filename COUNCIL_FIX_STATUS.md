@@ -55,7 +55,7 @@ This file tracks the hardening council's fix PRs, all against `roadmap/orderry-p
 | #151 | M19 Redis fallback logged and shown in `/readyz` | council | 18/18 green | **yes** |
 
 ## QA items (council)
-#123 (Q8 flaky test), #127 (Q1 coverage greenlet), #133 (Q5 Postgres lock tests) and #137 (Q3 drift gate, migration `nn01`) are done per the council. #123, #127 and #133 are 18/18 green. **#137 is red:** `backend-postgres (shard 1)` failed; it is being reproduced locally.
+#123 (Q8 flaky test), #127 (Q1 coverage greenlet), #133 (Q5 Postgres lock tests) and #137 (Q3 drift gate, migration `nn01`) are done per the council. #123, #127 and #133 are 18/18 green. **#137** was red: `backend-postgres (shard 1)` had 3 setup errors in `test_144eo_migrated_schema.py`, "password authentication failed for user repairos". The fixture built the migrated database's URL with `str(url)`, which masks the password as `***`. Reproduced locally with a password-protected role and fixed with `render_as_string(hide_password=False)` (3106d6e4). It now passes 3/3 runs. CI is pending on the new head.
 
 ## Alembic heads
 Four open PRs each add a migration that revises `trg01`: #95 `nob01`, #99 `idg01`, #107 `ot01` and #137 `nn01`. Only the first to merge keeps a single head. Each later one must be re-chained onto the new head, and `alembic heads` checked again, before it merges.
