@@ -155,7 +155,7 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
           <div className="flex gap-6 overflow-x-auto text-xs font-semibold">
             {(isSupplier ? [...BASE_TABS, "Supplier"] : BASE_TABS).map((t, i) => {
               const label = i === 1 && c.devices ? `Devices & assets (${c.devices.length})` : i === 2 && c.order_count != null ? `Work orders (${c.order_count})` : t;
-              return <button key={t} onClick={() => setTab(i)} className={`py-3 border-b-2 whitespace-nowrap transition-colors ${tab === i ? "text-primary border-primary font-bold" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{label}</button>;
+              return <button key={t} onClick={() => setTab(i)} className={`py-3 border-b-2 whitespace-nowrap transition-colors ${tab === i ? "text-primary border-primary" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{label}</button>;
             })}
           </div>
         </header>

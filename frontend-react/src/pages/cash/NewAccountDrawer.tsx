@@ -64,7 +64,7 @@ export default function NewAccountDrawer({ edit, onClose, onSaved }: Props) {
           <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-ink-tertiary hover:text-ink-primary"><M n="close" c="text-lg" /></button>
         </header>
         <nav className="px-6 border-b border-slate-200 flex space-x-6 text-sm font-semibold">
-          {(["general", "access"] as const).map((t) => <button key={t} onClick={() => setTab(t)} className={`py-3 border-b-2 capitalize transition-colors ${tab === t ? "text-primary border-primary font-bold" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{t}</button>)}
+          {(["general", "access"] as const).map((t) => <button key={t} onClick={() => setTab(t)} className={`py-3 border-b-2 capitalize transition-colors ${tab === t ? "text-primary border-primary" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{t}</button>)}
         </nav>
 
         <div className="flex-1 overflow-y-auto p-6 space-y-5 text-xs">

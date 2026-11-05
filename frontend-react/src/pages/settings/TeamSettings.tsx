@@ -69,12 +69,6 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
       <div>
         <h2 className="text-base font-semibold text-ink-primary">Your team</h2>
         <p className="text-xs text-ink-tertiary">Who works here, what they can do, and how commission is paid.</p>
-        {tab !== "signin" && (
-          <div className="mt-3 flex flex-wrap items-center gap-2">
-            <button onClick={primary.on} className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90"><M n={primary.icon} c="text-sm" />{primary.label}</button>
-            {tab === "people" && <button onClick={onNewPerson} className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50">Add without invite</button>}
-          </div>
-        )}
       </div>
 
       <div className="inline-flex rounded-xl bg-slate-100 p-1">
@@ -85,6 +79,14 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
           </button>
         ))}
       </div>
+
+      {/* Actions sit under the tabs, so the tab bar stays put on Sign-in (which has none). */}
+      {tab !== "signin" && (
+        <div className="flex flex-wrap items-center gap-2">
+          <button onClick={primary.on} className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90"><M n={primary.icon} c="text-sm" />{primary.label}</button>
+          {tab === "people" && <button onClick={onNewPerson} className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50">Add without invite</button>}
+        </div>
+      )}
 
       {tab === "people" && (
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-2">

@@ -102,11 +102,10 @@ export default function PayrollCalcPanel({ month, onMonth, headerAction }: { mon
 
   return (
     <div className="space-y-3">
+      {/* The heading stands alone so it starts on the same line as every other Finance tab's first text. */}
+      <h3 className="text-sm font-semibold text-ink-primary">Payroll calculation</h3>
       <div className="flex items-center gap-2 flex-wrap">
-        <h3 className="text-sm font-semibold text-ink-primary">Payroll calculation</h3>
         <input type="month" value={month} onChange={(e) => e.target.value && onMonth(e.target.value)} aria-label="Month" className={sel} />
-      </div>
-      <div className="flex items-center gap-2 flex-wrap">
         {headerAction}
         {can("can_export_payroll") && <button onClick={exportCsv} disabled={exporting || !rows?.length} className={btnGhost}><M n="download" c="text-sm" />{exporting ? "Exporting…" : "Export"}</button>}
         {can("can_view_own_payroll") && can("can_view_own_compensation") && <Link to="/my-earnings" className={btnGhost}><M n="payments" c="text-sm" />My earnings</Link>}

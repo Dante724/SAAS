@@ -31,7 +31,7 @@ import {
   ShieldCheck, Target, EyeOff, Car, Sailboat, Bike, Laptop, Cog, Upload,
   ShoppingBag, Split, Nfc, Phone, PhoneIncoming, PhoneOutgoing, PhoneMissed, Network, HelpCircle,
   LogOut, Menu as MenuIcon, PackageOpen, Info, UserCheck, KeyRound, MapPin, Crown,
-  CircleDot, CloudOff, Footprints, Hand, Infinity as InfinityIcon, LayoutGrid, LogIn, MessageSquareText, MessagesSquare, MoveRight, Redo2, SquareCheck, Star, ThumbsUp, TriangleAlert, UserX,
+  CircleDot, CloudOff, Footprints, Hand, Infinity as InfinityIcon, LayoutGrid, LogIn, MessageSquareText, MessagesSquare, MoveRight, Redo2, SquareCheck, Star, ThumbsDown, ThumbsUp, TriangleAlert, UserX,
 } from "lucide-react";
 import { loadFailed } from "../lib/notice";
 import { supportContact } from "../lib/support";
@@ -42,7 +42,7 @@ import { fmtServerTime } from "../lib/serverTime";
 const ICONS: Record<string, any> = {
   // Names used in the app that had no mapping (they drew as an empty circle).
   forum: MessagesSquare, grid_view: LayoutGrid, summarize: FileText, reviews: Star,
-  check_box: SquareCheck, check_box_outline_blank: Square, sms: MessageSquareText, thumb_up: ThumbsUp,
+  check_box: SquareCheck, check_box_outline_blank: Square, sms: MessageSquareText, thumb_up: ThumbsUp, thumb_down: ThumbsDown, assignment: ClipboardList,
   directions_walk: Footprints, insert_chart: BarChart3, login: LogIn, all_inclusive: InfinityIcon, bedtime: Moon,
   list_alt: ClipboardList, back_hand: Hand, cloud_off: CloudOff, sync_problem: TriangleAlert,
   trending_flat: MoveRight, person_off: UserX, redo: Redo2, replay: RotateCcw, print_disabled: Printer,
