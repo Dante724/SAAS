@@ -15,14 +15,10 @@ import CatalogToolbar, { usePhone, type CatOption } from "../catalog/CatalogTool
 import Button from "../../components/Button";
 import Card, { Badge } from "../../components/Card";
 import EmptyState, { ErrorState, TableEmpty } from "../../components/EmptyState";
-import { tableClass, theadRowClass } from "../../components/Table";
+import { tableClass, theadRowClass, Th, Td } from "../../components/Table";
 import { clickable, clickableRow } from "../../lib/clickable";
 import ImportDrawer from "../../components/ImportDrawer";
 import PageLayout from "../../components/PageLayout";
-import Button from "../../components/Button";
-import Card, { Badge } from "../../components/Card";
-import EmptyState, { TableEmpty } from "../../components/EmptyState";
-import { tableClass, theadRowClass, Th, Td } from "../../components/Table";
 
 const CO_PAGE = 50;
 
