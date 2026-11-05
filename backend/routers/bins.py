@@ -465,7 +465,9 @@ async def part_stock_detail(
     current: Employee = Depends(get_current_employee),
 ):
     """Cost layers + serialized units for one part — the serialized-inventory view."""
-    from backend.models import StockItemBatch, SerializedItem, StorageBin
+    from backend.models import Part, StockItemBatch, SerializedItem, StorageBin
+    from backend.services.owned import get_owned_or_404
+    await get_owned_or_404(db, Part, part_id, current.org_id, "product")
     batches = (await db.execute(select(StockItemBatch).where(
         StockItemBatch.org_id == current.org_id, StockItemBatch.part_id == part_id)
         .order_by(StockItemBatch.received_at))).scalars().all()

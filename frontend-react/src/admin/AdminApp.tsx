@@ -39,7 +39,7 @@ function Shell({ me, onSignOut }: { me: Me; onSignOut: () => void }) {
           <nav className="flex gap-1 overflow-x-auto">
             {nav.filter(([, , ok]) => ok).map(([k, label]) => (
               <button key={k} onClick={() => setView(k)}
-                className={`px-3 py-1.5 rounded-lg text-sm whitespace-nowrap ${view === k ? "bg-slate-100 font-semibold" : "text-ink-secondary hover:text-ink-primary"}`}>{label}</button>
+                className={`px-3 py-1.5 rounded-lg text-sm font-medium whitespace-nowrap ${view === k ? "bg-slate-100 text-ink-primary" : "text-ink-secondary hover:text-ink-primary"}`}>{label}</button>
             ))}
           </nav>
           <div className="ml-auto flex items-center gap-3 text-sm">

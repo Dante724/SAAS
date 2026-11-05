@@ -54,7 +54,8 @@ async def test_part_history_and_pos_are_shop_only(client):
 
     assert (await client.get(f"/api/inventory/parts/{part}/movements", headers=A)).status_code == 200
     assert (await client.get(f"/api/inventory/parts/{part}/movements", headers=B)).status_code == 404
-    assert (await client.get(f"/api/inventory/parts/{part}/purchase-orders", headers=B)).json()["items"] == []
+    assert (await client.get(f"/api/inventory/parts/{part}/purchase-orders", headers=A)).json()["items"] == []
+    assert (await client.get(f"/api/inventory/parts/{part}/purchase-orders", headers=B)).status_code == 404
 
 
 @pytest.mark.asyncio

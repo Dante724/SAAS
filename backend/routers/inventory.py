@@ -2216,6 +2216,8 @@ async def part_pos(
     current: Employee = Depends(get_current_employee),
 ):
     """POs this part is on (excluding closed) — shown in the product dialog."""
+    from backend.services.owned import get_owned_or_404
+    await get_owned_or_404(db, Part, part_id, current.org_id, "product")
     rows = (await db.execute(
         select(PurchaseOrder, POLine).join(POLine, POLine.po_id == PurchaseOrder.id)
         .join(Supplier, PurchaseOrder.supplier_id == Supplier.id)   # POs are scoped via their supplier

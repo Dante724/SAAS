@@ -59,7 +59,9 @@ export default function TaskSheet({ open, onClose, orderId, orderLabel }: { open
     } finally { setBusy(false); }
   }
 
-  const chip = (on: boolean) => `min-h-[2.75rem] px-4 rounded-full border text-go-body font-medium inline-flex items-center gap-1.5 ${on ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`;
+  // A chip that shows a tick when picked keeps 11px of extra padding on each side while unpicked, the
+  // same width as the 16px tick plus its 6px gap, so picking one never pushes its neighbours.
+  const chip = (on: boolean, ticked = false) => `min-h-[2.75rem] ${ticked && !on ? "px-[27px]" : "px-4"} rounded-full border text-go-body font-medium inline-flex items-center gap-1.5 ${on ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`;
 
   return (
     <Sheet open={open} onClose={onClose} title="New task">
@@ -72,7 +74,7 @@ export default function TaskSheet({ open, onClose, orderId, orderLabel }: { open
           <p className="mb-2 text-go-sub font-semibold text-ink-tertiary">When</p>
           <div className="flex flex-wrap gap-2">
             {(["today", "tomorrow", "none", "pick"] as When[]).map((w) => (
-              <button key={w} onClick={() => setWhen(w)} className={chip(when === w)}>
+              <button key={w} onClick={() => setWhen(w)} className={chip(when === w, true)}>
                 {when === w && <Check size={16} />}{{ today: "Today", tomorrow: "Tomorrow", none: "No date", pick: "Pick…" }[w]}
               </button>
             ))}
@@ -86,7 +88,7 @@ export default function TaskSheet({ open, onClose, orderId, orderLabel }: { open
           <p className="mb-2 text-go-sub font-semibold text-ink-tertiary">Who</p>
           <div className="flex flex-wrap gap-2">
             {people.map((p) => (
-              <button key={p.id} onClick={() => setWho(p.id)} className={chip(who === p.id)}>{who === p.id && <Check size={16} />}{p.name}</button>
+              <button key={p.id} onClick={() => setWho(p.id)} className={chip(who === p.id, true)}>{who === p.id && <Check size={16} />}{p.name}</button>
             ))}
           </div>
         </div>

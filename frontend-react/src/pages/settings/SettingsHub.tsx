@@ -52,6 +52,16 @@ const sectionLoading = <div className="text-xs text-ink-tertiary py-6">Loading�
 
 // Full section set = the registry sections + a few that have no nav entry of their own.
 type Section = SectionId | "overview" | "automation" | "payroll-rules";
+// What one row of each settings list is called, for the drawer title ("New price level", not "New Pricing").
+const EDIT_NOUN: Record<string, string> = {
+  automation: "automation", notifications: "notification rule", templates: "template", invites: "invite", forms: "form",
+  warehouses: "warehouse", statuses: "status", pricing: "price level", directories: "list",
+};
+const MOVED_SECTIONS: Record<string, { to: Section; note: string }> = {
+  automation: { to: "notifications", note: "Automations now live in Notifications › Automations." },
+  "payroll-rules": { to: "team", note: "Commission rules now live in Team & roles › Commissions." },
+  ...(FEATURES.ecommerce ? {} : { ecommerce: { to: "integrations" as Section, note: "Online store sync isn't switched on yet. Your other connections are here." } }),
+};
 
 const lbl = "block text-sm font-medium text-ink-primary mb-1.5";
 const field = "glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary";
@@ -151,8 +161,10 @@ export default function SettingsHub() {
   const { me } = useMe();
   const NAV = sectionsFor(me);
   const proOk = (f: Parameters<typeof hasFeature>[1]) => hasFeature(me, f);
-  // ?section=… deep-links a section (e.g. "Manage options" in a directory dropdown).
-  const [sec, setSec] = useState<Section>(() => (new URLSearchParams(window.location.search).get("section") as Section) || "overview");
+  // ?section=… deep-links a section (e.g. "Manage options" in a directory dropdown). Old links to
+  // sections that moved (or are switched off) open their new home instead of a blank page.
+  const [movedFrom] = useState(() => { const raw = new URLSearchParams(window.location.search).get("section") || ""; return Object.prototype.hasOwnProperty.call(MOVED_SECTIONS, raw) ? raw : ""; });
+  const [sec, setSec] = useState<Section>(() => { const raw = new URLSearchParams(window.location.search).get("section") || "overview"; return Object.prototype.hasOwnProperty.call(MOVED_SECTIONS, raw) ? MOVED_SECTIONS[raw].to : (raw as Section); });
   const [q, setQ] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [co, setCo] = useState<any>(null);
@@ -171,6 +183,7 @@ export default function SettingsHub() {
   const { me: hubMe } = useMe();
   const [toast, setToast] = useState<string | null>(null);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2200); };
+  useEffect(() => { if (movedFrom) flash(MOVED_SECTIONS[movedFrom].note); }, [movedFrom]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const coSaved = useRef<any>(null);   // last saved company settings (General shows a save bar when they differ)
   useEffect(() => { api.get<any>("/staff/company").then((c) => { coSaved.current = c; setCo(c); }).catch(() => setCo({})); }, []);
@@ -526,7 +539,7 @@ export default function SettingsHub() {
         />
       ) : editing && EDITORS[editing.sec] && (
         <EditorDrawer
-          title={`${editing.row?.id ? "Edit" : "New"} ${NAV.find((n) => n.id === (editing.sec as Section))?.label || editing.sec}`}
+          title={`${editing.row?.id ? "Edit" : "New"} ${EDIT_NOUN[editing.sec] || NAV.find((n) => n.id === (editing.sec as Section))?.label || editing.sec}`}
           fields={EDITORS[editing.sec].fields}
           initial={editing.row}
           varModule={editing.module}
