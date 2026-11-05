@@ -508,14 +508,14 @@ export default function ReportsHub() {
       <div className="px-6 pt-3 border-b border-slate-200/60 bg-white/40 flex-shrink-0">
         <nav className="flex space-x-1 -mb-px text-xs font-semibold overflow-x-auto">
           {([["reports", "Reports", "summarize"], ...(can("can_see_profit") ? [["total_profit", "Total profit", "savings"]] : []), ["custom", "Custom report", "tune"], ["fleet", "Business & analytics", "insights"], ["profitability", "Job profitability", "payments"], ["insights", "Insights", "lightbulb"], ["feedback", "Feedback", "reviews"], ...(can("can_manage_settings") ? [["gopilot", "Go pilot", "qr_code_scanner"]] : [])] as [typeof view, string, string][]).map(([id, label, icon]) => (
-            <button key={id} onClick={() => setView(id)} className={`flex items-center gap-1.5 px-3 pb-3 pt-1 border-b-2 whitespace-nowrap transition-colors ${view === id ? "text-primary font-bold border-primary" : "text-ink-secondary hover:text-ink-primary hover:bg-slate-100/60 rounded-t-lg border-transparent"}`}><M n={icon} c="text-sm" />{label}</button>
+            <button key={id} onClick={() => setView(id)} className={`flex items-center gap-1.5 px-3 pb-3 pt-1 border-b-2 whitespace-nowrap transition-colors ${view === id ? "text-primary border-primary" : "text-ink-secondary hover:text-ink-primary hover:bg-slate-100/60 rounded-t-lg border-transparent"}`}><M n={icon} c="text-sm" />{label}</button>
           ))}
         </nav>
       </div>
 
       {view === "custom" && <CustomView />}
       {view === "total_profit" && <div className="flex-1 overflow-y-auto px-6 py-5"><TotalProfit locs={locs} /></div>}
-      {view === "fleet" && <FleetAnalytics />}
+      {view === "fleet" && <div className="flex-1 overflow-y-auto px-6 py-5"><FleetAnalytics /></div>}
       {view === "gopilot" && <GoPilotReport />}
 
       {view !== "reports" && view !== "custom" && view !== "fleet" && view !== "total_profit" && view !== "gopilot" && (

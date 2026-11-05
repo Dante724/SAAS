@@ -342,7 +342,8 @@ export default function WorkOrdersHub() {
             <div className="ml-auto flex shrink-0 items-center gap-2">
               <div className="relative w-56"><M n="search" c="absolute left-3 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" /><input value={q} onChange={(e) => setQ(e.target.value)} className="glass-input w-full rounded-xl pl-9 pr-3 py-2 text-sm" aria-label="Search work orders" placeholder="Search work orders…" /></div>
               <button data-wo-menu="filter" aria-expanded={menu === "filter"} aria-label="Filter" title="Filter" onClick={() => toggleMenu("filter")} className={`h-9 px-3 rounded-xl text-xs font-semibold flex items-center gap-1.5 border whitespace-nowrap flex-shrink-0 ${activeFacets ? "bg-primary/10 text-primary border-primary/30" : "bg-white text-ink-secondary hover:bg-slate-100 border-slate-200"}`}><M n="filter_list" c="text-sm" /><span className="hidden xl:inline">Filter</span>{activeFacets ? <span className="ml-0.5 px-1.5 rounded-full bg-primary text-white text-[11px] font-bold tabular-nums">{activeFacets}</span> : null}</button>
-              {view === "table" && <button data-wo-menu="cols" aria-expanded={menu === "cols"} aria-label="Columns" title="Columns" onClick={() => toggleMenu("cols")} className={toolBtn}><M n="view_column" c="text-sm" /><span className="hidden xl:inline">Columns</span></button>}
+              {/* Always rendered, so Search and Filter never slide when the view changes; greyed out off the table. */}
+              <button data-wo-menu="cols" aria-expanded={menu === "cols"} aria-label="Columns" title={view === "table" ? "Columns" : "Columns apply to the table view"} disabled={view !== "table"} onClick={() => toggleMenu("cols")} className={`${toolBtn} disabled:opacity-40 disabled:cursor-not-allowed`}><M n="view_column" c="text-sm" /><span className="hidden xl:inline">Columns</span></button>
             </div>
           </div>
           {menu === "views" && (
@@ -386,20 +387,19 @@ export default function WorkOrdersHub() {
               ))}
             </FloatingMenu>
           )}
-          {/* Status chips. The scheduler shows every scheduled job in its date range, so it has no chips. */}
-          {view !== "scheduler" && (
-          <div className="flex flex-wrap items-center gap-2 pt-3.5 text-xs border-t border-slate-100">
+          {/* Status chips. The scheduler shows every scheduled job in its date range, so there they stay
+              in place but greyed out: the list below never jumps up or down when the view changes. */}
+          <div className={`flex flex-wrap items-center gap-2 pt-3.5 text-xs border-t border-slate-100 ${view === "scheduler" ? "opacity-40 select-none" : ""}`}>
             {[{ id: "__all", k: null as string | null, name: "All", n: countAll }, ...statuses.map((s) => { const k = s.key || norm(s.name); return { id: s.id, k, name: s.name || k, n: countFor(k) }; })].map((c) => {
               const on = filter === c.k;
               return (
-                <button key={c.id} onClick={() => setFilter(c.k)} aria-pressed={on}
-                  className={`px-3 py-1.5 rounded-full text-xs inline-flex items-center gap-1.5 transition-colors ${on ? "font-semibold bg-primary/10 text-primary ring-1 ring-inset ring-primary/20" : "font-medium bg-white text-ink-secondary ring-1 ring-inset ring-slate-200 hover:bg-slate-50 hover:text-ink-primary"}`}>
+                <button key={c.id} onClick={() => setFilter(c.k)} aria-pressed={on} disabled={view === "scheduler"}
+                  className={`px-3 py-1.5 rounded-full text-xs inline-flex items-center gap-1.5 transition-colors ${on ? "font-medium bg-primary/10 text-primary ring-1 ring-inset ring-primary/20" : "font-medium bg-white text-ink-secondary ring-1 ring-inset ring-slate-200 hover:bg-slate-50 hover:text-ink-primary"}`}>
                   {c.name}{" "}<span className={`tabular-nums ${on ? "text-primary/70" : "text-ink-tertiary"}`}>{c.n}</span>
                 </button>
               );
             })}
           </div>
-          )}
         </div>
 
         {/* Bulk action bar */}
@@ -444,17 +444,17 @@ export default function WorkOrdersHub() {
               </li>
             ))}
           </ul>
-          <table className="hidden sm:table w-full text-left border-collapse text-xs">
+          <table className="hidden sm:table w-full text-left border-collapse text-xs xl:table-fixed">
             <thead>
               <tr className="bg-slate-50/60 border-b border-slate-200/80 text-ink-tertiary text-[11px] font-semibold ">
-                <th className="py-3 px-4 w-10"><input className="rounded text-primary border-slate-300" type="checkbox" aria-label="Select all work orders" checked={rows.length > 0 && sel.size === rows.length} onChange={toggleAll} /></th>
-                {showCol("order_id") && <th className="py-3 px-4">Work order</th>}
+                <th className="py-3 px-4 w-10 xl:w-12"><input className="rounded text-primary border-slate-300" type="checkbox" aria-label="Select all work orders" checked={rows.length > 0 && sel.size === rows.length} onChange={toggleAll} /></th>
+                {showCol("order_id") && <th className="py-3 px-4 xl:w-28">Work order</th>}
                 {showCol("client") && <th className="py-3 px-4">Customer</th>}
                 {showCol("device") && <th className="py-3 px-4">Device / Asset</th>}
-                {showCol("status") && <th className="py-3 px-4">Status</th>}
-                {showCol("assignee") && <th className="py-3 px-4">Technician</th>}
-                {showCol("scheduled") && <th className="py-3 px-4">Scheduled</th>}
-                {showCol("estimate") && <th className="py-3 px-4 text-right">Total</th>}
+                {showCol("status") && <th className="py-3 px-4 xl:w-36">Status</th>}
+                {showCol("assignee") && <th className="py-3 px-4 xl:w-36">Technician</th>}
+                {showCol("scheduled") && <th className="py-3 px-4 xl:w-40">Scheduled</th>}
+                {showCol("estimate") && <th className="py-3 px-4 xl:w-28 text-right">Total</th>}
               </tr>
             </thead>
             <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">

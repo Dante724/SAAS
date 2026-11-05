@@ -9,6 +9,7 @@ from typing import Optional, List, Union
 from backend.db.database import get_db
 from backend.models import WorkOrderType, CustomField, Employee, FormLayout
 from backend.services.auth import get_current_employee, require_perm
+from backend.services.owned import get_owned_or_404
 
 router = APIRouter(prefix="/api/forms", tags=["forms-editor"])
 
@@ -454,6 +455,7 @@ async def list_fields(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
+    await get_owned_or_404(db, WorkOrderType, type_id, current.org_id, "work order type")
     result = await db.execute(
         select(CustomField)
         .where(CustomField.org_id == current.org_id, CustomField.type_id == type_id)
@@ -548,6 +550,7 @@ async def reorder_fields(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
+    await get_owned_or_404(db, WorkOrderType, type_id, current.org_id, "work order type")
     result = await db.execute(
         select(CustomField).where(CustomField.org_id == current.org_id, CustomField.type_id == type_id)
     )

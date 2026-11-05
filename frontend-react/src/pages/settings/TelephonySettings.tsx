@@ -166,7 +166,7 @@ export default function TelephonySettings() {
                 </select>
               </div>
               <div className="flex items-center gap-2.5 text-sm font-medium text-ink-primary sm:pt-6">
-                <Switch label="Calling is on" on={form.enabled} onChange={(v) => setForm({ ...form, enabled: v })} />Calling is on
+                <Switch label="Calling" on={form.enabled} onChange={(v) => setForm({ ...form, enabled: v })} />{form.enabled ? "Calling is on" : "Calling is off"}
               </div>
               <div>
                 <label htmlFor="tel-number" className={lbl}>{form.provider === "twilio" ? "Your Twilio phone number" : "Caller ID number"}</label>
