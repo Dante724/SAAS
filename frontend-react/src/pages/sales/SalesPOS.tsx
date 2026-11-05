@@ -14,7 +14,10 @@ import UnitSerials, { unnamedUnits } from "../../components/UnitSerials";
 import ReaderCharge from "../../components/ReaderCharge";
 import CardPaymentsList from "../../components/CardPaymentsList";
 import { scanBeep, useWedgeScanner } from "../../lib/scanner";
-import { inputCls } from "../invoices/billing";
+import { SearchBox, inputCls } from "../invoices/billing";
+import Button, { IconButton, buttonClass } from "../../components/Button";
+import Tabs from "../../components/Tabs";
+import { Toolbar } from "../../components/PageLayout";
 import { Avatar, deviceIcon } from "../orders/look";
 import { loadFailed } from "../../lib/notice";
 
@@ -291,24 +294,24 @@ export default function SalesPOS() {
   const row = (label: string, value: string, strong = false) => (
     <div className="flex items-center justify-between text-xs"><span className="text-ink-secondary">{label}</span><span className={`tabular-nums ${strong ? "font-semibold text-ink-primary" : "text-ink-primary"}`}>{value}</span></div>
   );
-  const problem = (msg?: string) => msg ? <p role="alert" className="text-[11px] text-rose-700">{msg}</p> : null;
+  const problem = (msg?: string) => msg ? <p role="alert" className="text-2xs text-rose-700">{msg}</p> : null;
 
   return (
     <Shell title="Point of sale">
       <div className="flex-1 flex overflow-hidden">
         {/* LEFT: catalog grid */}
         <div className="flex-1 min-w-0 flex flex-col overflow-hidden">
-          <div className="p-6 pb-3 flex flex-wrap items-center gap-3 flex-shrink-0">
-            <div className="flex items-center bg-slate-100 p-0.5 rounded-lg border border-slate-200 text-xs">
-              <button onClick={() => setMode("products")} className={`h-8 px-3 rounded-md font-semibold flex items-center gap-1.5 ${mode === "products" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="inventory_2" c="text-xs" />Products</button>
-              {can("can_sell_services") && <button onClick={() => setMode("services")} className={`h-8 px-3 rounded-md font-semibold flex items-center gap-1.5 ${mode === "services" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="build" c="text-xs" />Services</button>}
-            </div>
-            <div className="relative flex-1 min-w-[160px] max-w-md"><M n="search" c="absolute left-3 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" /><input value={q} onChange={(e) => setQ(e.target.value)}
-              onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); scan(q, true); } }} aria-label="Search or scan"
-              className={`${inputCls} pl-9 transition-shadow ${miss ? "!border-rose-400 ring-2 ring-rose-400/30" : ""}`} placeholder={mode === "products" ? "Search or scan a barcode…" : `Search ${mode}…`} /></div>
-            <ScanButton onScan={(c) => scan(c)} title="Scan barcode" />
-            <button onClick={() => setRecent((v) => !v)} aria-label="Recent sales" title="Recent sales" aria-expanded={recent} className={`h-9 px-3.5 rounded-xl border text-xs font-semibold flex items-center gap-1.5 ${recent ? "bg-primary/10 text-primary border-primary/30" : "bg-white text-ink-secondary border-slate-200 hover:bg-slate-50"}`}><M n="receipt_long" c="text-sm" /><span className="hidden sm:inline">Recent sales</span></button>
-          </div>
+          <Toolbar className="px-6 pt-5 pb-3 flex-shrink-0"
+            actions={<Button icon={<M n="receipt_long" c="text-sm" />} onClick={() => setRecent((v) => !v)} aria-expanded={recent}
+              className={recent ? "!bg-primary/10 !text-primary !border-primary/30" : ""}>Recent sales</Button>}
+            view={<Tabs look="segmented" label="What to sell" value={mode} onChange={setMode}
+              tabs={[{ id: "products", label: "Products", icon: <M n="inventory_2" c="text-xs" /> }, ...(can("can_sell_services") ? [{ id: "services" as const, label: "Services", icon: <M n="build" c="text-xs" /> }] : [])]} />}
+            search={<>
+              <SearchBox value={q} onChange={setQ} label="Search or scan" invalid={miss} className="flex-1 sm:flex-none"
+                onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); scan(q, true); } }}
+                placeholder={mode === "products" ? "Search or scan a barcode…" : `Search ${mode}…`} />
+              <ScanButton onScan={(c) => scan(c)} title="Scan barcode" />
+            </>} />
           {recent && (
             <div className="mx-6 mb-3 rounded-2xl border border-slate-200 bg-white max-h-72 overflow-y-auto flex-shrink-0">
               <VoidableList key={recentKey} perm="can_delete_sales" noun="sale" empty="No sales yet." onFlash={flash}
@@ -322,9 +325,9 @@ export default function SalesPOS() {
                   const s = saleRows.current[r.id];
                   if (!s || s.voided_at) return null;
                   if (!s.paid) return <button onClick={() => { setPending({ id: s.id, number: s.sale_number, due: s.due || 0, fromCart: false }); setCartOpen(true); }} disabled={locked}
-                    className="h-8 px-3 rounded-xl border border-slate-200 text-[11px] font-semibold text-primary hover:bg-primary/5 disabled:opacity-50">Take payment</button>;
+                    className={buttonClass("secondary", "sm", "!text-primary")}>Take payment</button>;
                   return can("can_create_returns") ? <button onClick={() => setReturnFor(s.id)} aria-label={`Return items from sale ${s.sale_number}`}
-                    className="h-8 px-3 rounded-xl border border-slate-200 text-[11px] font-semibold text-ink-secondary hover:bg-slate-50">Return items</button> : null;
+                    className={buttonClass("secondary", "sm")}>Return items</button> : null;
                 }} />
               {can("can_take_card_payments") && <div className="border-t border-slate-100 p-2"><CardPaymentsList sales reloadKey={recentKey} /></div>}
             </div>
@@ -338,10 +341,10 @@ export default function SalesPOS() {
                     <div className="flex items-start gap-2 mb-2.5">
                       {p.image_data ? <img src={p.image_data} alt="" className="w-9 h-9 rounded-lg object-cover border border-slate-200" /> : <span className="w-9 h-9 rounded-lg bg-slate-100 text-ink-tertiary flex items-center justify-center flex-shrink-0"><M n={productGlyph(p.name, p.brand)} c="text-base" /></span>}
                       <span data-testid="stock-chip" data-warn={chip.warn ? "true" : "false"}
-                        className={`ml-auto text-[11px] tabular-nums whitespace-nowrap ${chip.warn ? "font-semibold px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200/70" : "text-ink-tertiary pt-0.5"}`}>{chip.label}</span>
+                        className={`ml-auto text-2xs tabular-nums whitespace-nowrap ${chip.warn ? "font-semibold px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200/70" : "text-ink-tertiary pt-0.5"}`}>{chip.label}</span>
                     </div>
                     <div className="text-xs font-semibold text-ink-primary leading-snug line-clamp-2 min-h-[32px]">{p.name}</div>
-                    <div className="text-sm font-semibold tabular-nums text-ink-primary mt-1">{money(p.sell_price)}</div>
+                    <div className="text-sm font-semibold tabular-nums text-ink-primary mt-1">{cash(p.sell_price)}</div>
                   </button>
                 );
               })}
@@ -349,7 +352,7 @@ export default function SalesPOS() {
                 <button key={s.id} onClick={() => add("service", s.id, s.name, s.price || 0)} className={tileCls}>
                   <span className="w-9 h-9 rounded-lg bg-slate-100 text-ink-tertiary flex items-center justify-center mb-2.5"><M n="build" c="text-base" /></span>
                   <div className="text-xs font-semibold text-ink-primary leading-snug line-clamp-2 min-h-[32px]">{s.name}</div>
-                  <div className="flex items-center justify-between mt-1"><span className="text-sm font-semibold tabular-nums text-ink-primary">{money(s.price)}</span>{s.duration_min ? <span className="text-[11px] text-ink-tertiary tabular-nums">{s.duration_min} min</span> : null}</div>
+                  <div className="flex items-center justify-between mt-1"><span className="text-sm font-semibold tabular-nums text-ink-primary">{cash(s.price)}</span>{s.duration_min ? <span className="text-2xs text-ink-tertiary tabular-nums">{s.duration_min} min</span> : null}</div>
                 </button>
               ))}
               {grid.length === 0 && (
@@ -360,23 +363,23 @@ export default function SalesPOS() {
               )}
             </div>
           </div>
-          <button onClick={() => setCartOpen(true)} className="md:hidden m-3 mt-0 min-h-[48px] px-4 py-3 rounded-xl bg-primary text-white text-sm font-semibold flex items-center gap-2 flex-shrink-0">
+          <button onClick={() => setCartOpen(true)} className={buttonClass("primary", "lg", "md:hidden m-3 mt-0 !h-12 !justify-start flex-shrink-0")}>
             <M n="shopping_cart" c="text-base" />Current sale{itemCount > 0 ? ` · ${itemCount} ${itemCount === 1 ? "item" : "items"}` : ""}<span className="ml-auto tabular-nums">{cash(pending ? pending.due : due)}</span>
           </button>
         </div>
 
         {/* RIGHT: cart */}
         <aside className={`md:static md:w-[340px] lg:w-[380px] flex-shrink-0 bg-white md:border-l border-slate-200 flex-col ${cartOpen ? "fixed inset-0 z-[60] flex" : "hidden md:flex"}`}>
-          <div className="px-5 py-4 border-b border-slate-200/80 flex items-center justify-between gap-2">
+          <div className="px-6 h-14 flex-shrink-0 border-b border-slate-200/80 flex items-center justify-between gap-2">
             <h3 className="text-sm font-semibold text-ink-primary flex items-center gap-2">Current sale{itemCount > 0 && <span className="text-xs font-medium text-ink-tertiary tabular-nums">{itemCount} {itemCount === 1 ? "item" : "items"}</span>}</h3>
-            {cart.length > 0 && !locked && <button onClick={() => setCart([])} className="ml-auto h-8 px-3 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Clear</button>}
-            <button onClick={() => setCartOpen(false)} aria-label="Back to items" className="md:hidden w-9 h-9 rounded-lg flex items-center justify-center text-ink-tertiary hover:bg-slate-100"><M n="close" c="text-base" /></button>
+            {cart.length > 0 && !locked && <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setCart([])}>Clear</Button>}
+            <IconButton label="Back to items" onClick={() => setCartOpen(false)} className="md:hidden" icon={<M n="close" c="text-base" />} />
           </div>
 
           {/* client */}
-          <div className="px-5 py-3 border-b border-slate-100">
+          <div className="px-6 py-3 border-b border-slate-100">
             {client ? (
-              <div className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg border border-slate-200 bg-slate-50 text-xs"><Avatar name={client.name} size={28} /><span className="min-w-0"><span className="block font-semibold text-ink-primary truncate">{client.name}</span>{client.phone && <span className="block text-ink-tertiary tabular-nums">{client.phone}</span>}</span>{!locked && <button onClick={() => { setClient(null); setClientQ(""); }} className="ml-auto h-8 px-2 rounded-lg text-primary font-semibold hover:bg-primary/10">Change</button>}</div>
+              <div className="flex items-center gap-2.5 px-2.5 py-2 rounded-lg border border-slate-200 bg-slate-50 text-xs"><Avatar name={client.name} size={28} /><span className="min-w-0"><span className="block font-semibold text-ink-primary truncate">{client.name}</span>{client.phone && <span className="block text-ink-tertiary tabular-nums">{client.phone}</span>}</span>{!locked && <Button variant="ghost" size="sm" className="ml-auto !text-primary" onClick={() => { setClient(null); setClientQ(""); }}>Change</Button>}</div>
             ) : (
               <div className="flex items-center gap-2">
                 <div className="relative flex-1"><M n="search" c="absolute left-3 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" /><input value={clientQ} onChange={(e) => { setClientQ(e.target.value); setCOpen(true); }} onFocus={() => setCOpen(true)} onClick={() => setCOpen(true)}
@@ -384,20 +387,20 @@ export default function SalesPOS() {
                   {cOpen && (<>
                     <div className="fixed inset-0 z-[9]" aria-hidden="true" onClick={() => setCOpen(false)} />
                     <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5 max-h-72 overflow-y-auto">
-                      {!clientQ.trim() && clientResults.length > 0 && <div className="px-2.5 pt-1 pb-0.5 text-[11px] text-ink-tertiary">Recent clients</div>}
+                      {!clientQ.trim() && clientResults.length > 0 && <div className="px-2.5 pt-1 pb-0.5 text-2xs text-ink-tertiary">Recent clients</div>}
                       {clientQ.trim() && clientResults.length === 0 && <div className="px-2.5 py-2 text-xs text-ink-tertiary">No client matches "{clientQ.trim()}"</div>}
                       {clientResults.map((r) => <button key={r.id} onClick={() => { setClient(r); setCOpen(false); }} className="flex items-center gap-2.5 w-full text-left px-2.5 py-2 rounded-lg hover:bg-slate-50 text-xs"><Avatar name={r.name} size={24} /><span className="font-semibold text-ink-primary truncate">{r.name}</span><span className="ml-auto text-ink-tertiary tabular-nums">{r.phone}</span></button>)}
                       <button onClick={() => setNewClient(true)} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-slate-50 text-xs text-primary font-semibold border-t border-slate-100 mt-1"><M n="person_add" c="text-sm" />Create new client{clientQ.trim() ? ` "${clientQ.trim()}"` : ""}</button>
                     </div>
                   </>)}
                 </div>
-                <button aria-label="New client" onClick={() => setNewClient(true)} disabled={locked} title="New client" className="w-9 h-9 flex-shrink-0 rounded-lg bg-white text-ink-secondary border border-slate-200 flex items-center justify-center hover:bg-slate-50 hover:text-primary disabled:opacity-50"><M n="person_add" c="text-base" /></button>
+                <IconButton variant="secondary" label="New client" onClick={() => setNewClient(true)} disabled={locked} icon={<M n="person_add" c="text-base" />} />
               </div>
             )}
           </div>
 
           {/* lines */}
-          <div className="flex-1 overflow-y-auto px-5 py-3 space-y-2">
+          <div className="flex-1 overflow-y-auto px-6 py-3 space-y-2">
             {cart.length === 0 && !pending && (
               <div className="text-center py-12 px-4">
                 <span className="w-10 h-10 mx-auto rounded-full bg-slate-100 text-ink-tertiary flex items-center justify-center"><M n="shopping_cart" c="text-base" /></span>
@@ -408,7 +411,7 @@ export default function SalesPOS() {
             {cart.map((l) => (
               <div key={l.key} data-testid="cart-line" className={`rounded-xl border px-3 py-2.5 transition-colors ${lit && lit.id === l.ref_id && l.kind === "product" ? "bg-emerald-50 border-emerald-300" : "bg-white border-slate-200"}`}>
                 <div className="flex items-start gap-2">
-                  <div className="flex-1 min-w-0 pt-0.5"><div className="text-xs font-semibold text-ink-primary truncate">{l.description}</div><div className="text-[11px] text-ink-tertiary tabular-nums">{money(l.unit_price)} each</div></div>
+                  <div className="flex-1 min-w-0 pt-0.5"><div className="text-xs font-semibold text-ink-primary truncate">{l.description}</div><div className="text-2xs text-ink-tertiary tabular-nums">{cash(l.unit_price)} each</div></div>
                   <button aria-label="Remove item" title="Remove item" disabled={locked} onClick={() => remove(l.key)} className="w-9 h-9 -mr-1.5 -mt-1.5 flex-shrink-0 rounded-lg flex items-center justify-center text-ink-tertiary hover:text-rose-600 hover:bg-rose-50 disabled:opacity-40"><M n="close" c="text-sm" /></button>
                 </div>
                 <div className="flex items-center justify-between mt-1.5">
@@ -417,7 +420,7 @@ export default function SalesPOS() {
                     <span className="text-sm font-semibold tabular-nums min-w-[28px] text-center text-ink-primary">{l.qty}</span>
                     <button aria-label="Increase quantity" disabled={locked} onClick={() => setQty(l.key, 1)} className={qtyBtn}><M n="add" c="text-sm" /></button>
                   </div>
-                  <span className="text-sm font-semibold tabular-nums text-ink-primary">{money(l.unit_price * l.qty * (1 - l.discount / 100))}</span>
+                  <span className="text-sm font-semibold tabular-nums text-ink-primary">{cash(l.unit_price * l.qty * (1 - l.discount / 100))}</span>
                 </div>
                 {l.serialized && <UnitSerials partId={l.ref_id} need={l.qty} value={l.serials || []} label={l.description} onChange={(v) => setSerials(l.key, v)} disabled={locked} />}
               </div>
@@ -425,12 +428,12 @@ export default function SalesPOS() {
           </div>
 
           {/* totals + charge */}
-          <div className="px-5 py-4 border-t border-slate-200 space-y-3 bg-slate-50/60">
+          <div className="px-6 py-4 border-t border-slate-200 space-y-3 bg-slate-50/60">
             {pending ? (
               <div data-testid="pending-sale" className="space-y-2.5">
                 <div className="rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5">
                   <div className="text-xs font-semibold text-amber-900">Sale {pending.number} isn't paid yet</div>
-                  <div className="text-[11px] text-amber-800 mt-0.5">{pending.fromCart ? "The items stay in the cart until it's paid." : "Take the payment, or delete the sale."}</div>
+                  <div className="text-2xs text-amber-800 mt-0.5">{pending.fromCart ? "The items stay in the cart until it's paid." : "Take the payment, or delete the sale."}</div>
                 </div>
                 <div className="flex items-baseline justify-between"><span className="text-sm font-semibold text-ink-primary">To pay</span><span className="text-2xl font-semibold tabular-nums text-ink-primary">{cash(pending.due)}</span></div>
                 <div><label htmlFor="pos-pay-account" className="block text-xs font-semibold text-ink-tertiary mb-1">Take payment into</label>
@@ -441,11 +444,11 @@ export default function SalesPOS() {
                 </div>
                 {payAccount?.payment_option === "cash" && <div className="flex items-center justify-between gap-3 text-xs"><label htmlFor="pos-pay-cash" className="text-ink-secondary">Cash received</label><div className="w-28"><input id="pos-pay-cash" type="number" min={0} inputMode="decimal" value={payCash} onChange={(e) => setPayCash(e.target.value)} className={`${inputCls} text-right tabular-nums`} /></div></div>}
                 {payTendered != null && payTendered >= pending.due && row("Change due", cash(payTendered - pending.due), true)}
-                <button onClick={payPending} disabled={busy || !payAccount || (payTendered != null && payTendered + 0.005 < pending.due)} className="w-full h-11 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary-container disabled:opacity-50 tabular-nums">Take payment {cash(pending.due)}</button>
+                <Button variant="primary" size="lg" className="w-full tabular-nums" onClick={payPending} disabled={busy || !payAccount || (payTendered != null && payTendered + 0.005 < pending.due)}>Take payment {cash(pending.due)}</Button>
                 <div className="flex gap-2">
-                  {can("can_take_card_payments") && pending.due > 0 && <button onClick={() => setReaderFor(pending)} disabled={busy} className="flex-1 h-9 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50 flex items-center justify-center gap-1.5"><M n="contactless" c="text-sm text-ink-tertiary" />Try the card again</button>}
-                  {can("can_delete_sales") && <button onClick={deletePending} disabled={busy} className="h-9 px-3 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50">Delete sale</button>}
-                  {!pending.fromCart && <button onClick={() => setPending(null)} className="h-9 px-3 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Not now</button>}
+                  {can("can_take_card_payments") && pending.due > 0 && <Button className="flex-1" icon={<M n="contactless" c="text-sm text-ink-tertiary" />} onClick={() => setReaderFor(pending)} disabled={busy}>Try the card again</Button>}
+                  {can("can_delete_sales") && <Button variant="danger" onClick={deletePending} disabled={busy}>Delete sale</Button>}
+                  {!pending.fromCart && <Button variant="ghost" onClick={() => setPending(null)}>Not now</Button>}
                 </div>
               </div>
             ) : (<>
@@ -456,7 +459,7 @@ export default function SalesPOS() {
             {quote?.taxes.map((t) => <div key={`${t.name}-${t.rate}-${t.mode}`}>{row(`${t.name} ${t.rate}%${t.mode === "included" ? " (included)" : ""}`, cash(t.amount))}</div>)}
 
             {/* 144bb — rewards: coupon / gift card / loyalty, priced by the server on every change */}
-            <button onClick={() => setShowRewards((v) => !v)} aria-expanded={showRewards} className="flex items-center gap-1.5 text-xs font-semibold text-primary hover:underline"><M n="redeem" c="text-sm" />Rewards &amp; credits<M n={showRewards ? "expand_less" : "expand_more"} c="text-sm" /></button>
+            <button onClick={() => setShowRewards((v) => !v)} aria-expanded={showRewards} className={buttonClass("link", "md", "gap-1.5")}><M n="redeem" c="text-sm" />Rewards &amp; credits<M n={showRewards ? "expand_less" : "expand_more"} c="text-sm" /></button>
             {showRewards && (
               <div className="space-y-2 rounded-xl border border-slate-200 bg-white p-3">
                 <div className="flex items-center justify-between gap-3"><label htmlFor="pos-coupon" className="text-xs text-ink-secondary flex-shrink-0">Coupon code</label><div className="w-36"><input id="pos-coupon" value={coupon} onChange={(e) => setCoupon(e.target.value.toUpperCase())} className={`${inputCls} font-mono`} placeholder="SAVE10" /></div></div>
@@ -480,10 +483,10 @@ export default function SalesPOS() {
             {/* B5: cash — what the customer handed over, and the change to give back */}
             {isCash && <div className="flex items-center justify-between gap-3 text-xs"><label htmlFor="pos-cash" className="text-ink-secondary">Cash received</label><div className="w-28"><input id="pos-cash" type="number" min={0} inputMode="decimal" value={cashGiven} onChange={(e) => setCashGiven(e.target.value)} placeholder={cash(due)} className={`${inputCls} text-right tabular-nums`} /></div></div>}
             {quote?.change_due != null && !short && <div data-testid="change-due">{row("Change due", cash(quote.change_due), true)}</div>}
-            {short && <p role="alert" className="text-[11px] text-rose-700">Cash received is less than the total.</p>}
-            {quoteErr && <p role="alert" className="text-[11px] text-rose-700">{quoteErr}</p>}
-            <button onClick={() => charge()} disabled={busy || !quote || blocked || short} className="w-full h-11 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary-container disabled:opacity-50 flex items-center justify-center gap-2 tabular-nums">{busy ? "Processing…" : cart.length === 0 ? "Charge" : quote ? `Charge ${cash(quote.due)}` : quoteErr ? "Can't price this sale" : "Pricing…"}</button>
-            {can("can_take_card_payments") && <button onClick={() => charge(true)} disabled={busy || !quote || blocked || quote.due <= 0} className="w-full h-9 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50 flex items-center justify-center gap-2"><M n="contactless" c="text-base text-ink-tertiary" />Charge on reader</button>}
+            {short && <p role="alert" className="text-2xs text-rose-700">Cash received is less than the total.</p>}
+            {quoteErr && <p role="alert" className="text-2xs text-rose-700">{quoteErr}</p>}
+            <button onClick={() => charge()} disabled={busy || !quote || blocked || short} className={buttonClass("primary", "lg", "w-full tabular-nums")}>{busy ? "Processing…" : cart.length === 0 ? "Charge" : quote ? `Charge ${cash(quote.due)}` : quoteErr ? "Can't price this sale" : "Pricing…"}</button>
+            {can("can_take_card_payments") && <button onClick={() => charge(true)} disabled={busy || !quote || blocked || quote.due <= 0} className={buttonClass("secondary", "md", "w-full")}><M n="contactless" c="text-base text-ink-tertiary" />Charge on reader</button>}
             <div className="flex justify-center"><AutoPrintPicker event="sale" /></div>
             </>)}
           </div>
@@ -520,15 +523,15 @@ function MatchPicker({ code, items, onPick, onClose }: { code: string; items: Ma
         <div className="flex items-start justify-between gap-3">
           <div><div className="text-sm font-semibold text-ink-primary">Which product?</div>
             <div className="text-xs text-ink-tertiary">{items.length} products have the code <span className="font-mono">{code}</span></div></div>
-          <button aria-label="Close" onClick={onClose} className="w-9 h-9 -mr-2 -mt-2 rounded-lg grid place-items-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100"><M n="close" c="text-lg" /></button>
+          <IconButton label="Close" onClick={onClose} className="-mr-2 -mt-2" icon={<M n="close" c="text-lg" />} />
         </div>
         <div className="mt-3 space-y-1.5 max-h-80 overflow-y-auto">
           {items.map((m) => (
             <button key={m.id} onClick={() => onPick(m)} className="w-full text-left flex items-center gap-2.5 px-3 py-2.5 rounded-xl border border-slate-200 hover:border-primary/40 hover:bg-slate-50">
               <span className="w-8 h-8 rounded-lg bg-slate-100 text-ink-tertiary flex items-center justify-center flex-shrink-0"><M n={productGlyph(m.name)} c="text-sm" /></span>
               <div className="min-w-0 flex-1"><div className="text-xs font-semibold text-ink-primary truncate">{m.name}</div>
-                <div className="text-[11px] text-ink-tertiary truncate">{[m.sku && `SKU ${m.sku}`, m.barcode && `Barcode ${m.barcode}`, m.mpn && `MPN ${m.mpn}`].filter(Boolean).join(" · ")} · {m.qty_available} in stock</div></div>
-              <span className="text-xs font-semibold tabular-nums text-ink-primary">{money(m.sell_price)}</span>
+                <div className="text-2xs text-ink-tertiary truncate">{[m.sku && `SKU ${m.sku}`, m.barcode && `Barcode ${m.barcode}`, m.mpn && `MPN ${m.mpn}`].filter(Boolean).join(" · ")} · {m.qty_available} in stock</div></div>
+              <span className="text-xs font-semibold tabular-nums text-ink-primary">{cash(m.sell_price)}</span>
             </button>
           ))}
         </div>
@@ -586,26 +589,26 @@ function ReceiptSheet({ saleId, change, onClose, onFlash }: { saleId: string; ch
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="text-sm font-semibold text-ink-primary">Sale complete</div>
-            <div className="text-xs text-ink-tertiary tabular-nums">{rc ? `${rc.sale_number} · ${money(rc.total)}` : err || "Loading…"}</div>
+            <div className="text-xs text-ink-tertiary tabular-nums">{rc ? `${rc.sale_number} · ${cash(rc.total)}` : err || "Loading…"}</div>
           </div>
-          <button aria-label="Close" onClick={onClose} className="w-9 h-9 -mr-2 -mt-2 rounded-lg grid place-items-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100"><M n="close" c="text-lg" /></button>
+          <IconButton label="Close" onClick={onClose} className="-mr-2 -mt-2" icon={<M n="close" c="text-lg" />} />
         </div>
         {change ? <div data-testid="receipt-change" className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 flex items-baseline justify-between"><span className="text-xs font-semibold text-emerald-900">Give change</span><span className="text-xl font-semibold tabular-nums text-emerald-900">{cash(change)}</span></div> : null}
         <div className="mt-4 text-xs font-semibold text-ink-tertiary">Give the customer a receipt</div>
         <div className="mt-2 space-y-2.5">
-          <button onClick={print} disabled={!rc} className="w-full h-9 flex items-center justify-center gap-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-primary hover:bg-slate-50 disabled:opacity-50"><M n="print" c="text-base" />Print receipt</button>
+          <Button className="w-full" icon={<M n="print" c="text-base" />} onClick={print} disabled={!rc}>Print receipt</Button>
           <div className="flex gap-2">
             <input value={email} onChange={(e) => setEmail(e.target.value)} type="email" placeholder="Customer email" aria-label="Customer email" className={`${inputCls} min-w-0 flex-1`} />
-            <button onClick={sendEmail} disabled={!rc || sending || !email.includes("@")} className="flex-shrink-0 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50 flex items-center gap-1.5"><M n="mail" c="text-sm" />{sending ? "Sending…" : "Email"}</button>
+            <Button variant="primary" className="flex-shrink-0" icon={<M n="mail" c="text-sm" />} onClick={sendEmail} disabled={!rc || sending || !email.includes("@")}>{sending ? "Sending…" : "Email"}</Button>
           </div>
           <div className="flex gap-2">
             <input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="WhatsApp number with country code" aria-label="WhatsApp number" className={`${inputCls} min-w-0 flex-1`} />
             {waHref
-              ? <a href={waHref} target="_blank" rel="noopener noreferrer" onClick={onClose} className="flex-shrink-0 h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50 flex items-center gap-1.5"><M n="chat" c="text-sm text-emerald-600" />WhatsApp</a>
-              : <span className="flex-shrink-0 h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold flex items-center gap-1.5 opacity-50" aria-disabled="true"><M n="chat" c="text-sm" />WhatsApp</span>}
+              ? <a href={waHref} target="_blank" rel="noopener noreferrer" onClick={onClose} className={buttonClass("secondary", "md", "flex-shrink-0")}><M n="chat" c="text-sm text-emerald-600" />WhatsApp</a>
+              : <span className={buttonClass("secondary", "md", "flex-shrink-0 opacity-50")} aria-disabled="true"><M n="chat" c="text-sm" />WhatsApp</span>}
           </div>
         </div>
-        <button onClick={onClose} className="mt-3 w-full h-9 rounded-xl text-xs font-semibold text-ink-secondary hover:text-ink-primary hover:bg-slate-50">No receipt</button>
+        <Button variant="ghost" className="mt-3 w-full" onClick={onClose}>No receipt</Button>
       </div>
     </div>
   );
@@ -669,17 +672,17 @@ function ReturnSheet({ saleId, accounts, onClose, onDone }: { saleId: string; ac
         <div className="flex items-start justify-between gap-3">
           <div><div className="text-sm font-semibold text-ink-primary">Return items</div>
             <div className="text-xs text-ink-tertiary">{sale ? `Sale ${sale.sale_number} · ${cash(sale.total)}` : err || "Loading…"}</div></div>
-          <button aria-label="Close" onClick={onClose} className="w-9 h-9 -mr-2 -mt-2 rounded-lg grid place-items-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100"><M n="close" c="text-lg" /></button>
+          <IconButton label="Close" onClick={onClose} className="-mr-2 -mt-2" icon={<M n="close" c="text-lg" />} />
         </div>
         {sale && (<>
           <div className="mt-3 space-y-1.5 max-h-64 overflow-y-auto">
             {sale.lines.map((l) => (
               <div key={l.id} className="flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200">
                 <div className="min-w-0 flex-1"><div className="text-xs font-semibold text-ink-primary truncate">{l.description}</div>
-                  <div className="text-[11px] text-ink-tertiary tabular-nums">{l.returnable > 0 ? `${l.returnable} of ${l.qty} can come back` : "Already returned"}</div></div>
+                  <div className="text-2xs text-ink-tertiary tabular-nums">{l.returnable > 0 ? `${l.returnable} of ${l.qty} can come back` : "Already returned"}</div></div>
                 {l.serials_out?.length ? (
                   <div role="group" aria-label={`Which units of ${l.description} come back`} className="flex flex-col items-stretch gap-1 min-w-[150px]">
-                    <span className="text-[11px] text-ink-tertiary">Tick each IMEI coming back</span>
+                    <span className="text-2xs text-ink-tertiary">Tick each IMEI coming back</span>
                     {l.serials_out.map((sn) => (
                       <label key={sn} className="flex items-center gap-2 min-h-[32px] px-2 rounded-lg border border-slate-200 text-xs font-mono text-ink-primary cursor-pointer hover:bg-slate-50">
                         <input type="checkbox" checked={(units[l.id] || []).includes(sn)} onChange={() => toggleUnit(l.id, sn)} className="accent-primary" />{sn}
@@ -700,10 +703,10 @@ function ReturnSheet({ saleId, accounts, onClose, onDone }: { saleId: string; ac
                 {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
               </select></div>
             <input value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300} placeholder="Reason (optional)" aria-label="Reason" className={inputCls} />
-            {gift > 0.005 && <p className="text-[11px] text-ink-tertiary tabular-nums">{cash(gift)} goes back onto the gift card.</p>}
-            {err && <p role="alert" className="text-[11px] text-rose-700">{err}</p>}
+            {gift > 0.005 && <p className="text-2xs text-ink-tertiary tabular-nums">{cash(gift)} goes back onto the gift card.</p>}
+            {err && <p role="alert" className="text-2xs text-rose-700">{err}</p>}
           </div>
-          <button onClick={submit} disabled={busy || !picked || (refund > 0 && !acct)} className="mt-3 w-full h-11 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary-container disabled:opacity-50 tabular-nums">{busy ? "Returning…" : `Return and refund ${cash(refund)}`}</button>
+          <button onClick={submit} disabled={busy || !picked || (refund > 0 && !acct)} className={buttonClass("primary", "lg", "mt-3 w-full tabular-nums")}>{busy ? "Returning…" : `Return and refund ${cash(refund)}`}</button>
         </>)}
       </div>
     </div>

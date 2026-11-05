@@ -70,9 +70,9 @@ export const todayIso = () => {
 export const fmtDate = (iso?: string | null) =>
   iso ? new Date(iso).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }) : "—";
 
-// The field kit's look (components/Field.tsx): 36px tall, the glass-input border and focus ring.
+// The field kit's size (components/Field.tsx): 36px tall, 12px corners, sapphire focus ring.
 // min-h rather than h so a textarea that shares it still grows.
-export const inputCls = "glass-input w-full rounded-xl min-h-9 px-3 py-1.5 text-sm text-ink-primary disabled:opacity-60";
+export const inputCls = "w-full bg-white border border-slate-200 rounded-xl min-h-9 px-3 py-1.5 text-sm text-ink-primary outline-none hover:border-slate-300 focus:border-primary focus:ring-2 focus:ring-primary/10 disabled:opacity-60";
 export { labelClass as labelCls } from "../../components/Field";
 
 /* Days an invoice is late: only once it has a due date in the past and still owes money.
