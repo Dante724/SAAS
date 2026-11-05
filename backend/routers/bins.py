@@ -387,24 +387,28 @@ async def create_batch(
     no StockLevel, no StockMovement — so the shelf count never saw them. It is a receipt like any
     other now: quantity, movement, FIFO layer, moving average and units move together through
     `stock_posting.apply_receipt_line`."""
-    from backend.models import StockItemBatch
     from backend.services import serial_intake, stock_posting
+    from backend.services import warehouses as _wh
     from backend.services.owned import require_location
     part = (await db.execute(select(Part).where(
         Part.id == data.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
     if not part:
         raise HTTPException(404, "Product not found")
     await require_location(db, current.org_id, data.location_id)
+    # The warehouse must allow posting and this employee must be allowed to post here — the
+    # guard /inventory/parts/{id}/adjust applies (Build 89); this route skipped it.
+    await _wh.guard_action(db, current, "post", location_id=data.location_id)
     stock_rows.check_whole(part, data.qty)
     # Same serial rules as postings and PO receiving (one per unit, no repeats, none already in stock).
     serials = await serial_intake.validate_intake(db, current.org_id, part, data.qty, data.serials)
+    made: dict = {}
     await stock_posting.apply_receipt_line(
         db, org_id=current.org_id, part=part, location_id=data.location_id, qty=data.qty,
         unit_cost=float(data.unit_cost), created_by_id=current.id, ref_type="batch",
-        bin_id=data.bin_id, serials=serials or None, cost_known=True)
-    batch_id = (await db.execute(select(StockItemBatch.id).where(
-        StockItemBatch.org_id == current.org_id, StockItemBatch.part_id == part.id)
-        .order_by(StockItemBatch.received_at.desc()).limit(1))).scalar_one_or_none()
+        bin_id=data.bin_id, serials=serials or None, cost_known=True, out=made)
+    # The layer this receipt made — not the product's newest by received_at, which is another
+    # request's layer when one commits in between.
+    batch_id = made["batch"].id if made.get("batch") else None
     warnings = serial_intake.take_warnings(db)
     await db.commit()
     return {"batch_id": batch_id, "serials_created": len(serials or []), "warnings": warnings}
