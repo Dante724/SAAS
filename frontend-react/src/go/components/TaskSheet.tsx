@@ -1,9 +1,10 @@
 // New task: what, when, who. Assigning someone else needs can_assign_staff (the server checks too).
 import { useEffect, useMemo, useRef, useState } from "react";
-import { Check, Link2 } from "lucide-react";
+import { Link2 } from "lucide-react";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
-import { PrimaryButton, Sheet } from "./ui";
+import { PrimaryButton, Sheet, goField } from "./ui";
+import Chip from "./Chip";
 import { announceChange, useStaff, useToast } from "../lib/useGo";
 import { newKey } from "../lib/photos";
 import { isoDateTimeLocal } from "../../lib/localDate";
@@ -59,36 +60,32 @@ export default function TaskSheet({ open, onClose, orderId, orderLabel }: { open
     } finally { setBusy(false); }
   }
 
-  // A chip that shows a tick when picked keeps 11px of extra padding on each side while unpicked, the
-  // same width as the 16px tick plus its 6px gap, so picking one never pushes its neighbours.
-  const chip = (on: boolean, ticked = false) => `min-h-[2.75rem] ${ticked && !on ? "px-[27px]" : "px-4"} rounded-full border text-go-body font-medium inline-flex items-center gap-1.5 ${on ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`;
-
   return (
     <Sheet open={open} onClose={onClose} title="New task">
       <div className="px-2 space-y-4">
         <input ref={input} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What needs doing?" enterKeyHint="done"
           onKeyDown={(e) => { if (e.key === "Enter") save(); }}
-          className="w-full min-h-[3.25rem] rounded-xl border border-slate-200 bg-white px-4 text-go-body text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/15" />
+          className={goField()} />
         {orderId && <p className="inline-flex items-center gap-1.5 text-go-sub text-ink-secondary"><Link2 size={15} />On job {orderLabel}</p>}
         <div>
           <p className="mb-2 text-go-sub font-semibold text-ink-tertiary">When</p>
           <div className="flex flex-wrap gap-2">
             {(["today", "tomorrow", "none", "pick"] as When[]).map((w) => (
-              <button key={w} onClick={() => setWhen(w)} className={chip(when === w, true)}>
-                {when === w && <Check size={16} />}{{ today: "Today", tomorrow: "Tomorrow", none: "No date", pick: "Pick…" }[w]}
-              </button>
+              <Chip key={w} on={when === w} tick onClick={() => setWhen(w)}>
+                {{ today: "Today", tomorrow: "Tomorrow", none: "No date", pick: "Other date" }[w]}
+              </Chip>
             ))}
           </div>
           {when === "pick" && (
             <input type="datetime-local" value={picked} onChange={(e) => setPicked(e.target.value)}
-              className="mt-2 w-full min-h-[3rem] rounded-xl border border-slate-200 bg-white px-4 text-ink-primary" />
+              aria-label="Due date and time" className={goField("mt-2")} />
           )}
         </div>
         <div>
           <p className="mb-2 text-go-sub font-semibold text-ink-tertiary">Who</p>
           <div className="flex flex-wrap gap-2">
             {people.map((p) => (
-              <button key={p.id} onClick={() => setWho(p.id)} className={chip(who === p.id, true)}>{who === p.id && <Check size={16} />}{p.name}</button>
+              <Chip key={p.id} on={who === p.id} tick onClick={() => setWho(p.id)}>{p.name}</Chip>
             ))}
           </div>
         </div>

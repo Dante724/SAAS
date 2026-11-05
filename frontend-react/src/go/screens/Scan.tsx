@@ -4,7 +4,7 @@ import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useNavigate } from "react-router-dom";
 import { Camera, CameraOff, Keyboard, Loader2, SearchX } from "lucide-react";
 import { api } from "../../api/client";
-import { Card, Page, PrimaryButton } from "../components/ui";
+import { Card, GoButton, Page, goField } from "../components/ui";
 import { routeScan, type ScanResolve } from "../lib/scanRoute";
 import { cameraSupported, haptic, startScanner, type Stop } from "../lib/scanner";
 
@@ -94,8 +94,8 @@ export default function Scan() {
         <div className="flex gap-2">
           <input id="go-code" value={manual} onChange={(e) => setManual(e.target.value)} inputMode="text" autoCapitalize="characters" autoCorrect="off" spellCheck={false}
             enterKeyHint="search" placeholder="WO-00123, SKU, serial…"
-            className="min-h-[3.25rem] flex-1 min-w-0 rounded-xl border border-slate-200 bg-white px-4 text-go-body text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/15" />
-          <PrimaryButton type="submit" className="!w-auto px-6" disabled={!manual.trim() || state.kind === "looking"}>Go</PrimaryButton>
+            className={goField("flex-1 min-w-0")} />
+          <GoButton type="submit" variant="primary" className="px-6" disabled={!manual.trim() || state.kind === "looking"}>Go</GoButton>
         </div>
       </form>
     </Page>
