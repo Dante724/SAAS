@@ -1,6 +1,8 @@
 import { lazy, Suspense } from "react";
 import { Routes, Route } from "react-router-dom";
 import RouteErrorBoundary from "./components/RouteErrorBoundary";
+import { AppFrame } from "./components/Shell";
+import PageSkeleton from "./components/PageSkeleton";
 
 // Each hub is its own chunk: the first page load no longer downloads every screen (the single
 // bundle was ~1.3 MB of JS before any route rendered).
@@ -48,29 +50,34 @@ export default function App() {
   return (
     <div className="min-h-screen">
       <RouteErrorBoundary>
-      <Suspense fallback={<div className="p-10 text-ink-tertiary text-sm">Loading…</div>}>
+      <Suspense fallback={<PageSkeleton />}>
       <Routes>
-        <Route path="/" element={<CompanyHub />} />
-        <Route path="/catalog" element={<CatalogHub />} />
-        <Route path="/orders" element={<WorkOrdersHub />} />
-        <Route path="/invoices" element={<InvoicesHub />} />
-        <Route path="/clients" element={<ClientsHub />} />
-        <Route path="/assets" element={<AssetsHub />} />
-        <Route path="/inventory" element={<InventoryHub />} />
-        <Route path="/sales" element={<SalesPOS />} />
-        <Route path="/finance" element={<FinanceHub />} />
-        <Route path="/cash" element={<CashHub />} />
-        <Route path="/reports" element={<ReportsHub />} />
-        <Route path="/settings" element={<SettingsHub />} />
-        <Route path="/tasks" element={<TasksHub />} />
-        <Route path="/my-work" element={<MyWorkHub />} />
-        <Route path="/timesheets" element={<TimesheetsHub />} />
-        <Route path="/inquiries" element={<InquiriesHub />} />
-        <Route path="/chats" element={<ChatsHub />} />
-        <Route path="/appointments" element={<AppointmentsHub />} />
-        <Route path="/marketing" element={<MarketingHub />} />
-        <Route path="/my-earnings" element={<MyEarnings />} />
-        <Route path="*" element={<NotFound />} />
+        {/* One app frame for every page: the sidebar, header and badges stay mounted while pages
+            change (each page still names itself with <Shell title>); a page still downloading
+            shows the shared skeleton inside the frame. */}
+        <Route element={<AppFrame />}>
+          <Route path="/" element={<CompanyHub />} />
+          <Route path="/catalog" element={<CatalogHub />} />
+          <Route path="/orders" element={<WorkOrdersHub />} />
+          <Route path="/invoices" element={<InvoicesHub />} />
+          <Route path="/clients" element={<ClientsHub />} />
+          <Route path="/assets" element={<AssetsHub />} />
+          <Route path="/inventory" element={<InventoryHub />} />
+          <Route path="/sales" element={<SalesPOS />} />
+          <Route path="/finance" element={<FinanceHub />} />
+          <Route path="/cash" element={<CashHub />} />
+          <Route path="/reports" element={<ReportsHub />} />
+          <Route path="/settings" element={<SettingsHub />} />
+          <Route path="/tasks" element={<TasksHub />} />
+          <Route path="/my-work" element={<MyWorkHub />} />
+          <Route path="/timesheets" element={<TimesheetsHub />} />
+          <Route path="/inquiries" element={<InquiriesHub />} />
+          <Route path="/chats" element={<ChatsHub />} />
+          <Route path="/appointments" element={<AppointmentsHub />} />
+          <Route path="/marketing" element={<MarketingHub />} />
+          <Route path="/my-earnings" element={<MyEarnings />} />
+          <Route path="*" element={<NotFound />} />
+        </Route>
       </Routes>
       </Suspense>
       </RouteErrorBoundary>
