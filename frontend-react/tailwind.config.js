@@ -14,7 +14,9 @@ export default {
       colors: {
         // Printed-document previews (receipts, estimates) stay white paper in dark mode too.
         paper: "#ffffff",
-        camera: "#0b1020",   // the camera viewfinder behind a live scan (Tekly Go)
+        "paper-ink": "#14213f",   // text on a paper preview: stays dark in dark mode too
+        // Tekly Go's camera and photo viewers: a near-black stage with white controls, in both themes.
+        camera: { DEFAULT: "#0b1020", ink: "#ffffff" },
         surface: "#faf8ff",
         "surface-dim": "#cdd9ff",
         "surface-bright": "#faf8ff",
@@ -85,7 +87,9 @@ export default {
   },
   plugins: [
     plugin(({ addBase }) => {
-      addBase({ ":root": light, ".dark": { ...dark, "color-scheme": "dark" } });
+      // `.always-light` keeps a subtree in the light palette inside the dark app: previews of
+      // customer-facing pages (which are always light) shown in Settings.
+      addBase({ ":root": light, ".dark": { ...dark, "color-scheme": "dark" }, ".dark .always-light": { ...light, "color-scheme": "light", color: "rgb(var(--c-ink-primary))" } });
     }),
   ],
 };

@@ -36,12 +36,13 @@ export const NEUTRALS = {
   // text
   "ink-primary": ["#14213f", "#e4e8f2"],
   "ink-secondary": ["#435577", "#aab4c9"],
-  // tertiary/placeholder were 4.3:1 and 2.4:1 on white; now 5.3:1 (AA text) and 3.2:1 (AA non-text)
-  "ink-tertiary": ["#5e6b88", "#8e9ab4"],
-  // placeholders read as text too, so they meet 4.5:1 (light #63708c on the header search fill, dark #8591ab)
-  "ink-placeholder": ["#63708c", "#8591ab"],
-  "text-slate-400": ["#63708c", "#8591ab"],   // legacy grey text: same as the placeholder grey (4.5:1)
-  "text-slate-500": [colors.slate[500], "#8e9ab4"],
+  // tertiary was 4.3:1 on white; now 5.3:1. Placeholders count as text (WCAG), so the placeholder
+  // grey is 4.5:1+ too: light #63708c on the header search fill, dark 4.5:1+ on every surface up to
+  // slate-100. Dark tertiary is 5.3:1+ on every surface up to slate-200.
+  "ink-tertiary": ["#5e6b88", "#99a4bc"],
+  "ink-placeholder": ["#63708c", "#8a95ae"],
+  "text-slate-400": ["#63708c", "#8a95ae"],   // legacy grey text: same as the placeholder grey
+  "text-slate-500": [colors.slate[500], "#99a4bc"],
   "text-slate-600": [colors.slate[600], "#aab4c9"],
   "text-slate-700": [colors.slate[700], "#c3cbdb"],
   "text-slate-800": [colors.slate[800], "#d6dce8"],

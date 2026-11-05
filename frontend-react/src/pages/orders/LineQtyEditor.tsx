@@ -50,7 +50,7 @@ export default function LineQtyEditor({ lineId, label, qty, discount, canDiscoun
             </span>
           </label>
         )}
-        <Button type="submit" variant="primary" size="lg" className="w-full">Done</Button>
+        <Button type="submit" variant="primary" className="w-full">Done</Button>
       </form>
     </FloatingMenu>
   );

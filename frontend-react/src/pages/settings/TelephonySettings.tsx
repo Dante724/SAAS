@@ -261,7 +261,7 @@ export default function TelephonySettings() {
             help={!auto.enabled ? "Turn on Create contacts from calls first." : "The manager is the person who placed the call, or else whoever owns the extension that was dialled."}>
             <Switch label="Assign a manager" disabled={!auto.enabled} on={auto.config.assign_manager} onChange={(v) => setAuto({ ...auto, config: { ...auto.config, assign_manager: v } })} />
           </SettingRow>
-          <div className={`py-4 last:pb-0 ${auto.enabled ? "" : "opacity-60"}`}>
+          <div aria-disabled={!auto.enabled || undefined} className={`py-4 last:pb-0 ${auto.enabled ? "" : "opacity-60"}`}>
             <div className="block text-sm font-medium text-ink-primary">Tags for new contacts</div>
             {tags.length === 0
               ? <p className={`mt-0.5 ${hint}`}>No tags yet. Tags you create for contacts show up here.</p>

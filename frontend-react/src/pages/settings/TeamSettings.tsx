@@ -390,7 +390,7 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
                     {people.map((p) => { const on = payrollIds.includes(p.id); return (
                       <button key={p.id} type="button" onClick={() => setPayrollIds((s) => (on ? s.filter((x) => x !== p.id) : [...s, p.id]))} aria-pressed={on}
                         className={`inline-flex items-center gap-1.5 pl-1 pr-2.5 py-1 rounded-full text-xs border ${on ? "bg-white border-primary/40 text-ink-primary shadow-sm" : "border-dashed border-slate-300 text-ink-tertiary"}`}>
-                        <span aria-hidden="true" className="contents"><Avatar name={p.name} size={16} /></span>{p.name}{on && <M n="check" c="text-sm text-primary -mr-0.5" />}
+                        <span aria-hidden="true" className="contents"><Avatar name={p.name} size={16} /></span>{p.name}{on && <M n="check" c="text-xs text-primary -mr-0.5" />}
                       </button>
                     ); })}
                   </div>

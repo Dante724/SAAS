@@ -8,6 +8,7 @@ import { type Plan, type PlanItem } from "./shared";
 import { loadFailed } from "../../lib/notice";
 import { NumField } from "../../components/SettingRow";
 import Button from "../../components/Button";
+import Drawer from "../../components/Drawer";
 import EmptyState from "../../components/EmptyState";
 import CatalogToolbar from "../catalog/CatalogToolbar";
 import { laborText } from "../../lib/labor";
@@ -113,7 +114,7 @@ export default function PlansTab() {
               </div>
               <div className="px-5 py-4">
                 <ul className="space-y-1.5">{p.items.map((i) => (
-                  <li key={i.id} className="flex items-center gap-2 text-xs text-ink-secondary"><span style={{ color: p.color }}><M n="check_circle" c="text-sm" /></span>{i.text}</li>))}</ul>
+                  <li key={i.id} className="flex items-center gap-2 text-xs text-ink-secondary"><span style={{ color: p.color }}><M n="check_circle" c="text-xs" /></span>{i.text}</li>))}</ul>
                 {p.value_yearly ? <div className="mt-3 text-2xs font-semibold text-emerald-700">Worth {money(p.value_yearly)} a year in services</div> : null}
                 {r && (r.money_in > 0 || r.value_given > 0) && (
                   <div className="mt-3 flex items-center gap-2 border-t border-slate-100 pt-3 text-2xs text-ink-tertiary">
@@ -156,14 +157,11 @@ function PlanEditor({ plan, onClose, onSaved }: { plan: Omit<Plan, "id" | "membe
   }
 
   return (
-    <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-      <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={onClose} />
-      <div className="relative h-full w-full max-w-[560px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90">
-        <header className="px-6 py-4 border-b border-slate-200/90 flex items-center gap-2">
-          <div className="text-base font-semibold text-ink-primary">{p.id ? "Edit plan" : "New plan"}</div>
-          <button aria-label="Close" onClick={onClose} className="ml-auto h-8 w-8 rounded-full grid place-items-center text-ink-tertiary hover:bg-slate-100"><M n="close" c="text-lg" /></button>
-        </header>
-        <div className="flex-1 overflow-y-auto bg-canvas p-6 space-y-4">
+    <Drawer title={p.id ? "Edit plan" : "New plan"} label={p.id ? "Edit plan" : "New plan"} onClose={onClose}
+      footer={<>
+        {err && <p role="alert" className="w-full rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">{err}</p>}
+        <Button variant="primary" size="lg" className="w-full" onClick={save} disabled={busy || !p.name.trim()}>{busy ? "Saving…" : "Save plan"}</Button>
+      </>}>
           <section className="rounded-2xl border border-slate-200/90 bg-white shadow-sm p-4 space-y-3">
             <div><label htmlFor="plan-name" className={lbl}>Plan name</label>
               <input id="plan-name" value={p.name} onChange={(e) => set({ name: e.target.value })} placeholder="Boat Care" className={inp} /></div>
@@ -254,12 +252,6 @@ function PlanEditor({ plan, onClose, onSaved }: { plan: Omit<Plan, "id" | "membe
               </>)}
             </section>
           )}
-        </div>
-        <footer className="border-t border-slate-200/90 p-4 bg-white">
-          {err && <p role="alert" className="mb-2 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">{err}</p>}
-          <Button variant="primary" size="lg" className="w-full" onClick={save} disabled={busy || !p.name.trim()}>{busy ? "Saving…" : "Save plan"}</Button>
-        </footer>
-      </div>
-    </div>
+    </Drawer>
   );
 }

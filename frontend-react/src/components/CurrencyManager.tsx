@@ -106,7 +106,7 @@ export default function CurrencyManager() {
                 </select></div>
               <div className="col-span-3">
                 <input type="number" step="0.000001" defaultValue={c.rate} onBlur={(e) => { const v = parseFloat(e.target.value); if (v && v !== c.rate) saveRate(c, v); }} className={`${field} font-mono`} />
-                {c.updated_at && <div className="text-[11px] text-ink-placeholder mt-0.5">as of {new Date(c.updated_at).toLocaleDateString()}</div>}
+                {c.updated_at && <div className="text-2xs text-ink-tertiary mt-0.5">as of {new Date(c.updated_at).toLocaleDateString()}</div>}
               </div>
               <div className="col-span-3 flex items-center justify-end gap-1">
                 <button aria-label="Rate history" onClick={() => setHistFor(c)} title="Rate history" className="w-7 h-7 rounded-lg grid place-items-center text-ink-tertiary hover:bg-slate-100"><M n="history" c="text-base" /></button>
