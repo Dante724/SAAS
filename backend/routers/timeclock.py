@@ -95,7 +95,9 @@ async def shift_clock_in(db: AsyncSession = Depends(get_db),
         raise HTTPException(403, "Shop attendance clock is turned off for this company")
     # Lock the employee row for this transaction so a double tap serialises: the second
     # request waits here, then sees the first shift and gets 409 instead of a second open shift.
-    await db.execute(select(Employee.id).where(Employee.id == current.id).with_for_update())
+    # FOR NO KEY UPDATE: serialises clock-ins without blocking rows that only FK to employees.
+    await db.execute(select(Employee.id).where(Employee.id == current.id)
+                     .with_for_update(key_share=True))
     if await _open_shift(db, current.id):
         raise HTTPException(409, "You are already clocked in")
     loc_id = current.location_id

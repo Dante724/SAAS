@@ -72,10 +72,21 @@ async def test_leaked_duplicate_shift_is_not_paid_twice(client, tenant, db):
     await db.commit()
     r = await client.post("/api/timeclock/shift/clock-out", headers=tenant)
     assert r.status_code == 200, r.text
+    # The technician taps "Clock out" again (the app still showed them clocked in, or they
+    # double tap). Before the fix the leaked twin was still open, so this closed it with
+    # another ~8 h and payroll paid the same time twice.
+    again = await client.post("/api/timeclock/shift/clock-out", headers=tenant)
     db.expire_all()
-    hours = sorted(float(s.hours_worked or 0) for s in (await db.execute(
-        select(Shift).where(Shift.employee_id == emp_id))).scalars().all())
+    shifts = (await db.execute(select(Shift).where(Shift.employee_id == emp_id))).scalars().all()
+    paid = sum(float(s.hours_worked or 0) for s in shifts if s.ended_at is not None)
+    assert 7.9 < paid < 8.1, f"the same 8 h was paid {paid:.2f} h: {[(s.ended_at, s.hours_worked) for s in shifts]}"
+    hours = sorted(float(s.hours_worked or 0) for s in shifts)
     assert hours[0] == 0 and 7.9 < hours[1] < 8.1, hours
+    assert all(s.ended_at is not None for s in shifts), "a leaked shift is still open and accruing"
+    assert again.status_code == 409, again.text
+    # What payroll and the employee's history read: closed shifts' hours.
+    hist = await client.get("/api/timeclock/shift/history", headers=tenant)
+    assert 7.9 < float(hist.json()["total_hours"]) < 8.1, hist.json()
 
 
 async def test_clock_out_closes_every_open_shift(client, tenant, db):
