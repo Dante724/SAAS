@@ -84,9 +84,10 @@ export default function TasksHub() {
           </div>
         </div>
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-          <table className="w-full text-left border-collapse text-xs">
+          {/* Fixed column widths on desktop: switching filters never re-sizes the columns. */}
+          <table className="w-full text-left border-collapse text-xs xl:table-fixed">
             <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
-              <th className="py-3 pl-5 pr-2 w-10"></th><th className="py-3 px-3">Task</th><th className="py-3 px-3">Status</th><th className="py-3 px-3">Links</th><th className="py-3 px-3">Assigned to</th><th className="py-3 px-3">Due</th>
+              <th className="py-3 pl-5 pr-2 w-10 xl:w-12"></th><th className="py-3 px-3">Task</th><th className="py-3 px-3 xl:w-32">Status</th><th className="py-3 px-3 xl:w-48">Links</th><th className="py-3 px-3 xl:w-40">Assigned to</th><th className="py-3 px-3 xl:w-32">Due</th>
             </tr></thead>
             <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
               {!tasks && <SkeletonRows cols={6} />}
