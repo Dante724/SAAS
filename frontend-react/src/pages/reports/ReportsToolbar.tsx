@@ -28,7 +28,7 @@ export default function ReportsToolbar({ actions, extras, locs, locId = "", onLo
         {extras && <div className="flex flex-wrap items-center gap-2 max-sm:order-last">{extras}</div>}
         <div className="flex flex-wrap items-center gap-2">
           <select aria-label="Location" value={locOff ? "" : locId} onChange={(e) => onLoc?.(e.target.value)} disabled={locOff}
-            className={fieldClass("pr-8 w-44 shrink-0 disabled:cursor-not-allowed")}>
+            className={fieldClass("pr-8 !w-44 shrink-0 disabled:cursor-not-allowed")}>
             <option value="">All locations</option>
             {locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
           </select>

@@ -30,7 +30,7 @@ export default function CatalogToolbar({ newLabel, onNew, canNew = true, onCateg
       </>}
       filters={
         <select aria-label="Category" value={cats ? catFilter : ""} onChange={(e) => onCatFilter?.(e.target.value)} disabled={!cats}
-          className={fieldClass(`pr-8 w-auto max-w-[12rem] text-xs font-semibold cursor-pointer disabled:cursor-not-allowed ${filterOn ? "!bg-primary/10 !text-primary !border-primary/30" : ""}`)}>
+          className={fieldClass(`pr-8 !w-auto max-w-[12rem] text-xs font-semibold cursor-pointer disabled:cursor-not-allowed ${filterOn ? "!bg-primary/10 !text-primary !border-primary/30" : ""}`)}>
           <option value="">Category: All</option>
           {(cats || []).map((c) => <option key={c.id} value={c.id}>{`${"  ".repeat(c.depth)}${c.name}`}</option>)}
         </select>}

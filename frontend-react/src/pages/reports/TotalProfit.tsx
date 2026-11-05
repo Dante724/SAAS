@@ -10,7 +10,7 @@ import ReportsToolbar from "./ReportsToolbar";
 import { fieldClass } from "../../components/Field";
 import { theadRowClass } from "../../components/Table";
 
-const sel = fieldClass("pr-8 w-auto max-w-[12rem]");
+const sel = fieldClass("pr-8 !w-auto max-w-[12rem]");
 import { money } from "../orders/types";
 import { clickableRow } from "../../lib/clickable";
 import { KIND_LABEL, drillRows, trend, type Drill, type ProfitRow } from "./profitView";

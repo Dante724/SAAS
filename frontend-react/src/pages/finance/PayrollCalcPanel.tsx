@@ -102,7 +102,7 @@ export default function PayrollCalcPanel({ month, onMonth, headerAction }: { mon
   const set = (k: keyof PayrollFilters) => (e: React.ChangeEvent<HTMLSelectElement>) => setFilters((f) => ({ ...f, [k]: e.target.value }));
   const active = Object.values(filters).filter(Boolean).length;
   const total = (rows || []).reduce((s, r) => s + (r.computed_total || 0), 0);
-  const sel = fieldClass("pr-8 w-auto max-w-[11rem]");
+  const sel = fieldClass("pr-8 !w-auto max-w-[11rem]");
 
   return (
     <div className="space-y-3">

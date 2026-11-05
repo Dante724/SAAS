@@ -34,7 +34,7 @@ import ReportsToolbar from "./ReportsToolbar";
 const MONEY_WORDS = /commission|hourly|bonus|penalt|base|total|revenue|sales|cost|price|amount|value|profit|paid|due|balance|tax|discount|wage|refund|expense|income|salary|margin/i;
 const NOT_MONEY = /\b(count|qty|quantity|hours?|jobs|orders|units|items|%|pct|percent|rate|days|minutes|min|number|no\.)\b|%/i;
 export const isMoneyCol = (label: string) => MONEY_WORDS.test(label) && !NOT_MONEY.test(label);
-const sel = fieldClass("pr-8 w-auto max-w-[12rem]");
+const sel = fieldClass("pr-8 !w-auto max-w-[12rem]");
 
 const REPORT_PAGE = 50;
 
@@ -228,15 +228,15 @@ export function CustomView() {
                   <Button variant="link" onClick={() => setFilters((f) => [...f, { field: fieldsOf[0]?.key || "", op: "eq", value: "" }])}>+ Add</Button></div>
                 {filters.map((flt, i) => (
                   <div key={i} className="flex items-center gap-1.5 mt-1.5">
-                    <select value={flt.field} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, field: e.target.value, op: OPS_FOR(fType(e.target.value))[0][0] } : x))} className={fieldClass("pr-8 w-auto min-w-[130px]")}>
+                    <select value={flt.field} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, field: e.target.value, op: OPS_FOR(fType(e.target.value))[0][0] } : x))} className={fieldClass("pr-8 !w-auto min-w-[130px]")}>
                       {fieldsOf.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
                     </select>
-                    <select value={flt.op} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, op: e.target.value } : x))} className={fieldClass("pr-8 w-auto min-w-[110px]")}>
+                    <select value={flt.op} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, op: e.target.value } : x))} className={fieldClass("pr-8 !w-auto min-w-[110px]")}>
                       {OPS_FOR(fType(flt.field)).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                     </select>
                     {fType(flt.field) === "date"
                       ? <DateField className="w-40" value={flt.value} onChange={(d) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, value: d } : x))} label="Filter date" />
-                      : <input value={flt.value} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} placeholder="value" className={fieldClass("w-32")} />}
+                      : <input value={flt.value} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} placeholder="value" className={fieldClass("!w-32")} />}
                     <IconButton size="sm" label="Remove filter" onClick={() => setFilters((fs) => fs.filter((_, j) => j !== i))} icon={<M n="close" c="text-sm" />} />
                   </div>
                 ))}
@@ -260,11 +260,11 @@ export function CustomView() {
                     <div className="space-y-1.5">
                       {aggs.map((a, i) => (
                         <div key={i} className="flex items-center gap-1.5">
-                          <select value={a.fn} onChange={(e) => setAggs((as) => as.map((x, j) => j === i ? { ...x, fn: e.target.value } : x))} className={fieldClass("pr-8 w-auto min-w-[110px]")}>
+                          <select value={a.fn} onChange={(e) => setAggs((as) => as.map((x, j) => j === i ? { ...x, fn: e.target.value } : x))} className={fieldClass("pr-8 !w-auto min-w-[110px]")}>
                             <option value="count">Count</option><option value="sum">Sum</option><option value="avg">Average</option>
                           </select>
                           {a.fn !== "count" && (
-                            <select value={a.field} onChange={(e) => setAggs((as) => as.map((x, j) => j === i ? { ...x, field: e.target.value } : x))} className={fieldClass("pr-8 w-auto min-w-[130px]")}>
+                            <select value={a.field} onChange={(e) => setAggs((as) => as.map((x, j) => j === i ? { ...x, field: e.target.value } : x))} className={fieldClass("pr-8 !w-auto min-w-[130px]")}>
                               <option value="">field…</option>
                               {numFields.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
                             </select>
@@ -279,7 +279,7 @@ export function CustomView() {
 
               {/* save this report (Run and the downloads are in the page toolbar) */}
               <div className="flex items-center gap-2 flex-wrap pt-3 border-t border-slate-100">
-                <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Report name" aria-label="Report name" className={fieldClass("w-44")} />
+                <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Report name" aria-label="Report name" className={fieldClass("!w-44")} />
                 <Button disabled={busy} onClick={save}>{curId ? "Update" : "Save"}</Button>
                 {curId && <Button variant="danger" disabled={busy} onClick={del}>Delete</Button>}
               </div>
@@ -693,7 +693,7 @@ export default function ReportsHub() {
                 <div className="flex items-center gap-2 mb-3">
                   <h4 className="text-xs font-semibold text-ink-primary">Chart</h4>
                   {numericIdxs.length > 1 && (
-                    <select value={activeChartCol} onChange={(e) => setChartCol(Number(e.target.value))} aria-label="Chart column" className={fieldClass("pr-8 w-auto h-8 text-xs")}>
+                    <select value={activeChartCol} onChange={(e) => setChartCol(Number(e.target.value))} aria-label="Chart column" className={fieldClass("pr-8 !w-auto !h-8 text-xs")}>
                       {numericIdxs.map((i) => <option key={i} value={i}>{colLabel(cols[i])}</option>)}
                     </select>
                   )}

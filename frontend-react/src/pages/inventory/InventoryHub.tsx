@@ -59,7 +59,7 @@ const TABS: { id: Tab; label: string; count?: string }[] = [
 
 // A set filter reads as active in the primary tint; an unset one stays neutral.
 // A filter that is set reads as active in the primary tint (field kit size, 36px).
-const filterSel = (on: boolean) => fieldClass(`pr-8 w-auto max-w-[13rem] text-xs font-semibold cursor-pointer ${on ? "!bg-primary/10 !text-primary !border-primary/30" : "text-ink-secondary"}`);
+const filterSel = (on: boolean) => fieldClass(`pr-8 !w-auto max-w-[13rem] text-xs font-semibold cursor-pointer ${on ? "!bg-primary/10 !text-primary !border-primary/30" : "text-ink-secondary"}`);
 
 // A raw API value ("partially_received", "IN") as sentence-case words ("Partially received").
 const sentence = (s?: string | null) => { const h = humanize(s).toLowerCase(); return h ? h[0].toUpperCase() + h.slice(1) : ""; };
