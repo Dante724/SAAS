@@ -1,4 +1,5 @@
 import { createRoot } from "react-dom/client";
+import { buttonClass } from "../components/Button";
 
 // Promise-based, in-app replacements for native window.confirm / alert / prompt — styled with the
 // app's design tokens and non-blocking. Each mounts a transient portal and resolves on action, so a
@@ -19,9 +20,12 @@ function mount(render: (close: () => void) => any) {
 }
 
 const overlay = "fixed inset-0 z-[200] flex items-center justify-center p-4";
-const scrim = "absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]";
-const card = "relative bg-white rounded-2xl shadow-clay-drawer border border-slate-200 w-full max-w-sm p-5 space-y-4";
-const btnGhost = "px-4 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50";
+const scrim = "absolute inset-0 bg-ink-primary/40";
+const card = "relative bg-white rounded-2xl shadow-menu border border-slate-200 w-full max-w-sm p-5 space-y-4";
+const btnGhost = buttonClass("secondary");
+const btnMain = (danger?: boolean) => buttonClass(danger ? "dangerSolid" : "primary");
+// Footers: the main button comes first, on the left (the app's rule for every drawer and pop-up).
+const footer = "flex flex-wrap gap-2";
 
 export function confirmDialog(message: string, opts: ConfirmOpts = {}): Promise<boolean> {
   return new Promise((resolve) => {
@@ -31,13 +35,11 @@ export function confirmDialog(message: string, opts: ConfirmOpts = {}): Promise<
         <div className={overlay}>
           <div className={scrim} aria-hidden="true" onClick={() => done(false)} />
           <div className={card}>
-            {opts.title && <h3 className="text-sm font-bold text-ink-primary">{opts.title}</h3>}
+            {opts.title && <h3 className="text-sm font-semibold text-ink-primary">{opts.title}</h3>}
             <p className="text-xs text-ink-secondary whitespace-pre-line">{message}</p>
-            <div className="flex justify-end gap-2">
+            <div className={footer}>
+              <button autoFocus onClick={() => done(true)} className={btnMain(opts.danger)}>{opts.confirmLabel || "Confirm"}</button>
               <button className={btnGhost} onClick={() => done(false)}>{opts.cancelLabel || "Cancel"}</button>
-              <button autoFocus onClick={() => done(true)}
-                className={`px-4 py-2 rounded-xl text-xs font-bold text-white shadow-clay-sm hover:brightness-110 ${opts.danger ? "bg-rose-600 hover:bg-rose-700" : "bg-primary"}`}>
-                {opts.confirmLabel || "Confirm"}</button>
             </div>
           </div>
         </div>
@@ -54,9 +56,9 @@ export function alertDialog(message: string, title?: string): Promise<void> {
         <div className={overlay}>
           <div className={scrim} aria-hidden="true" onClick={done} />
           <div className={card}>
-            {title && <h3 className="text-sm font-bold text-ink-primary">{title}</h3>}
+            {title && <h3 className="text-sm font-semibold text-ink-primary">{title}</h3>}
             <p className="text-xs text-ink-secondary whitespace-pre-line">{message}</p>
-            <div className="flex justify-end"><button autoFocus className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110" onClick={done}>OK</button></div>
+            <div className={footer}><button autoFocus className={btnMain()} onClick={done}>OK</button></div>
           </div>
         </div>
       );
@@ -73,16 +75,16 @@ export function promptDialog(message: string, opts: PromptOpts = {}): Promise<st
         <div className={overlay}>
           <div className={scrim} aria-hidden="true" onClick={() => done(null)} />
           <div className={card}>
-            {opts.title && <h3 className="text-sm font-bold text-ink-primary">{opts.title}</h3>}
+            {opts.title && <h3 className="text-sm font-semibold text-ink-primary">{opts.title}</h3>}
             <p className="text-xs text-ink-secondary whitespace-pre-line">{message}</p>
             <input autoFocus defaultValue={val} placeholder={opts.placeholder} type={opts.type || "text"}
               autoComplete={opts.type === "password" ? "current-password" : undefined}
               onChange={(e) => { val = e.target.value; }}
               onKeyDown={(e) => { if (e.key === "Enter") done(val); if (e.key === "Escape") done(null); }}
-              className="glass-input w-full rounded-xl px-3 py-2 text-sm" />
-            <div className="flex justify-end gap-2">
+              className="glass-input w-full rounded-xl h-9 px-3 text-sm" />
+            <div className={footer}>
+              <button onClick={() => done(val)} className={btnMain()}>{opts.confirmLabel || "OK"}</button>
               <button className={btnGhost} onClick={() => done(null)}>Cancel</button>
-              <button onClick={() => done(val)} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110">{opts.confirmLabel || "OK"}</button>
             </div>
           </div>
         </div>
@@ -106,7 +108,7 @@ export function selectDialog(message: string, options: string[], opts: SelectOpt
         <div className={overlay}>
           <div className={scrim} aria-hidden="true" onClick={() => done(null)} />
           <div className={card} data-sel-dialog>
-            {opts.title && <h3 className="text-sm font-bold text-ink-primary">{opts.title}</h3>}
+            {opts.title && <h3 className="text-sm font-semibold text-ink-primary">{opts.title}</h3>}
             <p className="text-xs text-ink-secondary whitespace-pre-line">{message}</p>
             <div className="max-h-64 overflow-y-auto space-y-1">
               {options.map((o) => (
@@ -123,8 +125,7 @@ export function selectDialog(message: string, options: string[], opts: SelectOpt
               )}
             </div>
             {opts.required && <p data-sel-error role="alert" className="text-xs font-semibold text-rose-600 empty:hidden" />}
-            <div className="flex justify-end gap-2">
-              <button className={btnGhost} onClick={() => done(null)}>Back</button>
+            <div className={footer}>
               <button onClick={(e) => {
                 const v = val === "__other__" ? other.trim() : val;
                 if (opts.required && !v) {
@@ -134,8 +135,9 @@ export function selectDialog(message: string, options: string[], opts: SelectOpt
                 }
                 done(v);
               }}
-                className={`px-4 py-2 rounded-xl text-xs font-bold text-white shadow-clay-sm hover:brightness-110 ${opts.danger ? "bg-rose-600 hover:bg-rose-700" : "bg-primary"}`}>
+                className={btnMain(opts.danger)}>
                 {opts.confirmLabel || "OK"}</button>
+              <button className={btnGhost} onClick={() => done(null)}>Back</button>
             </div>
           </div>
         </div>

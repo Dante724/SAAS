@@ -256,7 +256,7 @@ function AgentControls({ s, busy, save }: { s: SenseSettings; busy: boolean; sav
               <div className={`mt-2 ${subPanel}`}>
                 <div className="divide-y divide-slate-200/70">
                   <SettingRow label="Ask me before sending" help="Drafts wait for your OK before they go out">
-                    <Switch size="sm" on={!c.auto_send} label="Ask me before sending"
+                    <Switch on={!c.auto_send} label="Ask me before sending"
                       onChange={() => save({ agents: { [r.k]: { auto_send: !c.auto_send } } })} />
                   </SettingRow>
                   <SettingRow label={r.wait === "months" ? "Customers away for" : r.k === "collections" ? "Days after it's due" : "Wait before nudging"}
@@ -302,19 +302,20 @@ function BriefControls({ s, busy, save }: { s: SenseSettings; busy: boolean; sav
             className="glass-input rounded-xl px-3 py-2 text-sm">{HOURS.map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}</select>
         </SettingRow>
         <SettingRow label="Email" help="Send the brief by email too">
-          <Switch size="sm" on={b.email} label="Email" onChange={() => save({ brief: { email: !b.email } })} />
+          <Switch on={b.email} label="Email" onChange={() => save({ brief: { email: !b.email } })} />
         </SettingRow>
         <SettingRow label="Push to the phone app" help="The push only says the brief is ready">
-          <Switch size="sm" on={b.push} label="Push to the phone app" onChange={() => save({ brief: { push: !b.push } })} />
+          <Switch on={b.push} label="Push to the phone app" onChange={() => save({ brief: { push: !b.push } })} />
         </SettingRow>
         <div className="py-4 last:pb-0">
           <div className="text-sm font-medium text-ink-primary">Also send to</div>
           <p className="mt-0.5 mb-2 text-xs text-ink-tertiary">You always get it.</p>
           {others.length ? (
-            <div className="flex flex-wrap gap-1.5">
+            <div className="grid sm:grid-cols-2 gap-x-4">
               {others.map((p) => (
-                <label key={p.id} className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs ${b.recipients.includes(p.id) ? "border-primary/40 bg-white text-ink-primary" : "border-slate-200 bg-white text-ink-secondary"}`}>
-                  <input type="checkbox" checked={b.recipients.includes(p.id)} disabled={busy} onChange={() => toggle(p.id)} className="accent-primary" /> {p.name}
+                <label key={p.id} className="flex items-center gap-2 min-h-9 text-sm text-ink-primary cursor-pointer">
+                  <input type="checkbox" checked={b.recipients.includes(p.id)} disabled={busy} onChange={() => toggle(p.id)} className="w-4 h-4 rounded accent-primary" />
+                  <span className="min-w-0 truncate">{p.name}</span>
                 </label>
               ))}
             </div>

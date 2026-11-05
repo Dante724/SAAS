@@ -17,6 +17,12 @@ import { useFormLayout, LayoutFields, reqStar, missingRequired, has } from "../.
 import { loadFailed } from "../../lib/notice";
 import { MembershipsCard } from "../memberships/shared";
 import { MembershipDrawer } from "../memberships/MembershipsView";
+import Drawer from "../../components/Drawer";
+import Button from "../../components/Button";
+import Tabs from "../../components/Tabs";
+import { Badge } from "../../components/Card";
+import EmptyState from "../../components/EmptyState";
+import { fieldClass, labelClass } from "../../components/Field";
 
 const TABS = ["General", "Work orders", "History"];
 
@@ -84,34 +90,25 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
   const title = [a.brand, a.model].filter(Boolean).join(" ") || assetNoun(a, term);
   const isClient = (a.owner_type || "client") === "client";
   const E = ({ l, k, mono, scan, req }: { l: string; k: keyof Asset; mono?: boolean; scan?: boolean; req?: string }) => (
-    <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">{l}{req && reqStar(layout, req)}</label>
+    <div><label className={labelClass}>{l}{req && reqStar(layout, req)}</label>
       <div className="flex items-center gap-1.5">
-        <input value={(a[k] as string) || ""} onChange={(e) => set(k, e.target.value)} className={`glass-input rounded-xl px-3 py-2.5 text-sm font-semibold text-ink-primary w-full ${mono ? "tabular-nums" : ""}`} />
+        <input value={(a[k] as string) || ""} onChange={(e) => set(k, e.target.value)} className={fieldClass(mono ? "tabular-nums" : "")} />
         {scan && <ScanButton title={`Scan ${l}`} onScan={(code) => set(k, code)} />}
       </div></div>
   );
 
-  return (
-    <div className="fixed inset-0 flex justify-end" style={{ zIndex: 60 }}>
-      <div className="absolute inset-0 bg-ink-primary/30" aria-hidden="true" onClick={onClose} />
-      <div className="relative h-full w-full max-w-[680px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
-        <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
-        <header className="px-6 pt-4 border-b border-slate-200/90 bg-white">
-          <div className="flex items-center gap-2 mb-3">
-            <button onClick={onClose} className="flex items-center gap-1.5 text-xs font-semibold text-primary"><M n="arrow_back" c="text-sm" /> {woNum ? `Back to ${woNum}` : "Back"}</button>
-            <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-ink-secondary border border-slate-200">{assetNoun(a, term)}</span>
-            <div className="flex-1" />
-            <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100"><M n="close" c="text-lg" /></button>
-          </div>
-          <div className="flex items-center gap-3 pb-3">
-            <div className="w-11 h-11 rounded-xl bg-slate-100 text-ink-secondary grid place-items-center border border-slate-200"><M n="smartphone" c="text-xl" /></div>
-            <div><div className="text-base font-bold text-ink-primary">{creating ? `New ${assetNoun(a, term).toLowerCase()}` : title}{!creating && a.color ? ` (${a.color})` : ""}</div><div className="text-xs text-ink-tertiary">{creating ? `Register a ${assetNoun(a, term).toLowerCase()}` : (a.owner_name ? `Owned by ${a.owner_name}` : "Company-owned")}</div></div>
-          </div>
-          <div className="flex gap-6 text-xs font-semibold">
-            {(creating ? [TABS[0]] : TABS).map((t, i) => <button key={t} onClick={() => setTab(i)} className={`py-3 border-b-2 transition-colors ${tab === i ? "text-primary border-primary" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{t}</button>)}
-          </div>
-        </header>
-        <div className="flex-1 overflow-y-auto p-6 bg-canvas space-y-4">
+  const noun = assetNoun(a, term).toLowerCase();
+  const article = /^[aeiou]/.test(noun) ? "an" : "a";
+  return (<>
+    <Drawer size={creating ? "md" : "lg"} z={60} label={creating ? `New ${noun}` : title} onClose={onClose}
+      title={<span className="flex items-center gap-2 min-w-0"><M n="smartphone" c="text-lg text-ink-tertiary flex-shrink-0" /><span className="truncate">{creating ? `New ${noun}` : title}{!creating && a.color ? ` (${a.color})` : ""}</span></span>}
+      sub={<span className="flex flex-wrap items-center gap-2"><Badge>{assetNoun(a, term)}</Badge>{creating ? `Register ${article} ${noun}` : (a.owner_name ? `Owned by ${a.owner_name}` : "Company-owned")}{woNum ? ` · from ${woNum}` : ""}</span>}
+      tabs={creating ? undefined : <Tabs label={`${assetNoun(a, term)} sections`} value={String(tab)} onChange={(v) => setTab(Number(v))} tabs={TABS.map((t, i) => ({ id: String(i), label: t }))} />}
+      footer={<>
+        <Button variant="primary" onClick={save} busy={busy}>{busy ? "Saving…" : creating ? `Create ${noun}` : "Save"}</Button>
+        <Button onClick={onClose}>Cancel</Button>
+        {!creating && <Button variant="danger" className="ml-auto" onClick={archive} disabled={busy}>Archive {noun}</Button>}
+      </>}>
           {tab === 0 ? (
             <>
               {/* Memberships: the plan on this boat / vehicle / device (docs/SPEC_memberships.md) */}
@@ -119,12 +116,9 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
                 <MembershipsCard clientId={a.client_id} deviceId={assetId} onOpen={setPlan} />
               )}
               {plan && <MembershipDrawer id={plan} onClose={() => setPlan(null)} />}
-              <div className="text-xs font-medium text-ink-secondary">Ownership</div>
+              <h3 className="text-xs font-semibold text-ink-secondary">Ownership</h3>
               <div className="flex items-center gap-2">
-                <div className="flex bg-slate-100 rounded-lg p-0.5 border border-slate-200/60">
-                  <button onClick={() => set("owner_type", "company")} className={`px-3 py-1.5 rounded-md text-xs ${!isClient ? "font-bold bg-white text-primary shadow-xs" : "font-semibold text-ink-secondary"}`}>Company</button>
-                  <button onClick={() => set("owner_type", "client")} className={`px-3 py-1.5 rounded-md text-xs ${isClient ? "font-bold bg-white text-primary shadow-xs" : "font-semibold text-ink-secondary"}`}>Customer</button>
-                </div>
+                <Tabs look="segmented" label="Ownership" value={isClient ? "client" : "company"} onChange={(v) => set("owner_type", v)} tabs={[{ id: "company", label: "Company" }, { id: "client", label: "Customer" }]} />
                 <span className="text-xs text-ink-tertiary">{isClient ? "Belongs to a customer" : "Owned by the workshop"}</span>
               </div>
               {isClient && (
@@ -133,19 +127,19 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
                   {!picking ? (
                     <div className="text-sm font-semibold text-ink-primary flex items-center gap-3">
                       <span className={a.owner_name ? "" : "text-ink-tertiary font-normal"}>{a.owner_name || "No customer"}</span>
-                      <button onClick={() => { setPicking(true); setQ(""); }} className="text-xs text-primary font-semibold hover:underline">{a.owner_name ? "Change" : "Choose customer"}</button>
+                      <Button variant="link" onClick={() => { setPicking(true); setQ(""); }}>{a.owner_name ? "Change" : "Choose customer"}</Button>
                     </div>
                   ) : (
                     <div className="relative">
-                      <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape") setPicking(false); }} autoComplete="off" aria-label="Search customers" placeholder="Search customer by name or phone…" className="glass-input rounded-xl px-3 py-2.5 text-sm font-semibold text-ink-primary w-full" />
+                      <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape") setPicking(false); }} autoComplete="off" aria-label="Search customers" placeholder="Search customer by name or phone…" className={fieldClass("pr-16")} />
                       {(results.length > 0 || q.trim()) && (
                         <div className="absolute z-10 left-0 right-0 mt-1 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5 max-h-72 overflow-y-auto">
-                          {!q.trim() && <div className="px-2.5 pt-1 pb-0.5 text-[11px] text-ink-tertiary">Recent customers</div>}
+                          {!q.trim() && <div className="px-2.5 pt-1 pb-0.5 text-2xs text-ink-tertiary">Recent customers</div>}
                           {q.trim() && results.length === 0 && <div className="px-2.5 py-2 text-xs text-ink-tertiary">No customer matches "{q.trim()}"</div>}
                           {results.map((r) => <button key={r.id} onClick={() => { set("client_id", r.id); setA((s) => ({ ...s, owner_name: r.name })); setPicking(false); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-sm"><span className="font-semibold text-ink-primary">{r.name}</span><span className="text-ink-tertiary font-mono text-xs">{r.phone}</span></button>)}
                         </div>
                       )}
-                      <button onClick={() => setPicking(false)} className="absolute right-2 top-2.5 text-xs text-ink-tertiary">Cancel</button>
+                      <Button variant="link" className="absolute right-2 top-1/2 -translate-y-1/2 !text-ink-tertiary" onClick={() => setPicking(false)}>Cancel</Button>
                     </div>
                   )}
                 </div>
@@ -158,27 +152,27 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
                 ); })()}
                 <F l="Status">
                   {(() => { const tone = a.asset_status === "written_off" ? { cls: "bg-slate-100 text-ink-secondary border-slate-200/70", dot: "bg-slate-400", label: "Archived" } : assetStatusTone(a.asset_status); return (
-                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border ${tone.cls}`}><span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} />{tone.label}</span>
+                    <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-2xs font-semibold border ${tone.cls}`}><span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} />{tone.label}</span>
                   ); })()}
                 </F>
               </div>
-              <div className="text-xs font-medium text-ink-secondary">Details</div>
+              <h3 className="text-xs font-semibold text-ink-secondary">Details</h3>
               {/* Built-in and custom fields in the order set in Settings → Forms → Customize. */}
               <LayoutFields layout={layout} blocks={{
                 asset_type: { half: true, el: E({ l: "Type", k: "asset_type" }) },
                 condition: { half: true, el: E({ l: "Condition", k: "condition", req: "condition" }) },
-                brand: { half: true, el: <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Brand{reqStar(layout, "brand")}</label>
-                  <NameSuggestInput field="brand" group={(a.asset_type as string) || undefined} template={(a.template_key as string) || undefined} value={(a.brand as string) || ""} onChange={(v) => set("brand", v)} className="glass-input rounded-xl px-3 py-2.5 text-sm font-semibold text-ink-primary w-full" /></div> },
-                model: { half: true, el: <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Model{reqStar(layout, "model")}</label>
-                  <NameSuggestInput field="model" brand={(a.brand as string) || ""} group={(a.asset_type as string) || undefined} template={(a.template_key as string) || undefined} value={(a.model as string) || ""} onChange={(v) => set("model", v)} className="glass-input rounded-xl px-3 py-2.5 text-sm font-semibold text-ink-primary w-full" /></div> },
+                brand: { half: true, el: <div><label className={labelClass}>Brand{reqStar(layout, "brand")}</label>
+                  <NameSuggestInput field="brand" group={(a.asset_type as string) || undefined} template={(a.template_key as string) || undefined} value={(a.brand as string) || ""} onChange={(v) => set("brand", v)} className={fieldClass()} /></div> },
+                model: { half: true, el: <div><label className={labelClass}>Model{reqStar(layout, "model")}</label>
+                  <NameSuggestInput field="model" brand={(a.brand as string) || ""} group={(a.asset_type as string) || undefined} template={(a.template_key as string) || undefined} value={(a.model as string) || ""} onChange={(v) => set("model", v)} className={fieldClass()} /></div> },
                 identifiers: { el: <div className="grid grid-cols-2 gap-3">{identifierFields(term.identifier?.allowed, term.identifier?.primary).map((f) =>
                   <div key={f.kind}>{E({ l: f.label, k: f.kind as keyof Asset, mono: true, scan: true, req: "identifiers" })}</div>)}</div> },
                 color: { half: true, el: E({ l: "Color", k: "color", req: "color" }) },
               }} custom={(ids) => <CustomFields entity="device" only={ids} bare={!!ids} value={a.custom_data || {}} onChange={(cd) => set("custom_data", cd)} creating={creating} inputSize="sm" />} />
               {woNum && (<>
-                <div className="text-xs font-medium text-ink-secondary">Active work order</div>
+                <h3 className="text-xs font-semibold text-ink-secondary">Active work order</h3>
                 {/* Opened from this work order, so going back is the way to open it. */}
-                <button type="button" onClick={onClose} className={`${sectionCard} w-full text-left p-3.5 flex items-center gap-3 hover:border-slate-300 transition-colors`}><span className="w-9 h-9 rounded-lg bg-slate-100 text-ink-secondary grid place-items-center"><M n="assignment" c="text-base" /></span><div className="flex-1"><div className="text-xs font-bold text-ink-primary">{woNum}</div><div className="text-[11px] text-ink-tertiary">Linked to this {assetNoun(a, term).toLowerCase()}</div></div><M n="chevron_right" c="text-ink-tertiary text-base" /></button>
+                <button type="button" onClick={onClose} className={`${sectionCard} w-full text-left p-3.5 flex items-center gap-3 hover:border-slate-300 transition-colors`}><span className="w-9 h-9 rounded-lg bg-slate-100 text-ink-secondary grid place-items-center"><M n="assignment" c="text-base" /></span><div className="flex-1"><div className="text-xs font-semibold text-ink-primary">{woNum}</div><div className="text-2xs text-ink-tertiary">Linked to this {assetNoun(a, term).toLowerCase()}</div></div><M n="chevron_right" c="text-ink-tertiary text-base" /></button>
               </>)}
             </>
           ) : null}
@@ -186,47 +180,40 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
           {tab === 1 && (
             (a.history && a.history.length > 0)
               ? <div className={`${sectionCard} overflow-hidden`}>
-                  <div className="grid grid-cols-[1fr_auto_auto] gap-3 px-4 py-2.5 border-b border-slate-100 text-[11px] font-bold text-ink-tertiary"><span>Work order</span><span className="text-right">Total</span><span className="text-right">Date</span></div>
+                  <div className="grid grid-cols-[1fr_auto_auto] gap-3 px-4 py-2.5 border-b border-slate-100 text-2xs font-semibold text-ink-tertiary"><span>Work order</span><span className="text-right">Total</span><span className="text-right">Date</span></div>
                   <div className="divide-y divide-slate-100">
                     {a.history.map((o) => (
                       <button type="button" key={o.id} onClick={() => openOrder(o.id)} aria-label={`Open work order ${o.order_number || ""}`.trim()} className="w-full text-left grid grid-cols-[1fr_auto_auto] gap-3 px-4 py-2.5 items-center text-xs hover:bg-slate-50 transition-colors">
-                        <div><span className="font-bold text-ink-primary font-mono">{o.order_number || o.id.slice(0, 8)}</span>{o.status && <span className="ml-2 px-1.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-ink-secondary capitalize">{o.status.replace(/_/g, " ")}</span>}</div>
+                        <div><span className="font-semibold text-ink-primary font-mono">{o.order_number || o.id.slice(0, 8)}</span>{o.status && <span className="ml-2 px-1.5 py-0.5 rounded-full text-2xs font-semibold bg-slate-100 text-ink-secondary capitalize">{o.status.replace(/_/g, " ")}</span>}</div>
                         <span className="text-right tabular-nums font-semibold text-ink-primary">{money(o.total ?? 0)}</span>
                         <span className="text-right text-ink-tertiary whitespace-nowrap">{fmtDate(o.created_at)}</span>
                       </button>
                     ))}
                   </div>
                 </div>
-              : <p className="text-xs text-ink-tertiary">No work orders reference this {assetNoun(a, term).toLowerCase()} yet.</p>
+              : <EmptyState icon={<M n="handyman" c="text-lg" />} title={`No work orders for this ${noun} yet`} />
           )}
 
           {tab === 2 && (
             moves === null
-              ? <p className="text-xs text-ink-tertiary">Loading history…</p>
+              ? <div aria-hidden className="space-y-2"><span className="sk block h-12 rounded-xl" /><span className="sk block h-12 rounded-xl" /></div>
               : moves.length === 0
-                ? <p className="text-xs text-ink-tertiary">No lifecycle events logged yet.</p>
+                ? <EmptyState icon={<M n="history" c="text-lg" />} title="No lifecycle events logged yet" />
                 : <div className={`${sectionCard} divide-y divide-slate-100`}>
                     {moves.map((m, i) => (
                       <div key={i} className="px-4 py-3 flex items-start gap-3">
                         <span className="w-8 h-8 rounded-lg bg-slate-100 text-ink-secondary grid place-items-center border border-slate-200 shrink-0"><M n="history" c="text-sm" /></span>
                         <div className="flex-1 min-w-0">
-                          <div className="text-xs font-bold text-ink-primary capitalize">{(m.event_type || "event").replace(/_/g, " ")}{m.status_key ? ` · ${m.status_key}` : ""}</div>
-                          {(m.from_zone || m.to_zone) && <div className="text-[11px] text-ink-secondary">{m.from_zone || "Unknown"} → {m.to_zone || "Unknown"}</div>}
-                          {m.note && <div className="text-[11px] text-ink-tertiary">{m.note}</div>}
-                          <div className="text-[11px] text-ink-tertiary mt-0.5">{m.by ? `${m.by} · ` : ""}{fmtDate(m.at)}</div>
+                          <div className="text-xs font-semibold text-ink-primary capitalize">{(m.event_type || "event").replace(/_/g, " ")}{m.status_key ? ` · ${m.status_key}` : ""}</div>
+                          {(m.from_zone || m.to_zone) && <div className="text-2xs text-ink-secondary">{m.from_zone || "Unknown"} → {m.to_zone || "Unknown"}</div>}
+                          {m.note && <div className="text-2xs text-ink-tertiary">{m.note}</div>}
+                          <div className="text-2xs text-ink-tertiary mt-0.5">{m.by ? `${m.by} · ` : ""}{fmtDate(m.at)}</div>
                         </div>
                       </div>
                     ))}
                   </div>
           )}
-        </div>
-        <footer className="px-6 py-3.5 border-t border-slate-200/90 bg-white flex items-center gap-2">
-          <button onClick={save} disabled={busy} className="h-9 px-4 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Saving…" : creating ? `Create ${assetNoun(a, term).toLowerCase()}` : "Save"}</button>
-          <button onClick={onClose} className="h-9 px-3.5 rounded-xl text-xs font-semibold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50">Cancel</button>
-          {!creating && <button onClick={archive} disabled={busy} className="ml-auto h-9 px-3 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50">Archive {assetNoun(a, term).toLowerCase()}</button>}
-        </footer>
-        {toast && <div className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-drawer">{toast}</div>}
-      </div>
-    </div>
-  );
+    </Drawer>
+    {toast && <div role="status" className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-clay-drawer z-[70]">{toast}</div>}
+  </>);
 }
