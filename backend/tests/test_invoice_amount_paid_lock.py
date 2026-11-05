@@ -7,6 +7,7 @@ the invoice ended at 100 instead of 160 and stayed Partial (3/3 live runs). amou
 with the atomic add_to_column UPDATE and the status is settled from the refreshed value.
 """
 import asyncio
+import os
 
 import pytest
 
@@ -74,3 +75,77 @@ async def test_two_jobs_on_one_invoice_paid_in_turn(client, tenant):
         assert r.status_code == 200, r.text
     inv = (await client.get(f"/api/finance/invoices/{iid}", headers=tenant)).json()
     assert inv["amount_paid"] == pytest.approx(160) and inv["status"] == "paid", inv
+
+
+# --- Lock order (independent review of #111) ------------------------------------------------
+# Postgres only: the two requests must run in two transactions that can wait on each other's row
+# locks. SQLite serialises writes and never deadlocks.
+_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL", "")
+pg_only = pytest.mark.skipif(not _URL.startswith("postgresql"), reason="row locks are Postgres only")
+
+
+async def _client_job(client, h, loc, price):
+    cid = (await client.post("/api/clients", json={"name": "C", "phone": "+15559"}, headers=h)).json()["id"]
+    r = await client.post("/api/orders", json={"location_id": loc, "client_id": cid, "complaint": "x",
+                                               "is_estimate": False, "lines": []}, headers=h)
+    assert r.status_code in (200, 201), r.text
+    oid = r.json()["id"]
+    r = await client.post(f"/api/orders/{oid}/lines", json={
+        "line_type": "labour", "kind": "custom", "description": "Work", "unit_price": price, "qty": 1}, headers=h)
+    assert r.status_code in (200, 201), r.text
+    return cid, oid
+
+
+async def _invoice(client, h, oid):
+    r = await client.post("/api/finance/invoices", json={"order_id": oid}, headers=h)
+    assert r.status_code == 201, r.text
+    return r.json()["id"]
+
+
+@pg_only
+@pytest.mark.asyncio
+async def test_pay_and_prepay_on_one_invoiced_job_together(client, tenant):
+    """Pre-locking the job's invoices before the job (Invoice -> Order) in the till payment
+    deadlocked against every other money path, which takes Order -> Invoice: a till payment and a
+    prepayment on the same invoiced job at once gave PAY a 500 (DeadlockDetectedError). The job
+    is now locked FOR NO KEY UPDATE first, like everywhere else: both land, the invoice settles."""
+    loc = await _loc(client, tenant)
+    cash = await _till(client, tenant, "Till", "cash")
+    _cid, oid = await _client_job(client, tenant, loc, 100)
+    iid = await _invoice(client, tenant, oid)
+
+    pay, pre = await asyncio.gather(
+        client.post(f"/api/cash/orders/{oid}/pay", json={"method": "cash", "account_id": cash, "amount": 60}, headers=tenant),
+        client.post(f"/api/cash/orders/{oid}/prepay", json={"method": "cash", "account_id": cash, "amount": 40}, headers=tenant))
+    assert pay.status_code == 200, pay.text
+    assert pre.status_code == 201, pre.text
+
+    inv = (await client.get(f"/api/finance/invoices/{iid}", headers=tenant)).json()
+    assert inv["amount_paid"] == pytest.approx(100), inv
+    assert inv["status"] == "paid", inv
+    o = (await client.get(f"/api/orders/{oid}", headers=tenant)).json()
+    assert o.get("prepayment_total") == pytest.approx(40), o
+
+
+@pg_only
+@pytest.mark.asyncio
+async def test_prepay_and_invoice_payment_together(client, tenant):
+    """Invoices › Record payment locks Invoice -> Client; a prepayment posted the client ledger
+    (Client) before putting the money on the invoice (Invoice). The two at once deadlocked. The
+    prepayment now lands on the invoice first, then posts the ledger: Invoice -> Client both ways."""
+    loc = await _loc(client, tenant)
+    cash = await _till(client, tenant, "Till", "cash")
+    cid, oid = await _client_job(client, tenant, loc, 100)
+    iid = await _invoice(client, tenant, oid)
+
+    pre, pay = await asyncio.gather(
+        client.post(f"/api/cash/orders/{oid}/prepay", json={"method": "cash", "account_id": cash, "amount": 40}, headers=tenant),
+        client.post(f"/api/finance/invoices/{iid}/pay", json={"method": "cash", "account_id": cash, "amount": 60}, headers=tenant))
+    assert pre.status_code == 201, pre.text
+    assert pay.status_code == 200, pay.text
+
+    inv = (await client.get(f"/api/finance/invoices/{iid}", headers=tenant)).json()
+    assert inv["amount_paid"] == pytest.approx(100), inv
+    assert inv["status"] == "paid", inv
+    c = (await client.get(f"/api/clients/{cid}", headers=tenant)).json()
+    assert c["balance"] == pytest.approx(0), c    # 100 owed, 40 + 60 received

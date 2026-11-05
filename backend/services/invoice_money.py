@@ -56,14 +56,17 @@ def pct_amounts(subtotal: float, discount_pct: float, tax_pct: float) -> tuple[f
 async def lock_order(db: AsyncSession, order_id: str) -> None:
     """Serialize changes to one job's money and lines, so two requests can't both apply the same
     held deposit, both create the job's first invoice, or edit its lines over each other. Postgres:
-    a row lock. SQLite ignores FOR UPDATE and only serializes writes, so there a no-op UPDATE
+    a row lock (FOR NO KEY UPDATE). SQLite ignores FOR UPDATE and only serializes writes, so there a no-op UPDATE
     takes the write lock now (the second request waits, then reads what the first one saved)."""
     if db.get_bind().dialect.name == "sqlite":
         from sqlalchemy import update
         await db.execute(update(Order).where(Order.id == order_id)
                          .values(updated_at=Order.updated_at).execution_options(synchronize_session=False))
     else:
-        await db.execute(select(Order.id).where(Order.id == order_id).with_for_update())
+        # FOR NO KEY UPDATE: invoices, payments and lines reference the job by foreign key, so
+        # writing one takes FOR KEY SHARE on the job; a plain FOR UPDATE held for another job on
+        # the same invoice deadlocked. NO KEY UPDATE still serialises two writers of one job.
+        await db.execute(select(Order.id).where(Order.id == order_id).with_for_update(key_share=True))
 
 
 async def billed_on(db: AsyncSession, order_id: str, *, exclude_invoice_id: str | None = None):

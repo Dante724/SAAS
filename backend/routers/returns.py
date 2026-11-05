@@ -196,8 +196,8 @@ async def create_refund(
         order_id = ret.order_id if ret else None
     if not order_id:
         raise HTTPException(400, "A refund must reference the order (or a return for an order) it repays")
-    locked = (await db.execute(select(Order).where(
-        Order.id == order_id, Order.org_id == current.org_id).with_for_update())).scalar_one_or_none()
+    locked = (await db.execute(select(Order).where(     # NO KEY UPDATE: see invoice_money.lock_order
+        Order.id == order_id, Order.org_id == current.org_id).with_for_update(key_share=True))).scalar_one_or_none()
     if not locked:
         raise HTTPException(404, "Order not found")
     from backend.services.invoice_money import lock_order

@@ -506,8 +506,8 @@ async def settle_succeeded(db: AsyncSession, ch: TerminalCharge, *, provider_pay
     from backend.routers.feed import log_system_event
     note = ""
     if ch.order_id:
-        o = (await db.execute(select(Order).where(
-            Order.id == ch.order_id, Order.org_id == ch.org_id).with_for_update())).scalar_one()
+        o = (await db.execute(select(Order).where(      # NO KEY UPDATE: see invoice_money.lock_order
+            Order.id == ch.order_id, Order.org_id == ch.org_id).with_for_update(key_share=True))).scalar_one()
         # Review M4b: the card may be approved after the order was paid another way (cash, a pay
         # link, a credit note). The money was taken, so it is recorded, but staff must look.
         from backend.services.order_money import balance_due
