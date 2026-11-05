@@ -5,10 +5,10 @@
 import { useEffect, useState } from "react";
 import { api, openAuthedDoc } from "../../api/client";
 import { alertDialog } from "../../lib/dialog";
-import DateField from "../../components/DateField";
 import { M } from "../../components/Shell";
 import Button from "../../components/Button";
-import PageLayout, { PanelHeader, Toolbar } from "../../components/PageLayout";
+import PageLayout, { PanelHeader } from "../../components/PageLayout";
+import ReportsToolbar from "./ReportsToolbar";
 
 type Counts = { total: number; go: number };
 export type PilotRow = {
@@ -37,7 +37,7 @@ export function reportQuery(from: string, to: string, extra = ""): string {
   return `/pilot/go-report?${p}`;
 }
 
-export default function GoPilotReport() {
+export default function GoPilotReport({ locs = [] }: { locs?: { id: string; name: string }[] } = {}) {
   const [to, setTo] = useState(iso(new Date()));
   const [from, setFrom] = useState(iso(new Date(Date.now() - 6 * 864e5)));
   const [rep, setRep] = useState<PilotReport | null>(null);
@@ -60,13 +60,10 @@ export default function GoPilotReport() {
   const td = "py-2.5 px-3 text-xs text-right tabular-nums whitespace-nowrap";
   return (
     <PageLayout>
+      {/* Its own range goes in the shared From/To slots; there is no location filter here, so that one is greyed. */}
+      <ReportsToolbar actions={<Button icon={<M n="download" c="text-sm" />} onClick={csv}>Download CSV</Button>}
+        locs={locs} from={from} to={to} onFrom={setFrom} onTo={setTo} />
       <PanelHeader title="Go pilot" sub="How much of the pilot's work happened on a phone. Days run midnight to midnight UTC; jobs count once they got a pilot QR label." />
-      <Toolbar actions={<Button icon={<M n="download" c="text-sm" />} onClick={csv}>Download CSV</Button>}
-        filters={<span className="flex items-center gap-1.5 whitespace-nowrap text-xs">
-          <DateField mode="date" label="From" value={from} max={to} onChange={setFrom} className="w-36" />
-          <span className="text-ink-tertiary">to</span>
-          <DateField mode="date" label="To" value={to} min={from} onChange={setTo} className="w-36" />
-        </span>} />
 
       {err && <p role="alert" className="text-sm text-rose-700">{err}</p>}
 

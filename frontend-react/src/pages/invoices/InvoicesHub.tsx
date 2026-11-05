@@ -106,9 +106,10 @@ export default function InvoicesHub() {
           {/* One toolbar for both tabs: what doesn't apply on a tab stays in place, greyed. */}
           <Toolbar
             actions={<>
+              {/* One fixed width for both labels, so "Print selected" never moves between tabs. */}
               {onNotes
-                ? <Button variant="primary" icon={<M n="add" c="text-sm" />} onClick={() => setCnCreating(true)} disabled={!can("can_create_credit_notes")}>New credit note</Button>
-                : <Button variant="primary" icon={<M n="add" c="text-sm" />} onClick={() => setNewInv(true)}>New invoice</Button>}
+                ? <Button variant="primary" className="min-w-[9.5rem]" icon={<M n="add" c="text-sm" />} onClick={() => setCnCreating(true)} disabled={!can("can_create_credit_notes")}>New credit note</Button>
+                : <Button variant="primary" className="min-w-[9.5rem]" icon={<M n="add" c="text-sm" />} onClick={() => setNewInv(true)}>New invoice</Button>}
               <Button icon={<M n="print" c="text-sm" />} onClick={() => setInvPrint(true)} disabled={onNotes || invSel.size === 0}>
                 {invSel.size > 0 && !onNotes ? `Print ${invSel.size} selected` : "Print selected"}</Button>
             </>}

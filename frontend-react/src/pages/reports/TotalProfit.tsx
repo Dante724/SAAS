@@ -3,10 +3,10 @@ import { useNavigate } from "react-router-dom";
 import { api, openAuthedDoc } from "../../api/client";
 import { alertDialog } from "../../lib/dialog";
 import { useMe } from "../../context/Me";
-import DateField from "../../components/DateField";
 import { M } from "../../components/Shell";
 import Button from "../../components/Button";
-import { PanelHeader, Toolbar } from "../../components/PageLayout";
+import { PanelHeader } from "../../components/PageLayout";
+import ReportsToolbar from "./ReportsToolbar";
 import { fieldClass } from "../../components/Field";
 import { theadRowClass } from "../../components/Table";
 
@@ -85,29 +85,20 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
 
   return (
     <>
-      <PanelHeader title="Total profit" sub="What the shop kept from jobs and sales, before running costs." />
-      {/* Same toolbar as the other Reports tabs: actions left; location and dates right, in the same place. */}
-      <Toolbar
+      {/* The shared Reports toolbar: Show and Export left; Technician (this tab's own filter) before
+          the shared Location and dates, which stay pinned right as on every Reports tab. */}
+      <ReportsToolbar
         actions={<>
           <Button variant="primary" onClick={() => load()}>Show</Button>
           {/* the CSV route also checks this permission */}
           {can("can_export_sales") && <Button icon={<M n="download" c="text-sm" />} onClick={exportCsv}>Export</Button>}
         </>}
-        filters={<>
-          <select aria-label="Technician" value={techId} onChange={(e) => setTechId(e.target.value)} className={sel}>
-            <option value="">Everyone</option>
-            {techs.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select>
-          <select aria-label="Location" value={locId} onChange={(e) => setLocId(e.target.value)} disabled={locs.length < 2} className={sel}>
-            <option value="">All locations</option>
-            {locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-          </select>
-          <span className="flex items-center gap-1.5 whitespace-nowrap text-xs">
-            <DateField mode="date" label="From" value={from} max={to} onChange={setFrom} className="w-36" />
-            <span className="text-ink-tertiary">to</span>
-            <DateField mode="date" label="To" value={to} min={from} onChange={setTo} className="w-36" />
-          </span>
-        </>} />
+        extras={<select aria-label="Technician" value={techId} onChange={(e) => setTechId(e.target.value)} className={sel}>
+          <option value="">Everyone</option>
+          {techs.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
+        </select>}
+        locs={locs} locId={locId} onLoc={setLocId} from={from} to={to} onFrom={setFrom} onTo={setTo} />
+      <PanelHeader title="Total profit" sub="What the shop kept from jobs and sales, before running costs." />
 
       {err && <div role="alert" className="text-xs text-rose-600">{err}</div>}
       {!rep && !err && <div className="text-xs text-ink-tertiary" role="status">Adding it up…</div>}

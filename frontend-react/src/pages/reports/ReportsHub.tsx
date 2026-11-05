@@ -19,7 +19,7 @@ import { DEFAULT_FILTERS, REPORTS_PREF, REPORT_FILTERS, filterParams, readReport
 import { cachedPref, loadPref, savePref } from "../../lib/userPref";
 import GoPilotReport from "./GoPilotReport";
 import { loadFailed } from "../../lib/notice";
-import PageLayout, { PanelHeader, Toolbar } from "../../components/PageLayout";
+import PageLayout, { PanelHeader } from "../../components/PageLayout";
 import Tabs from "../../components/Tabs";
 import Button, { IconButton } from "../../components/Button";
 import Card, { StatTile } from "../../components/Card";
@@ -27,6 +27,7 @@ import EmptyState from "../../components/EmptyState";
 import { fieldClass } from "../../components/Field";
 import { theadRowClass } from "../../components/Table";
 import { SearchBox } from "../invoices/billing";
+import ReportsToolbar from "./ReportsToolbar";
 
 // A report column holds money when its name says so (the API sends plain labels): those cells show
 // the shop's currency; every number column is right-aligned with even-width digits.
@@ -34,16 +35,6 @@ const MONEY_WORDS = /commission|hourly|bonus|penalt|base|total|revenue|sales|cos
 const NOT_MONEY = /\b(count|qty|quantity|hours?|jobs|orders|units|items|%|pct|percent|rate|days|minutes|min|number|no\.)\b|%/i;
 export const isMoneyCol = (label: string) => MONEY_WORDS.test(label) && !NOT_MONEY.test(label);
 const sel = fieldClass("pr-8 w-auto max-w-[12rem]");
-// One date range control for every Reports tab: the same width and place in the toolbar.
-function Range({ from, to, onFrom, onTo, disabled }: { from: string; to: string; onFrom: (v: string) => void; onTo: (v: string) => void; disabled?: boolean }) {
-  return (
-    <span className={`flex items-center gap-1.5 whitespace-nowrap text-xs ${disabled ? "opacity-50 pointer-events-none" : ""}`} aria-disabled={disabled || undefined}>
-      <DateField mode="date" label="From" value={from} max={to} onChange={onFrom} className="w-36" />
-      <span className="text-ink-tertiary">to</span>
-      <DateField mode="date" label="To" value={to} min={from} onChange={onTo} className="w-36" />
-    </span>
-  );
-}
 
 const REPORT_PAGE = 50;
 
@@ -180,20 +171,15 @@ export function CustomView() {
 
   return (
     <PageLayout>
-      <PanelHeader title="Custom report" sub="Build your own table from any data, then save it to run again." />
-      <Toolbar
+      <ReportsToolbar
         actions={<>
           <Button variant="primary" disabled={busy || !src} onClick={run}>Run</Button>
           <Button icon={<M n="table_view" c="text-sm" />} disabled={!res} onClick={() => exportRes("xlsx")}>Excel</Button>
           <Button icon={<M n="download" c="text-sm" />} disabled={!res} onClick={() => exportRes("csv")}>CSV</Button>
         </>}
-        filters={<>
-          <select aria-label="Location" value={locId} onChange={(e) => setLocId(e.target.value)} disabled={!(meta?.has_location && locs.length > 1)} className={sel}>
-            <option value="">All locations</option>
-            {locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-          </select>
-          <Range from={from} to={to} onFrom={setFrom} onTo={setTo} disabled={!meta?.date_field} />
-        </>} />
+        locs={locs} locId={locId} onLoc={meta?.has_location ? setLocId : undefined}
+        from={from} to={to} onFrom={meta?.date_field ? setFrom : undefined} onTo={meta?.date_field ? setTo : undefined} />
+      <PanelHeader title="Custom report" sub="Build your own table from any data, then save it to run again." />
       <div className="flex flex-col md:flex-row gap-4">
         {/* saved reports */}
         <aside className="md:w-52 flex-shrink-0 bg-white rounded-2xl border border-slate-200/90 p-2 h-fit">
@@ -534,11 +520,12 @@ export default function ReportsHub() {
 
       {view === "custom" && <CustomView />}
       {view === "total_profit" && <PageLayout><TotalProfit locs={locs} /></PageLayout>}
-      {view === "fleet" && <PageLayout><FleetAnalytics /></PageLayout>}
-      {view === "gopilot" && <GoPilotReport />}
+      {view === "fleet" && <PageLayout><FleetAnalytics locs={locs} from={from} to={to} /></PageLayout>}
+      {view === "gopilot" && <GoPilotReport locs={locs} />}
 
       {view !== "reports" && view !== "custom" && view !== "fleet" && view !== "total_profit" && view !== "gopilot" && (
         <PageLayout>
+          <ReportsToolbar locs={locs} from={from} to={to} />
           {view === "profitability" && <PanelHeader title="Job profitability" sub="What each job brought in against its parts, labour and commission." />}
           {view === "insights" && <PanelHeader title="Insights" sub="The numbers your shop tracks most closely." />}
           {view === "feedback" && <PanelHeader title="Feedback" sub="What customers said after their job." />}
@@ -635,22 +622,15 @@ export default function ReportsHub() {
 
       {view === "reports" && (
       <PageLayout>
-        <PanelHeader title={result?.title || "Reports"} sub={result ? "Pick another report on the left, or change the dates." : "Pick a report on the left to get started."} />
-        {/* The one Reports toolbar: run and download on the left; location and dates on the right,
-            in the same place as on Total profit, Custom report and Go pilot. */}
-        <Toolbar
+        <ReportsToolbar
           actions={<>
             <Button variant="primary" onClick={() => active && run(active)} disabled={!active}>Run</Button>
             <Button icon={<M n="table_view" c="text-sm" />} disabled={exporting || !result || !can(EXPORT_PERMS[active || ""])} onClick={() => download("xlsx")}>Excel</Button>
             <Button icon={<M n="download" c="text-sm" />} disabled={exporting || !result || !can(EXPORT_PERMS[active || ""])} onClick={() => download("csv")}>CSV</Button>
           </>}
-          filters={<>
-            <select aria-label="Location" value={locId} onChange={(e) => { setLocId(e.target.value); remember(active, filters, e.target.value); }} disabled={locs.length < 2} className={sel}>
-              <option value="">All locations</option>
-              {locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-            </select>
-            <Range from={from} to={to} onFrom={setFrom} onTo={setTo} />
-          </>} />
+          locs={locs} locId={locId} onLoc={(v) => { setLocId(v); remember(active, filters, v); }}
+          from={from} to={to} onFrom={setFrom} onTo={setTo} />
+        <PanelHeader title={result?.title || "Reports"} sub={result ? "Pick another report on the left, or change the dates." : "Pick a report on the left to get started."} />
         <PageSummary stats={kpiStats} />
 
         <div className="flex flex-col md:flex-row gap-4">
@@ -793,7 +773,7 @@ export default function ReportsHub() {
 // Fleet & owner analytics — surfaces the /analytics/* layer that shipped in the backend
 // but was never wired into the React app: owner KPIs, B2B fleet roll-up, technician
 // productivity and per-location comparison. Read-only; range in days.
-function FleetAnalytics() {
+function FleetAnalytics({ locs: shopLocs, from, to }: { locs: { id: string; name: string }[]; from: string; to: string }) {
   const term = useTerminology();
   const assetsLc = term.assets.toLowerCase();   // "vehicles" / "devices" / "vessels" …
   const [days, setDays] = useState(30);
@@ -821,9 +801,11 @@ function FleetAnalytics() {
   const th = "px-4 py-3 border-b border-slate-100 text-xs font-semibold text-ink-primary";
   return (
     <>
+      {/* The period is this tab's own filter; the shared location and dates stay in place, greyed. */}
+      <ReportsToolbar locs={shopLocs} from={from} to={to}
+        extras={<Tabs look="segmented" label="Period" value={String(days)} onChange={(d) => setDays(Number(d))}
+          tabs={[7, 30, 90].map((d) => ({ id: String(d), label: `${d} days` }))} />} />
       <PanelHeader title="Business & analytics" sub="How the shop is doing over the last few days, weeks or months." />
-      <Toolbar filters={<Tabs look="segmented" label="Period" value={String(days)} onChange={(d) => setDays(Number(d))}
-        tabs={[7, 30, 90].map((d) => ({ id: String(d), label: `${d} days` }))} />} />
       <PageSummary stats={kpis} />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
