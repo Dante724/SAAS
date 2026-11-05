@@ -138,7 +138,7 @@ export default function SupplierPanel({ supplierId, onSaved }: { supplierId: str
               </div>
             )}
             {!led ? <div aria-hidden className="space-y-2 py-2"><span className="sk block h-4 w-2/3 rounded" /><span className="sk block h-4 w-1/2 rounded" /></div>
-              : led.entries.length === 0 ? <EmptyState size="inline" title="No ledger activity yet. Received POs and returns for this supplier post here." />
+              : led.entries.length === 0 ? <EmptyState size="inline" title="Nothing here yet. Bills and returns from this supplier show up here." />
                 : <div className="divide-y divide-slate-100">
                   {led.entries.map((e) => (
                     <div key={e.id} className="flex items-center gap-3 py-2 text-xs">

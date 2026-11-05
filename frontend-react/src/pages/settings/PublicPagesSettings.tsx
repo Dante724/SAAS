@@ -10,6 +10,7 @@ import Button, { buttonClass } from "../../components/Button";
 import Tabs from "../../components/Tabs";
 import { fieldClass, labelClass } from "../../components/Field";
 import { settingsToast, rowField } from "./kit";
+import { laborText } from "../../lib/labor";
 
 /* Settings › Public pages — the three pages customers see (booking, job tracking, estimate
    approval), one brand colour for all of them, and a live phone preview. Same
@@ -282,7 +283,7 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker, afte
                   <div className="text-sm font-semibold text-ink-primary">Estimate EST-208</div>
                   <div className="space-y-1 text-ink-secondary">
                     <div className="flex justify-between"><span>Screen replacement</span><span>$189.00</span></div>
-                    <div className="flex justify-between"><span>Labour</span><span>$40.00</span></div>
+                    <div className="flex justify-between"><span>{laborText("Labour")}</span><span>$40.00</span></div>
                     <div className="flex justify-between font-semibold text-ink-primary pt-1 border-t border-dashed border-slate-200"><span>Total</span><span>$229.00</span></div>
                   </div>
                   {cfg.oe_allow_approval ? (<>

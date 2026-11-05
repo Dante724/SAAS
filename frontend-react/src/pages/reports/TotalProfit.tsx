@@ -14,6 +14,7 @@ const sel = fieldClass("pr-8 !w-auto max-w-[12rem]");
 import { money } from "../orders/types";
 import { clickableRow } from "../../lib/clickable";
 import { KIND_LABEL, drillRows, trend, type Drill, type ProfitRow } from "./profitView";
+import { laborText, laborWord } from "../../lib/labor";
 
 type Bucket = { count: number; revenue: number; tax: number; cogs?: number; labour_cost: number; commission: number; profit?: number; written_off: number };
 type Group = Bucket & { name: string; jobs: number; dropped: number; sales: number; location_id?: string | null; employee_id?: string | null };
@@ -187,7 +188,7 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
                     <th className="py-2 px-3">Number</th><th className="py-2 px-3">What</th><th className="py-2 px-3">Date</th>
                     <th className="py-2 px-3">Customer</th><th className="py-2 px-3 text-right">Sales</th><th className="py-2 px-3 text-right">Tax</th>
                     {!costsHidden && <th className="py-2 px-3 text-right">Parts</th>}
-                    <th className="py-2 px-3 text-right">Labour</th><th className="py-2 px-3 text-right">Commission</th>
+                    <th className="py-2 px-3 text-right">{laborText("Labour")}</th><th className="py-2 px-3 text-right">Commission</th>
                     {!costsHidden && <th className="py-2 px-3 text-right">Profit</th>}
                   </tr></thead>
                   <tbody className="divide-y divide-slate-100">
@@ -218,7 +219,7 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
             </div>
           )}
           <p className="text-2xs text-ink-tertiary">
-            Profit = sales − parts − labour − commissions. Jobs count on the day they were closed, invoiced and sent, or dropped; a dropped job counts only the money you kept. Sales matches Sales on Reports and the P&L. Paid on Home is money in on the day it arrived, so it can differ. With a technician picked, refunds that aren't on a job are left out.
+            Profit = sales − parts − {laborWord(true)} − commissions. Jobs count on the day they were closed, invoiced and sent, or dropped; a dropped job counts only the money you kept. Sales matches Sales on Reports and the P&L. Paid on Home is money in on the day it arrived, so it can differ. With a technician picked, refunds that aren't on a job are left out.
           </p>
         </>
       )}

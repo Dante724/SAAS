@@ -22,6 +22,7 @@ import { Avatar } from "../orders/look";
 import { DisplayModes, Drawer, cash, ErrorNote, MoreMenu, SearchBox, StatusPill, daysLate, fmtDate, inputCls, isVoid, labelCls, lateText, sendInvoice, type MenuItem } from "./billing";
 import { loadFailed } from "../../lib/notice";
 import { clickableRow } from "../../lib/clickable";
+import { laborText } from "../../lib/labor";
 
 // Invoices are day-to-day front-desk work (issue, take payment, resend), so they get their own
 // page next to Sales instead of a tab inside Finance — which also kept staff who only need
@@ -259,7 +260,7 @@ function NewInvoiceDrawer({ onClose, onCreated }: { onClose: () => void; onCreat
         <div className="space-y-2">
           {lines.map((l, i) => (
             <div key={i} className="grid grid-cols-[auto_4rem_1fr_auto] sm:flex items-center gap-2 pb-2 border-b border-slate-100 last:border-0 sm:pb-0 sm:border-0">
-              <select value={l.kind} onChange={(e) => setLine(i, "kind", e.target.value)} title="Line type" aria-label={`Line ${i + 1} type`} className={`${inputCls} !w-auto !px-2`}><option value="custom">Custom</option><option value="service">Service</option><option value="product">Product</option><option value="labor">Labor</option></select>
+              <select value={l.kind} onChange={(e) => setLine(i, "kind", e.target.value)} title="Line type" aria-label={`Line ${i + 1} type`} className={`${inputCls} !w-auto !px-2`}><option value="custom">Custom</option><option value="service">Service</option><option value="product">Product</option><option value="labor">{laborText("Labor")}</option></select>
               <input value={l.description} onChange={(e) => setLine(i, "description", e.target.value)} placeholder="Description" aria-label={`Line ${i + 1} description`} className={`${inputCls} col-span-4 order-first sm:order-none sm:!w-auto sm:flex-1 sm:min-w-[140px]`} />
               <input type="number" min={0} value={l.qty} onChange={(e) => setLine(i, "qty", Number(e.target.value))} title="Qty" aria-label={`Line ${i + 1} quantity`} className={`${inputCls} sm:!w-16 text-right tabular-nums`} />
               <input type="number" min={0} value={l.unit_price} onChange={(e) => setLine(i, "unit_price", Number(e.target.value))} placeholder="Price" aria-label={`Line ${i + 1} price`} className={`${inputCls} sm:!w-24 text-right tabular-nums`} />

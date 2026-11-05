@@ -28,6 +28,7 @@ import { fieldClass } from "../../components/Field";
 import { theadRowClass } from "../../components/Table";
 import { SearchBox } from "../invoices/billing";
 import ReportsToolbar from "./ReportsToolbar";
+import { laborText } from "../../lib/labor";
 
 // A report column holds money when its name says so (the API sends plain labels): those cells show
 // the shop's currency; every number column is right-aligned with even-width digits.
@@ -526,7 +527,7 @@ export default function ReportsHub() {
       {view !== "reports" && view !== "custom" && view !== "fleet" && view !== "total_profit" && view !== "gopilot" && (
         <PageLayout>
           <ReportsToolbar locs={locs} from={from} to={to} />
-          {view === "profitability" && <PanelHeader title="Job profitability" sub="What each job brought in against its parts, labour and commission." />}
+          {view === "profitability" && <PanelHeader title="Job profitability" sub={laborText("What each job brought in against its parts, labour and commission.")} />}
           {view === "insights" && <PanelHeader title="Insights" sub="The numbers your shop tracks most closely." />}
           {view === "feedback" && <PanelHeader title="Feedback" sub="What customers said after their job." />}
           {view === "profitability" && (

@@ -612,11 +612,11 @@ function DeliveryStatusBanner() {
         {order.map((k) => (
           <span key={k} className={"inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-xs font-medium " + (ch[k] === "live" ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-ink-secondary")}>
             <span className={"h-1.5 w-1.5 rounded-full " + (ch[k] === "live" ? "bg-emerald-500" : "bg-slate-400")} />
-            {k.toUpperCase()} · {ch[k]}
+            {k === "whatsapp" ? "WhatsApp" : k === "push" ? "Push" : k.toUpperCase()} · {ch[k] === "simulated" ? "practice mode" : ch[k]}
           </span>
         ))}
       </div>
-      {anySim && <div className="mt-2 text-xs text-ink-tertiary">Channels marked <span className="font-semibold">simulated</span> are logged, not delivered. Add provider credentials (SMTP / Twilio / VAPID) or connect an email account to go live.</div>}
+      {anySim && <div className="mt-2 text-xs text-ink-tertiary">Channels in <span className="font-semibold">practice mode</span> are logged, not delivered. Add provider credentials (SMTP / Twilio / VAPID) or connect an email account to go live.</div>}
     </div>
   );
 }
@@ -1152,7 +1152,7 @@ function IntegrationsHub({ data, goSection, reload, pro = { accounting: true, ap
     if (s === "org") return { text: "Your keys", tone: "on" };
     if (s === "env") return { text: "Shared default", tone: "neutral" };
     if (s === "unreadable") return { text: "Enter keys again", tone: "off" };
-    return { text: "Not set", tone: "off" };
+    return { text: "Not set up", tone: "off" };
   };
   const keyAction = (p: string) => ({ label: srcOf(p) === "org" ? "Edit keys" : srcOf(p) === "unreadable" ? "Re-enter keys" : "Add keys", onClick: () => setKeyProv(p) });
   const emailOn = (data.email?.accounts?.length || 0) > 0;
@@ -1187,10 +1187,10 @@ function IntegrationsHub({ data, goSection, reload, pro = { accounting: true, ap
         badge: keyBadge("sumup"), action: keyAction("sumup") } ] },
     { group: "Accounting", cards: [
       { name: "QuickBooks Online", desc: "Send invoices, payments and contacts to QuickBooks.",
-        badge: data.qbo?.connected ? { text: "Connected", tone: "on" } : { text: data.qbo?.configured ? "Not connected" : "Not configured", tone: "off" },
+        badge: data.qbo?.connected ? { text: "Connected", tone: "on" } : { text: data.qbo?.configured ? "Not connected" : "Not set up", tone: "off" },
         hint: data.qbo?.configured ? undefined : "Contact Tekly support to turn this on", ...(pro.accounting ? {} : proCard) },
       { name: "Xero", desc: "Sync invoices, payments and clients both ways.",
-        badge: data.xero?.connected ? { text: "Connected", tone: "on" } : { text: data.xero?.configured ? "Not connected" : "Not configured", tone: "off" },
+        badge: data.xero?.connected ? { text: "Connected", tone: "on" } : { text: data.xero?.configured ? "Not connected" : "Not set up", tone: "off" },
         hint: data.xero?.configured ? undefined : "Contact Tekly support to turn this on", ...(pro.accounting ? {} : proCard) } ] },
     { group: "Communication", cards: [
       { name: "Email (Gmail / Outlook)", desc: "Send from your own mailbox (OAuth). SMTP fallback available.",
@@ -1200,7 +1200,7 @@ function IntegrationsHub({ data, goSection, reload, pro = { accounting: true, ap
       { name: "SMS & WhatsApp (Twilio)", desc: "Two-way messages; replies land on the right job.",
         badge: keyBadge("twilio"), action: keyAction("twilio") },
       { name: "Calls / VoIP", desc: "Click-to-call and an inbound-call feed through your Twilio account.",
-        badge: telOn ? { text: telProv === "simulated" ? "Simulated" : telProv === "twilio" && data.tel?.twilio?.test_mode ? "Twilio: test mode" : `Live: ${telProv}`, tone: "on" } : { text: "Off", tone: "off" }, hint: telOn ? undefined : "Set up below in Calls & telephony" },
+        badge: telOn ? { text: telProv === "simulated" ? "Practice mode" : telProv === "twilio" && data.tel?.twilio?.test_mode ? "Twilio: test mode" : `Live: ${telProv}`, tone: "on" } : { text: "Off", tone: "off" }, hint: telOn ? undefined : "Set up below in Calls & telephony" },
       { name: "Chat inbox (Messenger / Instagram / WhatsApp)", desc: "Meta channels land in one inbox, linked to clients & jobs.",
         badge: keyBadge("meta"), action: keyAction("meta") } ] },
     { group: "E-commerce", cards: [
@@ -2083,7 +2083,7 @@ function SsoSettings() {
             <Button variant="primary" onClick={add} disabled={busy || !f.display_name.trim()}>{busy ? "Adding…" : "Add connection"}</Button>
             <Button onClick={close}>Cancel</Button>
           </>}>
-          <FieldBox label="Protocol" htmlFor="sso-protocol"><Select id="sso-protocol" value={f.protocol} onChange={(e) => setF({ ...f, protocol: e.target.value })}><option value="oidc">OpenID Connect</option><option value="saml">SAML</option></Select></FieldBox>
+          <FieldBox label="Protocol" htmlFor="sso-protocol"><Select id="sso-protocol" value={f.protocol} onChange={(e) => setF({ ...f, protocol: e.target.value })}><option value="oidc">OpenID Connect (Google, Microsoft, Okta…)</option><option value="saml">SAML (older company sign-in)</option></Select></FieldBox>
           {inp("display_name", "Display name", { placeholder: "Google Workspace" })}
           {inp("metadata_url", "Issuer or metadata address", { placeholder: "https://…/.well-known/openid-configuration" })}
           {inp("email_domain", "Email domain", { placeholder: "company.com" })}

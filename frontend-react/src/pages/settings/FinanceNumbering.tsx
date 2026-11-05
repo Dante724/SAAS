@@ -12,6 +12,7 @@ import EmptyState from "../../components/EmptyState";
 import { SettingRow } from "../../components/SettingRow";
 import { fieldClass, labelClass } from "../../components/Field";
 import { settingsToast } from "./kit";
+import { laborText } from "../../lib/labor";
 
 /* Settings › Finance & numbering — document numbers, sales tax, and the business details printed
    on invoices. Same endpoints as before (/settings/numbering, /catalog/taxes, /settings/tax-rules,
@@ -79,7 +80,7 @@ export default function FinanceNumbering({ currency, shop, before }: { currency:
   const invNo = inv ? renderNumber(inv.template, Number(inv.next_value) || 1) : "INV-00001";
   const jobTaxes = (stacks.tickets_sales || []).map((id) => (taxes || []).find((t) => t.id === id)).filter(Boolean) as any[];
   const ent = (ents || []).find((e) => e.is_default) || (ents || [])[0];
-  const lines: [string, number][] = [["Screen replacement", 189], ["Labour", 40]];
+  const lines: [string, number][] = [["Screen replacement", 189], [laborText("Labour"), 40]];
   const net = lines.reduce((a, [, v]) => a + v, 0);
   const taxLines = jobTaxes.map((t) => { const r = (Number(t.rate) || 0) / 100; return { t, amount: t.mode === "included" ? net - net / (1 + r) : net * r }; });
   const added = taxLines.filter((x) => x.t.mode !== "included").reduce((a, x) => a + x.amount, 0);
@@ -288,7 +289,7 @@ function Taxes({ taxes, stacks, exc, locations, currency, onChanged }: {
             <div className="text-2xs font-semibold text-ink-tertiary mb-1">Exceptions</div>
             {(exc || []).filter((e) => e.doc_family === fam).map((e) => (
               <div key={e.id} className="flex items-center gap-2 py-1.5 text-xs">
-                <span className="text-ink-secondary">{e.target_type === "labor" ? "Labour" : e.target_type.charAt(0).toUpperCase() + e.target_type.slice(1)}</span>
+                <span className="text-ink-secondary">{e.target_type === "labor" ? laborText("Labour") : e.target_type.charAt(0).toUpperCase() + e.target_type.slice(1)}</span>
                 <span className="ml-auto font-semibold text-ink-primary">{e.exempt ? "No tax" : nameOf(e.tax_id)}</span>
                 <IconButton size="sm" label="Remove exception" onClick={() => delExc(e.id)} icon={<M n="close" c="text-sm" />} />
               </div>

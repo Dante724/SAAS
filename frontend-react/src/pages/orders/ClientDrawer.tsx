@@ -29,6 +29,7 @@ import Drawer from "../../components/Drawer";
 import Button, { buttonClass } from "../../components/Button";
 import Tabs from "../../components/Tabs";
 import { Badge } from "../../components/Card";
+import { laborText } from "../../lib/labor";
 
 const BASE_TABS = ["General info", "Devices & assets", "Work orders", "Purchases", "Loyalty & payout", "Communications"];
 const LABEL = "text-xs font-semibold text-ink-secondary";
@@ -584,7 +585,7 @@ function DiscountMatrix({ disc, onChange }: { disc: any; onChange: (d: any) => v
     <div className={`${sectionCard} p-4 space-y-3`}>
       <div><h5 className="text-sm font-semibold text-ink-primary">Pricing and discounts</h5>
         <p className="text-xs text-ink-tertiary mt-0.5">Applied automatically to this customer's work orders, invoices and sales.</p></div>
-      <Row label="Services and labour" mk="disc_services" />
+      <Row label={laborText("Services and labour")} mk="disc_services" />
       <Row label="Materials and products" mk="disc_materials" />
     </div>
   );

@@ -27,7 +27,7 @@ type Config = {
 type Reader = { id: string; provider: string; reader_id: string; label: string; location_id?: string | null; device_type?: string | null; test_mode: boolean };
 type Loc = { id: string; name: string };
 
-const PROVIDER: Record<string, string> = { stripe: "Stripe Terminal", square: "Square Terminal", simulated: "Simulated reader" };
+const PROVIDER: Record<string, string> = { stripe: "Stripe Terminal", square: "Square Terminal", simulated: "Practice reader" };
 
 export default function CardReadersCard() {
   const { can } = useMe();

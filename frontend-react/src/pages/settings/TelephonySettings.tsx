@@ -32,7 +32,7 @@ type Tag = { id: string; name: string; color: string };
 export function statusBadge(c: TelConfig | null): { text: string; tone: "on" | "off" | "test" } {
   if (!c || !c.enabled) return { text: "Off", tone: "off" };
   if (c.provider === "twilio") return c.twilio.test_mode ? { text: "Twilio · Test mode", tone: "test" } : { text: "Twilio · Live", tone: "on" };
-  if (c.provider === "simulated") return { text: "Simulated", tone: "test" };
+  if (c.provider === "simulated") return { text: "Practice mode", tone: "test" };
   if (c.provider === "aircall") return { text: "Aircall", tone: "on" };
   return { text: c.provider, tone: "on" };
 }

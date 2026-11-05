@@ -14,6 +14,7 @@ import { getLang, setLang, LANGS } from "../../i18n";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
 import { SenseSettingsSection } from "../../components/sense/Sense";
+import { laborText } from "../../lib/labor";
 
 /* Settings › General — the shop's profile. Edits land in local state and save together from one
    SaveFooter that stays at the bottom of the form column; a live preview shows how customers see
@@ -283,7 +284,7 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
               {co.company_details && <div className="text-2xs text-ink-tertiary">{co.company_details}</div>}
               <div className="mt-3 border-t border-dashed border-slate-200 pt-3 space-y-1.5 text-2xs">
                 <div className="flex justify-between text-ink-secondary"><span>Screen replacement</span><span>{co.currency || "$"}189.00</span></div>
-                <div className="flex justify-between text-ink-secondary"><span>Labour</span><span>{co.currency || "$"}40.00</span></div>
+                <div className="flex justify-between text-ink-secondary"><span>{laborText("Labour")}</span><span>{co.currency || "$"}40.00</span></div>
                 <div className="flex justify-between font-semibold text-ink-primary pt-1"><span>Total</span><span>{co.currency || "$"}229.00</span></div>
               </div>
               {co.company_note && <div className="mt-3 text-2xs text-ink-tertiary italic leading-snug">{co.company_note}</div>}

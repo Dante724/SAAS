@@ -10,6 +10,7 @@ import { NumField } from "../../components/SettingRow";
 import Button from "../../components/Button";
 import EmptyState from "../../components/EmptyState";
 import CatalogToolbar from "../catalog/CatalogToolbar";
+import { laborText } from "../../lib/labor";
 
 // Catalog › Plans: what the shop sells as a membership. Each plan is a short list of what's
 // included; the editor keeps the everyday fields up front and the season options tucked away.
@@ -77,7 +78,7 @@ export default function PlansTab() {
                   <span className="h-9 w-9 shrink-0 rounded-xl grid place-items-center bg-slate-100 text-ink-secondary"><M n={t.icon} c="text-lg" /></span>
                   <span className="min-w-0">
                     <span className="block text-sm font-semibold text-ink-primary">{t.label}</span>
-                    <span className="block text-xs text-ink-tertiary leading-snug">{t.hint}</span>
+                    <span className="block text-xs text-ink-tertiary leading-snug">{laborText(t.hint)}</span>
                   </span>
                 </button>))}
               <div className="px-3 pt-1.5 pb-2 text-2xs text-ink-tertiary border-t border-slate-100 mt-1">You can change every price and item before saving.</div>
@@ -198,7 +199,7 @@ function PlanEditor({ plan, onClose, onSaved }: { plan: Omit<Plan, "id" | "membe
                       <input aria-label="Discount percent" inputMode="decimal" value={it.pct} onChange={(e) => setItem(i, { pct: Number(e.target.value) || 0 })} className={`${box} w-20 shrink-0 text-center`} />
                       <span className="text-xs text-ink-tertiary">% off</span>
                       <select aria-label="Discount applies to" value={it.applies_to} onChange={(e) => setItem(i, { applies_to: e.target.value as PlanItem["applies_to"] })} className={`${box} min-w-0 flex-1`}>
-                        <option value="labour">labour</option><option value="parts">parts</option><option value="both">labour and parts</option>
+                        <option value="labour">{laborText("labour")}</option><option value="parts">parts</option><option value="both">{laborText("labour and parts")}</option>
                       </select>
                     </>) : (
                       <input aria-label="Perk" value={it.label} onChange={(e) => setItem(i, { label: e.target.value })} placeholder="Priority slot when the yard is busy" className={`${box} min-w-0 flex-1`} />
