@@ -62,7 +62,9 @@ def migrated_db(tmp_path_factory):
         yield path
         return
     suite = make_url(_SUITE_URL)
-    url = str(suite.set(database=f"{suite.database}_mig{uuid.uuid4().hex[:6]}"))
+    # render_as_string(hide_password=False): str() of a URL masks the password as "***", which only
+    # works on a server that doesn't check it (CI's Postgres does: login failed for "repairos").
+    url = suite.set(database=f"{suite.database}_mig{uuid.uuid4().hex[:6]}").render_as_string(hide_password=False)
     db_isolation.run(db_isolation.create_postgres(url, suite.database))
     try:
         _upgrade_head(url)
