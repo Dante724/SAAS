@@ -108,8 +108,12 @@ body { background: rgb(var(--c-canvas)); color: rgb(var(--c-ink-primary)); }
    columns keeps a readable width (it scrolls) rather than wrapping every cell one word per line. */
 .app-main .overflow-hidden:has(> table) { overflow-x: auto; }
 @media (max-width: 899.98px) {
-  .app-main table:has(> thead > tr > th:nth-child(5)) { min-width: 680px; }
+  /* …except while the only row is the empty message: it stays readable instead of scrolling sideways. */
+  .app-main table:has(> thead > tr > th:nth-child(5)):not(:has(> tbody > tr:only-child > td[colspan]:only-child)) { min-width: 680px; }
 }
+/* Page scroll areas keep the scrollbar's space even when nothing scrolls, so switching to a
+   longer or shorter tab never nudges the content sideways. */
+.app-main > .overflow-y-auto { scrollbar-gutter: stable; }
 /* Phone gutter: the desktop 24–32px page padding becomes 16px under 640px so content keeps the width. */
 @media (max-width: 639.98px) {
   .app-main .px-6, .app-main .p-6, .app-main .px-8, .app-main .p-8 { padding-left: 1rem; padding-right: 1rem; }
@@ -123,3 +127,13 @@ body { background: rgb(var(--c-canvas)); color: rgb(var(--c-ink-primary)); }
 @media (max-width: 899.98px), (pointer: coarse) {
   input[type="checkbox"], input[type="radio"] { width: 1.5rem; height: 1.5rem; flex-shrink: 0; }
 }
+
+/* Shared Button / IconButton: on touch screens every button gets a 44px tap area (WCAG 2.5.5)
+   without growing visually; the invisible hit box is centred on the button. */
+@media (pointer: coarse) {
+  .hit44 { position: relative; }
+  .hit44::before { content: ""; position: absolute; left: 50%; top: 50%; width: max(100%, 44px); height: max(100%, 44px); transform: translate(-50%, -50%); }
+}
+/* Tab strips scroll sideways when they don't fit, with no visible scrollbar. */
+.no-scrollbar { scrollbar-width: none; }
+.no-scrollbar::-webkit-scrollbar { display: none; }

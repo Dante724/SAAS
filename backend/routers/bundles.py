@@ -240,8 +240,8 @@ async def delete_bundle(
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
     await assert_perm(db, current, "can_manage_bundles")
-    b = (await db.execute(select(Bundle).where(
-        Bundle.id == bundle_id, Bundle.org_id == current.org_id))).scalar_one_or_none()
-    if b and b.active:
+    from backend.services.owned import get_owned_or_404
+    b = await get_owned_or_404(db, Bundle, bundle_id, current.org_id, "bundle")
+    if b.active:
         await delete_bundle_core(db, b)
     return {"ok": True}
