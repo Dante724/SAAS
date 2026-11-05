@@ -4,6 +4,7 @@
 import { useMemo, useState } from "react";
 import { M } from "../../components/Shell";
 import { money } from "../orders/types";
+import { buttonClass } from "../../components/Button";
 
 const DENOMS: Record<string, number[]> = {
   INR: [2000, 500, 200, 100, 50, 20, 10, 5, 2, 1],
@@ -69,7 +70,7 @@ export default function DenomCountModal({
         </div>
         <div className="mt-4 flex gap-2 justify-end">
           <button onClick={onCancel} className="px-3 py-2 rounded-lg text-xs font-semibold text-ink-tertiary hover:bg-slate-100">Cancel</button>
-          <button onClick={confirm} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold shadow-clay-sm hover:opacity-90 disabled:opacity-50">{confirmLabel || "Confirm"}</button>
+          <button onClick={confirm} disabled={busy} className={buttonClass("primary", "md")}>{confirmLabel || "Confirm"}</button>
         </div>
       </div>
     </div>

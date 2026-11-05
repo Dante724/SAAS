@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { loadFailed } from "../../lib/notice";
+import { buttonClass } from "../../components/Button";
 
 // ADR-144po — everything about this job's parts in one place, opened from the work order's
 // ⋯ menu (or the "Waiting on parts" chip): what the job still owes from stock, the purchase
@@ -263,7 +264,7 @@ export default function PartsPOPanel({ orderId, lines, canBuy, isEstimate, onClo
                     <option value="">Choose a supplier</option>
                     {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                   </select>
-                  <button type="button" onClick={raisePO} disabled={busy !== null} className="px-3.5 py-2 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50">{busy === "po" ? "Raising…" : "Raise PO"}</button>
+                  <button type="button" onClick={raisePO} disabled={busy !== null} className={buttonClass("primary", "md")}>{busy === "po" ? "Raising…" : "Raise PO"}</button>
                 </div>
                 <div className="flex flex-wrap gap-x-4 gap-y-1">
                   <label className="flex items-center gap-1.5 text-[11px] text-ink-secondary cursor-pointer"><input type="checkbox" checked={onlyShort} onChange={(e) => setOnlyShort(e.target.checked)} />Only what's short</label>

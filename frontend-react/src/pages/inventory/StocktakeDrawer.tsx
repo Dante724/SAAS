@@ -7,6 +7,7 @@ import { api, openAuthedDoc } from "../../api/client";
 import { alertDialog, confirmDialog } from "../../lib/dialog";
 import { countRows } from "./countSheet";
 import type { Product } from "./types";
+import { buttonClass } from "../../components/Button";
 
 type StLine = { id: string; part_id: string; part_name: string; sku?: string | null; bin_id?: string | null; bin?: string | null;
   system_qty: number | null; counted_qty: number | null; variance: number | null; is_unknown?: boolean; serial_mismatch?: boolean; note?: string | null };
@@ -245,9 +246,9 @@ export default function StocktakeDrawer({ id, onClose, onDone }:
           )}
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
-          {!stId && <button onClick={start} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Starting…" : "Start count"}</button>}
-          {stId && !posted && !posting && <button onClick={() => setPosting(true)} disabled={busy || !sheet} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">Post count…</button>}
-          {stId && !posted && posting && <button onClick={post} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Posting…" : "Post and adjust stock"}</button>}
+          {!stId && <button onClick={start} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Starting…" : "Start count"}</button>}
+          {stId && !posted && !posting && <button onClick={() => setPosting(true)} disabled={busy || !sheet} className={buttonClass("primary", "md")}>Post count…</button>}
+          {stId && !posted && posting && <button onClick={post} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Posting…" : "Post and adjust stock"}</button>}
           <button onClick={posting ? () => setPosting(false) : stId && !posted ? onDone : onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">{posting ? "Back" : posted ? "Close" : stId ? "Save draft and close" : "Cancel"}</button>
           {stId && !posted && !posting && <button onClick={discard} className="ml-auto px-3 py-2 rounded-lg text-rose-600 hover:bg-rose-50 font-semibold text-xs">Discard draft</button>}
         </div>

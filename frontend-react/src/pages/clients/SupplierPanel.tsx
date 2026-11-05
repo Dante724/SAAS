@@ -3,6 +3,7 @@ import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { Supplier, money } from "../inventory/types";
 import { loadFailed } from "../../lib/notice";
+import { buttonClass } from "../../components/Button";
 
 /** Build 144am — the supplier facet of a Contact, reused inside the unified contact form
  * (ClientDrawer's "Supplier" tab) and by the standalone SupplierDrawer. It owns the
@@ -97,7 +98,7 @@ export default function SupplierPanel({ supplierId, onSaved }: { supplierId: str
             <div><label className={lbl}>PO currency</label>
               <input value={f.currency || ""} onChange={(e) => setF({ ...f, currency: e.target.value })} placeholder="$" className={fld} /></div>
           </div>
-          <div className="flex justify-end"><button onClick={saveHeader} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : "Save supplier details"}</button></div>
+          <div className="flex justify-end"><button onClick={saveHeader} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save supplier details"}</button></div>
 
           {perf && perf.total_pos > 0 && (
             <div className="rounded-2xl border border-slate-200/80 p-4 space-y-3">
@@ -137,7 +138,7 @@ export default function SupplierPanel({ supplierId, onSaved }: { supplierId: str
                   <select value={payAcct} onChange={(e) => setPayAcct(e.target.value)} className="glass-input rounded-lg px-2 py-1 text-xs w-full">
                     {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
                   </select></div>
-                <button onClick={paySupplier} disabled={busy} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-60">{busy ? "…" : "Pay"}</button>
+                <button onClick={paySupplier} disabled={busy} className={buttonClass("primary", "sm")}>{busy ? "…" : "Pay"}</button>
               </div>
             )}
             {!led ? <div className="text-xs text-ink-tertiary py-4">Loading…</div>

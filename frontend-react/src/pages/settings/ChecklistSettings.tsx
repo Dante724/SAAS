@@ -4,6 +4,7 @@ import { api } from "../../api/client";
 import { alertDialog, confirmDialog } from "../../lib/dialog";
 import { loadFailed } from "../../lib/notice";
 import { clickable } from "../../lib/clickable";
+import { buttonClass } from "../../components/Button";
 
 /* Settings › Checklists — template list (with starters when empty) and the template editor.
    Same API as before (/checklist-templates). The editor works on steps → checks; a template's
@@ -344,8 +345,8 @@ export function ChecklistEditor({ tpl, onClose, onSaved }: { tpl: any | null; on
         </div>
 
         <div className="px-5 py-4 border-t border-slate-100 flex items-center gap-2">
-          <button onClick={onClose} className="ml-auto px-4 py-2 rounded-xl border border-slate-200 text-ink-secondary hover:bg-slate-50 font-semibold text-xs">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-xl bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : isEdit ? "Save" : "Create checklist"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md", "ml-auto")}>Cancel</button>
+          <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : isEdit ? "Save" : "Create checklist"}</button>
         </div>
       </div>
     </div>

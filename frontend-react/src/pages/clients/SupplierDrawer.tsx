@@ -3,6 +3,7 @@ import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { Supplier, money } from "../inventory/types";
 import { loadFailed } from "../../lib/notice";
+import { buttonClass } from "../../components/Button";
 
 /** Phase 1 E — supplier detail: an editable header, a Balance ledger (bills we owe /
  * returns as a running statement), and a price-list import that reuses the backend's
@@ -84,7 +85,7 @@ export default function SupplierDrawer({ supplier, onClose, onSaved }: { supplie
                 <div><label className={lbl}>Lead time (days)</label>
                   <input type="number" value={f.lead_days ?? ""} onChange={(e) => setF({ ...f, lead_days: e.target.value === "" ? undefined : Number(e.target.value) })} className={fld} /></div>
               </div>
-              <div className="flex justify-end"><button onClick={saveHeader} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : "Save details"}</button></div>
+              <div className="flex justify-end"><button onClick={saveHeader} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save details"}</button></div>
 
               {perf && perf.total_pos > 0 && (
                 <div className="rounded-2xl border border-slate-200/80 p-4 space-y-3">

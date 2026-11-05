@@ -9,6 +9,7 @@ import Pager from "../../components/Pager";
 import JobPicker from "../../components/JobPicker";
 import { loadFailed } from "../../lib/notice";
 import { clickableRow } from "../../lib/clickable";
+import { buttonClass } from "../../components/Button";
 
 type Task = { id: string; title?: string; description?: string; status?: string; priority?: number; assigned_to_id?: string | null; assignee_name?: string; assignee_ids?: string[]; assignee_names?: string[]; due_at?: string | null; completed_at?: string | null; overdue?: boolean; order_id?: string | null; order_number?: string | null; client_name?: string };
 type Emp = { id: string; name: string };
@@ -203,7 +204,7 @@ export default function TasksHub() {
               <div><label className="block font-semibold text-ink-secondary mb-1">Link to work order <span className="text-ink-tertiary font-normal">(optional)</span></label><JobPicker value={form.order_id ? { id: form.order_id, order_number: form.order_number } : null} onChange={(j) => setForm({ ...form, order_id: j?.id || "", order_number: j?.order_number || "" })} /></div>
               <div><label className="block font-semibold text-ink-secondary mb-1">Due</label><DateField mode="datetime" value={form.due_at} onChange={(v) => setForm({ ...form, due_at: v })} /></div>
             </div>
-            <div className="p-4 border-t border-slate-100 bg-slate-50/70 flex items-center gap-2"><button onClick={createTask} className="px-5 py-2 rounded-lg bg-primary text-white font-bold text-xs shadow-clay-sm">Create task</button><button onClick={() => setCreate(false)} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button></div>
+            <div className="p-4 border-t border-slate-100 bg-slate-50/70 flex items-center gap-2"><button onClick={createTask} className={buttonClass("primary", "md")}>Create task</button><button onClick={() => setCreate(false)} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button></div>
           </div>
         </div>
       )}

@@ -9,6 +9,7 @@ import { confirmDialog, alertDialog } from "../../lib/dialog";
 import { Link } from "react-router-dom";
 import { Avatar } from "../orders/look";
 import { PhoneIncoming, PhoneOutgoing } from "lucide-react";
+import { buttonClass } from "../../components/Button";
 
 // Marketing: campaigns (SMS/email blasts by segment) + call log — legacy /comms surface.
 const CHANNEL: Record<string, string> = { sms: "SMS", email: "Email" };
@@ -151,7 +152,7 @@ export default function MarketingHub() {
               </div>
               {draft.channel === "email" && <input value={draft.subject || ""} onChange={(e) => setDraft({ ...draft, subject: e.target.value })} placeholder="Email subject" className={inp} />}
               <textarea value={draft.body || ""} onChange={(e) => setDraft({ ...draft, body: e.target.value })} placeholder="Message…" className={`${inp} h-24 resize-none`} />
-              <div className="flex justify-end gap-2"><button onClick={() => setDraft(null)} className="px-4 py-2 rounded-lg border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50">Cancel</button><button onClick={saveCampaign} disabled={busy || !draft.name?.trim()} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50">Save draft</button></div>
+              <div className="flex justify-end gap-2"><button onClick={() => setDraft(null)} className="px-4 py-2 rounded-lg border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50">Cancel</button><button onClick={saveCampaign} disabled={busy || !draft.name?.trim()} className={buttonClass("primary", "md")}>Save draft</button></div>
             </div>
           </div>
         </div>

@@ -19,6 +19,7 @@ import { DEFAULT_FILTERS, REPORTS_PREF, REPORT_FILTERS, filterParams, readReport
 import { cachedPref, loadPref, savePref } from "../../lib/userPref";
 import GoPilotReport from "./GoPilotReport";
 import { loadFailed } from "../../lib/notice";
+import { buttonClass } from "../../components/Button";
 
 const REPORT_PAGE = 50;
 
@@ -266,7 +267,7 @@ export function CustomView() {
 
               {/* actions */}
               <div className="flex items-center gap-2 flex-wrap pt-1 border-t border-slate-100">
-                <button disabled={busy} onClick={run} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-50">Run</button>
+                <button disabled={busy} onClick={run} className={buttonClass("primary", "sm")}>Run</button>
                 <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Report name" className="glass-input px-2.5 py-1.5 rounded-lg text-xs w-44" />
                 <button disabled={busy} onClick={save} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-primary bg-blue-50 hover:bg-blue-100 disabled:opacity-50">{curId ? "Update" : "Save"}</button>
                 {curId && <button disabled={busy} onClick={del} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-rose-600 bg-rose-50 hover:bg-rose-100">Delete</button>}

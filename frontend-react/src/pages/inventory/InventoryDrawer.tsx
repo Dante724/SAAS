@@ -24,6 +24,7 @@ import { loadFailed } from "../../lib/notice";
 import Switch from "../../components/Switch";
 import { sectionCard } from "../../components/Section";
 import { fitWithin } from "../../go/lib/photos";
+import { buttonClass } from "../../components/Button";
 
 export type DrawerKind = "product" | "service" | "asset" | "bundle";
 type Props = { kind: DrawerKind; id?: string | null; initial?: any; onClose: () => void; onSaved?: () => void };
@@ -486,7 +487,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                       ? <UnitSerials partId={id || ""} need={Math.floor(Number(adjQty))} value={adjSerials} onChange={setAdjSerials} label={p.name} />
                       : <SerialEntry value={adjSerials} onChange={setAdjSerials} target={Math.floor(Number(adjQty))} partId={id} />}</div>
                 )}
-                <div className="flex justify-end"><button type="button" onClick={submitAdjust} disabled={adjBusy} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{adjBusy ? "Saving…" : "Apply adjustment"}</button></div>
+                <div className="flex justify-end"><button type="button" onClick={submitAdjust} disabled={adjBusy} className={buttonClass("primary", "md")}>{adjBusy ? "Saving…" : "Apply adjustment"}</button></div>
               </div>
             )}
             {stock === null
@@ -708,8 +709,8 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
         </div>
 
         <div className="p-4 border-t border-slate-100 flex items-center justify-between bg-slate-50/70">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Cancel</button>
-          <button onClick={save} className="px-5 py-2 rounded-lg bg-primary text-white font-bold text-xs shadow-clay-sm hover:brightness-110">{footerLabel}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
+          <button onClick={save} className={buttonClass("primary", "md")}>{footerLabel}</button>
         </div>
         {toast && <div className="absolute bottom-20 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2 rounded-xl shadow-clay-drawer z-20">{toast}</div>}
       </div>

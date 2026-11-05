@@ -8,6 +8,7 @@ import MoveStockDialog from "../../components/MoveStockDialog";
 import { api } from "../../api/client";
 import { barcodeTypeLabel } from "../../lib/barcodes";
 import { confirmDialog } from "../../lib/dialog";
+import { buttonClass } from "../../components/Button";
 
 type Bin = { id: string; name: string; location_id: string; warehouse_id?: string | null; zone?: string | null; shelf?: string | null;
   bin_number?: string | null; barcode?: string | null; barcode_type?: string; is_default?: boolean; qty_on_hand?: number };
@@ -74,7 +75,7 @@ export default function BinsPanel() {
         <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Zone</label><input value={nf.zone} onChange={(e) => setNf({ ...nf, zone: e.target.value })} aria-label="Zone" className={`${fld} w-24`} /></div>
         <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Shelf</label><input value={nf.shelf} onChange={(e) => setNf({ ...nf, shelf: e.target.value })} aria-label="Shelf" className={`${fld} w-24`} /></div>
         <label className="flex items-center gap-1.5 text-xs text-ink-secondary pb-2.5"><input type="checkbox" checked={nf.is_default} onChange={(e) => setNf({ ...nf, is_default: e.target.checked })} />Default bin</label>
-        <button onClick={add} disabled={busy} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60 flex items-center gap-1"><M n="add" c="text-sm" />Add bin</button>
+        <button onClick={add} disabled={busy} className={buttonClass("primary", "md")}><M n="add" c="text-sm" />Add bin</button>
       </div>
 
       <div className="flex items-center gap-2 flex-wrap">
@@ -144,7 +145,7 @@ export default function BinsPanel() {
               <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Number</label><input value={edit.bin_number || ""} onChange={(e) => setEdit({ ...edit, bin_number: e.target.value })} aria-label="Bin number" className={`${fld} w-full`} /></div>
             </div>
             <div className="flex gap-2 pt-1">
-              <button onClick={saveEdit} disabled={busy || !edit.name.trim()} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs disabled:opacity-60">{busy ? "Saving…" : "Save"}</button>
+              <button onClick={saveEdit} disabled={busy || !edit.name.trim()} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save"}</button>
               <button onClick={() => setEdit(null)} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Cancel</button>
             </div>
           </div>

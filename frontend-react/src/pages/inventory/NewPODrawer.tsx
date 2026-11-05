@@ -162,7 +162,7 @@ export default function NewPODrawer({ products, onClose, onCreated }:
               {newSup ? (
                 <div className="flex gap-1.5">
                   <input autoFocus value={supName} onChange={(e) => setSupName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addSupplier(); }} placeholder="Supplier name" className={fld} />
-                  <button type="button" onClick={addSupplier} disabled={supBusy || !supName.trim()} className="px-3 rounded-xl bg-primary text-white text-xs font-semibold disabled:opacity-50">Add</button>
+                  <button type="button" onClick={addSupplier} disabled={supBusy || !supName.trim()} className={buttonClass("primary", "md")}>Add</button>
                 </div>
               ) : (
                 <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} className={fld}>
@@ -218,7 +218,7 @@ export default function NewPODrawer({ products, onClose, onCreated }:
                 <input autoFocus value={prodName} onChange={(e) => setProdName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addProduct(); }} placeholder="Oil filter" className={fld} /></div>
               <div className="w-24"><label className={lbl}>Cost</label>
                 <input type="number" min={0} value={prodCost} onChange={(e) => setProdCost(e.target.value)} className={`${fld} text-right font-mono`} /></div>
-              <button type="button" onClick={addProduct} disabled={prodBusy || !prodName.trim()} className="px-3 py-2 rounded-xl bg-primary text-white text-xs font-semibold disabled:opacity-50">Add</button>
+              <button type="button" onClick={addProduct} disabled={prodBusy || !prodName.trim()} className={buttonClass("primary", "md")}>Add</button>
             </div>
           )}
 
@@ -236,7 +236,7 @@ export default function NewPODrawer({ products, onClose, onCreated }:
                 ))}
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={matchSheet} disabled={busy} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold disabled:opacity-50">{busy ? "Matching…" : "Add matching lines"}</button>
+                <button onClick={matchSheet} disabled={busy} className={buttonClass("primary", "sm")}>{busy ? "Matching…" : "Add matching lines"}</button>
                 <button onClick={() => setSheet(null)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Cancel</button>
               </div>
             </div>

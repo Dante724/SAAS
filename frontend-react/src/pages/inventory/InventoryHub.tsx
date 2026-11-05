@@ -1215,7 +1215,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
               <div className="rounded-lg border border-slate-200 bg-slate-50/60 p-3">
                 <p className="text-[11px] text-ink-tertiary mb-2">Paste tab- or comma-separated rows, with or without a header row. Columns are matched for you and you can fix the mapping after.</p>
                 <textarea value={pasteText} onChange={(e) => setPasteText(e.target.value)} rows={4} placeholder={"SCR-IP13\tiPhone 13 Screen\t10\t60\t40\nBAT-GS22\t\t5\t14\t50"} className={`${fld} w-full tabular-nums text-xs`} />
-                <div className="flex justify-end mt-2"><button onClick={applyPaste} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold">Fill {pasteText.split(/\r?\n/).filter((x) => x.trim()).length || 0} rows</button></div>
+                <div className="flex justify-end mt-2"><button onClick={applyPaste} className={buttonClass("primary", "sm")}>Fill {pasteText.split(/\r?\n/).filter((x) => x.trim()).length || 0} rows</button></div>
               </div>
             )}
             {mapCols && dataGrid && (

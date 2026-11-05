@@ -323,7 +323,7 @@ function LocationDetail({ loc, companyTz, resources, onSaved, onResChanged, onCa
         {isNew && <button onClick={onCancelNew} className="px-3 py-2 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>}
         <span className="ml-auto text-[11px] text-ink-tertiary">{dirty && !isNew ? "Unsaved changes" : ""}</span>
         {!isNew && dirty && <button onClick={() => { const i = JSON.parse(orig.current); setF(i[0]); setWh(i[1]); setDay(null); }} className="px-3 py-2 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Discard</button>}
-        <button onClick={save} disabled={busy || !dirty} className="px-5 py-2 rounded-xl bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-40">{busy ? "Saving…" : isNew ? "Add location" : "Save"}</button>
+        <button onClick={save} disabled={busy || !dirty} className={buttonClass("primary", "md")}>{busy ? "Saving…" : isNew ? "Add location" : "Save"}</button>
       </div>
     </section>
   );

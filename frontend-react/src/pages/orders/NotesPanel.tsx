@@ -10,6 +10,7 @@ import { useMe } from "../../context/Me";
 import { readAsDataUrl } from "../../lib/files";
 import AuthedImage from "../../components/AuthedImage";
 import { fmtServerTime } from "../../lib/serverTime";
+import { buttonClass } from "../../components/Button";
 
 type Vis = "private" | "client";
 export type FeedItem = {
@@ -125,7 +126,7 @@ export default function NotesPanel({ orderId, onFlash }: { orderId: string; onFl
             title={defaults.file === "client" ? "Files start shown to the customer" : "Files start private"}
             className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 flex items-center gap-1 disabled:opacity-50"><M n="attach_file" c="text-[14px]" />Attach</button>
           <button type="button" onClick={post} disabled={busy || !text.trim()}
-            className="ml-auto px-3.5 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-40">Post</button>
+            className={buttonClass("primary", "sm", "ml-auto")}>Post</button>
         </div>
       </div>
     </div>

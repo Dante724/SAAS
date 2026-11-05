@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
+import { buttonClass } from "../../components/Button";
 
 export type Account = { id: string; name?: string; icon?: string; payment_option?: string; is_company?: boolean; is_virtual?: boolean; fee_pct?: number; fee_fixed?: number; currency_code?: string; balance?: number };
 type Props = { edit?: Account | null; onClose: () => void; onSaved: () => void };
@@ -105,8 +106,8 @@ export default function NewAccountDrawer({ edit, onClose, onSaved }: Props) {
         </div>
 
         <div className="p-4 border-t border-slate-100 bg-blue-50/30 flex items-center justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-lg bg-primary text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-50">{busy ? "Saving…" : edit ? "Save changes" : "Create"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
+          <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : edit ? "Save changes" : "Create"}</button>
         </div>
       </div>
     </div>

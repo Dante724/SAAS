@@ -5,6 +5,7 @@ import { confirmDialog } from "../../lib/dialog";
 import Switch from "../../components/Switch";
 import { loadFailed } from "../../lib/notice";
 import { laborText } from "../../lib/labor";
+import { buttonClass } from "../../components/Button";
 
 /* Settings › Finance & numbering — document numbers, sales tax, and the business details printed
    on invoices. Same endpoints as before (/settings/numbering, /catalog/taxes, /settings/tax-rules,
@@ -234,8 +235,8 @@ function NumberEditor({ row, onClose, onSaved }: { row: any; onClose: () => void
         <div className="sm:col-span-2 flex items-center gap-2 justify-end pb-0.5">
           <button onClick={() => { if (custom && parsePattern(raw)) setP(parsePattern(raw)!); if (!custom) setRaw(buildPattern(p)); setCustom(!custom); }}
             className="mr-auto text-[11px] font-semibold text-ink-tertiary hover:text-ink-secondary">{custom ? "Use the simple editor" : "Custom pattern"}</button>
-          <button onClick={onClose} className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : "Save"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
+          <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save"}</button>
         </div>
       </div>
       {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
@@ -379,8 +380,8 @@ function TaxEditor({ tax, locations, onClose, onSaved }: { tax: any; locations: 
       {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
       <div className="flex items-center gap-2">
         {t.id && <button onClick={remove} className="px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50">Remove</button>}
-        <button onClick={onClose} className="ml-auto px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50">Cancel</button>
-        <button onClick={save} disabled={busy} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : t.id ? "Save" : "Add tax"}</button>
+        <button onClick={onClose} className={buttonClass("secondary", "md", "ml-auto")}>Cancel</button>
+        <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : t.id ? "Save" : "Add tax"}</button>
       </div>
     </div>
   );
@@ -459,8 +460,8 @@ function EntityEditor({ ent, onClose, onSaved }: { ent: any; onClose: () => void
       <div className="flex items-center gap-2">
         {e.id && <button onClick={remove} className="px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50">Remove</button>}
         <span className="flex items-center gap-2 text-xs text-ink-secondary"><Switch size="sm" label="Use by default" on={!!e.is_default} onChange={(v) => set("is_default", v)} />Use by default</span>
-        <button onClick={onClose} className="ml-auto px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50">Cancel</button>
-        <button onClick={save} disabled={busy} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : e.id ? "Save" : "Add business"}</button>
+        <button onClick={onClose} className={buttonClass("secondary", "md", "ml-auto")}>Cancel</button>
+        <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : e.id ? "Save" : "Add business"}</button>
       </div>
     </div>
   );

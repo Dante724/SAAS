@@ -4,6 +4,7 @@
 import { useEffect, useRef, useState } from "react";
 import { M } from "../../components/Shell";
 import { loadFailed } from "../../lib/notice";
+import { buttonClass } from "../../components/Button";
 
 type Tool = "circle" | "spot" | "pen";
 type Pt = { x: number; y: number };
@@ -161,7 +162,7 @@ export default function PhotoAnnotator({ src, onSave, onClose }: {
           <span className="text-[11px] text-ink-tertiary">Saved as a new marked-up photo on this order.</span>
           <div className="flex gap-2">
             <button onClick={onClose} className="px-4 py-2 rounded-lg text-xs font-bold text-ink-secondary hover:bg-slate-100">Cancel</button>
-            <button onClick={save} disabled={saving || !ready} className="px-4 py-2 rounded-lg text-xs font-bold text-white bg-primary hover:opacity-90 shadow-clay-sm disabled:opacity-50">{saving ? "Saving…" : "Save markup"}</button>
+            <button onClick={save} disabled={saving || !ready} className={buttonClass("primary", "md")}>{saving ? "Saving…" : "Save markup"}</button>
           </div>
         </div>
       </div>

@@ -11,6 +11,7 @@ import { isoDate, isoDateTimeLocal } from "../../lib/localDate";
 import { EmployeeHours } from "../company/CompanyHub";
 import { fmtServerTime } from "../../lib/serverTime";
 import { loadFailed } from "../../lib/notice";
+import { buttonClass } from "../../components/Button";
 
 // Timesheets — React port of legacy timesheets.js. Per-employee grid + approve,
 // manual entry add/void/reopen, and a live "who's on the clock" roster.
@@ -69,8 +70,9 @@ export default function TimesheetsHub() {
       <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
         {/* controls */}
         <div className="flex flex-wrap items-end gap-3">
-          <button onClick={approve} className="h-[38px] px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110">Approve range</button>
-          <button onClick={() => setAdd(true)} className="h-[38px] px-3.5 rounded-xl bg-white border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50 flex items-center gap-1.5"><M n="add" c="text-sm" />Add entry</button>
+          {/* 38px to line up with the date and employee boxes in this row. */}
+          <button onClick={approve} className={buttonClass("primary", "md", "!h-[38px]")}>Approve range</button>
+          <button onClick={() => setAdd(true)} className={buttonClass("secondary", "md", "!h-[38px]")}><M n="add" c="text-sm" />Add entry</button>
           <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Employee</label>
             <select value={empId} onChange={(e) => setEmpId(e.target.value)} className="glass-input rounded-lg px-3 py-2 text-sm font-semibold text-ink-primary">{emps.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select></div>
           <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">From</label><DateField mode="date" value={from} onChange={setFrom} className="w-40" /></div>
@@ -190,7 +192,7 @@ function ManualEntryDrawer({ employees, defaultEmp, onClose, onDone }: { employe
           <label className="flex items-center gap-2 text-xs font-medium text-ink-secondary"><input type="checkbox" checked={f.billable} onChange={(e) => set("billable", e.target.checked)} className="accent-primary" />Billable</label>
           <div><label className={lbl}>Note</label><textarea value={f.note} onChange={(e) => set("note", e.target.value)} rows={2} className={fld} /></div>
         </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2"><button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Cancel</button><button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Saving…" : "Add entry"}</button></div>
+        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2"><button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button><button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Add entry"}</button></div>
       </div>
     </div>
   );
@@ -233,7 +235,7 @@ function ScheduleDrawer({ employees, defaultEmp, onClose, onDone }: { employees:
           )}
           <div><label className={lbl}>Note</label><input value={f.note} onChange={(e) => set("note", e.target.value)} placeholder="Optional" className={fld} /></div>
         </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2"><button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Cancel</button><button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Saving…" : "Add to schedule"}</button></div>
+        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2"><button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button><button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Add to schedule"}</button></div>
       </div>
     </div>
   );
