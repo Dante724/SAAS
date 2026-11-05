@@ -92,3 +92,42 @@ async def test_received_line_can_still_grow_and_other_lines_stay_editable(client
     assert (await _line(client, tenant, po_id, la))["qty_ordered"] == 12
     lb_now = await _line(client, tenant, po_id, lb)
     assert (lb_now["part_id"], lb_now["qty_ordered"], lb_now["unit_cost"]) == (pc, 1, 9)
+
+
+_URL = __import__("os").environ.get("TEST_DATABASE_URL") or __import__("os").environ.get("DATABASE_URL", "")
+
+
+@pytest.mark.skipif(not _URL.startswith("postgresql"), reason="row locks need Postgres")
+@pytest.mark.asyncio
+async def test_edit_racing_a_receipt_cannot_drop_below_what_arrived(client, tenant, monkeypatch):
+    """A receipt holds the PO's lines while it posts; an edit sent meanwhile used to read the line
+    unlocked (nothing received yet), wait out the receipt on its UPDATE and then write 2 ordered
+    over 4 received. Now the edit's locked read waits and sees the 4."""
+    import asyncio
+
+    from backend.services import serial_intake
+    po_id, pa, pb, la, lb = await _partial_po(client, tenant, received=1)
+    orig = serial_intake.validate_intake
+
+    async def slowed(*a, **kw):          # runs inside the receipt, after its line lock
+        out = await orig(*a, **kw)
+        await asyncio.sleep(0.4)
+        return out
+    monkeypatch.setattr(serial_intake, "validate_intake", slowed)
+
+    async def receive():
+        return await client.post(f"/api/inventory/po/{po_id}/receive",
+                                 json={"lines": [{"po_line_id": la, "qty": 3}]}, headers=tenant)
+
+    async def edit():
+        await asyncio.sleep(0.15)
+        return await client.patch(f"/api/inventory/po/{po_id}", json={"lines": [
+            {"id": la, "part_id": pa, "qty_ordered": 2, "unit_cost": 5},
+            {"id": lb, "part_id": pb, "qty_ordered": 3, "unit_cost": 7}]}, headers=tenant)
+
+    r, e = await asyncio.gather(receive(), edit())
+    assert r.status_code == 200, r.text
+    line = await _line(client, tenant, po_id, la)
+    assert line["qty_received"] == 4
+    assert line["qty_ordered"] >= line["qty_received"], f"edit {e.status_code}: {line}"
+    assert e.status_code == 409, e.text
