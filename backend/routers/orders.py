@@ -3629,13 +3629,24 @@ async def _archive_order(db, current, order_id, reason, do_refund):
     # Its stock holds go with it: an archived job must not keep its units reserved (up to 180
     # days) from every other job and transfer. Same release as the expiry sweep. Restore un-hides
     # only — reserve again by hand if the job still needs the parts.
+    # Lock order: the stock rows (by product, location), then the holds — the work-order draw
+    # locks the stock rows and then takes units off these holds (an override), so locking the
+    # holds first deadlocked an archive against a job drawing this one's units. The holds are
+    # re-read locked after the stock rows: one drawn down meanwhile is already released.
     from backend.models import StockReservation
     from backend.services import stock_rows
-    _holds = (await db.execute(select(StockReservation).where(
+    _hold_q = (select(StockReservation).where(
         StockReservation.org_id == current.org_id, StockReservation.order_id == order_id,
-        StockReservation.released == False).with_for_update())).scalars().all()  # noqa: E712
+        StockReservation.released == False)  # noqa: E712
+        .order_by(StockReservation.part_id, StockReservation.location_id))
+    _holds = (await db.execute(_hold_q)).scalars().all()
+    for _pid, _lid in sorted({(_h.part_id, _h.location_id) for _h in _holds}):
+        await stock_rows.rows(db, _pid, _lid, lock=True)
+    _holds = (await db.execute(_hold_q.with_for_update()
+                               .execution_options(populate_existing=True))).scalars().all()
     for _h in _holds:
-        await stock_rows.rows(db, _h.part_id, _h.location_id, lock=True)
+        if _h.released:
+            continue
         await stock_rows.reserve(db, _h.part_id, _h.location_id, -float(_h.qty or 0))
         _h.released = True
     if not order.is_estimate:
