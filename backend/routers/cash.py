@@ -650,7 +650,7 @@ async def _refuse_double_click(db, org_id, order_id, account_id, amount) -> None
     since = now_utc() - timedelta(seconds=_DOUBLE_CLICK_S)
     hit = (await db.execute(select(Transaction.id).where(
         Transaction.org_id == org_id, Transaction.account_id == account_id, Transaction.ref_type == "order",
-        Transaction.ref_id == order_id, Transaction.txn_type == "invoice_payment", Transaction.status == "active",
+        Transaction.ref_id == order_id, Transaction.txn_type == "invoice_payment", Transaction.status != "deleted",
         Transaction.amount == q2(abs(amount)), Transaction.created_at >= since).limit(1))).scalar_one_or_none()
     if hit:
         raise HTTPException(409, f"{q2(abs(amount)):.2f} was just taken for this job into this account. "
