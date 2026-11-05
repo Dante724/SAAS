@@ -293,30 +293,32 @@ async def _delete_square_link(db: AsyncSession, intent: PaymentIntent) -> bool:
 # Reader charges still in flight: "pending" waits for the card, "processing" is approved but not
 # yet posted. While one exists, recording other money (or changing the balance) collects twice.
 READER_IN_FLIGHT = ("pending", "processing")
-# A waiting charge stops blocking other money once staff asked to cancel it but the provider
-# couldn't confirm (terminal.cancel notes that in `error` while it stays pending), or after this
-# many minutes with no news: a provider outage must not lock the till to card. The charge itself
-# stays live, so if the reader does take the card later the webhook/poll posts it as usual and the
-# order shows as overpaid. "processing" (money taken, not yet posted) always blocks.
-READER_PENDING_MAX_MIN = 15
 
 
-async def reader_charge_in_flight(db: AsyncSession, order_id: str | None) -> bool:
+async def reader_charge_in_flight(db: AsyncSession, order_id: str | None, *, strict: bool = False) -> bool:
+    """Is a card reader still working on this order?
+
+    strict=True (archive, credit notes): any waiting or processing charge blocks. A late card
+    success must never land on a deleted job or on an invoice that was just credited.
+
+    strict=False (money coming in: pay, prepay, the inline payment on a status change): a waiting
+    charge stops blocking once staff asked to cancel it but the provider couldn't confirm
+    (terminal.cancel notes that in `error` while the charge stays pending), so a provider outage
+    doesn't lock the till to card. The charge itself stays live: if the reader does take the card
+    later the webhook/poll posts it as usual and the order shows as overpaid. A waiting charge
+    nobody tried to cancel keeps blocking however old it is — the reader may still be showing the
+    amount, and cash on top of that would be a silent double charge. "processing" (money taken,
+    not yet posted) always blocks."""
     if not order_id:
         return False
-    from datetime import timedelta
-
     from sqlalchemy import and_, or_
 
     from backend.models import TerminalCharge
-    from backend.services.dates import now_utc
-    fresh = now_utc() - timedelta(minutes=READER_PENDING_MAX_MIN)
+    live = TerminalCharge.status.in_(READER_IN_FLIGHT) if strict else or_(
+        TerminalCharge.status == "processing",
+        and_(TerminalCharge.status == "pending", TerminalCharge.error.is_(None)))
     return (await db.execute(select(TerminalCharge.id).where(
-        TerminalCharge.order_id == order_id, or_(
-            TerminalCharge.status == "processing",
-            and_(TerminalCharge.status == "pending", TerminalCharge.error.is_(None),
-                 TerminalCharge.created_at > fresh)))
-        .limit(1))).scalar_one_or_none() is not None
+        TerminalCharge.order_id == order_id, live).limit(1))).scalar_one_or_none() is not None
 
 
 async def unrefunded_reader_money(db: AsyncSession, order_id: str) -> float:

@@ -615,10 +615,11 @@ async def _note_unconfirmed_cancel(db: AsyncSession, ch: TerminalCharge, e: HTTP
     """Staff asked to cancel but the provider couldn't confirm it (outage, WAN flap). The charge
     stays waiting — the reader may still take the card, and a later succeeded webhook/poll must
     post that money — but the attempt is recorded on it, which is what lets other payments on the
-    document through (order_money.reader_charge_in_flight) so the till isn't locked to card."""
+    document through (order_money.reader_charge_in_flight) so the till isn't locked to card.
+    The route commits (before answering 502) so the note outlives the failed request."""
     ch.error = f"Cancel requested, but not confirmed: {e.detail}"[:500]
     ch.updated_at = now_utc()
-    await db.commit()
+    await db.flush()
 
 
 async def simulate(db: AsyncSession, ch: TerminalCharge, outcome: str) -> TerminalCharge:

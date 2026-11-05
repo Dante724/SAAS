@@ -5,9 +5,11 @@ services/terminal.cancel() re-raised the provider error and the charge stayed "p
 expiry; order_money.reader_charge_in_flight() then refused every cash/other payment on the order
 ("A card reader charge ... still in progress"), so the till could not take cash during a Stripe
 outage or WAN flap. Fix: a cancel the provider couldn't confirm is noted on the charge (it stays
-pending so a later "succeeded" webhook/poll still posts the money), and such a charge — or a
-pending one older than READER_PENDING_MAX_MIN — no longer blocks other payments. "processing"
-(approved, not yet posted) still blocks.
+pending so a later "succeeded" webhook/poll still posts the money), and such a charge no longer
+blocks money coming in. "processing" (approved, not yet posted) still blocks, and so does a waiting
+charge nobody tried to cancel, however old: the reader may still show the amount, and cash on top
+would be a silent double charge. Archiving the job and crediting its invoice stay strict (any open
+charge blocks): a late card success must not land on a deleted job or a credited invoice.
 """
 from datetime import timedelta
 
@@ -18,7 +20,6 @@ from sqlalchemy import select
 from backend.models import TerminalCharge
 from backend.services import terminal as svc
 from backend.services.dates import now_utc
-from backend.services.order_money import READER_PENDING_MAX_MIN
 from backend.tests.test_opf_card_readers import (  # noqa: F401
     _card_account,
     _charge,
@@ -97,13 +98,59 @@ async def test_fresh_pending_charge_still_blocks_other_money(client, tenant, str
     assert pay.status_code == 409, pay.text
 
 
-async def test_stale_pending_charge_stops_blocking_but_processing_never_does(client, tenant, stripe, db):  # noqa: F811
+async def test_old_pending_charge_with_no_cancel_attempt_still_blocks_cash(client, tenant, stripe, db):  # noqa: F811
+    """Review: age alone never unblocks. With no cancel attempt the reader may still be showing
+    the amount, so cash on top of it would be a double charge nobody flagged."""
     till, t, oid, ch = await _setup(client, tenant)
     row = (await db.execute(select(TerminalCharge).where(TerminalCharge.id == ch["id"]))).scalar_one()
-    row.created_at = now_utc() - timedelta(minutes=READER_PENDING_MAX_MIN + 1)
+    row.created_at = now_utc() - timedelta(minutes=16)
     await db.commit()
-    assert (await _pay_cash(client, tenant, oid, till, 40)).status_code == 200
+    assert (await _pay_cash(client, tenant, oid, till, 40)).status_code == 409
 
     row.status = "processing"      # approved on the reader, money not yet posted: must still block
     await db.commit()
     assert (await _pay_cash(client, tenant, oid, till, 10)).status_code == 409
+
+
+async def test_unconfirmed_cancel_is_saved_even_though_the_request_fails(client, tenant, stripe, monkeypatch, db):  # noqa: F811
+    """The service only notes the attempt; the route commits before answering 502."""
+    till, t, oid, ch = await _setup(client, tenant)
+    monkeypatch.setattr(svc, "_TRANSPORT", httpx.MockTransport(_dead))
+    assert (await client.post(f"/api/payments/terminal/charges/{ch['id']}/cancel", headers=tenant)).status_code == 502
+    db.expire_all()
+    row = (await db.execute(select(TerminalCharge).where(TerminalCharge.id == ch["id"]))).scalar_one()
+    assert row.status == "pending"
+    assert row.error and row.error.startswith("Cancel requested, but not confirmed"), row.error
+
+
+# ── Review: archive and credit notes stay strict ────────────────────────────────────────────────
+
+async def test_unconfirmed_cancel_does_not_let_the_job_be_archived(client, tenant, stripe, monkeypatch):  # noqa: F811
+    """A late card success on an archived job would post money onto a deleted job."""
+    till, t, oid, ch = await _setup(client, tenant)
+    monkeypatch.setattr(svc, "_TRANSPORT", httpx.MockTransport(_dead))
+    assert (await client.post(f"/api/payments/terminal/charges/{ch['id']}/cancel", headers=tenant)).status_code == 502
+    assert (await _pay_cash(client, tenant, oid, till)).status_code == 200    # cash is fine...
+    r = await client.post(f"/api/orders/{oid}/archive", json={"reason": "x", "refund": True}, headers=tenant)
+    assert r.status_code == 409, r.text                                       # ...archiving is not
+    assert "card reader" in r.json()["detail"]
+
+
+async def test_unconfirmed_cancel_does_not_let_the_invoice_be_credited(client, tenant, stripe, monkeypatch):  # noqa: F811
+    await _card_account(client, tenant)
+    t = await _reader(client, tenant)
+    oid = await _order(client, tenant, 100)
+    inv = await client.post(f"/api/cash/orders/{oid}/invoices", json={}, headers=tenant)
+    assert inv.status_code in (200, 201), inv.text
+    ch = (await _charge(client, tenant, t["id"], order_id=oid)).json()
+    assert ch["status"] == "pending", ch
+    monkeypatch.setattr(svc, "_TRANSPORT", httpx.MockTransport(_dead))
+    assert (await client.post(f"/api/payments/terminal/charges/{ch['id']}/cancel", headers=tenant)).status_code == 502
+
+    cn = await client.post("/api/finance/credit-notes", headers=tenant, json={
+        "invoice_id": inv.json()["id"], "reason": "Goodwill",
+        "lines": [{"description": "Refund part", "qty": 1, "unit_price": 30}]})
+    assert cn.status_code == 201, cn.text
+    r = await client.post(f"/api/finance/credit-notes/{cn.json()['id']}/issue", headers=tenant)
+    assert r.status_code == 409, r.text
+    assert "card reader" in r.json()["detail"]

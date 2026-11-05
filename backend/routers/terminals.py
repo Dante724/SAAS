@@ -126,6 +126,16 @@ async def delete_reader(terminal_id: str, db: AsyncSession = Depends(get_db),
     return {"ok": True}
 
 
+async def _cancel_keeping_note(db, ch):
+    """A cancel the provider couldn't confirm answers 502, but the attempt it noted on the charge
+    (svc._note_unconfirmed_cancel) must still be saved: that note is what lets cash through."""
+    try:
+        return await svc.cancel(db, ch)
+    except HTTPException:
+        await db.commit()
+        raise
+
+
 @router.post("/readers/{terminal_id}/clear")
 async def clear_reader(terminal_id: str, db: AsyncSession = Depends(get_db),
                        current: Employee = Depends(require_perm("can_take_card_payments"))):
@@ -134,8 +144,9 @@ async def clear_reader(terminal_id: str, db: AsyncSession = Depends(get_db),
     waiting = (await db.execute(select(TerminalCharge).where(
         TerminalCharge.terminal_id == t.id, TerminalCharge.status.in_(svc.OPEN)))).scalars().all()
     for ch in waiting:
-        await svc.cancel(db, ch)
+        await _cancel_keeping_note(db, ch)
     return {"ok": True, "canceled": len(waiting)}
+
 
 
 class ChargeIn(BaseModel):
@@ -200,7 +211,7 @@ async def get_charge(charge_id: str, db: AsyncSession = Depends(get_db),
 @router.post("/charges/{charge_id}/cancel")
 async def cancel_charge(charge_id: str, db: AsyncSession = Depends(get_db),
                         current: Employee = Depends(require_perm("can_take_card_payments"))):
-    ch = await svc.cancel(db, await _charge(db, current.org_id, charge_id))
+    ch = await _cancel_keeping_note(db, await _charge(db, current.org_id, charge_id))
     return await _ser(db, ch)
 
 

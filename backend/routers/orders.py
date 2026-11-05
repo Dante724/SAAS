@@ -3502,7 +3502,9 @@ async def _archive_order(db, current, order_id, reason, do_refund):
     # Card money taken on a reader goes back on the reader (Card reader payments › Refund), not as
     # a cash refund here — booking it here too would let the reader refund it a second time.
     from backend.services.order_money import reader_charge_in_flight, unrefunded_reader_money
-    if await reader_charge_in_flight(db, order_id):
+    # strict: even a charge whose cancel the provider couldn't confirm blocks — a late card
+    # success must not post money onto a deleted job.
+    if await reader_charge_in_flight(db, order_id, strict=True):
         raise HTTPException(409, "A card reader charge for this order is still in progress. "
                                  "Finish or cancel it on the reader first.")
     if do_refund and await unrefunded_reader_money(db, order_id) > 0:
