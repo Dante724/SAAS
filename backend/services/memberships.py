@@ -5,7 +5,9 @@ perk), priced monthly and/or yearly. A membership puts one plan on one asset. Ev
 ordinary invoice (or a line on the work order it was sold on), so the books need nothing new.
 
 Dates: every `*_end` here is exclusive — a plan year that starts on 12 Mar 2027 has term_end
-12 Mar 2028, which is also the renewal date shown to people.
+12 Mar 2028, which is also the renewal date shown to people. Every date is a day on the shop's
+calendar (services/dates.shop_today), never the server's: a plan sold at 23:50 shop time starts that
+day, and a job's plan year is the shop day it was opened (hardening council Q2).
 """
 from __future__ import annotations
 
@@ -39,6 +41,7 @@ from backend.models import (
     Tag,
     Taggable,
 )
+from backend.services.dates import org_today, shop_today, shop_tzname, utc_to_wall
 from backend.services.money import q2
 
 log = logging.getLogger("tekly.memberships")
@@ -229,6 +232,11 @@ def first_period(billing: str, term_start: date, term_end: date) -> tuple[date, 
     return term_start, min(add_months(term_start, 1), term_end)
 
 
+async def _shop_day(db: AsyncSession, org_id: str, at: datetime, tz: Optional[str] = None) -> date:
+    """The shop's calendar day of a stored (naive UTC) timestamp."""
+    return utc_to_wall(at, tz or await shop_tzname(db, org_id)).date()
+
+
 async def live_on_device(db: AsyncSession, org_id: str, device_id: str) -> list[Membership]:
     ids = (await db.execute(select(MembershipAsset.membership_id).where(
         MembershipAsset.org_id == org_id, MembershipAsset.device_id == device_id))).scalars().all()
@@ -263,7 +271,7 @@ def _line_text(plan: MembershipPlan, billing: str, device: Optional[Device], sta
 async def sell(db: AsyncSession, *, org_id: str, actor: Employee, plan_id: str, client_id: str,
                device_id: Optional[str], billing: str, order_id: Optional[str] = None,
                manager_id: Optional[str] = None, today: Optional[date] = None) -> Membership:
-    today = today or date.today()
+    today = today or await shop_today(db, org_id)
     if billing not in BILLING:
         raise HTTPException(422, "Choose monthly or yearly")
     plan = (await db.execute(select(MembershipPlan).where(
@@ -372,7 +380,7 @@ async def allowance(db: AsyncSession, m: Membership, item: MembershipPlanItem) -
     total = float(item.qty or 0)
     if item.rollover:
         prev_start = add_months(m.term_start, -12)
-        if m.created_at and m.created_at.date() <= prev_start:
+        if m.created_at and await _shop_day(db, m.org_id, m.created_at) <= prev_start:
             used_prev = await _used(db, m, item, prev_start)
             total += max(0.0, float(item.qty or 0) - used_prev)
     return total
@@ -505,6 +513,7 @@ async def record_usage(db: AsyncSession, order: Order) -> int:
         OrderLine.order_id == order.id, OrderLine.membership_id.isnot(None),
         OrderLine.kind != "membership"))).scalars().all()
     n = 0
+    tz = await shop_tzname(db, order.org_id) if lines else None
     for line in lines:
         if (await db.execute(select(MembershipUsage.id).where(
                 MembershipUsage.order_line_id == line.id))).scalar_one_or_none():
@@ -522,8 +531,9 @@ async def record_usage(db: AsyncSession, order: Order) -> int:
         gross = q2((line.qty or 0) * (line.unit_price or 0))
         # The plan year the job was opened in (a job reopened after renewal still counts in its year).
         term = m.term_start
-        opened = order.created_at.date() if order.created_at else term
-        joined = m.created_at.date() if m.created_at else term
+        # shop days, like term_start: a job opened at 00:10 shop time belongs to that shop day
+        opened = await _shop_day(db, order.org_id, order.created_at, tz) if order.created_at else term
+        joined = await _shop_day(db, order.org_id, m.created_at, tz) if m.created_at else term
         while opened < term and term > joined:
             term = add_months(term, -12)
         db.add(MembershipUsage(org_id=order.org_id, membership_id=m.id, term_start=term,
@@ -542,7 +552,7 @@ async def record_usage(db: AsyncSession, order: Order) -> int:
 async def offer_for_order(db: AsyncSession, org: Organisation, order: Order,
                           today: Optional[date] = None) -> Optional[dict]:
     """The plan worth offering a non-member at checkout, or None (§7.3)."""
-    today = today or date.today()
+    today = today or org_today(org)
     if not org.membership_checkout_prompt or not order.client_id:
         return None
     client = (await db.execute(select(Client).where(Client.id == order.client_id))).scalar_one_or_none()
@@ -648,7 +658,7 @@ async def sync_tags(db: AsyncSession, org_id: str, client_id: str) -> None:
 
 async def end(db: AsyncSession, m: Membership, reason: str, today: Optional[date] = None) -> None:
     m.status = "lapsed" if reason == "unpaid" else "cancelled"
-    m.ended_on = today or date.today()
+    m.ended_on = today or await shop_today(db, m.org_id)
     m.ended_reason = reason
     m.renews = False
     await db.flush()
@@ -694,7 +704,7 @@ async def sync_payments(db: AsyncSession, org_id: str, membership_id: Optional[s
         if await period_paid(db, p):
             p.paid_at = datetime.utcnow()
             m = (await db.execute(select(Membership).where(Membership.id == p.membership_id))).scalar_one_or_none()
-            if m and m.status == "paused" and not await _unpaid_started(db, m, date.today()):
+            if m and m.status == "paused" and not await _unpaid_started(db, m, await shop_today(db, org_id)):
                 m.status = "active"
             n += 1
     if n:
@@ -814,7 +824,7 @@ async def _next_period(db: AsyncSession, m: Membership, plan: MembershipPlan, to
 
 async def sweep(db: AsyncSession, org: Organisation, today: Optional[date] = None) -> dict:
     """Daily membership work for one shop; safe to run every hour (idempotent per day)."""
-    today = today or date.today()
+    today = today or org_today(org)
     stats = {"invoiced": 0, "paused": 0, "lapsed": 0, "ended": 0, "messages": 0, "failed": 0}
     org_id = org.id
     grace, lapse = org.membership_grace_days or 0, org.membership_lapse_days or 0
@@ -968,7 +978,7 @@ async def profitability(db: AsyncSession, org_id: str, start: date, end_: date) 
 
 async def prepaid_unearned(db: AsyncSession, org_id: str, today: Optional[date] = None) -> float:
     """Paid plan money for days not yet reached (what spreading revenue holds back)."""
-    today = today or date.today()
+    today = today or await shop_today(db, org_id)
     rows = (await db.execute(select(MembershipPeriod).where(
         MembershipPeriod.org_id == org_id, MembershipPeriod.paid_at.isnot(None),
         MembershipPeriod.period_end > today))).scalars().all()

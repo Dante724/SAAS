@@ -15,6 +15,7 @@ from backend.db.database import get_db
 from backend.models import AuditLog, Device, Employee, Order, OrderStatus, Organisation
 from backend.services import pilot, scoping
 from backend.services.auth import require_perm
+from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/pilot", tags=["pilot"])
 
@@ -98,7 +99,7 @@ async def go_report(
     """The pilot report: per employee, status changes and photos total vs from Tekly Go, messages
     from Go, scans and counter lookups by kind; plus the share of status changes made on a phone
     against the 50% decision rule. Owners and admins only."""
-    end = date_to or date.today()
+    end = date_to or now_utc().date()       # the report's days are UTC days (see services/pilot.day_range)
     start = date_from or (end - timedelta(days=6))
     if start > end:
         raise HTTPException(422, "from must be on or before to")

@@ -12,6 +12,7 @@ from backend.models import AdminActionLog, Employee, Organisation, PlatformAdmin
 from backend.services import account_id as acct
 from backend.services import admin_log
 from backend.services.admin_access import effective_discount
+from backend.services.dates import platform_today
 from backend.tests.admin_helpers import admin_headers, login, seed_admin
 
 
@@ -168,9 +169,9 @@ async def test_trial_extension_limit(client):
 
 
 def test_an_ended_discount_stops_counting():
-    org = Organisation(name="x", discount_pct=20, discount_until=date.today() - timedelta(days=1))
+    org = Organisation(name="x", discount_pct=20, discount_until=platform_today() - timedelta(days=1))
     assert effective_discount(org) == 0
-    org.discount_until = date.today()
+    org.discount_until = platform_today()           # a platform date: the UTC day
     assert effective_discount(org) == 20
 
 
