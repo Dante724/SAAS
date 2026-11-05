@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import Button, { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { confirmDialog, promptDialog } from "../../lib/dialog";
@@ -55,7 +56,7 @@ function Segmented({ label, value, onChange, options }: {
 }) {
   return (
     <div role="radiogroup" aria-label={label}>
-      <span className="mb-1 block text-[11px] font-medium text-ink-tertiary">{label}</span>
+      <span className="mb-1 block text-2xs font-medium text-ink-tertiary">{label}</span>
       <span className="inline-flex h-9 items-center gap-0.5 rounded-xl bg-slate-100 p-0.5">
         {options.map((o) => (
           <button key={o.v} type="button" role="radio" aria-checked={value === o.v} onClick={() => onChange(o.v)}
@@ -116,7 +117,7 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
         <div className="flex items-center gap-2">
           <Gate perm="can_recommend">
             {!form && <button onClick={() => setForm({ title: "", price: "", qty: "1", kind: "service", urgency: "", note: "", photo: null, item: "" })}
-              className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:brightness-110"><M n="add" c="text-sm" />Add</button>}
+              className={buttonClass("secondary")}><M n="add" c="text-sm" />Add</button>}
           </Gate>
           {drafts.length > 1 && (
             <Gate perm="can_publish_recommend">
@@ -127,7 +128,7 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
         </div>
       </div>
       {!enabled && (
-        <div className="mx-4 mt-3 rounded-lg bg-amber-50 px-3 py-2 text-[12px] text-amber-800">Customers can't see recommendations: they're switched off in Settings › Public pages.</div>
+        <div className="mx-4 mt-3 rounded-lg bg-amber-50 px-3 py-2 text-xs text-amber-800">Customers can't see recommendations: they're switched off in Settings › Public pages.</div>
       )}
 
       {form && (() => {
@@ -150,13 +151,13 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
                       className="absolute -right-1.5 -top-1.5 grid h-6 w-6 place-items-center rounded-full bg-white text-ink-secondary shadow ring-1 ring-slate-200 hover:text-rose-600"><M n="close" c="text-sm" /></button>
                   </div>
                 : <label className="grid h-20 w-20 shrink-0 cursor-pointer place-content-center justify-items-center gap-1 rounded-xl border border-dashed border-slate-300 text-ink-tertiary transition hover:border-primary/40 hover:bg-slate-50 hover:text-primary">
-                    <M n="photo_camera" c="text-lg" /><span className="text-[11px] font-medium">Add photo</span>{photoInput}
+                    <M n="photo_camera" c="text-lg" /><span className="text-2xs font-medium">Add photo</span>{photoInput}
                   </label>}
             </div>
 
             <div className="mt-4 flex flex-wrap items-end gap-x-2.5 gap-y-3 border-t border-slate-100 px-5 py-4">
                 <label className="block">
-                  <span className="mb-1 block text-[11px] font-medium text-ink-tertiary">Price</span>
+                  <span className="mb-1 block text-2xs font-medium text-ink-tertiary">Price</span>
                   <span className="flex h-9 w-28 items-center rounded-xl border border-slate-200 bg-white px-3 focus-within:border-primary/50 focus-within:ring-2 focus-within:ring-primary/15">
                     <span className="text-sm text-ink-tertiary">{currencySymbol()}</span>
                     <input inputMode="decimal" value={form.price} onChange={(e) => setForm({ ...form, price: e.target.value.replace(/[^\d.]/g, "") })} placeholder="0" aria-label="Price"
@@ -164,7 +165,7 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
                   </span>
                 </label>
                 <div>
-                  <span className="mb-1 block text-[11px] font-medium text-ink-tertiary">Qty</span>
+                  <span className="mb-1 block text-2xs font-medium text-ink-tertiary">Qty</span>
                   <span className="flex h-9 items-center rounded-xl border border-slate-200 bg-white">
                     <button type="button" aria-label="Decrease quantity" onClick={() => setForm({ ...form, qty: String(Math.max(1, (Number(form.qty) || 1) - 1)) })} className="grid h-9 w-8 place-items-center text-ink-tertiary hover:text-ink-primary"><M n="remove" c="text-sm" /></button>
                     <input inputMode="numeric" value={form.qty} onChange={(e) => setForm({ ...form, qty: e.target.value.replace(/\D/g, "") })} aria-label="Qty"
@@ -177,7 +178,7 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
               <div className="sm:ml-auto"><Segmented label="How urgent" value={form.urgency} onChange={(urgency) => setForm({ ...form, urgency })}
                 options={[{ v: "", t: "Not urgent" }, { v: "soon", t: "Soon", dot: "bg-amber-400" }, { v: "now", t: "Needs it now", dot: "bg-rose-500" }]} /></div>
               {items.length > 1 && (
-                <label className="flex basis-full items-center gap-2 text-[11px] font-medium text-ink-tertiary">For
+                <label className="flex basis-full items-center gap-2 text-2xs font-medium text-ink-tertiary">For
                   <select value={form.item} onChange={(e) => setForm({ ...form, item: e.target.value })} aria-label="Which item"
                     className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs font-medium text-ink-primary outline-none focus:border-primary/50">
                     <option value="">The whole job</option>{items.map((it) => <option key={it.id} value={it.id}>{it.name}</option>)}
@@ -192,8 +193,8 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
                 {(Number(form.qty) || 1) > 1 && <span className="ml-1 tabular-nums">({form.qty} × {money(Number(form.price) || 0)})</span>}
               </div>
               <div className="ml-auto flex gap-2">
-                <button type="button" onClick={() => setForm(null)} className="h-9 px-3.5 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>
-                <button type="button" disabled={busy || !form.title.trim()} onClick={save} className="h-9 px-4 rounded-xl bg-primary text-white text-xs font-semibold shadow-sm hover:brightness-110 disabled:opacity-40 disabled:shadow-none">Save draft</button>
+                <Button variant="primary" disabled={busy || !form.title.trim()} onClick={save}>Save draft</Button>
+                <Button variant="ghost" onClick={() => setForm(null)}>Cancel</Button>
               </div>
             </div>
           </div>
@@ -215,12 +216,12 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-1.5">
                     <span className="text-sm font-semibold text-ink-primary">{r.title}</span>
-                    <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${st.cls}`}>{st.label}</span>
-                    {r.urgency && <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${r.urgency === "now" ? "bg-amber-50 text-amber-800" : "bg-slate-100 text-ink-secondary"}`}>{URGENCY_LABEL[r.urgency]}</span>}
-                    {r.source === "checklist" && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-ink-tertiary">From checklist</span>}
+                    <span className={`rounded-full px-2 py-0.5 text-2xs font-medium ${st.cls}`}>{st.label}</span>
+                    {r.urgency && <span className={`rounded-full px-2 py-0.5 text-2xs font-medium ${r.urgency === "now" ? "bg-amber-50 text-amber-800" : "bg-slate-100 text-ink-secondary"}`}>{URGENCY_LABEL[r.urgency]}</span>}
+                    {r.source === "checklist" && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-2xs text-ink-tertiary">From checklist</span>}
                   </div>
                   {r.note && <p className="mt-0.5 text-xs text-ink-secondary">{r.note}</p>}
-                  <p className="mt-0.5 text-[11px] text-ink-tertiary">
+                  <p className="mt-0.5 text-2xs text-ink-tertiary">
                     {[itemName ? `For ${itemName}` : null,
                       r.status === "approved" && r.decided_by_name ? `Confirmed by ${r.decided_by_name}${r.decided_at ? `, ${fmtDay(r.decided_at)}` : ""}` : null,
                       r.status === "declined" && r.remind_after ? `Raise again after ${fmtDay(r.remind_after)}` : null].filter(Boolean).join(" · ")}
@@ -228,7 +229,7 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
                   <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                     {(r.status === "draft" || r.status === "sent") && can("can_recommend") && (
                       <select value={r.urgency || ""} disabled={busy} onChange={(e) => call(() => api.patch(`/orders/${orderId}/recommendations/${r.id}`, { urgency: e.target.value || null }))}
-                        aria-label={`How urgent ${r.title} is`} className="rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-ink-secondary">
+                        aria-label={`How urgent ${r.title} is`} className="rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-2xs text-ink-secondary">
                         <option value="">Not urgent</option><option value="soon">Soon</option><option value="now">Needs it now</option>
                       </select>
                     )}
@@ -257,7 +258,7 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
                 </div>
                 <div className="text-right">
                   <div className="text-sm font-semibold tabular-nums text-ink-primary">{money(total)}</div>
-                  {(r.qty || 1) > 1 && <div className="text-[11px] tabular-nums text-ink-tertiary">{r.qty} × {money(r.unit_price || 0)}</div>}
+                  {(r.qty || 1) > 1 && <div className="text-2xs tabular-nums text-ink-tertiary">{r.qty} × {money(r.unit_price || 0)}</div>}
                 </div>
               </li>
             );

@@ -12,16 +12,13 @@ function Item({ to, label, Icon, badge }: Tab & { badge?: number }) {
   return (
     <NavLink to={to}
       className={({ isActive }) => `relative flex-1 min-h-[3rem] flex flex-col items-center justify-center gap-0.5 rounded-xl text-go-caption font-medium ${isActive ? "text-primary" : "text-ink-tertiary"}`}>
-      {({ isActive }) => (
-        <>
-          <Icon size={24} strokeWidth={isActive ? 2.25 : 1.75} />
-          <span>{label}</span>
-          {!!badge && (
-            <span className="absolute top-0.5 left-1/2 ml-2 min-w-[1.125rem] h-[1.125rem] px-1 rounded-full bg-rose-600 text-white text-go-caption font-semibold leading-[1.125rem] text-center tabular-nums">
-              {badge > 9 ? "9+" : badge}
-            </span>
-          )}
-        </>
+      {/* the current tab changes colour only; every Go icon keeps lucide's 2px stroke */}
+      <Icon size={24} />
+      <span>{label}</span>
+      {!!badge && (
+        <span className="absolute top-0.5 left-1/2 ml-2 min-w-[1.125rem] h-[1.125rem] px-1 rounded-full bg-rose-600 text-white text-go-caption font-semibold leading-[1.125rem] text-center tabular-nums">
+          {badge > 9 ? "9+" : badge}
+        </span>
       )}
     </NavLink>
   );
@@ -36,7 +33,7 @@ export default function TabBar({ moreBadge, tasksBadge }: { moreBadge?: number; 
         <div className="flex-1 flex justify-center">
           <NavLink to="/scan" aria-label="Scan"
             className={({ isActive }) => `flex h-12 w-14 items-center justify-center rounded-xl text-white transition-colors active:bg-primary-container ${isActive ? "bg-primary-container" : "bg-primary"}`}>
-            <ScanLine size={26} strokeWidth={2} />
+            <ScanLine size={26} />
           </NavLink>
         </div>
         {RIGHT.map((t) => <Item key={t.to} {...t} badge={t.to === "/more" ? moreBadge : undefined} />)}
