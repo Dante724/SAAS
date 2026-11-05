@@ -44,10 +44,9 @@ export default function PageSummary({ title, subtitle, actions, stats, className
             </>
           );
           const cls = `${stats.length > 5 ? "min-[1400px]:flex-1" : "lg:flex-1"} min-w-0 text-left px-5 py-4 ${s.active ? "shadow-[inset_0_-2px_0] shadow-primary" : ""}`;
-          // A <button> centres its content vertically; tiles are top-aligned so every label sits on one line.
           return s.onClick ? (
             <button key={s.label} type="button" onClick={s.onClick} aria-pressed={s.active}
-              className={`${cls} flex flex-col justify-start hover:bg-slate-50/80 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 first:rounded-bl-2xl last:rounded-br-2xl`}>{body}</button>
+              className={`${cls} hover:bg-slate-50/80 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 first:rounded-bl-2xl last:rounded-br-2xl`}>{body}</button>
           ) : <div key={s.label} className={cls}>{body}</div>;
         })}
       </div>

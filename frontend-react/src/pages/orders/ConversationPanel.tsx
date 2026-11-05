@@ -3,7 +3,6 @@
 // G3: this box and the Activity tab's message box share the same thread, and both show what the
 // server says really happened (sent by email/text, or saved but not sent and why).
 import { useEffect, useRef, useState } from "react";
-import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { deliveryText, deliveryTone, type Delivery, type Flash } from "../../lib/delivery";
@@ -30,7 +29,7 @@ export function ChannelPicker({ value, onChange, id }: { value: SendChannel; onC
     <div role="radiogroup" aria-label="Send by" id={id} className="inline-flex gap-0.5 rounded-lg bg-slate-100 p-0.5 shrink-0">
       {CHANNELS.map(([k, l]) => (
         <button key={k} type="button" role="radio" aria-checked={value === k} onClick={() => onChange(k)}
-          className={`px-2 py-1 rounded-md text-2xs font-semibold ${value === k ? "bg-white text-ink-primary shadow-sm" : "text-ink-tertiary hover:text-ink-primary"}`}>{l}</button>
+          className={`px-2 py-1 rounded-md text-[11px] font-semibold ${value === k ? "bg-white text-ink-primary shadow-sm" : "text-ink-tertiary hover:text-ink-primary"}`}>{l}</button>
       ))}
     </div>
   );
@@ -43,7 +42,7 @@ export function DeliveryNote({ note }: { note: { text: string; tone?: "warn" | "
     : note.tone === "warn" ? "bg-amber-50 text-amber-800 border-amber-200"
     : "bg-emerald-50 text-emerald-700 border-emerald-200";
   return (
-    <div role="status" className={`mx-2.5 mb-2.5 rounded-lg border px-2.5 py-1.5 text-2xs font-medium flex items-start gap-1.5 ${cls}`}>
+    <div role="status" className={`mx-2.5 mb-2.5 rounded-lg border px-2.5 py-1.5 text-[11px] font-medium flex items-start gap-1.5 ${cls}`}>
       <M n={note.tone ? "info" : "check_circle"} c="text-sm" /><span>{note.text}</span>
     </div>
   );
@@ -95,8 +94,8 @@ export default function ConversationPanel({ orderId, onFlash, reloadKey, onSent 
           return (
             <div key={m.id} className={`flex ${staff ? "justify-end" : "justify-start"}`}>
               <div className={`max-w-[78%] rounded-2xl px-3 py-2 ${staff ? "bg-primary text-white rounded-br-sm" : "bg-white border border-slate-200 text-ink-primary rounded-bl-sm"}`}>
-                <div className="text-sm leading-snug whitespace-pre-wrap break-words">{m.body}</div>
-                <div className={`text-2xs mt-1 ${staff ? "text-white/70" : "text-ink-tertiary"}`}>{m.who || (staff ? "Staff" : "Customer")} · {fmt(m.at)}</div>
+                <div className="text-[13px] leading-snug whitespace-pre-wrap break-words">{m.body}</div>
+                <div className={`text-[11px] mt-1 ${staff ? "text-white/70" : "text-ink-tertiary"}`}>{m.who || (staff ? "Staff" : "Customer")} · {fmt(m.at)}</div>
               </div>
             </div>
           );
@@ -109,7 +108,7 @@ export default function ConversationPanel({ orderId, onFlash, reloadKey, onSent 
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
           className="glass-input flex-1 py-2 px-3 text-xs rounded-xl resize-none max-h-24" />
         <button onClick={send} disabled={busy || !text.trim()} aria-label="Send message"
-          className={buttonClass("primary", "md", "shrink-0 w-9 !px-0")}><M n="send" c="text-base" /></button>
+          className="shrink-0 w-9 h-9 rounded-xl bg-primary text-white flex items-center justify-center shadow-clay-sm disabled:opacity-40"><M n="send" c="text-base" /></button>
       </div>
       <DeliveryNote note={note} />
     </div>

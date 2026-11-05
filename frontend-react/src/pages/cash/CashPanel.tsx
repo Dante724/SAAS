@@ -13,8 +13,6 @@ import { isoDate } from "../../lib/localDate";
 import { useServerPage } from "../../hooks/useServerPage";
 import { fmtServerTime } from "../../lib/serverTime";
 import { btnGhost, btnPrimary } from "../invoices/billing";
-import { buttonClass } from "../../components/Button";
-import { theadRowClass } from "../../components/Table";
 import { loadFailed } from "../../lib/notice";
 import { clickable } from "../../lib/clickable";
 
@@ -31,7 +29,6 @@ const iconFor = (a: Account) => a.icon || (a.payment_option === "cash" ? "paymen
 export default function CashPanel() {
   const { can } = useMe();
   const [accounts, setAccounts] = useState<Account[]>([]);
-  const [loaded, setLoaded] = useState(false);   // no "Add your first cashbox" before the list arrives
   const [sel, setSel] = useState<Account | null>(null);
   const [flow, setFlow] = useState<FlowItem[]>([]);
   const [menu, setMenu] = useState<string | null>(null);
@@ -46,7 +43,7 @@ export default function CashPanel() {
       const items = r.items || []; setAccounts(items);
       setSel((cur) => keepSel && cur ? items.find((a) => a.id === cur.id) || items[0] || null : items[0] || null);
       return items;
-    }).catch(() => setAccounts([])).finally(() => setLoaded(true));
+    }).catch(() => setAccounts([]));
   }
   useEffect(() => { loadAccounts(false); api.get<{ items: FlowItem[] }>("/cash/flow-items").then((r) => setFlow(r.items || [])).catch(loadFailed("cash flow items")); }, []);
   // The ledger pages on the server; its totals come from the same request (SQL over every row),
@@ -108,17 +105,17 @@ export default function CashPanel() {
       <div className="flex-1 flex flex-col md:flex-row overflow-y-auto md:overflow-hidden">
         {/* LEFT: cashbox rail (stacks above the detail on narrow screens) */}
         <aside className="md:w-56 flex-shrink-0 border-b md:border-b-0 md:border-r border-slate-200/80 bg-white/40 md:overflow-y-auto px-6 py-3.5 md:py-5 md:pr-3 space-y-2">
-          <div className="text-2xs font-semibold text-ink-tertiary px-1 pb-0.5">Cashboxes</div>
+          <div className="text-[11px] font-bold text-ink-tertiary px-1 pb-0.5">Cashboxes</div>
           {accounts.map((a) => {
             const active = sel?.id === a.id;
             return (
               <div key={a.id} {...clickable(() => setSel(a))} className={`relative flex items-center gap-2.5 bg-white rounded-2xl border p-2.5 cursor-pointer transition-all shadow-clay-sm ${active ? "border-primary ring-2 ring-primary/15" : "border-slate-200/90 hover:border-primary/40"}`}>
                 <div className="w-9 h-9 rounded-full bg-primary text-white flex items-center justify-center shadow-clay-sm shrink-0"><M n={iconFor(a)} c="text-base" /></div>
                 <div className="min-w-0 flex-1">
-                  <div className="text-xs font-semibold text-ink-primary truncate">{a.name}</div>
-                  <div className="tabular-nums text-xs font-semibold text-ink-secondary">{money(a.balance, a.currency_code ? (CCY[a.currency_code] || "") : currencySymbol())}</div>
+                  <div className="text-xs font-bold text-ink-primary truncate">{a.name}</div>
+                  <div className="font-mono text-xs font-bold text-ink-secondary">{money(a.balance, a.currency_code ? (CCY[a.currency_code] || "") : currencySymbol())}</div>
                 </div>
-                <button aria-label="More options" aria-haspopup="menu" aria-expanded={menu === a.id} onClick={(e) => { e.stopPropagation(); setMenu(menu === a.id ? null : a.id); }} className={buttonClass("ghost", "sm", "w-8 !px-0 shrink-0 text-ink-tertiary")}><M n="more_vert" c="text-base" /></button>
+                <button aria-label="More options" aria-haspopup="menu" aria-expanded={menu === a.id} onClick={(e) => { e.stopPropagation(); setMenu(menu === a.id ? null : a.id); }} className="text-ink-tertiary hover:text-ink-primary p-1 -m-0.5 rounded-md shrink-0"><M n="more_vert" c="text-base" /></button>
                 {menu === a.id && (
                   <div className="absolute z-20 right-2 top-10 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5 w-40 text-xs" onClick={(e) => e.stopPropagation()}>
                     {can("can_create_incomes") && <button onClick={() => { setSel(a); openTxn("income"); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-emerald-50 text-emerald-700 font-semibold"><M n="add" c="text-sm" />Income</button>}
@@ -131,16 +128,17 @@ export default function CashPanel() {
               </div>
             );
           })}
-          <button onClick={() => setDrawer({ edit: null })} className={buttonClass("secondary", "md", "w-full")}><M n="add" c="text-base" />Cashbox</button>
+          <button onClick={() => setDrawer({ edit: null })} className="w-full rounded-2xl border-2 border-dashed border-slate-300 text-ink-tertiary hover:border-primary/60 hover:text-primary hover:bg-blue-50/20 py-3 flex items-center justify-center gap-1.5 text-xs font-bold transition-all"><M n="add" c="text-base" />Cashbox</button>
         </aside>
 
         {/* RIGHT: hero + drawer controls + activity */}
-        <div className="flex-1 min-w-0 md:overflow-y-auto px-6 py-5 space-y-4">
-          {!accounts.length ? (loaded &&
+        <div className="flex-1 min-w-0 md:overflow-y-auto p-6 space-y-4">
+          {!accounts.length ? (
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-12 flex flex-col items-center text-center">
               <div className="w-14 h-14 rounded-2xl bg-primary text-white flex items-center justify-center shadow-clay-sm mb-3"><M n="point_of_sale" c="text-3xl" /></div>
-              <h3 className="text-base font-semibold text-ink-primary">Add your first cashbox</h3>
-              <p className="text-xs text-ink-tertiary max-w-sm mt-1">A cashbox is where money lands — your till, a card account, UPI, petty cash. Add one with "Cashbox" to start taking payments and tracking the drawer.</p>
+              <h3 className="text-base font-bold text-ink-primary">Add your first cashbox</h3>
+              <p className="text-xs text-ink-tertiary max-w-sm mt-1">A cashbox is where money lands — your till, a card account, UPI, petty cash. Create one to start taking payments and tracking the drawer.</p>
+              <button onClick={() => setDrawer({ edit: null })} className={`${btnPrimary} mt-4`}><M n="add" c="text-sm" />New cashbox</button>
             </div>
           ) : (
           <>
@@ -148,28 +146,28 @@ export default function CashPanel() {
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-6">
             <div className="flex items-center gap-2.5 mb-3">
               <div className="w-9 h-9 rounded-full bg-primary text-white flex items-center justify-center shadow-clay-sm"><M n={sel ? iconFor(sel) : "account_balance"} c="text-base" /></div>
-              <div className="text-sm font-semibold text-ink-primary">{sel?.name || "—"}</div>
-              {sel?.payment_option && <span className="text-2xs font-semibold text-ink-tertiary bg-slate-100 px-2 py-0.5 rounded-full">{payLabel(sel.payment_option)}</span>}
+              <div className="text-sm font-bold text-ink-primary">{sel?.name || "—"}</div>
+              {sel?.payment_option && <span className="text-[11px] font-bold text-ink-tertiary bg-slate-100 px-2 py-0.5 rounded-full">{payLabel(sel.payment_option)}</span>}
             </div>
-            <div className="text-xs font-semibold text-ink-tertiary">{sel?.payment_option === "cash" ? "In the till right now" : "Balance"}</div>
+            <div className="text-xs font-bold text-ink-tertiary">{sel?.payment_option === "cash" ? "In the till right now" : "Balance"}</div>
             <div className="tabular-nums text-5xl font-bold text-ink-primary tracking-tight leading-none mt-1">{money(sel?.balance, sym)}</div>
             <div className="grid grid-cols-3 gap-px mt-5 rounded-2xl overflow-hidden border border-slate-200/80 bg-slate-200/60">
-              <div className="bg-white p-3.5"><div className="text-2xs font-semibold text-ink-tertiary">In today</div><div className="tabular-nums text-lg font-bold text-emerald-600 mt-0.5">{money(tt.in, sym)}</div></div>
-              <div className="bg-white p-3.5"><div className="text-2xs font-semibold text-ink-tertiary">Out today</div><div className="tabular-nums text-lg font-bold text-rose-600 mt-0.5">{money(tt.out, sym)}</div></div>
-              <div className="bg-white p-3.5"><div className="text-2xs font-semibold text-ink-tertiary">Net today</div><div className={`tabular-nums text-lg font-bold mt-0.5 ${tt.net >= 0 ? "text-ink-primary" : "text-rose-600"}`}>{money(tt.net, sym)}</div></div>
+              <div className="bg-white p-3.5"><div className="text-[11px] font-bold text-ink-tertiary ">In today</div><div className="tabular-nums text-lg font-bold text-emerald-600 mt-0.5">{money(tt.in, sym)}</div></div>
+              <div className="bg-white p-3.5"><div className="text-[11px] font-bold text-ink-tertiary ">Out today</div><div className="tabular-nums text-lg font-bold text-rose-600 mt-0.5">{money(tt.out, sym)}</div></div>
+              <div className="bg-white p-3.5"><div className="text-[11px] font-bold text-ink-tertiary ">Net today</div><div className={`tabular-nums text-lg font-bold mt-0.5 ${tt.net >= 0 ? "text-ink-primary" : "text-rose-600"}`}>{money(tt.net, sym)}</div></div>
             </div>
           </div>
 
           {/* Drawer (shift) controls — only cash boxes have a physical till to open/close/count */}
           {sel?.payment_option === "cash"
             ? <CashDrawer sym={sym} currencyCode={sel?.currency_code} />
-            : <div className="bg-slate-50/70 rounded-2xl border border-slate-200 p-3.5 flex items-center gap-2.5 text-xs text-ink-tertiary"><M n="info" c="text-base" />No physical drawer on a {sel?.payment_option === "card" ? "card" : "cashless"} account — record income, expenses, and transfers below.</div>}
+            : <div className="bg-slate-50/70 rounded-2xl border border-dashed border-slate-200 p-3.5 flex items-center gap-2.5 text-xs text-ink-tertiary"><M n="info" c="text-base" />No physical drawer on a {sel?.payment_option === "card" ? "card" : "cashless"} account — record income, expenses, and transfers below.</div>}
 
           {/* ACTIVITY: command bar + ledger */}
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
             <div className="px-4 py-3 border-b border-slate-100 space-y-2.5">
               <div className="flex items-baseline gap-1.5 flex-wrap">
-                <span className="text-sm font-semibold text-ink-primary">Activity</span>
+                <span className="text-sm font-bold text-ink-primary">Activity</span>
                 <span className="text-xs text-ink-tertiary">· {sel?.name || "—"} · {live.length} transactions</span>
               </div>
               <div className="flex items-center gap-2 flex-wrap">
@@ -180,13 +178,13 @@ export default function CashPanel() {
             </div>
             <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
-              <thead><tr className={theadRowClass}>
+              <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
                 <th className="py-3 px-4">Created</th><th className="py-3 px-4">Comment</th><th className="py-3 px-4">Category</th><th className="py-3 px-4 text-right">Income</th><th className="py-3 px-4 text-right">Expense</th><th className="py-3 px-4 text-right">Balance</th><th className="py-3 px-4 text-right">Actions</th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
                 {!txns && <SkeletonRows cols={7} />}
                 {txns?.length === 0 && (
-                  <tr><td colSpan={7} className="py-16 px-4 text-center"><div className="flex flex-col items-center gap-2"><M n="account_balance_wallet" c="text-3xl text-ink-placeholder" /><div className="text-sm font-semibold text-ink-secondary">Nothing here yet</div><div className="text-xs text-ink-tertiary">Add income or expenses to track your transactions.</div></div></td></tr>
+                  <tr><td colSpan={7} className="py-16 px-4 text-center"><div className="flex flex-col items-center gap-2"><M n="account_balance_wallet" c="text-3xl text-ink-placeholder" /><div className="text-sm font-bold text-ink-secondary">Nothing here yet</div><div className="text-xs text-ink-tertiary">Add income or expenses to track your transactions.</div></div></td></tr>
                 )}
                 {pageTxns.map((t) => {
                   const inc = txnDirection(t) === "in";
@@ -195,18 +193,18 @@ export default function CashPanel() {
                   return (
                     <tr key={t.id} className={`hover:bg-blue-50/30 ${del ? "opacity-50 line-through" : ""}`} title={del ? `Deleted${t.void_reason ? `: ${t.void_reason}` : ""}` : corrected ? "Corrected — see the linked adjustment row" : ""}>
                       <td className="py-2.5 px-4 text-ink-tertiary">{fmtServerTime(t.actual_date, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }) || "—"}</td>
-                      <td className="py-2.5 px-4 text-ink-primary font-semibold">{t.comment || "—"}{corrected && <span className="ml-2 px-1.5 py-0.5 rounded-full bg-amber-50 text-2xs font-semibold text-amber-700 no-underline">Corrected</span>}{t.reverses_txn_id && <span className="ml-2 px-1.5 py-0.5 rounded-full bg-sky-50 text-2xs font-semibold text-sky-700 no-underline">Adjustment</span>}</td>
+                      <td className="py-2.5 px-4 text-ink-primary font-semibold">{t.comment || "—"}{corrected && <span className="ml-2 px-1.5 py-0.5 rounded-full bg-amber-50 text-[11px] font-semibold text-amber-700 no-underline">Corrected</span>}{t.reverses_txn_id && <span className="ml-2 px-1.5 py-0.5 rounded-full bg-sky-50 text-[11px] font-semibold text-sky-700 no-underline">Adjustment</span>}</td>
                       <td className="py-2.5 px-4">{t.cash_flow_item || "—"}</td>
-                      <td className="py-2.5 px-4 text-right tabular-nums font-semibold text-emerald-600">{inc ? money(Math.abs(t.amount || 0), sym) : ""}</td>
-                      <td className="py-2.5 px-4 text-right tabular-nums font-semibold text-rose-600">{!inc ? money(Math.abs(t.amount || 0), sym) : ""}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums font-bold text-emerald-600">{inc ? money(Math.abs(t.amount || 0), sym) : ""}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums font-bold text-rose-600">{!inc ? money(Math.abs(t.amount || 0), sym) : ""}</td>
                       <td className="py-2.5 px-4 text-right tabular-nums text-ink-tertiary">{t.balance_after != null ? money(t.balance_after, sym) : "—"}</td>
                       <td className="py-2.5 px-4 text-right whitespace-nowrap no-underline">
                         {del ? (
-                          <button onClick={() => restoreTxn(t)} className="text-2xs font-semibold text-sky-600 hover:underline">Restore</button>
+                          <button onClick={() => restoreTxn(t)} className="text-[11px] font-bold text-sky-600 hover:underline">Restore</button>
                         ) : (
                           <>
-                            <button onClick={() => correctTxn(t)} className="text-2xs font-semibold text-amber-600 hover:underline mr-3">Correct</button>
-                            <button onClick={() => deleteTxn(t)} className="text-2xs font-semibold text-rose-600 hover:underline">Delete</button>
+                            <button onClick={() => correctTxn(t)} className="text-[11px] font-bold text-amber-600 hover:underline mr-3">Correct</button>
+                            <button onClick={() => deleteTxn(t)} className="text-[11px] font-bold text-rose-600 hover:underline">Delete</button>
                           </>
                         )}
                       </td>
@@ -231,16 +229,16 @@ export default function CashPanel() {
         <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
           <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={() => setModal(null)} />
           <div className="relative bg-white rounded-2xl shadow-clay-drawer border border-slate-200 w-full max-w-md p-5 space-y-4">
-            <div className="flex items-center justify-between"><h4 className="text-sm font-semibold text-ink-primary">{modal === "transfer" ? "Transfer money" : `Record ${modal}`} · {sel.name}</h4><button aria-label="Close" onClick={() => setModal(null)} className={buttonClass("ghost", "sm", "w-8 !px-0 text-ink-tertiary")}><M n="close" c="text-lg" /></button></div>
+            <div className="flex items-center justify-between"><h4 className="text-sm font-bold text-ink-primary">{modal === "transfer" ? "Transfer money" : `Record ${modal}`} · {sel.name}</h4><button aria-label="Close" onClick={() => setModal(null)} className="text-ink-tertiary hover:text-ink-primary"><M n="close" c="text-lg" /></button></div>
             {modal === "transfer" && (
-              <div><label className="block text-xs font-semibold text-ink-secondary mb-1.5">To account</label><select value={form.to_account_id} onChange={(e) => setForm({ ...form, to_account_id: e.target.value })} className="glass-input w-full h-9 px-3 text-sm rounded-xl">{accounts.filter((a) => a.id !== sel.id).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></div>
+              <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">To account</label><select value={form.to_account_id} onChange={(e) => setForm({ ...form, to_account_id: e.target.value })} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl">{accounts.filter((a) => a.id !== sel.id).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></div>
             )}
-            <div><label className="block text-xs font-semibold text-ink-secondary mb-1.5">Amount ({sym})</label><input type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} className="glass-input w-full h-9 px-3 text-sm font-semibold tabular-nums rounded-xl" /></div>
+            <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Amount ({sym})</label><input type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} className="glass-input w-full py-2 px-3 text-sm font-bold tabular-nums rounded-xl" /></div>
             {modal !== "transfer" && (
-              <div><label className="block text-xs font-semibold text-ink-secondary mb-1.5">Category</label><select value={form.cash_flow_item_id} onChange={(e) => setForm({ ...form, cash_flow_item_id: e.target.value })} className="glass-input w-full h-9 px-3 text-sm rounded-xl"><option value="">— None —</option>{flow.filter((f) => !f.direction || f.direction === modal).map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select></div>
+              <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Category</label><select value={form.cash_flow_item_id} onChange={(e) => setForm({ ...form, cash_flow_item_id: e.target.value })} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl"><option value="">— None —</option>{flow.filter((f) => !f.direction || f.direction === modal).map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select></div>
             )}
-            <div><label className="block text-xs font-semibold text-ink-secondary mb-1.5">Comment</label><input value={form.comment} onChange={(e) => setForm({ ...form, comment: e.target.value })} className="glass-input w-full h-9 px-3 text-sm rounded-xl" placeholder="Optional…" /></div>
-            <div className="flex gap-2 pt-1"><button onClick={submit} className={btnPrimary}>{KIND_LABEL[modal]}</button><button onClick={() => setModal(null)} className={btnGhost}>Cancel</button></div>
+            <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Comment</label><input value={form.comment} onChange={(e) => setForm({ ...form, comment: e.target.value })} className="glass-input w-full py-2 px-3 text-xs rounded-xl" placeholder="Optional…" /></div>
+            <div className="flex justify-end gap-2 pt-1"><button onClick={() => setModal(null)} className={btnGhost}>Cancel</button><button onClick={submit} className={btnPrimary}>{KIND_LABEL[modal]}</button></div>
           </div>
         </div>
       )}

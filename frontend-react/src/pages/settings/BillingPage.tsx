@@ -1,7 +1,4 @@
 import { useEffect, useState } from "react";
-import SettingsPage from "../../components/SettingsPage";
-import { sectionCard } from "../../components/Section";
-import Button from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { useMe, type PlanId, type PlanLimits } from "../../context/Me";
@@ -114,12 +111,7 @@ export default function BillingPage({ load, post, go }: Deps = {}) {
   });
   const manage = () => act("portal", async () => { leave((await doPost("/billing/portal")).url); });
 
-  const intro = "Your Tekly plan. Prices are in US dollars; checkout shows them in your currency and adds any tax.";
-  if (!b) return (
-    <SettingsPage wide title="Billing & plan" sub={intro}>
-      {err ? <p role="alert" className="text-xs font-semibold text-rose-700">{err}</p> : <div className={`${sectionCard} h-24`} aria-busy="true"><span className="sr-only" role="status">Loading billing…</span></div>}
-    </SettingsPage>
-  );
+  if (!b) return <div className="max-w-4xl text-xs text-ink-tertiary">{err || "Loading billing…"}</div>;
 
   const custom = b.billing_mode === "custom";
   const st = statusLine(b);
@@ -133,12 +125,16 @@ export default function BillingPage({ load, post, go }: Deps = {}) {
     .filter(([k]) => limits && limits[k] != null);
 
   return (
-    <SettingsPage wide title="Billing & plan" sub={custom ? "Your Tekly plan." : intro}>
+    <div className="max-w-4xl space-y-5">
+      <div>
+        <h2 className="text-base font-bold text-ink-primary">Billing</h2>
+        <p className="text-[12px] text-ink-tertiary mt-0.5">{custom ? "Your Tekly plan." : "Your Tekly plan. Prices are in US dollars; checkout shows them in your currency and adds any tax."}</p>
+      </div>
 
       {returned === "success" && !b.has_subscription && !custom && (
-        <div role="status" className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-sm text-indigo-900">
+        <div role="status" className="rounded-xl border border-indigo-200 bg-indigo-50 px-4 py-3 text-[13px] text-indigo-900">
           Thanks! We're confirming your payment with Stripe. This takes a few seconds.
-          <Button variant="link" onClick={() => { reload(); refresh(); }} className="ml-2">Check again</Button>
+          <button onClick={() => { reload(); refresh(); }} className="ml-2 font-semibold underline">Check again</button>
         </div>
       )}
 
@@ -146,18 +142,19 @@ export default function BillingPage({ load, post, go }: Deps = {}) {
         <div className="flex items-start gap-3">
           <M n={st.tone === "ok" ? "verified" : st.tone === "warn" ? "schedule" : "lock"} c="text-xl mt-0.5" />
           <div className="flex-1 min-w-0">
-            <div className="text-sm font-semibold">{st.title}</div>
-            <p className="text-xs mt-0.5 opacity-90">{st.text}</p>
-            {locked && <p className="text-xs mt-1 font-semibold">Founding price locked until {fmtDate(b.price_locked_until)}.</p>}
+            <div className="text-sm font-bold">{st.title}</div>
+            <p className="text-[12px] mt-0.5 opacity-90">{st.text}</p>
+            {locked && <p className="text-[12px] mt-1 font-semibold">Founding price locked until {fmtDate(b.price_locked_until)}.</p>}
             {trialPct !== null && (
               <div className="mt-3 h-1.5 rounded-full bg-white/70 overflow-hidden" aria-hidden>
                 <div className="h-full bg-emerald-500" style={{ width: `${trialPct}%` }} />
               </div>
             )}
             {b.has_billing_account && !custom && (
-              <Button onClick={manage} disabled={!!busy || !b.configured} className="mt-3">
+              <button onClick={manage} disabled={!!busy || !b.configured}
+                className="mt-3 px-3 py-2 rounded-lg bg-white border border-slate-200 text-xs font-semibold text-ink-primary hover:border-slate-300 disabled:opacity-50">
                 {busy === "portal" ? "Opening…" : "Manage billing"}
-              </Button>
+              </button>
             )}
           </div>
         </div>
@@ -169,8 +166,8 @@ export default function BillingPage({ load, post, go }: Deps = {}) {
             const used = b.usage[k]; const cap = limits![k] as number;
             const seats = k === "team_members" && !!b.extra_seat_price;   // Shop and Pro: more are billed, not refused
             return (
-              <div key={k} className={`${sectionCard} px-4 py-3`}>
-                <div className="text-2xs font-semibold text-ink-tertiary">{label}</div>
+              <div key={k} className="bg-white rounded-xl border border-slate-200/90 px-4 py-3">
+                <div className="text-[11px] font-bold text-ink-tertiary">{label}</div>
                 {seats
                   ? <div className="text-lg font-bold tabular-nums text-ink-primary">{used} <span className="text-xs font-semibold text-ink-tertiary">{cap} included{b.extra_seats ? ` + ${b.extra_seats} extra at ${money(b.extra_seat_price!)} a month` : ""}</span></div>
                   : <div className={`text-lg font-bold tabular-nums ${used >= cap ? "text-amber-700" : "text-ink-primary"}`}>{used} <span className="text-xs font-semibold text-ink-tertiary">of {cap}</span></div>}
@@ -181,30 +178,29 @@ export default function BillingPage({ load, post, go }: Deps = {}) {
       )}
 
       {custom ? (
-        <section aria-label="Managed plan" className={`${sectionCard} p-4`}>
-          <div className="text-sm font-semibold text-ink-primary">{PLAN_NAME[b.plan]} plan</div>
+        <section aria-label="Managed plan" className="bg-white rounded-2xl border border-slate-200/90 p-5">
+          <div className="text-sm font-bold text-ink-primary">{PLAN_NAME[b.plan]} plan</div>
           <ul className="mt-2 space-y-1.5">
             {limitLines(b.plans.find((p) => p.id === b.plan)?.limits ?? null, b.prices[b.plan]?.extra_seat?.month).map((t) => (
-              <li key={t} className="flex gap-2 text-xs text-ink-secondary"><M n="check" c="text-sm text-emerald-600" />{t}</li>
+              <li key={t} className="flex gap-2 text-[12px] text-ink-secondary"><M n="check" c="text-sm text-emerald-600" />{t}</li>
             ))}
           </ul>
-          <p className="text-xs text-ink-secondary mt-3">Your plan is managed by Tekly. Contact us to make changes.</p>
+          <p className="text-[12px] text-ink-secondary mt-3">Your plan is managed by Tekly. Contact us to make changes.</p>
         </section>
       ) : (<>
         {!b.configured && (
-          <p className="text-xs text-ink-secondary bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
+          <p className="text-[12px] text-ink-secondary bg-slate-50 border border-slate-200 rounded-xl px-4 py-3">
             Online billing isn't switched on yet. Contact Tekly support to choose a plan.
           </p>
         )}
-        {err && <p role="alert" className="text-xs font-semibold text-rose-700">{err}</p>}
+        {err && <p role="alert" className="text-[12px] font-semibold text-rose-700">{err}</p>}
 
         <div className="flex flex-wrap items-center justify-between gap-2">
-          <h3 className="text-sm font-semibold text-ink-primary">{b.has_subscription ? "Change plan" : "Choose a plan"}</h3>
-          {/* Looks like the shared segmented Tabs; kept as a radio group (one of two periods). */}
-          <div role="radiogroup" aria-label="Billing period" className="inline-flex rounded-xl bg-slate-100 p-1 gap-0.5 max-w-full overflow-x-auto no-scrollbar">
+          <h3 className="text-sm font-bold text-ink-primary">{b.has_subscription ? "Change plan" : "Choose a plan"}</h3>
+          <div role="radiogroup" aria-label="Billing period" className="inline-flex p-0.5 rounded-lg bg-slate-100 text-xs font-semibold">
             {(["month", "year"] as const).map((p) => (
-              <button key={p} type="button" role="radio" aria-checked={period === p} onClick={() => setPeriod(p)}
-                className={`shrink-0 h-7 px-3 rounded-lg whitespace-nowrap text-xs font-semibold transition-colors ${period === p ? "bg-white text-ink-primary shadow-2xs" : "text-ink-secondary hover:text-ink-primary"}`}>
+              <button key={p} role="radio" aria-checked={period === p} onClick={() => setPeriod(p)}
+                className={`px-3 py-1.5 rounded-md ${period === p ? "bg-white shadow-sm text-ink-primary" : "text-ink-secondary"}`}>
                 {p === "month" ? "Monthly" : `Yearly · ${12 - b.yearly_months} months free`}
               </button>
             ))}
@@ -221,39 +217,39 @@ export default function BillingPage({ load, post, go }: Deps = {}) {
             const total = planCost(b, plan.id, period);
             return (
               <section key={plan.id} aria-label={`${plan.name} plan`}
-                className={`${sectionCard} p-4 flex flex-col ${plan.id === "shop" ? "!border-primary/40" : ""}`}>
+                className={`bg-white rounded-2xl border p-5 flex flex-col ${plan.id === "shop" ? "border-primary/40 shadow-clay-card" : "border-slate-200/90"}`}>
                 <div className="flex flex-wrap items-center gap-2">
-                  <span className="text-sm font-semibold text-ink-primary">{plan.name}</span>
-                  {plan.id === "shop" && <span className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 text-2xs font-semibold">Most popular</span>}
-                  {fits && <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-2xs font-semibold">Fits your shop</span>}
+                  <span className="text-sm font-bold text-ink-primary">{plan.name}</span>
+                  {plan.id === "shop" && <span className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 text-[11px] font-bold">Most popular</span>}
+                  {fits && <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[11px] font-bold">Fits your shop</span>}
                 </div>
                 <div className="mt-2">
                   <span className="text-2xl font-bold text-ink-primary tabular-nums">{money(pr.base[period])}</span>
                   <span className="text-xs text-ink-tertiary"> / {period}</span>
                 </div>
-                <div className="text-2xs text-ink-tertiary min-h-[2rem]">
+                <div className="text-[11px] text-ink-tertiary min-h-[2rem]">
                   {pr.extra_location ? <>First location, then {money(pr.extra_location[period])} for each extra one.</> : "One location."}
                   {total !== pr.base[period] && <> For your shop ({b.usage.locations} {b.usage.locations === 1 ? "location" : "locations"}, {b.usage.team_members} people): <span className="font-semibold text-ink-secondary">{money(total)} / {period}</span>.</>}
                 </div>
                 <ul className="mt-3 space-y-1.5 flex-1">
                   {points.map((t) => (
-                    <li key={t} className="flex gap-2 text-xs text-ink-secondary"><M n="check" c="text-sm text-emerald-600" />{t}</li>
+                    <li key={t} className="flex gap-2 text-[12px] text-ink-secondary"><M n="check" c="text-sm text-emerald-600" />{t}</li>
                   ))}
                 </ul>
-                {/* Disabled (current plan, billing off) fades like every button instead of turning into a grey slab. */}
-                <Button variant={plan.id === "shop" ? "primary" : "secondary"} onClick={() => choose(plan.id)} disabled={current || !!busy || !b.configured} className="mt-4 w-full">
+                <button onClick={() => choose(plan.id)} disabled={current || !!busy || !b.configured}
+                  className={`mt-4 w-full py-2 rounded-lg text-xs font-semibold disabled:opacity-60 ${plan.id === "shop" ? "bg-primary text-white hover:bg-primary-container" : "bg-slate-900 text-white hover:bg-slate-800"}`}>
                   {current ? "Current plan" : busy === plan.id ? "One moment…" : b.has_subscription ? `Switch to ${plan.name}` : `Choose ${plan.name}`}
-                </Button>
+                </button>
               </section>
             );
           })}
         </div>
-        <p className="text-2xs text-ink-tertiary">
+        <p className="text-[11px] text-ink-tertiary">
           Payments are handled securely by Stripe. Plan changes are prorated. Your data is never deleted if a plan lapses.
           {locked && b.has_subscription && " Switching plan or billing period moves you to today's price for it."}
           {" "}In India? Pricing is arranged with you directly. Contact us.
         </p>
       </>)}
-    </SettingsPage>
+    </div>
   );
 }

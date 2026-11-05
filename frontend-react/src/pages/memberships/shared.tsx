@@ -6,9 +6,6 @@ import { useMe } from "../../context/Me";
 import { money } from "../orders/types";
 import { tint, hueText } from "../../lib/tint";
 import { loadFailed } from "../../lib/notice";
-import Button, { IconButton } from "../../components/Button";
-import { Select, labelClass } from "../../components/Field";
-import Tabs from "../../components/Tabs";
 
 // Memberships (docs/SPEC_memberships.md): the pieces every screen shares — the status pill, the
 // member card on a client or an asset, and the one-step "Add a plan" dialog.
@@ -51,7 +48,7 @@ const STATUS: Record<string, { label: string; hue: string }> = {
 export function StatusPill({ m }: { m: Pick<Member, "status" | "renews" | "starts_on"> }) {
   const s = STATUS[m.status] || STATUS.active;
   const label = m.status === "scheduled" ? `Starts ${fmtDate(m.starts_on)}` : m.status === "active" && !m.renews ? "Ends at term end" : s.label;
-  return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-semibold whitespace-nowrap" style={{ background: tint(s.hue), color: hueText(s.hue) }}>{label}</span>;
+  return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap" style={{ background: tint(s.hue), color: hueText(s.hue) }}>{label}</span>;
 }
 
 /** A thin ring for what's left of an included service, with the count inside (same look as the
@@ -66,7 +63,7 @@ export function Ring({ left, of, color, size = 34 }: { left: number; of: number;
         {pct > 0 && <circle cx={size / 2} cy={size / 2} r={r} fill="none" strokeWidth={sw} strokeLinecap="round" stroke={color}
           strokeDasharray={len} strokeDashoffset={len * (1 - pct)} />}
       </svg>
-      <span className="absolute text-2xs font-semibold tabular-nums text-ink-primary">{left}</span>
+      <span className="absolute text-[11px] font-semibold tabular-nums text-ink-primary">{left}</span>
     </span>
   );
 }
@@ -78,7 +75,7 @@ function ServiceRing({ it, color }: { it: Item; color: string }) {
       <Ring left={left} of={of} color={color} />
       <div className="min-w-0">
         <div className="text-xs font-semibold text-ink-primary truncate">{it.text.replace(/ × \d+$/, "")}</div>
-        <div className="text-2xs text-ink-tertiary">{left === 0 ? "none left" : `${left} of ${of} left`}
+        <div className="text-[11px] text-ink-tertiary">{left === 0 ? "none left" : `${left} of ${of} left`}
           {it.window && left > 0 ? ` · book ${fmtDate(it.window[0])}–${fmtDate(it.window[1])}` : ""}</div>
       </div>
     </div>
@@ -96,22 +93,22 @@ export function MemberCard({ m, onOpen }: { m: Member; onOpen?: () => void }) {
     <Tag type={onOpen ? "button" : undefined} onClick={onOpen}
       className={`block w-full text-left rounded-2xl border border-slate-200/90 bg-white shadow-clay-sm overflow-hidden ${onOpen ? "hover:border-slate-300 transition" : ""}`}>
       <div className="flex items-start gap-3 px-4 py-3" style={{ background: tint(m.color, 10) }}>
-        <div className="h-10 w-10 shrink-0 rounded-xl grid place-items-center bg-white/70" style={{ color: hueText(m.color) }}><M n="workspace_premium" c="text-xl" /></div>
+        <div className="h-10 w-10 shrink-0 rounded-xl grid place-items-center bg-white/70" style={{ color: hueText(m.color) }}><M n="workspace_premium" c="text-[20px]" /></div>
         <div className="min-w-0 flex-1">
           <div className="flex flex-wrap items-center gap-2"><span className="text-sm font-semibold text-ink-primary">{m.plan}</span><StatusPill m={m} /></div>
           <div className="text-xs text-ink-secondary leading-snug">{sub}</div>
         </div>
-        {m.owed ? <span className="shrink-0 rounded-full bg-white/80 px-2 py-0.5 text-2xs font-semibold text-amber-700 tabular-nums">{money(m.owed)} due</span> : null}
+        {m.owed ? <span className="shrink-0 rounded-full bg-white/80 px-2 py-0.5 text-[11px] font-semibold text-amber-700 tabular-nums">{money(m.owed)} due</span> : null}
       </div>
       {(services.length > 0 || extras.length > 0) && (
         <div className="px-4 py-3 space-y-3">
           {services.length > 0 && <div className="grid gap-3 sm:grid-cols-2">{services.map((it) => <ServiceRing key={it.id} it={it} color={m.color} />)}</div>}
           {extras.length > 0 && <div className="flex flex-wrap gap-1.5">{extras.map((it) => (
-            <span key={it.id} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-2xs font-medium" style={{ background: tint(m.color, 10), color: hueText(m.color) }}>
-              <M n={it.kind === "discount" ? "redeem" : "verified"} c="text-xs" />{it.text}</span>))}</div>}
+            <span key={it.id} className="inline-flex items-center gap-1 rounded-full px-2 py-0.5 text-[11px] font-medium" style={{ background: tint(m.color, 10), color: hueText(m.color) }}>
+              <M n={it.kind === "discount" ? "redeem" : "verified"} c="text-[12px]" />{it.text}</span>))}</div>}
         </div>
       )}
-      {m.saved ? <div className="border-t border-slate-100 px-4 py-2 text-2xs text-emerald-700 font-semibold">Saved {money(m.saved)} this plan year</div> : null}
+      {m.saved ? <div className="border-t border-slate-100 px-4 py-2 text-[11px] text-emerald-700 font-semibold">Saved {money(m.saved)} this plan year</div> : null}
     </Tag>
   );
 }
@@ -135,13 +132,13 @@ export function MembershipsCard({ clientId, deviceId, devices, refreshKey = 0, o
   return (
     <div className="space-y-2">
       <div className="flex items-center justify-between">
-        <h3 className="text-xs font-semibold text-ink-secondary">Membership</h3>
-        {canSell && data.live.length > 0 && <Button variant="link" onClick={() => setSell(true)} icon={<M n="add" c="text-sm" />}>Add a plan</Button>}
+        <div className="text-[11px] font-bold text-ink-tertiary">Membership</div>
+        {canSell && data.live.length > 0 && <button onClick={() => setSell(true)} className="text-xs font-semibold text-primary">+ Add a plan</button>}
       </div>
       {data.live.map((m) => <MemberCard key={m.id} m={m} onOpen={onOpen ? () => onOpen(m.id) : undefined} />)}
       {!data.live.length && canSell && (
         <button onClick={() => setSell(true)} className="w-full rounded-2xl border border-dashed border-slate-300 bg-white/60 p-4 text-left hover:border-primary/50 transition flex items-center gap-3">
-          <div className="h-9 w-9 rounded-xl grid place-items-center bg-primary/10 text-primary"><M n="workspace_premium" c="text-lg" /></div>
+          <div className="h-9 w-9 rounded-xl grid place-items-center bg-primary/10 text-primary"><M n="workspace_premium" c="text-[18px]" /></div>
           <div><div className="text-sm font-semibold text-ink-primary">Add a membership plan</div>
             <div className="text-xs text-ink-tertiary">Included services, member discounts and renewal reminders.</div></div>
         </button>
@@ -149,7 +146,7 @@ export function MembershipsCard({ clientId, deviceId, devices, refreshKey = 0, o
       {data.former.map((m) => (
         <div key={m.id} className="flex items-center gap-2 px-1 text-xs text-ink-tertiary">
           <M n="history" c="text-sm" />Former {m.plan} member · ended {fmtDate(m.ended_on)}{m.ended_reason === "unpaid" ? " (unpaid)" : ""}
-          {canSell && !data.live.some((x) => x.plan_id === m.plan_id) && <Button variant="link" className="ml-auto" onClick={() => setSell(true)}>Re-join</Button>}
+          {canSell && !data.live.some((x) => x.plan_id === m.plan_id) && <button onClick={() => setSell(true)} className="ml-auto font-semibold text-primary">Re-join</button>}
         </div>
       ))}
       {sell && <SellPlanDialog clientId={clientId} deviceId={deviceId || data.former[0]?.device_id || undefined} devices={devices}
@@ -198,13 +195,13 @@ export function SellPlanDialog({ clientId, deviceId, devices, orderId, presetPla
   // Portalled to <body> so it sits above whatever opened it (the payment dialog, a drawer).
   return createPortal(
     <div className="fixed inset-0 z-[90] grid place-items-center p-4">
-      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
-      <div role="dialog" aria-modal="true" aria-label="Add a membership plan" className="relative w-full max-w-md rounded-2xl bg-white shadow-clay-drawer border border-slate-200/90 p-5">
+      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div role="dialog" aria-label="Add a membership plan" className="relative w-full max-w-md rounded-2xl bg-white shadow-clay-card border border-slate-200/90 p-5">
         <div className="flex items-center gap-2">
-          <h2 className="text-title font-semibold text-ink-primary">Add a membership plan</h2>
-          <IconButton label="Close" className="ml-auto" onClick={onClose} icon={<M n="close" c="text-lg" />} />
+          <div className="text-base font-semibold text-ink-primary">Add a membership plan</div>
+          <button aria-label="Close" onClick={onClose} className="ml-auto h-8 w-8 rounded-full grid place-items-center text-ink-tertiary hover:bg-slate-100"><M n="close" c="text-lg" /></button>
         </div>
-        {plans === null ? <div aria-hidden className="mt-4 space-y-2"><span className="sk block h-16 rounded-xl" /><span className="sk block h-16 rounded-xl" /></div>
+        {plans === null ? <p className="mt-4 text-xs text-ink-tertiary">Loading…</p>
           : plans.length === 0 ? <p className="mt-4 text-sm text-ink-secondary">No plans yet. Set one up in Catalog › Plans.</p> : (<>
           <div className="mt-4 space-y-2">
             {plans.map((p) => {
@@ -212,36 +209,43 @@ export function SellPlanDialog({ clientId, deviceId, devices, orderId, presetPla
               return (
                 <button key={p.id} type="button" onClick={() => setPlanId(p.id)} aria-pressed={on}
                   className={`w-full text-left rounded-xl border p-3 transition flex items-start gap-3 ${on ? "border-primary ring-2 ring-primary/15" : "border-slate-200 hover:border-slate-300"}`}>
-                  <span className="h-9 w-9 shrink-0 rounded-lg grid place-items-center" style={{ background: tint(p.color, 14), color: hueText(p.color) }}><M n="workspace_premium" c="text-lg" /></span>
+                  <span className="h-9 w-9 shrink-0 rounded-lg grid place-items-center" style={{ background: tint(p.color, 14), color: hueText(p.color) }}><M n="workspace_premium" c="text-[18px]" /></span>
                   <span className="min-w-0 flex-1">
                     <span className="flex items-baseline gap-2"><span className="text-sm font-semibold text-ink-primary">{p.name}</span>
                       <span className="ml-auto text-xs font-semibold text-ink-primary tabular-nums">{priceLine(p)}</span></span>
                     <span className="block mt-0.5 text-xs text-ink-tertiary line-clamp-2">{p.items.map((i) => i.text).join(" · ")}</span>
-                    {p.value_yearly ? <span className="block mt-1 text-2xs font-semibold text-emerald-700">Worth {money(p.value_yearly)} a year in services</span> : null}
+                    {p.value_yearly ? <span className="block mt-1 text-[11px] font-semibold text-emerald-700">Worth {money(p.value_yearly)} a year in services</span> : null}
                   </span>
                 </button>
               );
             })}
           </div>
           {plan && plan.price_monthly && plan.price_yearly ? (
-            <Tabs look="segmented" label="Billing" className="mt-4" value={billing} onChange={setBilling} tabs={(["monthly", "yearly"] as const).map((b) => ({ id: b, label:
-              b === "monthly" ? `${money(plan.price_monthly!)} a month`
-                : `${money(plan.price_yearly!)} a year${plan.price_monthly! * 12 > plan.price_yearly! ? ` · save ${money(plan.price_monthly! * 12 - plan.price_yearly!)}` : ""}` }))} />
+            <div className="mt-4 grid grid-cols-2 gap-1 rounded-xl bg-slate-100 p-1 text-xs font-semibold">
+              {(["monthly", "yearly"] as const).map((b) => (
+                <button key={b} type="button" onClick={() => setBilling(b)} aria-pressed={billing === b}
+                  className={`h-9 rounded-lg transition ${billing === b ? "bg-white shadow-sm text-ink-primary" : "text-ink-tertiary"}`}>
+                  {b === "monthly" ? `${money(plan.price_monthly!)} a month`
+                    : `${money(plan.price_yearly!)} a year${plan.price_monthly! * 12 > plan.price_yearly! ? ` · save ${money(plan.price_monthly! * 12 - plan.price_yearly!)}` : ""}`}
+                </button>
+              ))}
+            </div>
           ) : null}
           {!deviceId && (
             <div className="mt-4">
-              <label htmlFor="sell-asset" className={labelClass}>Covers</label>
-              <Select id="sell-asset" value={device} onChange={(e) => setDevice(e.target.value)}>
+              <label htmlFor="sell-asset" className="block text-[11px] font-bold text-ink-tertiary mb-1">Covers</label>
+              <select id="sell-asset" value={device} onChange={(e) => setDevice(e.target.value)} className="glass-input w-full h-10 rounded-xl px-3 text-sm">
                 <option value="">Choose the boat, vehicle or device…</option>
                 {assets.map((d) => <option key={d.id} value={d.id}>{[d.brand, d.model].filter(Boolean).join(" ") || "Asset"}</option>)}
-              </Select>
+              </select>
             </div>
           )}
-          {err && <p role="alert" className="mt-3 rounded-xl bg-rose-50 px-3 py-2 text-xs text-rose-700">{err}</p>}
-          <Button variant="primary" size="lg" className="mt-5 w-full" onClick={save} disabled={busy || !plan || (!deviceId && !device)}>
+          {err && <p role="alert" className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">{err}</p>}
+          <button onClick={save} disabled={busy || !plan || (!deviceId && !device)}
+            className="mt-5 h-11 w-full rounded-xl bg-primary text-white text-sm font-semibold shadow-clay-sm disabled:opacity-50">
             {busy ? "Adding…" : plan && price ? `Add ${plan.name} · ${money(price)}${billing === "yearly" ? "/yr" : "/mo"}` : "Add plan"}
-          </Button>
-          <p className="mt-2 text-center text-2xs text-ink-tertiary">{orderId ? "Added to this job's bill." : "An invoice is created for the first payment."}</p>
+          </button>
+          <p className="mt-2 text-center text-[11px] text-ink-tertiary">{orderId ? "Added to this job's bill." : "An invoice is created for the first payment."}</p>
         </>)}
       </div>
     </div>,
