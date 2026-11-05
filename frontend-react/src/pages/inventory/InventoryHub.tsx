@@ -357,7 +357,7 @@ export default function InventoryHub() {
   function pExport() {
     const chosen = (products || []).filter((p) => psel.has(p.id));
     const head = ["Name", "SKU", "MPN", "Barcode", "Unit", "Cost", "Sell", "In stock"];
-    const body = chosen.map((p) => [p.name ?? "", p.sku || p.code || "", p.mpn ?? "", p.barcode ?? "", p.uom || "pcs", p.avg_cost ?? p.cost_price ?? 0, p.sell_price ?? 0, p.qty_available ?? 0]);
+    const body = chosen.map((p) => [p.name ?? "", p.sku || p.code || "", p.mpn ?? "", p.barcode ?? "", p.uom || "pcs", Number(p.avg_cost) || Number(p.cost_price) || 0, p.sell_price ?? 0, p.qty_available ?? 0]);
     downloadSheet([head, ...body], "csv", `products-${isoDate()}`);
   }
 
