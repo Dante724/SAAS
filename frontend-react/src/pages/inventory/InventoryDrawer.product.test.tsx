@@ -119,6 +119,15 @@ describe("Product drawer", () => {
     await u.click(await screen.findByRole("button", { name: /Adjust stock/ }));
     expect(screen.getByRole("option", { name: "Write off (damaged or lost)" })).toBeInTheDocument();
   });
+
+  it("shows the server's valuation on Details, not a raw average of 0 (design audit BUG-04)", async () => {
+    // Stock with no moving average yet: the Stock tab values it at the list cost; Details must agree.
+    served = { ...PROD, cost_price: 3200, avg_cost: 0, qty_available: 25, unit_cost: 3200, stock_value: 80000 };
+    render(<InventoryDrawer kind="product" id="p1" initial={served} onClose={() => {}} />);
+    const tile = (label: string) => screen.getByText(label).parentElement!.querySelector("p")!.textContent;
+    await vi.waitFor(() => expect(tile("Stock value")).toMatch(/80,?000/));
+    expect(tile("Avg cost")).toMatch(/3,?200/);
+  });
 });
 
 describe("Paste import", () => {

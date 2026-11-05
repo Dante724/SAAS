@@ -1,7 +1,9 @@
 export type Product = {
   id: string; name?: string; code?: string; sku?: string; mpn?: string | null; barcode?: string; barcode_type?: string; extra_barcodes?: string[]; brand?: string;
   category_id?: string | null; description?: string; uom?: string;
-  cost_price?: number; avg_cost?: number; sell_price?: number; min_stock?: number;
+  cost_price?: number; avg_cost?: number;
+  /** The valuation basis (moving average, else list cost) and on-hand × it, from the server: the Stock tab's figures. */
+  unit_cost?: number; stock_value?: number; sell_price?: number; min_stock?: number;
   serialized?: boolean; expiry_tracking?: boolean; weight?: number; dimensions?: string;
   image_data?: string | null; warranty_days?: number; supplier_warranty_days?: number;
   parent_id?: string | null; variant_attrs?: Record<string, string>; variant_count?: number;

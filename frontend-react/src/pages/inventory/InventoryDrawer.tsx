@@ -318,8 +318,8 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
             <div className={`grid ${seeCost ? "grid-cols-4" : "grid-cols-2"} gap-2.5`}>
               {([["Available", (p.qty_available ?? 0), p.low_stock ? "text-rose-600" : "text-ink-primary"],
                 ["Reserved", (p.qty_reserved ?? 0), "text-ink-primary"],
-                ...(seeCost ? [["Avg cost", money(p.avg_cost ?? p.cost_price ?? 0), "text-ink-primary"],
-                  ["Stock value", money((p.qty_available ?? 0) * Number(p.avg_cost ?? p.cost_price ?? 0)), "text-ink-primary"]] : [])] as [string, any, string][]).map(([l, v, c]) => (
+                ...(seeCost ? [["Avg cost", money(p.unit_cost ?? 0), "text-ink-primary"],
+                  ["Stock value", money(p.stock_value ?? 0), "text-ink-primary"]] : [])] as [string, any, string][]).map(([l, v, c]) => (
                 <div key={l as string} className="bg-white rounded-xl p-3 border border-slate-200/90 shadow-sm">
                   <span className="text-[11px] font-bold text-ink-tertiary block">{l}</span>
                   <p className={`text-lg font-bold tabular-nums truncate ${c}`}>{v}</p>

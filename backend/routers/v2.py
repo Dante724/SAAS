@@ -641,7 +641,7 @@ _OPENAPI_DESCRIPTION = """\
 The Tekly public API v2: inquiries, tags, services, bundles, writable products, contacts with
 structured addresses, and webhook subscriptions. v1 (/api/v1/openapi.json) is unchanged.
 
-**Authentication.** `Authorization: Bearer rok_…`, HTTPS only. The same keys work on v1 and v2.
+**Authentication.** `Authorization: Bearer tek_…` (older keys: `rok_…`), HTTPS only. The same keys work on v1 and v2.
 
 **Scopes.** Broad `read` / `write` cover every v2 resource except webhooks. `<resource>:read` and
 `<resource>:write` narrow a key to one resource (write includes read), for example
