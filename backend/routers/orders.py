@@ -3391,6 +3391,12 @@ async def reserve_stock_for_order(
     from datetime import timedelta
     from backend.models import Part, StockReservation
 
+    # council M7: holds past their date used to block until someone opened the reservations list.
+    # First, before the job is loaded: the sweep commits, and a commit after the job's row lock
+    # (#108) would drop it and let a second reserve click in.
+    from backend.routers.inventory import _release_expired
+    await _release_expired(db, current.org_id)
+
     # Lock the job first (Order FOR NO KEY UPDATE, then its stock rows sorted by product): two
     # reserve clicks at once each read "nothing held yet" and together held twice what the job
     # needs. NO KEY UPDATE, like the money paths, so rows that only reference the job by FK
@@ -3402,9 +3408,6 @@ async def reserve_stock_for_order(
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, order)
     hold_days = max(1, min(int(data.hold_days or 7), 180))
-    # council M7: holds past their date used to block until someone opened the reservations list
-    from backend.routers.inventory import _release_expired
-    await _release_expired(db, current.org_id)
 
     # how much is already actively held for this order, per part (don't double-reserve)
     held: dict[str, float] = {}
