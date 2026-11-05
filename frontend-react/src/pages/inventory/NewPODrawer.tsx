@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from "react";
-import { M } from "../../components/Shell";
 import { buttonClass } from "../../components/Button";
+import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import DateField from "../../components/DateField";
 import { Product, Supplier, money } from "./types";
@@ -140,29 +140,29 @@ export default function NewPODrawer({ products, onClose, onCreated }:
   }
 
   const fld = "glass-input rounded-xl px-3 py-2 text-xs w-full";
-  const lbl = "block text-2xs font-semibold text-ink-tertiary mb-1";
+  const lbl = "block text-[11px] font-semibold text-ink-tertiary mb-1";
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
-      <div className="relative h-full w-full max-w-[840px] bg-white shadow-clay-drawer flex flex-col">
-        <div className="px-5 py-4 border-b border-slate-200 flex items-center justify-between">
+      <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={onClose} />
+      <div className="relative h-full w-full max-w-[640px] bg-raised shadow-clay-card flex flex-col border-l border-slate-200/90">
+        <div className="px-6 pt-5 pb-3 border-b border-slate-100 flex items-center justify-between">
           <div className="flex items-center gap-2.5">
-            
-            <h2 className="text-title font-semibold text-ink-primary">New purchase order</h2>
+            <div className="w-10 h-10 rounded-xl bg-blue-50 text-primary grid place-items-center"><M n="receipt_long" c="text-xl" /></div>
+            <h2 className="text-base font-semibold text-ink-primary">New purchase order</h2>
           </div>
-          <button aria-label="Close" onClick={onClose} className={buttonClass("ghost", "md", "w-9 !px-0 shrink-0 text-ink-tertiary")}><M n="close" c="text-lg" /></button>
+          <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-full grid place-items-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100"><M n="close" c="text-lg" /></button>
         </div>
 
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
           <div className="grid grid-cols-2 gap-3">
             <div>
               <div className="flex items-center justify-between mb-1"><label className={lbl} style={{ margin: 0 }}>Supplier *</label>
-                <button type="button" onClick={() => setNewSup((v) => !v)} className="text-2xs font-semibold text-primary hover:underline">{newSup ? "Cancel" : "+ New"}</button></div>
+                <button type="button" onClick={() => setNewSup((v) => !v)} className="text-[11px] font-semibold text-primary hover:underline">{newSup ? "Cancel" : "+ New"}</button></div>
               {newSup ? (
                 <div className="flex gap-1.5">
                   <input autoFocus value={supName} onChange={(e) => setSupName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addSupplier(); }} placeholder="Supplier name" className={fld} />
-                  <button type="button" onClick={addSupplier} disabled={supBusy || !supName.trim()} className={buttonClass("primary", "md")}>Add</button>
+                  <button type="button" onClick={addSupplier} disabled={supBusy || !supName.trim()} className="px-3 rounded-xl bg-primary text-white text-xs font-semibold disabled:opacity-50">Add</button>
                 </div>
               ) : (
                 <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} className={fld}>
@@ -183,7 +183,7 @@ export default function NewPODrawer({ products, onClose, onCreated }:
 
           <div className="rounded-2xl border border-slate-200/80 overflow-hidden">
             <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50/70 text-2xs font-semibold text-ink-tertiary">
+              <thead className="bg-slate-50/70 text-[11px] font-semibold text-ink-tertiary">
                 <tr><th className="py-2.5 px-3">Product</th><th className="py-2.5 px-2 text-right w-16">Qty</th><th className="py-2.5 px-2 text-right w-24">Unit cost</th><th className="py-2.5 px-2 text-right w-24">Total</th><th className="w-8" /></tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
@@ -195,8 +195,8 @@ export default function NewPODrawer({ products, onClose, onCreated }:
                         {pool.map((p) => <option key={p.id} value={p.id}>{p.name}{p.sku ? ` · ${p.sku}` : ""}</option>)}
                       </select>
                     </td>
-                    <td className="py-2 px-2"><input type="number" min={1} value={r.qty} onChange={(e) => setRow(i, { qty: Math.max(1, Number(e.target.value) || 1) })} className="glass-input rounded-xl px-2 py-1.5 text-xs w-full text-right tabular-nums" /></td>
-                    <td className="py-2 px-2"><input type="number" min={0} value={r.cost} onChange={(e) => setRow(i, { cost: Math.max(0, Number(e.target.value) || 0) })} className="glass-input rounded-xl px-2 py-1.5 text-xs w-full text-right tabular-nums" /></td>
+                    <td className="py-2 px-2"><input type="number" min={1} value={r.qty} onChange={(e) => setRow(i, { qty: Math.max(1, Number(e.target.value) || 1) })} className="glass-input rounded-xl px-2 py-1.5 text-xs w-full text-right font-mono" /></td>
+                    <td className="py-2 px-2"><input type="number" min={0} value={r.cost} onChange={(e) => setRow(i, { cost: Math.max(0, Number(e.target.value) || 0) })} className="glass-input rounded-xl px-2 py-1.5 text-xs w-full text-right font-mono" /></td>
                     <td className="py-2 px-2 text-right tabular-nums text-ink-primary">{money((r.qty > 0 ? r.qty : 0) * (r.cost || 0))}</td>
                     <td className="py-2 px-1 text-center">{rows.length > 1 && <button aria-label="Remove line" onClick={() => delRow(i)} className="text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>}</td>
                   </tr>
@@ -217,27 +217,27 @@ export default function NewPODrawer({ products, onClose, onCreated }:
               <div className="flex-1"><label className={lbl}>New product name</label>
                 <input autoFocus value={prodName} onChange={(e) => setProdName(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") addProduct(); }} placeholder="Oil filter" className={fld} /></div>
               <div className="w-24"><label className={lbl}>Cost</label>
-                <input type="number" min={0} value={prodCost} onChange={(e) => setProdCost(e.target.value)} className={`${fld} text-right tabular-nums`} /></div>
-              <button type="button" onClick={addProduct} disabled={prodBusy || !prodName.trim()} className={buttonClass("primary", "md")}>Add</button>
+                <input type="number" min={0} value={prodCost} onChange={(e) => setProdCost(e.target.value)} className={`${fld} text-right font-mono`} /></div>
+              <button type="button" onClick={addProduct} disabled={prodBusy || !prodName.trim()} className="px-3 py-2 rounded-xl bg-primary text-white text-xs font-semibold disabled:opacity-50">Add</button>
             </div>
           )}
 
           {sheet && (
             <div className="rounded-xl border border-blue-200 bg-blue-50/50 p-3 space-y-2">
-              <p className="text-2xs font-semibold text-primary flex items-center gap-1"><M n="tune" c="text-sm" />{sheet.name}: {sheet.grid.length} rows — check the columns{supplierId ? " (remembered for this supplier)" : ""}</p>
+              <p className="text-[11px] font-semibold text-primary flex items-center gap-1"><M n="tune" c="text-sm" />{sheet.name}: {sheet.grid.length} rows — check the columns{supplierId ? " (remembered for this supplier)" : ""}</p>
               <div className="flex gap-2 overflow-x-auto pb-1">
                 {sheet.headers.map((h, c) => (
                   <div key={h} className="shrink-0 w-32">
                     <select aria-label={`Field for ${h}`} value={sheet.map[c]} onChange={(e) => remapSheet(c, e.target.value as PasteField)} className="glass-input rounded-lg px-2 py-1.5 text-xs w-full">
                       {FIELD_ORDER.map((f) => <option key={f} value={f}>{FIELD_LABELS[f]}</option>)}
                     </select>
-                    <div className="text-2xs text-ink-tertiary mt-1 px-1 truncate" title={h}>{h}</div>
+                    <div className="text-[11px] text-ink-tertiary mt-1 px-1 truncate" title={h}>{h}</div>
                   </div>
                 ))}
               </div>
               <div className="flex items-center gap-2">
-                <button onClick={matchSheet} disabled={busy} className={buttonClass("primary", "sm")}>{busy ? "Matching…" : "Add matching lines"}</button>
-                <button onClick={() => setSheet(null)} className={buttonClass("secondary", "sm")}>Cancel</button>
+                <button onClick={matchSheet} disabled={busy} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold disabled:opacity-50">{busy ? "Matching…" : "Add matching lines"}</button>
+                <button onClick={() => setSheet(null)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Cancel</button>
               </div>
             </div>
           )}
@@ -249,9 +249,9 @@ export default function NewPODrawer({ products, onClose, onCreated }:
           {err && <div className="text-xs text-rose-600 font-semibold">{err}</div>}
         </div>
 
-        <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
-          <button onClick={() => save(false)} disabled={busy} className={buttonClass("primary", "md")}><M n="check" c="text-sm" />{busy ? "Creating…" : "Create and order"}</button>
-          <button onClick={() => save(true)} disabled={busy} className={buttonClass("secondary", "md")}>Save as draft</button>
+        <div className="px-6 py-3 border-t border-slate-100 flex items-center gap-2">
+          <button onClick={() => save(false)} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50 flex items-center gap-1.5"><M n="check" c="text-sm" />{busy ? "Creating…" : "Create and order"}</button>
+          <button onClick={() => save(true)} disabled={busy} className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50">Save as draft</button>
           <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
           <span className="ml-auto text-sm font-semibold text-ink-primary tabular-nums">Total {money(total)}</span>
         </div>

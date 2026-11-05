@@ -4,14 +4,8 @@ import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
 import { confirmDialog } from "../../lib/dialog";
-import { MoreMenu } from "../invoices/billing";
-import Drawer from "../../components/Drawer";
-import Button from "../../components/Button";
-import Section from "../../components/Section";
-import EmptyState, { ErrorState } from "../../components/EmptyState";
-import { Input, Select, Field, fieldClass } from "../../components/Field";
+import { Drawer, MoreMenu, btnGhost, btnPrimary, inputCls, labelCls } from "../invoices/billing";
 import ModePill from "./ModePill";
-import { settingsToast } from "./kit";
 import { loadFailed } from "../../lib/notice";
 
 // F2/F3/F4 — Settings › Integrations › Card readers. Register Stripe Terminal or Square Terminal
@@ -37,7 +31,8 @@ export default function CardReadersCard() {
   const [locs, setLocs] = useState<Loc[]>([]);
   const [err, setErr] = useState<string | null>(null);
   const [edit, setEdit] = useState<Reader | "new" | null>(null);
-  const flash = (m: string) => settingsToast(m);
+  const [msg, setMsg] = useState<string | null>(null);
+  const flash = (m: string) => { setMsg(m); setTimeout(() => setMsg(null), 2600); };
 
   const load = () => {
     setErr(null);
@@ -63,24 +58,33 @@ export default function CardReadersCard() {
   const anyKeys = cfg && (cfg.providers.stripe.configured || cfg.providers.square.configured || cfg.providers.simulated.configured);
 
   const where = (r: Reader) => locs.find((l) => l.id === r.location_id)?.name;
-  const addBtn = canManage && anyKeys ? <Button variant="primary" onClick={() => setEdit("new")} icon={<M n="add" c="text-sm" />}>Add reader</Button> : null;
+  const addBtn = canManage && anyKeys ? <button onClick={() => setEdit("new")} className={btnPrimary}><M n="add" c="text-sm" />Add reader</button> : null;
 
   return (
-    <Section title="Card readers" icon="contactless"
-      meta={readers || cfg ? <span className="inline-flex items-center gap-2">{readers && <span>{readers.length} {readers.length === 1 ? "reader" : "readers"}</span>}{cfg && <ModePill mode={cfg.test_mode ? "test" : "live"} />}</span> : null}
-      actions={addBtn}>
-      {!cfg && !err && <div className="space-y-2" aria-busy="true">{[0, 1].map((i) => <div key={i} className="h-10 rounded-xl bg-slate-100 animate-pulse" />)}</div>}
-      {err && <ErrorState title="Card readers didn't load" body={err} onRetry={load} />}
+    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
+      <div className="p-3.5 border-b border-slate-100">
+        <div className="flex items-center gap-2">
+          <h3 className="text-sm font-semibold text-ink-primary">Card readers</h3>
+          {cfg && <ModePill mode={cfg.test_mode ? "test" : "live"} />}
+        </div>
+        {readers && <div className="text-xs text-ink-tertiary mt-0.5 tabular-nums">{readers.length} {readers.length === 1 ? "reader" : "readers"}</div>}
+        {readers && readers.length > 0 && addBtn && <div className="mt-3">{addBtn}</div>}
+      </div>
+
+      {!cfg && !err && <div className="p-4 text-xs text-ink-tertiary">Loading card readers…</div>}
+      {err && <div role="alert" className="p-4 text-xs text-rose-600 flex items-center gap-2"><M n="error" c="text-sm" />{err}<button onClick={load} className="ml-auto font-semibold text-primary hover:underline">Retry</button></div>}
 
       {cfg && readers && (
-        <div className="space-y-3">
+        <div className="p-3.5 space-y-3">
           {(cfg.providers.stripe.live_refused || cfg.providers.square.live_refused) && (
             <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 leading-relaxed">Live keys are saved but refused on this server, so readers only take test payments. Use test keys, or switch on live payments in production.</p>
           )}
           {!anyKeys && <p className="text-xs text-ink-secondary">Add your Stripe or Square keys above (Integrations › Payments), then add a reader here.</p>}
           {readers.length === 0 && anyKeys && (
-            <EmptyState icon={<M n="contactless" c="text-lg" />} title="No card readers yet."
-              body={canManage ? "Add one to take card payments from the POS and work orders." : undefined} />
+            <div className="py-4 text-center space-y-3">
+              <p className="text-xs text-ink-secondary">No card readers yet.{canManage ? " Add one to take card payments from the POS and work orders." : ""}</p>
+              {addBtn}
+            </div>
           )}
           {readers.length > 0 && (
             <ul className="divide-y divide-slate-100 border border-slate-200/80 rounded-xl overflow-hidden">
@@ -123,7 +127,8 @@ export default function CardReadersCard() {
       )}
       {edit && cfg && <ReaderDrawer cfg={cfg} reader={edit === "new" ? null : edit} locs={locs} hasStripeReader={!!readers?.some((r) => r.provider === "stripe")}
         onClose={() => setEdit(null)} onSaved={(m) => { setEdit(null); flash(m); load(); }} />}
-    </Section>
+      {msg && createPortal(<div role="status" className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-drawer z-[95]">{msg}</div>, document.body)}
+    </div>
   );
 }
 
@@ -157,32 +162,33 @@ function ReaderDrawer({ cfg, reader, locs, hasStripeReader, onClose, onSaved }: 
       }
     } catch (e: any) { setErr(e.message || "Couldn't save the reader"); } finally { setBusy(false); }
   }
-  const field = fieldClass();
+  const field = inputCls;
+  const lab = labelCls;
   const title = reader ? "Edit card reader" : "Add card reader";
 
   return createPortal(
-    <Drawer z={90} size="sm" label={title} title={title} sub={reader ? PROVIDER[reader.provider] || reader.provider : undefined} onClose={onClose}
+    <Drawer z={90} width={448} label={title} title={title} sub={reader ? PROVIDER[reader.provider] || reader.provider : undefined} onClose={onClose}
       footer={<>
-        <Button variant="primary" onClick={save} disabled={busy || (!reader && !provider)}>{busy ? "Saving…" : reader ? "Save" : "Add reader"}</Button>
-        <Button onClick={onClose}>Cancel</Button>
+        <button onClick={onClose} className={btnGhost}>Cancel</button>
+        <button onClick={save} disabled={busy || (!reader && !provider)} className={btnPrimary}>{busy ? "Saving…" : reader ? "Save" : "Add reader"}</button>
       </>}>
       {!reader && (
-        <Field label="Provider" htmlFor="rd-prov">
-          <Select id="rd-prov" value={provider} onChange={(e) => setProvider(e.target.value)}>
+        <div><label htmlFor="rd-prov" className={lab}>Provider</label>
+          <select id="rd-prov" value={provider} onChange={(e) => setProvider(e.target.value)} className={field}>
             {options.map((o) => <option key={o} value={o}>{PROVIDER[o]}</option>)}
-          </Select></Field>
+          </select></div>
       )}
-      <Field label="Name" htmlFor="rd-label">
-        <Input id="rd-label" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Front desk" /></Field>
-      <Field label="Location" htmlFor="rd-loc">
-        <Select id="rd-loc" value={locationId} onChange={(e) => setLocationId(e.target.value)}>
+      <div><label htmlFor="rd-label" className={lab}>Name</label>
+        <input id="rd-label" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Front desk" className={field} /></div>
+      <div><label htmlFor="rd-loc" className={lab}>Location</label>
+        <select id="rd-loc" value={locationId} onChange={(e) => setLocationId(e.target.value)} className={field}>
           <option value="">Any location</option>
           {locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-        </Select></Field>
+        </select></div>
       {!reader && provider === "stripe" && <>
-        <Field label="Registration code" htmlFor="rd-code"
-          hint={test ? `In test mode, ${cfg.stripe_test_registration_code} adds Stripe's practice reader.` : "Shown on the reader under Settings › Generate pairing code."}>
-          <Input id="rd-code" value={code} onChange={(e) => setCode(e.target.value)} /></Field>
+        <div><label htmlFor="rd-code" className={lab}>Registration code</label>
+          <input id="rd-code" value={code} onChange={(e) => setCode(e.target.value)} className={field} />
+          <p className="text-xs text-ink-tertiary mt-1">{test ? `In test mode, ${cfg.stripe_test_registration_code} adds Stripe's simulated reader.` : "Shown on the reader under Settings › Generate pairing code."}</p></div>
         {!hasStripeReader && (
           <div className="space-y-2">
             <p className="text-xs font-medium text-ink-secondary">Shop address (Stripe registers readers to a place)</p>
@@ -197,7 +203,7 @@ function ReaderDrawer({ cfg, reader, locs, hasStripeReader, onClose, onSaved }: 
         )}
       </>}
       {!reader && provider === "square" && (
-        <div><label htmlFor="rd-dev" className="block text-xs font-semibold text-ink-secondary mb-1.5">Device</label>
+        <div><label htmlFor="rd-dev" className={lab}>Device</label>
           {test
             ? <select id="rd-dev" value={device} onChange={(e) => setDevice(e.target.value)} className={field}>
                 {cfg.square_sandbox_devices.map((d) => <option key={d.id} value={d.id}>Sandbox: {d.label}</option>)}

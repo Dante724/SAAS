@@ -6,8 +6,7 @@ import { humanize } from "../../lib/humanize";
 import { useMe } from "../../context/Me";
 import RecordPaymentDrawer from "./RecordPaymentDrawer";
 import CreditNoteDrawer from "./CreditNoteDrawer";
-import Button from "../../components/Button";
-import { DISPLAY_MODES, DisplayModes, Drawer, ErrorNote, MoreMenu, StatusPill, cash, daysLate, fmtDate, isVoid, lateText, round2, sendInvoice, type InvoiceDetail } from "./billing";
+import { DISPLAY_MODES, Drawer, ErrorNote, StatusPill, btnGhost, btnPrimary, cash, daysLate, fmtDate, isVoid, lateText, round2, sendInvoice, type InvoiceDetail } from "./billing";
 import SendMenu, { type SendWay } from "../../components/SendMenu";
 
 /* The invoice view, read like a statement: the lines (in the chosen display mode), the total,
@@ -57,7 +56,6 @@ export default function InvoiceDrawer({ id, onClose, onChanged }: { id: string; 
   const billTo = inv.payer?.name || inv.customer?.name;
   const late = daysLate(inv);
   const seeNotes = can("can_view_credit_notes");
-  const canPay = can("can_view_finance") && !voided && due > 0;
 
   // Statement rows. Payment rows are used when they add up to what the invoice says was paid;
   // otherwise (older data) one "Paid" line carries the amount so the statement still balances.
@@ -72,24 +70,27 @@ export default function InvoiceDrawer({ id, onClose, onChanged }: { id: string; 
   return (
     <>
       <Drawer label={`Invoice ${inv.invoice_number}`} onClose={onClose}
-        title={<span className="flex items-center gap-2"><span className="tabular-nums">{inv.invoice_number}</span><StatusPill status={inv.status} label={humanize(inv.status)} /></span>}
+        title={<span className="flex items-center gap-2"><span className="font-mono">{inv.invoice_number}</span><StatusPill status={inv.status} label={humanize(inv.status)} /></span>}
         sub={<>{billTo ? <>Bill to <span className="font-semibold text-ink-secondary">{billTo}</span> · </> : "Walk-in · "}Issued {fmtDate(inv.issued_at)}{inv.due_at ? <> · Due {fmtDate(inv.due_at)}{late > 0 && <span className="font-semibold text-rose-600"> · {lateText(late)}</span>}</> : null}</>}
         footer={<>
-          {/* The main step comes first: take the money while some is owed, else send it. */}
-          {canPay && <Button variant="primary" onClick={() => setPaying(true)}>Record payment</Button>}
-          {!voided && <SendMenu primary={!canPay} label="Send invoice" busy={sending} onSend={send} />}
-          {can("can_create_credit_notes") && !voided && room > 0 && <Button onClick={() => setNewNote(true)}>Create credit note</Button>}
-          <Button icon={<M n="print" c="text-sm" />} onClick={() => openAuthedDoc(`/print/invoices/${inv.id}`).catch(() => alertDialog("Could not open invoice PDF"))}>Print / PDF</Button>
-          {can("can_print_itemised_copy") && <MoreMenu className="ml-auto" items={[
-            { label: "Print itemised copy", icon: "receipt_long", onClick: () => { openAuthedDoc(`/print/invoices/${inv.id}?itemised=true`).catch(() => alertDialog("Could not open the itemised copy")); } },
-          ]} />}
+          {!voided && <SendMenu primary={false} label="Send invoice" busy={sending} onSend={send} />}
+          <button onClick={() => openAuthedDoc(`/print/invoices/${inv.id}`).catch(() => alertDialog("Could not open invoice PDF"))} className={btnGhost}><M n="print" c="text-sm" />Print / PDF</button>
+          {can("can_print_itemised_copy") && <button onClick={() => openAuthedDoc(`/print/invoices/${inv.id}?itemised=true`).catch(() => alertDialog("Could not open the itemised copy"))} className={btnGhost} title="Every part and service on its own line, even when a kit prints as one line">Print itemised copy</button>}
+          {can("can_create_credit_notes") && !voided && room > 0 && <button onClick={() => setNewNote(true)} className={btnGhost}>Create credit note</button>}
+          {can("can_view_finance") && !voided && due > 0 && <button onClick={() => setPaying(true)} className={btnPrimary}>Record payment</button>}
         </>}>
         {sent && <div role="status" className={`rounded-lg border text-xs px-3 py-2 ${sent.tone ? "bg-amber-50 border-amber-200 text-amber-800" : "bg-emerald-50 border-emerald-200 text-emerald-700"}`}>{sent.text}</div>}
         {voided && <div role="note" className="rounded-lg bg-slate-50 border border-slate-200 text-ink-secondary text-xs px-3 py-2">This invoice was cancelled. It no longer counts as owed.</div>}
 
         <div className="flex flex-wrap items-center justify-between gap-2">
           <h3 className="text-sm font-semibold text-ink-primary">Statement</h3>
-          <DisplayModes value={inv.display_mode || "detailed"} onChange={setMode} disabled={!canEditMode || modeBusy} />
+          <div role="radiogroup" aria-label="Display on the invoice" className="inline-flex gap-0.5 rounded-lg bg-slate-100 p-0.5">
+            {DISPLAY_MODES.map((m) => (
+              <button key={m.key} role="radio" aria-checked={(inv.display_mode || "detailed") === m.key} title={m.hint}
+                disabled={!canEditMode || modeBusy} onClick={() => setMode(m.key)}
+                className={`px-2.5 py-1 rounded-md text-xs font-semibold disabled:cursor-not-allowed ${(inv.display_mode || "detailed") === m.key ? "bg-white text-ink-primary shadow-sm" : "text-ink-tertiary hover:text-ink-primary"}`}>{m.label}</button>
+            ))}
+          </div>
         </div>
 
         <section aria-label="Balance due" className="-mt-1 rounded-2xl border border-slate-200 overflow-hidden">
@@ -120,7 +121,7 @@ export default function InvoiceDrawer({ id, onClose, onChanged }: { id: string; 
                 <li key={c.id} data-row="credit">
                   <button onClick={() => setNoteId(c.id)} className={`${rowCls} w-full text-left hover:bg-slate-100/70`}>
                     <span className="min-w-0 flex flex-wrap items-center gap-x-2 gap-y-0.5 text-ink-secondary">
-                      <span>Credit note <span className="tabular-nums font-semibold text-primary">{c.number || "Draft"}</span>{c.issued_at && counts ? <> · {fmtDate(c.issued_at)}</> : null}</span>
+                      <span>Credit note <span className="font-mono font-semibold text-primary">{c.number || "Draft"}</span>{c.issued_at && counts ? <> · {fmtDate(c.issued_at)}</> : null}</span>
                       {!counts && <StatusPill status={c.status} label={c.status === "draft" ? "Draft, not applied" : humanize(c.status)} />}
                     </span>
                     <span className={`tabular-nums whitespace-nowrap ${counts ? "text-ink-secondary" : "text-ink-tertiary line-through"}`}>{counts ? "− " : ""}{cash(c.total)}</span>

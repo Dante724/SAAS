@@ -1,10 +1,4 @@
 import { useEffect, useState } from "react";
-import SettingsPage from "../../components/SettingsPage";
-import { sectionCard } from "../../components/Section";
-import Button, { IconButton } from "../../components/Button";
-import Tabs from "../../components/Tabs";
-import Drawer from "../../components/Drawer";
-import { fieldClass, labelClass } from "../../components/Field";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { alertDialog, confirmDialog } from "../../lib/dialog";
@@ -123,17 +117,22 @@ export function ChecklistList({ templates, onOpen, onNew, onChanged, onFlash }: 
   }
 
   return (
-    <SettingsPage title="Checklists" sub="Steps your team works through on a job. Customers see the checks you choose on their tracking page."
-      actions={<Button variant="primary" onClick={() => onNew()} icon={<M n="add" c="text-sm" />}>New checklist</Button>}>
-      {templates == null && <div className={`${sectionCard} h-40`} aria-busy="true"><span className="sr-only" role="status">Loading checklists…</span></div>}
+    <div className="max-w-3xl space-y-4">
+      <div>
+        <h2 className="text-base font-semibold text-ink-primary">Checklists</h2>
+        <p className="text-xs text-ink-tertiary">Steps your team works through on a job. Customers see the checks you choose on their tracking page.</p>
+        <button onClick={() => onNew()} className="mt-3 inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90"><M n="add" c="text-sm" />New checklist</button>
+      </div>
+
+      {templates == null && <div className="bg-white rounded-2xl border border-slate-200/90 p-5 text-xs text-ink-tertiary">Loading checklists…</div>}
 
       {templates && templates.length === 0 && (
-        <div className={`${sectionCard} p-4`}>
+        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-6">
           <div className="text-sm font-semibold text-ink-primary">Start your first checklist</div>
           <p className="text-xs text-ink-tertiary mt-0.5 mb-4">Pick a starter and change it to fit your shop, or build one from scratch.</p>
           <div className="grid sm:grid-cols-2 gap-3">
             {STARTERS.map((s) => (
-              <button key={s.name} type="button" onClick={() => onNew({ name: s.name, scope: "all", steps: s.steps })}
+              <button key={s.name} onClick={() => onNew({ name: s.name, scope: "all", steps: s.steps })}
                 className="text-left rounded-xl border border-slate-200 p-4 hover:border-primary/40 hover:bg-slate-50 transition-colors">
                 <span className="w-9 h-9 rounded-lg bg-primary/10 text-primary grid place-items-center mb-2.5"><M n={s.icon} c="text-lg" /></span>
                 <div className="text-sm font-medium text-ink-primary">{s.name}</div>
@@ -146,7 +145,7 @@ export function ChecklistList({ templates, onOpen, onNew, onChanged, onFlash }: 
       )}
 
       {templates && templates.length > 0 && (
-        <div className={`${sectionCard} p-2`}>
+        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-2">
           {templates.map((t) => {
             const c = counts(t);
             return (
@@ -157,11 +156,11 @@ export function ChecklistList({ templates, onOpen, onNew, onChanged, onFlash }: 
                   <span className="block text-xs text-ink-tertiary truncate">{c.checks} {c.checks === 1 ? "check" : "checks"} in {c.steps} {c.steps === 1 ? "step" : "steps"} · {appliesTo(t)}</span>
                 </span>
                 <span className="ml-auto flex items-center gap-1.5 flex-shrink-0">
-                  {(t.auto_status_keys || []).length > 0 && <span title="Attaches itself when a job reaches a chosen status" className="inline-flex items-center h-6 px-2 rounded-md bg-primary/10 text-2xs font-medium text-primary">Adds itself</span>}
-                  {c.visible > 0 && <span title={`${c.visible} shown to the customer`} className="hidden sm:inline-flex items-center gap-1 h-6 px-2 rounded-md bg-slate-100 text-2xs tabular-nums text-ink-secondary"><M n="visibility" c="text-sm" />{c.visible}</span>}
-                  {c.required > 0 && <span title={`${c.required} must be filled in`} className="hidden sm:inline-flex items-center gap-1 h-6 px-2 rounded-md bg-slate-100 text-2xs tabular-nums text-ink-secondary"><M n="priority_high" c="text-sm" />{c.required}</span>}
-                  <IconButton size="sm" label={`More actions for ${t.name}`} onClick={(e) => { e.stopPropagation(); setMenu(menu === t.id ? null : t.id); }}
-                    icon={<M n="more_horiz" c="text-base" />} className="sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100" />
+                  {(t.auto_status_keys || []).length > 0 && <span title="Attaches itself when a job reaches a chosen status" className="inline-flex items-center h-6 px-2 rounded-md bg-primary/10 text-[11px] font-medium text-primary">Adds itself</span>}
+                  {c.visible > 0 && <span title={`${c.visible} shown to the customer`} className="hidden sm:inline-flex items-center gap-1 h-6 px-2 rounded-md bg-slate-100 text-[11px] text-ink-secondary"><M n="visibility" c="text-[13px]" />{c.visible}</span>}
+                  {c.required > 0 && <span title={`${c.required} must be filled in`} className="hidden sm:inline-flex items-center gap-1 h-6 px-2 rounded-md bg-slate-100 text-[11px] text-ink-secondary"><M n="priority_high" c="text-[13px]" />{c.required}</span>}
+                  <button aria-label={`More actions for ${t.name}`} onClick={(e) => { e.stopPropagation(); setMenu(menu === t.id ? null : t.id); }}
+                    className="w-8 h-8 rounded-lg grid place-items-center text-ink-tertiary hover:bg-slate-100 hover:text-ink-primary sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100"><M n="more_horiz" c="text-base" /></button>
                 </span>
                 {menu === t.id && (
                   <div className="absolute right-2 top-12 z-20 w-40 bg-white rounded-xl border border-slate-200 shadow-clay-drawer py-1 text-xs" onClick={(e) => e.stopPropagation()}>
@@ -175,7 +174,7 @@ export function ChecklistList({ templates, onOpen, onNew, onChanged, onFlash }: 
           })}
         </div>
       )}
-    </SettingsPage>
+    </div>
   );
 }
 
@@ -198,6 +197,10 @@ export function ChecklistEditor({ tpl, onClose, onSaved }: { tpl: any | null; on
     Promise.all((["work_order", "estimate"] as const).map((rt) => api.get<any>(`/statuses?record_type=${rt}`).then((r) => (r.items || r || []).filter((s: any) => s.active !== false)).catch(() => [])))
       .then(([wo, est]) => setStatuses({ work_order: wo, estimate: est }));
   }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
 
   const upStep = (si: number, patch: Partial<Step>) => setSteps((s) => s.map((st, i) => (i === si ? { ...st, ...patch } : st)));
   const upItem = (si: number, ii: number, patch: Partial<Item>) => setSteps((s) => s.map((st, i) => (i !== si ? st : { ...st, items: st.items.map((it, j) => (j === ii ? { ...it, ...patch } : it)) })));
@@ -227,33 +230,42 @@ export function ChecklistEditor({ tpl, onClose, onSaved }: { tpl: any | null; on
 
   const Toggle = ({ on, onClick, icon, label }: { on: boolean; onClick: () => void; icon: string; label: string }) => (
     <button type="button" onClick={onClick} aria-pressed={on}
-      className={`inline-flex items-center gap-1.5 min-h-8 px-2.5 py-1 rounded-full text-xs font-semibold border transition-colors ${on ? "bg-primary/10 text-primary border-primary/30" : "border-slate-200 text-ink-tertiary hover:text-ink-secondary hover:border-slate-300"}`}>
-      <M n={icon} c="text-sm" />{label}
+      className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border transition-colors ${on ? "bg-primary/10 text-primary border-primary/30" : "border-slate-200 text-ink-tertiary hover:text-ink-secondary hover:border-slate-300"}`}>
+      <M n={icon} c="text-[13px]" />{label}
     </button>
   );
 
   return (
-    <Drawer size="md" label={isEdit ? `Edit ${name}` : "New checklist"} title={isEdit ? (name || "Checklist") : "New checklist"} onClose={onClose}
-      sub={`${all.length} ${all.length === 1 ? "check" : "checks"} in ${steps.length} ${steps.length === 1 ? "step" : "steps"}${visible ? ` · ${visible} shown to the customer` : ""}`}
-      footer={<>
-        <Button variant="primary" onClick={save} disabled={busy}>{busy ? "Saving…" : isEdit ? "Save" : "Create checklist"}</Button>
-        <Button onClick={onClose}>Cancel</Button>
-      </>}>
-          <div>
-            <label htmlFor="cl-name" className={labelClass}>Name</label>
-            <input id="cl-name" value={name} onChange={(e) => setName(e.target.value)} placeholder="Checklist name, like Intake check" autoFocus={!isEdit} aria-label="Checklist name" className={fieldClass()} />
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div className="absolute inset-0 bg-ink-primary/30" aria-hidden="true" onClick={onClose} />
+      <div role="dialog" aria-label={isEdit ? `Edit ${name}` : "New checklist"} className="relative w-[600px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.28s_cubic-bezier(.16,1,.3,1)]">
+        <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
+        <div className="flex items-center gap-3 px-5 pt-5 pb-3">
+          <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n="fact_check" c="text-lg" /></span>
+          <div className="flex-1 min-w-0">
+            <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Checklist name, like Intake check" autoFocus={!isEdit} aria-label="Checklist name"
+              className="w-full text-lg font-semibold text-ink-primary bg-transparent outline-none placeholder:text-ink-tertiary placeholder:font-normal border-b border-transparent focus:border-slate-200 py-0.5" />
+            <div className="text-xs text-ink-tertiary">{all.length} {all.length === 1 ? "check" : "checks"} in {steps.length} {steps.length === 1 ? "step" : "steps"}{visible ? ` · ${visible} shown to the customer` : ""}</div>
           </div>
+          <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 grid place-items-center text-ink-tertiary flex-shrink-0"><M n="close" c="text-base" /></button>
+        </div>
+
+        <div className="flex-1 overflow-y-auto px-5 pb-6 space-y-5">
           <div>
-            <div className={labelClass}>Use on</div>
-            <Tabs look="segmented" label="Use on" value={scope === "selected" ? "selected" : "all"} onChange={setScope}
-              tabs={[{ id: "all", label: "All job types" }, { id: "selected", label: "Some job types" }]} />
+            <div className="text-xs font-semibold text-ink-secondary mb-1.5">Use on</div>
+            <div className="inline-flex rounded-xl bg-slate-100 p-1">
+              {([["all", "All job types"], ["selected", "Some job types"]] as [string, string][]).map(([v, l]) => (
+                <button key={v} type="button" onClick={() => setScope(v)} aria-pressed={scope === v}
+                  className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${scope === v ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>{l}</button>
+              ))}
+            </div>
             {scope === "selected" && (
               <div className="flex flex-wrap gap-1.5 mt-2.5">
                 {types.length === 0 && <span className="text-xs text-ink-tertiary">No job types yet. Add them in Forms & fields.</span>}
                 {types.map((t) => { const on = typeIds.includes(t.id); return (
                   <button key={t.id} type="button" onClick={() => setTypeIds((s) => (on ? s.filter((x) => x !== t.id) : [...s, t.id]))} aria-pressed={on}
-                    className={`inline-flex items-center gap-1.5 min-h-8 px-2.5 py-1 rounded-full text-xs border transition-colors ${on ? "bg-white border-primary/40 text-ink-primary shadow-sm" : "border-dashed border-slate-300 text-ink-tertiary hover:text-ink-secondary"}`}>
-                    <Dot color={t.color} />{t.name}{on && <M n="check" c="text-sm text-primary -mr-0.5" />}
+                    className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border transition-colors ${on ? "bg-white border-primary/40 text-ink-primary shadow-sm" : "border-dashed border-slate-300 text-ink-tertiary hover:text-ink-secondary"}`}>
+                    <Dot color={t.color} />{t.name}{on && <M n="check" c="text-[13px] text-primary -mr-0.5" />}
                   </button>
                 ); })}
               </div>
@@ -265,13 +277,13 @@ export function ChecklistEditor({ tpl, onClose, onSaved }: { tpl: any | null; on
           {steps.map((st, si) => (
             <div key={si} className="rounded-2xl border border-slate-200 bg-white">
               <div className="group/step flex items-center gap-3 px-4 pt-3.5 pb-2">
-                <span className="w-7 h-7 rounded-full bg-slate-100 text-ink-secondary text-xs font-semibold tabular-nums grid place-items-center flex-shrink-0">{si + 1}</span>
+                <span className="w-7 h-7 rounded-full bg-ink-primary text-white text-xs font-semibold grid place-items-center flex-shrink-0">{si + 1}</span>
                 <input value={st.title} onChange={(e) => upStep(si, { title: e.target.value })} placeholder="Step name" aria-label={`Step ${si + 1} name`}
                   className="flex-1 min-w-0 text-sm font-semibold text-ink-primary bg-transparent outline-none border-b border-transparent focus:border-slate-200 py-0.5" />
-                <span className="flex items-center gap-0.5 sm:opacity-0 group-hover/step:opacity-100 focus-within:opacity-100 transition-opacity">
-                  <IconButton size="sm" label="Move step up" disabled={si === 0} onClick={() => moveStep(si, -1)} icon={<M n="expand_less" c="text-base" />} className="disabled:opacity-20" />
-                  <IconButton size="sm" label="Move step down" disabled={si === steps.length - 1} onClick={() => moveStep(si, 1)} icon={<M n="expand_more" c="text-base" />} className="disabled:opacity-20" />
-                  {steps.length > 1 && <IconButton size="sm" label="Delete step" onClick={() => setSteps((s) => s.filter((_, i) => i !== si))} icon={<M n="delete" c="text-base" />} className="hover:!text-rose-600" />}
+                <span className="flex items-center gap-0.5 opacity-0 group-hover/step:opacity-100 focus-within:opacity-100 transition-opacity">
+                  <button aria-label="Move step up" disabled={si === 0} onClick={() => moveStep(si, -1)} className="w-7 h-7 rounded-lg grid place-items-center text-ink-tertiary hover:bg-slate-100 disabled:opacity-20"><M n="expand_less" c="text-base" /></button>
+                  <button aria-label="Move step down" disabled={si === steps.length - 1} onClick={() => moveStep(si, 1)} className="w-7 h-7 rounded-lg grid place-items-center text-ink-tertiary hover:bg-slate-100 disabled:opacity-20"><M n="expand_more" c="text-base" /></button>
+                  {steps.length > 1 && <button aria-label="Delete step" onClick={() => setSteps((s) => s.filter((_, i) => i !== si))} className="w-7 h-7 rounded-lg grid place-items-center text-ink-tertiary hover:bg-rose-50 hover:text-rose-600"><M n="delete" c="text-base" /></button>}
                 </span>
               </div>
 
@@ -282,54 +294,61 @@ export function ChecklistEditor({ tpl, onClose, onSaved }: { tpl: any | null; on
                   const isOpen = open === key;
                   return (
                     <div key={ii} className={`group rounded-xl transition-colors ${isOpen ? "bg-slate-50 ring-1 ring-slate-200" : "hover:bg-slate-50"}`}>
-                      <div className="flex flex-wrap sm:flex-nowrap items-center gap-x-2.5 gap-y-1 px-2 py-1.5">
-                        <span className="w-7 h-7 rounded-lg bg-slate-100 text-ink-secondary grid place-items-center flex-shrink-0" title={k.label}><M n={k.icon} c="text-sm" /></span>
+                      <div className="flex items-center gap-2.5 px-2 py-1.5">
+                        <span className="w-7 h-7 rounded-lg bg-slate-100 text-ink-secondary grid place-items-center flex-shrink-0" title={k.label}><M n={k.icon} c="text-[15px]" /></span>
                         <input value={it.label} onChange={(e) => upItem(si, ii, { label: e.target.value })} placeholder="What to check, like Screen works" aria-label="Check name"
-                          className="flex-1 basis-40 min-w-0 text-sm text-ink-primary bg-transparent outline-none py-1" />
+                          className="flex-1 min-w-0 text-sm text-ink-primary bg-transparent outline-none py-1" />
                         {it.required && <span className="text-rose-500 text-xs" title="Must be filled in">*</span>}
-                        {it.client_visible && <span title="Shown to the customer"><M n="visibility" c="text-sm text-ink-tertiary" /></span>}
-                        <span className="text-2xs text-ink-tertiary whitespace-nowrap hidden sm:inline">{k.label}</span>
-                        <span className="flex items-center ml-auto sm:ml-0 sm:opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
-                          <IconButton size="sm" label="Move check up" disabled={ii === 0} onClick={() => moveItem(si, ii, -1)} icon={<M n="expand_less" c="text-sm" />} className="!w-7 disabled:opacity-20" />
-                          <IconButton size="sm" label="Move check down" disabled={ii === st.items.length - 1} onClick={() => moveItem(si, ii, 1)} icon={<M n="expand_more" c="text-sm" />} className="!w-7 disabled:opacity-20" />
-                          <IconButton size="sm" label="Remove check" onClick={() => delItem(si, ii)} icon={<M n="close" c="text-sm" />} className="!w-7 hover:!text-rose-600" />
+                        {it.client_visible && <span title="Shown to the customer"><M n="visibility" c="text-[14px] text-ink-tertiary" /></span>}
+                        <span className="text-[11px] text-ink-tertiary whitespace-nowrap hidden sm:inline">{k.label}</span>
+                        <span className="flex items-center opacity-0 group-hover:opacity-100 focus-within:opacity-100 transition-opacity">
+                          <button aria-label="Move check up" disabled={ii === 0} onClick={() => moveItem(si, ii, -1)} className="w-6 h-6 grid place-items-center text-ink-tertiary hover:text-primary disabled:opacity-20"><M n="expand_less" c="text-sm" /></button>
+                          <button aria-label="Move check down" disabled={ii === st.items.length - 1} onClick={() => moveItem(si, ii, 1)} className="w-6 h-6 grid place-items-center text-ink-tertiary hover:text-primary disabled:opacity-20"><M n="expand_more" c="text-sm" /></button>
+                          <button aria-label="Remove check" onClick={() => delItem(si, ii)} className="w-6 h-6 grid place-items-center text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>
                         </span>
-                        <IconButton size="sm" label="Check settings" aria-expanded={isOpen} onClick={() => setOpen(isOpen ? null : key)}
-                          icon={<M n="tune" c="text-sm" />} className={isOpen ? "!bg-white !text-primary shadow-sm" : ""} />
+                        <button aria-label="Check settings" aria-expanded={isOpen} onClick={() => setOpen(isOpen ? null : key)}
+                          className={`w-7 h-7 rounded-lg grid place-items-center flex-shrink-0 ${isOpen ? "bg-white text-primary shadow-sm" : "text-ink-tertiary hover:bg-slate-100"}`}><M n="tune" c="text-[15px]" /></button>
                       </div>
                       {isOpen && (
                         <div className="px-3 pb-3 pt-1 space-y-3">
                           <div className="flex flex-wrap gap-1.5">
                             {KINDS.map((x) => (
                               <button key={x.k} type="button" onClick={() => upItem(si, ii, { field_kind: x.k })} aria-pressed={it.field_kind === x.k}
-                                className={`inline-flex items-center gap-1.5 min-h-8 px-2.5 py-1 rounded-lg text-xs border transition-colors ${it.field_kind === x.k ? "bg-white border-primary/40 text-primary" : "border-slate-200 text-ink-secondary hover:border-slate-300"}`}>
-                                <M n={x.icon} c="text-sm" />{x.label}
+                                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg text-[11px] border transition-colors ${it.field_kind === x.k ? "bg-white border-primary/40 text-ink-primary shadow-sm font-semibold" : "border-slate-200 text-ink-secondary hover:border-slate-300"}`}>
+                                <M n={x.icon} c="text-[13px]" />{x.label}
                               </button>
                             ))}
                           </div>
                           {hasOptions(it.field_kind) && (
                             <input value={it.options} onChange={(e) => upItem(si, ii, { options: e.target.value })} placeholder="Choices, separated by commas: Perfect, Scratched, Cracked" aria-label="Choices"
-                              className={fieldClass()} />
+                              className="glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary" />
                           )}
                           <div className="flex flex-wrap gap-1.5">
                             <Toggle on={it.required} onClick={() => upItem(si, ii, { required: !it.required })} icon="priority_high" label="Must be filled in" />
                             <Toggle on={it.client_visible} onClick={() => upItem(si, ii, { client_visible: !it.client_visible })} icon="visibility" label="Customer sees it" />
                             {it.field_kind === "check_result" && <Toggle on={it.affects_result} onClick={() => upItem(si, ii, { affects_result: !it.affects_result })} icon="flag" label="A fail fails the checklist" />}
                           </div>
-                          {it.raw?.upsell_kind && <p className="text-xs text-ink-tertiary"><M n="sell" c="text-xs mr-1" />This check suggests an extra service when it fails. That setting is kept.</p>}
+                          {it.raw?.upsell_kind && <p className="text-xs text-ink-tertiary"><M n="sell" c="text-[12px] mr-1" />This check suggests an extra service when it fails. That setting is kept.</p>}
                         </div>
                       )}
                     </div>
                   );
                 })}
-                <Button variant="ghost" size="sm" onClick={() => addItem(si)} icon={<M n="add" c="text-sm" />} className="mt-1 ml-2 !text-primary hover:!bg-primary/5">Add check</Button>
+                <button onClick={() => addItem(si)} className="mt-1 ml-2 inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-primary hover:bg-primary/5"><M n="add" c="text-sm" />Add check</button>
               </div>
             </div>
           ))}
 
-          <button type="button" onClick={() => setSteps((s) => [...s, { title: `Step ${s.length + 1}`, items: [blank()] }])}
+          <button onClick={() => setSteps((s) => [...s, { title: `Step ${s.length + 1}`, items: [blank()] }])}
             className="w-full py-3 rounded-2xl border border-dashed border-slate-300 text-xs font-semibold text-ink-secondary hover:bg-slate-50 hover:border-slate-400 inline-flex items-center justify-center gap-1.5"><M n="add" c="text-sm" />Add step</button>
-    </Drawer>
+        </div>
+
+        <div className="px-5 py-4 border-t border-slate-100 flex items-center gap-2">
+          <button onClick={onClose} className="ml-auto px-4 py-2 rounded-xl border border-slate-200 text-ink-secondary hover:bg-slate-50 font-semibold text-xs">Cancel</button>
+          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-xl bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : isEdit ? "Save" : "Create checklist"}</button>
+        </div>
+      </div>
+    </div>
   );
 }
 
@@ -349,17 +368,17 @@ export function AutoAttachPicker({ value, onChange, statuses }: {
   const groups: [AutoKey["record_type"], string][] = [["work_order", "Work orders"], ["estimate", "Estimates"]];
   return (
     <div>
-      <div className={labelClass}>When a job reaches…</div>
+      <div className="text-xs font-semibold text-ink-secondary mb-0.5">When a job reaches…</div>
       <p className="text-xs text-ink-tertiary mb-2">{value.length ? "Added to the job once, the first time it reaches one of these statuses." : "Off. Pick statuses to add this checklist to jobs on its own, or keep attaching it by hand."}</p>
-      {!statuses && <div className="sk h-8 rounded-lg" aria-busy="true" />}
+      {!statuses && <div className="text-xs text-ink-tertiary">Loading statuses…</div>}
       {statuses && groups.map(([rt, label]) => statuses[rt].length > 0 && (
         <div key={rt} className="mb-2" role="group" aria-label={`${label} statuses`}>
           <div className="text-xs text-ink-secondary mb-1">{label}</div>
           <div className="flex flex-wrap gap-1.5">
             {statuses[rt].map((s: any) => { const on = has(rt, s.key); return (
               <button key={s.key} type="button" onClick={() => flip(rt, s.key)} aria-pressed={on}
-                className={`inline-flex items-center gap-1.5 min-h-8 px-2.5 py-1 rounded-full text-xs border transition-colors ${on ? "bg-white border-primary/40 text-ink-primary shadow-sm" : "border-dashed border-slate-300 text-ink-tertiary hover:text-ink-secondary"}`}>
-                <Dot color={s.color} />{s.name}{on && <M n="check" c="text-sm text-primary -mr-0.5" />}
+                className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border transition-colors ${on ? "bg-white border-primary/40 text-ink-primary shadow-sm" : "border-dashed border-slate-300 text-ink-tertiary hover:text-ink-secondary"}`}>
+                <Dot color={s.color} />{s.name}{on && <M n="check" c="text-[13px] text-primary -mr-0.5" />}
               </button>
             ); })}
           </div>

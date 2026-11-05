@@ -1,7 +1,7 @@
 import { humanize } from "../../lib/humanize";
+import { buttonClass } from "../../components/Button";
 import { Fragment, useEffect, useState } from "react";
 import { M } from "../../components/Shell";
-import { buttonClass } from "../../components/Button";
 import { api, openAuthedDoc } from "../../api/client";
 import DateField from "../../components/DateField";
 import { Product, money } from "./types";
@@ -273,15 +273,15 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
-      <div className="relative h-full w-full max-w-[840px] bg-white shadow-clay-drawer flex flex-col">
+      <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={onClose} />
+      <div className="relative h-full w-full max-w-[720px] bg-raised shadow-clay-card flex flex-col border-l border-slate-200/90">
         {/* header */}
-        <div className="px-5 py-4 border-b border-slate-200 flex items-start justify-between">
+        <div className="px-6 pt-5 pb-3 border-b border-slate-100 flex items-start justify-between">
           <div className="flex items-center gap-2.5">
-            
+            <div className="w-10 h-10 rounded-xl bg-blue-50 text-primary grid place-items-center"><M n="receipt_long" c="text-xl" /></div>
             <div>
               <div className="flex items-center gap-2">
-                <h2 className="text-base font-semibold text-ink-primary leading-tight tabular-nums">{po?.po_number || "Purchase order"}</h2>
+                <h2 className="text-base font-semibold text-ink-primary leading-tight font-mono">{po?.po_number || "Purchase order"}</h2>
                 {/* 144an — manual, configurable WORKFLOW stage (primary). Set from the pipeline. */}
                 {po && (() => {
                   const wf = pipeline.find((s) => s.key === po.workflow_status);
@@ -289,14 +289,14 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                   return (
                     <div className="relative">
                       <button onClick={() => { if (editable2) setStatusMenu((v) => !v); }} disabled={busy}
-                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-2xs font-semibold border ${editable2 ? "hover:brightness-95" : "cursor-default"}`}
+                        className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[11px] font-semibold border ${editable2 ? "hover:brightness-95" : "cursor-default"}`}
                         style={wf ? { backgroundColor: wf.color + "22", color: wf.color, borderColor: wf.color + "55" } : undefined}>
                         {wf?.name || po.workflow_status || "Draft"}
-                        {editable2 && <M n="expand_more" c="text-[13px]" />}
+                        {editable2 && <M n="expand_more" c="text-xs" />}
                       </button>
                       {statusMenu && (
                         <div className="absolute left-0 top-8 z-20 w-52 max-h-72 overflow-y-auto bg-raised rounded-xl shadow-clay-card border border-slate-200/80 py-1 text-xs">
-                          <div className="px-3 py-1.5 text-2xs font-semibold text-ink-tertiary">Set status</div>
+                          <div className="px-3 py-1.5 text-[11px] font-semibold text-ink-tertiary">Set status</div>
                           {pipeline.map((s) => (
                             <button key={s.key} onClick={() => setWorkflow(s.key)}
                               className={`w-full text-left px-3 py-2 hover:bg-slate-100 font-semibold flex items-center gap-2 ${s.key === po.workflow_status ? "text-ink-primary" : "text-ink-secondary"}`}>
@@ -313,14 +313,14 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                 {/* Receipt state (auto, read-only) — never hand-set; driven by actual receiving. */}
                 {po && st !== "draft" && (
                   <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-2xs font-semibold border ${stCls(st)}`} title="Receipt state. Updates as you receive stock.">
-                    <M n={st === "received" ? "check_circle" : "local_shipping"} c="text-[13px]" />{stLabel[st] || po.status}</span>
+                    <M n={st === "received" ? "check_circle" : "local_shipping"} c="text-xs" />{stLabel[st] || po.status}</span>
                 )}
                 {po?.match && MATCH[po.match.status] && (
                   <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-2xs font-semibold border ${MATCH[po.match.status].cls}`}>
-                    <M n={MATCH[po.match.status].icon} c="text-[13px]" />{MATCH[po.match.status].label}</span>
+                    <M n={MATCH[po.match.status].icon} c="text-xs" />{MATCH[po.match.status].label}</span>
                 )}
               </div>
-              <span className="text-2xs text-ink-tertiary">{[po?.supplier?.name, po?.ordered_at && `ordered ${d(po.ordered_at)}`, po?.expected_at && `expected ${d(po.expected_at)}`].filter(Boolean).join(" · ")}</span>
+              <span className="text-[11px] text-ink-tertiary">{[po?.supplier?.name, po?.ordered_at && `ordered ${d(po.ordered_at)}`, po?.expected_at && `expected ${d(po.expected_at)}`].filter(Boolean).join(" · ")}</span>
             </div>
           </div>
           <div className="flex items-center gap-1">
@@ -339,7 +339,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
             )}
             {po?.editable && !editing && <button aria-label="Cancel PO" onClick={cancelPo} disabled={busy} title="Cancel PO" className="w-8 h-8 rounded-lg grid place-items-center text-ink-tertiary hover:text-rose-600 hover:bg-rose-50"><M n="cancel" c="text-base" /></button>}
             <button aria-label="Print / PDF" onClick={() => openAuthedDoc(`/print/purchase-order/${poId}`).catch(() => flash("Could not open PDF"))} title="Print / PDF" className="w-8 h-8 rounded-lg grid place-items-center text-ink-tertiary hover:text-primary hover:bg-slate-100"><M n="print" c="text-base" /></button>
-            <button aria-label="Close" onClick={onClose} className={buttonClass("ghost", "md", "w-9 !px-0 shrink-0 text-ink-tertiary")}><M n="close" c="text-lg" /></button>
+            <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-full grid place-items-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100"><M n="close" c="text-lg" /></button>
           </div>
         </div>
 
@@ -348,11 +348,11 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
             /* ── EDIT MODE (PATCH /po) ── */
             <div className="space-y-4">
               <div className="grid grid-cols-2 gap-3 text-xs">
-                <div><label className="block text-2xs font-semibold text-ink-tertiary mb-1">Supplier invoice #</label>
+                <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Supplier invoice #</label>
                   <input value={ed.supplier_invoice_no} onChange={(e) => edSet({ supplier_invoice_no: e.target.value })} className="glass-input rounded-xl px-3 py-2 w-full" /></div>
-                <div><label className="block text-2xs font-semibold text-ink-tertiary mb-1">Invoice date</label>
+                <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Invoice date</label>
                   <DateField value={ed.supplier_invoice_date} onChange={(v) => edSet({ supplier_invoice_date: v })} /></div>
-                <div><label className="block text-2xs font-semibold text-ink-tertiary mb-1">Expected</label>
+                <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Expected</label>
                   <DateField value={ed.expected_at} onChange={(v) => edSet({ expected_at: v })} /></div>
                 <label className="flex items-end gap-2 pb-2 text-ink-secondary cursor-pointer"><input type="checkbox" checked={ed.on_credit} onChange={(e) => edSet({ on_credit: e.target.checked })} />On credit</label>
               </div>
@@ -360,7 +360,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
               {/* editable lines */}
               <div className="rounded-2xl border border-slate-200/80 overflow-hidden">
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50/70 text-2xs font-semibold text-ink-tertiary">
+                  <thead className="bg-slate-50/70 text-[11px] font-semibold text-ink-tertiary">
                     <tr><th className="py-2 px-3">Product</th><th className="py-2 px-2 text-right w-16">Qty</th><th className="py-2 px-2 text-right w-24">Unit cost</th><th className="w-8" /></tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
@@ -368,15 +368,15 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                       <tr key={i}>
                         <td className="py-2 px-3">
                           {(l.qty_received || 0) > 0 ? (
-                            <span className="font-semibold text-ink-primary">{prodName(l.part_id)} <span className="text-2xs text-ink-tertiary">· {l.qty_received} received, locked</span></span>
+                            <span className="font-semibold text-ink-primary">{prodName(l.part_id)} <span className="text-[11px] text-ink-tertiary">· {l.qty_received} received, locked</span></span>
                           ) : (
                             <select value={l.part_id} onChange={(e) => { const p: any = pool.find((x) => x.id === e.target.value); edLine(i, { part_id: e.target.value, unit_cost: l.unit_cost || (p && (p.cost_price ?? p.avg_cost)) || 0 }); }} className="glass-input rounded-xl px-3 py-2 w-full">
                               <option value="">Select product…</option>{pool.map((p) => <option key={p.id} value={p.id}>{p.name}{p.sku ? ` · ${p.sku}` : ""}</option>)}
                             </select>
                           )}
                         </td>
-                        <td className="py-2 px-2"><input type="number" min={0} value={l.qty_ordered} onChange={(e) => edLine(i, { qty_ordered: Math.max(0, Number(e.target.value) || 0) })} className="glass-input rounded-xl px-3 py-2 w-full text-right tabular-nums" /></td>
-                        <td className="py-2 px-2"><input type="number" min={0} value={l.unit_cost} onChange={(e) => edLine(i, { unit_cost: Math.max(0, Number(e.target.value) || 0) })} className="glass-input rounded-xl px-3 py-2 w-full text-right tabular-nums" /></td>
+                        <td className="py-2 px-2"><input type="number" min={0} value={l.qty_ordered} onChange={(e) => edLine(i, { qty_ordered: Math.max(0, Number(e.target.value) || 0) })} className="glass-input rounded-xl px-3 py-2 w-full text-right font-mono" /></td>
+                        <td className="py-2 px-2"><input type="number" min={0} value={l.unit_cost} onChange={(e) => edLine(i, { unit_cost: Math.max(0, Number(e.target.value) || 0) })} className="glass-input rounded-xl px-3 py-2 w-full text-right font-mono" /></td>
                         <td className="py-2 px-1 text-center">{(l.qty_received || 0) === 0 && <button aria-label="Remove line" onClick={() => edDelLine(i)} className="text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>}</td>
                       </tr>
                     ))}
@@ -391,21 +391,21 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
 
               {/* charges / landed cost */}
               <div className="rounded-2xl border border-slate-200/80 p-3 space-y-2">
-                <div className="flex items-center justify-between"><span className="text-2xs font-semibold text-ink-tertiary">Charges (shipping / customs)</span>
-                  <button onClick={edAddCharge} className="text-2xs font-semibold text-primary hover:underline">+ Add charge</button></div>
-                {(ed.charges || []).length === 0 && <div className="text-2xs text-ink-tertiary">No charges. Add freight/customs to include them in the PO total.</div>}
+                <div className="flex items-center justify-between"><span className="text-[11px] font-semibold text-ink-tertiary">Charges (shipping / customs)</span>
+                  <button onClick={edAddCharge} className="text-[11px] font-semibold text-primary hover:underline">+ Add charge</button></div>
+                {(ed.charges || []).length === 0 && <div className="text-[11px] text-ink-tertiary">No charges. Add freight/customs to include them in the PO total.</div>}
                 {(ed.charges || []).map((c: any, i: number) => (
                   <div key={i} className="flex items-center gap-2">
                     <input value={c.label} onChange={(e) => edCharge(i, { label: e.target.value })} placeholder="Label" className="glass-input rounded-xl px-3 py-2 text-xs flex-1" />
-                    <input type="number" min={0} value={c.amount} onChange={(e) => edCharge(i, { amount: Number(e.target.value) || 0 })} className="glass-input rounded-xl px-3 py-2 text-xs w-28 text-right tabular-nums" />
+                    <input type="number" min={0} value={c.amount} onChange={(e) => edCharge(i, { amount: Number(e.target.value) || 0 })} className="glass-input rounded-xl px-3 py-2 text-xs w-28 text-right font-mono" />
                     <button aria-label="Remove charge" onClick={() => edDelCharge(i)} className="text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>
                   </div>
                 ))}
-                <label className="flex items-center gap-2 text-2xs text-ink-secondary cursor-pointer pt-1"><input type="checkbox" checked={ed.charges_to_cost} onChange={(e) => edSet({ charges_to_cost: e.target.checked })} />Add these charges to the cost of each product when the order is received</label>
+                <label className="flex items-center gap-2 text-[11px] text-ink-secondary cursor-pointer pt-1"><input type="checkbox" checked={ed.charges_to_cost} onChange={(e) => edSet({ charges_to_cost: e.target.checked })} />Add these charges to the cost of each product when the order is received</label>
                 {ed.charges_to_cost && (
-                  <div className="flex items-center gap-2 pt-1 text-2xs text-ink-secondary">
+                  <div className="flex items-center gap-2 pt-1 text-[11px] text-ink-secondary">
                     <span>Spread by</span>
-                    <select value={ed.alloc_basis || "value"} onChange={(e) => edSet({ alloc_basis: e.target.value })} className="glass-input rounded-xl px-3 py-2 text-2xs">
+                    <select value={ed.alloc_basis || "value"} onChange={(e) => edSet({ alloc_basis: e.target.value })} className="glass-input rounded-xl px-3 py-2 text-[11px]">
                       <option value="value">Value (cost-weighted)</option>
                       <option value="qty">Quantity (per unit)</option>
                       <option value="weight">Weight (per kg)</option>
@@ -414,7 +414,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                 )}
               </div>
 
-              <div><label className="block text-2xs font-semibold text-ink-tertiary mb-1">Notes</label>
+              <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Notes</label>
                 <textarea value={ed.notes} onChange={(e) => edSet({ notes: e.target.value })} rows={2} className="glass-input rounded-xl px-3 py-2 text-xs w-full" /></div>
             </div>
           ) : <>
@@ -423,7 +423,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
               {[["Supplier invoice", po.supplier_invoice_no || ""], ["Invoice date", d(po.supplier_invoice_date)],
                 ["Terms", po.on_credit ? "On credit" : "Paid / cash"]].filter(([, v]) => v).map(([l, v]) => (
                 <div key={l} className="rounded-xl bg-slate-50/70 border border-slate-200/70 px-3 py-2">
-                  <div className="text-2xs font-semibold text-ink-tertiary">{l}</div>
+                  <div className="text-[11px] font-semibold text-ink-tertiary">{l}</div>
                   <div className="text-ink-primary font-semibold mt-0.5">{v}</div>
                 </div>
               ))}
@@ -434,7 +434,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
               <div className="flex items-center gap-2 rounded-xl bg-slate-50 border border-slate-200 px-3 py-2.5">
                 <M n="edit_note" c="text-base text-ink-tertiary" />
                 <span className="text-xs text-ink-secondary flex-1">This PO is a draft. Edit it freely, then mark it as ordered to start receiving.</span>
-                <button onClick={() => setStatus("ordered")} disabled={busy} className={buttonClass("primary", "md")}>Mark as ordered</button>
+                <button onClick={() => setStatus("ordered")} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50">Mark as ordered</button>
               </div>
             )}
 
@@ -443,12 +443,12 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
               <div className="flex items-center gap-2 rounded-xl bg-blue-50/60 border border-blue-100 px-3 py-2">
                 <M n="barcode_scanner" c="text-base text-primary" />
                 <input value={scan} onChange={(e) => setScan(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") onScan(scan); }}
-                  placeholder="Scan or type a barcode / SKU to add 1 to receive" className="glass-input rounded-xl px-3 py-2 text-xs flex-1 tabular-nums" />
+                  placeholder="Scan or type a barcode / SKU to add 1 to receive" className="glass-input rounded-xl px-3 py-2 text-xs flex-1 font-mono" />
               </div>
             )}
             {canReceive && (
               <div className="rounded-xl border border-slate-200 px-3 py-2">
-                <div className="text-2xs font-semibold text-ink-tertiary mb-1">Put away into a bin (optional — otherwise the location's default bin)</div>
+                <div className="text-[11px] font-semibold text-ink-tertiary mb-1">Put away into a bin (optional — otherwise the location's default bin)</div>
                 <BinScanField label="Into" current={recvBin} locationId={(po as any)?.location_id} onBin={setRecvBin} onClear={() => setRecvBin(null)} />
               </div>
             )}
@@ -456,7 +456,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
             {/* lines + receive */}
             <div className="rounded-2xl border border-slate-200/80 overflow-hidden">
               <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50/70 text-2xs font-semibold text-ink-tertiary">
+                <thead className="bg-slate-50/70 text-[11px] font-semibold text-ink-tertiary">
                   <tr><th className="py-2.5 px-3">Product</th><th className="py-2.5 px-3 text-right">Ordered</th>
                     <th className="py-2.5 px-3 text-right">Received</th><th className="py-2.5 px-3 text-right">Unit cost</th>
                     {canReceive && <th className="py-2.5 px-3 text-right w-24">Receive now</th>}</tr>
@@ -467,9 +467,9 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                     const scanRow = canReceive && l.serialized && remain > 0;
                     return (<Fragment key={l.id}>
                       <tr className={scanRow ? "border-b-0" : undefined}>
-                        <td className="py-2.5 px-3 font-semibold text-ink-primary">{l.part || l.part_id}{l.serialized && <span className="ml-1.5 text-2xs font-semibold px-1.5 py-0.5 rounded bg-slate-100 text-ink-secondary">Serial-tracked</span>}</td>
+                        <td className="py-2.5 px-3 font-semibold text-ink-primary">{l.part || l.part_id}{l.serialized && <span className="ml-1.5 text-[11px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 text-ink-secondary">Serial-tracked</span>}</td>
                         <td className="py-2.5 px-3 text-right tabular-nums">{l.qty_ordered}</td>
-                        <td className="py-2.5 px-3 text-right tabular-nums">{l.qty_received || 0}{remain > 0 && (l.qty_received || 0) > 0 ? <span className="text-2xs text-amber-600"> · {remain} left</span> : null}</td>
+                        <td className="py-2.5 px-3 text-right tabular-nums">{l.qty_received || 0}{remain > 0 && (l.qty_received || 0) > 0 ? <span className="text-[11px] text-amber-600"> · {remain} left</span> : null}</td>
                         <td className="py-2.5 px-3 text-right tabular-nums">{money(l.unit_cost)}</td>
                         {canReceive && <td className="py-2.5 px-3 text-right">
                           {l.serialized
@@ -500,7 +500,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
               {(po.charges || []).map((c, i) => (
                 <div key={i} className="flex justify-between text-ink-tertiary"><span>{c.label}</span><span className="tabular-nums">{money(c.amount)}</span></div>
               ))}
-              {po.charges_to_cost && (po.charges_total || 0) > 0 && <div className="text-2xs text-ink-tertiary italic">Charges added to the cost of each product</div>}
+              {po.charges_to_cost && (po.charges_total || 0) > 0 && <div className="text-[11px] text-ink-tertiary italic">Charges added to the cost of each product</div>}
               <div className="flex justify-between font-semibold text-ink-primary border-t border-slate-200 pt-1"><span>Total</span><span className="tabular-nums">{money(po.total)}</span></div>
             </div>
 
@@ -524,14 +524,14 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                   {anyRecvd && (
                     <div className="flex items-end gap-2 pt-1 border-t border-slate-100">
                       <div className="flex-1">
-                        <label className="block text-2xs font-semibold text-ink-tertiary mb-1 flex items-center gap-1"><M n="paid" c="text-sm text-primary" />Freight bill arrived late?</label>
+                        <label className="block text-[11px] font-semibold text-ink-tertiary mb-1 flex items-center gap-1"><M n="paid" c="text-sm text-primary" />Freight bill arrived late?</label>
                         <input type="number" min={0} value={freight} onChange={(e) => setFreight(e.target.value)} placeholder="Shipping / customs amount"
                           className="glass-input rounded-xl px-3 py-2 text-xs w-full tabular-nums" />
                       </div>
                       <button onClick={addFreightRecost} disabled={busy || !freight} className={buttonClass("primary", "md")}>Add &amp; recost stock</button>
                     </div>
                   )}
-                  {anyRecvd && <div className="text-2xs text-ink-tertiary">Spreads the freight into the cost of stock you've already received. Inventory value updates straight away.</div>}
+                  {anyRecvd && <div className="text-[11px] text-ink-tertiary">Spreads the freight into the cost of stock you've already received. Inventory value updates straight away.</div>}
                 </div>
               );
             })()}
@@ -539,18 +539,18 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
             {/* three-way match: ordered vs received vs supplier-invoiced */}
             {po.match && po.match.status !== "pending" && (
               <div className="rounded-2xl border border-slate-200/80 p-4 space-y-2.5">
-                <div className="flex items-center gap-1.5 text-2xs font-semibold text-ink-tertiary ">
+                <div className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-tertiary ">
                   <M n="rule" c="text-sm text-primary" />Three-way match
                 </div>
                 <div className="grid grid-cols-3 gap-2 text-xs">
-                  <div><div className="text-2xs text-ink-tertiary ">Ordered</div><div className="tabular-nums font-semibold text-ink-primary">{po.match.ordered_qty}</div></div>
-                  <div><div className="text-2xs text-ink-tertiary ">Received</div>
-                    <div className={`tabular-nums font-semibold ${po.match.qty_variance !== 0 ? "text-rose-600" : "text-ink-primary"}`}>{po.match.received_qty}{po.match.qty_variance !== 0 && <span className="text-2xs"> ({po.match.qty_variance > 0 ? "+" : ""}{po.match.qty_variance})</span>}</div></div>
-                  <div><div className="text-2xs text-ink-tertiary ">Expected cost</div><div className="tabular-nums font-semibold text-ink-primary">{money(po.match.expected_cost)}</div></div>
+                  <div><div className="text-[11px] text-ink-tertiary ">Ordered</div><div className="tabular-nums font-semibold text-ink-primary">{po.match.ordered_qty}</div></div>
+                  <div><div className="text-[11px] text-ink-tertiary ">Received</div>
+                    <div className={`tabular-nums font-semibold ${po.match.qty_variance !== 0 ? "text-rose-600" : "text-ink-primary"}`}>{po.match.received_qty}{po.match.qty_variance !== 0 && <span className="text-[11px]"> ({po.match.qty_variance > 0 ? "+" : ""}{po.match.qty_variance})</span>}</div></div>
+                  <div><div className="text-[11px] text-ink-tertiary ">Expected cost</div><div className="tabular-nums font-semibold text-ink-primary">{money(po.match.expected_cost)}</div></div>
                 </div>
                 <div className="flex items-end gap-2 pt-1">
                   <div className="flex-1">
-                    <label className="block text-2xs font-semibold text-ink-tertiary mb-1">Supplier invoice total</label>
+                    <label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Supplier invoice total</label>
                     <input type="number" min={0} value={inv} onChange={(e) => setInv(e.target.value)} placeholder="What they billed you"
                       className="glass-input rounded-xl px-3 py-2 text-xs w-full tabular-nums" />
                   </div>
@@ -559,25 +559,25 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                 <div className="flex items-center gap-2 pt-1">
                   {po.supplier_invoice_file ? (
                     <button onClick={() => openAuthedDoc(po.supplier_invoice_file!.url).catch(() => flash("Could not open file"))}
-                      className="text-2xs font-semibold text-primary hover:underline flex items-center gap-1"><M n="description" c="text-sm" />{po.supplier_invoice_file.name || "Supplier invoice"}</button>
-                  ) : <span className="text-2xs text-ink-tertiary">No invoice file attached.</span>}
-                  <label className="ml-auto text-2xs font-semibold text-primary hover:underline cursor-pointer flex items-center gap-1">
+                      className="text-[11px] font-semibold text-primary hover:underline flex items-center gap-1"><M n="description" c="text-sm" />{po.supplier_invoice_file.name || "Supplier invoice"}</button>
+                  ) : <span className="text-[11px] text-ink-tertiary">No invoice file attached.</span>}
+                  <label className="ml-auto text-[11px] font-semibold text-primary hover:underline cursor-pointer flex items-center gap-1">
                     <M n="attach_file" c="text-sm" />{po.supplier_invoice_file ? "Replace" : "Attach PDF"}
                     <input type="file" accept="application/pdf,image/*" className="hidden" onChange={(e) => { const f = e.target.files?.[0]; if (f) attachInvoice(f); e.target.value = ""; }} />
                   </label>
                 </div>
                 {po.match.price_variance != null && po.match.price_variance !== 0 && (
-                  <div className="text-2xs text-rose-600 font-semibold flex items-center gap-1"><M n="report" c="text-sm" />
+                  <div className="text-[11px] text-rose-600 font-semibold flex items-center gap-1"><M n="report" c="text-sm" />
                     Billed {money(po.match.invoiced_total || 0)}, {po.match.price_variance > 0 ? "over" : "under"} expected by {money(Math.abs(po.match.price_variance))}</div>
                 )}
-                {po.match.status === "matched" && <div className="text-2xs text-emerald-700 font-semibold flex items-center gap-1"><M n="verified" c="text-sm" />Order, receipt and invoice all agree.</div>}
+                {po.match.status === "matched" && <div className="text-[11px] text-emerald-700 font-semibold flex items-center gap-1"><M n="verified" c="text-sm" />Order, receipt and invoice all agree.</div>}
               </div>
             )}
 
             {/* receipt timeline */}
             {receipts.length > 0 && (
               <div className="rounded-2xl border border-slate-200/80 p-4">
-                <div className="flex items-center gap-1.5 text-2xs font-semibold text-ink-tertiary mb-2"><M n="history" c="text-sm text-primary" />Receipt history</div>
+                <div className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-tertiary mb-2"><M n="history" c="text-sm text-primary" />Receipt history</div>
                 <div className="divide-y divide-slate-100">
                   {receipts.map((r) => (
                     <div key={r.id} className="flex items-center gap-3 py-1.5 text-xs">
@@ -591,34 +591,34 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
               </div>
             )}
 
-            {po.notes && <div className="text-xs text-ink-secondary"><span className="font-semibold text-ink-tertiary text-2xs block mb-0.5">Notes</span>{po.notes}</div>}
+            {po.notes && <div className="text-xs text-ink-secondary"><span className="font-semibold text-ink-tertiary text-[11px] block mb-0.5">Notes</span>{po.notes}</div>}
           </>}
         </div>
 
         {/* edit action bar */}
         {po && editing && (
-          <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
+          <div className="px-6 py-3 border-t border-slate-100 flex items-center gap-2 bg-raised">
             <button onClick={saveEdit} disabled={busy} className={buttonClass("primary", "md")}><M n="check" c="text-sm" />{busy ? "Saving…" : "Save changes"}</button>
-            <button onClick={() => { setEditing(false); setEd(null); }} className={buttonClass("secondary", "md")}>Cancel</button>
+            <button onClick={() => { setEditing(false); setEd(null); }} className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50">Cancel</button>
           </div>
         )}
         {/* receive action bar */}
         {po && canReceive && !editing && (
-          <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-3">
+          <div className="px-6 py-3 border-t border-slate-100 flex items-center gap-3 bg-raised">
             <div className="flex items-center gap-2">
               <button onClick={() => receive(false)} disabled={busy || toReceive === 0}
-                className={buttonClass("primary", "md")}>
+                className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50 flex items-center gap-1.5">
                 <M n="inventory" c="text-sm" />{busy ? "Receiving…" : `Receive ${toReceive || ""}`.trim()}
               </button>
               <button onClick={() => receive(true)} disabled={busy}
-                className={buttonClass("secondary", "md")}>
+                className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50 flex items-center gap-1.5">
                 <M n="done_all" c="text-sm" />Receive all
               </button>
             </div>
             <div className="ml-auto flex items-center gap-3">
-              <span className="text-2xs text-ink-tertiary">{outstanding} outstanding · receiving {toReceive}</span>
+              <span className="text-[11px] text-ink-tertiary">{outstanding} outstanding · receiving {toReceive}</span>
               {/* 144ar — freight billed with THIS delivery, capitalised into these units' cost */}
-              <label className="flex items-center gap-2 text-2xs text-ink-secondary" title="Shipping billed with this delivery is added to the cost of the products received now">
+              <label className="flex items-center gap-2 text-[11px] text-ink-secondary" title="Shipping billed with this delivery is added to the cost of the products received now">
                 <span className="flex items-center gap-1"><M n="local_shipping" c="text-sm text-ink-tertiary" />Shipping on this delivery</span>
                 <input type="number" min={0} value={shipFreight} onChange={(e) => setShipFreight(e.target.value)}
                   placeholder="0.00" className="glass-input rounded-xl px-3 py-2 w-28 text-right tabular-nums text-xs" />
@@ -626,8 +626,8 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
             </div>
           </div>
         )}
-        {po && received && <div className="px-6 py-3 border-t border-slate-100 text-2xs text-emerald-700 font-semibold flex items-center gap-1.5"><M n="check_circle" c="text-sm" />Fully received {d(po.received_at)}. Stock added to inventory.</div>}
-        {po && (st === "cancelled" || st === "canceled") && <div className="px-6 py-3 border-t border-slate-100 text-2xs text-rose-600 font-semibold flex items-center gap-1.5"><M n="cancel" c="text-sm" />This purchase order was cancelled.</div>}
+        {po && received && <div className="px-6 py-3 border-t border-slate-100 text-[11px] text-emerald-700 font-semibold flex items-center gap-1.5"><M n="check_circle" c="text-sm" />Fully received {d(po.received_at)}. Stock added to inventory.</div>}
+        {po && (st === "cancelled" || st === "canceled") && <div className="px-6 py-3 border-t border-slate-100 text-[11px] text-rose-600 font-semibold flex items-center gap-1.5"><M n="cancel" c="text-sm" />This purchase order was cancelled.</div>}
 
         {toast && <div className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold h-9 px-3.5 rounded-xl shadow-clay-card">{toast}</div>}
       </div>
