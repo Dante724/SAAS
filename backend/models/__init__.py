@@ -4140,6 +4140,9 @@ class IdempotencyRecord(OrgScoped, Base):
     # Set in the same transaction as the work's first commit (idg01). Once set, the work's money
     # is in: the key is never released or taken over, so a retry can't post it again.
     committed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # Who holds the key right now (idg02): a retry that takes over a dead request's key gets a
+    # new token, and the original's commits only go through while the token is still its own.
+    claim_token: Mapped[Optional[str]] = mapped_column(String(32))
     response: Mapped[Optional[dict]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
     __table_args__ = (UniqueConstraint("org_id", "key", name="uq_idempotency_org_key"),)

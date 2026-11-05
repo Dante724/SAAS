@@ -209,7 +209,9 @@ async def sweep_idempotency_keys() -> None:
 @job_runner.every(600, "superseded-charge-sweep")
 async def sweep_superseded_charges() -> None:
     """Card-reader charges migration idg01 marked superseded: cancel them at the provider and keep
-    polling them for 7 days, so a card taken anyway is booked and flagged (services/terminal)."""
+    polling them for 7 days, so a card taken anyway is booked and flagged. Also cancels pending
+    charges the reader never confirmed, or that went stale, so they stop holding their reader
+    (services/terminal.reconcile_superseded)."""
     from backend.db.database import AsyncSessionLocal
     from backend.services.terminal import reconcile_superseded
 

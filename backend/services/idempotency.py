@@ -31,9 +31,12 @@ Money safety:
   done (`idem_retry_safe = True` on the exception) still releases it.
 - A key whose request died mid-flight (cancelled, process killed) would block retries for 48h. A
   key still in flight after STALE_AFTER, whose work never committed, can be taken over by a retry.
-  The takeover moves the key's `created_at`; the original's commit checks it hasn't moved (row
-  lock + compare), so a slow original that wakes up afterwards can't commit its posting too.
+  Staleness is measured on the database clock (`created_at` is written by the database too), so a
+  fast or slow app server clock can't make a running request look dead. The takeover gives the
+  key a new `claim_token`; the original's commit checks its token is still the key's (row lock +
+  compare), so a slow original that wakes up afterwards can't commit its posting too.
 """
+import uuid
 import hashlib
 import json
 from dataclasses import dataclass, field
@@ -42,7 +45,7 @@ from typing import Any, Awaitable, Callable, Optional
 
 from fastapi import HTTPException, Request
 from fastapi.encoders import jsonable_encoder
-from sqlalchemy import delete, event, func, select, update
+from sqlalchemy import delete, event, func, insert, literal, literal_column, select, update
 from sqlalchemy.exc import IntegrityError
 
 from backend.models import IdempotencyRecord
@@ -54,6 +57,7 @@ STALE_AFTER = timedelta(minutes=2)
 IN_FLIGHT = "The same request is still being processed. Try again in a moment."
 DONE_NO_ANSWER = ("This request has already been carried out, but its answer was lost. "
                   "Refresh to see the result instead of sending it again.")
+NO_ANSWER = {"__idempotency__": "committed-without-answer"}   # stored by release() after a commit
 TAKEN_OVER = ("This request took too long and was sent again; the retry was carried out instead. "
               "Refresh to see the result.")
 
@@ -62,7 +66,7 @@ TAKEN_OVER = ("This request took too long and was sent again; the retry was carr
 class Claim:
     record_id: Optional[str] = None
     replay: Any = None
-    started_at: Optional[datetime] = None
+    token: Optional[str] = None
     committed: bool = False
     _unwatch: Optional[Callable[[], None]] = field(default=None, repr=False)
 
@@ -71,7 +75,7 @@ class Claim:
         return self.record_id is not None
 
     def _mine(self):
-        return (IdempotencyRecord.id == self.record_id) & (IdempotencyRecord.created_at == self.started_at)
+        return (IdempotencyRecord.id == self.record_id) & (IdempotencyRecord.claim_token == self.token)
 
     def _watch(self, db) -> None:
         """Stamp committed_at in the same transaction as each commit the work makes, and refuse
@@ -118,11 +122,24 @@ class Claim:
         try:
             await db.rollback()
             if self.committed and not retry_safe:
-                return
-            await db.execute(delete(IdempotencyRecord).where(self._mine()))
+                # The money is in but the answer is lost: a retry is told so (409), never re-run.
+                await db.execute(update(IdempotencyRecord).where(self._mine()).values(response=NO_ANSWER)
+                                 .execution_options(synchronize_session=False))
+            else:
+                await db.execute(delete(IdempotencyRecord).where(self._mine()))
             await db.commit()
         except Exception:
             pass   # the stale window or the 48h sweep frees it
+
+
+def _db_now(db, *, ago: Optional[timedelta] = None):
+    """The database's clock (UTC, naive, like the column), optionally `ago` earlier."""
+    secs = int((ago or timedelta()).total_seconds())
+    if db.get_bind().dialect.name == "postgresql":
+        now = func.timezone("UTC", func.now())
+        return now - literal_column(f"interval '{secs} seconds'") if secs else now
+    # SQLite: same text form as stored datetimes ('YYYY-MM-DD HH:MM:SS.ffffff'), so they compare.
+    return func.strftime("%Y-%m-%d %H:%M:%f000", "now", f"-{secs} seconds")
 
 
 def request_hash(body: Any) -> str:
@@ -145,34 +162,44 @@ async def idem_begin(db, org_id: str, request: Request, endpoint: str, *, body: 
             raise HTTPException(422, "This Idempotency-Key was already used for a different action")
         if digest is not None and existing.request_hash is not None and existing.request_hash != digest:
             raise HTTPException(422, "This Idempotency-Key was already used with a different request")
+        if existing.response == NO_ANSWER:
+            raise HTTPException(409, DONE_NO_ANSWER)
         if existing.response is not None:
             return Claim(replay=existing.response)
+        stale = IdempotencyRecord.created_at < _db_now(db, ago=STALE_AFTER)
         if existing.committed_at is not None:
-            raise HTTPException(409, DONE_NO_ANSWER)
-        if existing.created_at is not None and existing.created_at < datetime.utcnow() - STALE_AFTER:
-            # Its request looks dead and never committed anything: take the key over. Only one
-            # retry can win (compare on created_at), and the original can't commit after this.
-            now = datetime.utcnow()
-            res = await db.execute(update(IdempotencyRecord).where(
-                IdempotencyRecord.id == existing.id, IdempotencyRecord.created_at == existing.created_at,
-                IdempotencyRecord.response.is_(None), IdempotencyRecord.committed_at.is_(None),
-            ).values(created_at=now, request_hash=digest if digest is not None else existing.request_hash)
-                .execution_options(synchronize_session=False))
-            await db.commit()
-            if res.rowcount == 1:
-                claim = Claim(record_id=existing.id, started_at=now)
-                claim._watch(db)
-                return claim
+            # Its money is in. Still running, or it died before saving the answer: never re-run.
+            died = (await db.execute(select(literal(1)).where(
+                IdempotencyRecord.id == existing.id, stale))).first() is not None
+            raise HTTPException(409, DONE_NO_ANSWER if died else IN_FLIGHT)
+        # In flight and nothing committed yet: if it has been so for STALE_AFTER (database clock),
+        # its request is taken to be dead and the key is taken over. Only one retry can win
+        # (compare on the token), and the original can't commit after this.
+        token = uuid.uuid4().hex
+        same = (IdempotencyRecord.claim_token == existing.claim_token) if existing.claim_token else (
+            IdempotencyRecord.claim_token.is_(None))
+        res = await db.execute(update(IdempotencyRecord).where(
+            IdempotencyRecord.id == existing.id, same, stale,
+            IdempotencyRecord.response.is_(None), IdempotencyRecord.committed_at.is_(None),
+        ).values(created_at=_db_now(db), claim_token=token,
+                 request_hash=digest if digest is not None else existing.request_hash)
+            .execution_options(synchronize_session=False))
+        await db.commit()
+        if res.rowcount == 1:
+            claim = Claim(record_id=existing.id, token=token)
+            claim._watch(db)
+            return claim
         raise HTTPException(409, IN_FLIGHT)
-    now = datetime.utcnow()
-    rec = IdempotencyRecord(org_id=org_id, key=key, endpoint=endpoint, request_hash=digest, created_at=now)
-    db.add(rec)
+    rec_id, token = str(uuid.uuid4()), uuid.uuid4().hex
     try:
+        await db.execute(insert(IdempotencyRecord).values(
+            id=rec_id, org_id=org_id, key=key, endpoint=endpoint, request_hash=digest,
+            claim_token=token, created_at=_db_now(db)))
         await db.commit()
     except IntegrityError:
         await db.rollback()
         raise HTTPException(409, IN_FLIGHT)
-    claim = Claim(record_id=rec.id, started_at=now)
+    claim = Claim(record_id=rec_id, token=token)
     claim._watch(db)
     return claim
 
