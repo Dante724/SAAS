@@ -13,7 +13,7 @@ import { signupTimezone } from "../lib/serverTime";
 // All share the sign-in page's look (authUi.tsx).
 
 const qs = (k: string) => new URLSearchParams(location.search).get(k) || "";
-const link = "font-medium text-primary hover:underline";
+const link = "hit44 font-medium text-primary hover:underline";   // 44px tap area on phones
 
 async function postJson(path: string, body: any) {
   const r = await fetch(path, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });

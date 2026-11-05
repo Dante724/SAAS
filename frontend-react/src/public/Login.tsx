@@ -183,7 +183,7 @@ export default function Login() {
             <div className="mt-5 flex justify-center"><Button variant="ghost" onClick={() => { setStep("password"); setErr(null); setCode(""); }} icon={<ArrowLeft size={15} />}>Back</Button></div>
           )}
           {step === "email" && (
-            <FootLink>New to Tekly? <a href="/signup" className="font-medium text-primary hover:underline">Create your shop</a></FootLink>
+            <FootLink>New to Tekly? <a href="/signup" className="hit44 font-medium text-primary hover:underline">Create your shop</a></FootLink>
           )}
         </form>
     </AuthShell>

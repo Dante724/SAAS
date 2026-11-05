@@ -126,7 +126,7 @@ export default function PublicLayout({ shop, title, right, onBack, backLabel = "
             <ShopTile shop={shop} />
             <span className="min-w-0 flex-1 truncate text-base font-semibold text-ink-primary">{shop.name}</span>
           </>) : (<>
-            <a href="/login" aria-label="Tekly" className="flex h-9 shrink-0 items-center"><TeklyLogo size={28} /></a>
+            <a href="/login" aria-label="Tekly" className="flex h-11 shrink-0 items-center"><TeklyLogo size={28} /></a>
             {title && <span className="min-w-0 flex-1 truncate border-l border-slate-200 pl-3 text-sm font-medium text-ink-secondary">{title}</span>}
           </>)}
           {right && <span className="ml-auto shrink-0">{right}</span>}
