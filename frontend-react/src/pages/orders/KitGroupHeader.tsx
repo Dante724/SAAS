@@ -1,6 +1,7 @@
 import { useEffect, useState, type ReactNode } from "react";
 import { api } from "../../api/client";
 import { M } from "../../components/Shell";
+import { buttonClass } from "../../components/Button";
 import FloatingMenu from "../../components/FloatingMenu";
 import { useMe } from "../../context/Me";
 import { promptDialog } from "../../lib/dialog";
@@ -76,13 +77,13 @@ export default function KitGroupHeader({ orderId, groupId, name, qty, mode, lock
         <div className="w-10 h-10">
           {hasMenu && (
             <button type="button" data-kit-menu={groupId} onClick={() => setMenuOpen((v) => !v)} aria-label={`Kit actions for ${name}`} aria-haspopup="menu" aria-expanded={menuOpen}
-              className="w-10 h-10 grid place-items-center rounded-lg text-ink-tertiary hover:text-ink-primary hover:bg-white"><M n="more_horiz" c="text-base" /></button>
+              className={buttonClass("ghost", "md", "w-9 !px-0 text-ink-tertiary")}><M n="more_horiz" c="text-base" /></button>
           )}
           {menuOpen && (
             <FloatingMenu anchorSel={menuSel} onClose={() => setMenuOpen(false)} width={256}>
               <div className="text-sm">
                 {canPrint && <>
-                  <div className="px-2.5 pt-1 pb-1.5 text-2xs font-semibold uppercase tracking-wide text-ink-tertiary">Customer sees</div>
+                  <div className="px-2.5 pt-1 pb-1.5 text-2xs font-semibold text-ink-tertiary">Customer sees</div>
                   {KIT_PRINT_LABELS.map((o) => (
                     <button type="button" key={o.value} role="menuitemradio" aria-checked={mode === o.value} title={o.hint}
                       onClick={pick(() => { if (o.value !== mode) save({ print_mode: o.value }, "Kit print setting saved"); })}

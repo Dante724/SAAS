@@ -2,7 +2,7 @@
 // (seamstress, auto, repair) can point right at the damage. Flattens to a new JPEG and hands the data
 // URL back; the caller uploads it and swaps the photo id, so the marks show everywhere the photo does.
 import { useEffect, useRef, useState } from "react";
-import Button from "../../components/Button";
+import Button, { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { loadFailed } from "../../lib/notice";
 
@@ -147,9 +147,9 @@ export default function PhotoAnnotator({ src, onSave, onClose }: {
           <span className="w-px h-5 bg-slate-200 mx-1" />
           <input type="range" min={2} max={16} value={width} onChange={(e) => setWidth(Number(e.target.value))} className="w-20" aria-label="Line width" />
           <button onClick={() => setStrokes((x) => x.slice(0, -1))} disabled={!strokes.length}
-            className="ml-auto flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-ink-secondary border border-slate-200 hover:bg-slate-50 disabled:opacity-40"><M n="undo" c="text-base" />Undo</button>
+            className={buttonClass("secondary", "sm", "ml-auto")}><M n="undo" c="text-base" />Undo</button>
           <button onClick={() => setStrokes([])} disabled={!strokes.length}
-            className="flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold text-rose-700 border border-rose-200 hover:bg-rose-50 disabled:opacity-40"><M n="delete" c="text-base" />Clear</button>
+            className={buttonClass("danger", "sm")}><M n="delete" c="text-base" />Clear</button>
         </div>
 
         <div className="flex-1 overflow-auto bg-slate-800 flex items-center justify-center p-3">

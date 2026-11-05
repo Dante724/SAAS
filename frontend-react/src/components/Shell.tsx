@@ -472,7 +472,7 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
             : <button aria-label="Close" onClick={onClose} className="w-7 h-7 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>}
         </div>
         <div className="p-5 space-y-4 text-sm overflow-y-auto">
-          <p className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary">Two-factor authentication</p>
+          <p className="text-2xs font-bold text-ink-tertiary">Two-factor authentication</p>
           {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
 
           {enabled && step !== "done" && (
@@ -525,7 +525,7 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
           )}
           {!forced && (
             <div className="border-t border-slate-100 pt-4">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary">Signed-in devices</p>
+              <p className="text-2xs font-bold text-ink-tertiary">Signed-in devices</p>
               <p className="mt-0.5 mb-1 text-xs text-ink-tertiary">Don't recognise one? Sign it out and change your password.</p>
               <DeviceList base="/auth/sessions" />
             </div>

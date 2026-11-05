@@ -2,8 +2,8 @@
 // on the left. On the right, a tab's own filters come first and the controls every tab shares —
 // Location, From, To — come last, in fixed-width slots, so they stay pinned to the right edge and
 // never move between tabs. A shared control that doesn't apply on a tab is greyed, not removed.
-// On a phone the shared controls lead the filter row (the tab's extras follow), and a tab with no
-// action keeps the action row's height, so nothing moves there either.
+// On a phone the shared controls lead the filter row and the tab's extras follow on a 44px row of
+// their own; a tab with no action keeps the action row's height, so nothing moves there either.
 import type { ReactNode } from "react";
 import { Toolbar } from "../../components/PageLayout";
 import DateField from "../../components/DateField";
@@ -25,7 +25,8 @@ export default function ReportsToolbar({ actions, extras, locs, locId = "", onLo
     <Toolbar
       actions={<>{actions}<span aria-hidden="true" className="h-9 w-0" /></>}
       filters={<>
-        {extras && <div className="flex flex-wrap items-center gap-2 max-sm:order-last">{extras}</div>}
+        {/* On a phone a tab's own filter gets a full-width second row at the 44px tap height. */}
+        {extras && <div className="flex flex-wrap items-center gap-2 max-sm:order-last max-sm:w-full max-sm:min-h-11 max-sm:[&>*]:min-h-11 max-sm:[&>[role=group]>*]:min-h-9">{extras}</div>}
         <div className="flex flex-wrap items-center gap-2">
           <select aria-label="Location" value={locOff ? "" : locId} onChange={(e) => onLoc?.(e.target.value)} disabled={locOff}
             className={fieldClass("pr-8 !w-44 shrink-0 disabled:cursor-not-allowed")}>

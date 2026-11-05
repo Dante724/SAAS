@@ -13,7 +13,7 @@ export default function SettingsPage({ title, sub, actions, children, wide = fal
   return (
     <div className={`${wide ? "max-w-5xl" : "max-w-3xl"} space-y-4`}>
       <div>
-        <h2 className="text-base font-semibold text-ink-primary">{title}</h2>
+        <h2 className="text-sm font-semibold text-ink-primary">{title}</h2>
         {sub && <p className="text-xs text-ink-tertiary mt-0.5">{sub}</p>}
         {actions && <div className="mt-3 flex flex-wrap items-center gap-2">{actions}</div>}
       </div>

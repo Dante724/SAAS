@@ -4,6 +4,7 @@
 import { useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { M } from "./Shell";
+import { buttonClass } from "./Button";
 
 export type SendWay = "auto" | "email" | "sms";
 
@@ -14,10 +15,10 @@ export default function SendMenu({ label, busy, onSend, primary = true, small, w
 }) {
   const [pos, setPos] = useState<{ top: number; left: number } | null>(null);
   const caret = useRef<HTMLButtonElement>(null);
-  const pad = small ? "px-2.5 py-1 text-[11px]" : "px-3.5 py-2 text-xs";
-  const tone = primary
-    ? "bg-primary text-white hover:brightness-110 border-primary"
-    : "bg-white text-ink-secondary hover:bg-slate-50 border-slate-200";
+  // One split button on the shared Button look: same height (32 small / 36), weight and colours as
+  // every other button; the caret is joined to it by a hairline.
+  const variant = primary ? "primary" : "secondary";
+  const size = small ? "sm" : "md";
   function toggle() {
     if (pos) { setPos(null); return; }
     const r = caret.current?.getBoundingClientRect();
@@ -28,12 +29,12 @@ export default function SendMenu({ label, busy, onSend, primary = true, small, w
   return (
     <div className="relative inline-flex">
       <button type="button" disabled={busy} onClick={() => onSend(undefined)}
-        className={`${pad} rounded-l-xl border font-bold flex items-center gap-1.5 whitespace-nowrap disabled:opacity-60 ${tone}`}>
+        className={buttonClass(variant, size, "rounded-r-none")}>
         <M n="send" c="text-xs" />{busy ? "Sending…" : label}
       </button>
       <button ref={caret} type="button" disabled={busy} aria-label={`${label}: choose email or text`} aria-haspopup="menu" aria-expanded={!!pos}
         onClick={toggle}
-        className={`${small ? "px-1" : "px-1.5"} rounded-r-xl border border-l-0 font-bold disabled:opacity-60 ${tone}`}>
+        className={buttonClass(variant, size, `rounded-l-none !px-1.5 ${primary ? "border-l border-white/30" : "border-l-0"}`)}>
         <M n="expand_more" c="text-sm" />
       </button>
       {pos && createPortal(<>

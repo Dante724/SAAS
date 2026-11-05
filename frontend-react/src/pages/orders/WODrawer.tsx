@@ -653,7 +653,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                         <p className="text-xs text-ink-secondary">{[dev.color, dev.asset_type].filter(Boolean).join(" · ") || dev.asset_label || "Device"}</p>
                       </div>
                     </div>
-                    <button onClick={(e) => { e.stopPropagation(); setSub("asset"); }} className="flex items-center gap-1 px-2 py-1 rounded-lg text-primary text-2xs font-semibold hover:bg-primary/10 transition-colors shrink-0"><M n="open_in_new" c="text-sm" />Details</button>
+                    <button onClick={(e) => { e.stopPropagation(); setSub("asset"); }} className={buttonClass("ghost", "sm", "shrink-0 !text-primary")}><M n="open_in_new" c="text-sm" />Details</button>
                   </div>
                   {(dev.serial || dev.imei) && (
                   <div className="mt-3 pt-2.5 border-t border-slate-100 text-xs text-ink-tertiary flex items-center justify-between">
@@ -700,7 +700,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                             <span className="flex items-center gap-1.5"><Avatar name={b.employee_name} size={20} />{b.running && <span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />}<span className="font-semibold text-ink-primary">{b.employee_name}</span></span>
                             <span className="flex items-center gap-2">
                               <span className="tabular-nums text-ink-secondary">{secHM(b.total_seconds)}{b.running ? " · running" : ""}</span>
-                              {b.running && <button type="button" onClick={() => stopEntry(b.employee_id)} className="px-1.5 py-0.5 rounded-md bg-rose-50 text-rose-600 border border-rose-200 text-2xs font-semibold hover:bg-rose-100">Stop</button>}
+                              {b.running && <button type="button" onClick={() => stopEntry(b.employee_id)} className={buttonClass("danger", "sm")}>Stop</button>}
                             </span>
                           </div>
                         ))}
@@ -750,7 +750,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                     <div className="flex items-center gap-2"><M n="draw" c="text-base text-primary" /><h5 className="text-xs font-semibold text-ink-primary">Customer signature</h5></div>
                     <img src={d.signature} alt="Customer signature" style={{ background: "#fff" }} className="mt-2 h-16 max-w-[260px] object-contain rounded-lg border border-slate-200" />
                   </div>
-                  <button onClick={() => setSigOpen(true)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">Sign again</button>
+                  <button onClick={() => setSigOpen(true)} className={buttonClass("secondary", "sm")}>Sign again</button>
                 </div>
               )}
 
@@ -953,7 +953,7 @@ function JobItems({ orderId, onFlash, onChanged }: { orderId: string; onFlash: (
           <textarea value={complaint} onChange={(e) => setComplaint(e.target.value)} rows={2} placeholder="What's wrong with it?" aria-label="Problem" className="glass-input w-full rounded-lg px-3 py-2 text-xs" />
           <div className="flex gap-2">
             <button onClick={add} disabled={!pickAsset && !label.trim()} className={buttonClass("primary", "sm")}>Add item</button>
-            <button onClick={() => setAdding(false)} className="px-3 py-1.5 rounded-lg text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>
+            <button onClick={() => setAdding(false)} className={buttonClass("ghost", "sm")}>Cancel</button>
           </div>
         </div>
       )}
@@ -983,12 +983,12 @@ function JobItems({ orderId, onFlash, onChanged }: { orderId: string; onFlash: (
                   <span className="ml-auto text-2xs text-ink-tertiary tabular-nums">{it.line_count ? `${it.line_count} line${it.line_count === 1 ? "" : "s"} · ${money(it.total)}${it.collected_at && !it.unbilled_lines ? " · invoiced" : ""}` : "No lines yet"}</span>
                   {canSplit && !pick && !it.is_primary && !it.collected_at && st.items.length > 1 && (
                     <button type="button" aria-label={`Split ${itemName(it)} into its own job`} title="Split into its own job" onClick={() => split(it)}
-                      className="w-7 h-7 rounded-lg grid place-items-center text-ink-tertiary hover:text-primary hover:bg-primary/5"><M n="call_split" c="text-sm" /></button>
+                      className={buttonClass("ghost", "sm", "w-8 !px-0 text-ink-tertiary hover:!text-primary")}><M n="call_split" c="text-sm" /></button>
                   )}
                   {!ro && !pick && !it.is_primary && (
                     <button type="button" aria-label={`Remove ${itemName(it)}`} title="Remove from this job"
                       onClick={async () => { if (await confirmDialog(`Remove ${itemName(it)} from this job? Its services and parts stay on the job, marked "whole job".`, { title: "Remove item", confirmLabel: "Remove", danger: true })) call(() => api.del(`/orders/${orderId}/items/${it.id}`), "Item removed"); }}
-                      className="w-7 h-7 rounded-lg grid place-items-center text-ink-tertiary hover:text-rose-600 hover:bg-rose-50"><M n="delete" c="text-sm" /></button>
+                      className={buttonClass("ghost", "sm", "w-8 !px-0 text-ink-tertiary hover:!text-rose-700 hover:!bg-rose-50")}><M n="delete" c="text-sm" /></button>
                   )}
                 </div>
               </div>
@@ -1325,7 +1325,7 @@ function CustomLineForm({ orderId, forItem, kitId, onFlash, onClose, onAdded }: 
         </div>
       )}
       <div className="flex justify-end gap-2">
-        <button type="button" onClick={onClose} className="px-3 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Cancel</button>
+        <button type="button" onClick={onClose} className={btnSecondary}>Cancel</button>
         <button type="button" onClick={submit} disabled={busy || !name.trim()} className={buttonClass("primary")}>{busy ? "Adding…" : save && canSave ? "Add and save" : "Add"}</button>
       </div>
     </div>
@@ -1492,7 +1492,7 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, onFla
             _runningLine(l.id)
               ? <span className="flex items-center gap-1.5 text-xs font-medium text-emerald-700"><span className="w-1.5 h-1.5 rounded-full bg-emerald-500 animate-pulse" />Running</span>
               : <button type="button" onClick={() => onClockIn(l.id)} title={`Clock into ${l.description || "this line"}`}
-                  className="h-8 px-2.5 rounded-lg border border-slate-200 text-xs font-medium text-ink-secondary hover:bg-slate-50 flex items-center gap-1 whitespace-nowrap"><M n="play_arrow" c="text-sm" />Clock in</button>
+                  className={buttonClass("secondary", "sm")}><M n="play_arrow" c="text-sm" />Clock in</button>
           )}
         </div>
         <div className="text-right">
@@ -1521,7 +1521,7 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, onFla
         <div className="w-10 h-10">
           {canRemove(l) && (
             <button type="button" onClick={() => removeLine(l)} aria-label={`Remove ${l.description || "line"}`} title="Remove from job"
-              className="w-10 h-10 grid place-items-center rounded-lg text-ink-tertiary hover:text-rose-600 hover:bg-rose-50"><M n="delete" c="text-base" /></button>
+              className={buttonClass("ghost", "md", "w-9 !px-0 text-ink-tertiary hover:!text-rose-700 hover:!bg-rose-50")}><M n="delete" c="text-base" /></button>
           )}
         </div>
         {/* 144av — assignee + booked/actual on service & labour lines only */}
@@ -1550,7 +1550,7 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, onFla
                     const first = (id?: string | null) => empName(id).split(" ")[0];
                     return (
                       <div className="text-sm">
-                        <div className="px-2.5 pt-1 pb-1.5 text-2xs font-semibold uppercase tracking-wide text-ink-tertiary">Technician for this line</div>
+                        <div className="px-2.5 pt-1 pb-1.5 text-2xs font-semibold text-ink-tertiary">Technician for this line</div>
                         {(emps || []).length > 6 && (
                           <input autoFocus value={techQuery} onChange={(e) => setTechQuery(e.target.value)} placeholder="Search technicians"
                             onKeyDown={(e) => { if (e.key === "Enter" && list[0]) pickTech(list[0].id); }}
@@ -1681,7 +1681,7 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, onFla
               </select>
             )}
             {(can("can_add_custom_product") || can("can_add_custom_service")) && (
-              <button type="button" onClick={() => setCustom(true)} className="h-9 px-2.5 rounded-xl text-xs font-semibold text-primary hover:bg-primary/5 flex items-center gap-1.5 whitespace-nowrap"><M n="add" c="text-sm" />Custom line</button>
+              <button type="button" onClick={() => setCustom(true)} className={buttonClass("ghost", "md", "!text-primary")}><M n="add" c="text-sm" />Custom line</button>
             )}
           </div>
         )}
@@ -1811,7 +1811,7 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
           <div key={c.id} className={`${sectionCard} p-4 space-y-3.5`}>
             <div className="flex items-center justify-between border-b border-slate-100 pb-2">
               <div className="flex items-center gap-2.5 min-w-0"><ProgressRing pct={pct} size={28} label={false} /><div className="min-w-0"><h4 className="text-sm font-semibold text-ink-primary truncate">{c.title || c.name || "Checklist"}</h4><p className="text-xs text-ink-tertiary tabular-nums">{done} of {items.length} done</p></div></div>
-              <div className="flex items-center gap-2"><span className={`text-xs font-semibold tabular-nums ${pct === 100 ? "text-emerald-700" : "text-ink-tertiary"}`}>{pct}%</span><button aria-label="Remove" onClick={() => removeCl(c.id)} title="Remove" className="w-7 h-7 rounded-lg grid place-items-center text-ink-tertiary hover:text-rose-600 hover:bg-rose-50"><M n="delete" c="text-sm" /></button></div>
+              <div className="flex items-center gap-2"><span className={`text-xs font-semibold tabular-nums ${pct === 100 ? "text-emerald-700" : "text-ink-tertiary"}`}>{pct}%</span><button aria-label="Remove" onClick={() => removeCl(c.id)} title="Remove" className={buttonClass("ghost", "sm", "w-8 !px-0 text-ink-tertiary hover:!text-rose-700 hover:!bg-rose-50")}><M n="delete" c="text-sm" /></button></div>
             </div>
             <div className="space-y-2 text-xs font-medium text-ink-primary">
               {items.map((i: any) => {
@@ -2018,7 +2018,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
         return (
           <section aria-label="Balance" className={`${sectionCard} relative overflow-hidden p-6`}>
             <div aria-hidden="true" className={`absolute inset-x-0 top-0 h-0.5 ${tone.edge}`} />
-            <span className="text-2xs font-medium uppercase tracking-[0.08em] text-ink-tertiary">Still to pay</span>
+            <span className="text-2xs font-medium text-ink-tertiary">Still to pay</span>
             <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-2">
               <h2 className={`flex items-start tabular-nums ${state === "due" ? "text-ink-primary" : "text-ink-tertiary"}`} aria-label={`Still to pay ${shown}`}>
                 {m ? <><span className="mt-1.5 mr-0.5 text-xl font-medium text-ink-tertiary">{m[1].trim()}</span><span className="text-hero leading-none font-medium tracking-[-0.035em]">{m[2]}</span></>
@@ -2059,9 +2059,9 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
             ) : (
               <div className="flex flex-wrap items-center gap-1 pl-2.5 pr-1 h-9 rounded-xl border border-slate-200 bg-slate-50 text-xs">
                 <span className="font-semibold text-ink-secondary mr-1">Payment link · {linkStatusLabel(link.status)}</span>
-                <button onClick={copyLink} title="Copy the payment link" className="h-7 px-2 rounded-lg font-semibold text-ink-primary hover:bg-white">Copy</button>
-                <button onClick={() => createLink(true)} title="Make a new link (the old one stops working)" className="h-7 px-2 rounded-lg font-semibold text-ink-primary hover:bg-white">New link</button>
-                <button onClick={revokeLink} title="Stop this link working" className="h-7 px-2 rounded-lg font-semibold text-rose-600 hover:bg-white">Revoke</button>
+                <button onClick={copyLink} title="Copy the payment link" className={buttonClass("ghost", "sm")}>Copy</button>
+                <button onClick={() => createLink(true)} title="Make a new link (the old one stops working)" className={buttonClass("ghost", "sm")}>New link</button>
+                <button onClick={revokeLink} title="Stop this link working" className={buttonClass("ghost", "sm", "!text-rose-700")}>Revoke</button>
               </div>
             )}
           </div>
@@ -2079,7 +2079,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
           {[25, 50, 100].map((pct) => (
             <button key={pct} type="button" disabled={depBusy} onClick={() => requestDeposit({ percent: pct })} className={btnSecondary}>{pct}%</button>
           ))}
-          {dep > 0 && <button type="button" disabled={depBusy} onClick={() => requestDeposit({ amount: 0 })} className="h-9 px-3 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50">Clear</button>}
+          {dep > 0 && <button type="button" disabled={depBusy} onClick={() => requestDeposit({ amount: 0 })} className={buttonClass("ghost", "md", "!text-rose-700 hover:!bg-rose-50")}>Clear</button>}
         </div>
       </Section>}
 
@@ -2148,7 +2148,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
               <AccountPicker accounts={allAccts} paymentOption={method as PaymentOption} locationId={ctx.location_id} value={account} onChange={setAccount} onCreated={addAccount} />
             )}
             {modal === "pay" && method === "card" && can("can_take_card_payments") && (
-              <button onClick={() => setOnReader(true)} disabled={!(parseFloat(amount) > 0)} className="w-full py-2 rounded-xl border border-primary/30 bg-white text-primary text-xs font-semibold hover:bg-blue-50 disabled:opacity-50 flex items-center justify-center gap-2"><M n="contactless" c="text-base" />Charge on reader</button>
+              <button onClick={() => setOnReader(true)} disabled={!(parseFloat(amount) > 0)} className={buttonClass("secondary", "md", "w-full !text-primary")}><M n="contactless" c="text-base" />Charge on reader</button>
             )}
             {/* Like Orderry: what prints by itself is chosen where it happens. Shop-wide, kept until changed. */}
             {modal === "pay" && (

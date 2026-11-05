@@ -2,6 +2,7 @@ import { useEffect, useRef, useState } from "react";
 import { loadFailed } from "../../lib/notice";
 import { M } from "../../components/Shell";
 import { buttonClass } from "../../components/Button";
+import Drawer from "../../components/Drawer";
 import SkeletonRows from "../../components/SkeletonRows";
 import ScanButton from "../../components/ScanButton";
 import { api, openAuthedDoc } from "../../api/client";
@@ -131,21 +132,22 @@ export default function StocktakeDrawer({ id, onClose, onDone }:
   const choice = (on: boolean) => `flex-1 rounded-lg border px-3 py-2 text-xs font-semibold text-left ${on ? "border-primary bg-primary/5 text-primary" : "border-slate-200 text-ink-secondary"}`;
   const fld = "w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2";
   const lbl = "block text-2xs font-semibold text-ink-tertiary mb-1";
-  const btnGhost = "px-3 py-2 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 font-semibold text-xs flex items-center gap-1 disabled:opacity-50";
+  const btnGhost = buttonClass("secondary", "md");
 
   return (
-    <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
-      <div className="relative w-[840px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col">
-        <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
-          <h2 className="text-title font-semibold text-ink-primary flex items-center gap-2">{stId ? (posted ? "Stock take (posted)" : "Count in progress") : "New stock take"}
+    <Drawer size="lg" label={stId ? (posted ? "Stock take (posted)" : "Count in progress") : "New stock take"} onClose={onClose}
+      title={<span className="flex items-center gap-2">{stId ? (posted ? "Stock take (posted)" : "Count in progress") : "New stock take"}
             {sheet && !posted && <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200/70 text-2xs font-semibold">Draft</span>}
             {sheet?.blind && <span className="px-2 py-0.5 rounded-full bg-slate-100 text-ink-secondary border border-slate-200 text-2xs font-semibold">Blind</span>}
             {sheet?.by_bin && <span className="px-2 py-0.5 rounded-full bg-blue-50 text-primary border border-blue-100 text-2xs font-semibold">Bin by bin</span>}
-          </h2>
-          <button aria-label="Close" onClick={onClose} className={buttonClass("ghost", "md", "w-9 !px-0 shrink-0 text-ink-tertiary")}><M n="close" c="text-base" /></button>
-        </div>
-        <div className="flex-1 overflow-y-auto p-5 space-y-4">
+      </span>}
+      footer={<>
+          {!stId && <button onClick={start} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Starting…" : "Start count"}</button>}
+          {stId && !posted && !posting && <button onClick={() => setPosting(true)} disabled={busy || !sheet} className={buttonClass("primary", "md")}>Post count…</button>}
+          {stId && !posted && posting && <button onClick={post} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Posting…" : "Post and adjust stock"}</button>}
+          <button onClick={posting ? () => setPosting(false) : stId && !posted ? onDone : onClose} className={buttonClass("secondary", "md")}>{posting ? "Back" : posted ? "Close" : stId ? "Save draft and close" : "Cancel"}</button>
+          {stId && !posted && !posting && <button onClick={discard} className={buttonClass("ghost", "md", "ml-auto !text-rose-700 hover:!bg-rose-50")}>Discard draft</button>}
+      </>}>
           {err && <div role="alert" className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2 whitespace-pre-line">{err}</div>}
 
           {!stId ? (
@@ -244,15 +246,6 @@ export default function StocktakeDrawer({ id, onClose, onDone }:
               )}
             </>
           )}
-        </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
-          {!stId && <button onClick={start} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Starting…" : "Start count"}</button>}
-          {stId && !posted && !posting && <button onClick={() => setPosting(true)} disabled={busy || !sheet} className={buttonClass("primary", "md")}>Post count…</button>}
-          {stId && !posted && posting && <button onClick={post} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Posting…" : "Post and adjust stock"}</button>}
-          <button onClick={posting ? () => setPosting(false) : stId && !posted ? onDone : onClose} className={buttonClass("secondary", "md")}>{posting ? "Back" : posted ? "Close" : stId ? "Save draft and close" : "Cancel"}</button>
-          {stId && !posted && !posting && <button onClick={discard} className="ml-auto px-3 py-2 rounded-lg text-rose-600 hover:bg-rose-50 font-semibold text-xs">Discard draft</button>}
-        </div>
-      </div>
-    </div>
+    </Drawer>
   );
 }

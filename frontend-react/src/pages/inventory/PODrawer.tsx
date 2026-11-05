@@ -2,6 +2,7 @@ import { humanize } from "../../lib/humanize";
 import { Fragment, useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { buttonClass } from "../../components/Button";
+import Drawer from "../../components/Drawer";
 import { api, openAuthedDoc } from "../../api/client";
 import DateField from "../../components/DateField";
 import { Product, money } from "./types";
@@ -272,16 +273,10 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
   };
 
   return (
-    <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
-      <div className="relative h-full w-full max-w-[840px] bg-white shadow-clay-drawer flex flex-col">
-        {/* header */}
-        <div className="px-5 py-4 border-b border-slate-200 flex items-start justify-between">
-          <div className="flex items-center gap-2.5">
-            
-            <div>
-              <div className="flex items-center gap-2">
-                <h2 className="text-base font-semibold text-ink-primary leading-tight tabular-nums">{po?.po_number || "Purchase order"}</h2>
+    <Drawer size="lg" label={po?.po_number || "Purchase order"} onClose={onClose}
+      title={<span className="tabular-nums">{po?.po_number || "Purchase order"}</span>}
+      sub={<div className="space-y-1">
+        <div className="flex flex-wrap items-center gap-2">
                 {/* 144an — manual, configurable WORKFLOW stage (primary). Set from the pipeline. */}
                 {po && (() => {
                   const wf = pipeline.find((s) => s.key === po.workflow_status);
@@ -319,15 +314,14 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                   <span className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-2xs font-semibold border ${MATCH[po.match.status].cls}`}>
                     <M n={MATCH[po.match.status].icon} c="text-xs" />{MATCH[po.match.status].label}</span>
                 )}
-              </div>
-              <span className="text-2xs text-ink-tertiary">{[po?.supplier?.name, po?.ordered_at && `ordered ${d(po.ordered_at)}`, po?.expected_at && `expected ${d(po.expected_at)}`].filter(Boolean).join(" · ")}</span>
-            </div>
-          </div>
-          <div className="flex items-center gap-1">
-            {po?.editable && !editing && <button aria-label="Edit PO" onClick={startEdit} disabled={busy} title="Edit PO" className="w-8 h-8 rounded-lg grid place-items-center text-ink-tertiary hover:text-primary hover:bg-slate-100"><M n="edit" c="text-base" /></button>}
+        </div>
+        <span className="text-2xs text-ink-tertiary">{[po?.supplier?.name, po?.ordered_at && `ordered ${d(po.ordered_at)}`, po?.expected_at && `expected ${d(po.expected_at)}`].filter(Boolean).join(" · ")}</span>
+      </div>}
+      actions={<>
+            {po?.editable && !editing && <button aria-label="Edit PO" onClick={startEdit} disabled={busy} title="Edit PO" className={buttonClass("ghost", "md", "w-9 !px-0 text-ink-tertiary hover:!text-primary")}><M n="edit" c="text-base" /></button>}
             {po && !received && po.status !== "cancelled" && !editing && (
               <div className="relative">
-                <button aria-label="Send to supplier" onClick={() => setSendMenu((v) => !v)} disabled={busy} title="Send to supplier" className="w-8 h-8 rounded-lg grid place-items-center text-ink-tertiary hover:text-primary hover:bg-slate-100"><M n="send" c="text-base" /></button>
+                <button aria-label="Send to supplier" onClick={() => setSendMenu((v) => !v)} disabled={busy} title="Send to supplier" className={buttonClass("ghost", "md", "w-9 !px-0 text-ink-tertiary hover:!text-primary")}><M n="send" c="text-base" /></button>
                 {sendMenu && (
                   <div className="absolute right-0 top-9 z-10 w-40 bg-raised rounded-xl shadow-clay-card border border-slate-200/80 py-1 text-xs">
                     {[["email", "Email"], ["sms", "SMS"], ["whatsapp", "WhatsApp"]].map(([c, l]) => (
@@ -337,13 +331,42 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                 )}
               </div>
             )}
-            {po?.editable && !editing && <button aria-label="Cancel PO" onClick={cancelPo} disabled={busy} title="Cancel PO" className="w-8 h-8 rounded-lg grid place-items-center text-ink-tertiary hover:text-rose-600 hover:bg-rose-50"><M n="cancel" c="text-base" /></button>}
-            <button aria-label="Print / PDF" onClick={() => openAuthedDoc(`/print/purchase-order/${poId}`).catch(() => flash("Could not open PDF"))} title="Print / PDF" className="w-8 h-8 rounded-lg grid place-items-center text-ink-tertiary hover:text-primary hover:bg-slate-100"><M n="print" c="text-base" /></button>
-            <button aria-label="Close" onClick={onClose} className={buttonClass("ghost", "md", "w-9 !px-0 shrink-0 text-ink-tertiary")}><M n="close" c="text-lg" /></button>
+            {po?.editable && !editing && <button aria-label="Cancel PO" onClick={cancelPo} disabled={busy} title="Cancel PO" className={buttonClass("ghost", "md", "w-9 !px-0 text-ink-tertiary hover:!text-rose-700 hover:!bg-rose-50")}><M n="cancel" c="text-base" /></button>}
+            <button aria-label="Print / PDF" onClick={() => openAuthedDoc(`/print/purchase-order/${poId}`).catch(() => flash("Could not open PDF"))} title="Print / PDF" className={buttonClass("ghost", "md", "w-9 !px-0 text-ink-tertiary hover:!text-primary")}><M n="print" c="text-base" /></button>
+      </>}
+      footer={po && (editing || canReceive || received || st === "cancelled" || st === "canceled") ? <>
+        {po && editing && (
+          <div className="w-full flex items-center gap-2">
+            <button onClick={saveEdit} disabled={busy} className={buttonClass("primary", "md")}><M n="check" c="text-sm" />{busy ? "Saving…" : "Save changes"}</button>
+            <button onClick={() => { setEditing(false); setEd(null); }} className={buttonClass("secondary", "md")}>Cancel</button>
           </div>
-        </div>
-
-        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-5">
+        )}
+        {po && canReceive && !editing && (
+          <div className="w-full flex items-center gap-3">
+            <div className="flex items-center gap-2">
+              <button onClick={() => receive(false)} disabled={busy || toReceive === 0}
+                className={buttonClass("primary", "md")}>
+                <M n="inventory" c="text-sm" />{busy ? "Receiving…" : `Receive ${toReceive || ""}`.trim()}
+              </button>
+              <button onClick={() => receive(true)} disabled={busy}
+                className={buttonClass("secondary", "md")}>
+                <M n="done_all" c="text-sm" />Receive all
+              </button>
+            </div>
+            <div className="ml-auto flex items-center gap-3">
+              <span className="text-2xs text-ink-tertiary">{outstanding} outstanding · receiving {toReceive}</span>
+              {/* 144ar — freight billed with THIS delivery, capitalised into these units' cost */}
+              <label className="flex items-center gap-2 text-2xs text-ink-secondary" title="Shipping billed with this delivery is added to the cost of the products received now">
+                <span className="flex items-center gap-1"><M n="local_shipping" c="text-sm text-ink-tertiary" />Shipping on this delivery</span>
+                <input type="number" min={0} value={shipFreight} onChange={(e) => setShipFreight(e.target.value)}
+                  placeholder="0.00" className="glass-input rounded-xl px-3 py-2 w-28 text-right tabular-nums text-xs" />
+              </label>
+            </div>
+          </div>
+        )}
+        {po && received && <div className="w-full text-2xs text-emerald-700 font-semibold flex items-center gap-1.5"><M n="check_circle" c="text-sm" />Fully received {d(po.received_at)}. Stock added to inventory.</div>}
+        {po && (st === "cancelled" || st === "canceled") && <div className="w-full text-2xs text-rose-600 font-semibold flex items-center gap-1.5"><M n="cancel" c="text-sm" />This purchase order was cancelled.</div>}
+      </> : undefined}>
           {!po ? <div className="text-sm text-ink-tertiary">Loading…</div> : editing && ed ? (
             /* ── EDIT MODE (PATCH /po) ── */
             <div className="space-y-4">
@@ -593,44 +616,7 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
 
             {po.notes && <div className="text-xs text-ink-secondary"><span className="font-semibold text-ink-tertiary text-2xs block mb-0.5">Notes</span>{po.notes}</div>}
           </>}
-        </div>
-
-        {/* edit action bar */}
-        {po && editing && (
-          <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
-            <button onClick={saveEdit} disabled={busy} className={buttonClass("primary", "md")}><M n="check" c="text-sm" />{busy ? "Saving…" : "Save changes"}</button>
-            <button onClick={() => { setEditing(false); setEd(null); }} className={buttonClass("secondary", "md")}>Cancel</button>
-          </div>
-        )}
-        {/* receive action bar */}
-        {po && canReceive && !editing && (
-          <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-3">
-            <div className="flex items-center gap-2">
-              <button onClick={() => receive(false)} disabled={busy || toReceive === 0}
-                className={buttonClass("primary", "md")}>
-                <M n="inventory" c="text-sm" />{busy ? "Receiving…" : `Receive ${toReceive || ""}`.trim()}
-              </button>
-              <button onClick={() => receive(true)} disabled={busy}
-                className={buttonClass("secondary", "md")}>
-                <M n="done_all" c="text-sm" />Receive all
-              </button>
-            </div>
-            <div className="ml-auto flex items-center gap-3">
-              <span className="text-2xs text-ink-tertiary">{outstanding} outstanding · receiving {toReceive}</span>
-              {/* 144ar — freight billed with THIS delivery, capitalised into these units' cost */}
-              <label className="flex items-center gap-2 text-2xs text-ink-secondary" title="Shipping billed with this delivery is added to the cost of the products received now">
-                <span className="flex items-center gap-1"><M n="local_shipping" c="text-sm text-ink-tertiary" />Shipping on this delivery</span>
-                <input type="number" min={0} value={shipFreight} onChange={(e) => setShipFreight(e.target.value)}
-                  placeholder="0.00" className="glass-input rounded-xl px-3 py-2 w-28 text-right tabular-nums text-xs" />
-              </label>
-            </div>
-          </div>
-        )}
-        {po && received && <div className="px-6 py-3 border-t border-slate-100 text-2xs text-emerald-700 font-semibold flex items-center gap-1.5"><M n="check_circle" c="text-sm" />Fully received {d(po.received_at)}. Stock added to inventory.</div>}
-        {po && (st === "cancelled" || st === "canceled") && <div className="px-6 py-3 border-t border-slate-100 text-2xs text-rose-600 font-semibold flex items-center gap-1.5"><M n="cancel" c="text-sm" />This purchase order was cancelled.</div>}
-
         {toast && <div className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold h-9 px-3.5 rounded-xl shadow-clay-card">{toast}</div>}
-      </div>
-    </div>
+    </Drawer>
   );
 }

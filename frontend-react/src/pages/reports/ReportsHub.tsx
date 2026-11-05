@@ -1,7 +1,7 @@
 import SkeletonRows from "../../components/SkeletonRows";
 import PageSummary, { type SummaryStat } from "../../components/PageSummary";
 import { downloadSheet } from "../../lib/downloadSheet";
-import { humanize } from "../../lib/humanize";
+import { humanize, sentenceCase } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
@@ -640,7 +640,7 @@ export default function ReportsHub() {
             {!cat && <div className="p-3 text-xs text-ink-tertiary">Loading…</div>}
             {cat?.tabs.map((t) => (
               <div key={t.name} className="mb-2">
-                <div className="text-2xs font-semibold text-ink-tertiary px-2 py-1.5">{t.name}</div>
+                <div className="text-2xs font-semibold text-ink-tertiary px-2 py-1.5">{sentenceCase(t.name)}</div>
                 {t.reports.map((r) => (
                   <button key={r.key} onClick={() => run(r.key)} title={r.title} aria-current={active === r.key || undefined} className={`w-full text-left px-2.5 py-2 rounded-lg text-xs font-medium transition-colors ${active === r.key ? "bg-primary/10 text-primary" : "text-ink-secondary hover:bg-slate-100"}`}><span className="block leading-snug">{r.title}</span></button>
                 ))}
