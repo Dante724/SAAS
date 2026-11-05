@@ -463,7 +463,7 @@ export default function InventoryHub() {
             {savedViews.map((v) => (
               <span key={v.name} className={`group inline-flex items-center h-8 rounded-full ring-1 ring-inset font-semibold ${viewActive(v) ? "bg-primary/10 text-primary ring-primary/20" : "bg-white text-ink-secondary ring-slate-200 hover:bg-slate-50"}`}>
                 <button onClick={() => applyView(v)} className="pl-3 pr-1.5 py-1.5">{v.name}</button>
-                <button aria-label="Delete view" onClick={() => deleteView(v.name)} title="Delete view" className="pr-2 pl-0.5 py-1.5 text-ink-tertiary hover:text-rose-600"><M n="close" c="text-[13px]" /></button>
+                <button aria-label="Delete view" onClick={() => deleteView(v.name)} title="Delete view" className="pr-2 pl-0.5 py-1.5 text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>
               </span>
             ))}
             <button onClick={saveCurrentView} className={buttonClass("ghost", "sm")}><M n="bookmark_add" c="text-sm" />Save view</button>
@@ -720,7 +720,7 @@ export default function InventoryHub() {
             <input type="number" min={1} max={500} value={labelCopies} onChange={(e) => setLabelCopies(Math.max(1, +e.target.value || 1))} className="w-full glass-input rounded-xl px-3 py-2 text-xs mb-4" />
             {labelErr && <div role="alert" className="mb-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{labelErr}</div>}
             <div className="flex items-center gap-2">
-              <button onClick={printLabels} disabled={!labelTplId} className={buttonClass("primary", "md")}><M n="print" c="text-[15px]" /> Print {labelSelCount * labelCopies} label{labelSelCount * labelCopies === 1 ? "" : "s"}</button>
+              <button onClick={printLabels} disabled={!labelTplId} className={buttonClass("primary", "md")}><M n="print" c="text-md" /> Print {labelSelCount * labelCopies} label{labelSelCount * labelCopies === 1 ? "" : "s"}</button>
               <button onClick={() => setLabelDlg(false)} className={buttonClass("secondary", "md")}>Cancel</button>
             </div>
           </div>
@@ -1259,7 +1259,7 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
                         <span className="font-semibold text-ink-secondary">Serials / IMEIs</span>
                         {missing > 0 ? <span className="text-amber-700 font-semibold">Needs {missing} more</span>
                           : units !== Number(r.qty) ? <span className="text-rose-700 font-semibold">Quantity must be a whole number</span>
-                          : <span className="text-emerald-700 font-semibold flex items-center gap-0.5"><M n="check" c="text-[13px]" />All units entered</span>}
+                          : <span className="text-emerald-700 font-semibold flex items-center gap-0.5"><M n="check" c="text-sm" />All units entered</span>}
                       </div>
                       <SerialEntry value={r.serials} target={units} partId={isNew ? null : r.chosen}
                         others={review.flatMap((x, j) => j !== i && rowSerialized(x) ? x.serials : [])}
@@ -1390,7 +1390,7 @@ function PartsToOrderModal({ onClose, onCreated }: { onClose: () => void; onCrea
             <div key={k} className="rounded-xl border border-slate-200 overflow-hidden">
               <div className="flex items-center justify-between px-3 py-2 bg-slate-50/70 border-b border-slate-100">
                 <div className="text-xs font-semibold text-ink-primary flex items-center gap-1.5"><M n="local_shipping" c="text-sm text-ink-tertiary" />{g.name}<span className="text-ink-tertiary font-normal">· {g.rows.length} line{g.rows.length === 1 ? "" : "s"}</span></div>
-                <button onClick={() => createPO(g)} disabled={!!busy} className={buttonClass("primary", "md")}><M n="receipt_long" c="text-[13px]" />{busy === g.sid ? "Creating…" : "Create PO"}</button>
+                <button onClick={() => createPO(g)} disabled={!!busy} className={buttonClass("primary", "md")}><M n="receipt_long" c="text-sm" />{busy === g.sid ? "Creating…" : "Create PO"}</button>
               </div>
               <table className="w-full text-left text-xs">
                 <thead className="text-2xs font-semibold text-ink-tertiary "><tr><th className="py-1.5 px-3">Product</th><th className="py-1.5 px-2 text-right">Need</th><th className="py-1.5 px-2 text-right">Have</th><th className="py-1.5 px-2 text-right">On order</th><th className="py-1.5 px-2 text-right">Order</th><th className="py-1.5 px-3">Jobs</th></tr></thead>

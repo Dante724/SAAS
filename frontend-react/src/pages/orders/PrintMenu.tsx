@@ -149,7 +149,7 @@ export default function PrintMenu({ orderId, status, canInvoices = true, onStick
   // Which listed document the "List every kit item" switch belongs to: the default work order (or estimate).
   const itemisedAnchor = (listed.find((t) => t.doc_type === itemisedType && t.is_default) || listed.find((t) => t.doc_type === itemisedType))?.id;
   const row = "flex w-full min-h-10 items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-ink-primary hover:bg-slate-50";
-  const tag = "shrink-0 rounded-full px-1.5 py-px text-[10px] font-semibold";
+  const tag = "shrink-0 rounded-full px-1.5 py-px text-2xs font-semibold";
   const printRow = (id: string, label: string, opts?: { auto?: boolean }) => (
     <button key={id} type="button" onClick={() => print(id)} className={row}>
       <span className="min-w-0 flex-1 truncate">{label}</span>

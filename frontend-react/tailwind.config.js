@@ -14,6 +14,7 @@ export default {
       colors: {
         // Printed-document previews (receipts, estimates) stay white paper in dark mode too.
         paper: "#ffffff",
+        camera: "#0b1020",   // the camera viewfinder behind a live scan (Tekly Go)
         surface: "#faf8ff",
         "surface-dim": "#cdd9ff",
         "surface-bright": "#faf8ff",
@@ -62,6 +63,7 @@ export default {
         md: ["15px", { lineHeight: "22px" }],
         title: ["17px", { lineHeight: "24px" }],
         display: ["28px", { lineHeight: "34px" }],
+        hero: ["44px", { lineHeight: "1" }],   // the one big amount on a job (work-order drawer)
         "go-display": ["28px", { lineHeight: "34px" }],
         "go-title": ["20px", { lineHeight: "25px" }],
         "go-body": ["16px", { lineHeight: "22px" }],
