@@ -329,8 +329,12 @@ export default function WorkOrdersHub() {
   return (
     <Shell title="Work orders">
       <PageLayout>
-        {/* Toolbar: actions on the left (main one first), the view switch, then filters and search on
-            the right. Every control stays in place on every view; what doesn't apply is greyed out. */}
+        <PageSummary stats={kpiStats} />
+
+        {/* One card: the toolbar (actions on the left, main one first; view switch; filters and search on
+            the right) and the status chips under it. Every control stays in place on every view; what
+            doesn't apply is greyed out, so nothing slides. */}
+        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4 space-y-3.5">
         <Toolbar
           actions={<>
             <Gate perm="can_create_tickets"><Button variant="primary" onClick={() => setCreate("order")} icon={<M n="add" c="text-sm" />}>New work order</Button></Gate>
@@ -339,9 +343,9 @@ export default function WorkOrdersHub() {
             <Button onClick={openArchived} aria-label="Archived" title="Archived" icon={<M n="inventory" c="text-sm" />}><span className="hidden 2xl:inline">Archived</span></Button>
           </>}
           view={<Tabs look="segmented" label="View" value={view} onChange={setView} tabs={[
-            { id: "table", label: "Table", icon: <M n="table_rows" c="text-xs" /> },
-            { id: "board", label: "Board", icon: <M n="view_kanban" c="text-xs" /> },
-            { id: "scheduler", label: "Scheduler", icon: <M n="calendar_month" c="text-xs" /> },
+            { id: "table", label: <span className="sr-only 2xl:not-sr-only">Table</span>, icon: <M n="table_rows" c="text-xs" /> },
+            { id: "board", label: <span className="sr-only 2xl:not-sr-only">Board</span>, icon: <M n="view_kanban" c="text-xs" /> },
+            { id: "scheduler", label: <span className="sr-only 2xl:not-sr-only">Scheduler</span>, icon: <M n="calendar_month" c="text-xs" /> },
           ]} />}
           filters={<>
             <Button data-wo-menu="filter" aria-expanded={menu === "filter"} aria-label="Filter" title="Filter" onClick={() => toggleMenu("filter")} className={activeFacets ? "!bg-primary/10 !text-primary !border-primary/30" : ""} icon={<M n="filter_list" c="text-sm" />}>
@@ -393,12 +397,11 @@ export default function WorkOrdersHub() {
             </FloatingMenu>
           )}
 
-        <PageSummary stats={kpiStats} />
-
         {/* Status chips. The scheduler shows every scheduled job in its date range, so there they stay
             in place but greyed out: the list below never jumps up or down when the view changes. */}
-        <Tabs look="chips" label="Status" value={chipTabs.find((c) => c.k === filter)?.id ?? "__all"} onChange={(id) => setFilter(chipTabs.find((c) => c.id === id)?.k ?? null)}
+        <Tabs look="chips" label="Status" className="pt-3.5 border-t border-slate-100" value={chipTabs.find((c) => c.k === filter)?.id ?? "__all"} onChange={(id) => setFilter(chipTabs.find((c) => c.id === id)?.k ?? null)}
           tabs={chipTabs.map((c) => ({ id: c.id, label: <>{c.name}{" "}</>, count: c.n, disabled: onScheduler }))} />
+        </div>
 
         {/* Bulk action bar */}
         {sel.size > 0 && (

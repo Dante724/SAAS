@@ -32,11 +32,9 @@ import { useMe, hasFeature } from "../../context/Me";
 import { alertDialog, confirmDialog, promptDialog } from "../../lib/dialog";
 import { type BlockedItem, keptMessage, splitBlocked, writeOffPrompt } from "./archiveBlocked";
 import { printHtmlInFrame } from "../../lib/safeHtml";
-import { MoreMenu, SearchBox } from "../invoices/billing";
 import PageLayout, { Toolbar } from "../../components/PageLayout";
 import Tabs from "../../components/Tabs";
 import { IconButton, buttonClass } from "../../components/Button";
-import { fieldClass } from "../../components/Field";
 import { theadRowClass } from "../../components/Table";
 import { humanize } from "../../lib/humanize";
 import { fmtDay, fmtServerTime } from "../../lib/serverTime";
@@ -45,6 +43,7 @@ import { RowMenu } from "../company/CompanyHub";
 import { usePhone } from "../catalog/CatalogToolbar";
 import { loadFailed } from "../../lib/notice";
 import { clickableRow } from "../../lib/clickable";
+import { MoreMenu, inputCls } from "../invoices/billing";
 
 type Tab = "stock" | "devices" | "services" | "bundles" | "purchase-orders"
   | "postings" | "reservations" | "conversions" | "transfers" | "stock-takes" | "write-offs" | "returns" | "bins";
@@ -59,7 +58,8 @@ const TABS: { id: Tab; label: string; count?: string }[] = [
 
 // A set filter reads as active in the primary tint; an unset one stays neutral.
 // A filter that is set reads as active in the primary tint (field kit size, 36px).
-const filterSel = (on: boolean) => fieldClass(`pr-8 !w-auto max-w-[13rem] text-xs font-semibold cursor-pointer ${on ? "!bg-primary/10 !text-primary !border-primary/30" : "text-ink-secondary"}`);
+// The compact filter dropdowns (restored: the owner prefers these to full-size form fields).
+const filterSel = (on: boolean) => `h-8 px-3 text-xs font-semibold rounded-lg border cursor-pointer ${on ? "bg-primary/10 text-primary border-primary/30" : "bg-white text-ink-secondary border-slate-200 hover:bg-slate-50"}`;
 
 // A raw API value ("partially_received", "IN") as sentence-case words ("Partially received").
 const sentence = (s?: string | null) => { const h = humanize(s).toLowerCase(); return h ? h[0].toUpperCase() + h.slice(1) : ""; };
@@ -371,7 +371,7 @@ export default function InventoryHub() {
     <button onClick={() => setDrawer({ kind })} className={primaryBtn}><M n="add" c="text-sm" />{label}</button>
   );
   const searchBar = (ph: string, value?: string, onChange?: (v: string) => void) => (
-    <SearchBox value={value || ""} onChange={(v) => onChange?.(v)} label={ph.replace(/…$/, "")} placeholder={ph} className="flex-1 sm:flex-none sm:w-72" />
+    <div className="relative flex-1 min-w-[200px] max-w-md"><M n="search" c="absolute left-3 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" /><input value={value} onChange={onChange ? (e) => onChange(e.target.value) : undefined} aria-label={ph.replace(/…$/, "")} className={`${inputCls} pl-9 text-ink-primary`} placeholder={ph} /></div>
   );
 
   // Client-side stock filter (data already loaded) — search + availability wired; warehouse/category left static (no resolved names loaded).
