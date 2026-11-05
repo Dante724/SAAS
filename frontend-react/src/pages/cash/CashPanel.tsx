@@ -104,7 +104,7 @@ export default function CashPanel() {
     <>
       <div className="flex-1 flex flex-col md:flex-row overflow-y-auto md:overflow-hidden">
         {/* LEFT: cashbox rail (stacks above the detail on narrow screens) */}
-        <aside className="md:w-56 flex-shrink-0 border-b md:border-b-0 md:border-r border-slate-200/80 bg-white/40 md:overflow-y-auto p-3.5 space-y-2">
+        <aside className="md:w-56 flex-shrink-0 border-b md:border-b-0 md:border-r border-slate-200/80 bg-white/40 md:overflow-y-auto px-6 py-3.5 md:py-5 md:pr-3 space-y-2">
           <div className="text-[11px] font-bold text-ink-tertiary px-1 pb-0.5">Cashboxes</div>
           {accounts.map((a) => {
             const active = sel?.id === a.id;

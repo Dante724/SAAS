@@ -30,7 +30,9 @@ const PROBLEMS = ["Cracked screen", "Battery", "Charging port", "Water damage", 
 const CONDITIONS = ["Like new", "Scratches", "Dents", "Cracked back", "Bent frame"];
 const deviceLabel = (d: Device) => [d.brand, d.model].filter(Boolean).join(" ") || d.serial || d.imei || "Device";
 const field = "w-full min-h-[3rem] rounded-xl border border-slate-200 bg-white px-4 text-go-body text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/15";
-const chip = (on: boolean) => `min-h-[2.75rem] px-4 rounded-full border text-go-body font-medium inline-flex items-center gap-1.5 ${on ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`;
+// A chip that shows a tick when picked keeps 11px of extra padding on each side while unpicked, the
+// same width as the 16px tick plus its 6px gap, so picking one never pushes its neighbours.
+const chip = (on: boolean, ticked = false) => `min-h-[2.75rem] ${ticked && !on ? "px-[27px]" : "px-4"} rounded-full border text-go-body font-medium inline-flex items-center gap-1.5 ${on ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`;
 const whenText = (local: string) => new Date(local).toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 
 function Label({ children }: { children: React.ReactNode }) {
@@ -336,7 +338,7 @@ export default function NewJob() {
         <section className="mb-5">
           <Label>Job type</Label>
           <div className="flex flex-wrap gap-2">
-            {types.map((t) => <button key={t.id} onClick={() => { setTypeId(t.id); setMissing(new Set()); }} aria-pressed={typeId === t.id} className={chip(typeId === t.id)}>{typeId === t.id && <Check size={16} />}{t.name}</button>)}
+            {types.map((t) => <button key={t.id} onClick={() => { setTypeId(t.id); setMissing(new Set()); }} aria-pressed={typeId === t.id} className={chip(typeId === t.id, true)}>{typeId === t.id && <Check size={16} />}{t.name}</button>)}
           </div>
         </section>
       )}
@@ -345,13 +347,13 @@ export default function NewJob() {
         <div>
           <Label>Priority</Label>
           <div className="flex flex-wrap gap-2" role="group" aria-label="Priority">
-            {[0, 1, 2].map((p) => <button key={p} onClick={() => setPriority(p)} aria-pressed={priority === p} className={chip(priority === p)}>{priority === p && <Check size={16} />}{PRIORITY_LABEL[p]}</button>)}
+            {[0, 1, 2].map((p) => <button key={p} onClick={() => setPriority(p)} aria-pressed={priority === p} className={chip(priority === p, true)}>{priority === p && <Check size={16} />}{PRIORITY_LABEL[p]}</button>)}
           </div>
         </div>
         <div>
           <Label>Promised by</Label>
           <div className="flex flex-wrap gap-2" role="group" aria-label="Promised by">
-            {presets.map((p) => <button key={p.label} onClick={() => { setDueAt(dueAt === p.value ? "" : p.value); setPickDue(false); }} aria-pressed={dueAt === p.value} className={chip(dueAt === p.value)}>{dueAt === p.value && <Check size={16} />}{p.label}</button>)}
+            {presets.map((p) => <button key={p.label} onClick={() => { setDueAt(dueAt === p.value ? "" : p.value); setPickDue(false); }} aria-pressed={dueAt === p.value} className={chip(dueAt === p.value, true)}>{dueAt === p.value && <Check size={16} />}{p.label}</button>)}
             <button onClick={() => setPickDue((v) => !v)} aria-pressed={pickDue} className={chip(pickDue || (!!dueAt && !presets.some((p) => p.value === dueAt)))}><CalendarClock size={16} />Pick…</button>
           </div>
           {pickDue && <input type="datetime-local" value={dueAt} onChange={(e) => setDueAt(e.target.value)} aria-label="Promised by date and time" className={`${field} mt-2`} />}
@@ -415,7 +417,7 @@ export default function NewJob() {
         <div className="flex flex-wrap gap-2">
           {people.map((p) => {
             const id = p.id === "me" ? me?.id || "" : p.id;
-            return <button key={p.id || "none"} onClick={() => setWho(id)} className={chip(who === id)}>{who === id && <Check size={16} />}{p.name}</button>;
+            return <button key={p.id || "none"} onClick={() => setWho(id)} className={chip(who === id, true)}>{who === id && <Check size={16} />}{p.name}</button>;
           })}
         </div>
       </section>
