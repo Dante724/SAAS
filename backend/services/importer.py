@@ -16,7 +16,9 @@ same way for all of them:
 Products match on the shop's "unique identifier" setting (organisations.inv_unique_identifier):
 SKU, barcode, code or name. Unset means SKU, then barcode, then name.
 """
+import hashlib
 import io
+import json
 from dataclasses import dataclass, field
 from datetime import date, datetime, timedelta
 from decimal import Decimal
@@ -1007,6 +1009,18 @@ async def run(db, current, kind_key: str, headers: list, rows: list, mapping: di
         planned.append(r)
 
     counts = {a: sum(1 for r in planned if r.action == a) for a in ("create", "update", "error", "skip")}
+    # Council M15: the same bytes committed twice (a double click, a browser retry, "did that
+    # work?") used to create every name-only client again, and the first batch could no longer be
+    # undone. A re-commit of an identical (kind, headers, rows, mapping) while the earlier batch is
+    # still inside the undo window is refused; the preview only warns.
+    content_hash = _content_hash(kind_key, headers, rows, mapping)
+    earlier = await _recent_identical_batch(db, org.id, kind_key, content_hash)
+    if earlier is not None:
+        msg = _already_imported(earlier)     # before any rollback expires the batch's columns
+        if commit:
+            await db.rollback()
+            raise HTTPException(409, msg)
+        warnings.append(msg)
     result = {"kind": kind_key, "counts": counts, "warnings": warnings, "rows": [r.out() for r in planned],
               "match_on": kind.match_help if kind_key != "products" else _key_help(ctx)}
     if not commit:
@@ -1042,7 +1056,7 @@ async def run(db, current, kind_key: str, headers: list, rows: list, mapping: di
     from backend.services import audit
     if created or updated:
         batch.created_count, batch.updated_count, batch.failed_count = created, updated, failed
-        batch.undo = ctx.undo
+        batch.undo = {**ctx.undo, "content_hash": content_hash}
         await audit.record(db, org_id=org.id, actor_id=current.id, action="import", entity_type=kind_key,
                            entity_id=batch.id, diff={"file_name": file_name, "created": created,
                                                      "updated": updated, "failed": failed})
@@ -1054,6 +1068,29 @@ async def run(db, current, kind_key: str, headers: list, rows: list, mapping: di
                    "counts": {a: sum(1 for r in planned if r.action == a) for a in ("create", "update", "error", "skip")},
                    "undo_until": (batch.created_at + UNDO_WINDOW).isoformat() if (created or updated) else None})
     return result
+
+
+def _content_hash(kind_key: str, headers: list, rows: list, mapping: dict) -> str:
+    """What makes two commits "the same file": the list, the columns, every cell and the mapping,
+    as the client sent them."""
+    blob = json.dumps([kind_key, headers, rows, mapping], sort_keys=True, default=str, ensure_ascii=False)
+    return hashlib.sha256(blob.encode()).hexdigest()
+
+
+async def _recent_identical_batch(db, org_id: str, kind_key: str, content_hash: str) -> Optional[ImportBatch]:
+    """The newest batch of this list with the same content hash that hasn't been undone and is
+    still inside the undo window (kept on the batch's undo JSON: no new column)."""
+    since = datetime.utcnow() - UNDO_WINDOW
+    return (await db.execute(select(ImportBatch).where(
+        ImportBatch.org_id == org_id, ImportBatch.kind == kind_key, ImportBatch.undone_at.is_(None),
+        ImportBatch.created_at >= since, ImportBatch.undo["content_hash"].as_string() == content_hash)
+        .order_by(ImportBatch.created_at.desc()).limit(1))).scalars().first()
+
+
+def _already_imported(batch: ImportBatch) -> str:
+    minutes = max(0, int((datetime.utcnow() - batch.created_at).total_seconds() // 60))
+    return (f"This file was already imported {minutes} minute{'' if minutes == 1 else 's'} ago "
+            f"(batch {batch.id}). Undo that import first if you need to run it again.")
 
 
 def _key_help(ctx: Ctx) -> str:
