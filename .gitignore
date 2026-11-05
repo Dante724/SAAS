@@ -71,3 +71,4 @@ frontend-react/coverage/
 
 # Vite temp config bundles
 *.timestamp-*.mjs
+design-capture-out/
