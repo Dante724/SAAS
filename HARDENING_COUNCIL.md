@@ -131,6 +131,7 @@ Baseline, all on Postgres 16:
 | Q5 | Medium | Postgres-only lock paths have no Postgres behavioural test: `skip_locked` serial allocation, the `pg_advisory_xact_lock` sites, two-runner `run_exclusive`, `insert_ignore` | `grep pg_advisory backend/tests` returns nothing | A small two-session `test_pg_locks.py` |
 | Q6 | Low | Machine date in `stock_posting.py:83`, `serials.py:136`, `pilot.py:101`, `public.py:152` | — | `org_today` |
 | Q7 | Low | Slow tests: 76 s, 16 s, 12.7 s | — | Trim or mark them |
+| Q8 | Low | Flaky test: `test_sense_sprint2.py::test_the_brief_goes_out_once_after_the_hour_in_the_shops_time_zone` asserts `"999" not in str(push)`, and the push payload holds random UUIDs | It failed CI shard 1 on #101, a change unrelated to it; a re-run passes | Assert on the brief's text fields only, not on `str()` of the whole payload |
 
 ---
 
