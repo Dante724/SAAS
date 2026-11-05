@@ -92,3 +92,22 @@ async def test_restored_job_takes_money_again(client, tenant):
                             json={"method": "cash", "account_id": acc, "amount": 100}, headers=tenant)
     assert pay.status_code == 200, pay.text
     assert await _balance(client, tenant, acc) == 100
+
+
+# ── Review (rev14): the card-reader path was missed ──────────────────────────────────────────
+# `start_charge` loaded the Order without looking at `archived`, so a reader charge on a deleted
+# job answered 201 and a late card success would have posted money onto it.
+from backend.tests.test_opf_card_readers import _card_account, _charge, _reader, stripe  # noqa: E402,F401
+
+
+@pytest.mark.asyncio
+async def test_archived_job_cannot_be_charged_on_a_reader(client, tenant, stripe):  # noqa: F811
+    await _card_account(client, tenant)
+    reader = await _reader(client, tenant)
+    oid, _ = await _job(client, tenant)
+    await _archive(client, tenant, oid)
+    before = len(stripe.calls)
+    r = await _charge(client, tenant, reader["id"], order_id=oid)
+    assert r.status_code == 409, f"reader charge on an archived job: {r.text}"
+    assert "deleted" in r.json()["detail"]
+    assert len(stripe.calls) == before, "nothing was sent to the reader"

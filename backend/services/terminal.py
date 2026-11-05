@@ -304,7 +304,8 @@ async def start_charge(db: AsyncSession, *, org_id: str, actor_id: str, terminal
         o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == org_id))).scalar_one_or_none()
         if not o:
             raise TerminalError(404, "Order not found")
-        from backend.services.order_money import balance_due
+        from backend.services.order_money import balance_due, refuse_archived
+        refuse_archived(o)     # a deleted job takes no money on a reader either (409)
         owed = await balance_due(db, o)
         if amount is None:
             amount = owed
