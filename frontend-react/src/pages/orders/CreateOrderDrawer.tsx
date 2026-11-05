@@ -1,4 +1,4 @@
-import { useEffect, useState, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
 import Drawer from "../../components/Drawer";
 import Button, { IconButton, buttonClass } from "../../components/Button";
 import Tabs from "../../components/Tabs";
@@ -11,7 +11,7 @@ import { Avatar } from "./look";
 import { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import ScanButton from "../../components/ScanButton";
-import { api } from "../../api/client";
+import { api, idempotencyKey } from "../../api/client";
 import { autoPrintForJob } from "../../lib/autoPrint";
 import AutoPrintPicker from "../../components/AutoPrintPicker";
 import { useClientSearch } from "../../hooks/useClientSearch";
@@ -141,6 +141,11 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
   // Document display currency (optional override; blank = client preference / base).
   const { base, items: curItems, opts: curOpts, multi: multiCurrency } = useCurrencies();
   const [curCode, setCurCode] = useState("");
+  // Council M13: one key per attempt at this job, kept until it has gone through, so a double
+  // click or a retry after a timeout gets the same job back instead of a second one (as Tekly
+  // Go's NewJob does). Each kit expands through its own keyed add-line call.
+  const jobKey = useRef(idempotencyKey());
+  const bundleKeys = useRef<Record<string, string>>({});
   const docCur: CurItem | undefined = curItems.find((c) => c.code === curCode);
   // registry rate is "1 <code> = rate <base>", so a base amount shows in the currency as amount / rate.
   const conv = (amt: number) => (docCur && docCur.rate ? amt / docCur.rate : amt);
@@ -161,7 +166,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
     const m = missingRequired(); if (m) { setErr(m); setStep(1); return; }
     setBusy(true); setErr(null);
     try {
-      const created = await api.post<any>("/orders", {
+      const created = await api.postOnce<any>("/orders", {
         client_id: client?.id || null,
         type_id: typeId,
         custom_data: woCustom,
@@ -182,8 +187,12 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
         currency_code: curCode || null,
         // Bundles expand into their components only through the add-line endpoint (below).
         lines: lines.filter((l) => l.kind !== "bundle").map(lineBody),
-      });
-      for (const b of lines.filter((l) => l.kind === "bundle")) await api.post(`/orders/${created.id}/lines`, lineBody(b));
+      }, jobKey.current);
+      for (const b of lines.filter((l) => l.kind === "bundle")) {
+        const k = (bundleKeys.current[b.id] ||= idempotencyKey());
+        await api.postOnce(`/orders/${created.id}/lines`, lineBody(b), k);
+      }
+      jobKey.current = idempotencyKey(); bundleKeys.current = {};   // done: the next job gets fresh keys
       if (!estimate) void autoPrintForJob(created.id);   // label templates set to print on new jobs
       onCreated();
       if (!reopen) onClose();

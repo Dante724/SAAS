@@ -3,7 +3,7 @@
 // so a queued replay could take it twice.
 import { useEffect, useRef, useState } from "react";
 import { Check, Loader2, Package, PackageSearch, ScanBarcode, Search, Wrench, X } from "lucide-react";
-import { api } from "../../api/client";
+import { api, idempotencyKey } from "../../api/client";
 import { useMe } from "../../context/Me";
 import { GoButton, Sheet, goField } from "./ui";
 import { cameraSupported, haptic, startScanner, type Stop } from "../lib/scanner";
@@ -30,6 +30,7 @@ export default function ItemsSheet({ open, onClose, orderId, deviceId, onAdded, 
 
   const [scanning, setScanning] = useState(false);
   const video = useRef<HTMLVideoElement>(null);
+  const addKeys = useRef<Record<string, string>>({});   // council M13: one key per item until it lands
   const stopRef = useRef<Stop | null>(null);
   useEffect(() => { if (open) { setQ(""); setAdded({}); } else setScanning(false); }, [open]);
   // Scan a part's barcode/SKU label and put it straight on the job.
@@ -67,10 +68,12 @@ export default function ItemsSheet({ open, onClose, orderId, deviceId, onAdded, 
     if (!navigator.onLine) { toast({ title: "You're offline", body: "Adding items needs a connection (it takes stock).", tone: "warn" }); return; }
     setAdding(h.ref_id);
     try {
-      await api.post(`/orders/${encodeURIComponent(orderId)}/lines`, {
+      const key = (addKeys.current[h.ref_id] ||= idempotencyKey());
+      await api.postOnce(`/orders/${encodeURIComponent(orderId)}/lines`, {
         description: h.name, kind: h.kind === "bundle" ? "bundle" : h.kind, line_type: h.kind === "service" ? "labour" : "part",
         ref_id: h.ref_id, qty: 1, unit_price: h.price ?? 0,
-      });
+      }, key);
+      delete addKeys.current[h.ref_id];
       haptic();
       if (h.kind === "product" && h.available != null && h.available <= 0) toast({ title: `${h.name} added`, body: "It's out of stock, so it shows as waiting for stock until it's ordered and received." });
       setAdded((a) => ({ ...a, [h.ref_id]: (a[h.ref_id] || 0) + 1 }));
