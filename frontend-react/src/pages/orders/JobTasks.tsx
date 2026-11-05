@@ -1,6 +1,4 @@
 import { useEffect, useState } from "react";
-import Button from "../../components/Button";
-import { fieldClass } from "../../components/Field";
 import { api } from "../../api/client";
 import { M } from "../../components/Shell";
 import { Avatar } from "./look";
@@ -43,22 +41,21 @@ export default function JobTasks({ orderId, emps, onFlash }: { orderId: string; 
   return (
     <div className="bg-white rounded-2xl border border-slate-200/90 p-5 shadow-clay-sm space-y-3">
       <div className="flex items-center gap-2">
-        <h4 className="text-sm font-semibold text-ink-primary">Tasks</h4>
-        {items && items.length > 0 && <span className="text-2xs text-ink-tertiary">{open ? `${open} open` : "All done"}</span>}
-        {/* A section's own action is a quiet small button after its title, so it never competes
-            with the drawer's main button. */}
-        <Button size="sm" className="ml-auto" aria-expanded={adding} onClick={() => setAdding((v) => !v)} icon={<M n="add" c="text-xs" />}>Add task</Button>
+        <button type="button" onClick={() => setAdding((v) => !v)}
+          className="px-3 py-1.5 rounded-lg text-xs font-bold text-white bg-primary hover:opacity-90 flex items-center gap-1.5"><M n="add" c="text-xs" />Add task</button>
+        <h4 className="text-sm font-semibold text-ink-primary ml-1">Tasks</h4>
+        {items && items.length > 0 && <span className="text-[11px] text-ink-tertiary">{open ? `${open} open` : "All done"}</span>}
       </div>
       {adding && (
         <div className="flex flex-wrap items-center gap-2">
           <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }}
-            aria-label="Task" placeholder="What needs doing? e.g. Order the screen" className={fieldClass("flex-1 min-w-[200px] !w-auto")} />
-          <select value={who} onChange={(e) => setWho(e.target.value)} aria-label="Assign to" className={fieldClass("!w-auto pr-8")}>
+            aria-label="Task" placeholder="What needs doing? e.g. Order the screen" className="glass-input flex-1 min-w-[200px] py-2 px-3 text-xs rounded-xl" />
+          <select value={who} onChange={(e) => setWho(e.target.value)} aria-label="Assign to" className="glass-input py-2 px-2 text-xs rounded-xl">
             <option value="">Nobody yet</option>
             {emps.filter((e) => e.in_assignees !== false).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
           </select>
-          <Button variant="primary" onClick={add} disabled={busy || !title.trim()}>{busy ? "Adding…" : "Add"}</Button>
-          <Button variant="ghost" onClick={() => { setAdding(false); setTitle(""); }}>Cancel</Button>
+          <button type="button" onClick={add} disabled={busy || !title.trim()} className="px-3 py-2 rounded-xl text-xs font-bold text-white bg-primary disabled:opacity-50">{busy ? "Adding…" : "Add"}</button>
+          <button type="button" onClick={() => { setAdding(false); setTitle(""); }} className="px-3 py-2 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-50">Cancel</button>
         </div>
       )}
       {items === null ? <p className="text-xs text-ink-tertiary">Loading…</p>
@@ -69,11 +66,11 @@ export default function JobTasks({ orderId, emps, onFlash }: { orderId: string; 
               <li key={t.id} className="flex items-center gap-3 py-2">
                 <input type="checkbox" checked={!!t.completed_at} onChange={() => toggle(t)} aria-label={`Done: ${t.title}`} className="h-4 w-4 accent-[rgb(var(--c-primary))]" />
                 <span className={`flex-1 min-w-0 truncate text-xs ${t.completed_at ? "line-through text-ink-tertiary" : "text-ink-primary font-medium"}`}>{t.title}</span>
-                {t.overdue && !t.completed_at && <span className="text-2xs font-semibold text-rose-600">Overdue</span>}
+                {t.overdue && !t.completed_at && <span className="text-[11px] font-semibold text-rose-600">Overdue</span>}
                 <span className="flex items-center gap-1.5">
                   {t.assigned_to_id && <Avatar name={t.assignee_name || ""} size={20} />}
                   <select value={t.assigned_to_id || ""} onChange={(e) => assign(t, e.target.value)} aria-label={`Assignee for ${t.title}`}
-                    className="bg-transparent text-2xs text-ink-secondary max-w-[130px] truncate">
+                    className="bg-transparent text-[11px] text-ink-secondary max-w-[130px] truncate">
                     <option value="">Unassigned</option>
                     {emps.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
                   </select>

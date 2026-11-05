@@ -4,20 +4,13 @@ import { api } from "../../api/client";
 import Switch from "../../components/Switch";
 import { SettingRow, NumField } from "../../components/SettingRow";
 import { loadFailed } from "../../lib/notice";
-import SettingsPage from "../../components/SettingsPage";
-import Section from "../../components/Section";
-import Button, { buttonClass } from "../../components/Button";
-import Tabs from "../../components/Tabs";
-import { fieldClass, labelClass } from "../../components/Field";
-import { settingsToast, rowField } from "./kit";
 import { laborText } from "../../lib/labor";
 
 /* Settings › Public pages — the three pages customers see (booking, job tracking, estimate
    approval), one brand colour for all of them, and a live phone preview. Same
    /staff/public-pages endpoint; each change saves on its own like before. Settings the public
    pages don't read yet (separate tables, zero-price lines, background pattern…) are left out
-   rather than shown as switches that do nothing. Every change here is a single choice, so it
-   saves the moment it's made and confirms with the page toast. */
+   rather than shown as switches that do nothing. */
 
 type Status = { key: string; name: string; status_group?: string; color?: string };
 type Picker = (p: { value: string; list: Status[]; onChange: (v: string) => void }) => ReactNode;
@@ -26,39 +19,39 @@ const ACCENTS = ["#3b6fe0", "#185FA5", "#7F77DD", "#1D9E75", "#0F6E56", "#D85A30
 const SLOTS: [number, string][] = [[15, "15 minutes"], [30, "30 minutes"], [45, "45 minutes"], [60, "1 hour"], [90, "1.5 hours"], [120, "2 hours"]];
 const LEADS: [number, string][] = [[0, "Any time"], [60, "1 hour"], [120, "2 hours"], [240, "4 hours"], [1440, "1 day"], [2880, "2 days"]];
 const WINDOWS: [number, string][] = [[7, "1 week"], [14, "2 weeks"], [30, "1 month"], [60, "2 months"], [90, "3 months"]];
-const inp = fieldClass();
+const inp = "glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary";
 
 // A settings card. Defined here (not inside the page) so typing in it doesn't remount it.
-// `control` is the card's own on/off switch: the first row of the card, label left, switch right.
-function Card({ icon, title, hint, control, children, onEnter }: { icon: string; title: string; hint?: string; control?: { label: string; node: ReactNode }; children?: ReactNode; onEnter?: () => void }) {
+// `control` is the card's own on/off switch, shown beside the title.
+function Card({ icon, title, hint, control, children, onEnter }: { icon: string; title: string; hint?: string; control?: ReactNode; children?: ReactNode; onEnter?: () => void }) {
   return (
-    <div onMouseEnter={onEnter}>
-      <Section icon={icon} title={title} description={hint}>
-        {control && <div className={children ? "pb-3 mb-1 border-b border-slate-100" : ""}><SettingRow label={control.label}>{control.node}</SettingRow></div>}
-        {children}
-      </Section>
-    </div>
+    <section className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card" onMouseEnter={onEnter}>
+      <div className="flex items-start gap-3 px-5 pt-4 pb-3">
+        <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n={icon} c="text-lg" /></span>
+        <div className="min-w-0 flex-1"><h3 className="text-sm font-semibold text-ink-primary">{title}</h3>{hint && <p className="text-xs text-ink-tertiary">{hint}</p>}</div>
+        {control && <div className="flex-shrink-0 pt-0.5">{control}</div>}
+      </div>
+      {children && <div className="px-5 pb-4">{children}</div>}
+    </section>
   );
 }
 
-export default function PublicPagesSettings({ shopName, logo, StatusPicker, after }: { shopName: string; logo?: string | null; StatusPicker: Picker;
-  /** More cards at the end of the column (the hub passes Self check-in). */
-  after?: ReactNode }) {
+export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { shopName: string; logo?: string | null; StatusPicker: Picker }) {
   const [cfg, setCfg] = useState<any>(null);
   const [slug, setSlug] = useState("");
+  const [toast, setToast] = useState<string | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [page, setPage] = useState<"booking" | "tracking" | "estimate">("booking");
   const [est, setEst] = useState<Status[]>([]);
   const [wo, setWo] = useState<Status[]>([]);
-  const flash = (m: string) => settingsToast(m);
+  const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 1800); };
   const load = () => api.get<any>("/staff/public-pages").then((c) => { setCfg(c); setSlug(c.slug || ""); }).catch(() => setCfg({}));
   useEffect(() => {
     load();
     api.get<any>("/statuses?record_type=estimate").then((r) => setEst(r.items || [])).catch(loadFailed("statuses"));
     api.get<any>("/statuses?record_type=work_order").then((r) => setWo(r.items || [])).catch(loadFailed("statuses"));
   }, []);
-  const head = { title: "Public pages", sub: "The pages your customers open from a link: booking a visit, tracking a repair, and approving an estimate." };
-  if (!cfg) return <SettingsPage wide {...head}><div className="h-64" aria-busy="true" /></SettingsPage>;
+  if (!cfg) return <div className="max-w-3xl text-xs text-ink-tertiary">Loading…</div>;
 
   const url = `${location.origin}/book/${cfg.slug}`;
   const accent = cfg.page_color || "#3b6fe0";
@@ -75,8 +68,9 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker, afte
 
   // Plain functions (not components), so rows aren't remounted on every change.
   const sw = (k: string, label: string, hint?: string, onFocus?: typeof page) => (
-    <div key={k} className="py-3 border-t border-slate-100 first:border-0 first:pt-0" onMouseEnter={() => onFocus && setPage(onFocus)}>
-      <SettingRow label={label} help={hint}><Switch label={label} on={!!cfg[k]} onChange={(v) => save({ [k]: v })} /></SettingRow>
+    <div key={k} className="flex items-center gap-3 py-3 border-t border-slate-100 first:border-0" onMouseEnter={() => onFocus && setPage(onFocus)}>
+      <span className="min-w-0"><span className="block text-sm text-ink-primary">{label}</span>{hint && <span className="block text-xs text-ink-tertiary">{hint}</span>}</span>
+      <span className="ml-auto"><Switch label={label} on={!!cfg[k]} onChange={(v) => save({ [k]: v })} /></span>
     </div>
   );
   const pick = (k: string, label: string, opts: [number, string][], hint?: string) => {
@@ -84,7 +78,7 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker, afte
     const known = opts.some(([x]) => x === v);
     return (
       <label className="block">
-        <span className={labelClass}>{label}</span>
+        <span className="block text-sm font-medium text-ink-primary mb-1.5">{label}</span>
         <select value={v} onChange={(e) => save({ [k]: Number(e.target.value) })} className={inp}>
           {!known && <option value={v}>{v}</option>}
           {opts.map(([x, l]) => <option key={x} value={x}>{l}</option>)}
@@ -93,10 +87,10 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker, afte
       </label>
     );
   };
-  const bigSwitch = (k: string, label: string) => ({ label, node: <Switch label={label} on={!!cfg[k]} onChange={(v) => save({ [k]: v })} /> });
+  const bigSwitch = (k: string, label: string) => <Switch label={label} on={!!cfg[k]} onChange={(v) => save({ [k]: v })} />;
   const statusSelect = (k: string, list: Status[], label: string) => (
     <label className="block">
-      <span className={labelClass}>{label}</span>
+      <span className="block text-sm font-medium text-ink-primary mb-1.5">{label}</span>
       <select value={cfg[k] || ""} onChange={(e) => save({ [k]: e.target.value })} className={inp}>
         <option value="">Keep the status</option>
         {list.map((s) => <option key={s.key} value={s.key}>{s.name}</option>)}
@@ -117,7 +111,7 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker, afte
             {sw(sig, "Ask for a signature", "They sign with a finger or mouse before approving.", "estimate")}
             {prefix === "oe" && sw("oe_estimate_line_choice", "Let them leave lines out", "They can untick lines they don't want before approving. You see what they left out on the job.", "estimate")}
             <div>
-              <span className={labelClass}>Only while the {noun} is in</span>
+              <span className="block text-sm font-medium text-ink-primary mb-1.5">Only while the {noun} is in</span>
               {StatusPicker({ value: cfg[sts] || "", list, onChange: (v) => save({ [sts]: v }) })}
               <span className="block text-xs text-ink-tertiary mt-1">Leave empty to allow it in any status.</span>
             </div>
@@ -137,11 +131,16 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker, afte
     : <span className="w-8 h-8 rounded-lg grid place-items-center text-xs font-semibold text-white" style={{ background: accent }}>{name.slice(0, 1).toUpperCase()}</span>;
 
   return (
-    <SettingsPage wide {...head}>
-      {err && <div role="alert" className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
+    <div className="max-w-5xl pb-10">
+      {toast && <div className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-clay-drawer z-[70]">{toast}</div>}
+      <div className="mb-5">
+        <h2 className="text-base font-semibold text-ink-primary">Customer pages</h2>
+        <p className="text-xs text-ink-tertiary">The pages your customers open from a link: booking a visit, tracking a repair, and approving an estimate.</p>
+      </div>
+      {err && <div className="mb-4 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
 
-      <div className="grid xl:grid-cols-[minmax(0,1fr)_300px] gap-4 items-start">
-        <div className="space-y-4 min-w-0">
+      <div className="grid xl:grid-cols-[minmax(0,1fr)_300px] gap-5 items-start">
+        <div className="space-y-5 min-w-0">
           <Card icon="auto_awesome" title="Your brand on every page" hint="Name and logo come from General. Pick the colour for buttons and highlights.">
             <div className="flex items-center gap-2 flex-wrap">
               {ACCENTS.map((c) => (
@@ -153,25 +152,23 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker, afte
               <label className="w-8 h-8 rounded-full border border-dashed border-slate-300 grid place-items-center cursor-pointer text-ink-tertiary hover:border-primary hover:text-primary" title="Custom colour">
                 <M n="colorize" c="text-sm" /><input type="color" value={accent} onChange={(e) => setCfg({ ...cfg, page_color: e.target.value })} onBlur={() => save({ page_color: cfg.page_color })} className="sr-only" />
               </label>
-            </div>
-            <div className="mt-3 pt-3 border-t border-slate-100">
-              <SettingRow label="Show your logo" help="On every customer page.">
+              <span className="ml-auto flex items-center gap-2 text-xs text-ink-secondary">Show logo
                 <Switch label="Show logo on customer pages" on={!!cfg.page_show_logo} onChange={(v) => save({ page_show_logo: v, oe_show_logo: v })} />
-              </SettingRow>
+              </span>
             </div>
           </Card>
 
           <Card icon="calendar_month" title="Online booking" hint="Customers pick a time and tell you what's wrong." onEnter={() => setPage("booking")}
             control={bigSwitch("appointment_enabled", "Online booking")}>
             <div className={cfg.appointment_enabled ? "" : "opacity-60"}>
-              <div className="flex flex-wrap sm:flex-nowrap items-center gap-2 mb-4">
-                <div className="glass-input h-9 flex-1 min-w-0 basis-full sm:basis-auto flex items-center rounded-xl overflow-hidden">
+              <div className="flex items-center gap-2 mb-4">
+                <div className="flex-1 min-w-0 flex items-center bg-slate-50 border border-slate-200 rounded-xl overflow-hidden">
                   <span className="pl-3 text-xs text-ink-tertiary whitespace-nowrap">{location.host}/book/</span>
                   <input value={slug} onChange={(e) => setSlug(e.target.value.toLowerCase().replace(/[^a-z0-9-]/g, ""))} onBlur={saveSlug} onKeyDown={(e) => e.key === "Enter" && saveSlug()}
-                    aria-label="Booking link name" className="flex-1 min-w-0 bg-transparent pr-3 text-sm font-medium text-ink-primary outline-none" />
+                    aria-label="Booking link name" className="flex-1 min-w-0 bg-transparent py-2.5 pr-3 text-sm font-medium text-ink-primary outline-none" />
                 </div>
-                <Button onClick={() => { navigator.clipboard?.writeText(url); flash("Link copied"); }} icon={<M n="content_copy" c="text-sm" />}>Copy</Button>
-                <a href={url} target="_blank" rel="noreferrer" className={buttonClass("secondary")}><M n="open_in_new" c="text-sm" />Open</a>
+                <button onClick={() => { navigator.clipboard?.writeText(url); flash("Link copied"); }} className="px-3 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50 inline-flex items-center gap-1"><M n="content_copy" c="text-sm" />Copy</button>
+                <a href={url} target="_blank" rel="noreferrer" className="px-3 py-2.5 rounded-xl border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50 inline-flex items-center gap-1"><M n="open_in_new" c="text-sm" />Open</a>
               </div>
               <div className="grid sm:grid-cols-3 gap-3 mb-2">
                 {pick("appointment_time_slot", "Visit length", SLOTS)}
@@ -179,17 +176,16 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker, afte
                 {pick("appointment_window_days", "Book up to", WINDOWS, "How far ahead")}
               </div>
               {sw("book_show_employee_step", "Let customers choose a technician", "Off: you assign someone later.", "booking")}
-              <div className="py-3 border-t border-slate-100" onMouseEnter={() => setPage("booking")}>
-                <SettingRow stack htmlFor="pp-names" label="How your team's names appear" help="On the booking page and in customer messages. Custom uses each person's “Name on documents” in Team.">
-                <select id="pp-names" value={cfg.public_employee_name || "full"} onChange={(e) => save({ public_employee_name: e.target.value })} aria-label="How your team's names appear"
-                  className={fieldClass(`${rowField} sm:w-56 pr-8`)}>
+              <label className="flex flex-wrap items-center gap-3 py-3 border-t border-slate-100" onMouseEnter={() => setPage("booking")}>
+                <span className="min-w-0"><span className="block text-sm text-ink-primary">How your team's names appear</span><span className="block text-xs text-ink-tertiary">On the booking page and in customer messages. Custom uses each person's “Name on documents” in Team.</span></span>
+                <select value={cfg.public_employee_name || "full"} onChange={(e) => save({ public_employee_name: e.target.value })} aria-label="How your team's names appear"
+                  className="ml-auto glass-input rounded-xl px-3 py-2 text-sm">
                   <option value="full">Full name</option>
                   <option value="first_initial">First name and initial</option>
                   <option value="first">First name only</option>
                   <option value="custom">Custom name</option>
                 </select>
-                </SettingRow>
-              </div>
+              </label>
               {sw("appointment_allow_multiple", "Allow more than one booking at the same time", undefined, "booking")}
               {sw("appointment_consider_orders", "Keep times free when jobs are scheduled", "Scheduled work orders block booking slots too.", "booking")}
             </div>
@@ -218,18 +214,20 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker, afte
               onChange={(e) => setCfg({ ...cfg, dropoff_terms: e.target.value })}
               onBlur={() => save({ dropoff_terms: (cfg.dropoff_terms || "").trim() })}
               placeholder="I'm leaving this item for diagnosis and repair. I've backed up my data; the shop isn't responsible for data loss…"
-              className={fieldClass("h-auto py-2")} />
+              className="glass-input w-full rounded-xl px-3 py-2 text-sm" />
           </Card>
-
-          {after}
         </div>
 
         {/* Live preview */}
         <aside className="xl:sticky xl:top-4" aria-label="Preview">
-          <Tabs look="segmented" label="Preview page" value={page} onChange={setPage} className="mb-3"
-            tabs={[{ id: "booking", label: "Booking" }, { id: "tracking", label: "Tracking" }, { id: "estimate", label: "Estimate" }]} />
+          <div className="inline-flex rounded-xl bg-slate-100 p-1 mb-3">
+            {([["booking", "Booking"], ["tracking", "Tracking"], ["estimate", "Estimate"]] as [typeof page, string][]).map(([v, l]) => (
+              <button key={v} onClick={() => setPage(v)} aria-pressed={page === v}
+                className={`px-3 py-1.5 rounded-lg text-xs font-semibold transition-colors ${page === v ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>{l}</button>
+            ))}
+          </div>
           <div className="rounded-[34px] border-[7px] border-slate-800 bg-white overflow-hidden mx-auto w-[260px] shadow-clay-card">
-            <div className="h-[470px] overflow-hidden flex flex-col text-2xs">
+            <div className="h-[470px] overflow-hidden flex flex-col text-[11px]">
               <div className="flex items-center gap-2 px-3 py-3 border-b border-slate-100">
                 {logoEl(!!cfg.page_show_logo)}<span className="font-semibold text-ink-primary truncate">{name}</span>
               </div>
@@ -248,11 +246,11 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker, afte
                       ))}
                     </div>
                     {cfg.book_show_employee_step && (
-                      <div className="flex flex-wrap gap-1.5">{["Any", ...(cfg.public_employee_name === "first" ? ["Priya", "Amit"] : cfg.public_employee_name === "first_initial" ? ["Priya S.", "Amit R."] : cfg.public_employee_name === "custom" ? ["Priya S.", "Amit (lead tech)"] : ["Priya Shah", "Amit Rao"])].map((p, i) => <span key={p} className="px-2.5 py-1 rounded-full border text-2xs" style={i === 0 ? { borderColor: accent, color: accent } : { borderColor: "#e2e8f0" }}>{p}</span>)}</div>
+                      <div className="flex flex-wrap gap-1.5">{["Any", ...(cfg.public_employee_name === "first" ? ["Priya", "Amit"] : cfg.public_employee_name === "first_initial" ? ["Priya S.", "Amit R."] : cfg.public_employee_name === "custom" ? ["Priya S.", "Amit (lead tech)"] : ["Priya Shah", "Amit Rao"])].map((p, i) => <span key={p} className="px-2.5 py-1 rounded-full border text-[11px]" style={i === 0 ? { borderColor: accent, color: accent } : { borderColor: "#e2e8f0" }}>{p}</span>)}</div>
                     )}
                     <div className="grid grid-cols-4 gap-1.5">
                       {["9:00", "9:30", "10:00", "10:30", "11:00", "1:00", "1:30", "2:00"].map((t, i) => (
-                        <span key={t} className="text-center rounded-lg py-1.5 border text-2xs" style={i === 2 ? { background: accent, color: "#fff", borderColor: accent } : { borderColor: "#e2e8f0" }}>{t}</span>
+                        <span key={t} className="text-center rounded-lg py-1.5 border text-[11px]" style={i === 2 ? { background: accent, color: "#fff", borderColor: accent } : { borderColor: "#e2e8f0" }}>{t}</span>
                       ))}
                     </div>
                     <div className="rounded-xl py-2.5 text-center text-white font-semibold" style={{ background: accent }}>Book 10:00</div>
@@ -262,7 +260,7 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker, afte
 
               {page === "tracking" && (
                 <div className="p-3 space-y-3 flex-1">
-                  <div><div className="text-2xs text-ink-tertiary">iPhone 14 · WO-1042</div><div className="text-sm font-semibold text-ink-primary">In repair</div></div>
+                  <div><div className="text-[11px] text-ink-tertiary">iPhone 14 · WO-1042</div><div className="text-sm font-semibold text-ink-primary">In repair</div></div>
                   <div className="flex items-center gap-1">{[0, 1, 2, 3].map((i) => <div key={i} className="flex-1 h-1.5 rounded-full" style={{ background: i <= 1 ? accent : "#e2e8f0" }} />)}</div>
                   {cfg.oe_show_scheduled && <div className="text-ink-secondary">Ready by Fri, Oct 18</div>}
                   {cfg.oe_allow_recommend && (
@@ -297,9 +295,9 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker, afte
               )}
             </div>
           </div>
-          <p className="text-2xs text-ink-tertiary text-center mt-2">Sample job and customer.</p>
+          <p className="text-[11px] text-ink-tertiary text-center mt-2">Sample job and customer.</p>
         </aside>
       </div>
-    </SettingsPage>
+    </div>
   );
 }

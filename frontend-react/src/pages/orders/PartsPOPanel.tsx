@@ -1,7 +1,4 @@
 import { useEffect, useState } from "react";
-import { IconButton, buttonClass } from "../../components/Button";
-import Tabs from "../../components/Tabs";
-import { fieldClass } from "../../components/Field";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { loadFailed } from "../../lib/notice";
@@ -40,12 +37,12 @@ function Eta({ po }: { po: LinkedPO }) {
     : d === 0 ? ["Due today", "text-amber-800 bg-amber-50"]
     : d === 1 ? ["Due tomorrow", "text-primary bg-blue-50"]
     : [`Due in ${d} days`, "text-ink-secondary bg-slate-100"];
-  return <span className={`text-2xs font-semibold px-1.5 py-0.5 rounded-md tabular-nums ${tone}`}>{txt}</span>;
+  return <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded-md tabular-nums ${tone}`}>{txt}</span>;
 }
 
 // Draft → Ordered → Arrived, with the date under each step that happened.
 function Track({ po }: { po: LinkedPO }) {
-  if (po.status === "cancelled") return <div className="text-2xs text-rose-700 flex items-center gap-1"><M n="block" c="text-sm" />Cancelled, so these parts aren't coming</div>;
+  if (po.status === "cancelled") return <div className="text-[11px] text-rose-700 flex items-center gap-1"><M n="block" c="text-sm" />Cancelled, so these parts aren't coming</div>;
   const steps: [string, boolean, string][] = [
     ["Raised", true, ""],
     ["Ordered", po.status !== "draft", day(po.ordered_at)],
@@ -59,8 +56,8 @@ function Track({ po }: { po: LinkedPO }) {
             <span className={`w-2.5 h-2.5 rounded-full flex-shrink-0 ${done ? (i === 2 && po.status === "partial" ? "bg-amber-500" : "bg-primary") : "bg-white border-2 border-slate-300"}`} />
             {i < steps.length - 1 && <span className={`h-0.5 flex-1 mx-1 rounded ${steps[i + 1][1] ? "bg-primary" : "bg-slate-200"}`} />}
           </div>
-          <div className={`text-2xs mt-1 ${done ? "text-ink-primary" : "text-ink-tertiary"}`}>{label}</div>
-          {when && <div className="text-2xs text-ink-tertiary tabular-nums">{when}</div>}
+          <div className={`text-[11px] mt-1 ${done ? "text-ink-primary" : "text-ink-tertiary"}`}>{label}</div>
+          {when && <div className="text-[11px] text-ink-tertiary tabular-nums">{when}</div>}
         </div>
       ))}
     </div>
@@ -134,9 +131,9 @@ export default function PartsPOPanel({ orderId, lines, canBuy, isEstimate, onClo
           <div className="min-w-0 flex-1">
             <div className="flex items-center gap-2">
               <span className="text-sm font-semibold text-ink-primary tabular-nums">{p.po_number}</span>
-              <span className={`text-2xs font-semibold px-1.5 py-0.5 rounded-md ${tone}`}>{label}</span>
+              <span className={`text-[11px] font-semibold px-1.5 py-0.5 rounded-md ${tone}`}>{label}</span>
             </div>
-            <div className="text-2xs text-ink-tertiary truncate">{p.supplier || "Supplier"}{p.raised_here ? "" : " · shared with other jobs"}</div>
+            <div className="text-[11px] text-ink-tertiary truncate">{p.supplier || "Supplier"}{p.raised_here ? "" : " · shared with other jobs"}</div>
           </div>
           <Eta po={p} />
         </div>
@@ -154,7 +151,7 @@ export default function PartsPOPanel({ orderId, lines, canBuy, isEstimate, onClo
                   <div className="flex-1 h-1.5 rounded-full bg-slate-200/70 overflow-hidden">
                     <div className={`h-full rounded-full transition-all ${pct >= 100 ? "bg-emerald-500" : "bg-primary"}`} style={{ width: `${pct}%` }} />
                   </div>
-                  <span className={`text-2xs tabular-nums w-16 text-right ${l.outstanding > 0 && p.status !== "cancelled" ? "text-amber-700" : "text-emerald-700"}`}>
+                  <span className={`text-[11px] tabular-nums w-16 text-right ${l.outstanding > 0 && p.status !== "cancelled" ? "text-amber-700" : "text-emerald-700"}`}>
                     {p.status === "cancelled" ? "" : l.outstanding > 0 ? `${n(l.outstanding)} to come` : "All in"}
                   </span>
                 </div>
@@ -169,13 +166,13 @@ export default function PartsPOPanel({ orderId, lines, canBuy, isEstimate, onClo
   const Stat = ({ v, l, tone }: { v: string; l: string; tone: string }) => (
     <div className="flex-1 min-w-0 px-3 py-2.5">
       <div className={`text-lg font-semibold tabular-nums leading-tight ${tone}`}>{v}</div>
-      <div className="text-2xs text-ink-tertiary">{l}</div>
+      <div className="text-[11px] text-ink-tertiary">{l}</div>
     </div>
   );
 
   return (
     <div className="absolute inset-0 z-30 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/30" aria-hidden="true" onClick={onClose} />
       <div role="dialog" aria-label="Parts and purchase orders" className="relative w-[480px] max-w-full h-full bg-slate-50 border-l border-slate-200/90 shadow-clay-drawer flex flex-col animate-[panelIn_.24s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes panelIn{from{transform:translateX(24px);opacity:0}to{transform:none;opacity:1}}`}</style>
         <div className="px-5 pt-4 pb-3 bg-white border-b border-slate-200/90">
@@ -183,12 +180,12 @@ export default function PartsPOPanel({ orderId, lines, canBuy, isEstimate, onClo
             <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center"><M n="local_shipping" c="text-lg" /></span>
             <div className="flex-1 min-w-0">
               <div className="text-sm font-semibold text-ink-primary">Parts &amp; purchase orders</div>
-              <div className="text-2xs text-ink-tertiary flex items-center gap-1">
+              <div className="text-[11px] text-ink-tertiary flex items-center gap-1">
                 <M n={auto ? "bolt" : "back_hand"} c="text-xs" />
                 {auto ? "Parts that arrive are taken from stock for this job automatically" : "Parts that arrive wait for you to use them from stock"}
               </div>
             </div>
-            <IconButton label="Close" onClick={onClose} icon={<M n="close" c="text-base" />} />
+            <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 grid place-items-center text-ink-tertiary"><M n="close" c="text-base" /></button>
           </div>
           <div className="mt-3 flex divide-x divide-slate-100 rounded-xl border border-slate-200/80 bg-slate-50/60">
             <Stat v={n(toCome)} l={late ? "To come · late" : "To come"} tone={late ? "text-rose-700" : toCome ? "text-primary" : "text-ink-primary"} />
@@ -210,7 +207,7 @@ export default function PartsPOPanel({ orderId, lines, canBuy, isEstimate, onClo
                     <span className="text-xs text-ink-primary truncate flex-1">{l.description || "Part"}</span>
                     <span className="text-xs tabular-nums text-amber-700">{n(l.pending_stock || 0)} owed</span>
                     {canBuy && <button type="button" onClick={() => writeOff(l)} disabled={busy !== null}
-                      className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-2xs font-semibold text-ink-primary hover:bg-slate-50 disabled:opacity-50">{busy === `w${l.id}` ? "Using…" : "Use from stock"}</button>}
+                      className="px-2.5 py-1.5 rounded-lg border border-slate-200 text-[11px] font-semibold text-ink-primary hover:bg-slate-50 disabled:opacity-50">{busy === `w${l.id}` ? "Using…" : "Use from stock"}</button>}
                   </div>
                 ))}
               </div>
@@ -225,7 +222,7 @@ export default function PartsPOPanel({ orderId, lines, canBuy, isEstimate, onClo
                 <div className="rounded-2xl border border-dashed border-slate-200 bg-white px-4 py-6 text-center">
                   <M n="inventory" c="text-2xl text-ink-tertiary" />
                   <div className="text-xs text-ink-secondary mt-1">Nothing on order for this job</div>
-                  {canBuy && !isEstimate && <div className="text-2xs text-ink-tertiary">Raise a PO below when a part is short.</div>}
+                  {canBuy && !isEstimate && <div className="text-[11px] text-ink-tertiary">Raise a PO below when a part is short.</div>}
                 </div>
               )}
           </section>
@@ -247,8 +244,8 @@ export default function PartsPOPanel({ orderId, lines, canBuy, isEstimate, onClo
                       <span className="w-7 h-7 rounded-lg bg-slate-100 text-ink-secondary grid place-items-center flex-shrink-0"><M n="lock_clock" c="text-sm" /></span>
                       <span className="text-ink-primary truncate flex-1">{h.part}</span>
                       <span className="tabular-nums text-ink-secondary">×{n(h.qty)}</span>
-                      {h.expires_at && <span className="text-2xs text-ink-tertiary">until {day(h.expires_at)}</span>}
-                      <button type="button" onClick={() => release(h.id)} disabled={busy !== null} className="text-2xs font-semibold text-ink-secondary hover:text-rose-600 disabled:opacity-50">Release</button>
+                      {h.expires_at && <span className="text-[11px] text-ink-tertiary">until {day(h.expires_at)}</span>}
+                      <button type="button" onClick={() => release(h.id)} disabled={busy !== null} className="text-[11px] font-semibold text-ink-secondary hover:text-rose-600 disabled:opacity-50">Release</button>
                     </div>
                   ))}
                 </div>
@@ -262,23 +259,25 @@ export default function PartsPOPanel({ orderId, lines, canBuy, isEstimate, onClo
                 <div className="flex items-center gap-2 text-xs font-semibold text-ink-primary"><M n="add_shopping_cart" c="text-sm text-primary" />Order parts from a supplier</div>
                 <div className="flex items-center gap-2">
                   <select value={supplier} onChange={(e) => { setSupplier(e.target.value); setMsg(null); }} aria-label="Supplier"
-                    className={fieldClass("flex-1 min-w-0 pr-8")}>
+                    className="glass-input rounded-lg px-2.5 py-2 text-xs text-ink-primary flex-1 min-w-0">
                     <option value="">Choose a supplier</option>
                     {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
                   </select>
-                  <button type="button" onClick={raisePO} disabled={busy !== null} className={buttonClass("primary")}>{busy === "po" ? "Raising…" : "Raise PO"}</button>
+                  <button type="button" onClick={raisePO} disabled={busy !== null} className="px-3.5 py-2 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50">{busy === "po" ? "Raising…" : "Raise PO"}</button>
                 </div>
                 <div className="flex flex-wrap gap-x-4 gap-y-1">
-                  <label className="flex items-center gap-1.5 text-2xs text-ink-secondary cursor-pointer"><input type="checkbox" checked={onlyShort} onChange={(e) => setOnlyShort(e.target.checked)} />Only what's short</label>
-                  <label className="flex items-center gap-1.5 text-2xs text-ink-secondary cursor-pointer"><input type="checkbox" checked={autoSend} onChange={(e) => setAutoSend(e.target.checked)} />Mark ordered and tell the supplier</label>
+                  <label className="flex items-center gap-1.5 text-[11px] text-ink-secondary cursor-pointer"><input type="checkbox" checked={onlyShort} onChange={(e) => setOnlyShort(e.target.checked)} />Only what's short</label>
+                  <label className="flex items-center gap-1.5 text-[11px] text-ink-secondary cursor-pointer"><input type="checkbox" checked={autoSend} onChange={(e) => setAutoSend(e.target.checked)} />Mark ordered and tell the supplier</label>
                 </div>
               </div>
               <div className="p-4 space-y-2.5 border-t border-slate-100 bg-slate-50/50">
                 <div className="flex items-center gap-2 text-xs font-semibold text-ink-primary"><M n="lock_clock" c="text-sm text-primary" />Hold parts already in stock</div>
                 <div className="flex items-center gap-1.5 flex-wrap">
-                  <Tabs look="chips" label="Hold for" value={String(holdDays)} onChange={(v) => setHoldDays(Number(v) as typeof holdDays)}
-                    tabs={HOLD_PRESETS.map((d) => ({ id: String(d), label: `${d} days` }))} />
-                  <button type="button" onClick={reserve} disabled={busy !== null} className={buttonClass("secondary", "md", "ml-auto")}>{busy === "hold" ? "Holding…" : "Hold stock"}</button>
+                  {HOLD_PRESETS.map((d) => (
+                    <button key={d} type="button" onClick={() => setHoldDays(d)} aria-pressed={holdDays === d}
+                      className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${holdDays === d ? "bg-blue-50 text-primary border-blue-200" : "bg-white text-ink-secondary border-slate-200 hover:bg-slate-50"}`}>{d} days</button>
+                  ))}
+                  <button type="button" onClick={reserve} disabled={busy !== null} className="ml-auto px-3.5 py-2 rounded-lg bg-white border border-slate-200 text-ink-primary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50">{busy === "hold" ? "Holding…" : "Hold stock"}</button>
                 </div>
               </div>
             </section>

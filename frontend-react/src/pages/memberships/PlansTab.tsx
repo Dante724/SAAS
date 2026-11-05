@@ -7,9 +7,6 @@ import { tint, hueText } from "../../lib/tint";
 import { type Plan, type PlanItem } from "./shared";
 import { loadFailed } from "../../lib/notice";
 import { NumField } from "../../components/SettingRow";
-import Button from "../../components/Button";
-import EmptyState from "../../components/EmptyState";
-import CatalogToolbar from "../catalog/CatalogToolbar";
 import { laborText } from "../../lib/labor";
 
 // Catalog › Plans: what the shop sells as a membership. Each plan is a short list of what's
@@ -34,7 +31,6 @@ export default function PlansTab() {
   const [edit, setEdit] = useState<(Omit<Plan, "id" | "members"> & { id?: string }) | null>(null);
   const [starter, setStarter] = useState(false);
   const starterRef = useRef<HTMLDivElement>(null);
-  const [q, setQ] = useState("");
   const [report, setReport] = useState<Record<string, { money_in: number; value_given: number }>>({});
   const load = () => api.get<{ items: Plan[] }>("/memberships/plans").then((r) => setPlans(r.items || [])).catch(() => setPlans([]));
   useEffect(() => {
@@ -53,8 +49,6 @@ export default function PlansTab() {
     return () => { document.removeEventListener("mousedown", onDoc); document.removeEventListener("keydown", onKey); };
   }, [starter]);
 
-  const shownPlans = plans?.filter((p) => !q || p.name.toLowerCase().includes(q.toLowerCase()));
-
   async function fromStarter(k: string) {
     const r = await api.get<{ items: any[] }>(`/memberships/plans/starters?template=${k}`);
     setStarter(false);
@@ -63,38 +57,47 @@ export default function PlansTab() {
 
   return (
     <div className="space-y-4">
-      {/* Catalog's one toolbar, so Plans starts on the same line as Services and Products. */}
-      <CatalogToolbar newLabel="New plan" onNew={() => setEdit(blankPlan())} canNew={canEdit}
-        third={<div ref={starterRef} className="relative">
-          <Button onClick={() => setStarter((x) => !x)} aria-haspopup="menu" aria-expanded={starter} disabled={!canEdit}>
-            From a template<M n={starter ? "expand_less" : "expand_more"} c="text-base text-ink-tertiary" />
-          </Button>
-          {starter && (
-            <div role="menu" className="absolute left-0 top-full mt-1.5 z-40 w-80 bg-raised rounded-2xl border border-slate-200/80 shadow-clay-card p-1.5">
-              <div className="px-3 pt-2 pb-1.5 text-2xs font-semibold text-ink-tertiary">Start from your trade</div>
-              {STARTER_TEMPLATES.map((t) => (
-                <button key={t.k} role="menuitem" onClick={() => fromStarter(t.k)}
-                  className="w-full flex items-start gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-slate-50 focus-visible:outline-none focus-visible:bg-slate-50">
-                  <span className="h-9 w-9 shrink-0 rounded-xl grid place-items-center bg-slate-100 text-ink-secondary"><M n={t.icon} c="text-lg" /></span>
-                  <span className="min-w-0">
-                    <span className="block text-sm font-semibold text-ink-primary">{t.label}</span>
-                    <span className="block text-xs text-ink-tertiary leading-snug">{laborText(t.hint)}</span>
-                  </span>
-                </button>))}
-              <div className="px-3 pt-1.5 pb-2 text-2xs text-ink-tertiary border-t border-slate-100 mt-1">You can change every price and item before saving.</div>
-            </div>
-          )}
+      <div className="flex flex-col items-start gap-3">
+        <div className="min-w-0">
+          <div className="text-base font-semibold text-ink-primary">Membership plans</div>
+          <div className="text-xs text-ink-tertiary">Sell included services and member discounts monthly or yearly. Plans go on a customer's boat, vehicle or device.</div>
+        </div>
+        {canEdit && <div className="flex gap-2">
+          <button onClick={() => setEdit(blankPlan())} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm flex items-center gap-1.5 whitespace-nowrap"><M n="add" c="text-sm" />New plan</button>
+          <div ref={starterRef} className="relative">
+            <button onClick={() => setStarter((x) => !x)} aria-haspopup="menu" aria-expanded={starter}
+              className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 whitespace-nowrap flex items-center gap-1">
+              From a template<M n={starter ? "expand_less" : "expand_more"} c="text-base text-ink-tertiary" />
+            </button>
+            {starter && (
+              <div role="menu" className="absolute left-0 top-full mt-1.5 z-40 w-80 bg-raised rounded-2xl border border-slate-200/80 shadow-clay-card p-1.5">
+                <div className="px-3 pt-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-tertiary">Start from your trade</div>
+                {STARTER_TEMPLATES.map((t) => (
+                  <button key={t.k} role="menuitem" onClick={() => fromStarter(t.k)}
+                    className="w-full flex items-start gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-slate-50 focus-visible:outline-none focus-visible:bg-slate-50">
+                    <span className="h-9 w-9 shrink-0 rounded-xl grid place-items-center bg-primary/10 text-primary"><M n={t.icon} c="text-lg" /></span>
+                    <span className="min-w-0">
+                      <span className="block text-sm font-semibold text-ink-primary">{t.label}</span>
+                      <span className="block text-xs text-ink-tertiary leading-snug">{laborText(t.hint)}</span>
+                    </span>
+                  </button>))}
+                <div className="px-3 pt-1.5 pb-2 text-[11px] text-ink-tertiary border-t border-slate-100 mt-1">You can change every price and item before saving.</div>
+              </div>
+            )}
+          </div>
         </div>}
-        q={q} onQ={setQ} searchLabel="Search plans" placeholder="Search plans…" />
-      <p className="text-xs text-ink-tertiary">Sell included services and member discounts monthly or yearly. A plan goes on the customer's device, vehicle or other item you look after.</p>
-      {plans === null && <p className="text-xs text-ink-tertiary">Loading plans…</p>}
+      </div>
+      {plans === null && <p className="text-xs text-ink-tertiary">Loading…</p>}
       {plans && plans.length === 0 && (
-        <div className="bg-white rounded-2xl border border-slate-200/90">
-          <EmptyState icon={<M n="workspace_premium" c="text-xl" />} title="No plans yet" body="Start from a template for your trade, then adjust the prices." />
+        <div className="rounded-2xl border border-dashed border-slate-300 bg-white/60 p-8 text-center">
+          <div className="mx-auto h-11 w-11 rounded-2xl grid place-items-center bg-primary/10 text-primary"><M n="workspace_premium" c="text-xl" /></div>
+          <div className="mt-3 text-sm font-semibold text-ink-primary">No plans yet</div>
+          <div className="mt-1 text-xs text-ink-tertiary">Start from a template for your trade, then adjust the prices.</div>
+          {canEdit && <button onClick={() => setStarter(true)} className="mt-4 h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 inline-flex items-center gap-1.5"><M n="workspace_premium" c="text-sm text-ink-tertiary" />Choose a template</button>}
         </div>
       )}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
-        {shownPlans?.map((p) => {
+        {plans?.map((p) => {
           const r = report[p.id];
           const hero = p.price_yearly ? { n: p.price_yearly, per: "/yr" } : { n: p.price_monthly || 0, per: "/mo" };
           return (
