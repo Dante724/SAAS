@@ -39,7 +39,7 @@ export function Timeline({ leadId }: { leadId: string }) {
         {items?.map((i) => (
           <li key={i.id} className="flex gap-2.5">
             <span className={`mt-0.5 w-6 h-6 rounded-full flex items-center justify-center flex-shrink-0 ${i.item_type === "system" ? "bg-slate-100 text-ink-tertiary" : "bg-blue-50 text-primary"}`}>
-              <M n={i.item_type === "system" ? "bolt" : "chat_bubble"} c="text-[13px]" /></span>
+              <M n={i.item_type === "system" ? "bolt" : "chat_bubble"} c="text-sm" /></span>
             <div className="min-w-0">
               <p className="text-xs text-ink-primary whitespace-pre-line break-words">{i.body}</p>
               <p className="text-2xs text-ink-tertiary">{i.item_type === "system" ? "Automatic" : i.author_name || "Staff"} · {fmt(i.created_at)}</p>

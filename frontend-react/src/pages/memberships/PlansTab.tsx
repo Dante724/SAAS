@@ -113,15 +113,15 @@ export default function PlansTab() {
               </div>
               <div className="px-5 py-4">
                 <ul className="space-y-1.5">{p.items.map((i) => (
-                  <li key={i.id} className="flex items-center gap-2 text-xs text-ink-secondary"><span style={{ color: p.color }}><M n="check_circle" c="text-[14px]" /></span>{i.text}</li>))}</ul>
-                {p.value_yearly ? <div className="mt-3 text-[11px] font-semibold text-emerald-700">Worth {money(p.value_yearly)} a year in services</div> : null}
+                  <li key={i.id} className="flex items-center gap-2 text-xs text-ink-secondary"><span style={{ color: p.color }}><M n="check_circle" c="text-sm" /></span>{i.text}</li>))}</ul>
+                {p.value_yearly ? <div className="mt-3 text-2xs font-semibold text-emerald-700">Worth {money(p.value_yearly)} a year in services</div> : null}
                 {r && (r.money_in > 0 || r.value_given > 0) && (
-                  <div className="mt-3 flex items-center gap-2 border-t border-slate-100 pt-3 text-[11px] text-ink-tertiary">
+                  <div className="mt-3 flex items-center gap-2 border-t border-slate-100 pt-3 text-2xs text-ink-tertiary">
                     <span>12 months: <b className="text-ink-primary tabular-nums">{money(r.money_in)}</b> in · <b className="text-ink-primary tabular-nums">{money(r.value_given)}</b> work given</span>
                     <span className={`ml-auto rounded-full px-1.5 py-px font-semibold ${r.money_in >= r.value_given ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>{r.money_in >= r.value_given ? "Paying off" : "Giving more"}</span>
                   </div>
                 )}
-                {p.term === "season" && <div className="mt-2 text-[11px] text-ink-tertiary">Season {p.season_start} → {p.season_end}</div>}
+                {p.term === "season" && <div className="mt-2 text-2xs text-ink-tertiary">Season {p.season_start} → {p.season_end}</div>}
               </div>
             </button>
           );
@@ -143,7 +143,7 @@ function PlanEditor({ plan, onClose, onSaved }: { plan: Omit<Plan, "id" | "membe
   const setItem = (i: number, patch: Partial<PlanItem>) => set({ items: p.items.map((it, j) => (j === i ? { ...it, ...patch } : it)) });
   const box = "glass-input h-10 rounded-xl px-3 text-sm";
   const inp = `${box} w-full`;
-  const lbl = "block text-[11px] font-bold text-ink-tertiary mb-1";
+  const lbl = "block text-2xs font-bold text-ink-tertiary mb-1";
 
   async function save() {
     setBusy(true); setErr(null);
@@ -157,7 +157,7 @@ function PlanEditor({ plan, onClose, onSaved }: { plan: Omit<Plan, "id" | "membe
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={onClose} />
       <div className="relative h-full w-full max-w-[560px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90">
         <header className="px-6 py-4 border-b border-slate-200/90 flex items-center gap-2">
           <div className="text-base font-semibold text-ink-primary">{p.id ? "Edit plan" : "New plan"}</div>
@@ -174,7 +174,7 @@ function PlanEditor({ plan, onClose, onSaved }: { plan: Omit<Plan, "id" | "membe
                 <input id="plan-year" inputMode="decimal" value={p.price_yearly ?? ""} onChange={(e) => set({ price_yearly: e.target.value === "" ? null : Number(e.target.value) })} placeholder="Not offered" className={inp} /></div>
             </div>
             {p.price_monthly && p.price_yearly && p.price_monthly * 12 > p.price_yearly
-              ? <p className="text-[11px] text-emerald-700">Yearly saves members {money(p.price_monthly * 12 - p.price_yearly)}.</p> : null}
+              ? <p className="text-2xs text-emerald-700">Yearly saves members {money(p.price_monthly * 12 - p.price_yearly)}.</p> : null}
             <div className="flex items-center gap-1.5">{SWATCHES.map((c) => (
               <button key={c} type="button" aria-label={`Colour ${c}`} onClick={() => set({ color: c })} className={`h-6 w-6 rounded-full transition ${p.color === c ? "ring-2 ring-offset-2 ring-slate-400" : ""}`} style={{ background: c }} />))}
               <label className="ml-auto flex items-center gap-2 text-xs text-ink-secondary"><input type="checkbox" checked={p.active} onChange={(e) => set({ active: e.target.checked })} />On sale</label>
@@ -257,7 +257,7 @@ function PlanEditor({ plan, onClose, onSaved }: { plan: Omit<Plan, "id" | "membe
         </div>
         <footer className="border-t border-slate-200/90 p-4 bg-white">
           {err && <p role="alert" className="mb-2 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">{err}</p>}
-          <button onClick={save} disabled={busy || !p.name.trim()} className="h-11 w-full rounded-xl bg-primary text-white text-sm font-semibold shadow-clay-sm disabled:opacity-50">{busy ? "Saving…" : "Save plan"}</button>
+          <Button variant="primary" size="lg" className="w-full" onClick={save} disabled={busy || !p.name.trim()}>{busy ? "Saving…" : "Save plan"}</Button>
         </footer>
       </div>
     </div>

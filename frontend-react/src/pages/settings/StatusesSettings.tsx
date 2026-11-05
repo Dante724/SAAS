@@ -165,7 +165,7 @@ export function StatusList({ statuses, recordType, onRecordType, onOpen, onAdd, 
                 <span className="flex items-center gap-1.5 flex-shrink-0">
                   {counts && <span className="text-2xs text-ink-tertiary tabular-nums mr-1 whitespace-nowrap">{terminal ? `${s.job_count || 0} in 30 days` : `${s.job_count || 0} ${s.job_count === 1 ? "job" : "jobs"}`}</span>}
                   {badges(s, ownMessages(s)).map((b) => (
-                    <span key={b.icon} title={b.title} aria-label={b.title} className="w-6 h-6 rounded-md bg-slate-100 text-ink-secondary grid place-items-center max-sm:hidden"><M n={b.icon} c="text-[14px]" /></span>
+                    <span key={b.icon} title={b.title} aria-label={b.title} className="w-6 h-6 rounded-md bg-slate-100 text-ink-secondary grid place-items-center max-sm:hidden"><M n={b.icon} c="text-sm" /></span>
                   ))}
                   <IconButton size="sm" label={`More actions for ${s.name}`} onClick={(e) => { e.stopPropagation(); setMenu(menu === s.id ? null : s.id); }}
                     icon={<M n="more_horiz" c="text-base" />} className="sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100" />
@@ -264,7 +264,7 @@ function MovesPanel({ statuses, onFlash }: { statuses: any[]; onFlash: (m: strin
                         return (
                           <button key={t.id} onClick={() => toggle(fr.id, t.id)} disabled={busy} aria-pressed={on}
                             className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border transition-colors disabled:opacity-60 ${on ? "bg-white border-primary/40 text-ink-primary shadow-sm" : "border-dashed border-slate-300 text-ink-tertiary hover:border-slate-400 hover:text-ink-secondary"}`}>
-                            {on ? <M n="check" c="text-[12px] text-primary" /> : <Dot c={t.color} />}{t.name}
+                            {on ? <M n="check" c="text-xs text-primary" /> : <Dot c={t.color} />}{t.name}
                           </button>
                         );
                       })}

@@ -38,8 +38,9 @@ export const NEUTRALS = {
   "ink-secondary": ["#435577", "#aab4c9"],
   // tertiary/placeholder were 4.3:1 and 2.4:1 on white; now 5.3:1 (AA text) and 3.2:1 (AA non-text)
   "ink-tertiary": ["#5e6b88", "#8e9ab4"],
-  "ink-placeholder": ["#8290ad", "#76829d"],
-  "text-slate-400": [colors.slate[400], "#76829d"],
+  // placeholders read as text too, so they meet 4.5:1 (light #63708c on the header search fill, dark #8591ab)
+  "ink-placeholder": ["#63708c", "#8591ab"],
+  "text-slate-400": ["#63708c", "#8591ab"],   // legacy grey text: same as the placeholder grey (4.5:1)
   "text-slate-500": [colors.slate[500], "#8e9ab4"],
   "text-slate-600": [colors.slate[600], "#aab4c9"],
   "text-slate-700": [colors.slate[700], "#c3cbdb"],
@@ -79,7 +80,9 @@ export function cssVars() {
     const set = (k, l, d) => { light[`--c-${fam}-${k}`] = hex(l); dark[`--c-${fam}-${k}`] = hex(d); };
     set("bg50", c[50], t.bg50); set("bg100", c[100], t.bg100);
     set("line100", c[100], t.line); set("line200", c[200], t.line); set("line300", c[300], t.line3);
-    set("t500", c[500], t.text); set("t600", c[600], t.text); set("t700", c[700], t.text); set("t800", c[800], t.text); set("t900", c[900], t.text);
+    // Light mode: coloured TEXT in the 500/600 shades renders at the 700 shade, so small red / green /
+    // amber text (required asterisks, amounts, "Delete") reaches 4.5:1 on white and the canvas.
+    set("t500", c[700], t.text); set("t600", c[700], t.text); set("t700", c[700], t.text); set("t800", c[800], t.text); set("t900", c[900], t.text);
   }
   // Shadows: flat and quiet in light (hairline border + a 1–2px lift, no glossy inset highlight);
   // in dark depth comes from surfaces, so shadows go quiet.

@@ -1,6 +1,7 @@
 import { useState } from "react";
 import { M } from "../../components/Shell";
 import FloatingMenu from "../../components/FloatingMenu";
+import Button from "../../components/Button";
 
 // Quantity and discount live on the line, not in an "Add" step: picking from search adds the item
 // with quantity 1, and the rare line that needs 2 or a discount is changed here. The line decides
@@ -49,7 +50,7 @@ export default function LineQtyEditor({ lineId, label, qty, discount, canDiscoun
             </span>
           </label>
         )}
-        <button type="submit" className="h-10 w-full rounded-xl bg-primary text-sm font-semibold text-white hover:brightness-110">Done</button>
+        <Button type="submit" variant="primary" size="lg" className="w-full">Done</Button>
       </form>
     </FloatingMenu>
   );
