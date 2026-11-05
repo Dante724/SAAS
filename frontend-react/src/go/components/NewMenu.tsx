@@ -4,7 +4,7 @@ import { useState } from "react";
 import { useNavigate } from "react-router-dom";
 import { ClipboardList, FileText, ListTodo, PhoneIncoming, Plus } from "lucide-react";
 import { useMe } from "../../context/Me";
-import { Sheet } from "./ui";
+import { FAB_CLASS, Sheet } from "./ui";
 import TaskSheet from "./TaskSheet";
 import InquirySheet from "./InquirySheet";
 
@@ -24,8 +24,8 @@ export default function NewMenu() {
   return (
     <>
       <button onClick={() => setOpen(true)} aria-label="New"
-        className="fixed z-30 right-[calc(env(safe-area-inset-right)+1rem)] bottom-[calc(env(safe-area-inset-bottom)+4.75rem)] h-14 w-14 rounded-full bg-primary text-white shadow-xs inline-flex items-center justify-center active:bg-primary-container transition-colors">
-        <Plus size={28} strokeWidth={2.25} />
+        className={`fixed z-30 right-[calc(env(safe-area-inset-right)+1rem)] ${FAB_CLASS} rounded-full bg-primary text-white shadow-xs inline-flex items-center justify-center active:bg-primary-container transition-colors`}>
+        <Plus size={28} />
       </button>
       <Sheet open={open} onClose={() => setOpen(false)} title="New">
         <div className="space-y-1">

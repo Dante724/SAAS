@@ -56,7 +56,7 @@ async def compute_pnl(db: AsyncSession, org_id: str, date_from: Optional[str],
     fee_row = (await db.execute(
         select(func.coalesce(func.sum(func.abs(Transaction.amount)), 0.0))
         .where(Transaction.org_id == org_id, Transaction.txn_type == "fee",
-               Transaction.status == "active", txn_date >= df, txn_date <= dt)
+               Transaction.status != "deleted", txn_date >= df, txn_date <= dt)
     )).scalar_one()
     fees = float(fee_row or 0.0)
 

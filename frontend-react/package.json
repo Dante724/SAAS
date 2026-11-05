@@ -12,7 +12,8 @@
     "test:watch": "vitest",
     "lint:uitext": "node scripts/check-ui-text.mjs",
     "e2e": "playwright test",
-    "test:coverage": "vitest run --coverage"
+    "test:coverage": "vitest run --coverage",
+    "lint:design": "node scripts/check-design.mjs"
   },
   "dependencies": {
     "@fontsource-variable/geist": "5.3.0",
