@@ -241,6 +241,8 @@ jobs:
         run: npx tsc --noEmit
       - name: UI-text lint (no raw snake_case in labels)
         run: npm run lint:uitext
+      - name: Design drift check (no new hand-made buttons, tabs, colours or sizes)
+        run: npm run lint:design
       - name: Unit tests + coverage floor (Vitest)
         run: npm run test:coverage
       - name: Upload frontend coverage report
