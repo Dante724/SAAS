@@ -4,10 +4,24 @@ Updated: 2026-11-05 ~17:30 UTC (cloud session). Base branch: `roadmap/orderry-pa
 This branch only carries this file. It is a report, not something to merge.
 
 ## Blocker
-**#122 (Phase 3 brand) is not merged yet** (checked 2026-11-05 ~19:20 UTC). A is ready on `fix/design-polish-a`.
+**#122 (Phase 3 brand) is not merged yet** (checked 2026-11-05 ~20:45 UTC). A is ready on `fix/design-polish-a`.
 Its PR opens after #122 merges and A is rebased onto the beta branch. B is prepared on `fix/design-polish-b`
 (on top of A for now), C on `fix/design-polish-c` (on top of B) and D on `fix/design-polish-d` (on top of C). Each PR opens after the one before it
 merges, rebased onto the beta branch. No PRs are stacked.
+
+## Waiting on a decision: force-push blocked
+The beta branch moved (#142: Work orders and Inventory layouts restored; Settings › General save bar).
+I rebased A→D onto it locally: no conflicts. On the new base, tsc, both lints, vitest 760/760 and build
+pass; tab-shift is 34/34; visual is 44/44. I recorded D's baselines again and masked countdowns
+("7090h left"), which change every hour.
+
+Pushing the rebased branches needs a force-push, and this session's permission check blocked it. The
+pushed `fix/design-polish-a..d` are still the earlier, pre-rebase versions. The rebased commits exist
+only in this container: A 9f27ebaa, B 8c5818ea, C 08a5cff1, D 1262d4e3.
+
+Opening each PR on top of the beta branch will need the same kind of push. Options:
+1. allow force-push to `fix/design-polish-*` for this session; or
+2. I push each rebased branch under a new name (for example `fix/design-polish-a2`) and open the PR from that.
 
 ## How it's measured
 `scripts/design-capture/capture.js` (added in A, with a README) checks every staff screen and tab, plus a
