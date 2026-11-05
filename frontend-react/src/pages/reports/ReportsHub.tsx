@@ -19,6 +19,31 @@ import { DEFAULT_FILTERS, REPORTS_PREF, REPORT_FILTERS, filterParams, readReport
 import { cachedPref, loadPref, savePref } from "../../lib/userPref";
 import GoPilotReport from "./GoPilotReport";
 import { loadFailed } from "../../lib/notice";
+import PageLayout, { PanelHeader, Toolbar } from "../../components/PageLayout";
+import Tabs from "../../components/Tabs";
+import Button, { IconButton } from "../../components/Button";
+import Card, { StatTile } from "../../components/Card";
+import EmptyState from "../../components/EmptyState";
+import { fieldClass } from "../../components/Field";
+import { theadRowClass } from "../../components/Table";
+import { SearchBox } from "../invoices/billing";
+
+// A report column holds money when its name says so (the API sends plain labels): those cells show
+// the shop's currency; every number column is right-aligned with even-width digits.
+const MONEY_WORDS = /commission|hourly|bonus|penalt|base|total|revenue|sales|cost|price|amount|value|profit|paid|due|balance|tax|discount|wage|refund|expense|income|salary|margin/i;
+const NOT_MONEY = /\b(count|qty|quantity|hours?|jobs|orders|units|items|%|pct|percent|rate|days|minutes|min|number|no\.)\b|%/i;
+export const isMoneyCol = (label: string) => MONEY_WORDS.test(label) && !NOT_MONEY.test(label);
+const sel = fieldClass("pr-8 w-auto max-w-[12rem]");
+// One date range control for every Reports tab: the same width and place in the toolbar.
+function Range({ from, to, onFrom, onTo, disabled }: { from: string; to: string; onFrom: (v: string) => void; onTo: (v: string) => void; disabled?: boolean }) {
+  return (
+    <span className={`flex items-center gap-1.5 whitespace-nowrap text-xs ${disabled ? "opacity-50 pointer-events-none" : ""}`} aria-disabled={disabled || undefined}>
+      <DateField mode="date" label="From" value={from} max={to} onChange={onFrom} className="w-36" />
+      <span className="text-ink-tertiary">to</span>
+      <DateField mode="date" label="To" value={to} min={from} onChange={onTo} className="w-36" />
+    </span>
+  );
+}
 
 const REPORT_PAGE = 50;
 
@@ -29,9 +54,8 @@ type Catalog = { tabs: { name: string; reports: { key: string; title: string }[]
 type RunResult = { key: string; title: string; columns: { key: string; label: string; align?: string }[] | string[]; rows: any[]; row_count: number };
 
 // Dependency-free horizontal bar chart (CSS widths, no canvas/lib). Values may be negative.
-// Richer rendering: gradient fills, rounded tracks, animated width on mount, rose tint for
-// negatives, a leading rank, and a value chip. Pass `color` to force one solid fill (e.g.
-// the feedback ratings chart); otherwise bars are signed (primary gradient up, rose down).
+// Solid fills (sapphire up, rose down), a leading rank and the value. Pass `color` to force one
+// fill (e.g. the feedback ratings chart).
 function BarChart({ rows, fmt = (n: number) => n.toLocaleString(getLocale()), color }: {
   rows: { label: string; value: number }[]; fmt?: (n: number) => string; color?: string;
 }) {
@@ -47,10 +71,10 @@ function BarChart({ rows, fmt = (n: number) => n.toLocaleString(getLocale()), co
           : "bg-rose-400");
         return (
           <div key={i} className="group flex items-center gap-2.5 text-xs">
-            <span className="w-4 shrink-0 text-right text-[11px] font-bold text-ink-placeholder tabular-nums">{i + 1}</span>
+            <span className="w-4 shrink-0 text-right text-2xs font-semibold text-ink-placeholder tabular-nums">{i + 1}</span>
             <span className="w-32 shrink-0 truncate text-ink-secondary group-hover:text-ink-primary transition-colors" title={r.label}>{r.label}</span>
-            <div className="flex-1 h-5 rounded-full bg-slate-100/80 overflow-hidden ring-1 ring-inset ring-slate-200/50">
-              <div className={`h-full rounded-full ${fill} shadow-sm transition-[width] duration-700 ease-out group-hover:brightness-105`} style={{ width: `${pct}%` }} />
+            <div className="flex-1 h-5 rounded-full bg-slate-100 overflow-hidden">
+              <div className={`h-full rounded-full ${fill} transition-[width] duration-700 ease-out`} style={{ width: `${pct}%` }} />
             </div>
             <span className={`w-24 shrink-0 text-right tabular-nums font-semibold tabular-nums ${pos ? "text-ink-primary" : "text-rose-600"}`}>{fmt(r.value)}</span>
           </div>
@@ -155,38 +179,41 @@ export function CustomView() {
     : [];
 
   return (
-    <div className="flex-1 overflow-y-auto px-6 py-5">
+    <PageLayout>
+      <PanelHeader title="Custom report" sub="Build your own table from any data, then save it to run again." />
+      <Toolbar
+        actions={<>
+          <Button variant="primary" disabled={busy || !src} onClick={run}>Run</Button>
+          <Button icon={<M n="table_view" c="text-sm" />} disabled={!res} onClick={() => exportRes("xlsx")}>Excel</Button>
+          <Button icon={<M n="download" c="text-sm" />} disabled={!res} onClick={() => exportRes("csv")}>CSV</Button>
+        </>}
+        filters={<>
+          <select aria-label="Location" value={locId} onChange={(e) => setLocId(e.target.value)} disabled={!(meta?.has_location && locs.length > 1)} className={sel}>
+            <option value="">All locations</option>
+            {locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+          </select>
+          <Range from={from} to={to} onFrom={setFrom} onTo={setTo} disabled={!meta?.date_field} />
+        </>} />
       <div className="flex flex-col md:flex-row gap-4">
         {/* saved reports */}
-        <aside className="md:w-52 flex-shrink-0 bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-2 h-fit">
-          <button onClick={() => pickSource("")} className="w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-bold text-primary hover:bg-blue-50 flex items-center gap-1.5"><M n="add" c="text-sm" />New report</button>
-          <div className="text-[11px] font-bold text-ink-tertiary px-2 py-1.5 mt-1">Saved</div>
+        <aside className="md:w-52 flex-shrink-0 bg-white rounded-2xl border border-slate-200/90 p-2 h-fit">
+          <button onClick={() => pickSource("")} className="w-full text-left px-2.5 py-2 rounded-lg text-xs font-semibold text-primary hover:bg-slate-50 flex items-center gap-1.5"><M n="add" c="text-sm" />New report</button>
+          <div className="text-2xs font-semibold text-ink-tertiary px-2 py-1.5 mt-1">Saved</div>
           {saved.length === 0 && <div className="px-2.5 py-1 text-xs text-ink-tertiary">None yet.</div>}
           {saved.map((r) => (
-            <button key={r.id} onClick={() => loadReport(r)} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center gap-2 ${curId === r.id ? "bg-blue-50/80 text-primary font-semibold" : "text-ink-secondary hover:bg-slate-100"}`}><M n="bar_chart" c="text-sm" /><span className="truncate">{r.name}</span></button>
+            <button key={r.id} onClick={() => loadReport(r)} className={`w-full text-left px-2.5 py-2 rounded-lg text-xs font-medium ${curId === r.id ? "bg-primary/10 text-primary" : "text-ink-secondary hover:bg-slate-100"}`}><span className="block truncate">{r.name}</span></button>
           ))}
         </aside>
 
         {/* builder + results */}
         <div className="flex-1 min-w-0 space-y-3">
-          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 space-y-3">
+          <div className="bg-white rounded-2xl border border-slate-200/90 p-4 space-y-3">
             <div className="flex items-center gap-2 flex-wrap">
-              <span className="text-[11px] font-bold text-ink-tertiary">Source</span>
-              <select value={src} onChange={(e) => pickSource(e.target.value)} className="glass-input px-2.5 py-1.5 rounded-lg text-xs">
+              <span className="text-xs font-semibold text-ink-secondary">Source</span>
+              <select aria-label="Source" value={src} onChange={(e) => pickSource(e.target.value)} className={sel}>
                 <option value="">Choose data…</option>
                 {sources && Object.entries(sources).map(([k, s]) => <option key={k} value={k}>{s.label}</option>)}
               </select>
-              {meta?.has_location && locs.length > 1 && (
-                <select value={locId} onChange={(e) => setLocId(e.target.value)} className="glass-input px-2.5 py-1.5 rounded-lg text-xs">
-                  <option value="">All locations</option>
-                  {locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-                </select>
-              )}
-              {meta?.date_field && (<>
-                <DateField mode="date" value={from} onChange={setFrom} className="w-32" />
-                <span className="text-ink-tertiary text-xs">→</span>
-                <DateField mode="date" value={to} onChange={setTo} className="w-32" />
-              </>)}
             </div>
 
             {meta && (<>
@@ -194,37 +221,37 @@ export function CustomView() {
                    the result is the group key + aggregates, so the column picker is hidden to
                    avoid the misleading "all columns selected but ignored" state (code-review #1). */}
               {groupBy
-                ? <div className="text-[11px] text-ink-tertiary flex items-center gap-1.5"><M n="info" c="text-xs" />Columns are set by <span className="font-semibold text-ink-secondary">Group by</span> + <span className="font-semibold text-ink-secondary">Aggregates</span> below.</div>
+                ? <div className="text-xs text-ink-tertiary flex items-center gap-1.5"><M n="info" c="text-xs" />Columns are set by <span className="font-semibold text-ink-secondary">Group by</span> + <span className="font-semibold text-ink-secondary">Aggregates</span> below.</div>
                 : (
                 <div>
-                  <span className="text-[11px] font-bold text-ink-tertiary">Columns</span>
+                  <span className="text-xs font-semibold text-ink-secondary">Columns</span>
                   <div className="flex flex-wrap gap-1.5 mt-1.5">
                     {fieldsOf.map((f) => {
                       const on = cols.includes(f.key);
                       return <button key={f.key} onClick={() => setCols((c) => on ? c.filter((k) => k !== f.key) : [...c, f.key])}
-                        className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${on ? "bg-blue-50 text-primary border-blue-200" : "bg-white text-ink-secondary border-slate-200 hover:bg-slate-50"}`}>{f.label}</button>;
+                        aria-pressed={on} className={`h-8 px-3 rounded-full text-xs font-semibold ring-1 ring-inset ${on ? "bg-primary/10 text-primary ring-primary/20" : "bg-white text-ink-secondary ring-slate-200 hover:bg-slate-50"}`}>{f.label}</button>;
                     })}
                   </div>
-                  {cols.length === 0 && <p className="mt-1.5 text-[11px] text-ink-tertiary flex items-center gap-1"><M n="info" c="text-xs" />No columns selected — the report will show all of them.</p>}
+                  {cols.length === 0 && <p className="mt-1.5 text-xs text-ink-tertiary flex items-center gap-1"><M n="info" c="text-xs" />No columns selected — the report will show all of them.</p>}
                 </div>
               )}
 
               {/* filters */}
               <div>
-                <div className="flex items-center gap-2"><span className="text-[11px] font-bold text-ink-tertiary">Filters</span>
-                  <button onClick={() => setFilters((f) => [...f, { field: fieldsOf[0]?.key || "", op: "eq", value: "" }])} className="text-[11px] font-semibold text-primary hover:underline">+ Add</button></div>
+                <div className="flex items-center gap-2"><span className="text-xs font-semibold text-ink-secondary">Filters</span>
+                  <Button variant="link" onClick={() => setFilters((f) => [...f, { field: fieldsOf[0]?.key || "", op: "eq", value: "" }])}>+ Add</Button></div>
                 {filters.map((flt, i) => (
                   <div key={i} className="flex items-center gap-1.5 mt-1.5">
-                    <select value={flt.field} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, field: e.target.value, op: OPS_FOR(fType(e.target.value))[0][0] } : x))} className="glass-input px-2.5 py-1.5 rounded-lg text-xs min-w-[130px]">
+                    <select value={flt.field} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, field: e.target.value, op: OPS_FOR(fType(e.target.value))[0][0] } : x))} className={fieldClass("pr-8 w-auto min-w-[130px]")}>
                       {fieldsOf.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
                     </select>
-                    <select value={flt.op} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, op: e.target.value } : x))} className="glass-input px-2.5 py-1.5 rounded-lg text-xs min-w-[110px]">
+                    <select value={flt.op} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, op: e.target.value } : x))} className={fieldClass("pr-8 w-auto min-w-[110px]")}>
                       {OPS_FOR(fType(flt.field)).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
                     </select>
                     {fType(flt.field) === "date"
                       ? <DateField className="w-40" value={flt.value} onChange={(d) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, value: d } : x))} label="Filter date" />
-                      : <input value={flt.value} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} placeholder="value" className="glass-input px-2.5 py-1.5 rounded-lg text-xs w-32" />}
-                    <button aria-label="Remove filter" onClick={() => setFilters((fs) => fs.filter((_, j) => j !== i))} className="p-1 rounded-md text-ink-tertiary hover:text-rose-500 hover:bg-rose-50 shrink-0"><M n="close" c="text-sm" /></button>
+                      : <input value={flt.value} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} placeholder="value" className={fieldClass("w-32")} />}
+                    <IconButton size="sm" label="Remove filter" onClick={() => setFilters((fs) => fs.filter((_, j) => j !== i))} icon={<M n="close" c="text-sm" />} />
                   </div>
                 ))}
               </div>
@@ -232,8 +259,8 @@ export function CustomView() {
               {/* group by + aggregates — the "shape the output" panel */}
               <div className="rounded-xl bg-slate-50/70 border border-slate-200/70 p-3 flex flex-wrap items-start gap-x-6 gap-y-3">
                 <div className="min-w-[160px]">
-                  <span className="block text-[11px] font-bold text-ink-tertiary mb-1.5">Group by</span>
-                  <select value={groupBy} onChange={(e) => setGroupBy(e.target.value)} className="glass-input px-2.5 py-1.5 rounded-lg text-xs w-full">
+                  <span className="block text-xs font-semibold text-ink-secondary mb-1.5">Group by</span>
+                  <select value={groupBy} onChange={(e) => setGroupBy(e.target.value)} className={fieldClass("pr-8")}>
                     <option value="">— none (list rows) —</option>
                     {fieldsOf.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
                   </select>
@@ -241,22 +268,22 @@ export function CustomView() {
                 {groupBy && (
                   <div className="min-w-[200px]">
                     <div className="flex items-center justify-between gap-3 mb-1.5">
-                      <span className="text-[11px] font-bold text-ink-tertiary">Aggregates</span>
-                      <button onClick={() => setAggs((a) => [...a, { fn: "sum", field: numFields[0]?.key || "" }])} className="flex items-center gap-0.5 text-[11px] font-semibold text-primary hover:underline"><M n="add" c="text-xs" />Add</button>
+                      <span className="text-xs font-semibold text-ink-secondary">Aggregates</span>
+                      <Button variant="link" onClick={() => setAggs((a) => [...a, { fn: "sum", field: numFields[0]?.key || "" }])}>+ Add</Button>
                     </div>
                     <div className="space-y-1.5">
                       {aggs.map((a, i) => (
                         <div key={i} className="flex items-center gap-1.5">
-                          <select value={a.fn} onChange={(e) => setAggs((as) => as.map((x, j) => j === i ? { ...x, fn: e.target.value } : x))} className="glass-input px-2.5 py-1.5 rounded-lg text-xs min-w-[110px]">
+                          <select value={a.fn} onChange={(e) => setAggs((as) => as.map((x, j) => j === i ? { ...x, fn: e.target.value } : x))} className={fieldClass("pr-8 w-auto min-w-[110px]")}>
                             <option value="count">Count</option><option value="sum">Sum</option><option value="avg">Average</option>
                           </select>
                           {a.fn !== "count" && (
-                            <select value={a.field} onChange={(e) => setAggs((as) => as.map((x, j) => j === i ? { ...x, field: e.target.value } : x))} className="glass-input px-2.5 py-1.5 rounded-lg text-xs min-w-[130px]">
+                            <select value={a.field} onChange={(e) => setAggs((as) => as.map((x, j) => j === i ? { ...x, field: e.target.value } : x))} className={fieldClass("pr-8 w-auto min-w-[130px]")}>
                               <option value="">field…</option>
                               {numFields.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
                             </select>
                           )}
-                          <button aria-label="Remove aggregate" onClick={() => setAggs((as) => as.filter((_, j) => j !== i))} className="p-1 rounded-md text-ink-tertiary hover:text-rose-500 hover:bg-rose-50 shrink-0"><M n="close" c="text-sm" /></button>
+                          <IconButton size="sm" label="Remove aggregate" onClick={() => setAggs((as) => as.filter((_, j) => j !== i))} icon={<M n="close" c="text-sm" />} />
                         </div>
                       ))}
                     </div>
@@ -264,26 +291,21 @@ export function CustomView() {
                 )}
               </div>
 
-              {/* actions */}
-              <div className="flex items-center gap-2 flex-wrap pt-1 border-t border-slate-100">
-                <button disabled={busy} onClick={run} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-50">Run</button>
-                <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Report name" className="glass-input px-2.5 py-1.5 rounded-lg text-xs w-44" />
-                <button disabled={busy} onClick={save} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-primary bg-blue-50 hover:bg-blue-100 disabled:opacity-50">{curId ? "Update" : "Save"}</button>
-                {curId && <button disabled={busy} onClick={del} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-rose-600 bg-rose-50 hover:bg-rose-100">Delete</button>}
-                {res && <div className="ml-auto flex items-center gap-2">
-                  <button onClick={() => exportRes("xlsx")} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 flex items-center gap-1"><M n="table_view" c="text-sm" />Excel</button>
-                  <button onClick={() => exportRes("csv")} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-ink-secondary bg-slate-100 hover:bg-slate-200 flex items-center gap-1"><M n="download" c="text-sm" />CSV</button>
-                </div>}
+              {/* save this report (Run and the downloads are in the page toolbar) */}
+              <div className="flex items-center gap-2 flex-wrap pt-3 border-t border-slate-100">
+                <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Report name" aria-label="Report name" className={fieldClass("w-44")} />
+                <Button disabled={busy} onClick={save}>{curId ? "Update" : "Save"}</Button>
+                {curId && <Button variant="danger" disabled={busy} onClick={del}>Delete</Button>}
               </div>
               {err && <div className="text-xs text-rose-600">{err}</div>}
             </>)}
           </div>
 
-          {!meta && <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-8 text-xs text-ink-tertiary text-center">Choose a data source to start building, or pick a saved report.</div>}
+          {!meta && <Card padded={false}><EmptyState title="Choose what to report on" body="Pick a data source above, or open a saved report." /></Card>}
 
           {res && chartRows.length > 0 && (
-            <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5">
-              <h4 className="text-xs font-bold text-ink-primary mb-3">Chart</h4>
+            <div className="bg-white rounded-2xl border border-slate-200/90 p-4">
+              <h4 className="text-xs font-semibold text-ink-primary mb-3">Chart</h4>
               <BarChart rows={chartRows} />
             </div>
           )}
@@ -295,14 +317,14 @@ export function CustomView() {
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
               <div className="overflow-auto max-h-[62vh]">
                 <table className="w-full text-left border-collapse text-xs">
-                  <thead className="sticky top-0 z-10"><tr className="bg-slate-50 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold shadow-[0_1px_0_rgba(0,0,0,0.04)]">
+                  <thead className="sticky top-0 z-10"><tr className={theadRowClass}>
                     {res.columns.map((c) => <th key={c.key} className={`py-3 px-4 bg-slate-50 ${c.align === "right" ? "text-right" : ""}`}>{c.label}</th>)}
                   </tr></thead>
                   <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
-                    {res.rows.length === 0 && <tr><td colSpan={res.columns.length} className="py-6 px-4 text-ink-tertiary">No data for this query.</td></tr>}
+                    {res.rows.length === 0 && <tr><td colSpan={res.columns.length} className="p-0"><EmptyState size="inline" className="px-4" title="Nothing matches this report for these dates." /></td></tr>}
                     {cShown.map((row, ri) => (
                       <tr key={(cSafe - 1) * REPORT_PAGE + ri} className="odd:bg-slate-50/40 hover:bg-blue-50/50 transition-colors">
-                        {res.columns.map((c, ci) => <td key={ci} className={`py-2.5 px-4 text-ink-primary ${c.align === "right" ? "text-right font-mono" : ""}`}>{typeof row[ci] === "number" ? row[ci].toLocaleString(getLocale()) : String(row[ci] ?? "—")}</td>)}
+                        {res.columns.map((c, ci) => <td key={ci} className={`py-2.5 px-4 text-ink-primary ${c.align === "right" || typeof row[ci] === "number" ? "text-right tabular-nums whitespace-nowrap" : ""}`}>{typeof row[ci] === "number" ? (isMoneyCol(c.label) ? money(row[ci], undefined, true) : row[ci].toLocaleString(getLocale())) : String(row[ci] ?? "—")}</td>)}
                       </tr>
                     ))}
                   </tbody>
@@ -310,13 +332,13 @@ export function CustomView() {
               </div>
               {res.rows.length > 0
                 ? <Pager total={res.rows.length} page={cSafe} pageSize={REPORT_PAGE} onPage={setCpage} noun="rows" />
-                : <div className="px-4 py-3 bg-slate-50/60 border-t border-slate-100 text-[11px] text-ink-tertiary">0 rows</div>}
+                : <div className="px-4 py-3 bg-slate-50/60 border-t border-slate-100 text-2xs text-ink-tertiary">0 rows</div>}
             </div>
             );
           })()}
         </div>
       </div>
-    </div>
+    </PageLayout>
   );
 }
 
@@ -386,7 +408,7 @@ export default function ReportsHub() {
     ["This month", () => { const n = new Date(); return [new Date(n.getFullYear(), n.getMonth(), 1), n]; }],
     ["Last month", () => { const n = new Date(); return [new Date(n.getFullYear(), n.getMonth() - 1, 1), new Date(n.getFullYear(), n.getMonth(), 0)]; }],
     ["This quarter", () => { const n = new Date(); const q0 = Math.floor(n.getMonth() / 3) * 3; return [new Date(n.getFullYear(), q0, 1), n]; }],
-    ["YTD", () => { const n = new Date(); return [new Date(n.getFullYear(), 0, 1), n]; }],
+    ["This year", () => { const n = new Date(); return [new Date(n.getFullYear(), 0, 1), n]; }],
   ];
   function applyPreset(fn: () => [Date, Date]) {
     const [s, e] = fn(); const f = iso(s), t = iso(e);
@@ -456,7 +478,7 @@ export default function ReportsHub() {
   const colLabel = (c: any) => typeof c === "string" ? c : (c.label || c.key);
   const colKey = (c: any, i: number) => typeof c === "string" ? c : (c.key ?? i);
   // Raw keys from the server ("technician", "in_repair") read as words; names and emails are left alone.
-  const cell = (v: any) => (typeof v === "number" ? <span className={`font-mono tabular-nums ${v < 0 ? "text-rose-600 font-semibold" : ""}`}>{v.toLocaleString(getLocale())}</span>
+  const cell = (v: any, label = "") => (typeof v === "number" ? <span className={`tabular-nums ${v < 0 ? "text-rose-600 font-semibold" : ""}`}>{isMoneyCol(label) ? money(v, undefined, true) : v.toLocaleString(getLocale())}</span>
     : typeof v === "string" && /^[a-z]+(_[a-z]+)*$/.test(v) ? humanize(v) : String(v ?? "—"));
   const cellVal = (row: any, c: any, ci: number) => Array.isArray(row) ? row[ci] : row[colKey(c, ci)];
 
@@ -505,39 +527,38 @@ export default function ReportsHub() {
 
   return (
     <Shell title="Reports">
-      <div className="px-6 pt-3 border-b border-slate-200/60 bg-white/40 flex-shrink-0">
-        <nav className="flex space-x-1 -mb-px text-xs font-semibold overflow-x-auto">
-          {([["reports", "Reports", "summarize"], ...(can("can_see_profit") ? [["total_profit", "Total profit", "savings"]] : []), ["custom", "Custom report", "tune"], ["fleet", "Business & analytics", "insights"], ["profitability", "Job profitability", "payments"], ["insights", "Insights", "lightbulb"], ["feedback", "Feedback", "reviews"], ...(can("can_manage_settings") ? [["gopilot", "Go pilot", "qr_code_scanner"]] : [])] as [typeof view, string, string][]).map(([id, label, icon]) => (
-            <button key={id} onClick={() => setView(id)} className={`flex items-center gap-1.5 px-3 pb-3 pt-1 border-b-2 whitespace-nowrap transition-colors ${view === id ? "text-primary border-primary" : "text-ink-secondary hover:text-ink-primary hover:bg-slate-100/60 rounded-t-lg border-transparent"}`}><M n={icon} c="text-sm" />{label}</button>
-          ))}
-        </nav>
+      <div className="px-6 flex-shrink-0">
+        <Tabs look="underline" label="Report sections" value={view} onChange={setView}
+          tabs={([["reports", "Reports"], ...(can("can_see_profit") ? [["total_profit", "Total profit"]] : []), ["custom", "Custom report"], ["fleet", "Business & analytics"], ["profitability", "Job profitability"], ["insights", "Insights"], ["feedback", "Feedback"], ...(can("can_manage_settings") ? [["gopilot", "Go pilot"]] : [])] as [typeof view, string][]).map(([id, label]) => ({ id, label }))} />
       </div>
 
       {view === "custom" && <CustomView />}
-      {view === "total_profit" && <div className="flex-1 overflow-y-auto px-6 py-5"><TotalProfit locs={locs} /></div>}
-      {view === "fleet" && <div className="flex-1 overflow-y-auto px-6 py-5"><FleetAnalytics /></div>}
+      {view === "total_profit" && <PageLayout><TotalProfit locs={locs} /></PageLayout>}
+      {view === "fleet" && <PageLayout><FleetAnalytics /></PageLayout>}
       {view === "gopilot" && <GoPilotReport />}
 
       {view !== "reports" && view !== "custom" && view !== "fleet" && view !== "total_profit" && view !== "gopilot" && (
-        <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+        <PageLayout>
+          {view === "profitability" && <PanelHeader title="Job profitability" sub="What each job brought in against its parts, labour and commission." />}
+          {view === "insights" && <PanelHeader title="Insights" sub="The numbers your shop tracks most closely." />}
+          {view === "feedback" && <PanelHeader title="Feedback" sub="What customers said after their job." />}
           {view === "profitability" && (
-            <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-              <div className="p-3.5 border-b border-slate-100 text-xs font-bold text-ink-primary ">Job profitability</div>
+            <Card padded={false}>
               <table className="w-full text-left border-collapse text-xs">
-                <thead><tr className="bg-slate-50/60 border-b border-slate-100 text-ink-tertiary text-[11px] font-bold ">
+                <thead><tr className={theadRowClass}>
                   <th className="py-3 px-4">Order</th><th className="py-3 px-4">Client</th><th className="py-3 px-4 text-right">Sales</th><th className="py-3 px-4 text-right">Costs</th><th className="py-3 px-4 text-right">Profit</th><th className="py-3 px-4 text-right">Margin</th>
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
                   {profit == null && <SkeletonRows cols={6} />}
-                  {profit?.length === 0 && <tr><td colSpan={6} className="py-6 px-4 text-ink-tertiary">No data.</td></tr>}
+                  {profit?.length === 0 && <tr><td colSpan={6} className="p-0"><EmptyState size="inline" className="px-4" title="No finished jobs to show yet." /></td></tr>}
                   {profit?.slice((Math.min(ppage, Math.max(1, Math.ceil(profit.length / REPORT_PAGE))) - 1) * REPORT_PAGE,
                                  Math.min(ppage, Math.max(1, Math.ceil(profit.length / REPORT_PAGE))) * REPORT_PAGE).map((r, i) => (
                     <tr key={r?.id || i} className="odd:bg-slate-50/40 hover:bg-blue-50/50 transition-colors">
-                      <td className="py-2.5 px-4 font-bold text-primary font-mono">{gv(r, ["order_number", "order_id", "order"])}</td>
+                      <td className="py-2.5 px-4 font-semibold text-primary tabular-nums">{gv(r, ["order_number", "order_id", "order"])}</td>
                       <td className="py-2.5 px-4">{gv(r, ["client_name", "client"])}</td>
-                      <td className="py-2.5 px-4 text-right tabular-nums">{money(r?.revenue ?? r?.total_revenue)}</td>
-                      <td className="py-2.5 px-4 text-right tabular-nums">{r?.parts_cost === undefined ? "—" : money((r.parts_cost || 0) + (r.labour_cost || 0) + (r.commission || 0))}</td>
-                      <td className="py-2.5 px-4 text-right tabular-nums font-bold text-ink-primary">{r?.margin === undefined ? "—" : money(r.margin)}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums whitespace-nowrap">{money(r?.revenue ?? r?.total_revenue, undefined, true)}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums whitespace-nowrap">{r?.parts_cost === undefined ? "—" : money((r.parts_cost || 0) + (r.labour_cost || 0) + (r.commission || 0), undefined, true)}</td>
+                      <td className="py-2.5 px-4 text-right tabular-nums whitespace-nowrap font-semibold text-ink-primary">{r?.margin === undefined ? "—" : money(r.margin, undefined, true)}</td>
                       <td className="py-2.5 px-4 text-right tabular-nums">{gv(r, ["margin_pct", "margin"], "—")}{(r?.margin_pct != null || r?.margin != null) ? "%" : ""}</td>
                     </tr>
                   ))}
@@ -547,22 +568,21 @@ export default function ReportsHub() {
                 <Pager total={profit.length} page={Math.min(ppage, Math.max(1, Math.ceil(profit.length / REPORT_PAGE)))}
                        pageSize={REPORT_PAGE} onPage={setPpage} noun="jobs" />
               )}
-            </div>
+            </Card>
           )}
 
           {view === "insights" && (
             <div>
               {insights == null && <div className="text-xs text-ink-tertiary">Loading insights…</div>}
-              {insights?.length === 0 && <div className="text-xs text-ink-tertiary">No insight cards configured.</div>}
-              <div className="grid grid-cols-2 lg:grid-cols-3 gap-4">
-                {insights?.map((c, i) => (
-                  <div key={c?.id || i} className="bg-white rounded-2xl border border-slate-200/80 shadow-clay-sm p-4">
-                    <p className="text-xs font-semibold text-ink-tertiary">{gv(c, ["title", "name", "label"])}</p>
-                    <p className="mt-2 text-2xl font-bold text-ink-primary tabular-nums">{gv(c, ["value", "total", "count"], "—")}</p>
-                    {gv(c, ["subtitle", "hint", "description"], "") && <p className="mt-1 text-[11px] text-ink-tertiary">{gv(c, ["subtitle", "hint", "description"], "")}</p>}
-                  </div>
-                ))}
-              </div>
+              {insights?.length === 0 && <Card padded={false}><EmptyState title="No insights yet" body="Insight cards appear here once your shop has enough activity to compare." /></Card>}
+              {!!insights?.length && (
+                <Card className="grid grid-cols-2 lg:grid-cols-3 gap-6">
+                  {insights.map((c, i) => (
+                    <StatTile key={c?.id || i} label={gv(c, ["title", "name", "label"])} value={gv(c, ["value", "total", "count"], "—")}
+                      hint={gv(c, ["subtitle", "hint", "description"], "") || undefined} />
+                  ))}
+                </Card>
+              )}
             </div>
           )}
 
@@ -573,40 +593,33 @@ export default function ReportsHub() {
             const five = submitted.filter((f: any) => f.system === "five_point");
             const dist = [5, 4, 3, 2, 1].map((n) => ({ label: `${n} ★`, value: five.filter((f: any) => f.rating === n).length }));
             const hasDist = five.length > 0;
-            const cards = [
-              { l: "Avg rating", v: feedback.avg_five_point != null ? `${feedback.avg_five_point} / 5` : "—", icon: "trending_up", tint: "bg-amber-50 text-amber-600" },
-              { l: "NPS", v: feedback.nps != null ? String(feedback.nps) : "—", icon: "analytics", tint: "bg-indigo-50 text-indigo-600" },
-              { l: "Response rate", v: `${feedback.response_rate ?? 0}%`, icon: "contacts", tint: "bg-emerald-50 text-emerald-600" },
-              { l: "Responses", v: String(submitted.length), icon: "handyman", tint: "bg-blue-50 text-primary" },
+            const stats: SummaryStat[] = [
+              { label: "Average rating", value: feedback.avg_five_point != null ? `${feedback.avg_five_point} / 5` : "—" },
+              { label: "NPS", value: feedback.nps != null ? String(feedback.nps) : "—", hint: "Promoters minus detractors" },
+              { label: "Response rate", value: `${feedback.response_rate ?? 0}%` },
+              { label: "Responses", value: String(submitted.length) },
             ];
             return (
               <div className="space-y-4">
-                <div className="grid grid-cols-2 sm:grid-cols-4 gap-3">
-                  {cards.map((k) => (
-                    <div key={k.l} className="bg-white rounded-xl p-3 border border-slate-200/80 shadow-clay-sm flex items-center justify-between">
-                      <div><span className="text-[11px] font-bold text-ink-tertiary">{k.l}</span><p className="text-lg font-bold text-ink-primary">{k.v}</p></div>
-                      <div className={`w-8 h-8 rounded-lg flex items-center justify-center ${k.tint}`}><M n={k.icon} c="text-base" /></div>
-                    </div>
-                  ))}
-                </div>
+                <PageSummary stats={stats} />
                 {hasDist && (
-                  <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5">
-                    <h4 className="text-xs font-bold text-ink-primary mb-3">Rating distribution</h4>
+                  <div className="bg-white rounded-2xl border border-slate-200/90 p-4">
+                    <h4 className="text-xs font-semibold text-ink-primary mb-3">Rating distribution</h4>
                     <BarChart rows={dist} color="bg-amber-400" fmt={(n) => String(n)} />
                   </div>
                 )}
-                <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-                  <div className="p-3.5 border-b border-slate-100 text-xs font-bold text-ink-primary ">Comments</div>
+                <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
+                  <div className="px-4 py-3 border-b border-slate-100 text-xs font-semibold text-ink-primary">Comments</div>
                   <table className="w-full text-left border-collapse text-xs">
-                    <thead><tr className="bg-slate-50/60 border-b border-slate-100 text-ink-tertiary text-[11px] font-bold ">
+                    <thead><tr className={theadRowClass}>
                       <th className="py-3 px-4">Date</th><th className="py-3 px-4">Order</th><th className="py-3 px-4">Rating</th><th className="py-3 px-4">Comment</th>
                     </tr></thead>
                     <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
-                      {submitted.length === 0 && <tr><td colSpan={4} className="py-6 px-4 text-ink-tertiary">No feedback submitted yet.</td></tr>}
+                      {submitted.length === 0 && <tr><td colSpan={4} className="p-0"><EmptyState size="inline" className="px-4" title="No feedback submitted yet." /></td></tr>}
                       {submitted.map((f: any, i: number) => (
                         <tr key={f?.id || i} className="odd:bg-slate-50/40 hover:bg-blue-50/50 transition-colors">
                           <td className="py-2.5 px-4">{f?.submitted_at ? new Date(f.submitted_at).toLocaleDateString() : "—"}</td>
-                          <td className="py-2.5 px-4 font-bold text-primary font-mono">{f?.order_number ?? "—"}</td>
+                          <td className="py-2.5 px-4 font-semibold text-primary tabular-nums">{f?.order_number ?? "—"}</td>
                           <td className="py-2.5 px-4 tabular-nums">{f?.rating ?? "—"}</td>
                           <td className="py-2.5 px-4 text-ink-tertiary truncate max-w-[360px]">{f?.comment || "—"}</td>
                         </tr>
@@ -617,22 +630,38 @@ export default function ReportsHub() {
               </div>
             );
           })()}
-        </div>
+        </PageLayout>
       )}
 
       {view === "reports" && (
-      <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+      <PageLayout>
+        <PanelHeader title={result?.title || "Reports"} sub={result ? "Pick another report on the left, or change the dates." : "Pick a report on the left to get started."} />
+        {/* The one Reports toolbar: run and download on the left; location and dates on the right,
+            in the same place as on Total profit, Custom report and Go pilot. */}
+        <Toolbar
+          actions={<>
+            <Button variant="primary" onClick={() => active && run(active)} disabled={!active}>Run</Button>
+            <Button icon={<M n="table_view" c="text-sm" />} disabled={exporting || !result || !can(EXPORT_PERMS[active || ""])} onClick={() => download("xlsx")}>Excel</Button>
+            <Button icon={<M n="download" c="text-sm" />} disabled={exporting || !result || !can(EXPORT_PERMS[active || ""])} onClick={() => download("csv")}>CSV</Button>
+          </>}
+          filters={<>
+            <select aria-label="Location" value={locId} onChange={(e) => { setLocId(e.target.value); remember(active, filters, e.target.value); }} disabled={locs.length < 2} className={sel}>
+              <option value="">All locations</option>
+              {locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+            </select>
+            <Range from={from} to={to} onFrom={setFrom} onTo={setTo} />
+          </>} />
         <PageSummary stats={kpiStats} />
 
         <div className="flex flex-col md:flex-row gap-4">
           {/* report catalog */}
-          <aside className="md:w-56 flex-shrink-0 bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-2 h-fit max-h-[40vh] md:max-h-[70vh] overflow-y-auto">
+          <aside className="md:w-64 flex-shrink-0 bg-white rounded-2xl border border-slate-200/90 p-2 h-fit">
             {!cat && <div className="p-3 text-xs text-ink-tertiary">Loading…</div>}
             {cat?.tabs.map((t) => (
               <div key={t.name} className="mb-2">
-                <div className="text-[11px] font-bold text-ink-tertiary px-2 py-1.5">{t.name}</div>
+                <div className="text-2xs font-semibold text-ink-tertiary px-2 py-1.5">{t.name}</div>
                 {t.reports.map((r) => (
-                  <button key={r.key} onClick={() => run(r.key)} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center gap-2 border-l-2 transition-colors ${active === r.key ? "bg-blue-50/80 text-primary font-semibold border-primary" : "text-ink-secondary hover:bg-slate-100 border-transparent"}`}><M n="bar_chart" c={`text-sm ${active === r.key ? "text-primary" : "text-ink-tertiary"}`} /><span className="truncate">{r.title}</span></button>
+                  <button key={r.key} onClick={() => run(r.key)} title={r.title} aria-current={active === r.key || undefined} className={`w-full text-left px-2.5 py-2 rounded-lg text-xs font-medium transition-colors ${active === r.key ? "bg-primary/10 text-primary" : "text-ink-secondary hover:bg-slate-100"}`}><span className="block leading-snug">{r.title}</span></button>
                 ))}
               </div>
             ))}
@@ -640,26 +669,11 @@ export default function ReportsHub() {
 
           {/* report result */}
           <div className="flex-1 min-w-0 space-y-3">
-            <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 space-y-2.5">
-              <div className="flex items-center gap-3 flex-wrap">
-                <h3 className="text-sm font-bold text-ink-primary">{result?.title || "Select a report"}</h3>
-                <div className="ml-auto flex items-center gap-2 flex-wrap text-xs">
-                  {locs.length > 1 && (
-                    <select value={locId} onChange={(e) => { setLocId(e.target.value); remember(active, filters, e.target.value); }} className="glass-input px-2.5 py-1.5 rounded-lg">
-                      <option value="">All locations</option>
-                      {locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-                    </select>
-                  )}
-                  <DateField mode="date" value={from} onChange={setFrom} className="w-36" />
-                  <span className="text-ink-tertiary">→</span>
-                  <DateField mode="date" value={to} onChange={setTo} className="w-36" />
-                  <button onClick={() => active && run(active)} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110">Run</button>
-                </div>
-              </div>
+            <div className="bg-white rounded-2xl border border-slate-200/90 p-4 space-y-3">
               {active && (REPORT_FILTERS[active] || []).length > 0 && (
                 <div className="flex items-center gap-2 flex-wrap text-xs" aria-label="Report filters">
                   {REPORT_FILTERS[active].includes("movement") && (
-                    <select aria-label="Stock movement" value={filters.movement} onChange={(e) => changeFilter({ movement: e.target.value as ReportFilters["movement"] })} className="glass-input px-2.5 py-1.5 rounded-lg">
+                    <select aria-label="Stock movement" value={filters.movement} onChange={(e) => changeFilter({ movement: e.target.value as ReportFilters["movement"] })} className={sel}>
                       <option value="with">Products that moved</option>
                       <option value="without">Products that didn't move</option>
                       <option value="all">All products</option>
@@ -672,55 +686,45 @@ export default function ReportsHub() {
                     </label>
                   )}
                   {REPORT_FILTERS[active].includes("status") && dropStatuses.length > 1 && (
-                    <select aria-label="Status" value={filters.status} onChange={(e) => changeFilter({ status: e.target.value })} className="glass-input px-2.5 py-1.5 rounded-lg">
+                    <select aria-label="Status" value={filters.status} onChange={(e) => changeFilter({ status: e.target.value })} className={sel}>
                       <option value="">Any dropped status</option>
                       {dropStatuses.map((st) => <option key={st.key} value={st.key}>{st.name}</option>)}
                     </select>
                   )}
                   {REPORT_FILTERS[active].includes("typeId") && woTypes.length > 0 && (
-                    <select aria-label="Job type" value={filters.typeId} onChange={(e) => changeFilter({ typeId: e.target.value })} className="glass-input px-2.5 py-1.5 rounded-lg">
+                    <select aria-label="Job type" value={filters.typeId} onChange={(e) => changeFilter({ typeId: e.target.value })} className={sel}>
                       <option value="">Any job type</option>
                       {woTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
                     </select>
                   )}
                   {JSON.stringify(filterParams(active, filters)) !== "{}" && (
-                    <button type="button" onClick={() => changeFilter(DEFAULT_FILTERS)} className="text-[11px] font-semibold text-ink-secondary hover:text-primary">Clear filters</button>
+                    <Button variant="link" onClick={() => changeFilter(DEFAULT_FILTERS)}>Clear filters</Button>
                   )}
                 </div>
               )}
               <div className="flex items-center gap-2 flex-wrap">
-                {presets.map(([label, fn]) => (
-                  <button key={label} onClick={() => applyPreset(fn)} className="px-2.5 py-1 rounded-full text-[11px] font-semibold text-ink-secondary bg-slate-100 hover:bg-blue-50 hover:text-primary transition-colors">{label}</button>
-                ))}
-                {result && (
-                  <div className="ml-auto flex items-center gap-2">
-                    <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search rows…" aria-label="Search report rows" className="glass-input px-2.5 py-1.5 rounded-lg text-xs w-40" />
-                    {can(EXPORT_PERMS[active || ""]) && <>
-                    <button disabled={exporting} onClick={() => download("xlsx")} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-emerald-700 bg-emerald-50 hover:bg-emerald-100 flex items-center gap-1 disabled:opacity-50"><M n="table_view" c="text-sm" />Excel</button>
-                    <button disabled={exporting} onClick={() => download("csv")} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-ink-secondary bg-slate-100 hover:bg-slate-200 flex items-center gap-1 disabled:opacity-50"><M n="download" c="text-sm" />CSV</button>
-                    </>}
-                  </div>
-                )}
+                <Tabs look="chips" label="Quick dates" value={"" as string} onChange={(l) => { const p = presets.find(([x]) => x === l); if (p) applyPreset(p[1]); }}
+                  tabs={presets.map(([label]) => ({ id: label, label }))} />
+                <SearchBox value={q} onChange={setQ} label="Search report rows" placeholder="Search rows…" disabled={!result} className="sm:ml-auto sm:w-56" />
               </div>
             </div>
             {!loading && result && numericIdxs.length > 0 && (
-              <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5">
+              <div className="bg-white rounded-2xl border border-slate-200/90 p-4">
                 <div className="flex items-center gap-2 mb-3">
-                  <M n="bar_chart" c="text-sm text-primary" />
-                  <h4 className="text-xs font-bold text-ink-primary ">Chart</h4>
+                  <h4 className="text-xs font-semibold text-ink-primary">Chart</h4>
                   {numericIdxs.length > 1 && (
-                    <select value={activeChartCol} onChange={(e) => setChartCol(Number(e.target.value))} className="glass-input px-2 py-1 rounded-lg text-xs">
+                    <select value={activeChartCol} onChange={(e) => setChartCol(Number(e.target.value))} aria-label="Chart column" className={fieldClass("pr-8 w-auto h-8 text-xs")}>
                       {numericIdxs.map((i) => <option key={i} value={i}>{colLabel(cols[i])}</option>)}
                     </select>
                   )}
-                  <button onClick={() => setShowChart((v) => !v)} className="ml-auto px-2 py-1 -my-1 text-[11px] font-semibold text-ink-secondary hover:text-primary">{showChart ? "Hide" : "Show"}</button>
+                  <Button variant="ghost" size="sm" className="ml-auto -my-1" onClick={() => setShowChart((v) => !v)}>{showChart ? "Hide chart" : "Show chart"}</Button>
                 </div>
                 {showChart && (chartRows.length
-                  ? <><BarChart rows={chartRows} /><p className="mt-2 text-[11px] text-ink-tertiary">Top {chartRows.length} by {colLabel(cols[activeChartCol])}{q.trim() ? " (filtered)" : ""}.</p></>
+                  ? <><BarChart rows={chartRows} /><p className="mt-2 text-2xs text-ink-tertiary">Top {chartRows.length} by {colLabel(cols[activeChartCol])}{q.trim() ? " (filtered)" : ""}.</p></>
                   : <div className="text-xs text-ink-tertiary py-3 text-center">No non-zero values to chart.</div>)}
               </div>
             )}
-            <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
+            <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
               {loading && (
                 <table className="w-full text-left border-collapse text-xs">
                   <tbody className="divide-y divide-slate-100"><SkeletonRows cols={Math.max(4, cols.length)} rows={8} /></tbody>
@@ -729,38 +733,38 @@ export default function ReportsHub() {
               {!loading && result && (
                 <div className="overflow-auto max-h-[62vh]">
                   <table className="w-full text-left border-collapse text-xs">
-                    <thead className="sticky top-0 z-10"><tr className="bg-slate-50 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold shadow-[0_1px_0_rgba(0,0,0,0.04)]">
+                    <thead className="sticky top-0 z-10"><tr className={theadRowClass}>
                       {cols.map((c, i) => (
                         <th key={colKey(c, i)} scope="col" role="button" tabIndex={0}
                             aria-sort={sort?.i === i ? (sort.dir === 1 ? "ascending" : "descending") : "none"}
                             onClick={() => toggleSort(i)}
                             onKeyDown={(e) => { if (e.key === "Enter" || e.key === " ") { e.preventDefault(); toggleSort(i); } }}
-                            className={`py-3 px-4 cursor-pointer select-none hover:text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 bg-slate-50 ${sort?.i === i ? "text-primary" : ""}`}>
-                          <span className="inline-flex items-center gap-0.5">{colLabel(c)}{sort?.i === i && <M n={sort.dir === 1 ? "arrow_upward" : "arrow_downward"} c="text-[11px]" />}</span>
+                            className={`py-3 px-4 cursor-pointer select-none hover:text-primary focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40 bg-slate-50 ${numericCol[i] ? "text-right" : ""} ${sort?.i === i ? "text-primary" : ""}`}>
+                          <span className="inline-flex items-center gap-0.5">{colLabel(c)}{sort?.i === i && <M n={sort.dir === 1 ? "arrow_upward" : "arrow_downward"} c="text-2xs" />}</span>
                         </th>
                       ))}
                     </tr></thead>
                     <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
-                      {viewRows.length === 0 && <tr><td colSpan={cols.length} className="py-10 px-4 text-center"><M n={q.trim() ? "search_off" : "bar_chart"} c="text-3xl text-ink-placeholder" /><p className="mt-1 text-xs text-ink-tertiary">{q.trim() ? "No rows match your search." : "No data for this range."}</p></td></tr>}
+                      {viewRows.length === 0 && <tr><td colSpan={cols.length} className="p-0"><EmptyState title={q.trim() ? "No rows match your search" : "Nothing in this date range"} body={q.trim() ? "Try another word." : "Pick other dates and press Run."} /></td></tr>}
                       {pagedRows.map((row, ri) => (
                         <tr key={(safePage - 1) * REPORT_PAGE + ri} className="odd:bg-slate-50/40 hover:bg-blue-50/50 transition-colors">
-                          {cols.map((c, ci) => <td key={ci} className="py-2.5 px-4 text-ink-primary">{cell(cellVal(row, c, ci))}</td>)}
+                          {cols.map((c, ci) => <td key={ci} className={`py-2.5 px-4 text-ink-primary ${numericCol[ci] ? "text-right tabular-nums whitespace-nowrap" : ""}`}>{cell(cellVal(row, c, ci), colLabel(c))}</td>)}
                         </tr>
                       ))}
                     </tbody>
                     {hasTotals && viewRows.length > 0 && (
-                      <tfoot><tr className="bg-slate-50/80 border-t-2 border-slate-200 font-bold text-ink-primary">
+                      <tfoot><tr className="bg-slate-50/80 border-t-2 border-slate-200 font-semibold text-ink-primary">
                         {cols.map((_c, ci) => {
-                          if (ci === totalsLabelIdx) return <td key={ci} className="py-2.5 px-4">Total{prevTotals && <span className="ml-1 font-normal text-[11px] text-ink-tertiary">vs prev period</span>}</td>;
+                          if (ci === totalsLabelIdx) return <td key={ci} className="py-2.5 px-4">Total{prevTotals && <span className="ml-1 font-normal text-2xs text-ink-tertiary">vs the period before</span>}</td>;
                           if (totals[ci] == null) return <td key={ci} className="py-2.5 px-4" />;
                           const prev = prevTotals?.[ci];
                           const d = prev != null ? deltaPct(totals[ci]!, prev) : null;
                           const up = (totals[ci]! - (prev ?? 0)) >= 0;
                           return (
-                            <td key={ci} className="py-2.5 px-4">
-                              <span className="tabular-nums block">{totals[ci]!.toLocaleString(getLocale(), { maximumFractionDigits: 2 })}</span>
+                            <td key={ci} className="py-2.5 px-4 text-right whitespace-nowrap">
+                              <span className="tabular-nums block">{isMoneyCol(colLabel(cols[ci])) ? money(totals[ci]!, undefined, true) : totals[ci]!.toLocaleString(getLocale(), { maximumFractionDigits: 2 })}</span>
                               {prev != null && (
-                                <span className={`text-[11px] font-semibold ${up ? "text-emerald-600" : "text-rose-600"}`} title={`Previous: ${prev.toLocaleString(getLocale())}`}>
+                                <span className={`text-2xs font-semibold tabular-nums ${up ? "text-emerald-600" : "text-rose-600"}`} title={`Previous: ${prev.toLocaleString(getLocale())}`}>
                                   {up ? "▲" : "▼"} {d == null ? "—" : `${Math.abs(d).toFixed(1)}%`}
                                 </span>
                               )}
@@ -776,11 +780,11 @@ export default function ReportsHub() {
                 <Pager total={viewRows.length} page={safePage} pageSize={REPORT_PAGE} onPage={setPage}
                        noun={q.trim() ? "matching rows" : "rows"} />
               )}
-              {!loading && !result && <div className="p-12 text-center"><M n="insert_chart" c="mx-auto mb-2 text-4xl text-ink-placeholder" /><p className="mt-2 text-xs text-ink-tertiary">Pick a report from the left to get started.</p></div>}
+              {!loading && !result && <EmptyState size="page" icon={<M n="insert_chart" c="text-xl" />} title="No report open" body="Pick a report from the list to get started." />}
             </div>
           </div>
         </div>
-      </div>
+      </PageLayout>
       )}
     </Shell>
   );
@@ -804,53 +808,33 @@ function FleetAnalytics() {
     api.get<any>(`/analytics/technician-productivity?days=${days}`).then((r) => setTechs(r.technicians || [])).catch(() => setTechs([]));
     api.get<any>(`/analytics/location-comparison?days=${days}`).then((r) => setLocs(r.locations || [])).catch(() => setLocs([]));
   }, [days]);
-  const kpis: { l: string; v: string; icon: string; tint: string; accent: string }[] = ins ? [
-    { l: "Revenue", v: m(ins.revenue), icon: "trending_up", tint: "bg-emerald-50 text-emerald-600", accent: "from-emerald-300 to-emerald-500" },
-    { l: "Orders closed", v: String(ins.orders_closed ?? 0), icon: "task_alt", tint: "bg-blue-50 text-primary", accent: "from-blue-400 to-primary" },
-    { l: "Close rate", v: `${ins.close_rate_pct ?? 0}%`, icon: "percent", tint: "bg-indigo-50 text-indigo-600", accent: "from-indigo-300 to-indigo-500" },
-    { l: "Avg ticket", v: m(ins.avg_ticket_value), icon: "receipt_long", tint: "bg-violet-50 text-violet-600", accent: "from-violet-300 to-violet-500" },
-    { l: "Avg turnaround", v: `${ins.avg_turnaround_hours ?? 0}h`, icon: "schedule", tint: "bg-amber-50 text-amber-600", accent: "from-amber-300 to-amber-500" },
-  ] : [];
-  const box = "bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden";
-  const th = "px-4 py-2.5 border-b border-slate-100 text-[11px] font-bold   text-ink-tertiary";
+  // Plain numbers in the one summary strip: no tinted icon chips, no coloured underlines.
+  const dash = <span className="sk inline-block h-7 w-20 rounded align-middle" aria-label="Loading" />;
+  const kpis: SummaryStat[] = [
+    { label: "Revenue", value: ins ? m(ins.revenue) : dash },
+    { label: "Jobs closed", value: ins ? String(ins.orders_closed ?? 0) : dash },
+    { label: "Close rate", value: ins ? `${ins.close_rate_pct ?? 0}%` : dash },
+    { label: "Average job value", value: ins ? m(ins.avg_ticket_value) : dash },
+    { label: "Average turnaround", value: ins ? `${ins.avg_turnaround_hours ?? 0} hours` : dash },
+  ];
+  const box = "bg-white rounded-2xl border border-slate-200/90 overflow-hidden";
+  const th = "px-4 py-3 border-b border-slate-100 text-xs font-semibold text-ink-primary";
   return (
-    <div className="space-y-5">
-      <div className="flex items-center gap-2">
-        <span className="text-[11px] font-bold text-ink-tertiary">Period</span>
-        <div className="flex bg-slate-100 rounded-lg p-0.5 border border-slate-200/60">
-          {[7, 30, 90].map((d) => <button key={d} type="button" onClick={() => setDays(d)} className={`px-3 py-1 rounded-md text-xs font-semibold ${days === d ? "bg-white text-primary shadow-xs" : "text-ink-secondary"}`}>{d}d</button>)}
-        </div>
-      </div>
-
-      <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
-        {kpis.map((k) => (
-          <div key={k.l} className="group relative overflow-hidden bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-4">
-            <div className="flex items-start justify-between gap-2">
-              <div className="min-w-0">
-                <div className="text-[11px] font-bold text-ink-tertiary">{k.l}</div>
-                <div className="mt-1 text-2xl font-bold text-ink-primary leading-tight truncate">{k.v}</div>
-              </div>
-              <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${k.tint}`}><M n={k.icon} c="text-base" /></div>
-            </div>
-            <div className={`absolute inset-x-0 bottom-0 h-1 bg-gradient-to-r ${k.accent} opacity-70`} />
-          </div>
-        ))}
-        {!ins && Array.from({ length: 5 }).map((_, i) => (
-          <div key={i} className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-4">
-            <span className="sk block h-3 w-16 rounded" /><span className="sk block h-6 w-20 rounded mt-2" />
-          </div>
-        ))}
-      </div>
+    <>
+      <PanelHeader title="Business & analytics" sub="How the shop is doing over the last few days, weeks or months." />
+      <Toolbar filters={<Tabs look="segmented" label="Period" value={String(days)} onChange={(d) => setDays(Number(d))}
+        tabs={[7, 30, 90].map((d) => ({ id: String(d), label: `${d} days` }))} />} />
+      <PageSummary stats={kpis} />
 
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-4">
         <div className={box}>
           <div className={th}>Business accounts ({fleet.length})</div>
           <div className="divide-y divide-slate-100 max-h-80 overflow-y-auto">
-            {fleet.length === 0 && <p className="px-4 py-3 text-xs text-ink-tertiary">No business accounts yet.</p>}
+            {fleet.length === 0 && <EmptyState size="inline" className="px-4" title="No business accounts yet." />}
             {fleet.map((c) => (
               <div key={c.client_id} className="px-4 py-2.5 flex items-center justify-between text-xs">
-                <span className="font-bold text-ink-primary truncate">{c.name}</span>
-                <span className="text-ink-secondary shrink-0">{c.vehicle_count} {assetsLc} · <span className={c.open_tickets ? "text-amber-600 font-bold" : ""}>{c.open_tickets} open</span></span>
+                <span className="font-semibold text-ink-primary truncate">{c.name}</span>
+                <span className="text-ink-secondary shrink-0 tabular-nums">{c.vehicle_count} {assetsLc} · <span className={c.open_tickets ? "text-amber-600 font-semibold" : ""}>{c.open_tickets} open</span></span>
               </div>
             ))}
           </div>
@@ -859,11 +843,11 @@ function FleetAnalytics() {
         <div className={box}>
           <div className={th}>Technician productivity</div>
           <div className="divide-y divide-slate-100 max-h-80 overflow-y-auto">
-            {techs.length === 0 && <p className="px-4 py-3 text-xs text-ink-tertiary">No technician activity in range.</p>}
+            {techs.length === 0 && <EmptyState size="inline" className="px-4" title="No technician activity in this period." />}
             {techs.map((t, i) => (
               <div key={i} className="px-4 py-2.5 flex items-center justify-between text-xs">
-                <span className="font-bold text-ink-primary truncate">{t.technician}</span>
-                <span className="text-ink-secondary shrink-0">{t.jobs_closed ?? 0} jobs{t.revenue != null ? ` · ${m(t.revenue)}` : ""}</span>
+                <span className="font-semibold text-ink-primary truncate">{t.technician}</span>
+                <span className="text-ink-secondary shrink-0 tabular-nums">{t.jobs_closed ?? 0} jobs{t.revenue != null ? ` · ${m(t.revenue)}` : ""}</span>
               </div>
             ))}
           </div>
@@ -876,13 +860,13 @@ function FleetAnalytics() {
           <div className="divide-y divide-slate-100">
             {locs.map((l, i) => (
               <div key={i} className="px-4 py-2.5 flex items-center justify-between text-xs">
-                <span className="font-bold text-ink-primary truncate">{l.location || l.name || "—"}</span>
-                <span className="text-ink-secondary shrink-0">{l.orders_closed ?? l.jobs_closed ?? 0} closed{l.revenue != null ? ` · ${m(l.revenue)}` : ""}</span>
+                <span className="font-semibold text-ink-primary truncate">{l.location || l.name || "—"}</span>
+                <span className="text-ink-secondary shrink-0 tabular-nums">{l.orders_closed ?? l.jobs_closed ?? 0} closed{l.revenue != null ? ` · ${m(l.revenue)}` : ""}</span>
               </div>
             ))}
           </div>
         </div>
       )}
-    </div>
+    </>
   );
 }

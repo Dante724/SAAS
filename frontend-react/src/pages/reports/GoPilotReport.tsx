@@ -6,6 +6,9 @@ import { useEffect, useState } from "react";
 import { api, openAuthedDoc } from "../../api/client";
 import { alertDialog } from "../../lib/dialog";
 import DateField from "../../components/DateField";
+import { M } from "../../components/Shell";
+import Button from "../../components/Button";
+import PageLayout, { PanelHeader, Toolbar } from "../../components/PageLayout";
 
 type Counts = { total: number; go: number };
 export type PilotRow = {
@@ -53,26 +56,25 @@ export default function GoPilotReport() {
   }
 
   const h = rep?.headline;
-  const th = "py-2 px-3 text-left text-[11px] font-semibold text-ink-tertiary whitespace-nowrap";
-  const td = "py-2 px-3 text-xs tabular-nums whitespace-nowrap";
+  const th = "py-3 px-3 text-right text-2xs font-semibold text-ink-tertiary whitespace-nowrap";
+  const td = "py-2.5 px-3 text-xs text-right tabular-nums whitespace-nowrap";
   return (
-    <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
-      <div className="flex flex-wrap items-end gap-3">
-        <div className="space-y-1"><span className="block text-[11px] font-semibold text-ink-secondary">From</span>
-          <DateField mode="date" label="From" value={from} max={to} onChange={setFrom} className="w-40" /></div>
-        <div className="space-y-1"><span className="block text-[11px] font-semibold text-ink-secondary">To</span>
-          <DateField mode="date" label="To" value={to} min={from} onChange={setTo} className="w-40" /></div>
-        <button type="button" onClick={csv} className="px-3 py-2 rounded-xl text-xs font-semibold border border-slate-200 hover:bg-slate-50">Download CSV</button>
-        <p className="text-[11px] text-ink-tertiary">Dates are UTC. Jobs: those that got a pilot QR label.</p>
-      </div>
+    <PageLayout>
+      <PanelHeader title="Go pilot" sub="How much of the pilot's work happened on a phone. Days run midnight to midnight UTC; jobs count once they got a pilot QR label." />
+      <Toolbar actions={<Button icon={<M n="download" c="text-sm" />} onClick={csv}>Download CSV</Button>}
+        filters={<span className="flex items-center gap-1.5 whitespace-nowrap text-xs">
+          <DateField mode="date" label="From" value={from} max={to} onChange={setFrom} className="w-36" />
+          <span className="text-ink-tertiary">to</span>
+          <DateField mode="date" label="To" value={to} min={from} onChange={setTo} className="w-36" />
+        </span>} />
 
-      {err && <p className="text-sm text-red-700">{err}</p>}
+      {err && <p role="alert" className="text-sm text-rose-700">{err}</p>}
 
       {h && rep && (
         <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-2">
-          <div className="text-[11px] font-semibold text-ink-tertiary">Status changes made on a phone · {rep.jobs.count} pilot job{rep.jobs.count === 1 ? "" : "s"}</div>
+          <div className="text-xs font-medium text-ink-tertiary">Status changes made on a phone · {rep.jobs.count} pilot job{rep.jobs.count === 1 ? "" : "s"}</div>
           <div className="flex items-baseline gap-3">
-            <span className="text-3xl font-bold tabular-nums" data-testid="pilot-share">{pct(h.share_status_changes_on_phone)}</span>
+            <span className="text-3xl font-semibold tracking-tight tabular-nums" data-testid="pilot-share">{pct(h.share_status_changes_on_phone)}</span>
             <span className="text-sm text-ink-secondary tabular-nums">{h.status_changes_go} of {h.status_changes_total} · decision line {pct(h.threshold)}</span>
           </div>
           <p className="text-sm text-ink-primary">{h.reading}</p>
@@ -83,18 +85,18 @@ export default function GoPilotReport() {
       {rep && (
         <div className="bg-white rounded-2xl border border-slate-200 overflow-x-auto">
           <table className="w-full">
-            <thead className="border-b border-slate-100">
+            <thead className="bg-slate-50/80 border-b border-slate-200">
               <tr>
-                <th className={th}>Person</th><th className={th}>Status changes (phone / all)</th><th className={th}>Photos (phone / all)</th>
+                <th className={`${th} !text-left`}>Person</th><th className={th}>Status changes (phone / all)</th><th className={th}>Photos (phone / all)</th>
                 <th className={th}>Messages from Go</th><th className={th}>Scans</th>
-                {LOOKUP_KINDS.map(([k, l]) => <th key={k} className={th}>Lookups: {l}</th>)}
+                {LOOKUP_KINDS.map(([k, l]) => <th key={k} className={th}>Found by {l.toLowerCase()}</th>)}
               </tr>
             </thead>
             <tbody>
-              {rep.employees.length === 0 && <tr><td className={`${td} text-ink-tertiary`} colSpan={5 + LOOKUP_KINDS.length}>Nothing recorded in this range yet.</td></tr>}
+              {rep.employees.length === 0 && <tr><td className={`${td} !text-left text-ink-tertiary`} colSpan={5 + LOOKUP_KINDS.length}>Nothing recorded in this range yet.</td></tr>}
               {rep.employees.map((r) => (
                 <tr key={r.employee_id} className="border-b border-slate-50">
-                  <td className={`${td} font-semibold`}>{r.name}</td>
+                  <td className={`${td} !text-left font-semibold`}>{r.name}</td>
                   <td className={td}>{r.status_changes.go} / {r.status_changes.total} <span className="text-ink-tertiary">({pct(r.status_changes.share_go)})</span></td>
                   <td className={td}>{r.photos.go} / {r.photos.total}</td>
                   <td className={td}>{r.messages.go}</td>
@@ -106,6 +108,6 @@ export default function GoPilotReport() {
           </table>
         </div>
       )}
-    </div>
+    </PageLayout>
   );
 }
