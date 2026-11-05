@@ -4,12 +4,12 @@
 import { useEffect, useRef, useState } from "react";
 import { Minus, Plus } from "lucide-react";
 import { api } from "../../api/client";
-import { PrimaryButton, Sheet } from "./ui";
+import { PrimaryButton, Sheet, goArea, goField } from "./ui";
 import { newKey } from "../lib/photos";
 import { haptic } from "../lib/scanner";
 import { announceChange, useToast } from "../lib/useGo";
 
-const field = "w-full min-h-[3rem] rounded-xl border border-slate-200 bg-white px-4 text-go-body text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/15";
+const field = goField();
 
 export default function PartRequestSheet({ open, onClose, orderId, initialName, waitingStatus, onWaiting }: {
   open: boolean; onClose: () => void; orderId: string; initialName?: string;
@@ -58,7 +58,7 @@ export default function PartRequestSheet({ open, onClose, orderId, initialName, 
           </div>
         </div>
         <textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} placeholder="Note for whoever orders it (colour, supplier, how urgent…)" aria-label="Note"
-          className={`${field} py-3 min-h-[5rem] resize-none`} />
+          className={goArea("min-h-[5rem]")} />
         {waitingStatus && (
           <label className="flex min-h-[3rem] items-center gap-3 rounded-xl border border-slate-200 bg-white px-4">
             <input type="checkbox" checked={wait} onChange={(e) => setWait(e.target.checked)} className="h-6 w-6 accent-primary" />
