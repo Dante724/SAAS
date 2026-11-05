@@ -220,3 +220,52 @@ async def test_expiry_sweep_and_archive_of_the_same_hold_release_it_once(client,
     assert (avail, reserved) == (2, 1), (avail, reserved)     # B's hold survives
     assert await _active_holds(db, a) == []
     assert len(await _active_holds(db, b)) == 1
+
+
+@_pg
+@pytest.mark.asyncio
+async def test_archiving_a_job_that_drew_one_product_and_holds_another_does_not_deadlock(
+        client, tenant, db, monkeypatch):
+    """Stock lock order is Order → StockLevel sorted by (part_id, location_id) → holds. The archive
+    put the job's drawn parts back in line order and only then released its holds, so a job that
+    drew Y and held X (X < Y) locked Y then X — the reverse of a reserve that needs [X, Y], which
+    locks X then Y. Every stock row the archive touches is now locked sorted up front.
+
+    The window is forced: the archive pauses after putting Y back, the reserve starts in the pause."""
+    from backend.services import stock_rows
+    loc = await _loc(client, tenant)
+    x, y = sorted([await _part(client, tenant, loc, 5), await _part(client, tenant, loc, 5)])
+    a = await _work_order(client, tenant, loc)
+    r = await client.post(f"/api/orders/{a}/lines", headers=tenant, json={
+        "line_type": "part", "kind": "product", "ref_id": y, "description": "y", "qty": 1, "unit_price": 1})
+    assert r.status_code == 201, r.text
+    r = await client.post("/api/inventory/reserve", headers=tenant, json={
+        "part_id": x, "location_id": loc, "qty": 1, "order_id": a, "hold_days": 30})
+    assert r.status_code == 201, r.text
+    cid = (await client.post("/api/clients", json={"name": "Cust"}, headers=tenant)).json()["id"]
+    r = await client.post("/api/orders", headers=tenant, json={
+        "client_id": cid, "location_id": loc, "is_estimate": True,
+        "lines": [{"line_type": "part", "kind": "product", "ref_id": x, "description": "x", "qty": 1, "unit_price": 1},
+                  {"line_type": "part", "kind": "product", "ref_id": y, "description": "y", "qty": 1, "unit_price": 1}]})
+    assert r.status_code == 201, r.text
+    d = r.json()["id"]
+
+    orig = stock_rows.add
+    put_back = asyncio.Event()
+
+    async def paused(db_, part_id, location_id, qty, **kw):
+        res = await orig(db_, part_id, location_id, qty, **kw)
+        if part_id == y and not put_back.is_set():
+            put_back.set()
+            await asyncio.sleep(0.7)        # the reserve locks X and waits on Y meanwhile
+        return res
+    monkeypatch.setattr(stock_rows, "add", paused)
+
+    async def reserve():
+        await asyncio.wait_for(put_back.wait(), 10)
+        return await client.post(f"/api/orders/{d}/reserve-stock", json={"hold_days": 7}, headers=tenant)
+    arch, res = await asyncio.gather(client.delete(f"/api/orders/{a}", headers=tenant), reserve())
+    assert (arch.status_code, res.status_code) == (200, 201), (arch.text[:300], res.text[:300])
+    assert await _active_holds(db, a) == []
+    assert await _on_hand(db, x) == (5, 1)       # A's hold on X released, D holds one
+    assert await _on_hand(db, y) == (5, 1)       # A's Y back on the shelf, D holds one

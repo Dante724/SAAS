@@ -1156,7 +1156,10 @@ async def _release_expired(db: AsyncSession, org_id: str):
     # unit off another job's hold.
     for pid, lid in sorted({(r.part_id, r.location_id) for r in rows}):
         await stock_rows.rows(db, pid, lid, lock=True)
-    rows = (await db.execute(q.with_for_update().execution_options(populate_existing=True))).scalars().all()
+    # only the holds whose stock rows were just locked: one that expired in between waits for the
+    # next sweep rather than being locked out of order
+    rows = (await db.execute(q.where(StockReservation.id.in_([r.id for r in rows])).with_for_update()
+                             .execution_options(populate_existing=True))).scalars().all()
     for r in rows:
         if r.released:
             continue
