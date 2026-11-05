@@ -690,8 +690,8 @@ async def _pay_order(order_id: str, data: OrderPaymentIn, db: AsyncSession, curr
     if not o:
         raise HTTPException(404, "Order not found")
     # remaining = total minus everything already paid, net of refunds and credit notes (shared definition)
-    from backend.services.order_money import balance_due, cancel_open_pay_links, reader_charge_in_flight
-    if await reader_charge_in_flight(db, order_id):
+    from backend.services.order_money import balance_due, cancel_open_pay_links, reader_blocks_other_money
+    if await reader_blocks_other_money(db, order_id):
         raise HTTPException(409, "A card reader charge for this order is still in progress. "
                                  "Finish or cancel it on the reader first.")
     remaining = await balance_due(db, o)

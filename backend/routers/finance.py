@@ -674,7 +674,7 @@ async def _record_payment(invoice_id: str, data: "PaymentIn", db: AsyncSession, 
     if inv.status in ("cancelled", "canceled"):
         raise HTTPException(409, "This invoice was deleted and can't take payments")
     from backend.services.credit_notes import reader_busy
-    if await reader_busy(db, inv):          # the card on the reader would collect it a second time
+    if await reader_busy(db, inv, taking_money=True):   # the card on the reader would collect it again
         raise HTTPException(409, "A card reader charge for this invoice is still in progress. "
                                  "Finish or cancel it on the reader first.")
     # Negative amounts used to post +|amount| into the cashbox while reducing amount_paid.

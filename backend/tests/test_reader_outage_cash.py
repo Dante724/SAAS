@@ -148,9 +148,22 @@ async def test_unconfirmed_cancel_does_not_let_the_invoice_be_credited(client, t
     assert (await client.post(f"/api/payments/terminal/charges/{ch['id']}/cancel", headers=tenant)).status_code == 502
 
     cn = await client.post("/api/finance/credit-notes", headers=tenant, json={
-        "invoice_id": inv.json()["id"], "reason": "Goodwill",
+        "invoice_id": inv.json()["invoice_id"], "reason": "Goodwill",
         "lines": [{"description": "Refund part", "qty": 1, "unit_price": 30}]})
     assert cn.status_code == 201, cn.text
     r = await client.post(f"/api/finance/credit-notes/{cn.json()['id']}/issue", headers=tenant)
     assert r.status_code == 409, r.text
     assert "card reader" in r.json()["detail"]
+
+
+async def test_unconfirmed_cancel_does_not_let_the_job_be_finished_and_paid_inline(client, tenant, stripe, monkeypatch, db):  # noqa: F811
+    """Independent review: the inline payment on "finish" closes the job in the same step, so it
+    stays strict like archive. A late card success would land on a job already closed and paid."""
+    till, t, oid, ch = await _setup(client, tenant)
+    monkeypatch.setattr(svc, "_TRANSPORT", httpx.MockTransport(_dead))
+    assert (await client.post(f"/api/payments/terminal/charges/{ch['id']}/cancel", headers=tenant)).status_code == 502
+    r = await client.post(f"/api/orders/{oid}/finish", headers=tenant, json={
+        "payment": {"method": "cash", "account_id": till, "amount": 100}})
+    assert r.status_code == 409, r.text
+    assert "card reader" in r.json()["detail"]
+    assert await _owed(db, oid) == 100

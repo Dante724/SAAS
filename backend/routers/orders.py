@@ -3504,7 +3504,7 @@ async def _archive_order(db, current, order_id, reason, do_refund):
     from backend.services.order_money import reader_charge_in_flight, unrefunded_reader_money
     # strict: even a charge whose cancel the provider couldn't confirm blocks — a late card
     # success must not post money onto a deleted job.
-    if await reader_charge_in_flight(db, order_id, strict=True):
+    if await reader_charge_in_flight(db, order_id):
         raise HTTPException(409, "A card reader charge for this order is still in progress. "
                                  "Finish or cancel it on the reader first.")
     if do_refund and await unrefunded_reader_money(db, order_id) > 0:

@@ -80,7 +80,7 @@ async def issue(db: AsyncSession, cn: CreditNote, actor_id: str | None) -> None:
         inv = await lock_invoice(db, cn.org_id, cn.invoice_id)
         if (inv.status or "") in VOID_STATUSES:
             raise HTTPException(409, "That invoice was cancelled, so it can't be credited")
-        if await reader_busy(db, inv, strict=True):
+        if await reader_busy(db, inv):
             raise HTTPException(409, "A card reader charge for this invoice is still in progress. "
                                      "Finish or cancel it on the reader before issuing a credit note.")
         room = creditable(inv)
@@ -111,12 +111,14 @@ async def invoice_order_ids(db: AsyncSession, inv: Invoice) -> set:
         InvoiceOrder.invoice_id == inv.id))).scalars().all()) | ({inv.order_id} if inv.order_id else set())
 
 
-async def reader_busy(db: AsyncSession, inv: Invoice, *, strict: bool = False) -> bool:
-    """strict: see order_money.reader_charge_in_flight — issuing a credit note passes True (a late
-    card success must not collect an invoice that was just credited); taking money passes False."""
-    from backend.services.order_money import reader_charge_in_flight
+async def reader_busy(db: AsyncSession, inv: Invoice, *, taking_money: bool = False) -> bool:
+    """Is a card reader working on any job this invoice bills? Strict by default (issuing a credit
+    note: a late card success must not collect an invoice that was just credited). Recording a
+    payment passes taking_money=True for the permissive check (order_money.reader_blocks_other_money)."""
+    from backend.services.order_money import reader_blocks_other_money, reader_charge_in_flight
+    check = reader_blocks_other_money if taking_money else reader_charge_in_flight
     for oid in await invoice_order_ids(db, inv):
-        if await reader_charge_in_flight(db, oid, strict=strict):
+        if await check(db, oid):
             return True
     return False
 
