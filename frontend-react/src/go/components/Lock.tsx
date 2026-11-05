@@ -12,7 +12,7 @@ import { passkeyCheck, passkeyOn } from "../lib/passkey";
 import { setPin, verifyPin } from "../lib/pin";
 import { haptic } from "../lib/scanner";
 import { signOut } from "../session";
-import { PrimaryButton, Sheet } from "./ui";
+import { GoButton, PrimaryButton, Sheet, goField } from "./ui";
 
 type Ask = { mode: "verify" | "setup"; what: string; resolve: (ok: boolean) => void };
 type Ctx = {
@@ -186,7 +186,7 @@ function SetupForm({ pinSet, what, onDone }: { pinSet: boolean; what: string; on
     haptic();
     onDone();
   }
-  const field = "mt-1 w-full min-h-[3rem] rounded-xl border border-slate-200 bg-white px-3 text-go-body text-ink-primary focus:outline-none focus:border-primary";
+  const field = goField("mt-1 font-normal");
   return (
     <form className="px-2 pb-2 space-y-3" onSubmit={(e) => { e.preventDefault(); save(); }}>
       <p className="text-go-body text-ink-secondary">
@@ -220,9 +220,9 @@ function LockScreen({ name, uid, onUnlock }: { name?: string; uid?: string; onUn
           <h1 className="mt-0.5 text-go-title font-bold tracking-tight">{name || "Signed in"}</h1>
           <p className="text-go-body text-ink-secondary">Enter your PIN to carry on</p>
           <PinEntry uid={uid} onSubmit={verifyPin} onOk={onUnlock} />
-          <button type="button" onClick={signOut} className="mt-4 min-h-[2.75rem] px-4 inline-flex items-center gap-2 rounded-xl text-go-body font-semibold text-rose-700 active:bg-slate-100">
+          <GoButton variant="link" onClick={signOut} className="mt-4 px-4">
             <LogOut size={18} />Not {(name || "you").split(" ")[0]}? Sign out
-          </button>
+          </GoButton>
         </div>
       </div>
     </div>
