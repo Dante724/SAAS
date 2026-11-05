@@ -1,10 +1,11 @@
 // Small building blocks for Tekly Go: a light slate canvas, white inset grouped lists (radius 12,
 // 0.5px hairlines, no shadow), ink-* text on Geist's five type steps (go-display … go-caption).
 // Only sheets carry a shadow. Theme tokens (bg-canvas / bg-white = surface) keep dark mode working.
-import { useEffect, useRef, useState, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ButtonHTMLAttributes, type ReactNode } from "react";
 import { X } from "lucide-react";
 import type { StatusMeta } from "../lib/useGo";
 import { clickable } from "../../lib/clickable";
+import { buttonClass, type ButtonVariant } from "../../components/Button";
 
 /** A screen with an iOS-style large title that collapses into a compact bar when scrolled.
  *  `caption` sits above the title; `footer` is docked below the scroll area (it reserves its own
@@ -142,25 +143,47 @@ export function Empty({ icon, title, body, action }: { icon: ReactNode; title: s
   );
 }
 
-export function PrimaryButton({ children, onClick, disabled, type = "button", className = "" }: {
-  children: ReactNode; onClick?: () => void; disabled?: boolean; type?: "button" | "submit"; className?: string;
+// ── Buttons ──────────────────────────────────────────────────────────────────────────────────────
+// Go uses the app's one button look (components/Button.tsx: sapphire main button, white outlined
+// secondary, rose-outlined danger, sapphire text links; 12px corners; faded when disabled) at Go's
+// own sizes: 16px text, at least 44px tall, and 52px for a screen's main button (`main`).
+// `!text-go-body` overrides the shared size's 14px text (Tailwind emits text-sm after text-go-body).
+// Not for a fixed or absolute button: the shared tap-area rule makes buttons position: relative.
+export type GoButtonVariant = Exclude<ButtonVariant, "dangerSolid">;
+
+export function goButtonClass(variant: GoButtonVariant = "secondary", { main = false, extra = "" }: { main?: boolean; extra?: string } = {}) {
+  return buttonClass(variant, "lg", ["h-auto min-h-11 !text-go-body gap-2", main && "min-h-[3.25rem] px-5", extra].filter(Boolean).join(" "));
+}
+
+type GoButtonProps = ButtonHTMLAttributes<HTMLButtonElement> & { variant?: GoButtonVariant; main?: boolean };
+
+export function GoButton({ variant = "secondary", main = false, className = "", type = "button", ...rest }: GoButtonProps) {
+  return <button type={type} className={goButtonClass(variant, { main, extra: className })} {...rest} />;
+}
+
+/** A screen's main action: sapphire, full width, 52px. */
+export function PrimaryButton({ className = "", ...rest }: Omit<GoButtonProps, "variant" | "main">) {
+  return <GoButton variant="primary" main className={`w-full ${className}`} {...rest} />;
+}
+
+/** A round 44px icon-only button (refresh, close, more…). `label` is its accessible name. */
+export function IconButton({ label, icon, tone = "secondary", className = "", type = "button", ...rest }: Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children"> & {
+  label: string; icon: ReactNode; tone?: "secondary" | "tertiary" | "primary";
 }) {
+  const ink = tone === "primary" ? "text-primary" : tone === "tertiary" ? "text-ink-tertiary" : "text-ink-secondary";
   return (
-    <button type={type} onClick={onClick} disabled={disabled}
-      className={`min-h-[3.25rem] w-full rounded-xl bg-primary px-5 text-go-body font-semibold text-white active:bg-primary-container transition-colors disabled:opacity-50 inline-flex items-center justify-center gap-2 ${className}`}>
-      {children}
+    <button type={type} aria-label={label} className={`h-11 w-11 shrink-0 inline-flex items-center justify-center rounded-full ${ink} active:bg-slate-100 disabled:opacity-50 ${className}`} {...rest}>
+      {icon}
     </button>
   );
 }
 
-export function GhostButton({ children, onClick, className = "" }: { children: ReactNode; onClick?: () => void; className?: string }) {
-  return (
-    <button type="button" onClick={onClick}
-      className={`min-h-[2.75rem] rounded-xl border-[0.5px] border-slate-200 bg-white px-4 text-go-body font-semibold text-ink-primary active:bg-slate-50 inline-flex items-center justify-center gap-2 ${className}`}>
-      {children}
-    </button>
-  );
-}
+// ── Fields ───────────────────────────────────────────────────────────────────────────────────────
+/** Go's one field look: the app's field (components/Field.tsx fieldClass: glass-input border and
+ *  focus ring, 12px corners) at Go's 44px height and 16px text (16px also stops iPhones zooming in). */
+export const goField = (extra = "") => `glass-input w-full min-h-11 rounded-xl px-4 text-go-body text-ink-primary disabled:opacity-60 ${extra}`;
+/** The same look for a textarea: give it its own min height (e.g. min-h-[5.5rem]). */
+export const goArea = (extra = "") => `glass-input w-full rounded-xl px-4 py-3 text-go-body text-ink-primary resize-none disabled:opacity-60 ${extra}`;
 
 /** Bottom sheet (a centred card on iPad). Slides up 260ms ease-out, no overshoot; reduced motion is honoured by index.css. */
 export function Sheet({ open, onClose, title, children, wide }: { open: boolean; onClose: () => void; title: string; children: ReactNode; /** tablet: a wider dialog (signing, pickers) */ wide?: boolean }) {
@@ -187,9 +210,7 @@ export function Sheet({ open, onClose, title, children, wide }: { open: boolean;
         <div className="mx-auto mt-2 h-1.5 w-10 rounded-full bg-slate-200 md:hidden" aria-hidden />
         <div className="flex items-center justify-between px-5 pt-3 pb-2">
           <h2 className="text-go-body font-semibold text-ink-primary">{title}</h2>
-          <button onClick={onClose} aria-label="Close" className="-mr-2 h-11 w-11 inline-flex items-center justify-center rounded-full text-ink-tertiary active:bg-slate-100">
-            <X size={20} />
-          </button>
+          <IconButton label="Close" tone="tertiary" onClick={onClose} className="-mr-2" icon={<X size={20} />} />
         </div>
         <div className="overflow-y-auto px-3 pb-4">{children}</div>
       </div>

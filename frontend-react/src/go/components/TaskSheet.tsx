@@ -3,7 +3,7 @@ import { useEffect, useMemo, useRef, useState } from "react";
 import { Link2 } from "lucide-react";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
-import { PrimaryButton, Sheet } from "./ui";
+import { PrimaryButton, Sheet, goField } from "./ui";
 import Chip from "./Chip";
 import { announceChange, useStaff, useToast } from "../lib/useGo";
 import { newKey } from "../lib/photos";
@@ -65,7 +65,7 @@ export default function TaskSheet({ open, onClose, orderId, orderLabel }: { open
       <div className="px-2 space-y-4">
         <input ref={input} value={title} onChange={(e) => setTitle(e.target.value)} placeholder="What needs doing?" enterKeyHint="done"
           onKeyDown={(e) => { if (e.key === "Enter") save(); }}
-          className="w-full min-h-[3.25rem] rounded-xl border border-slate-200 bg-white px-4 text-go-body text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/15" />
+          className={goField()} />
         {orderId && <p className="inline-flex items-center gap-1.5 text-go-sub text-ink-secondary"><Link2 size={15} />On job {orderLabel}</p>}
         <div>
           <p className="mb-2 text-go-sub font-semibold text-ink-tertiary">When</p>
@@ -78,7 +78,7 @@ export default function TaskSheet({ open, onClose, orderId, orderLabel }: { open
           </div>
           {when === "pick" && (
             <input type="datetime-local" value={picked} onChange={(e) => setPicked(e.target.value)}
-              className="mt-2 w-full min-h-[3rem] rounded-xl border border-slate-200 bg-white px-4 text-ink-primary" />
+              aria-label="Due date and time" className={goField("mt-2")} />
           )}
         </div>
         <div>

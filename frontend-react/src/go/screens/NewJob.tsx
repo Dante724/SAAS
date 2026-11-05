@@ -10,7 +10,8 @@ import { useLocation, useNavigate } from "react-router-dom";
 import { CalendarClock, Camera, Check, ChevronLeft, Loader2, PenLine, Plus, Search, Smartphone, User, UserPlus, X } from "lucide-react";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
-import { Card, Page, PrimaryButton } from "../components/ui";
+import { Card, GoButton, IconButton, Page, PrimaryButton, goArea, goField } from "../components/ui";
+import Chip from "../components/Chip";
 import IntakeFields, { intakeFieldsFrom } from "../components/IntakeFields";
 import QuoteSheet from "../components/QuoteSheet";
 import SignatureSheet from "../components/SignatureSheet";
@@ -29,10 +30,7 @@ type JobType = { id: string; name: string; is_default?: boolean };
 const PROBLEMS = ["Cracked screen", "Battery", "Charging port", "Water damage", "Won't turn on", "Software"];
 const CONDITIONS = ["Like new", "Scratches", "Dents", "Cracked back", "Bent frame"];
 const deviceLabel = (d: Device) => [d.brand, d.model].filter(Boolean).join(" ") || d.serial || d.imei || "Device";
-const field = "w-full min-h-[3rem] rounded-xl border border-slate-200 bg-white px-4 text-go-body text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/15";
-// A chip that shows a tick when picked keeps 11px of extra padding on each side while unpicked, the
-// same width as the 16px tick plus its 6px gap, so picking one never pushes its neighbours.
-const chip = (on: boolean, ticked = false) => `min-h-[2.75rem] ${ticked && !on ? "px-[27px]" : "px-4"} rounded-full border text-go-body font-medium inline-flex items-center gap-1.5 ${on ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`;
+const field = goField();
 const whenText = (local: string) => new Date(local).toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" });
 
 function Label({ children }: { children: React.ReactNode }) {
@@ -256,22 +254,22 @@ export default function NewJob() {
           <Card className="p-3 flex items-center gap-3">
             <span className="flex h-10 w-10 items-center justify-center rounded-xl bg-blue-50 text-primary"><User size={20} /></span>
             <div className="min-w-0 flex-1"><p className="font-semibold text-ink-primary truncate">{client.name}</p>{client.phone && <p className="text-go-sub text-ink-secondary">{client.phone}</p>}</div>
-            <button onClick={() => { setClient(null); setDeviceId(null); setNewDevice(null); }} aria-label="Change customer" className="h-11 w-11 inline-flex items-center justify-center rounded-full text-ink-tertiary active:bg-slate-100"><X size={20} /></button>
+            <IconButton label="Change customer" tone="tertiary" onClick={() => { setClient(null); setDeviceId(null); setNewDevice(null); }} icon={<X size={20} />} />
           </Card>
         ) : adding ? (
           <Card className="p-3 space-y-2">
             <input autoFocus value={adding.name} onChange={(e) => setAdding({ ...adding, name: e.target.value })} placeholder="Name" aria-label="Name" className={field} />
             <input value={adding.phone} onChange={(e) => setAdding({ ...adding, phone: e.target.value })} placeholder="Phone" aria-label="Phone" inputMode="tel" className={field} />
             <div className="flex gap-2">
-              <button onClick={() => setAdding(null)} className="min-h-[2.75rem] flex-1 rounded-xl border border-slate-200 font-semibold text-ink-primary">Back</button>
-              <button onClick={saveClient} disabled={!adding.name.trim() || savingClient} className="min-h-[2.75rem] flex-1 rounded-xl bg-primary font-semibold text-white disabled:opacity-50">{savingClient ? "Adding…" : "Add customer"}</button>
+              <GoButton variant="primary" onClick={saveClient} disabled={!adding.name.trim() || savingClient} className="flex-1">{savingClient ? "Adding…" : "Add customer"}</GoButton>
+              <GoButton onClick={() => setAdding(null)} className="flex-1">Back</GoButton>
             </div>
           </Card>
         ) : (
           <>
             <div className="relative">
               <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-ink-tertiary" />
-              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Name or phone" aria-label="Find a customer" autoComplete="off" enterKeyHint="search" className={`${field} pl-11`} />
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Name or phone" aria-label="Find a customer" autoComplete="off" enterKeyHint="search" className={goField("pl-11")} />
               {searching && <Loader2 size={18} className="absolute right-4 top-1/2 -translate-y-1/2 animate-spin text-ink-tertiary" />}
             </div>
             {(results.length > 0 || term.length >= 2) && (
@@ -299,13 +297,13 @@ export default function NewJob() {
           <Label>Device</Label>
           <div className="flex flex-wrap gap-2">
             {(client.devices || []).map((d) => (
-              <button key={d.id} onClick={() => { setDeviceId(d.id); setNewDevice(null); }} className={chip(deviceId === d.id)}>
-                {deviceId === d.id ? <Check size={16} /> : <Smartphone size={16} />}{deviceLabel(d)}
-              </button>
+              <Chip key={d.id} on={deviceId === d.id} tick icon={<Smartphone size={16} />} onClick={() => { setDeviceId(d.id); setNewDevice(null); }}>
+                {deviceLabel(d)}
+              </Chip>
             ))}
-            <button onClick={() => { setDeviceId(null); setNewDevice(newDevice ?? { brand: "", model: "", serial: "", imei: "" }); }} className={chip(!!newDevice)}>
-              <Plus size={16} />New device
-            </button>
+            <Chip on={!!newDevice} icon={<Plus size={16} />} onClick={() => { setDeviceId(null); setNewDevice(newDevice ?? { brand: "", model: "", serial: "", imei: "" }); }}>
+              New device
+            </Chip>
           </div>
           {newDevice && (
             <>
@@ -318,7 +316,7 @@ export default function NewJob() {
               <p className="mt-3 mb-2 px-1 text-go-sub font-semibold text-ink-tertiary">Condition at drop-off</p>
               <input value={condition} onChange={(e) => setCondition(e.target.value)} placeholder="Marks, cracks, missing parts…" aria-label="Condition at drop-off" className={field} />
               <div className="mt-2 flex flex-wrap gap-2">
-                {CONDITIONS.map((c) => <button key={c} onClick={() => setCondition((cur) => addProblem(cur, c))} className={chip(false)}>{c}</button>)}
+                {CONDITIONS.map((c) => <Chip key={c} onClick={() => setCondition((cur) => addProblem(cur, c))}>{c}</Chip>)}
               </div>
             </>
           )}
@@ -328,9 +326,9 @@ export default function NewJob() {
       <section className="mb-5">
         <Label>Problem</Label>
         <textarea value={complaint} onChange={(e) => setComplaint(e.target.value)} rows={3} placeholder="What's wrong?" aria-label="Problem"
-          className={`${field} py-3 min-h-[5.5rem] resize-none`} />
+          className={goArea("min-h-[5.5rem]")} />
         <div className="mt-2 flex flex-wrap gap-2">
-          {PROBLEMS.map((p) => <button key={p} onClick={() => setComplaint((c) => addProblem(c, p))} className={chip(false)}>{p}</button>)}
+          {PROBLEMS.map((p) => <Chip key={p} onClick={() => setComplaint((c) => addProblem(c, p))}>{p}</Chip>)}
         </div>
       </section>
 
@@ -338,7 +336,7 @@ export default function NewJob() {
         <section className="mb-5">
           <Label>Job type</Label>
           <div className="flex flex-wrap gap-2">
-            {types.map((t) => <button key={t.id} onClick={() => { setTypeId(t.id); setMissing(new Set()); }} aria-pressed={typeId === t.id} className={chip(typeId === t.id, true)}>{typeId === t.id && <Check size={16} />}{t.name}</button>)}
+            {types.map((t) => <Chip key={t.id} on={typeId === t.id} tick onClick={() => { setTypeId(t.id); setMissing(new Set()); }}>{t.name}</Chip>)}
           </div>
         </section>
       )}
@@ -347,16 +345,16 @@ export default function NewJob() {
         <div>
           <Label>Priority</Label>
           <div className="flex flex-wrap gap-2" role="group" aria-label="Priority">
-            {[0, 1, 2].map((p) => <button key={p} onClick={() => setPriority(p)} aria-pressed={priority === p} className={chip(priority === p, true)}>{priority === p && <Check size={16} />}{PRIORITY_LABEL[p]}</button>)}
+            {[0, 1, 2].map((p) => <Chip key={p} on={priority === p} tick onClick={() => setPriority(p)}>{PRIORITY_LABEL[p]}</Chip>)}
           </div>
         </div>
         <div>
           <Label>Promised by</Label>
           <div className="flex flex-wrap gap-2" role="group" aria-label="Promised by">
-            {presets.map((p) => <button key={p.label} onClick={() => { setDueAt(dueAt === p.value ? "" : p.value); setPickDue(false); }} aria-pressed={dueAt === p.value} className={chip(dueAt === p.value, true)}>{dueAt === p.value && <Check size={16} />}{p.label}</button>)}
-            <button onClick={() => setPickDue((v) => !v)} aria-pressed={pickDue} className={chip(pickDue || (!!dueAt && !presets.some((p) => p.value === dueAt)))}><CalendarClock size={16} />Pick…</button>
+            {presets.map((p) => <Chip key={p.label} on={dueAt === p.value} tick onClick={() => { setDueAt(dueAt === p.value ? "" : p.value); setPickDue(false); }}>{p.label}</Chip>)}
+            <Chip on={pickDue || (!!dueAt && !presets.some((p) => p.value === dueAt))} icon={<CalendarClock size={16} />} onClick={() => setPickDue((v) => !v)}>Other date</Chip>
           </div>
-          {pickDue && <input type="datetime-local" value={dueAt} onChange={(e) => setDueAt(e.target.value)} aria-label="Promised by date and time" className={`${field} mt-2`} />}
+          {pickDue && <input type="datetime-local" value={dueAt} onChange={(e) => setDueAt(e.target.value)} aria-label="Promised by date and time" className={goField("mt-2")} />}
           {dueAt && <p className="mt-2 px-1 text-go-sub text-ink-secondary">Due {whenText(dueAt)}</p>}
         </div>
       </section>
@@ -378,33 +376,36 @@ export default function NewJob() {
                 <div key={i} className="flex items-center gap-3 py-2">
                   <span className="min-w-0 flex-1 truncate text-ink-primary">{l.description}</span>
                   <span className="tabular-nums text-ink-secondary">{fmt(l.unit_price * l.qty)}</span>
-                  <button onClick={() => setLines((ls) => ls.filter((_, j) => j !== i))} aria-label={`Remove ${l.description}`} className="h-10 w-10 -mr-1 inline-flex items-center justify-center rounded-full text-ink-tertiary active:bg-slate-100"><X size={18} /></button>
+                  <IconButton label={`Remove ${l.description}`} tone="tertiary" onClick={() => setLines((ls) => ls.filter((_, j) => j !== i))} className="-mr-1.5" icon={<X size={18} />} />
                 </div>
               ))}
               <div className="flex justify-between pt-2 font-semibold text-ink-primary"><span>Total</span><span className="tabular-nums">{fmt(total)}</span></div>
             </div>
           )}
-          <button onClick={() => setQuoteOpen(true)} className="w-full min-h-[2.75rem] flex items-center gap-2 font-semibold text-primary">
+          <GoButton variant="link" onClick={() => setQuoteOpen(true)} className="w-full !justify-start">
             <Plus size={18} />{lines.length ? "Add another" : mayQuote ? "Add services, parts or a price" : "Add a price"}
-          </button>
+          </GoButton>
         </Card>
         <div className="mt-3 flex items-center gap-3">
           <label htmlFor="deposit" className="flex-1 px-1 text-go-body text-ink-secondary">Ask for a deposit</label>
-          <input id="deposit" value={deposit} onChange={(e) => setDeposit(e.target.value)} placeholder="0" inputMode="decimal" className={`${field} !w-36 text-right tabular-nums`} />
+          <input id="deposit" value={deposit} onChange={(e) => setDeposit(e.target.value)} placeholder="0" inputMode="decimal" className={goField("!w-36 text-right tabular-nums")} />
         </div>
       </section>
 
       <section className="mb-5">
         <Label>Photos</Label>
-        <div className="flex gap-2 overflow-x-auto pb-1">
+        <div className="-mt-3 flex gap-2 overflow-x-auto pt-3 pr-3 pb-1">
           <button onClick={() => fileRef.current?.click()} className="h-20 w-20 shrink-0 rounded-xl border-2 border-dashed border-slate-300 inline-flex flex-col items-center justify-center gap-1 text-ink-secondary active:bg-slate-50">
             <Camera size={22} /><span className="text-go-caption font-medium">Add</span>
           </button>
           {photos.map((p, i) => (
             <div key={i} className="relative h-20 w-20 shrink-0">
               <img src={p} alt={`Photo ${i + 1}`} className="h-20 w-20 rounded-xl object-cover" />
+              {/* a 28px badge on the photo's corner inside a 44px tap area */}
               <button onClick={() => setPhotos((l) => l.filter((_, j) => j !== i))} aria-label="Remove photo"
-                className="absolute -right-1.5 -top-1.5 h-7 w-7 rounded-full bg-ink-primary text-white inline-flex items-center justify-center"><X size={14} /></button>
+                className="absolute -right-3.5 -top-3.5 h-11 w-11 inline-flex items-center justify-center">
+                <span className="h-7 w-7 rounded-full bg-ink-primary text-white inline-flex items-center justify-center"><X size={14} /></span>
+              </button>
             </div>
           ))}
         </div>
@@ -417,7 +418,7 @@ export default function NewJob() {
         <div className="flex flex-wrap gap-2">
           {people.map((p) => {
             const id = p.id === "me" ? me?.id || "" : p.id;
-            return <button key={p.id || "none"} onClick={() => setWho(id)} className={chip(who === id, true)}>{who === id && <Check size={16} />}{p.name}</button>;
+            return <Chip key={p.id || "none"} on={who === id} tick onClick={() => setWho(id)}>{p.name}</Chip>;
           })}
         </div>
       </section>

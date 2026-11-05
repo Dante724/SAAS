@@ -5,12 +5,12 @@ import { useEffect, useState } from "react";
 import { Loader2, Package, Plus, Search, Wrench } from "lucide-react";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
-import { PrimaryButton, Sheet } from "./ui";
+import { GoButton, Sheet, goField } from "./ui";
 import { money } from "../lib/pay";
 import type { QuoteLine } from "../lib/newJob";
 
 type Hit = { kind: "service" | "product" | "bundle"; ref_id: string; name: string; price?: number; available?: number | null };
-const field = "w-full min-h-[3rem] rounded-xl border border-slate-200 bg-white px-4 text-go-body text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary";
+const field = goField();
 
 export default function QuoteSheet({ open, onClose, onAdd, deviceId }: {
   open: boolean; onClose: () => void; onAdd: (l: QuoteLine) => void; deviceId?: string | null;
@@ -55,7 +55,7 @@ export default function QuoteSheet({ open, onClose, onAdd, deviceId }: {
             )}
             <div className="relative mb-2">
               <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-ink-tertiary" />
-              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={type === "service" ? "Search services" : "Search parts"} aria-label="Search the catalogue" className={`${field} pl-11`} />
+              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={type === "service" ? "Search services" : "Search parts"} aria-label="Search the catalogue" className={goField("pl-11")} />
             </div>
             {hits === null ? <div className="py-5 flex justify-center text-ink-tertiary"><Loader2 className="animate-spin" /></div> : (
               <div className="divide-y-[0.5px] divide-slate-200 max-h-[36vh] overflow-y-auto">
@@ -80,8 +80,8 @@ export default function QuoteSheet({ open, onClose, onAdd, deviceId }: {
           <input value={desc} onChange={(e) => setDesc(e.target.value)} placeholder="What for? e.g. Screen replacement" aria-label="Description" className={field} />
           <div className="flex gap-2">
             <input value={price} onChange={(e) => setPrice(e.target.value)} placeholder="Price" inputMode="decimal" aria-label="Price" className={`${field} flex-1`} />
-            <PrimaryButton className="!w-auto px-5" disabled={!okCustom}
-              onClick={() => { onAdd({ kind: "custom", description: desc.trim(), qty: 1, unit_price: amount }); setDesc(""); setPrice(""); }}>Add</PrimaryButton>
+            <GoButton variant="primary" className="px-5" disabled={!okCustom}
+              onClick={() => { onAdd({ kind: "custom", description: desc.trim(), qty: 1, unit_price: amount }); setDesc(""); setPrice(""); }}>Add</GoButton>
           </div>
         </div>
       </div>

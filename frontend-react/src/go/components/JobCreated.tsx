@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { CheckCircle2, Copy, ExternalLink, Loader2, MessageCircle, Plus, Printer, Share2 } from "lucide-react";
 import { useMe } from "../../context/Me";
-import { Card, GhostButton, PrimaryButton } from "./ui";
+import { Card, GoButton, PrimaryButton } from "./ui";
 import MessageSheet from "./MessageSheet";
 import { printTicket, trackingUrl } from "../lib/ticket";
 import { useToast } from "../lib/useGo";
@@ -42,17 +42,17 @@ export default function JobCreated({ job, isEstimate, customer, onOpen, onAnothe
   const spin = (k: string) => busy === k && <Loader2 size={18} className="animate-spin" />;
   return (
     <div className="py-6 md:py-10 max-w-xl mx-auto text-center">
-      <CheckCircle2 size={56} strokeWidth={1.5} className="mx-auto text-emerald-600" />
+      <CheckCircle2 size={56} className="mx-auto text-emerald-600" />
       <h2 className="mt-3 text-go-title font-bold text-ink-primary">{isEstimate ? "Estimate" : "Job"} {job.order_number} booked in</h2>
       {customer && <p className="mt-1 text-go-body text-ink-secondary">{customer.name}{customer.phone ? ` · ${customer.phone}` : ""}</p>}
       <Card className="mt-6 p-3 text-left">
         <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
-          <GhostButton onClick={() => run("print")} className="min-h-[3.5rem] justify-start">{spin("print") || <Printer size={20} />}Print ticket</GhostButton>
-          {maySend && customer && <GhostButton onClick={() => setMsg(true)} className="min-h-[3.5rem] justify-start"><MessageCircle size={20} />Text the tracking link</GhostButton>}
+          <GoButton onClick={() => run("print")} className="min-h-[3.5rem] !justify-start">{spin("print") || <Printer size={20} />}Print ticket</GoButton>
+          {maySend && customer && <GoButton onClick={() => setMsg(true)} className="min-h-[3.5rem] !justify-start"><MessageCircle size={20} />Text the tracking link</GoButton>}
           {canShare
-            ? <GhostButton onClick={() => run("share")} className="min-h-[3.5rem] justify-start">{spin("share") || <Share2 size={20} />}Share tracking link</GhostButton>
-            : <GhostButton onClick={() => run("copy")} className="min-h-[3.5rem] justify-start">{spin("copy") || <Copy size={20} />}Copy tracking link</GhostButton>}
-          <GhostButton onClick={onOpen} className="min-h-[3.5rem] justify-start"><ExternalLink size={20} />Open the job</GhostButton>
+            ? <GoButton onClick={() => run("share")} className="min-h-[3.5rem] !justify-start">{spin("share") || <Share2 size={20} />}Share tracking link</GoButton>
+            : <GoButton onClick={() => run("copy")} className="min-h-[3.5rem] !justify-start">{spin("copy") || <Copy size={20} />}Copy tracking link</GoButton>}
+          <GoButton onClick={onOpen} className="min-h-[3.5rem] !justify-start"><ExternalLink size={20} />Open the job</GoButton>
         </div>
       </Card>
       <PrimaryButton onClick={onAnother} className="mt-5"><Plus size={20} />Book in another</PrimaryButton>
