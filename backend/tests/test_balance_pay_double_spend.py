@@ -125,3 +125,112 @@ async def test_credit_left_after_a_balance_pay_still_pays_another_job(client, te
     assert (await _pay_balance(client, tenant, a)).status_code == 200
     assert (await _pay_balance(client, tenant, b)).status_code == 200
     assert await _balance(client, tenant, cid) == pytest.approx(0)
+
+
+async def _move(client, h, oid, status):
+    r = await client.patch(f"/api/orders/{oid}/status", json={"status": status}, headers=h)
+    assert r.status_code == 200, r.text
+
+
+def _no_credit_left(r):
+    assert r.status_code == 400, f"the same credit paid a second job: {r.text}"
+    assert "only 0.00 of credit" in r.json()["detail"], r.text      # available credit is 0
+
+
+@pytest.mark.asyncio
+async def test_moving_a_credit_paid_job_on_keeps_the_credit_spent(client, tenant):
+    """Review: the status resync set a non-closing job's charge target to 0, which reversed the
+    spend and handed the credit back while job A stayed paid from it."""
+    cid = await _credit_client(client, tenant)
+    a, b = await _job(client, tenant, cid), await _job(client, tenant, cid)
+    assert (await _pay_balance(client, tenant, a)).status_code == 200
+    await _move(client, tenant, a, "in_repair")
+    assert await _balance(client, tenant, cid) == pytest.approx(0)
+    _no_credit_left(await _pay_balance(client, tenant, b))
+    await _close(client, tenant, a)                                     # and the close still bills once
+    assert await _balance(client, tenant, cid) == pytest.approx(0)
+
+
+@pytest.mark.asyncio
+async def test_reopening_a_job_paid_from_credit_after_close_keeps_the_credit_spent(client, tenant):
+    cid = await _credit_client(client, tenant)
+    a, b = await _job(client, tenant, cid), await _job(client, tenant, cid)
+    await _close(client, tenant, a)
+    assert (await _pay_balance(client, tenant, a)).status_code == 200
+    await _move(client, tenant, a, "in_repair")
+    assert await _balance(client, tenant, cid) == pytest.approx(0)
+    _no_credit_left(await _pay_balance(client, tenant, b))
+
+
+@pytest.mark.asyncio
+async def test_archiving_a_job_paid_from_credit_gives_the_credit_back(client, tenant):
+    cid = await _credit_client(client, tenant)
+    a, b = await _job(client, tenant, cid), await _job(client, tenant, cid)
+    assert (await _pay_balance(client, tenant, a)).status_code == 200
+    r = await client.post(f"/api/orders/{a}/archive", json={"reason": "Customer changed mind"}, headers=tenant)
+    assert r.status_code == 200, r.text
+    assert await _balance(client, tenant, cid) == pytest.approx(-100)
+    assert (await _pay_balance(client, tenant, b)).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_money_taken_on_another_open_job_is_not_credit(client, tenant):
+    """Review: available_credit netted only the target job, so a cash payment held on another
+    open job counted as free credit and paid this one."""
+    acc = await _till(client, tenant)
+    cid = (await client.post("/api/clients", json={"name": "No credit"}, headers=tenant)).json()["id"]
+    k, j = await _job(client, tenant, cid), await _job(client, tenant, cid)
+    r = await client.post(f"/api/cash/orders/{k}/pay", json={"method": "cash", "account_id": acc, "amount": 100},
+                          headers=tenant)
+    assert r.status_code == 200, r.text
+    _no_credit_left(await _pay_balance(client, tenant, j))
+    r = await client.post("/api/finance/invoices", json={
+        "client_id": cid, "lines": [{"description": "Repair", "qty": 1, "unit_price": 100}]}, headers=tenant)
+    assert r.status_code == 201, r.text
+    r = await client.post(f"/api/finance/invoices/{r.json()['id']}/pay", json={"method": "balance", "amount": 100},
+                          headers=tenant)
+    _no_credit_left(r)
+    await _close(client, tenant, k)                 # once K is billed, its money is no longer held for it
+    assert await _balance(client, tenant, cid) == pytest.approx(0)
+
+
+@pytest.mark.asyncio
+async def test_closed_job_cannot_be_paid_from_credit_twice_over(client, tenant):
+    cid = await _credit_client(client, tenant, 150)
+    oid = await _job(client, tenant, cid, 200)
+    await _close(client, tenant, oid)
+    assert (await _pay_balance(client, tenant, oid, 150)).status_code == 200
+    _no_credit_left(await _pay_balance(client, tenant, oid, 50))
+    assert await _balance(client, tenant, cid) == pytest.approx(50)     # still owes the 50
+
+
+@pytest.mark.asyncio
+async def test_crediting_back_a_jobless_invoice_paid_from_credit(client, tenant):
+    """A job-less invoice has no refund route: a credit note gives the credit back, cancelling the
+    note takes it again, and the ledger and the balance agree at every step."""
+    cid = await _credit_client(client, tenant)
+    invs = []
+    for _ in range(2):
+        r = await client.post("/api/finance/invoices", json={
+            "client_id": cid, "lines": [{"description": "Repair", "qty": 1, "unit_price": 100}]}, headers=tenant)
+        assert r.status_code == 201, r.text
+        invs.append(r.json()["id"])
+    r = await client.post(f"/api/finance/invoices/{invs[0]}/pay", json={"method": "balance", "amount": 100},
+                          headers=tenant)
+    assert r.status_code == 200, r.text
+    assert await _balance(client, tenant, cid) == pytest.approx(0)
+    r = await client.post("/api/finance/credit-notes", headers=tenant, json={
+        "client_id": cid, "invoice_id": invs[0], "reason": "Goodwill",
+        "lines": [{"description": "Repair", "qty": 1, "unit_price": 100}]})
+    assert r.status_code == 201, r.text
+    cn = r.json()["id"]
+    assert (await client.post(f"/api/finance/credit-notes/{cn}/issue", headers=tenant)).status_code == 200
+    assert await _balance(client, tenant, cid) == pytest.approx(-100)   # the credit is back
+    assert (await client.post(f"/api/finance/credit-notes/{cn}/cancel", headers=tenant)).status_code == 200
+    b = (await client.get(f"/api/clients/{cid}/balance", headers=tenant)).json()
+    assert b["balance"] == pytest.approx(0), b
+    kinds = sorted((e["entry_type"], e["amount"]) for e in b["entries"])
+    assert kinds == sorted([("advance", -100), ("charge", 100), ("credit_note", -100),
+                            ("credit_note_void", 100)]), kinds
+    _no_credit_left(await client.post(f"/api/finance/invoices/{invs[1]}/pay",
+                                      json={"method": "balance", "amount": 100}, headers=tenant))
