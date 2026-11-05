@@ -403,7 +403,7 @@ export default function SettingsHub() {
 
         {/* One scroll area with the standard page margin. pb-80: scroll room below the last card
             so dropdowns near the bottom (e.g. the Public-pages status pickers) can open downward. */}
-        <div className="flex-1 min-w-0 overflow-y-auto px-6 py-5 pb-80">
+        <div className="flex-1 min-w-0 overflow-y-auto [scrollbar-gutter:stable] px-6 py-5 pb-80">
           <Suspense fallback={sectionLoading}>
           {/* Narrow screens hide the section list; the Overview's category cards are the menu. */}
           {sec !== "overview" && (
