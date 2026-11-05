@@ -239,7 +239,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                           {!q.trim() && results.length > 0 && <div className="px-2.5 pt-1 pb-0.5 text-[11px] text-ink-tertiary">Recent customers</div>}
                           {q.trim() && results.length === 0 && <div className="px-2.5 py-2 text-xs text-ink-tertiary">No customer matches "{q.trim()}"</div>}
                           {results.map((r) => <button key={r.id} onClick={() => { setClient(r); setCOpen(false); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-sm"><span className="font-semibold text-ink-primary">{r.name}</span><span className="text-ink-tertiary font-mono text-xs">{r.phone}</span></button>)}
-                          <button onClick={() => { setNewClient(true); setCOpen(false); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-sm text-primary font-bold border-t border-slate-100 mt-1"><M n="person_add" c="text-base" />New customer{q.trim() ? ` "${q.trim()}"` : ""}</button>
+                          <button onClick={() => { setNewClient(true); setCOpen(false); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-sm text-primary font-semibold border-t border-slate-100 mt-1"><M n="person_add" c="text-base" />New customer{q.trim() ? ` "${q.trim()}"` : ""}</button>
                         </div>
                       </>)}
                     </div>
@@ -327,7 +327,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                 </div>
 
                 {!moreOpen ? (
-                  <button type="button" onClick={() => setMoreOpen(true)} className="flex items-center gap-1 text-xs font-semibold text-primary hover:text-primary/80 transition-colors">
+                  <button type="button" onClick={() => setMoreOpen(true)} className="flex items-center gap-1 text-xs font-semibold text-primary hover:underline transition-colors">
                     <M n="add" c="text-sm" />More details
                   </button>
                 ) : (

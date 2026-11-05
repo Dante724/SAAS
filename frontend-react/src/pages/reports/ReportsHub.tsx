@@ -47,7 +47,7 @@ function BarChart({ rows, fmt = (n: number) => n.toLocaleString(getLocale()), co
           : "bg-rose-400");
         return (
           <div key={i} className="group flex items-center gap-2.5 text-xs">
-            <span className="w-4 shrink-0 text-right text-[11px] font-bold text-ink-placeholder tabular-nums">{i + 1}</span>
+            <span className="w-4 shrink-0 text-right text-2xs font-semibold text-ink-tertiary tabular-nums">{i + 1}</span>
             <span className="w-32 shrink-0 truncate text-ink-secondary group-hover:text-ink-primary transition-colors" title={r.label}>{r.label}</span>
             <div className="flex-1 h-5 rounded-full bg-slate-100/80 overflow-hidden ring-1 ring-inset ring-slate-200/50">
               <div className={`h-full rounded-full ${fill} shadow-sm transition-[width] duration-700 ease-out group-hover:brightness-105`} style={{ width: `${pct}%` }} />

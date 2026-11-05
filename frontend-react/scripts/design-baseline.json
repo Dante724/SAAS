@@ -1,19 +1,7 @@
 {
-  "go/components/ItemsSheet.tsx": {
-    "raw-hex": 1
-  },
-  "go/components/MessageSheet.tsx": {
-    "button-look": 1
-  },
-  "go/screens/Job.tsx": {
-    "raw-hex": 3
-  },
-  "go/screens/Scan.tsx": {
-    "raw-hex": 1
-  },
   "pages/appointments/AppointmentsHub.tsx": {
     "button-look": 1,
-    "text-px": 19,
+    "text-px": 18,
     "blur": 2
   },
   "pages/assets/AssetsHub.tsx": {
@@ -76,7 +64,7 @@
   },
   "pages/inbox/InquiryDrawer.tsx": {
     "button-look": 2,
-    "text-px": 10,
+    "text-px": 9,
     "blur": 1
   },
   "pages/inbox/InquiryFields.tsx": {
@@ -87,15 +75,15 @@
   },
   "pages/inventory/BinsPanel.tsx": {
     "button-look": 2,
-    "text-px": 12
+    "text-px": 10
   },
   "pages/inventory/InventoryDrawer.tsx": {
     "button-look": 2,
-    "text-px": 54
+    "text-px": 52
   },
   "pages/inventory/InventoryHub.tsx": {
     "button-look": 7,
-    "text-px": 49
+    "text-px": 47
   },
   "pages/inventory/NewPODrawer.tsx": {
     "button-look": 3,
@@ -103,7 +91,7 @@
   },
   "pages/inventory/PODrawer.tsx": {
     "button-look": 2,
-    "text-px": 45
+    "text-px": 40
   },
   "pages/inventory/PasteImport.tsx": {
     "button-look": 2,
@@ -163,8 +151,7 @@
   "pages/orders/CreateOrderDrawer.tsx": {
     "button-look": 1,
     "text-px": 13,
-    "blur": 1,
-    "bold-tab": 1
+    "blur": 1
   },
   "pages/orders/EstimateTerms.tsx": {
     "text-px": 2
@@ -174,14 +161,11 @@
     "text-px": 3
   },
   "pages/orders/KitGroupHeader.tsx": {
-    "text-px": 9
-  },
-  "pages/orders/LineQtyEditor.tsx": {
-    "button-look": 1
+    "text-px": 7
   },
   "pages/orders/NotesPanel.tsx": {
     "button-look": 1,
-    "text-px": 6
+    "text-px": 3
   },
   "pages/orders/PartsPOPanel.tsx": {
     "button-look": 1,
@@ -192,7 +176,7 @@
     "text-px": 2
   },
   "pages/orders/PrintMenu.tsx": {
-    "text-px": 11
+    "text-px": 9
   },
   "pages/orders/RecommendationsPanel.tsx": {
     "button-look": 1,
@@ -200,24 +184,21 @@
   },
   "pages/orders/WODrawer.tsx": {
     "button-look": 4,
-    "text-px": 82
+    "text-px": 70
   },
   "pages/orders/WorkOrdersHub.tsx": {
     "text-px": 45
-  },
-  "pages/orders/look.tsx": {
-    "text-px": 1
   },
   "pages/reports/GoPilotReport.tsx": {
     "text-px": 5
   },
   "pages/reports/ReportsHub.tsx": {
     "button-look": 1,
-    "text-px": 30,
+    "text-px": 29,
     "gradient": 1
   },
   "pages/reports/TotalProfit.tsx": {
-    "text-px": 15
+    "text-px": 13
   },
   "pages/sales/SalesPOS.tsx": {
     "button-look": 2,
@@ -242,8 +223,7 @@
     "text-px": 15
   },
   "pages/settings/DocumentTemplatesPage.tsx": {
-    "text-px": 8,
-    "gradient": 1
+    "text-px": 8
   },
   "pages/settings/FinanceNumbering.tsx": {
     "button-look": 3,
@@ -278,7 +258,7 @@
   },
   "pages/settings/SettingsHub.tsx": {
     "button-look": 8,
-    "text-px": 50,
+    "text-px": 45,
     "blur": 6
   },
   "pages/settings/SetupChecklist.tsx": {
@@ -286,16 +266,16 @@
   },
   "pages/settings/StatusesSettings.tsx": {
     "button-look": 2,
-    "text-px": 15,
+    "text-px": 14,
     "blur": 1
   },
   "pages/settings/TeamSettings.tsx": {
     "button-look": 2,
-    "text-px": 10
+    "text-px": 6
   },
   "pages/settings/TemplateEditorDrawer.tsx": {
     "button-look": 3,
-    "text-px": 36
+    "text-px": 21
   },
   "pages/settings/WebhooksSettings.tsx": {
     "text-px": 3

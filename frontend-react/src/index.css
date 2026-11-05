@@ -14,7 +14,7 @@
 /* Glass input + clay scrollbars (from the Stitch export) */
 .glass-input { background: #fff; border: 1px solid rgb(226 232 240); box-shadow: 0 1px 2px rgba(15,23,42,.04); transition: border-color .15s, box-shadow .15s; }
 .glass-input:hover { border-color: rgb(203 213 225); }
-.glass-input::placeholder { color: rgb(148 163 184); font-weight: 400; }
+.glass-input::placeholder { color: rgb(var(--c-ink-placeholder)); font-weight: 400; }
 .glass-input:focus { background:#fff; border-color:#0059ba; box-shadow: 0 0 0 3px rgba(0,89,186,.12); outline: none; }
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
@@ -69,8 +69,8 @@ table[data-density="compact"] > tbody > tr > td { padding-top: .4rem; padding-bo
 /* Dark mode — every surface, border, text colour, the primary and the soft tints come from
    theme tokens (theme.tokens.js → CSS variables on :root / .dark), so nothing needs a patch
    here. What's left is the few things a utility can't express. */
-:root { --tint-boost: 1; --hue-lift: 0%; }
-.dark { --tint-boost: 1.8; --hue-lift: 35%; }
+:root { --tint-boost: 1; --hue-lift: 0%; --hue-sink: 45%; }
+.dark { --tint-boost: 1.8; --hue-lift: 35%; --hue-sink: 0%; }
 body { background: rgb(var(--c-canvas)); color: rgb(var(--c-ink-primary)); }
 ::selection { background: rgb(var(--c-primary-fill) / .25); }
 .dark ::selection { background: rgb(147 184 255 / .3); }
