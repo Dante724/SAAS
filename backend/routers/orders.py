@@ -3048,7 +3048,7 @@ async def notify_order_customer(
             if result is not None:
                 delivery = "oauth"
         if result is None:
-            _creds = await notif_creds(db, current.org_id, data.channel)
+            _creds = await notif_creds(db, current.org_id, data.channel, transactional=True)   # about this job
             result = await _adapter_for(data.channel, _creds).send(
                 recipient=recipient, subject=data.subject, body=data.body)
             delivery = "smtp" if (data.channel == "email" and _settings.SMTP_HOST) else "simulated"

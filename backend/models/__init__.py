@@ -4276,3 +4276,13 @@ class MembershipUsage(OrgScoped, Base):
     value: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     term_start: Mapped[date] = mapped_column(Date)                         # which plan year it counts in
     used_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class OperatorTextUsage(OrgScoped, Base):
+    """Texts a shop sent today through the OPERATOR's shared Twilio account (H12 toll-fraud cap).
+    One row per shop per shop-local day; services/notifications.reserve_operator_text() bumps
+    `sent` with one conditional upsert, so concurrent sends from every worker share the count."""
+    __tablename__ = "operator_text_usage"
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    sent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)
