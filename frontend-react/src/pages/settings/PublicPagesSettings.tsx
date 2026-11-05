@@ -228,7 +228,7 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker, afte
         <aside className="xl:sticky xl:top-4" aria-label="Preview">
           <Tabs look="segmented" label="Preview page" value={page} onChange={setPage} className="mb-3"
             tabs={[{ id: "booking", label: "Booking" }, { id: "tracking", label: "Tracking" }, { id: "estimate", label: "Estimate" }]} />
-          <div className="rounded-[34px] border-[7px] border-slate-800 bg-white overflow-hidden mx-auto w-[260px] shadow-clay-card">
+          <div className="always-light rounded-[34px] border-[7px] border-slate-800 bg-white overflow-hidden mx-auto w-[260px] shadow-clay-card">
             <div className="h-[470px] overflow-hidden flex flex-col text-2xs">
               <div className="flex items-center gap-2 px-3 py-3 border-b border-slate-100">
                 {logoEl(!!cfg.page_show_logo)}<span className="font-semibold text-ink-primary truncate">{name}</span>

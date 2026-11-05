@@ -333,7 +333,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                 </div>
 
                 {!moreOpen ? (
-                  <button type="button" onClick={() => setMoreOpen(true)} className="flex items-center gap-1 text-xs font-semibold text-primary hover:text-primary/80 transition-colors">
+                  <button type="button" onClick={() => setMoreOpen(true)} className="flex items-center gap-1 text-xs font-semibold text-primary hover:underline transition-colors">
                     <M n="add" c="text-sm" />More details
                   </button>
                 ) : (

@@ -36,7 +36,7 @@ function TrendChip({ cur, prev }: { cur: number | null; prev: number | null }) {
   const tone = t.dir === "up" ? "text-emerald-700 bg-emerald-50" : t.dir === "down" ? "text-rose-700 bg-rose-50" : "text-ink-secondary bg-slate-100";
   return (
     <span className={`inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-2xs font-semibold ${tone}`} title={`Last period: ${money(prev)}`}>
-      <M n={t.dir === "up" ? "trending_up" : t.dir === "down" ? "trending_down" : "trending_flat"} c="text-sm" />{t.label}
+      <M n={t.dir === "up" ? "trending_up" : t.dir === "down" ? "trending_down" : "trending_flat"} c="text-xs" />{t.label}
     </span>
   );
 }

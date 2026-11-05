@@ -59,7 +59,7 @@ export default function DenomCountModal({
                 <input type="number" min={0} inputMode="numeric" value={counts[key] || ""}
                   onChange={(e) => setCounts({ ...counts, [key]: e.target.value })}
                   placeholder="0" className="glass-input w-16 h-9 px-2 text-sm tabular-nums font-semibold rounded-xl text-center" />
-                <span className="ml-auto text-xs tabular-nums font-semibold text-ink-primary">{n ? money(d * n, sym) : <span className="text-ink-placeholder">—</span>}</span>
+                <span className="ml-auto text-xs tabular-nums font-semibold text-ink-primary">{n ? money(d * n, sym) : <span className="text-ink-tertiary">—</span>}</span>
               </div>
             );
           })}

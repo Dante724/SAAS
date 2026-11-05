@@ -41,7 +41,7 @@ type Tab = "clients" | "memberships" | "suppliers";
 const TIER_HUE: Record<string, string> = { vip: "#7F77DD", gold: "#BA7517", silver: "#64748b" };
 export function TierPill({ tier }: { tier?: string | null }) {
   const k = (tier || "").trim().toLowerCase();
-  if (!k || k === "standard") return <span className="text-ink-placeholder">—</span>;
+  if (!k || k === "standard") return <span className="text-ink-tertiary">—</span>;
   const hue = TIER_HUE[k] || "#378ADD";
   return <span className="inline-flex items-center h-6 px-2 rounded-full text-2xs font-semibold whitespace-nowrap" style={{ background: tint(hue), color: hueText(hue) }}>{k === "vip" ? "VIP" : humanize(tier)}</span>;
 }

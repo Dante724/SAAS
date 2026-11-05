@@ -30,7 +30,7 @@ export function VisibilityToggle({ value, onChange, disabled, compact }: { value
       aria-label={pub ? "Shown to customer. Make private" : "Private. Show to customer"}
       title={pub ? "The customer sees this on their tracking page" : "Only your team sees this"}
       className={`inline-flex items-center gap-1 rounded-lg border font-semibold transition-colors disabled:opacity-50 ${compact ? "px-1.5 py-0.5 text-2xs" : "px-2.5 py-1.5 text-xs"} ${pub ? "bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100" : "bg-white border-slate-200 text-ink-secondary hover:bg-slate-50"}`}>
-      <M n={pub ? "visibility" : "lock"} c={compact ? "text-xs" : "text-sm"} />{pub ? "Customer sees" : "Private"}
+      <M n={pub ? "visibility" : "lock"} c={compact ? "text-xs" : "text-xs"} />{pub ? "Customer sees" : "Private"}
     </button>
   );
 }

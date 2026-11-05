@@ -1621,7 +1621,7 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
             </div>
             {/* When to show */}
             <div className="flex flex-wrap items-center gap-2 text-xs text-ink-secondary pt-1 border-t border-slate-100">
-              <span className="font-semibold"><M n="visibility" c="text-sm align-middle" /> Show only when</span>
+              <span className="font-semibold"><M n="visibility" c="text-xs align-middle" /> Show only when</span>
               <select value={nf.show_when_field_key} onChange={(e) => setNf({ ...nf, show_when_field_key: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
                 <option value="">always</option>
                 {(fields || []).map((f) => <option key={f.id} value={f.field_key}>{f.field_label}</option>)}
@@ -1635,7 +1635,7 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
             </div>
             {/* What it does — upsell rule (shared engine with checklist) */}
             <div className="flex flex-wrap items-center gap-2 text-xs text-ink-secondary pt-1 border-t border-slate-100">
-              <label className="font-semibold flex items-center gap-1"><input type="checkbox" checked={nf.upsell_on} onChange={(e) => setNf({ ...nf, upsell_on: e.target.checked })} className="w-4 h-4 rounded border-slate-300 text-primary" /><M n="sell" c="text-sm align-middle" /> Draft upsell when value</label>
+              <label className="font-semibold flex items-center gap-1"><input type="checkbox" checked={nf.upsell_on} onChange={(e) => setNf({ ...nf, upsell_on: e.target.checked })} className="w-4 h-4 rounded border-slate-300 text-primary" /><M n="sell" c="text-xs align-middle" /> Draft upsell when value</label>
               {nf.upsell_on && <>
                 <select value={nf.upsell_comparator} onChange={(e) => setNf({ ...nf, upsell_comparator: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
                   <option value="lt">&lt;</option><option value="gt">&gt;</option><option value="is">is</option><option value="is_not">is not</option>
@@ -1649,7 +1649,7 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
             </div>
             {/* Gate a status — a value can block entering a status */}
             <div className="flex flex-wrap items-center gap-2 text-xs text-ink-secondary pt-1 border-t border-slate-100">
-              <label className="font-semibold flex items-center gap-1"><input type="checkbox" checked={nf.gate_on} onChange={(e) => setNf({ ...nf, gate_on: e.target.checked })} className="w-4 h-4 rounded border-slate-300 text-primary" /><M n="block" c="text-sm align-middle" /> Block status</label>
+              <label className="font-semibold flex items-center gap-1"><input type="checkbox" checked={nf.gate_on} onChange={(e) => setNf({ ...nf, gate_on: e.target.checked })} className="w-4 h-4 rounded border-slate-300 text-primary" /><M n="block" c="text-xs align-middle" /> Block status</label>
               {nf.gate_on && <>
                 <select value={nf.gate_status_key} onChange={(e) => setNf({ ...nf, gate_status_key: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
                   <option value="">choose…</option>{statuses.map((s) => <option key={s.id} value={s.key}>{s.name}</option>)}
