@@ -22,7 +22,7 @@ This file tracks the hardening council's fix PRs, all against `roadmap/orderry-p
 | #104 | H10: `/bins/batches` checks the warehouse's `post` permission; `apply_receipt_line` returns its own batch (council, 72d6f5f7) | 201 instead of 403; the earlier layer's id came back | pending (re-check) | yes, if CI is green. Related suites re-run here: 150 passed |
 | #105 | H5 client balance moved atomically | — | — | PM approved |
 | #106 | H8 invoice keeps the job's tax | — | — | PM approved |
-| #107 | H12 SMS cap review items 1–4 | in progress | — | no |
+| #107 | H12: `from`-only creds are capped; durable per-shop-day counter (`OperatorTextUsage`, migration `ot01`, atomic upsert); full cap only for `active` shops; `OPERATOR_SMS_RESERVE_PCT`=20 kept for transactional sends (campaigns, chats, birthday and win-back count as marketing) | from-only creds sent a 4th text (201, not 429); cap lost when memory was cleared; no reset at the shop's midnight; non-active shops got the full cap; marketing used up the reserve. Postgres race: exactly 1 of 12 parallel sends at cap−1, 10/10 runs | pending | yes, if CI is green. 686 comms tests passed on Postgres. Outbox reschedule waits for #95. **Migration:** `ot01` revises `trg01` |
 | #108 | H9: reserve-stock locks the job `FOR NO KEY UPDATE`; products taken in sorted order | Double click held 2 for a job needing 1; [X,Y] vs [Y,X] → 500 deadlock | 18/18 green (600e375) | **yes** |
 | #109 | H6: status resync keeps the credit already spent while a job is open; `available_credit` nets money on all open jobs; job-less invoice reversal test | Move-to-in-repair: balance −100 (credit handed back); paying J from balance succeeded with no credit; closed job paid twice from credit | pending | yes, if CI is green. 225 money tests passed. **Look at:** `test_invoice_money` setup gained a 100 advance (the old test relied on the double-spend) |
 | #110 | M2: archive locks every stock row it touches, sorted, before the holds; the expiry sweep and manual release lock and re-check `released` | Archive racing an override draw → deadlock; release + archive took B's unit; archive of a job that drew Y and held X → 500 deadlock | pending | yes, if CI is green. 6 tests 5/5; 138 related tests passed |
@@ -56,3 +56,6 @@ This file tracks the hardening council's fix PRs, all against `roadmap/orderry-p
 
 ## QA items (council)
 #123 (Q8 flaky test), #127 (Q1 coverage greenlet), #133 (Q5 Postgres lock tests) and #137 (Q3 drift gate, migration `nn01`) are done per the council. Their CI is to be re-checked.
+
+## Alembic heads
+Four open PRs each add a migration that revises `trg01`: #95 `nob01`, #99 `idg01`, #107 `ot01` and #137 `nn01`. Only the first to merge keeps a single head. Each later one must be re-chained onto the new head, and `alembic heads` checked again, before it merges.
