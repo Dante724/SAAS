@@ -116,6 +116,15 @@ def _jobs_tax(orders) -> float:
     return q2(sum(float(getattr(o, "tax", 0) or 0) for o in orders))
 
 
+def _lines_tax(lines) -> float:
+    """The tax a subset of job lines carries (M11): a per-line or "bill the rest" invoice used
+    to take none of it, so a taxed job billed in parts exported as zero-rated."""
+    from backend.services.tax import line_tax
+    return q2(sum(line_tax(qty=l.qty, unit_price=l.unit_price, discount=l.discount,
+                           discount_type=l.discount_type, tax_rate=l.tax_rate, tax_mode=l.tax_mode)
+                  for l in lines))
+
+
 async def _has_free_lines(db: AsyncSession, inv: Invoice) -> bool:
     return bool((await db.execute(select(InvoiceLine.id).where(
         InvoiceLine.invoice_id == inv.id, InvoiceLine.order_line_id.is_(None)).limit(1))).scalar_one_or_none())
@@ -157,10 +166,10 @@ async def new_invoice(db: AsyncSession, *, org_id: str, orders: list[Order] = ()
     inv.subtotal = q2(subtotal) if subtotal else await source_subtotal(db, inv)
     if discount_pct is not None or tax_pct is not None:
         discount, tax = pct_amounts(inv.subtotal, discount_pct or 0, tax_pct or 0)
-    elif orders and not lines and not free_lines and not subtotal and not tax:
-        # Whole jobs: their totals already include their tax, so it's shown as the invoice's
-        # tax and the subtotal is what's left. The total doesn't change.
-        tax = _jobs_tax(orders)
+    elif orders and not free_lines and not subtotal and not tax:
+        # Whole jobs (or a subset of their lines): the totals already include their tax, so it's
+        # shown as the invoice's tax and the subtotal is what's left. The total doesn't change.
+        tax = _lines_tax(lines) if lines else _jobs_tax(orders)
         inv.subtotal = q2(inv.subtotal - tax)
     inv.discount, inv.tax = q2(discount or 0), q2(tax or 0)
     retotal(inv)
