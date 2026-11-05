@@ -12,6 +12,7 @@ from backend.db.database import get_db
 from backend.models import Client, CustomField, Directory, DirectoryItem, Employee, Order
 from backend.services.auth import get_current_employee, require_perm
 from backend.core.spreadsheet import MAX_IMPORT_ROWS, safe_row, too_many_rows, unguard_cell
+from backend.services.owned import get_owned_or_404
 
 router = APIRouter(prefix="/api/directories", tags=["settings"])
 
@@ -339,6 +340,7 @@ async def reorder_items(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
+    await get_owned_or_404(db, Directory, directory_id, current.org_id, "list")
     rows = {i.id: i for i in (await db.execute(select(DirectoryItem).where(
         DirectoryItem.directory_id == directory_id, DirectoryItem.org_id == current.org_id,
         DirectoryItem.id.in_(data.ids)))).scalars().all()}
@@ -464,6 +466,7 @@ async def export_items(
     import csv
     import io
     from fastapi.responses import Response
+    await get_owned_or_404(db, Directory, directory_id, current.org_id, "list")
     rows = (await db.execute(select(DirectoryItem).where(
         DirectoryItem.directory_id == directory_id, DirectoryItem.org_id == current.org_id,
         DirectoryItem.active == True).order_by(DirectoryItem.sort_order, DirectoryItem.value))).scalars().all()  # noqa: E712

@@ -8,7 +8,11 @@ import { useMe } from "../../context/Me";
 import { money } from "../orders/types";
 import EarningsBreakdown, { type BreakdownRule } from "./EarningsBreakdown";
 import { Avatar } from "../orders/look";
-import { btnGhost } from "../invoices/billing";
+import Button, { buttonClass } from "../../components/Button";
+import { PanelHeader, Toolbar } from "../../components/PageLayout";
+import { fieldClass } from "../../components/Field";
+import { TableEmpty } from "../../components/EmptyState";
+import { theadRowClass } from "../../components/Table";
 import { clickableRow } from "../../lib/clickable";
 
 /* Finance › Payroll calculation: the month's live pay per person, narrowed by location, role
@@ -98,43 +102,42 @@ export default function PayrollCalcPanel({ month, onMonth, headerAction }: { mon
   const set = (k: keyof PayrollFilters) => (e: React.ChangeEvent<HTMLSelectElement>) => setFilters((f) => ({ ...f, [k]: e.target.value }));
   const active = Object.values(filters).filter(Boolean).length;
   const total = (rows || []).reduce((s, r) => s + (r.computed_total || 0), 0);
-  const sel = "bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm text-ink-primary outline-none focus:border-primary max-w-[11rem]";
+  const sel = fieldClass("pr-8 !w-auto max-w-[11rem]");
 
   return (
     <div className="space-y-3">
-      <div className="flex items-center gap-2 flex-wrap">
-        <h3 className="text-sm font-semibold text-ink-primary">Payroll calculation</h3>
-        <input type="month" value={month} onChange={(e) => e.target.value && onMonth(e.target.value)} aria-label="Month" className={sel} />
-      </div>
-      <div className="flex items-center gap-2 flex-wrap">
-        {headerAction}
-        {can("can_export_payroll") && <button onClick={exportCsv} disabled={exporting || !rows?.length} className={btnGhost}><M n="download" c="text-sm" />{exporting ? "Exporting…" : "Export"}</button>}
-        {can("can_view_own_payroll") && can("can_view_own_compensation") && <Link to="/my-earnings" className={btnGhost}><M n="payments" c="text-sm" />My earnings</Link>}
-      </div>
-
-      <div className="flex items-center gap-2 flex-wrap" role="group" aria-label="Payroll filters">
-        <M n="filter_list" c="text-sm text-ink-tertiary" />
-        {locations.length > 1 && (
-          <select value={filters.location_id} onChange={set("location_id")} aria-label="Location" className={sel}>
-            <option value="">All locations</option>
-            {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+      <PanelHeader title="Payroll calculation" sub={rows && rows.length > 0
+        ? <>{rows.length} {rows.length === 1 ? "person" : "people"} · <span className="font-semibold text-ink-primary tabular-nums">{money(total, undefined, true)}</span></>
+        : "The month's pay per person, before it's run."} />
+      {/* Actions on the left (main first); the month and the filters on the right. */}
+      <Toolbar
+        actions={<>
+          {headerAction}
+          {can("can_export_payroll") && <Button icon={<M n="download" c="text-sm" />} onClick={exportCsv} disabled={exporting || !rows?.length}>{exporting ? "Exporting…" : "Export"}</Button>}
+          {can("can_view_own_payroll") && can("can_view_own_compensation") && <Link to="/my-earnings" className={buttonClass("secondary")}><M n="payments" c="text-sm" />My earnings</Link>}
+        </>}
+        filters={<div className="flex flex-wrap items-center gap-2" role="group" aria-label="Payroll filters">
+          {active > 0 && <Button variant="link" onClick={() => setFilters({ location_id: "", role_id: "", employee_id: "" })}>Clear filters</Button>}
+          <input type="month" value={month} onChange={(e) => e.target.value && onMonth(e.target.value)} aria-label="Month" className={sel} />
+          {locations.length > 1 && (
+            <select value={filters.location_id} onChange={set("location_id")} aria-label="Location" className={sel}>
+              <option value="">All locations</option>
+              {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+            </select>
+          )}
+          <select value={filters.role_id} onChange={set("role_id")} aria-label="Role" className={sel}>
+            <option value="">All roles</option>
+            {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
           </select>
-        )}
-        <select value={filters.role_id} onChange={set("role_id")} aria-label="Role" className={sel}>
-          <option value="">All roles</option>
-          {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-        </select>
-        <select value={filters.employee_id} onChange={set("employee_id")} aria-label="Employee" className={sel}>
-          <option value="">Everyone</option>
-          {people.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
-        {active > 0 && <button onClick={() => setFilters({ location_id: "", role_id: "", employee_id: "" })} className="text-xs font-semibold text-primary hover:underline">Clear filters</button>}
-        {rows && rows.length > 0 && <span className="ml-auto text-xs text-ink-tertiary">{rows.length} {rows.length === 1 ? "person" : "people"} · <span className="font-semibold text-ink-primary tabular-nums">{money(total)}</span></span>}
-      </div>
+          <select value={filters.employee_id} onChange={set("employee_id")} aria-label="Employee" className={sel}>
+            <option value="">Everyone</option>
+            {people.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
+          </select>
+        </div>} />
 
       <div className="bg-white rounded-2xl border border-slate-200/90 overflow-x-auto">
         <table className="w-full min-w-[840px] text-left border-collapse text-xs">
-          <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-xs font-semibold">
+          <thead><tr className={theadRowClass}>
             <th className="py-3 pl-3 pr-1 w-8"></th><th className="py-3 px-3">Employee</th><th className="py-3 px-3">Position</th><th className="py-3 px-3">Wage type</th>
             <th className="py-3 px-3 text-right">Base</th><th className="py-3 px-3 text-right">Hourly</th><th className="py-3 px-3 text-right">Commission</th>
             <th className="py-3 px-3 text-right">Bonus</th><th className="py-3 px-3 text-right">Penalty</th><th className="py-3 px-3 text-right">Total</th><th className="py-3 px-3"></th>
@@ -142,7 +145,7 @@ export default function PayrollCalcPanel({ month, onMonth, headerAction }: { mon
           <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
             {!rows && <SkeletonRows cols={11} />}
             {err && <tr><td colSpan={11} className="py-6 px-4 text-rose-600" role="alert">{err}</td></tr>}
-            {rows?.length === 0 && !err && <tr><td colSpan={11} className="py-6 px-4 text-ink-tertiary">{active ? "Nobody matches these filters." : "No payroll data for this month."}</td></tr>}
+            {rows?.length === 0 && !err && <TableEmpty cols={11} size="inline" className="px-4" title={active ? "Nobody matches these filters." : "No payroll data for this month."} />}
             {rows?.map((p) => {
               const isOpen = open === p.employee_id;
               const d = details[p.employee_id];
@@ -150,17 +153,17 @@ export default function PayrollCalcPanel({ month, onMonth, headerAction }: { mon
               return (
                 <Fragment key={p.employee_id}>
                   <tr className={`hover:bg-blue-50/30 cursor-pointer ${isOpen ? "bg-blue-50/40" : ""}`} {...clickableRow(() => toggle(p.employee_id))}>
-                    <td className="py-2 pl-3 pr-1"><button type="button" aria-expanded={isOpen} aria-label={`${isOpen ? "Hide" : "Show"} breakdown for ${p.name || "employee"}`} onClick={(e) => { e.stopPropagation(); toggle(p.employee_id); }} className="w-7 h-7 rounded-md grid place-items-center text-ink-tertiary hover:bg-slate-100"><M n={isOpen ? "expand_more" : "chevron_right"} c="text-sm" /></button></td>
-                    <td className="py-2 px-3"><span className="flex items-center gap-2.5 min-w-0"><Avatar name={p.name} size={26} /><span className="font-semibold text-ink-primary truncate">{p.name || "—"}</span>{acc && <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${acc[1]}`}>{acc[0]}</span>}</span></td>
+                    <td className="py-2 pl-3 pr-1"><button type="button" aria-expanded={isOpen} aria-label={`${isOpen ? "Hide" : "Show"} breakdown for ${p.name || "employee"}`} onClick={(e) => { e.stopPropagation(); toggle(p.employee_id); }} className={buttonClass("ghost", "sm", "w-8 !px-0 text-ink-tertiary")}><M n={isOpen ? "expand_more" : "chevron_right"} c="text-sm" /></button></td>
+                    <td className="py-2 px-3"><span className="flex items-center gap-2.5 min-w-0"><Avatar name={p.name} size={26} /><span className="font-semibold text-ink-primary truncate">{p.name || "—"}</span>{acc && <span className={`px-2 py-0.5 rounded-full text-2xs font-semibold whitespace-nowrap ${acc[1]}`}>{acc[0]}</span>}</span></td>
                     <td className="py-2.5 px-3">{p.position || "—"}</td>
                     <td className="py-2.5 px-3">{WAGE[p.wage_type || ""] || "—"}</td>
-                    <td className={`py-2.5 px-3 text-right tabular-nums ${Number(p.base_salary) ? "" : "text-ink-tertiary"}`}>{money(p.base_salary)}</td>
-                    <td className={`py-2.5 px-3 text-right tabular-nums ${Number(p.hourly_total) ? "" : "text-ink-tertiary"}`}>{money(p.hourly_total)}</td>
-                    <td data-col="commission" className={`py-2.5 px-3 text-right tabular-nums ${amountTone(p.commissions_total, "gain")}`}>{money(p.commissions_total)}</td>
-                    <td data-col="bonus" className={`py-2.5 px-3 text-right tabular-nums ${amountTone(p.bonuses_total, "gain")}`}>{money(p.bonuses_total)}</td>
-                    <td data-col="penalty" className={`py-2.5 px-3 text-right tabular-nums ${amountTone(p.penalties_total, "loss")}`}>{money(p.penalties_total)}</td>
-                    <td className="py-2.5 px-3 text-right tabular-nums font-semibold text-ink-primary">{money(p.computed_total)}</td>
-                    <td className="py-1.5 px-3 text-right"><button aria-label="Print payslip" onClick={(e) => { e.stopPropagation(); openAuthedDoc(`/print/payroll-statement/${p.employee_id}`).catch(() => alertDialog("Could not open payslip")); }} title="Print payslip" className="w-8 h-8 inline-grid place-items-center rounded-lg text-ink-tertiary hover:text-ink-primary hover:bg-slate-100"><M n="print" c="text-base" /></button></td>
+                    <td className={`py-2.5 px-3 text-right tabular-nums whitespace-nowrap ${Number(p.base_salary) ? "" : "text-ink-tertiary"}`}>{money(p.base_salary, undefined, true)}</td>
+                    <td className={`py-2.5 px-3 text-right tabular-nums whitespace-nowrap ${Number(p.hourly_total) ? "" : "text-ink-tertiary"}`}>{money(p.hourly_total, undefined, true)}</td>
+                    <td data-col="commission" className={`py-2.5 px-3 text-right tabular-nums whitespace-nowrap ${amountTone(p.commissions_total, "gain")}`}>{money(p.commissions_total, undefined, true)}</td>
+                    <td data-col="bonus" className={`py-2.5 px-3 text-right tabular-nums whitespace-nowrap ${amountTone(p.bonuses_total, "gain")}`}>{money(p.bonuses_total, undefined, true)}</td>
+                    <td data-col="penalty" className={`py-2.5 px-3 text-right tabular-nums whitespace-nowrap ${amountTone(p.penalties_total, "loss")}`}>{money(p.penalties_total, undefined, true)}</td>
+                    <td className="py-2.5 px-3 text-right tabular-nums font-semibold text-ink-primary">{money(p.computed_total, undefined, true)}</td>
+                    <td className="py-1.5 px-3 text-right"><button aria-label="Print payslip" onClick={(e) => { e.stopPropagation(); openAuthedDoc(`/print/payroll-statement/${p.employee_id}`).catch(() => alertDialog("Could not open payslip")); }} title="Print payslip" className={buttonClass("ghost", "sm", "w-8 !px-0 text-ink-tertiary")}><M n="print" c="text-base" /></button></td>
                   </tr>
                   {isOpen && (
                     <tr className="bg-slate-50/50">
@@ -174,8 +177,8 @@ export default function PayrollCalcPanel({ month, onMonth, headerAction }: { mon
                               <div className="text-xs font-semibold text-ink-secondary mb-1.5">Bonuses and penalties</div>
                               {d.bonuses.length + d.penalties.length === 0 ? <div className="text-xs text-ink-tertiary">None this month.</div> : (
                                 <ul className="space-y-1">
-                                  {d.bonuses.map((b) => <li key={b.id} className="flex justify-between gap-2"><span className="truncate">{b.note || "Bonus"}</span><span className="tabular-nums text-emerald-700">+{money(b.amount)}</span></li>)}
-                                  {d.penalties.map((b) => <li key={b.id} className="flex justify-between gap-2"><span className="truncate">{b.note || "Penalty"}</span><span className="tabular-nums text-rose-600">−{money(Math.abs(b.amount))}</span></li>)}
+                                  {d.bonuses.map((b) => <li key={b.id} className="flex justify-between gap-2"><span className="truncate">{b.note || "Bonus"}</span><span className="tabular-nums text-emerald-700">+{money(b.amount, undefined, true)}</span></li>)}
+                                  {d.penalties.map((b) => <li key={b.id} className="flex justify-between gap-2"><span className="truncate">{b.note || "Penalty"}</span><span className="tabular-nums text-rose-600">−{money(Math.abs(b.amount), undefined, true)}</span></li>)}
                                 </ul>
                               )}
                             </div>
