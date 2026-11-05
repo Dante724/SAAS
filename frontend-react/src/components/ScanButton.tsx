@@ -49,7 +49,7 @@ export default function ScanButton({
         title={title}
         aria-label={title}
         onClick={() => setOpen(true)}
-        className={`shrink-0 w-9 h-9 grid place-items-center rounded-lg glass-input text-primary hover:bg-blue-50 ${className}`}
+        className={`hit44 shrink-0 w-9 h-9 grid place-items-center rounded-lg glass-input text-primary hover:bg-blue-50 ${className}`}
       >
         <M n="qr_code_scanner" c="text-base" />
       </button>
