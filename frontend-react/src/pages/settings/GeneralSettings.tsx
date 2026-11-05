@@ -142,7 +142,11 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
   const first = (co.name || "Your shop").trim();
 
   return (
-    <SettingsPage wide title="General" sub="How your business shows up on invoices, receipts, texts and the customer tracking page.">
+    <SettingsPage wide title="General" sub="How your business shows up on invoices, receipts, texts and the customer tracking page."
+      actions={<>
+        <Button variant="primary" onClick={save} disabled={saving || !dirty}>{saving ? "Saving…" : "Save changes"}</Button>
+        {dirty && <span className="text-2xs text-ink-tertiary">Unsaved changes</span>}
+      </>}>
       <div className="grid xl:grid-cols-[minmax(0,1fr)_300px] gap-4 items-start">
         <div className="space-y-4 min-w-0">
           <Section icon="storefront" title="Shop details" hint="Shown on every document and message.">
@@ -252,9 +256,9 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
             </div>
           </Section>
 
-          {/* Everything above saves together. The bar stays at the bottom of this column, in a card,
-              so Save is always in reach and never floats over the page. */}
-          <div className={`${sectionCard} sticky bottom-3 z-10`}>
+          {/* Everything above saves together: one save bar at the end of the form, in the page flow
+              (never floating over the fields). The same Save sits under the page title too. */}
+          <div className={sectionCard}>
             <SaveFooter dirty={dirty} busy={saving} onSave={save} onDiscard={discard} saveLabel="Save changes" />
           </div>
 
