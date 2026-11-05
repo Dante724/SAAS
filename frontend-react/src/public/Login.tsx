@@ -2,6 +2,7 @@ import { useEffect, useRef, useState, type FormEvent, type KeyboardEvent } from 
 import { ago } from "../components/DeviceList";
 import { safeNext } from "../lib/safeNext";
 import { ArrowLeft, Eye, EyeOff } from "lucide-react";
+import Button from "../components/Button";
 import { AuthShell, Field, FootLink, Notice, Submit, inputCls as input } from "./authUi";
 
 // React sign-in page — replaces the legacy vanilla-JS auth shell.
@@ -11,8 +12,8 @@ import { AuthShell, Field, FootLink, Notice, Submit, inputCls as input } from ".
 // Token is stored as `ros_tok` (same key the app + api client read), then we
 // hand off to the redesign at "/".
 // Design: email first, then password, then the code (the Apple / Tesla pattern) — one field
-// and one solid button per step, the real app mark, nothing to sell. Every colour is a theme
-// token, so the page is wholly light or wholly dark with the device.
+// and one solid button per step, the real app mark, nothing to sell. Always light, like every
+// customer page (PublicLayout).
 
 type Step = "email" | "password" | "code" | "limit";
 type LimitDevice = { id: string; device: string; signed_in_at: string | null; last_active_at: string | null };
@@ -34,7 +35,7 @@ export default function Login() {
   const codeRef = useRef<HTMLInputElement>(null);
   useEffect(() => { if (step === "password") passRef.current?.focus(); if (step === "code" && !busy) codeRef.current?.focus(); }, [step, busy]);
 
-  // If already signed in, skip the form. (AuthShell follows the device theme.)
+  // If already signed in, skip the form. 
   useEffect(() => {
     try {
       if (localStorage.getItem("ros_tok")) window.location.replace(safeNext(window.location.search));
@@ -121,12 +122,12 @@ export default function Login() {
             )}
 
             {step !== "email" && (
-              <div className="flex h-[52px] items-center gap-3 rounded-xl border border-slate-200 px-3">
-                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-slate-100 text-[13px] font-semibold uppercase text-ink-secondary">{email.trim()[0]}</span>
-                <span className="min-w-0 flex-1 truncate text-[15px]">{email.trim()}</span>
-                <button type="button" onClick={startOver} className="text-[14px] font-medium text-primary hover:underline">
+              <div className="flex h-11 items-center gap-3 rounded-xl border border-slate-200 bg-white pl-2 pr-1">
+                <span className="grid h-8 w-8 shrink-0 place-items-center rounded-full bg-slate-100 text-sm font-semibold uppercase text-ink-secondary">{email.trim()[0]}</span>
+                <span className="min-w-0 flex-1 truncate text-base">{email.trim()}</span>
+                <Button variant="link" onClick={startOver} className="px-2">
                   {step === "code" ? "Use a different account" : "Change"}
-                </button>
+                </Button>
               </div>
             )}
 
@@ -139,7 +140,7 @@ export default function Login() {
                   onChange={(e) => setPass(e.target.value)} onKeyUp={capsCheck} onKeyDown={capsCheck}
                   className={`${input} pr-14`} placeholder=" " />
               </Field>
-              {caps && <p className="px-1 text-[13px] text-amber-600">Caps Lock is on</p>}
+              {caps && <p className="px-1 text-sm text-amber-600">Caps Lock is on</p>}
             </>)}
 
             {step === "limit" && limit && (
@@ -149,8 +150,8 @@ export default function Login() {
                   <label key={d.id} className={`flex cursor-pointer items-center gap-3 rounded-xl border px-3 py-3 ${pick === d.id ? "border-primary" : "border-slate-200"}`}>
                     <input type="radio" name="limit-device" value={d.id} checked={pick === d.id} onChange={() => setPick(d.id)} className="accent-primary" />
                     <span className="min-w-0 flex-1">
-                      <span className="block truncate text-[15px] font-medium">{d.device}</span>
-                      <span className="block text-[13px] text-ink-tertiary">{ago(d.last_active_at)}</span>
+                      <span className="block truncate text-base font-medium">{d.device}</span>
+                      <span className="block text-sm text-ink-tertiary">{ago(d.last_active_at)}</span>
                     </span>
                   </label>
                 ))}
@@ -161,7 +162,7 @@ export default function Login() {
               <Field id="login-code" label="Code">
                 <input id="login-code" ref={codeRef} inputMode="numeric" autoComplete="one-time-code" value={code}
                   onChange={(e) => setCode(e.target.value)} maxLength={32}
-                  className={`${input} text-[20px] font-medium tracking-[.3em]`} placeholder=" " />
+                  className={`${input} text-xl font-medium tracking-widest`} placeholder=" " />
               </Field>
             )}
           </div>
@@ -171,21 +172,15 @@ export default function Login() {
           <Submit busy={busy} busyText={step === "code" ? "Checking…" : "Signing in…"}>{cta}</Submit>
 
           {step === "limit" && (<>
-            <p className="mt-4 text-center text-[13px] text-ink-tertiary">Using a shared front-desk device? Ask your manager about it.</p>
-            <button type="button" onClick={startOver}
-              className="mx-auto mt-3 flex items-center gap-1.5 text-[14px] font-medium text-ink-secondary hover:text-ink-primary">
-              <ArrowLeft size={15} />Cancel
-            </button>
+            <p className="mt-4 text-center text-sm text-ink-tertiary">Using a shared front-desk device? Ask your manager about it.</p>
+            <div className="mt-3 flex justify-center"><Button variant="ghost" onClick={startOver} icon={<ArrowLeft size={15} />}>Cancel</Button></div>
           </>)}
 
           {step === "password" && (
-            <p className="mt-5 text-center"><a href="/reset-password" className="text-[14px] font-medium text-primary hover:underline">Forgot password?</a></p>
+            <p className="mt-5 text-center"><a href="/reset-password" className="text-sm font-medium text-primary hover:underline">Forgot password?</a></p>
           )}
           {step === "code" && (
-            <button type="button" onClick={() => { setStep("password"); setErr(null); setCode(""); }}
-              className="mx-auto mt-5 flex items-center gap-1.5 text-[14px] font-medium text-ink-secondary hover:text-ink-primary">
-              <ArrowLeft size={15} />Back
-            </button>
+            <div className="mt-5 flex justify-center"><Button variant="ghost" onClick={() => { setStep("password"); setErr(null); setCode(""); }} icon={<ArrowLeft size={15} />}>Back</Button></div>
           )}
           {step === "email" && (
             <FootLink>New to Tekly? <a href="/signup" className="font-medium text-primary hover:underline">Create your shop</a></FootLink>

@@ -1,6 +1,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { ArrowLeft, CheckCircle2, ChevronDown, Eye, EyeOff, Loader2, MailCheck, XCircle } from "lucide-react";
 import { AuthShell, Field, FootLink, Notice, Submit, inputCls, selectCls } from "./authUi";
+import Button, { buttonClass } from "../components/Button";
 import { signupTimezone } from "../lib/serverTime";
 
 // React auth deep-links (replace the legacy vanilla-JS shell):
@@ -132,7 +133,7 @@ export function Signup() {
   const opt = (xs: { key: string; label: string }[] = []) => xs.map((x) => ({ value: x.key, label: x.label }));
   const provinces = o?.provinces?.[f.country] || [];
   return (
-    <AuthShell title={step === 1 ? "Create your shop" : "Now, about you"} wide
+    <AuthShell title={step === 1 ? "Create your shop" : "Now, about you"}
       sub={<><span className="font-medium text-ink-primary">Step {step} of 2</span> · {step === 1 ? "Tell us about your shop." : "You'll use this to sign in."}</>}>
       <form onSubmit={submit} noValidate>
         {step === 1 ? (
@@ -174,7 +175,7 @@ export function Signup() {
               <input id="su-email" type="email" className={inputCls} value={f.email} onChange={(e) => set("email", e.target.value)} placeholder=" " autoComplete="username" />
             </Field>
             <Password id="su-pass" label="Password (8+ characters)" value={f.pass} onChange={(v) => set("pass", v)} />
-            <label htmlFor="su-agree" className="flex items-start gap-2.5 pt-1 text-[14px] text-ink-secondary">
+            <label htmlFor="su-agree" className="flex items-start gap-2.5 pt-1 text-sm text-ink-secondary">
               <input id="su-agree" type="checkbox" checked={agree} onChange={(e) => setAgree(e.target.checked)} className="mt-0.5 h-4 w-4 shrink-0" />
               <span>I agree to the <a href={`${SITE_URL}/terms/`} target="_blank" rel="noopener" className={link}>Terms of service</a> and <a href={`${SITE_URL}/privacy/`} target="_blank" rel="noopener" className={link}>Privacy policy</a>.</span>
             </label>
@@ -183,10 +184,7 @@ export function Signup() {
         <Notice err={err} />
         <Submit busy={busy} busyText="Creating your shop…">{step === 1 ? "Continue" : "Create shop"}</Submit>
         {step === 2 && (
-          <button type="button" onClick={() => { setStep(1); setErr(null); }}
-            className="mx-auto mt-5 flex items-center gap-1.5 text-[14px] font-medium text-ink-secondary hover:text-ink-primary">
-            <ArrowLeft size={15} />Back
-          </button>
+          <div className="mt-5 flex justify-center"><Button variant="ghost" onClick={() => { setStep(1); setErr(null); }} icon={<ArrowLeft size={15} />}>Back</Button></div>
         )}
         <FootLink>Already have an account? <a href="/login" className={link}>Sign in</a></FootLink>
       </form>
@@ -220,8 +218,8 @@ function ForgotPassword() {
     return (
       <AuthShell title="Check your email" icon={<span className="grid h-14 w-14 place-items-center rounded-2xl bg-primary/10 text-primary"><MailCheck size={28} /></span>}
         sub={<>If <span className="font-medium text-ink-primary">{email.trim()}</span> has a Tekly account, a link to reset your password is on its way. It works for 1 hour.</>}>
-        <a href="/login" className="flex h-[52px] w-full items-center justify-center rounded-xl bg-primary text-[16px] font-semibold text-white hover:bg-primary-container">Back to sign in</a>
-        <p className="mt-5 text-center text-[14px] text-ink-secondary">No email? Check spam, or <button type="button" onClick={() => setSent(false)} className={link}>try another address</button>.</p>
+        <a href="/login" className={buttonClass("primary", "lg", "w-full")}>Back to sign in</a>
+        <p className="mt-5 text-center text-sm text-ink-secondary">No email? Check spam, or <button type="button" onClick={() => setSent(false)} className={link}>try another address</button>.</p>
       </AuthShell>
     );
 
@@ -286,7 +284,7 @@ export function VerifyEmail() {
       title={state === "ok" ? "Email verified" : state === "fail" ? "This link didn't work" : "Verifying your email"}
       sub={state === "ok" ? "Your address is confirmed. You can sign in now." : state === "fail" ? "It may have expired or already been used. Ask your shop's admin to send a new one." : "One moment…"}>
       {state !== "working" && (
-        <a href="/login" className="flex h-[52px] w-full items-center justify-center rounded-xl bg-primary text-[16px] font-semibold text-white hover:bg-primary-container">Go to sign in</a>
+        <a href="/login" className={buttonClass("primary", "lg", "w-full")}>Go to sign in</a>
       )}
     </AuthShell>
   );
@@ -322,7 +320,7 @@ export function AcceptInvite() {
     return (
       <AuthShell title="This invite didn't work" icon={<span className="grid h-14 w-14 place-items-center rounded-2xl bg-rose-500/10 text-rose-600"><XCircle size={30} /></span>}
         sub="It may have expired or already been used. Ask your shop's admin to send a new one.">
-        <a href="/login" className="flex h-[52px] w-full items-center justify-center rounded-xl bg-primary text-[16px] font-semibold text-white hover:bg-primary-container">Go to sign in</a>
+        <a href="/login" className={buttonClass("primary", "lg", "w-full")}>Go to sign in</a>
       </AuthShell>
     );
 
