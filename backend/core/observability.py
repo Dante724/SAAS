@@ -104,7 +104,8 @@ def _rate_key(request) -> str:
     auth = request.headers.get("authorization", "")
     if auth[:7].lower() == "bearer ":
         tok = auth[7:].strip()
-        if tok.startswith("rok_"):
+        from backend.services.apikeys import looks_like_api_key
+        if looks_like_api_key(tok):     # tek_… (or a legacy rok_… key)
             return "k:" + tok               # verified in dispatch (_key_bucket) before it gets its own budget
         try:
             import jwt
@@ -118,7 +119,7 @@ def _rate_key(request) -> str:
     return "ip:" + ratelimit.client_ip(request)
 
 
-# Verified API keys: sha256 → (ApiKey.id or None, expires_at). A made-up "rok_…" token must not
+# Verified API keys: sha256 → (ApiKey.id or None, expires_at). A made-up "tek_…" token must not
 # buy a fresh budget, so only a key that exists, is active and has not expired gets its own bucket;
 # anything else counts against the caller's IP. The bucket is the key's id (A15: it used to be the
 # prefix, which a rotation changes and which is not guaranteed unique). Results are cached briefly

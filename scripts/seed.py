@@ -6,7 +6,7 @@ from sqlalchemy import select
 from backend.db.database import AsyncSessionLocal
 from backend.models import (
     Organisation, Location, Role, Employee, Client, Device,
-    Order, OrderLine, OrderStatusLog, Part, StockLevel, Task, Invoice, Payment,
+    Order, OrderLine, OrderStatusLog, Part, Task, Invoice, Payment,
     WorkOrderType, CustomField, NotificationTemplate, Service, Tax, Account, CashFlowItem
 )
 from backend.services.auth import hash_password
@@ -192,12 +192,15 @@ async def seed_demo_data():
                             phone="+91 98200 11223", email="sales@techparts.example")
         db.add(supplier)
         await db.flush()
-        # Stock levels
+        # Opening stock, through the one inflow path (services/stock_posting): it sets the moving-average
+        # cost and the FIFO cost layer like any receipt. Writing stock rows directly left avg_cost at 0,
+        # so the product's Details showed "Avg cost 0 / Stock value 0" (design audit BUG-04).
+        from backend.services.stock_posting import apply_receipt_line
         for p in parts:
             qty = 12 if p.category == "Screens" else 25
-            sl = StockLevel(id=uid(), part_id=p.id, location_id=loc.id,
-                            qty_available=qty, qty_reserved=0)
-            db.add(sl)
+            await apply_receipt_line(db, org_id=org.id, part=p, location_id=loc.id, qty=qty,
+                                     unit_cost=float(p.cost_price), cost_known=True,
+                                     ref_type="adjust", movement_type="adjust")
         await db.flush()
 
         # Services & Labors catalog

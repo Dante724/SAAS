@@ -320,4 +320,5 @@ async def test_v2_index_lists_resources(client, tenant):
     assert r.status_code == 200 and r.json()["data"]["scopes"] == ["tags:read"]
     assert "inquiries" in r.json()["data"]["resources"]
     assert (await client.get("/api/v2")).status_code == 401
-    assert json.dumps(r.json()).count("rok_") == 0
+    body = json.dumps(r.json())
+    assert body.count("tek_") == 0 and body.count("rok_") == 0     # no key, new prefix or old
