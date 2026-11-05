@@ -7,6 +7,12 @@ import type { StatusMeta } from "../lib/useGo";
 import { clickable } from "../../lib/clickable";
 import { buttonClass, type ButtonVariant } from "../../components/Button";
 
+// The floating "+" button (NewMenu): 56px, 1rem above the bottom of the screen area (the tab bar).
+export const FAB_CLASS = "h-14 w-14 bottom-[calc(env(safe-area-inset-bottom)+4.75rem)]";
+// A page's scroll area ends with the button's height + its 1rem offset + a 2rem gap (6.5rem), so
+// the last row scrolls clear of it.
+const FAB_CLEARANCE = "pb-[6.5rem]";
+
 /** A screen with an iOS-style large title that collapses into a compact bar when scrolled.
  *  `caption` sits above the title; `footer` is docked below the scroll area (it reserves its own
  *  height, so it never covers the last rows). */
@@ -35,7 +41,7 @@ export function Page({ title, caption, subtitle, right, back, footer, children }
         {right}
       </div>
       {/* the "+" button floats over lists: leave room so it never covers the last row */}
-      <div className={`px-4 ${footer ? "pb-6" : "pb-24"}`}>
+      <div className={`px-4 ${footer ? "pb-6" : FAB_CLEARANCE}`}>
         {caption && <p className="text-go-caption font-medium text-ink-tertiary tabular-nums">{caption}</p>}
         <h1 className="text-go-display font-bold tracking-tight text-ink-primary">{title}</h1>
         {subtitle && <div className="mt-0.5 text-go-body text-ink-secondary">{subtitle}</div>}
