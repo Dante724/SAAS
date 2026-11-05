@@ -6,7 +6,14 @@ import { confirmDialog } from "../../lib/dialog";
 import Switch from "../../components/Switch";
 import { friendlyDate } from "../orders/look";
 import { tint, hueText } from "../../lib/tint";
-import { Drawer, ErrorNote, MoreMenu, btnDanger, btnGhost, btnPrimary, inputCls, labelCls } from "../invoices/billing";
+import { ErrorNote, MoreMenu } from "../invoices/billing";
+import Drawer from "../../components/Drawer";
+import Button from "../../components/Button";
+import Section from "../../components/Section";
+import EmptyState, { ErrorState } from "../../components/EmptyState";
+import { Input, Field, labelClass } from "../../components/Field";
+import { SettingRow } from "../../components/SettingRow";
+import { settingsToast } from "./kit";
 
 // B15 — Settings › Integrations › Webhooks. Add, edit and remove endpoints, pick events, see each
 // endpoint's deliveries (and send one again), send a test event, and rotate the signing secret.
@@ -29,7 +36,7 @@ type Fresh = { secret: string; rotated: boolean };
 const HUE: Record<string, string> = { ok: "#1D9E75", warn: "#BA7517", bad: "#c2410c", off: "#64748b", info: "#2c72d9" };
 
 function Pill({ hue, children }: { hue: string; children: React.ReactNode }) {
-  return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap" style={{ background: tint(hue), color: hueText(hue) }}>{children}</span>;
+  return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-semibold whitespace-nowrap" style={{ background: tint(hue), color: hueText(hue) }}>{children}</span>;
 }
 
 /** What a delivery row says, in words. */
@@ -62,8 +69,7 @@ export default function WebhooksSettings() {
   const [err, setErr] = useState<string | null>(null);
   const [open, setOpen] = useState<Endpoint | "new" | null>(null);
   const [fresh, setFresh] = useState<Fresh | null>(null);
-  const [msg, setMsg] = useState<string | null>(null);
-  const flash = (m: string) => { setMsg(m); setTimeout(() => setMsg(null), 2600); };
+  const flash = (m: string) => settingsToast(m);
 
   const load = () => {
     setErr(null);
@@ -95,27 +101,19 @@ export default function WebhooksSettings() {
     catch (x: any) { flash(x.message || "Couldn't rotate the secret"); }
   }
 
-  const addBtn = <button onClick={() => setOpen("new")} disabled={atCap} className={btnPrimary}><M n="add" c="text-sm" />Add endpoint</button>;
+  const addBtn = <Button variant="primary" onClick={() => setOpen("new")} disabled={!data || atCap} icon={<M n="add" c="text-sm" />}>Add endpoint</Button>;
 
   return (
-    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-      <div className="p-3.5 border-b border-slate-100">
-        <h3 className="text-sm font-semibold text-ink-primary">Webhooks</h3>
-        {data && <div className="text-xs text-ink-tertiary mt-0.5 tabular-nums">{items.length} of {data.max_endpoints ?? 10} endpoints</div>}
-        {items.length > 0 && <div className="mt-3">{addBtn}</div>}
-      </div>
-
-      {!data && !err && <div className="p-4 text-xs text-ink-tertiary">Loading webhooks…</div>}
-      {err && <div role="alert" className="p-4 text-xs text-rose-600 flex items-center gap-2"><M n="error" c="text-sm" />{err}<button onClick={load} className="ml-auto font-semibold text-primary hover:underline">Retry</button></div>}
+    <Section title="Webhooks" icon="webhook"
+      meta={data ? `${items.length} of ${data.max_endpoints ?? 10} endpoints` : null}
+      description="Send new jobs, invoices and bookings to your own systems as they happen."
+      actions={addBtn}>
+      {!data && !err && <div className="space-y-2" aria-busy="true">{[0, 1].map((i) => <div key={i} className="h-12 rounded-xl bg-slate-100 animate-pulse" />)}</div>}
+      {err && <ErrorState title="Webhooks didn't load" body={err} onRetry={load} />}
 
       {data && (
-        <div className="p-3.5 space-y-3">
-          {items.length === 0 && (
-            <div className="py-4 text-center space-y-3">
-              <p className="text-xs text-ink-secondary">No webhooks yet. Add an endpoint to send new jobs, invoices and bookings to your own systems as they happen.</p>
-              {addBtn}
-            </div>
-          )}
+        <div className="space-y-3">
+          {items.length === 0 && <EmptyState icon={<M n="webhook" c="text-lg" />} title="No webhooks yet." />}
           {items.length > 0 && (
             <ul className="divide-y divide-slate-100 border border-slate-200/80 rounded-xl overflow-hidden">
               {items.map((e) => {
@@ -157,8 +155,7 @@ export default function WebhooksSettings() {
           }} />
       )}
       {fresh && <SecretOnce fresh={fresh} onClose={() => setFresh(null)} />}
-      {msg && createPortal(<div role="status" className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-drawer z-[95]">{msg}</div>, document.body)}
-    </div>
+    </Section>
   );
 }
 
@@ -195,23 +192,22 @@ export function EndpointDrawer({ endpoint, catalogue, onClose, onSaved, onDelete
 
   const title = endpoint ? "Edit webhook" : "Add webhook";
   return createPortal(
-    <Drawer z={90} width={520} label={title} title={title} sub={endpoint ? endpoint.url : undefined} onClose={onClose}
+    <Drawer z={90} size="md" label={title} title={title} sub={endpoint ? endpoint.url : undefined} onClose={onClose}
       footer={<>
-        {endpoint && <button onClick={() => onDelete(endpoint)} className={`${btnDanger} mr-auto`}>Delete</button>}
-        <button onClick={onClose} className={btnGhost}>Cancel</button>
-        <button onClick={save} disabled={busy} className={btnPrimary}>{busy ? "Saving…" : endpoint ? "Save" : "Add webhook"}</button>
+        <Button variant="primary" onClick={save} disabled={busy}>{busy ? "Saving…" : endpoint ? "Save" : "Add webhook"}</Button>
+        <Button onClick={onClose}>Cancel</Button>
+        {endpoint && <Button variant="danger" className="ml-auto" onClick={() => onDelete(endpoint)}>Delete</Button>}
       </>}>
       {endpoint?.disabled_reason && !endpoint.active && (
         <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 leading-relaxed">{endpoint.disabled_reason}. Fix the endpoint, send a test event, then turn it back on.</p>
       )}
-      <div><label htmlFor="wh-url" className={labelCls}>Endpoint URL</label>
-        <input id="wh-url" value={url} onChange={(e) => setUrl(e.target.value)} maxLength={500} placeholder="https://example.com/tekly" className={inputCls} />
-        <p className="text-xs text-ink-tertiary mt-1">A public https address.</p></div>
-      <div><label htmlFor="wh-desc" className={labelCls}>Description</label>
-        <input id="wh-desc" value={description} onChange={(e) => setDescription(e.target.value)} maxLength={200} placeholder="e.g. Accounting sync" className={inputCls} /></div>
+      <Field label="Endpoint URL" htmlFor="wh-url" hint="A public https address.">
+        <Input id="wh-url" value={url} onChange={(e) => setUrl(e.target.value)} maxLength={500} placeholder="https://example.com/tekly" /></Field>
+      <Field label="Description" htmlFor="wh-desc">
+        <Input id="wh-desc" value={description} onChange={(e) => setDescription(e.target.value)} maxLength={200} placeholder="e.g. Accounting sync" /></Field>
 
       <fieldset>
-        <legend className={labelCls}>Events</legend>
+        <legend className={labelClass}>Events</legend>
         <div className="flex gap-4 mb-2">
           <label className="inline-flex items-center gap-2 text-sm text-ink-primary"><input type="radio" name="wh-all" checked={all} onChange={() => setAll(true)} />All events</label>
           <label className="inline-flex items-center gap-2 text-sm text-ink-primary"><input type="radio" name="wh-all" checked={!all} onChange={() => setAll(false)} />Choose events</label>
@@ -224,7 +220,7 @@ export function EndpointDrawer({ endpoint, catalogue, onClose, onSaved, onDelete
                   <input type="checkbox" className="mt-0.5" checked={picked.includes(c.name)} onChange={() => toggle(c.name)} aria-label={c.name} />
                   <span className="min-w-0">
                     <span className="block text-sm text-ink-primary">{c.description}</span>
-                    <span className="block font-mono text-[11px] text-ink-tertiary">{c.name}</span>
+                    <span className="block font-mono text-2xs text-ink-tertiary">{c.name}</span>
                   </span>
                 </label>
               </li>
@@ -234,9 +230,9 @@ export function EndpointDrawer({ endpoint, catalogue, onClose, onSaved, onDelete
       </fieldset>
 
       {endpoint && (
-        <div className="flex items-center gap-3 text-sm text-ink-primary">
-          <Switch label="Send events to this endpoint" on={active} onChange={setActive} />Send events to this endpoint
-        </div>
+        <SettingRow label="Send events to this endpoint">
+          <Switch label="Send events to this endpoint" on={active} onChange={setActive} />
+        </SettingRow>
       )}
       <ErrorNote msg={err} />
 
@@ -245,7 +241,7 @@ export function EndpointDrawer({ endpoint, catalogue, onClose, onSaved, onDelete
           <h4 className="text-sm font-semibold text-ink-primary">Signing secret</h4>
           <div className="flex items-center gap-2">
             <span className="font-mono text-xs text-ink-secondary">{endpoint.secret_hint || "Hidden"}</span>
-            <button onClick={() => onRotate(endpoint)} className={`${btnGhost} ml-auto`}><M n="lock" c="text-sm" />New secret</button>
+            <Button size="sm" className="ml-auto" onClick={() => onRotate(endpoint)} icon={<M n="lock" c="text-sm" />}>New secret</Button>
           </div>
           {endpoint.previous_secret_expires_at && <p className="text-xs text-ink-tertiary">The previous secret also signs deliveries until {utc(endpoint.previous_secret_expires_at).toLocaleString()}.</p>}
         </section>
@@ -280,11 +276,11 @@ export function DeliveryLog({ endpoint, onTest }: { endpoint: Endpoint; onTest: 
     <section className="pt-2 border-t border-slate-100 space-y-2">
       <div className="flex items-center gap-2">
         <h4 className="text-sm font-semibold text-ink-primary">Recent deliveries</h4>
-        <button onClick={test} disabled={busy === "test"} className={`${btnGhost} ml-auto`}><M n="send" c="text-sm" />{busy === "test" ? "Sending…" : "Send test event"}</button>
+        <Button size="sm" className="ml-auto" onClick={test} disabled={busy === "test"} icon={<M n="send" c="text-sm" />}>{busy === "test" ? "Sending…" : "Send test event"}</Button>
       </div>
       <ErrorNote msg={err} />
-      {!rows && <p className="text-xs text-ink-tertiary">Loading deliveries…</p>}
-      {rows && rows.length === 0 && <p className="text-xs text-ink-tertiary">Nothing sent yet. Send a test event to check the endpoint answers.</p>}
+      {!rows && <div className="space-y-2" aria-busy="true">{[0, 1].map((i) => <div key={i} className="h-9 rounded-xl bg-slate-100 animate-pulse" />)}</div>}
+      {rows && rows.length === 0 && <EmptyState size="inline" title="Nothing sent yet. Send a test event to check the endpoint answers." />}
       {rows && rows.length > 0 && (
         <ul className="border border-slate-200/80 rounded-xl divide-y divide-slate-100">
           {rows.map((d) => {
@@ -298,7 +294,7 @@ export function DeliveryLog({ endpoint, onTest }: { endpoint: Endpoint; onTest: 
                     <Pill hue={st.hue}>{st.label}</Pill>
                     <span className="basis-full sm:basis-auto sm:ml-auto text-xs text-ink-tertiary tabular-nums whitespace-nowrap">{d.response_code ? `HTTP ${d.response_code} · ` : ""}{friendlyDate(d.created_at)}</span>
                   </button>
-                  {canResend && <button onClick={() => redeliver(d)} disabled={busy === d.id} className="text-xs font-semibold text-primary hover:underline px-1 disabled:opacity-50">{busy === d.id ? "Sending…" : "Redeliver"}</button>}
+                  {canResend && <Button variant="link" onClick={() => redeliver(d)} disabled={busy === d.id} className="px-1">{busy === d.id ? "Sending…" : "Redeliver"}</Button>}
                 </div>
                 {openId === d.id && (
                   <div className="px-3 pb-3 space-y-1.5">
@@ -306,7 +302,7 @@ export function DeliveryLog({ endpoint, onTest }: { endpoint: Endpoint; onTest: 
                       {d.attempts} {d.attempts === 1 ? "attempt" : "attempts"}{d.error ? ` · ${d.error}` : ""}
                       {d.next_attempt_at ? ` · next try ${utc(d.next_attempt_at).toLocaleString()}` : ""}
                     </p>
-                    <pre className="text-[11px] font-mono bg-slate-50 border border-slate-200 rounded-lg p-2 overflow-x-auto max-h-64 text-ink-primary">{detail ? JSON.stringify(detail.payload, null, 2) : "Loading…"}</pre>
+                    <pre className="text-2xs font-mono bg-slate-50 border border-slate-200 rounded-lg p-2 overflow-x-auto max-h-64 text-ink-primary">{detail ? JSON.stringify(detail.payload, null, 2) : "Loading…"}</pre>
                   </div>
                 )}
               </li>
@@ -324,13 +320,13 @@ function SecretOnce({ fresh, onClose }: { fresh: Fresh; onClose: () => void }) {
     try { await navigator.clipboard.writeText(fresh.secret); setCopied(true); } catch { setCopied(false); }
   }
   return createPortal(
-    <Drawer z={92} width={448} label="Signing secret" title="Signing secret" onClose={onClose}
-      footer={<button onClick={onClose} className={btnPrimary}>I've saved it</button>}>
+    <Drawer z={92} size="sm" label="Signing secret" title="Signing secret" onClose={onClose}
+      footer={<Button variant="primary" onClick={onClose}>I've saved it</Button>}>
       <p className="text-sm text-ink-secondary">Copy it now and keep it with your receiver. You won't be able to see it again.</p>
       <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
         <div className="font-mono text-xs text-ink-primary break-all select-all" data-testid="fresh-secret">{fresh.secret}</div>
       </div>
-      <button onClick={copy} className={btnGhost}><M n={copied ? "check" : "content_copy"} c="text-sm" />{copied ? "Copied" : "Copy secret"}</button>
+      <div><Button onClick={copy} icon={<M n={copied ? "check" : "content_copy"} c="text-sm" />}>{copied ? "Copied" : "Copy secret"}</Button></div>
       {fresh.rotated && <p className="text-xs text-ink-tertiary">The old secret keeps signing deliveries for 24 hours, so you have time to swap this one in.</p>}
     </Drawer>, document.body);
 }

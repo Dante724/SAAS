@@ -4,10 +4,12 @@ Staff tokens were checked against org.sub_status / sub_end on every request, but
 get_api_principal only looked at the key row — a suspended shop's integrations kept
 reading and writing customer data.
 """
-from datetime import date, timedelta
+from datetime import timedelta
 
 import pytest
 from sqlalchemy import select
+
+from backend.services.dates import platform_today
 
 
 async def _key(client, h):
@@ -41,7 +43,7 @@ async def test_key_rejected_once_org_is_suspended(client, tenant, db):
 async def test_key_rejected_after_subscription_end(client, tenant, db):
     key = await _key(client, tenant)
     org = await _org(db, client, tenant)
-    org.sub_end = date.today() - timedelta(days=1)
+    org.sub_end = platform_today() - timedelta(days=1)   # the lock-out's clock: the UTC day
     await db.commit()
     r = await client.get("/api/v1/contacts", headers={"Authorization": f"Bearer {key}"})
     assert r.status_code == 403

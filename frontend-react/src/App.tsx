@@ -24,6 +24,7 @@ const ChatsHub = lazy(() => import("./pages/chats/ChatsHub"));
 const AppointmentsHub = lazy(() => import("./pages/appointments/AppointmentsHub"));
 const MarketingHub = lazy(() => import("./pages/marketing/MarketingHub"));
 const MyEarnings = lazy(() => import("./pages/finance/MyEarnings"));
+const NotFound = lazy(() => import("./pages/NotFound"));
 
 // ── Route-ownership table (Strangler Fig) ─────────────────────────────
 // Flip a module from "legacy" to "react" once it passes the parity gate.
@@ -77,15 +78,3 @@ export default function App() {
   );
 }
 
-// Any address the app doesn't know (an old bookmark, a mistyped link).
-function NotFound() {
-  return (
-    <div className="min-h-[60vh] grid place-items-center p-10 text-center">
-      <div>
-        <div className="text-sm font-semibold text-ink-primary">This page doesn't exist</div>
-        <div className="text-xs text-ink-tertiary mt-1">The link may be old or mistyped.</div>
-        <a href="/" className="inline-block mt-4 px-3.5 py-2 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container">Go to Home</a>
-      </div>
-    </div>
-  );
-}

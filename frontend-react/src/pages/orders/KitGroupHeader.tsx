@@ -51,7 +51,7 @@ export default function KitGroupHeader({ orderId, groupId, name, qty, mode, lock
   const canDrop = !!onRemove && !closed;
   const hasMenu = canPrint || canPrice || canAdd || canDrop;
   const menuSel = `[data-kit-menu="${groupId}"]`;
-  const item = "w-full flex items-center gap-2.5 px-2.5 h-9 rounded-lg text-left text-[13px] hover:bg-slate-50 focus-visible:bg-slate-100 outline-none";
+  const item = "w-full flex items-center gap-2.5 px-2.5 h-9 rounded-lg text-left text-sm hover:bg-slate-50 focus-visible:bg-slate-100 outline-none";
   const pick = (fn: () => void) => () => { setMenuOpen(false); fn(); };
   const sub = ["Kit", locked != null ? "Fixed price" : "", `${count} ${count === 1 ? "item" : "items"}`, `Customer sees ${kitPrintLabel(mode).toLowerCase()}`].filter(Boolean).join(" · ");
 
@@ -67,12 +67,12 @@ export default function KitGroupHeader({ orderId, groupId, name, qty, mode, lock
         <div className="min-w-0 flex items-center gap-3">
           <div className="w-7 h-7 rounded-lg grid place-items-center flex-none bg-slate-100 text-ink-secondary"><M n="package_2" c="text-[15px]" /></div>
           <div className="min-w-0">
-            <h5 className="text-[13px] font-semibold text-ink-primary truncate">{name}{qty > 1 ? ` × ${qty}` : ""}</h5>
+            <h5 className="text-sm font-semibold text-ink-primary truncate">{name}{qty > 1 ? ` × ${qty}` : ""}</h5>
             <p className="text-xs text-ink-secondary" title={locked != null ? "The customer's price for this kit stays the same when its parts change." : undefined}>{sub}</p>
           </div>
         </div>
         <div />
-        <div className="text-right">{seePrices && <span className="tabular-nums text-[13px] font-semibold text-ink-primary">{money(total)}</span>}</div>
+        <div className="text-right">{seePrices && <span className="tabular-nums text-sm font-semibold text-ink-primary">{money(total)}</span>}</div>
         <div className="w-10 h-10">
           {hasMenu && (
             <button type="button" data-kit-menu={groupId} onClick={() => setMenuOpen((v) => !v)} aria-label={`Kit actions for ${name}`} aria-haspopup="menu" aria-expanded={menuOpen}
@@ -80,9 +80,9 @@ export default function KitGroupHeader({ orderId, groupId, name, qty, mode, lock
           )}
           {menuOpen && (
             <FloatingMenu anchorSel={menuSel} onClose={() => setMenuOpen(false)} width={256}>
-              <div className="text-[13px]">
+              <div className="text-sm">
                 {canPrint && <>
-                  <div className="px-2.5 pt-1 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-tertiary">Customer sees</div>
+                  <div className="px-2.5 pt-1 pb-1.5 text-2xs font-semibold uppercase tracking-wide text-ink-tertiary">Customer sees</div>
                   {KIT_PRINT_LABELS.map((o) => (
                     <button type="button" key={o.value} role="menuitemradio" aria-checked={mode === o.value} title={o.hint}
                       onClick={pick(() => { if (o.value !== mode) save({ print_mode: o.value }, "Kit print setting saved"); })}
@@ -108,7 +108,7 @@ export default function KitGroupHeader({ orderId, groupId, name, qty, mode, lock
         </div>
       </div>
       {canPrint && warning && mode !== "itemized" && (
-        <p role="note" className="px-4 py-1.5 text-[11px] text-amber-800 bg-amber-50 border-t border-amber-100 flex items-start gap-1.5"><M n="info" c="text-[13px] mt-px" />{warning}</p>
+        <p role="note" className="px-4 py-1.5 text-2xs text-amber-800 bg-amber-50 border-t border-amber-100 flex items-start gap-1.5"><M n="info" c="text-sm mt-px" />{warning}</p>
       )}
       {/* Children indent so their icon sits under the kit's tile. */}
       {open && <div className="pl-10 divide-y divide-slate-100 border-t border-slate-100">{children}</div>}
