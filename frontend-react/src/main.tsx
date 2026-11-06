@@ -32,7 +32,7 @@ const AUTH: Record<string, JSX.Element> = {
 
 const route = publicRoute(path);
 if (route.page === "track" || route.page === "trackLookup") {
-  // Public customer page: /track/:token (or /track lookup). Follows the visitor's device theme.
+  // Public customer page: /track/:token (or /track lookup). Always light (PublicLayout).
   root.render(<React.StrictMode>{route.page === "track" ? <PublicTrack /> : <TrackLookup />}</React.StrictMode>);
 } else if (route.page === "portal") {
   // Customer portal: all of one customer's jobs, behind their magic link.
@@ -41,8 +41,7 @@ if (route.page === "track" || route.page === "trackLookup") {
   // Self check-in from a point's QR, and the customer's place in the queue.
   root.render(<React.StrictMode>{route.page === "checkin" ? <PublicCheckin token={route.token} /> : <PublicCheckinStatus token={route.token} />}</React.StrictMode>);
 } else if (route.page === "book") {
-  // Public online appointment — standalone, no session, follows device theme
-  // (PublicAppointment sets the dark class itself).
+  // Public online appointment — standalone, no session, always light (PublicLayout).
   root.render(<React.StrictMode><PublicAppointment /></React.StrictMode>);
 } else if (route.page === "auth") {
   // React auth pages (sign-in, signup, reset, verify, invite).

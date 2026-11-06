@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "./TeklySelect";
 import { M } from "./Shell";
 import { api } from "../api/client";
 import { printHtmlInFrame } from "../lib/safeHtml";
@@ -61,7 +62,7 @@ export default function BulkPrintDialog({ open, onClose, ids, noun, endpoint, id
   if (!open) return null;
   const total = copies ? ids.length * nCopies : ids.length;
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-primary/40 backdrop-blur-[2px]" role="presentation" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-ink-primary/40" role="presentation" onClick={onClose}>
       <div className="bg-white rounded-2xl shadow-drawer w-[380px] max-w-full p-5" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-bold text-ink-primary">Print {noun}s</h3>
@@ -69,10 +70,10 @@ export default function BulkPrintDialog({ open, onClose, ids, noun, endpoint, id
         </div>
         <p className="text-xs text-ink-tertiary mb-3">{ids.length} {noun}{ids.length === 1 ? "" : "s"} selected. Each prints at the template's exact size.</p>
         <label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Template</label>
-        <select value={tplId} onChange={(e) => setTplId(e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2.5 py-2 mb-3">
+        <TeklySelect value={tplId} onChange={(e) => setTplId(e.target.value)} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2.5 py-2 mb-3">
           {tpls.length === 0 && <option value="">No matching templates — create one in Settings</option>}
           {tpls.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-        </select>
+        </TeklySelect>
         {copies && (<>
           <label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Copies each</label>
           <input type="number" min={1} max={500} value={nCopies} onChange={(e) => setNCopies(Math.max(1, +e.target.value || 1))} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2.5 py-2 mb-4" />

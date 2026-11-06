@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
@@ -7,11 +8,6 @@ import { tint, hueText } from "../../lib/tint";
 import { type Member, MemberCard, StatusPill, fmtDate } from "./shared";
 import PageSummary from "../../components/PageSummary";
 import { Avatar } from "../orders/look";
-import Tabs from "../../components/Tabs";
-import Card from "../../components/Card";
-import Drawer from "../../components/Drawer";
-import Button from "../../components/Button";
-import EmptyState from "../../components/EmptyState";
 
 // Contacts › Memberships: the list a manager works from. Five filters, one row per plan, and a
 // side panel with what's left, the payments and the few changes a plan needs.
@@ -38,8 +34,6 @@ export default function MembershipsView({ q = "" }: { q?: string }) {
   const t = data?.totals;
   return (
     <div className="space-y-4">
-      {/* The summary keeps its place while loading, so the filters below never jump. */}
-      {!data && <div aria-hidden className="sk h-[92px] rounded-2xl" />}
       {data && (
         <PageSummary stats={[
           { label: "Active members", value: c.all ?? 0, hint: c.paused ? `${c.paused} paused` : "on a plan today" },
@@ -48,15 +42,30 @@ export default function MembershipsView({ q = "" }: { q?: string }) {
           { label: "Unpaid", value: t ? money(t.owed) : (c.unpaid ?? 0), hint: `${c.unpaid ?? 0} member${c.unpaid === 1 ? "" : "s"}`, tone: "bad" as const, zero: !(c.unpaid) },
         ]} />
       )}
-      <Tabs look="chips" label="Show" value={view} onChange={setView}
-        tabs={VIEWS.map((v) => ({ id: v.k, label: v.label, count: data?.counts?.[v.k] || null }))} />
+      <div className="flex flex-wrap items-center gap-3">
+        <div role="group" aria-label="Show" className="inline-flex flex-wrap gap-0.5 rounded-xl bg-slate-100/80 p-1">
+          {VIEWS.map((v) => {
+            const n = data?.counts?.[v.k];
+            const on = view === v.k;
+            return (
+              <button key={v.k} onClick={() => setView(v.k)} aria-pressed={on}
+                className={`h-8 px-3 rounded-lg text-xs font-semibold transition flex items-center gap-1.5 ${on ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>
+                {v.label}{n ? <span className={`tabular-nums ${(v.k === "unpaid" || v.k === "paused") ? "text-amber-700" : "text-ink-tertiary"}`}>{n}</span> : null}
+              </button>
+            );
+          })}
+        </div>
+      </div>
 
-      <Card padded={false}>
-        {!data && <div aria-hidden className="p-4 space-y-3"><span className="sk block h-9 w-2/3 rounded-lg" /><span className="sk block h-9 w-1/2 rounded-lg" /></div>}
-        {/* No button here: "Manage plans" is already the first button in the Contacts toolbar. */}
+      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
+        {!data && <p className="p-5 text-xs text-ink-tertiary">Loading…</p>}
         {data && data.items.length === 0 && (
-          <EmptyState icon={<M n="workspace_premium" c="text-lg" />} title={view === "all" ? "No members yet" : "Nothing here"}
-            body={view === "all" ? "Sell a plan from a customer's page, one of their assets, or at checkout." : "All caught up."} />
+          <div className="p-10 text-center">
+            <div className="mx-auto h-11 w-11 rounded-2xl grid place-items-center bg-primary/10 text-primary"><M n="workspace_premium" c="text-xl" /></div>
+            <div className="mt-3 text-sm font-semibold text-ink-primary">{view === "all" ? "No members yet" : "Nothing here"}</div>
+            <div className="mt-1 text-xs text-ink-tertiary">{view === "all" ? "Sell a plan from a customer's page, one of their assets, or at checkout." : "All caught up."}</div>
+            {view === "all" && <a href="/catalog?tab=plans" className="mt-4 inline-flex h-9 px-3.5 rounded-xl bg-primary text-white hover:bg-primary-container text-xs font-semibold items-center">Set up plans</a>}
+          </div>
         )}
         {data?.items.map((m) => (
           <button key={m.id} onClick={() => setOpen(m.id)} className="w-full text-left flex items-center gap-3 px-4 py-3 border-t border-slate-100 first:border-t-0 hover:bg-slate-50/70">
@@ -64,11 +73,11 @@ export default function MembershipsView({ q = "" }: { q?: string }) {
             <div className="min-w-0 flex-1">
               <div className="flex items-center gap-2 min-w-0">
                 <span className="text-sm font-semibold text-ink-primary truncate">{m.client}</span>
-                <span className="inline-flex shrink-0 items-center gap-1 rounded-full h-6 px-2 text-2xs font-semibold" style={{ background: tint(m.color, 12), color: hueText(m.color) }}>
+                <span className="inline-flex shrink-0 items-center gap-1 rounded-full px-2 py-px text-[11px] font-semibold" style={{ background: tint(m.color, 12), color: hueText(m.color) }}>
                   <span className="h-1.5 w-1.5 rounded-full" style={{ background: m.color }} />{m.plan}</span>
               </div>
               <div className="text-xs text-ink-tertiary truncate">{[m.asset, m.billing === "monthly" ? "Monthly" : "Yearly"].filter(Boolean).join(" · ")}</div>
-              {m.attention && <div className="mt-0.5 inline-flex items-center gap-1 text-2xs font-semibold text-amber-700"><M n="schedule" c="text-xs" />{m.attention.text}</div>}
+              {m.attention && <div className="mt-0.5 inline-flex items-center gap-1 text-[11px] font-semibold text-amber-700"><M n="schedule" c="text-[12px]" />{m.attention.text}</div>}
             </div>
             <div className="hidden sm:block text-right text-xs text-ink-tertiary">
               {view === "former" ? `Ended ${fmtDate(m.ended_on)}` : m.status === "scheduled" ? ""
@@ -78,7 +87,7 @@ export default function MembershipsView({ q = "" }: { q?: string }) {
             <StatusPill m={m} />
           </button>
         ))}
-      </Card>
+      </div>
       {open && <MembershipDrawer id={open} onClose={() => setOpen(null)} onChanged={() => setN((x) => x + 1)} />}
     </div>
   );
@@ -116,19 +125,18 @@ export function MembershipDrawer({ id, onClose, onChanged }: { id: string; onClo
     }, "Payment link copied");
   }
 
-  const live = m && ["scheduled", "active", "paused"].includes(m.status);
+  const btn = buttonClass("secondary", "md");
   return (
-    <Drawer z={55} label={m?.client || "Membership"} onClose={onClose}
-      title={<span className="flex items-center gap-2.5 min-w-0">{m && <Avatar name={m.client} size={32} />}<span className="truncate">{m?.client || "Membership"}</span></span>}
-      sub={m ? `Member since ${fmtDate(m.starts_on)}` : undefined}
-      footer={live ? <>
-        {m.unpaid && can("can_create_payment_links") && <Button variant="primary" disabled={busy} onClick={link}>Copy payment link</Button>}
-        {canChange && <Button disabled={busy} onClick={() => act(() => api.post(`/memberships/${m.id}/billing`, { billing: m.billing === "monthly" ? "yearly" : "monthly" }), `Switches to ${m.billing === "monthly" ? "yearly" : "monthly"} from the next payment`)}>
-          Switch to {m.billing === "monthly" ? "yearly" : "monthly"}</Button>}
-        {canChange && (!m.renews || m.status === "paused") && <Button disabled={busy} onClick={() => act(() => api.post(`/memberships/${m.id}/resume`, {}), "Back on")}>Resume</Button>}
-        {canChange && m.renews && <Button variant="danger" className="ml-auto" disabled={busy} onClick={() => setAsking(true)}>Cancel plan</Button>}
-      </> : undefined}>
-          {!m && !msg && <div aria-hidden className="space-y-3"><span className="sk block h-28 rounded-2xl" /><span className="sk block h-20 rounded-2xl" /></div>}
+    <div className="fixed inset-0 flex justify-end" style={{ zIndex: 55 }}>
+      <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={onClose} />
+      <div className="relative h-full w-full max-w-[520px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90">
+        <header className="px-6 py-4 border-b border-slate-200/90 flex items-center gap-2">
+          {m && <Avatar name={m.client} size={44} />}
+          <div className="min-w-0"><div className="text-base font-semibold text-ink-primary truncate">{m?.client || "Membership"}</div>
+            {m && <div className="text-xs text-ink-tertiary">Member since {fmtDate(m.starts_on)}</div>}</div>
+          <button aria-label="Close" onClick={onClose} className="ml-auto h-8 w-8 rounded-full grid place-items-center text-ink-tertiary hover:bg-slate-100"><M n="close" c="text-lg" /></button>
+        </header>
+        <div className="flex-1 overflow-y-auto bg-canvas p-6 space-y-4">
           {m && <MemberCard m={m} />}
           {m && (m.paid != null || m.value_given != null) && (
             <PageSummary stats={[
@@ -138,8 +146,8 @@ export function MembershipDrawer({ id, onClose, onChanged }: { id: string; onClo
             ]} />
           )}
           {!!m?.periods?.length && (
-            <Card padded={false}>
-              <h3 className="px-4 pt-3 pb-2 text-xs font-semibold text-ink-secondary">Payments</h3>
+            <div className="rounded-2xl bg-white border border-slate-200/90 overflow-hidden">
+              <div className="px-4 pt-3 pb-2 text-[11px] font-bold text-ink-tertiary">Payments</div>
               {m.periods.map((p) => (
                 <div key={p.id} className="flex items-center gap-3 px-4 py-2.5 border-t border-slate-100 text-xs">
                   <span className="text-ink-secondary">{fmtDate(p.start)} – {fmtDate(p.end)}</span>
@@ -147,7 +155,7 @@ export function MembershipDrawer({ id, onClose, onChanged }: { id: string; onClo
                   <span className={`font-semibold ${p.paid ? "text-emerald-700" : "text-amber-700"}`}>{p.paid ? "Paid" : p.order_id ? "On the job" : "Due"}</span>
                 </div>
               ))}
-            </Card>
+            </div>
           )}
           {asking && m && (
             <div className="rounded-2xl bg-white border border-rose-200 p-4 space-y-3">
@@ -155,13 +163,24 @@ export function MembershipDrawer({ id, onClose, onChanged }: { id: string; onClo
               <div className="text-xs text-ink-secondary">Let it run to {fmtDate(m.renews_on)} without renewing, or end it today.
                 {m.refund_if_cancelled_now ? ` Ending today suggests a ${money(m.refund_if_cancelled_now)} refund (unused time, less what the plan already gave).` : ""}</div>
               <div className="flex flex-wrap gap-2">
-                <Button disabled={busy} onClick={() => cancel(false)}>Don't renew</Button>
-                <Button variant="dangerSolid" disabled={busy} onClick={() => cancel(true)}>End today</Button>
-                <Button variant="ghost" onClick={() => setAsking(false)}>Keep it</Button>
+                <button disabled={busy} onClick={() => cancel(false)} className={btn}>Don't renew</button>
+                <button disabled={busy} onClick={() => cancel(true)} className="h-9 px-3.5 rounded-xl bg-rose-600 text-white text-xs font-semibold">End today</button>
+                <button onClick={() => setAsking(false)} className="h-9 px-3 text-xs font-semibold text-ink-tertiary">Keep it</button>
               </div>
             </div>
           )}
-          {msg && <p role="status" className="rounded-xl bg-white border border-slate-200 px-3 py-2 text-xs text-ink-secondary">{msg}</p>}
-    </Drawer>
+          {msg && <p role="status" className="rounded-lg bg-white border border-slate-200 px-3 py-2 text-xs text-ink-secondary">{msg}</p>}
+        </div>
+        {m && ["scheduled", "active", "paused"].includes(m.status) && (
+          <footer className="border-t border-slate-200/90 p-4 bg-white flex flex-wrap gap-2">
+            {m.unpaid && can("can_create_payment_links") && <button disabled={busy} onClick={link} className={buttonClass("primary", "md")}>Copy payment link</button>}
+            {canChange && <button disabled={busy} className={btn} onClick={() => act(() => api.post(`/memberships/${m.id}/billing`, { billing: m.billing === "monthly" ? "yearly" : "monthly" }), `Switches to ${m.billing === "monthly" ? "yearly" : "monthly"} from the next payment`)}>
+              Switch to {m.billing === "monthly" ? "yearly" : "monthly"}</button>}
+            {canChange && (!m.renews || m.status === "paused") && <button disabled={busy} className={btn} onClick={() => act(() => api.post(`/memberships/${m.id}/resume`, {}), "Back on")}>Resume</button>}
+            {canChange && m.renews && <button disabled={busy} onClick={() => setAsking(true)} className="h-9 px-3.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50">Cancel plan</button>}
+          </footer>
+        )}
+      </div>
+    </div>
   );
 }
