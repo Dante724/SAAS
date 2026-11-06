@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import HexTile from "../../components/HexTile";
 import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
@@ -193,30 +194,30 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
           <Section icon="language" title="Region, money and language" hint="Picking a country fills in the time zone and currency. You can still change them.">
             <div className="grid sm:grid-cols-2 gap-4">
               <Field label="Country">
-                <select value={co.country || ""} onChange={(e) => pickCountry(e.target.value)} className={inp}>
+                <TeklySelect value={co.country || ""} onChange={(e) => pickCountry(e.target.value)} className={inp}>
                   <option value="">Choose a country</option>{opts.countries.map((c) => <option key={c[0]} value={c[0]}>{c[1]}</option>)}
-                </select>
+                </TeklySelect>
               </Field>
               <Field label="Time zone">
-                <select value={co.timezone || ""} onChange={(e) => set("timezone", e.target.value)} className={inp}>
+                <TeklySelect value={co.timezone || ""} onChange={(e) => set("timezone", e.target.value)} className={inp}>
                   <option value="">Choose a time zone</option>{opts.timezones.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}
-                </select>
+                </TeklySelect>
               </Field>
               <Field label="Currency">
-                <select value={co.currency_code || ""} onChange={(e) => pickCurrency(e.target.value)} className={inp}>
+                <TeklySelect value={co.currency_code || ""} onChange={(e) => pickCurrency(e.target.value)} className={inp}>
                   <option value="">Choose a currency</option>{opts.currencies.map(([c, s]) => <option key={c} value={c}>{c} ({s})</option>)}
-                </select>
+                </TeklySelect>
               </Field>
               <Field label="Currency symbol"><input value={co.currency || ""} onChange={(e) => set("currency", e.target.value)} className={inp} /></Field>
               <Field label="Language on printed documents">
-                <select value={co.document_language || "en"} onChange={(e) => set("document_language", e.target.value)} className={inp}>
+                <TeklySelect value={co.document_language || "en"} onChange={(e) => set("document_language", e.target.value)} className={inp}>
                   {opts.docLangs.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                </select>
+                </TeklySelect>
               </Field>
               <Field label="My language in the app" hint="Just for you, on this device. Saved right away.">
-                <select value={getLang()} onChange={(e) => setLang(e.target.value as any)} className={inp}>
+                <TeklySelect value={getLang()} onChange={(e) => setLang(e.target.value as any)} className={inp}>
                   {LANGS.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
-                </select>
+                </TeklySelect>
               </Field>
             </div>
           </Section>

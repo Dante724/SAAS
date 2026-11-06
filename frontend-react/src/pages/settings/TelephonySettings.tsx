@@ -4,6 +4,7 @@
 // the contacts-from-calls automation, and a simulated inbound call to try it all out.
 // Twilio keys are write-only: the API never sends them back.
 import { useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
@@ -159,12 +160,12 @@ export default function TelephonySettings() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label htmlFor="tel-provider" className={lbl}>Provider</label>
-                <select id="tel-provider" className={field} value={form.provider} onChange={(e) => setForm({ ...form, provider: e.target.value })}>
+                <TeklySelect id="tel-provider" className={field} value={form.provider} onChange={(e) => setForm({ ...form, provider: e.target.value })}>
                   <option value="simulated">Simulated (no real calls)</option>
                   <option value="twilio">Twilio</option>
                   {(cfg.aircall?.available || form.provider === "aircall") && <option value="aircall">Aircall</option>}
                   {!["simulated", "twilio", "aircall"].includes(form.provider) && <option value={form.provider}>{form.provider[0].toUpperCase() + form.provider.slice(1)} (events through the call webhook)</option>}
-                </select>
+                </TeklySelect>
               </div>
               <div className="flex items-center gap-2.5 text-sm font-medium text-ink-primary sm:pt-6">
                 <Switch label="Calling" on={form.enabled} onChange={(v) => setForm({ ...form, enabled: v })} />{form.enabled ? "Calling is on" : "Calling is off"}
@@ -258,10 +259,10 @@ export default function TelephonySettings() {
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
               <div>
                 <label htmlFor="auto-dir" className={lbl}>Which calls</label>
-                <select id="auto-dir" className={field} value={auto.config.direction} disabled={!auto.enabled} onChange={(e) => setAuto({ ...auto, config: { ...auto.config, direction: e.target.value as "incoming" | "all" } })}>
+                <TeklySelect id="auto-dir" className={field} value={auto.config.direction} disabled={!auto.enabled} onChange={(e) => setAuto({ ...auto, config: { ...auto.config, direction: e.target.value as "incoming" | "all" } })}>
                   <option value="incoming">Incoming calls only</option>
                   <option value="all">Incoming and outgoing calls</option>
-                </select>
+                </TeklySelect>
               </div>
               <div className="flex items-center gap-2.5 text-sm font-medium text-ink-primary sm:pt-6">
                 <Switch label="Assign a manager" disabled={!auto.enabled} on={auto.config.assign_manager} onChange={(v) => setAuto({ ...auto, config: { ...auto.config, assign_manager: v } })} />Assign a manager

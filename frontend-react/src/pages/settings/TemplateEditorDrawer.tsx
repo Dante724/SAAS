@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import Tabs from "../../components/Tabs";
 import { buttonClass } from "../../components/Button";
 import LabelBarcodePicker, { LABEL_DOC_TYPES } from "./LabelBarcodePicker";
@@ -319,11 +320,11 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
         <button aria-label="Close" onClick={onClose} title="Close" className="w-9 h-9 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="arrow_back" c="text-lg" /></button>
         <button onClick={newDoc} className={buttonClass("secondary", "md", "shrink-0")}><M n="add" c="text-[16px]" /> New</button>
         {templates.length > 0 && (
-          <select value={currentId || ""} onChange={(e) => { const t = templates.find((x) => x.id === e.target.value); if (t) openTpl(t); }}
+          <TeklySelect value={currentId || ""} onChange={(e) => { const t = templates.find((x) => x.id === e.target.value); if (t) openTpl(t); }}
             className="glass-input h-9 max-w-[180px] rounded-xl px-3 text-sm">
             <option value="" disabled>Switch template…</option>
             {templates.map((t) => <option key={t.id} value={t.id}>{t.name}{t.is_default ? " (default)" : ""}</option>)}
-          </select>
+          </TeklySelect>
         )}
         <input value={meta.name} onChange={(e) => setMeta({ ...meta, name: e.target.value })} placeholder="Untitled template" className="text-[15px] font-semibold text-ink-primary bg-transparent border-0 focus:outline-none focus:bg-slate-100 rounded px-2 py-1 w-44" />
         {/* Actions menu — replaces separate rename/delete icons */}
@@ -345,15 +346,15 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
           {settings && (
             <div className="absolute right-0 top-11 z-20 w-64 bg-white border border-slate-200 rounded-xl shadow-drawer p-3 space-y-3">
               <div><label className="block text-sm font-medium text-ink-primary mb-1">Type</label>
-                <select value={meta.doc_type} onChange={(e) => setMeta({ ...meta, doc_type: e.target.value, auto_print_on: keepAllowed(meta.auto_print_on, e.target.value) })} className="glass-input w-full rounded-xl px-3 py-2 text-sm capitalize">{DOC_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}</select></div>
+                <TeklySelect value={meta.doc_type} onChange={(e) => setMeta({ ...meta, doc_type: e.target.value, auto_print_on: keepAllowed(meta.auto_print_on, e.target.value) })} className="glass-input w-full rounded-xl px-3 py-2 text-sm capitalize">{DOC_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}</TeklySelect></div>
               <div><label className="block text-sm font-medium text-ink-primary mb-1">Paper / label size</label>
-                <select value={meta.page_size} onChange={(e) => setMeta({ ...meta, page_size: e.target.value })} className="glass-input w-full rounded-xl px-3 py-2 text-sm">
+                <TeklySelect value={meta.page_size} onChange={(e) => setMeta({ ...meta, page_size: e.target.value })} className="glass-input w-full rounded-xl px-3 py-2 text-sm">
                   <option value="a4">A4 (210×297mm)</option>
                   <option value="letter">Letter (8.5×11in)</option>
                   <option value="receipt80">Receipt 80mm</option>
                   <option value="receipt58">Receipt 58mm</option>
                   <option value="label">Custom label (mm)…</option>
-                </select></div>
+                </TeklySelect></div>
               {meta.page_size === "label" && (
                 <div className="grid grid-cols-2 gap-2">
                   <div><label className="block text-sm font-medium text-ink-primary mb-1">Width mm</label>
@@ -365,7 +366,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
               <div><label className="block text-sm font-medium text-ink-primary mb-1">Margin mm (blank = auto)</label>
                 <input type="number" value={meta.margin_mm ?? ""} onChange={(e) => setMeta({ ...meta, margin_mm: e.target.value ? +e.target.value : null })} placeholder={(meta.page_size === "a4" || meta.page_size === "letter") ? "10" : "0"} className="glass-input w-full rounded-xl px-3 py-2 text-sm" /></div>
               <div><label className="block text-sm font-medium text-ink-primary mb-1">Default font</label>
-                <select value={meta.font_family} onChange={(e) => setMeta({ ...meta, font_family: e.target.value })} className="glass-input w-full rounded-xl px-3 py-2 text-sm">{FONTS.map((f) => <option key={f} value={f}>{f}</option>)}</select></div>
+                <TeklySelect value={meta.font_family} onChange={(e) => setMeta({ ...meta, font_family: e.target.value })} className="glass-input w-full rounded-xl px-3 py-2 text-sm">{FONTS.map((f) => <option key={f} value={f}>{f}</option>)}</TeklySelect></div>
               <div className="flex items-center gap-2 text-sm text-ink-secondary"><Switch size="sm" label="Default for this type" on={!!meta.is_default} onChange={(v) => setMeta({ ...meta, is_default: v })} /> Default for this type</div>
               {autoPrintChoices(meta.doc_type).length > 0 && (
                 <fieldset><legend className="block text-sm font-medium text-ink-primary mb-1">Print automatically when</legend>

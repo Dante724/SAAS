@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import DateField from "../../components/DateField";
 import { M } from "../../components/Shell";
@@ -350,9 +351,9 @@ function LocationDetail({ loc, companyTz, resources, onSaved, onResChanged, onCa
               </div>
               <div className="flex items-center gap-2">
                 <input value={nr.name} onChange={(e) => setNr({ ...nr, name: e.target.value })} onKeyDown={(e) => e.key === "Enter" && addRes()} placeholder="Lift 1, Bench 2, Room A" aria-label="Bay or room name" className={inp} />
-                <select value={nr.kind} onChange={(e) => setNr({ ...nr, kind: e.target.value })} aria-label="Kind" className="glass-input rounded-xl px-3 py-2 text-sm">
+                <TeklySelect value={nr.kind} onChange={(e) => setNr({ ...nr, kind: e.target.value })} aria-label="Kind" className="glass-input rounded-xl px-3 py-2 text-sm">
                   {[["bay", "Bay / lift"], ["room", "Room"], ["equipment", "Equipment"], ["other", "Other"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                </select>
+                </TeklySelect>
                 <button onClick={addRes} disabled={!nr.name.trim()} className={buttonClass("primary", "md")}>Add</button>
               </div>
             </>)}
@@ -362,9 +363,9 @@ function LocationDetail({ loc, companyTz, resources, onSaved, onResChanged, onCa
           <div className="sm:col-span-2 rounded-xl border border-slate-200 p-4 space-y-3">
             <div className="grid sm:grid-cols-2 gap-3">
               <label className="block"><span className="block text-sm font-medium text-ink-primary mb-1.5">Invoices are from</span>
-                <select value={f.legal_entity_id || ""} onChange={(e) => set("legal_entity_id", e.target.value)} className={inp}><option value="">Company default</option>{legals.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></label>
+                <TeklySelect value={f.legal_entity_id || ""} onChange={(e) => set("legal_entity_id", e.target.value)} className={inp}><option value="">Company default</option>{legals.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</TeklySelect></label>
               <label className="block"><span className="block text-sm font-medium text-ink-primary mb-1.5">Price level</span>
-                <select value={f.price_type_id || ""} onChange={(e) => set("price_type_id", e.target.value)} className={inp}><option value="">Company default</option>{priceTypes.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></label>
+                <TeklySelect value={f.price_type_id || ""} onChange={(e) => set("price_type_id", e.target.value)} className={inp}><option value="">Company default</option>{priceTypes.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</TeklySelect></label>
             </div>
             <label className="block"><span className="block text-sm font-medium text-ink-primary mb-1.5">Line at the top of receipts</span>
               <input value={f.receipt_header} onChange={(e) => set("receipt_header", e.target.value)} placeholder="Thanks for visiting our Downtown shop!" className={inp} /></label>

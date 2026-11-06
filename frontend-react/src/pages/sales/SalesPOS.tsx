@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import Shell, { M } from "../../components/Shell";
 import EmptyState from "../../components/EmptyState";
@@ -432,10 +433,10 @@ export default function SalesPOS() {
                 </div>
                 <div className="flex items-baseline justify-between"><span className="text-sm font-semibold text-ink-primary">To pay</span><span className="text-2xl font-semibold tabular-nums text-ink-primary">{cash(pending.due)}</span></div>
                 <div><label htmlFor="pos-pay-account" className="block text-xs font-semibold text-ink-tertiary mb-1">Take payment into</label>
-                  <select id="pos-pay-account" value={payAccount?.id || ""} onChange={(e) => setPayAcct(e.target.value)} className={inputCls}>
+                  <TeklySelect id="pos-pay-account" value={payAccount?.id || ""} onChange={(e) => setPayAcct(e.target.value)} className={inputCls}>
                     {accounts.length === 0 && <option value="">No cashbox set up</option>}
                     {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-                  </select>
+                  </TeklySelect>
                 </div>
                 {payAccount?.payment_option === "cash" && <div className="flex items-center justify-between gap-3 text-xs"><label htmlFor="pos-pay-cash" className="text-ink-secondary">Cash received</label><div className="w-28"><input id="pos-pay-cash" type="number" min={0} inputMode="decimal" value={payCash} onChange={(e) => setPayCash(e.target.value)} className={`${inputCls} text-right tabular-nums`} /></div></div>}
                 {payTendered != null && payTendered >= pending.due && row("Change due", cash(payTendered - pending.due), true)}
@@ -470,10 +471,10 @@ export default function SalesPOS() {
             <div className="flex items-baseline justify-between pt-3 border-t border-slate-200"><span className="text-sm font-semibold text-ink-primary">Total</span><span className="text-2xl font-semibold tabular-nums text-ink-primary">{cash(quote?.total ?? Math.max(subtotal - discount, 0))}</span></div>
             {!!quote?.gift_card && <>{row("Paid by gift card", `−${cash(quote.gift_card)}`)}{row("To pay", cash(quote.due), true)}</>}
             <div><label htmlFor="pos-account" className="block text-xs font-semibold text-ink-tertiary mb-1">Take payment into</label>
-              <select id="pos-account" value={accountId} onChange={(e) => setAccountId(e.target.value)} className={inputCls}>
+              <TeklySelect id="pos-account" value={accountId} onChange={(e) => setAccountId(e.target.value)} className={inputCls}>
                 <option value="">Pay later (save the sale)</option>
                 {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-              </select>
+              </TeklySelect>
             </div>
             {/* B5: cash — what the customer handed over, and the change to give back */}
             {isCash && <div className="flex items-center justify-between gap-3 text-xs"><label htmlFor="pos-cash" className="text-ink-secondary">Cash received</label><div className="w-28"><input id="pos-cash" type="number" min={0} inputMode="decimal" value={cashGiven} onChange={(e) => setCashGiven(e.target.value)} placeholder={cash(due)} className={`${inputCls} text-right tabular-nums`} /></div></div>}
@@ -694,9 +695,9 @@ function ReturnSheet({ saleId, accounts, onClose, onDone }: { saleId: string; ac
           </div>
           <div className="mt-3 space-y-2">
             <div><label htmlFor="pos-return-account" className="block text-xs font-semibold text-ink-tertiary mb-1">Refund from</label>
-              <select id="pos-return-account" value={acct} onChange={(e) => setAcct(e.target.value)} className={inputCls}>
+              <TeklySelect id="pos-return-account" value={acct} onChange={(e) => setAcct(e.target.value)} className={inputCls}>
                 {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-              </select></div>
+              </TeklySelect></div>
             <input value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300} placeholder="Reason (optional)" aria-label="Reason" className={inputCls} />
             {gift > 0.005 && <p className="text-[11px] text-ink-tertiary tabular-nums">{cash(gift)} goes back onto the gift card.</p>}
             {err && <p role="alert" className="text-[11px] text-rose-700">{err}</p>}

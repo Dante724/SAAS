@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import Switch from "../../components/Switch";
@@ -110,11 +111,11 @@ export function StatusList({ statuses, recordType, onRecordType, onOpen, onAdd, 
             <button key={rt} onClick={() => onRecordType(rt)}
               className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${recordType === rt ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>{label}</button>
           ))}
-          <select value={inMore ? recordType : ""} onChange={(e) => e.target.value && onRecordType(e.target.value)} aria-label="More status lists"
+          <TeklySelect value={inMore ? recordType : ""} onChange={(e) => e.target.value && onRecordType(e.target.value)} aria-label="More status lists"
             className={`bg-transparent pl-3 pr-1 py-1.5 rounded-lg text-xs font-semibold cursor-pointer outline-none ${inMore ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary"}`}>
             <option value="">More…</option>
             {more.map(([rt, label]) => <option key={rt} value={rt}>{label}</option>)}
-          </select>
+          </TeklySelect>
         </div>
       </div>
 
@@ -409,9 +410,9 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
 
           <div>
             <label className={lbl}>Stage</label>
-            <select value={f.status_group} onChange={(e) => set("status_group", e.target.value)} className="glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary">
+            <TeklySelect value={f.status_group} onChange={(e) => set("status_group", e.target.value)} className="glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary">
               {GROUP_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-            </select>
+            </TeklySelect>
           </div>
 
           <div className="rounded-xl bg-slate-50 border border-slate-100 px-4 py-3">
@@ -471,12 +472,12 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
                     className="glass-input w-20 py-1.5 px-2 text-xs text-right rounded-lg" /><span className="text-xs text-ink-secondary">min</span>
                 </span>
               ) : (
-                <select value={f.time_limit_min ?? ""} aria-label="Alert after"
+                <TeklySelect value={f.time_limit_min ?? ""} aria-label="Alert after"
                   onChange={(e) => { if (e.target.value === "custom") { setCustomLimit(true); return; } set("time_limit_min", e.target.value ? Number(e.target.value) : null); }}
                   className="ml-auto glass-input py-1.5 px-2 text-xs rounded-lg">
                   {LIMITS.map(([v, l]) => <option key={l} value={v ?? ""}>{l}</option>)}
                   <option value="custom">Custom…</option>
-                </select>
+                </TeklySelect>
               )}
             </div>
             {rt === "estimate" && <>
@@ -517,11 +518,11 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
                   <div className="flex items-center gap-3 py-2.5 border-t border-slate-100">
                     <span className="w-8 h-8 rounded-lg bg-slate-100 text-ink-secondary grid place-items-center flex-shrink-0"><M n="inventory_2" c="text-base" /></span>
                     <span className="text-sm text-ink-primary">Move the item to</span>
-                    <select value={f.moves_asset_to || ""} onChange={(e) => set("moves_asset_to", e.target.value)} className="ml-auto glass-input py-1.5 px-2 text-xs rounded-lg w-40">
+                    <TeklySelect value={f.moves_asset_to || ""} onChange={(e) => set("moves_asset_to", e.target.value)} className="ml-auto glass-input py-1.5 px-2 text-xs rounded-lg w-40">
                       <option value="">Don't move</option>
                       {warehouses.filter((w) => w.kind !== "product").map((w) => <option key={w.id} value={w.name}>{w.name}</option>)}
                       {f.moves_asset_to && !warehouses.some((w) => w.name === f.moves_asset_to) && <option value={f.moves_asset_to}>{f.moves_asset_to}</option>}
-                    </select>
+                    </TeklySelect>
                   </div>
                 </div>
                 <div>

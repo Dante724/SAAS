@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
@@ -95,9 +96,9 @@ export function PricingPage({ types, currency, onAdd, onEdit, onDelete, tiers }:
 
   const docPick = (k: string, label: string) => (
     <Field key={k} label={label}>
-      <select value={d?.[k] || ""} onChange={(e) => set(k, e.target.value)} className={inp}>
+      <TeklySelect value={d?.[k] || ""} onChange={(e) => set(k, e.target.value)} className={inp}>
         <option value="">Standard price</option>{list.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-      </select>
+      </TeklySelect>
     </Field>
   );
 
@@ -186,9 +187,9 @@ export function PricingPage({ types, currency, onAdd, onEdit, onDelete, tiers }:
                 <div className="relative"><input type="number" min={0} max={100} value={d.discount_approval_pct ?? 0} onChange={(e) => set("discount_approval_pct", e.target.value)} className={`${inp} pr-8`} /><span className="absolute right-3 top-2.5 text-sm text-ink-tertiary">%</span></div>
               </Field>
               <Field label="Decimals on prices">
-                <select value={d.price_decimals ?? 2} onChange={(e) => set("price_decimals", Number(e.target.value))} className={inp}>
+                <TeklySelect value={d.price_decimals ?? 2} onChange={(e) => set("price_decimals", Number(e.target.value))} className={inp}>
                   {[0, 1, 2].map((n) => <option key={n} value={n}>{n === 0 ? "None (whole numbers)" : `${n} (${(1.5).toFixed(n)})`}</option>)}
-                </select>
+                </TeklySelect>
               </Field>
             </div>
           </div>
@@ -317,9 +318,9 @@ export function InventoryPage({ warehouses, currency, onAdd, onEdit, onDelete }:
             <div className="grid sm:grid-cols-2 gap-3">
               <Field label="New products start as"><input value={c.default_product_type || "default"} onChange={(e) => set("default_product_type", e.target.value)} className={inp} /></Field>
               <Field label="New barcodes start with" hint="20–29 is set aside for a shop's own barcodes, so they never match a manufacturer's.">
-                <select value={c.barcode_prefix || "20"} onChange={(e) => set("barcode_prefix", e.target.value)} aria-label="Barcode prefix" className={inp}>
+                <TeklySelect value={c.barcode_prefix || "20"} onChange={(e) => set("barcode_prefix", e.target.value)} aria-label="Barcode prefix" className={inp}>
                   {Array.from({ length: 10 }, (_, i) => String(20 + i)).map((v) => <option key={v} value={v}>{v}</option>)}
-                </select></Field>
+                </TeklySelect></Field>
             </div>
             <div>
               <button type="button" onClick={() => setPatterns((v) => !v)} aria-expanded={patterns} className="inline-flex items-center gap-1 text-xs font-semibold text-primary">

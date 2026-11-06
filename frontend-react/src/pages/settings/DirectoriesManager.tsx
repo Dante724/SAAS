@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api, openAuthedDoc } from "../../api/client";
@@ -221,8 +222,8 @@ function ListEditor({ dir, onChanged, onDelete }: { dir: Dir; onChanged: () => v
         </div>
         {more && (
           <div className="flex flex-wrap gap-2">
-            <select value={np} onChange={(e) => setNp(e.target.value)} aria-label="Put it under" className="glass-input rounded-xl px-3 py-2 text-sm"><option value="">Top level</option>{active.map((i) => <option key={i.id} value={i.id}>Under {i.value}</option>)}</select>
-            <select value={nl} onChange={(e) => setNl(e.target.value)} aria-label="Location" className="glass-input rounded-xl px-3 py-2 text-sm"><option value="">All locations</option>{locs.map((l) => <option key={l.id} value={l.id}>{l.name} only</option>)}</select>
+            <TeklySelect value={np} onChange={(e) => setNp(e.target.value)} aria-label="Put it under" className="glass-input rounded-xl px-3 py-2 text-sm"><option value="">Top level</option>{active.map((i) => <option key={i.id} value={i.id}>Under {i.value}</option>)}</TeklySelect>
+            <TeklySelect value={nl} onChange={(e) => setNl(e.target.value)} aria-label="Location" className="glass-input rounded-xl px-3 py-2 text-sm"><option value="">All locations</option>{locs.map((l) => <option key={l.id} value={l.id}>{l.name} only</option>)}</TeklySelect>
           </div>
         )}
         {paste !== null && (

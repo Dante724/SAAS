@@ -1,4 +1,5 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import DeviceList from "../../components/DeviceList";
 import { createPortal } from "react-dom";
@@ -841,9 +842,9 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
           {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
           {!isReminder && (
             <div><label className={lbl}>Event</label>
-              <select value={f.event} onChange={(e) => set("event", e.target.value)} className={field}>
+              <TeklySelect value={f.event} onChange={(e) => set("event", e.target.value)} className={field}>
                 {events.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-              </select></div>
+              </TeklySelect></div>
           )}
           {!isReminder && f.event === "status_changed" && statusRT && (
             <div><label className={lbl}>Status changed to</label>
@@ -858,15 +859,15 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
               <input value={f.trigger_status_key} onChange={(e) => set("trigger_status_key", e.target.value)} placeholder="blank = any" className={field} /></div>
           )}
           <div><label className={lbl}>Send via</label>
-            <select value={f.channel} onChange={(e) => set("channel", e.target.value)} className={field}>
+            <TeklySelect value={f.channel} onChange={(e) => set("channel", e.target.value)} className={field}>
               {channels.map((c) => <option key={c} value={c}>{c === "push" ? "In-app / push" : c.toUpperCase()}</option>)}
-            </select></div>
+            </TeklySelect></div>
           {!internal && (
             <div><label className={lbl}>Template</label>
-              <select value={f.template_id} onChange={(e) => set("template_id", e.target.value)} className={field}>
+              <TeklySelect value={f.template_id} onChange={(e) => set("template_id", e.target.value)} className={field}>
                 <option value="">Default message</option>
                 {tplOpts.map((t) => <option key={t.id} value={t.id}>{t.name || optLabel(t.trigger_event)}</option>)}
-              </select>
+              </TeklySelect>
               <div className="mt-1 text-[11px] text-ink-tertiary">No template → a sensible default message is sent.</div>
             </div>
           )}
@@ -888,10 +889,10 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
           )}
           {locations.length > 1 && (
             <div><label className={lbl}>Location</label>
-              <select value={f.location_id} onChange={(e) => set("location_id", e.target.value)} className={field}>
+              <TeklySelect value={f.location_id} onChange={(e) => set("location_id", e.target.value)} className={field}>
                 <option value="">All locations</option>
                 {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-              </select></div>
+              </TeklySelect></div>
           )}
           <ToggleRow label="Only send during working hours" on={f.working_hours_only} onToggle={() => set("working_hours_only", !f.working_hours_only)} />
           {!internal && <ToggleRow label="Try the client's latest chat first" on={f.chat_first} onToggle={() => set("chat_first", !f.chat_first)} />}
@@ -1138,7 +1139,7 @@ function FeedbackSettingsEditor() {
               <Switch on={!!c.active} onChange={(v) => set("active", v)} label="Ask customers for feedback after a work order closes" />
             </SettingRow>
             <SettingRow label="Rating system" htmlFor="fb-system" dim={!c.active}>
-              <select id="fb-system" value={c.system || "five_point"} onChange={(e) => set("system", e.target.value)} className={inp}>{[["five_point", "5-point stars"], ["like", "Like / dislike"], ["nps", "NPS (0–10)"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+              <TeklySelect id="fb-system" value={c.system || "five_point"} onChange={(e) => set("system", e.target.value)} className={inp}>{[["five_point", "5-point stars"], ["like", "Like / dislike"], ["nps", "NPS (0–10)"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</TeklySelect>
             </SettingRow>
           </SettingGroup>
           <div className="border-t border-slate-100">
@@ -1478,9 +1479,9 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div><label className={lblc}>Role</label>
-                <select value={f.role_id || ""} onChange={(e) => set("role_id", e.target.value)} className={`${fld} appearance-none`}><option value="">{me?.is_owner ? "— No role (full access) —" : "Choose a role…"}</option>{roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
+                <TeklySelect value={f.role_id || ""} onChange={(e) => set("role_id", e.target.value)} className={`${fld} appearance-none`}><option value="">{me?.is_owner ? "— No role (full access) —" : "Choose a role…"}</option>{roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</TeklySelect></div>
               <div><label className={lblc}>Home location</label>
-                <select value={f.location_id || ""} onChange={(e) => set("location_id", e.target.value)} className={`${fld} appearance-none`}><option value="">All locations</option>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+                <TeklySelect value={f.location_id || ""} onChange={(e) => set("location_id", e.target.value)} className={`${fld} appearance-none`}><option value="">All locations</option>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</TeklySelect></div>
             </div>
             {!isNew && (
               <label className="flex items-center justify-between py-1 cursor-pointer">
@@ -1495,10 +1496,10 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
           <div className="space-y-4">
             <div className="grid grid-cols-3 gap-3">
               <div><label className={lblc}>Wage type</label>
-                <select value={f.wage_type || "fixed"} onChange={(e) => set("wage_type", e.target.value)} className={`${fld} appearance-none`}><option value="fixed">Fixed salary</option><option value="hourly">Hourly</option></select></div>
+                <TeklySelect value={f.wage_type || "fixed"} onChange={(e) => set("wage_type", e.target.value)} className={`${fld} appearance-none`}><option value="fixed">Fixed salary</option><option value="hourly">Hourly</option></TeklySelect></div>
               <div><label className={lblc}>Wage value</label><input type="number" value={f.wage_value ?? ""} onChange={(e) => set("wage_value", e.target.value)} className={`${fld} font-mono`} /></div>
               <div><label className={lblc}>Pay hours from</label>
-                <select value={f.hourly_basis === "attendance" ? "attendance" : "labour"} onChange={(e) => set("hourly_basis", e.target.value)} className={`${fld} appearance-none`}><option value="labour">Approved job timesheets</option><option value="attendance">Shop clock-in / out</option></select></div>
+                <TeklySelect value={f.hourly_basis === "attendance" ? "attendance" : "labour"} onChange={(e) => set("hourly_basis", e.target.value)} className={`${fld} appearance-none`}><option value="labour">Approved job timesheets</option><option value="attendance">Shop clock-in / out</option></TeklySelect></div>
             </div>
             <div className="divide-y divide-slate-100">
               <label className="flex items-center justify-between py-2 cursor-pointer"><span className="text-xs font-semibold text-ink-primary">Work-order / job timer</span>
@@ -1588,25 +1589,25 @@ function PayrollRuleDrawer({ rule, employees, statuses, onClose, onSaved }: { ru
             <h3 className="text-xs font-bold text-ink-primary">Trigger</h3>
             <div><label className={lblc}>Rule name</label><input value={f.name || ""} onChange={(e) => set("name", e.target.value)} className={fld} /></div>
             <div><label className={lblc}>Pays when this happens (event)</label>
-              <select value={f.event} onChange={(e) => set("event", e.target.value)} className={fld}>
+              <TeklySelect value={f.event} onChange={(e) => set("event", e.target.value)} className={fld}>
                 {PAYROLL_EVENTS.map((ev) => <option key={ev} value={ev}>{PAYROLL_EVENT_LABELS[ev]}</option>)}
-              </select></div>
+              </TeklySelect></div>
             <div><label className={lblc}>Applies to</label>
-              <select value={f.employee_id || ""} onChange={(e) => set("employee_id", e.target.value)} className={fld}>
+              <TeklySelect value={f.employee_id || ""} onChange={(e) => set("employee_id", e.target.value)} className={fld}>
                 <option value="">All employees (or by role default)</option>
                 {employees.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
-              </select></div>
+              </TeklySelect></div>
           </div>
 
           <div className="bg-white rounded-xl border border-slate-200/90 shadow-clay-card p-4 space-y-3">
             <h3 className="text-xs font-bold text-ink-primary">Amount</h3>
             <div className="grid grid-cols-2 gap-3">
               <div><label className={lblc}>Type</label>
-                <select value={f.calc_type} onChange={(e) => set("calc_type", e.target.value)} className={fld}><option value="percent">Percentage</option><option value="flat">Flat amount</option></select></div>
+                <TeklySelect value={f.calc_type} onChange={(e) => set("calc_type", e.target.value)} className={fld}><option value="percent">Percentage</option><option value="flat">Flat amount</option></TeklySelect></div>
               <div><label className={lblc}>{isPct ? "Percent (%)" : "Amount"}</label><input type="number" value={f.amount ?? ""} onChange={(e) => set("amount", e.target.value)} className={`${fld} font-mono`} /></div>
               {isPct && (
                 <div><label className={lblc}>Percentage of</label>
-                  <select value={f.percent_basis} onChange={(e) => set("percent_basis", e.target.value)} className={fld}><option value="total">Line / order total</option><option value="margin">Gross profit (margin)</option></select></div>
+                  <TeklySelect value={f.percent_basis} onChange={(e) => set("percent_basis", e.target.value)} className={fld}><option value="total">Line / order total</option><option value="margin">Gross profit (margin)</option></TeklySelect></div>
               )}
               <div><label className={lblc}>Coefficient (×)</label><input type="number" step="0.1" value={f.coefficient ?? ""} onChange={(e) => set("coefficient", e.target.value)} className={`${fld} font-mono`} /></div>
             </div>
@@ -1616,15 +1617,15 @@ function PayrollRuleDrawer({ rule, employees, statuses, onClose, onSaved }: { ru
             <h3 className="text-xs font-bold text-ink-primary">Conditions</h3>
             <div className="grid grid-cols-2 gap-3">
               <div><label className={lblc}>Accrue</label>
-                <select value={f.calc_timing} onChange={(e) => set("calc_timing", e.target.value)} className={fld}>{PAYROLL_TIMINGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
+                <TeklySelect value={f.calc_timing} onChange={(e) => set("calc_timing", e.target.value)} className={fld}>{PAYROLL_TIMINGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</TeklySelect></div>
               {f.calc_timing === "on_status" && (
                 <div><label className={lblc}>At status</label>
-                  <select value={f.trigger_status_key || ""} onChange={(e) => set("trigger_status_key", e.target.value)} className={fld}><option value="">— pick —</option>{statuses.map((s) => <option key={s.key} value={s.key}>{s.name}</option>)}</select></div>
+                  <TeklySelect value={f.trigger_status_key || ""} onChange={(e) => set("trigger_status_key", e.target.value)} className={fld}><option value="">— pick —</option>{statuses.map((s) => <option key={s.key} value={s.key}>{s.name}</option>)}</TeklySelect></div>
               )}
               <div><label className={lblc}>Only for orders</label>
-                <select value={f.term_condition} onChange={(e) => set("term_condition", e.target.value)} className={fld}>{PAYROLL_TERMS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
+                <TeklySelect value={f.term_condition} onChange={(e) => set("term_condition", e.target.value)} className={fld}>{PAYROLL_TERMS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</TeklySelect></div>
               <div><label className={lblc}>Level</label>
-                <select value={f.rule_level} onChange={(e) => set("rule_level", e.target.value)} className={fld}>{PAYROLL_LEVELS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
+                <TeklySelect value={f.rule_level} onChange={(e) => set("rule_level", e.target.value)} className={fld}>{PAYROLL_LEVELS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</TeklySelect></div>
               {f.rule_level === "category" && (
                 <div className="col-span-2"><label className={lblc}>Category name</label><input value={f.category || ""} onChange={(e) => set("category", e.target.value)} className={fld} placeholder="e.g. Screens" /></div>
               )}
@@ -1695,24 +1696,24 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
             <div className="text-[11px] font-bold text-ink-tertiary">Add a field</div>
             <input value={nf.field_label} onChange={(e) => setNf({ ...nf, field_label: e.target.value })} placeholder="Field label" className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary" />
             <div className="flex items-center gap-3">
-              <select value={nf.field_type} onChange={(e) => setNf({ ...nf, field_type: e.target.value })} className="bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 capitalize">
+              <TeklySelect value={nf.field_type} onChange={(e) => setNf({ ...nf, field_type: e.target.value })} className="bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 capitalize">
                 {/* "bool" is the server's yes/no type — the old "checkbox" option was rejected with a 400 */}
                 {[["text", "Short text"], ["textarea", "Long text"], ["number", "Number"], ["select", "Pick one"], ["multiselect", "Pick several"], ["bool", "Yes / no"], ["date", "Date"], ["link", "Link"]].map(([t, l]) => <option key={t} value={t}>{l}</option>)}
-              </select>
+              </TeklySelect>
               <label className="flex items-center gap-1.5 text-xs text-ink-secondary"><input type="checkbox" checked={nf.required} onChange={(e) => setNf({ ...nf, required: e.target.checked })} className="w-4 h-4 rounded border-slate-300 text-primary" />Required</label>
               <button onClick={add} disabled={busy} className={buttonClass("primary", "sm", "ml-auto")}>Add</button>
             </div>
             {/* When to show */}
             <div className="flex flex-wrap items-center gap-2 text-xs text-ink-secondary pt-1 border-t border-slate-100">
               <span className="font-semibold"><M n="visibility" c="text-xs align-middle" /> Show only when</span>
-              <select value={nf.show_when_field_key} onChange={(e) => setNf({ ...nf, show_when_field_key: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
+              <TeklySelect value={nf.show_when_field_key} onChange={(e) => setNf({ ...nf, show_when_field_key: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
                 <option value="">always</option>
                 {(fields || []).map((f) => <option key={f.id} value={f.field_key}>{f.field_label}</option>)}
-              </select>
+              </TeklySelect>
               {nf.show_when_field_key && <>
-                <select value={nf.show_when_op} onChange={(e) => setNf({ ...nf, show_when_op: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
+                <TeklySelect value={nf.show_when_op} onChange={(e) => setNf({ ...nf, show_when_op: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
                   <option value="is">is</option><option value="is_not">is not</option><option value="gt">&gt;</option><option value="lt">&lt;</option><option value="filled">is filled</option>
-                </select>
+                </TeklySelect>
                 {nf.show_when_op !== "filled" && <input value={nf.show_when_value} onChange={(e) => setNf({ ...nf, show_when_value: e.target.value })} placeholder="value" className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 w-24" />}
               </>}
             </div>
@@ -1720,9 +1721,9 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
             <div className="flex flex-wrap items-center gap-2 text-xs text-ink-secondary pt-1 border-t border-slate-100">
               <label className="font-semibold flex items-center gap-1"><input type="checkbox" checked={nf.upsell_on} onChange={(e) => setNf({ ...nf, upsell_on: e.target.checked })} className="w-4 h-4 rounded border-slate-300 text-primary" /><M n="sell" c="text-xs align-middle" /> Draft upsell when value</label>
               {nf.upsell_on && <>
-                <select value={nf.upsell_comparator} onChange={(e) => setNf({ ...nf, upsell_comparator: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
+                <TeklySelect value={nf.upsell_comparator} onChange={(e) => setNf({ ...nf, upsell_comparator: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
                   <option value="lt">&lt;</option><option value="gt">&gt;</option><option value="is">is</option><option value="is_not">is not</option>
-                </select>
+                </TeklySelect>
                 {(nf.upsell_comparator === "lt" || nf.upsell_comparator === "gt")
                   ? <input value={nf.upsell_threshold} onChange={(e) => setNf({ ...nf, upsell_threshold: e.target.value })} placeholder="80" className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 w-16" />
                   : <input value={nf.upsell_value} onChange={(e) => setNf({ ...nf, upsell_value: e.target.value })} placeholder="value" className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 w-24" />}
@@ -1734,13 +1735,13 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
             <div className="flex flex-wrap items-center gap-2 text-xs text-ink-secondary pt-1 border-t border-slate-100">
               <label className="font-semibold flex items-center gap-1"><input type="checkbox" checked={nf.gate_on} onChange={(e) => setNf({ ...nf, gate_on: e.target.checked })} className="w-4 h-4 rounded border-slate-300 text-primary" /><M n="block" c="text-xs align-middle" /> Block status</label>
               {nf.gate_on && <>
-                <select value={nf.gate_status_key} onChange={(e) => setNf({ ...nf, gate_status_key: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
+                <TeklySelect value={nf.gate_status_key} onChange={(e) => setNf({ ...nf, gate_status_key: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
                   <option value="">choose…</option>{statuses.map((s) => <option key={s.id} value={s.key}>{s.name}</option>)}
-                </select>
+                </TeklySelect>
                 <span>when value</span>
-                <select value={nf.gate_comparator} onChange={(e) => setNf({ ...nf, gate_comparator: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
+                <TeklySelect value={nf.gate_comparator} onChange={(e) => setNf({ ...nf, gate_comparator: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
                   <option value="is">is</option><option value="is_not">is not</option><option value="lt">&lt;</option><option value="gt">&gt;</option>
-                </select>
+                </TeklySelect>
                 {(nf.gate_comparator === "lt" || nf.gate_comparator === "gt")
                   ? <input value={nf.gate_threshold} onChange={(e) => setNf({ ...nf, gate_threshold: e.target.value })} placeholder="0" className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 w-16" />
                   : <input value={nf.gate_value} onChange={(e) => setNf({ ...nf, gate_value: e.target.value })} placeholder="value" className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 w-24" />}
@@ -1904,11 +1905,11 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
             <div key={f.k}>
               <label htmlFor={`ed-${f.k}`} className="block text-sm font-medium text-ink-primary mb-1.5">{f.label}{f.req ? " *" : ""}</label>
               {f.type === "select" && f.choices ? (
-                <select id={`ed-${f.k}`} value={v[f.k]} onChange={set(f.k)} className={edInp}><option value="">Choose…</option>{f.choices.map((o: { value: string; label: string }) => <option key={o.value} value={o.value}>{o.label}</option>)}</select>
+                <TeklySelect id={`ed-${f.k}`} value={v[f.k]} onChange={set(f.k)} className={edInp}><option value="">Choose…</option>{f.choices.map((o: { value: string; label: string }) => <option key={o.value} value={o.value}>{o.label}</option>)}</TeklySelect>
               ) : f.type === "select" ? (
                 f.options
-                  ? <select id={`ed-${f.k}`} value={v[f.k] ?? ""} onChange={set(f.k)} className={edInp}>{f.options.map((o: { value: string; label: string }) => <option key={o.value} value={o.value}>{o.label}</option>)}</select>
-                  : <select id={`ed-${f.k}`} value={v[f.k]} onChange={set(f.k)} className={edInp}>{f.opts.map((o: string) => <option key={o} value={o}>{f.labels?.[o] || optLabel(o)}</option>)}</select>
+                  ? <TeklySelect id={`ed-${f.k}`} value={v[f.k] ?? ""} onChange={set(f.k)} className={edInp}>{f.options.map((o: { value: string; label: string }) => <option key={o.value} value={o.value}>{o.label}</option>)}</TeklySelect>
+                  : <TeklySelect id={`ed-${f.k}`} value={v[f.k]} onChange={set(f.k)} className={edInp}>{f.opts.map((o: string) => <option key={o} value={o}>{f.labels?.[o] || optLabel(o)}</option>)}</TeklySelect>
               ) : f.type === "color" ? (
                 <input id={`ed-${f.k}`} type="color" value={v[f.k]} onChange={set(f.k)} className="h-9 w-16 rounded-xl border border-slate-200" />
               ) : f.type === "textarea" ? (
@@ -2105,7 +2106,7 @@ function EcommerceSettings() {
         {open && (
           <div className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-[180px_1fr] gap-3">
-              <div><label htmlFor="ecom-platform" className={lbl}>Platform</label><select id="ecom-platform" value={f.platform} onChange={(e) => setF({ ...f, platform: e.target.value })} className={field}><option value="shopify">Shopify</option><option value="woocommerce">WooCommerce</option></select></div>
+              <div><label htmlFor="ecom-platform" className={lbl}>Platform</label><TeklySelect id="ecom-platform" value={f.platform} onChange={(e) => setF({ ...f, platform: e.target.value })} className={field}><option value="shopify">Shopify</option><option value="woocommerce">WooCommerce</option></TeklySelect></div>
               <div><label htmlFor="ecom-url" className={lbl}>Store address</label><input id="ecom-url" value={f.store_url} onChange={(e) => setF({ ...f, store_url: e.target.value })} placeholder="my-shop.myshopify.com" className={field} /></div>
             </div>
             <div className="divide-y divide-slate-100">
@@ -2165,7 +2166,7 @@ function SsoSettings() {
         {open && (
           <div className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div><label htmlFor="sso-protocol" className={lbl}>Protocol</label><select id="sso-protocol" value={f.protocol} onChange={(e) => setF({ ...f, protocol: e.target.value })} className={field}><option value="oidc">OIDC</option><option value="saml">SAML</option></select></div>
+              <div><label htmlFor="sso-protocol" className={lbl}>Protocol</label><TeklySelect id="sso-protocol" value={f.protocol} onChange={(e) => setF({ ...f, protocol: e.target.value })} className={field}><option value="oidc">OIDC</option><option value="saml">SAML</option></TeklySelect></div>
               {inp("display_name", "Display name", { placeholder: "Google Workspace" })}
               {inp("metadata_url", "Issuer or metadata address", { placeholder: "https://…/.well-known/openid-configuration" })}
               {inp("email_domain", "Email domain", { placeholder: "company.com" })}
@@ -2435,8 +2436,8 @@ function TierManager({ types }: { types: any[] }) {
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-5 space-y-3">
       <div><h4 className="text-sm font-semibold text-ink-primary">Quantity break tiers</h4>
         <p className="text-xs text-ink-tertiary mt-0.5">Lower the markup automatically once a line reaches a quantity. The highest matching tier wins.</p></div>
-      <select value={ptId} onChange={(e) => setPtId(e.target.value)} aria-label="Price type" className="glass-input rounded-xl px-3 py-2 text-sm max-w-xs">
-        <option value="">Choose a price type…</option>{types.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
+      <TeklySelect value={ptId} onChange={(e) => setPtId(e.target.value)} aria-label="Price type" className="glass-input rounded-xl px-3 py-2 text-sm max-w-xs">
+        <option value="">Choose a price type…</option>{types.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</TeklySelect>
       {ptId && <div className="space-y-2">
         {tiers.length === 0 && <p className="text-xs text-ink-tertiary">No tiers yet. The type's base markup applies at every quantity.</p>}
         {tiers.map((t) => (

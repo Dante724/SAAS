@@ -2,6 +2,7 @@
 // On by default: a missed call opens an inquiry (repeat calls from the same number are added
 // to it), creates a call-back task and alerts whoever is clocked in.
 import { useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { api } from "../../api/client";
 import Switch from "../../components/Switch";
 import SaveFooter from "../../components/SaveFooter";
@@ -58,10 +59,10 @@ export default function MissedCallSettings() {
           <Switch label="Send an alert" disabled={!s.enabled} on={c.notify} onChange={(v) => set({ notify: v })} />
         </SettingRow>
         <SettingRow htmlFor="mc-fallback" dim={!s.enabled} label="When nobody is clocked in, alert">
-          <select id="mc-fallback" disabled={!s.enabled} className={`${field} w-64`} value={c.fallback_employee_id || ""} onChange={(e) => set({ fallback_employee_id: e.target.value || null })}>
+          <TeklySelect id="mc-fallback" disabled={!s.enabled} className={`${field} w-64`} value={c.fallback_employee_id || ""} onChange={(e) => set({ fallback_employee_id: e.target.value || null })}>
             <option value="">The contact's manager, else the admins</option>
             {staff.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
-          </select>
+          </TeklySelect>
         </SettingRow>
       </div>
       {msg && !msg.ok && <div role="alert" className="rounded-xl border px-3 py-2 text-xs bg-rose-50 border-rose-200 text-rose-700">{msg.text}</div>}

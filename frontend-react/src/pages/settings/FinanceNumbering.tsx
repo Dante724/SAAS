@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
@@ -214,9 +215,9 @@ function NumberEditor({ row, onClose, onSaved }: { row: any; onClose: () => void
         <div className="grid sm:grid-cols-3 gap-3">
           <Field label="Starts with"><input value={p.prefix} onChange={(e) => setP({ ...p, prefix: e.target.value })} placeholder="INV-" className={`${inp} tabular-nums`} /></Field>
           <Field label="Digits">
-            <select value={p.digits} onChange={(e) => setP({ ...p, digits: Number(e.target.value) })} className={inp}>
+            <TeklySelect value={p.digits} onChange={(e) => setP({ ...p, digits: Number(e.target.value) })} className={inp}>
               {[0, 3, 4, 5, 6, 7].map((d) => <option key={d} value={d}>{d === 0 ? "No padding (1, 2, 3)" : `${d} (${"0".repeat(d - 1)}1)`}</option>)}
-            </select>
+            </TeklySelect>
           </Field>
           <Field label="Add the year">
             <div className="inline-flex rounded-xl bg-white border border-slate-200 p-1 w-full">

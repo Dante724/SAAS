@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api, openAuthedDoc } from "../../api/client";
@@ -118,9 +119,9 @@ function PointRow({ p, types, canEdit, onSaved, onFlash }: { p: Point; types: Jo
               <input id={`name-${p.id}`} aria-label="Point name" value={f.name} disabled={!canEdit} onChange={(e) => set({ name: e.target.value })} className={`${inp} w-56`} />
             </Row>
             <Row label="How it works" htmlFor={`mode-${p.id}`} help={f.mode === "auto" ? "Walk-in queue while you're open, key drop when you're closed." : undefined}>
-              <select id={`mode-${p.id}`} value={f.mode} disabled={!canEdit} onChange={(e) => set({ mode: e.target.value as Point["mode"] })} className={`${inp} w-56`}>
+              <TeklySelect id={`mode-${p.id}`} value={f.mode} disabled={!canEdit} onChange={(e) => set({ mode: e.target.value as Point["mode"] })} className={`${inp} w-56`}>
                 {MODES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-              </select>
+              </TeklySelect>
             </Row>
             <div className="py-3">
               <div className="text-sm font-medium text-ink-primary">Job types offered</div>
@@ -200,11 +201,11 @@ export default function CheckinPointsSettings() {
       {add && (
         <div className="rounded-2xl border border-slate-200 bg-white p-4 flex flex-wrap items-end gap-2 text-xs">
           <div><label htmlFor="new-pt-loc" className="block text-sm font-medium text-ink-primary mb-1.5">Location</label>
-            <select id="new-pt-loc" value={add.location_id} onChange={(e) => setAdd({ ...add, location_id: e.target.value })} className="glass-input rounded-xl px-3 py-2 text-sm">{locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+            <TeklySelect id="new-pt-loc" value={add.location_id} onChange={(e) => setAdd({ ...add, location_id: e.target.value })} className="glass-input rounded-xl px-3 py-2 text-sm">{locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</TeklySelect></div>
           <div><label htmlFor="new-pt-name" className="block text-sm font-medium text-ink-primary mb-1.5">Name</label>
             <input id="new-pt-name" value={add.name} onChange={(e) => setAdd({ ...add, name: e.target.value })} placeholder="Key box" className="glass-input rounded-xl px-3 py-2 text-sm" /></div>
           <div><label htmlFor="new-pt-mode" className="block text-sm font-medium text-ink-primary mb-1.5">How it works</label>
-            <select id="new-pt-mode" value={add.mode} onChange={(e) => setAdd({ ...add, mode: e.target.value as Point["mode"] })} className="glass-input rounded-xl px-3 py-2 text-sm">{MODES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</select></div>
+            <TeklySelect id="new-pt-mode" value={add.mode} onChange={(e) => setAdd({ ...add, mode: e.target.value as Point["mode"] })} className="glass-input rounded-xl px-3 py-2 text-sm">{MODES.map(([k, l]) => <option key={k} value={k}>{l}</option>)}</TeklySelect></div>
           <button onClick={create} disabled={!add.name.trim()} className={buttonClass("primary", "md")}>Add</button>
           <button onClick={() => setAdd(null)} className="h-9 px-3.5 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>
         </div>

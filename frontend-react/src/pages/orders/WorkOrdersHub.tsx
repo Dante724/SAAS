@@ -1,4 +1,5 @@
 import { askCancelReason, droppedStatus } from "../../lib/cancelReason";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import { fmtDay } from "../../lib/serverTime";
 import { tint } from "../../lib/tint";
@@ -365,14 +366,14 @@ export default function WorkOrdersHub() {
               <div className="p-1.5 space-y-3">
                 <div className="flex items-center justify-between"><span className="text-[11px] font-semibold text-ink-tertiary">Filter work orders</span>{activeFacets ? <button onClick={() => { setFAssignee(""); setFPriority(""); setFScheduled(""); }} className="text-[11px] font-semibold text-primary">Clear</button> : null}</div>
                 <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Technician</span>
-                  <select value={fAssignee} onChange={(e) => setFAssignee(e.target.value)} className="glass-input w-full rounded-xl px-3 py-2 text-sm"><option value="">Any</option><option value="__none">Unassigned</option>{assignees.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
+                  <TeklySelect value={fAssignee} onChange={(e) => setFAssignee(e.target.value)} className="glass-input w-full rounded-xl px-3 py-2 text-sm"><option value="">Any</option><option value="__none">Unassigned</option>{assignees.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</TeklySelect></label>
                 {fAssignee && fAssignee !== "__none" && (
                   <JobLabelsButton pick={{ assignedToId: fAssignee }} label="Print QR labels for all their open jobs" className="text-[11px] font-semibold text-primary hover:underline text-left" />
                 )}
                 <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Priority</span>
-                  <select value={fPriority} onChange={(e) => setFPriority(e.target.value)} className="glass-input w-full rounded-xl px-3 py-2 text-sm"><option value="">Any</option><option value="0">Normal</option><option value="1">High</option><option value="2">Urgent</option><option value="urgent">High or urgent</option></select></label>
+                  <TeklySelect value={fPriority} onChange={(e) => setFPriority(e.target.value)} className="glass-input w-full rounded-xl px-3 py-2 text-sm"><option value="">Any</option><option value="0">Normal</option><option value="1">High</option><option value="2">Urgent</option><option value="urgent">High or urgent</option></TeklySelect></label>
                 {view !== "scheduler" && <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Scheduling</span>
-                  <select value={fScheduled} onChange={(e) => setFScheduled(e.target.value as "" | "yes" | "no")} className="glass-input w-full rounded-xl px-3 py-2 text-sm"><option value="">Any</option><option value="yes">Scheduled</option><option value="no">Unscheduled</option></select></label>}
+                  <TeklySelect value={fScheduled} onChange={(e) => setFScheduled(e.target.value as "" | "yes" | "no")} className="glass-input w-full rounded-xl px-3 py-2 text-sm"><option value="">Any</option><option value="yes">Scheduled</option><option value="no">Unscheduled</option></TeklySelect></label>}
               </div>
             </FloatingMenu>
           )}
@@ -407,10 +408,10 @@ export default function WorkOrdersHub() {
             <span className="tabular-nums">{sel.size} selected</span>
             <div className="h-4 w-px bg-slate-200" />
             <label className="flex items-center gap-2"><span className="text-ink-secondary font-medium">Set status</span>
-            <select disabled={busy} onChange={(e) => { bulkStatus(e.target.value); e.target.value = ""; }} className="bg-white border border-slate-200 rounded-lg px-2 py-1 text-ink-primary text-xs focus:outline-none focus:ring-2 focus:ring-primary/30">
+            <TeklySelect disabled={busy} onChange={(e) => { bulkStatus(e.target.value); e.target.value = ""; }} className="bg-white border border-slate-200 rounded-lg px-2 py-1 text-ink-primary text-xs focus:outline-none focus:ring-2 focus:ring-primary/30">
               <option value="">Choose…</option>
               {statuses.map((s) => <option key={s.id} value={s.key || norm(s.name)}>{s.name}</option>)}
-            </select></label>
+            </TeklySelect></label>
             <div className="h-4 w-px bg-slate-200" />
             <JobLabelsButton pick={{ orderIds: [...sel] }} label="Print QR labels" className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50" />
             {canArchive && <button disabled={busy} onClick={bulkArchive} className={buttonClass("secondary", "sm")}><M n="archive" c="text-[13px]" />Archive</button>}

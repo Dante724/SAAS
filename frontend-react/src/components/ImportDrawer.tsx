@@ -3,6 +3,7 @@
 // → 3 Review every row (green create, blue update, red needs fixing) → Import. The server does the
 // checking (POST /imports/{kind}/preview is a dry run); this only shows it.
 import { useEffect, useMemo, useRef, useState } from "react";
+import TeklySelect from "./TeklySelect";
 import { loadFailed } from "../lib/notice";
 import { api, downloadAuthed } from "../api/client";
 import { M } from "./Shell";
@@ -181,10 +182,10 @@ export default function ImportDrawer({ kind, onClose, onDone }: { kind: ImportKi
                       <td className="py-2 px-3 font-semibold text-ink-primary">{h}</td>
                       <td className="py-2 px-3 text-ink-secondary truncate max-w-[180px]" title={samples[i]}>{samples[i] || <span className="text-ink-tertiary">—</span>}</td>
                       <td className="py-2 px-3">
-                        <select aria-label={`Field for ${h}`} value={mapping[h] || ""} onChange={(e) => setField(h, e.target.value)} className={`${fld} w-full ${mapping[h] ? "" : "text-ink-tertiary"}`}>
+                        <TeklySelect aria-label={`Field for ${h}`} value={mapping[h] || ""} onChange={(e) => setField(h, e.target.value)} className={`${fld} w-full ${mapping[h] ? "" : "text-ink-tertiary"}`}>
                           <option value="">Don't import</option>
                           {fields.map((f) => <option key={f.key} value={f.key} disabled={mapped.has(f.key) && mapping[h] !== f.key}>{f.label}{f.required ? " *" : ""}</option>)}
-                        </select>
+                        </TeklySelect>
                       </td>
                     </tr>
                   ))}
@@ -195,9 +196,9 @@ export default function ImportDrawer({ kind, onClose, onDone }: { kind: ImportKi
               <div className="rounded-xl border border-slate-200 p-3 space-y-2 text-xs">
                 {kind === "products" && (mapped.has("opening_qty") || mapped.has("serials")) && (
                   <label className="flex items-center gap-2 text-ink-secondary">Post opening stock into
-                    <select aria-label="Warehouse" value={opts.location_id || ""} onChange={(e) => setOpts({ ...opts, location_id: e.target.value })} className={fld}>
+                    <TeklySelect aria-label="Warehouse" value={opts.location_id || ""} onChange={(e) => setOpts({ ...opts, location_id: e.target.value })} className={fld}>
                       {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-                    </select>
+                    </TeklySelect>
                   </label>
                 )}
                 {hasCat && <label className="flex items-center gap-2 text-ink-secondary"><input type="checkbox" checked={opts.create_categories} onChange={(e) => setOpts({ ...opts, create_categories: e.target.checked })} />Create missing categories</label>}
