@@ -10,6 +10,7 @@ import { useMe } from "../../context/Me";
 import CreditNoteDrawer, { type CreditNote } from "./CreditNoteDrawer";
 import { StatusPill, btnPrimary, cash, fmtDate, inputCls } from "./billing";
 import { clickableRow } from "../../lib/clickable";
+import { theadRowClass } from "../../components/Table";
 
 /* Credit notes list (Invoices page tab). Server-paged, filter by status, search by number,
    client or invoice. */
@@ -59,8 +60,8 @@ export default function CreditNotesList() {
         </ul>
         <div className="hidden sm:block overflow-x-auto">
         <table className="w-full text-left border-collapse text-xs min-w-[640px]">
-          <thead><tr className="bg-slate-50/60 border-b border-slate-200/80 text-ink-tertiary text-xs">
-            <th className="py-3 px-4 font-medium">Number</th><th className="py-3 px-4 font-medium">Client</th><th className="py-3 px-4 font-medium">Invoice</th><th className="py-3 px-4 font-medium">Date</th><th className="py-3 px-4 font-medium">Status</th><th className="py-3 px-4 font-medium text-right">Total</th><th className="py-3 px-4"><span className="sr-only">PDF</span></th>
+          <thead><tr className={theadRowClass}>
+            <th className="py-3 px-4">Number</th><th className="py-3 px-4">Client</th><th className="py-3 px-4">Invoice</th><th className="py-3 px-4">Date</th><th className="py-3 px-4">Status</th><th className="py-3 px-4 text-right">Total</th><th className="py-3 px-4"><span className="sr-only">PDF</span></th>
           </tr></thead>
           <tbody className="divide-y divide-slate-100 text-ink-secondary">
             {!rows && !p.err && <SkeletonRows cols={7} />}

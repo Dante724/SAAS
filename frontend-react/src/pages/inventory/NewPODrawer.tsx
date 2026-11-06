@@ -8,6 +8,7 @@ import PasteImport, { ImportedLine } from "./PasteImport";
 import { useMe } from "../../context/Me";
 import { loadFailed } from "../../lib/notice";
 import { FIELD_LABELS, FIELD_ORDER, fileToGrid, gridToRows, mapByHeader, type PasteField } from "./pasteMap";
+import { theadRowClass } from "../../components/Table";
 
 /** Create a purchase order: supplier + location + line items → POST /inventory/po.
  * This is the entry point that was missing — the toolbar button used to open the
@@ -183,8 +184,8 @@ export default function NewPODrawer({ products, onClose, onCreated }:
 
           <div className="rounded-2xl border border-slate-200/80 overflow-hidden">
             <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50/70 text-[11px] font-semibold text-ink-tertiary">
-                <tr><th className="py-2.5 px-3">Product</th><th className="py-2.5 px-2 text-right w-16">Qty</th><th className="py-2.5 px-2 text-right w-24">Unit cost</th><th className="py-2.5 px-2 text-right w-24">Total</th><th className="w-8" /></tr>
+              <thead>
+                <tr className={theadRowClass}><th className="py-2.5 px-3">Product</th><th className="py-2.5 px-2 text-right w-16">Qty</th><th className="py-2.5 px-2 text-right w-24">Unit cost</th><th className="py-2.5 px-2 text-right w-24">Total</th><th className="w-8" /></tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {rows.map((r, i) => (

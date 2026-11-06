@@ -18,6 +18,7 @@ import VoidableList from "../../components/VoidableList";
 import PayrollCalcPanel from "./PayrollCalcPanel";
 import { loadFailed } from "../../lib/notice";
 import { Badge } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 type Tab = "cashboxes" | "overview" | "pnl" | "reconcile" | "balances" | "refunds" | "payroll";
 type Account = { id: string; name?: string; balance?: number; payment_option?: string; is_virtual?: boolean };
@@ -261,7 +262,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
               <div className="p-3.5 border-b border-slate-100 text-xs font-bold text-ink-primary ">Payroll runs</div>
               <table className="w-full text-left border-collapse text-xs">
-                <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
+                <thead><tr className={theadRowClass}>
                   <th className="py-3 px-4">Period</th><th className="py-3 px-4">Status</th><th className="py-3 px-4 text-right">Gross</th><th className="py-3 px-4">Accrued</th><th className="py-3 px-4 text-right">Action</th>
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
@@ -302,7 +303,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
         {tab === "balances" && (
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
             <table className="w-full text-left border-collapse text-xs">
-              <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
+              <thead><tr className={theadRowClass}>
                 <th className="py-3 px-4">Client</th><th className="py-3 px-4">Phone</th><th className="py-3 px-4 text-right">Balance</th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">

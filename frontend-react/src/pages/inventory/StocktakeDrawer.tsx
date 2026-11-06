@@ -9,6 +9,7 @@ import { countRows } from "./countSheet";
 import type { Product } from "./types";
 import { buttonClass } from "../../components/Button";
 import { Badge } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 type StLine = { id: string; part_id: string; part_name: string; sku?: string | null; bin_id?: string | null; bin?: string | null;
   system_qty: number | null; counted_qty: number | null; variance: number | null; is_unknown?: boolean; serial_mismatch?: boolean; note?: string | null };
@@ -210,7 +211,7 @@ export default function StocktakeDrawer({ id, onClose, onDone }:
               </div>
               <div className="rounded-xl border border-slate-200 overflow-hidden">
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50/60 text-[11px] font-bold text-ink-tertiary"><tr>
+                  <thead><tr className={theadRowClass}>
                     <th className="py-2 px-3">Product</th>{showBin && <th className="py-2 px-3">Bin</th>}
                     <th className="py-2 px-3 text-right">Book</th><th className="py-2 px-3 text-right w-24">Counted</th><th className="py-2 px-3 text-right">Difference</th>
                   </tr></thead>

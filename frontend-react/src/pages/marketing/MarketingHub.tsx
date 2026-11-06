@@ -11,6 +11,7 @@ import { Avatar } from "../orders/look";
 import { PhoneIncoming, PhoneOutgoing } from "lucide-react";
 import { buttonClass } from "../../components/Button";
 import { Badge, type BadgeTone } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 // Marketing: campaigns (SMS/email blasts by segment) + call log — legacy /comms surface.
 const CHANNEL: Record<string, string> = { sms: "SMS", email: "Email" };
@@ -70,7 +71,7 @@ export default function MarketingHub() {
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
               <div className="overflow-x-auto">
               <table className="w-full min-w-[640px] text-left text-xs">
-                <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-xs font-semibold"><th className="py-3 px-4">Name</th><th className="py-3 px-4">Channel</th><th className="py-3 px-4">Segment</th><th className="py-3 px-4">Status</th><th className="py-3 px-4 text-right">Recipients</th><th className="py-3 px-4 text-right">Action</th></tr></thead>
+                <thead><tr className={theadRowClass}><th className="py-3 px-4">Name</th><th className="py-3 px-4">Channel</th><th className="py-3 px-4">Segment</th><th className="py-3 px-4">Status</th><th className="py-3 px-4 text-right">Recipients</th><th className="py-3 px-4 text-right">Action</th></tr></thead>
                 <tbody className="divide-y divide-slate-100">
                   {!camps && <SkeletonRows cols={6} />}
                   {camps?.length === 0 && <tr><td colSpan={6} className="py-10 px-4 text-center text-xs text-ink-secondary">No campaigns yet. Write one SMS or email and send it to a group of clients.</td></tr>}
@@ -96,7 +97,7 @@ export default function MarketingHub() {
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
             <div className="overflow-x-auto">
             <table className="w-full min-w-[760px] text-left text-xs">
-              <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-xs font-semibold"><th className="py-3 px-4 font-semibold">When</th><th className="py-3 px-4 font-semibold">Direction</th><th className="py-3 px-4 font-semibold">Contact</th><th className="py-3 px-4 font-semibold">Status</th><th className="py-3 px-4 font-semibold text-right">Duration</th><th className="py-3 px-4 font-semibold">Recording</th></tr></thead>
+              <thead><tr className={theadRowClass}><th className="py-3 px-4">When</th><th className="py-3 px-4">Direction</th><th className="py-3 px-4">Contact</th><th className="py-3 px-4">Status</th><th className="py-3 px-4 text-right">Duration</th><th className="py-3 px-4">Recording</th></tr></thead>
               <tbody className="divide-y divide-slate-100 text-ink-secondary">
                 {!calls && <SkeletonRows cols={6} />}
                 {calls?.length === 0 && (

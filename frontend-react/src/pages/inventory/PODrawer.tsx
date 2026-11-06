@@ -13,6 +13,7 @@ import PasteImport, { ImportedLine } from "./PasteImport";
 import { useMe } from "../../context/Me";
 import BinScanField, { ScannedBin } from "../../components/BinScanField";
 import { Badge, type BadgeTone } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 /** PO detail + the missing Receive action. Receiving posts to the ONE real path
  * (`/inventory/po/{id}/receive`) that lands stock, moving-average cost, FIFO layers,
@@ -361,8 +362,8 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
               {/* editable lines */}
               <div className="rounded-2xl border border-slate-200/80 overflow-hidden">
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50/70 text-[11px] font-semibold text-ink-tertiary">
-                    <tr><th className="py-2 px-3">Product</th><th className="py-2 px-2 text-right w-16">Qty</th><th className="py-2 px-2 text-right w-24">Unit cost</th><th className="w-8" /></tr>
+                  <thead>
+                    <tr className={theadRowClass}><th className="py-2 px-3">Product</th><th className="py-2 px-2 text-right w-16">Qty</th><th className="py-2 px-2 text-right w-24">Unit cost</th><th className="w-8" /></tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {ed.lines.map((l: any, i: number) => (
@@ -457,8 +458,8 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
             {/* lines + receive */}
             <div className="rounded-2xl border border-slate-200/80 overflow-hidden">
               <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50/70 text-[11px] font-semibold text-ink-tertiary">
-                  <tr><th className="py-2.5 px-3">Product</th><th className="py-2.5 px-3 text-right">Ordered</th>
+                <thead>
+                  <tr className={theadRowClass}><th className="py-2.5 px-3">Product</th><th className="py-2.5 px-3 text-right">Ordered</th>
                     <th className="py-2.5 px-3 text-right">Received</th><th className="py-2.5 px-3 text-right">Unit cost</th>
                     {canReceive && <th className="py-2.5 px-3 text-right w-24">Receive now</th>}</tr>
                 </thead>

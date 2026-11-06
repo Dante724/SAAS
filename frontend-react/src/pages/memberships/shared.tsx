@@ -196,7 +196,7 @@ export function SellPlanDialog({ clientId, deviceId, devices, orderId, presetPla
   // Portalled to <body> so it sits above whatever opened it (the payment dialog, a drawer).
   return createPortal(
     <div className="fixed inset-0 z-[90] grid place-items-center p-4">
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={onClose} />
       <div role="dialog" aria-label="Add a membership plan" className="relative w-full max-w-md rounded-2xl bg-white shadow-clay-card border border-slate-200/90 p-5">
         <div className="flex items-center gap-2">
           <div className="text-base font-semibold text-ink-primary">Add a membership plan</div>

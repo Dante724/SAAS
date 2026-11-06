@@ -11,6 +11,7 @@ import { Avatar } from "../orders/look";
 import { btnGhost } from "../invoices/billing";
 import { clickableRow } from "../../lib/clickable";
 import { Badge, type BadgeTone } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 /* Finance › Payroll calculation: the month's live pay per person, narrowed by location, role
    and employee. A row opens to the commissions behind it (rule → job → line item) plus the
@@ -134,7 +135,7 @@ export default function PayrollCalcPanel({ month, onMonth, headerAction }: { mon
 
       <div className="bg-white rounded-2xl border border-slate-200/90 overflow-x-auto">
         <table className="w-full min-w-[840px] text-left border-collapse text-xs">
-          <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-xs font-semibold">
+          <thead><tr className={theadRowClass}>
             <th className="py-3 pl-3 pr-1 w-8"></th><th className="py-3 px-3">Employee</th><th className="py-3 px-3">Position</th><th className="py-3 px-3">Wage type</th>
             <th className="py-3 px-3 text-right">Base</th><th className="py-3 px-3 text-right">Hourly</th><th className="py-3 px-3 text-right">Commission</th>
             <th className="py-3 px-3 text-right">Bonus</th><th className="py-3 px-3 text-right">Penalty</th><th className="py-3 px-3 text-right">Total</th><th className="py-3 px-3"></th>

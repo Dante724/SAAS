@@ -406,7 +406,7 @@ function MessageEditor({ row, rt, channels, rules, templates, shopName, flash, s
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/30 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/30" aria-hidden="true" onClick={onClose} />
       <div role="dialog" aria-label={`Message for ${row.label}`} className="relative w-[640px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.28s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="px-5 pt-5 pb-3">

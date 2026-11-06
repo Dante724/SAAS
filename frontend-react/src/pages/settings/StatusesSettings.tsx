@@ -377,7 +377,7 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/30 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/30" aria-hidden="true" onClick={onClose} />
       <div role="dialog" aria-label={isNew ? "New status" : `Edit ${f.name}`} className="relative w-[460px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.28s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="flex items-center gap-3 px-5 pt-5 pb-3">

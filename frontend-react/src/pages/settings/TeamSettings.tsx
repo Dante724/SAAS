@@ -112,7 +112,7 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
                     <span className="block text-sm text-ink-primary truncate">{i.name || i.email}</span>
                     <span className="block text-xs text-ink-tertiary truncate">{i.name ? `${i.email} · ` : ""}{roleName(i.role_id) || "No role yet"}</span>
                   </span>
-                  <span className={`ml-auto text-[11px] font-semibold px-2 py-0.5 rounded-md ${i.expired ? "bg-rose-50 text-rose-600" : "bg-amber-50 text-amber-700"}`}>{i.expired ? "Invite expired" : "Invited"}</span>
+                  <span className={`ml-auto text-[11px] font-semibold px-2 py-0.5 rounded-full ${i.expired ? "bg-rose-50 text-rose-600" : "bg-amber-50 text-amber-700"}`}>{i.expired ? "Invite expired" : "Invited"}</span>
                   <button onClick={() => cancelInvite(i)} aria-label={`Cancel invite for ${i.email}`} className="w-7 h-7 rounded-lg grid place-items-center text-ink-tertiary hover:bg-rose-50 hover:text-rose-600 opacity-0 group-hover:opacity-100 focus:opacity-100"><M n="close" c="text-base" /></button>
                 </div>
               ))}
@@ -131,9 +131,9 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
               </span>
               <span className="ml-auto flex items-center gap-2 flex-shrink-0">
                 {roleName(p.role_id)
-                  ? <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-slate-100 text-ink-secondary">{roleName(p.role_id)}</span>
-                  : <span className="text-[11px] px-2 py-0.5 rounded-md border border-dashed border-slate-300 text-ink-tertiary">No role</span>}
-                {p.active === false && <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-rose-50 text-rose-600">Blocked</span>}
+                  ? <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-ink-secondary inline-block first-letter:uppercase">{roleName(p.role_id)}</span>
+                  : <span className="text-[11px] px-2 py-0.5 rounded-full border border-dashed border-slate-300 text-ink-tertiary">No role</span>}
+                {p.active === false && <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-rose-50 text-rose-600">Blocked</span>}
                 <M n="chevron_right" c="text-base text-ink-tertiary" />
               </span>
             </div>
