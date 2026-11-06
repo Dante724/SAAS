@@ -115,7 +115,7 @@ describe("Product drawer", () => {
     render(<InventoryDrawer kind="product" id="p1" initial={served} onClose={() => {}} />);
     expect(await screen.findByRole("button", { name: "Remove line" })).toBeInTheDocument();
     expect(screen.getAllByPlaceholderText("Brand").length).toBe(1);
-    await u.click(screen.getByRole("button", { name: "Stock" }));
+    await u.click(screen.getByRole("tab", { name: "Stock" }));
     await u.click(await screen.findByRole("button", { name: /Adjust stock/ }));
     expect(screen.getByRole("option", { name: "Write off (damaged or lost)" })).toBeInTheDocument();
   });
