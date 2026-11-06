@@ -144,7 +144,7 @@
     "text-px": 63
   },
   "pages/orders/WorkOrdersHub.tsx": {
-    "text-px": 43
+    "text-px": 41
   },
   "pages/reports/GoPilotReport.tsx": {
     "text-px": 4
@@ -183,7 +183,7 @@
     "text-px": 3
   },
   "pages/settings/LocationsPage.tsx": {
-    "text-px": 19
+    "text-px": 18
   },
   "pages/settings/ModePill.tsx": {
     "text-px": 1
