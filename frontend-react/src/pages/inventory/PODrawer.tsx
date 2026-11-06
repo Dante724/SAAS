@@ -1,4 +1,5 @@
 import { humanize } from "../../lib/humanize";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import { Fragment, useEffect, useState } from "react";
 import { M } from "../../components/Shell";
@@ -13,6 +14,7 @@ import PasteImport, { ImportedLine } from "./PasteImport";
 import { useMe } from "../../context/Me";
 import BinScanField, { ScannedBin } from "../../components/BinScanField";
 import { Badge, type BadgeTone } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 /** PO detail + the missing Receive action. Receiving posts to the ONE real path
  * (`/inventory/po/{id}/receive`) that lands stock, moving-average cost, FIFO layers,
@@ -361,8 +363,8 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
               {/* editable lines */}
               <div className="rounded-2xl border border-slate-200/80 overflow-hidden">
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50/70 text-[11px] font-semibold text-ink-tertiary">
-                    <tr><th className="py-2 px-3">Product</th><th className="py-2 px-2 text-right w-16">Qty</th><th className="py-2 px-2 text-right w-24">Unit cost</th><th className="w-8" /></tr>
+                  <thead>
+                    <tr className={theadRowClass}><th className="py-2 px-3">Product</th><th className="py-2 px-2 text-right w-16">Qty</th><th className="py-2 px-2 text-right w-24">Unit cost</th><th className="w-8" /></tr>
                   </thead>
                   <tbody className="divide-y divide-slate-100">
                     {ed.lines.map((l: any, i: number) => (
@@ -371,9 +373,9 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                           {(l.qty_received || 0) > 0 ? (
                             <span className="font-semibold text-ink-primary">{prodName(l.part_id)} <span className="text-[11px] text-ink-tertiary">· {l.qty_received} received, locked</span></span>
                           ) : (
-                            <select value={l.part_id} onChange={(e) => { const p: any = pool.find((x) => x.id === e.target.value); edLine(i, { part_id: e.target.value, unit_cost: l.unit_cost || (p && (p.cost_price ?? p.avg_cost)) || 0 }); }} className="glass-input rounded-xl px-3 py-2 w-full">
+                            <TeklySelect value={l.part_id} onChange={(e) => { const p: any = pool.find((x) => x.id === e.target.value); edLine(i, { part_id: e.target.value, unit_cost: l.unit_cost || (p && (p.cost_price ?? p.avg_cost)) || 0 }); }} className="glass-input rounded-xl px-3 py-2 w-full">
                               <option value="">Select product…</option>{pool.map((p) => <option key={p.id} value={p.id}>{p.name}{p.sku ? ` · ${p.sku}` : ""}</option>)}
-                            </select>
+                            </TeklySelect>
                           )}
                         </td>
                         <td className="py-2 px-2"><input type="number" min={0} value={l.qty_ordered} onChange={(e) => edLine(i, { qty_ordered: Math.max(0, Number(e.target.value) || 0) })} className="glass-input rounded-xl px-3 py-2 w-full text-right font-mono" /></td>
@@ -406,11 +408,11 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
                 {ed.charges_to_cost && (
                   <div className="flex items-center gap-2 pt-1 text-[11px] text-ink-secondary">
                     <span>Spread by</span>
-                    <select value={ed.alloc_basis || "value"} onChange={(e) => edSet({ alloc_basis: e.target.value })} className="glass-input rounded-xl px-3 py-2 text-[11px]">
+                    <TeklySelect value={ed.alloc_basis || "value"} onChange={(e) => edSet({ alloc_basis: e.target.value })} className="glass-input rounded-xl px-3 py-2 text-[11px]">
                       <option value="value">Value (cost-weighted)</option>
                       <option value="qty">Quantity (per unit)</option>
                       <option value="weight">Weight (per kg)</option>
-                    </select>
+                    </TeklySelect>
                   </div>
                 )}
               </div>
@@ -457,8 +459,8 @@ export default function PODrawer({ poId, onClose, onChanged }: { poId: string; o
             {/* lines + receive */}
             <div className="rounded-2xl border border-slate-200/80 overflow-hidden">
               <table className="w-full text-left text-xs">
-                <thead className="bg-slate-50/70 text-[11px] font-semibold text-ink-tertiary">
-                  <tr><th className="py-2.5 px-3">Product</th><th className="py-2.5 px-3 text-right">Ordered</th>
+                <thead>
+                  <tr className={theadRowClass}><th className="py-2.5 px-3">Product</th><th className="py-2.5 px-3 text-right">Ordered</th>
                     <th className="py-2.5 px-3 text-right">Received</th><th className="py-2.5 px-3 text-right">Unit cost</th>
                     {canReceive && <th className="py-2.5 px-3 text-right w-24">Receive now</th>}</tr>
                 </thead>

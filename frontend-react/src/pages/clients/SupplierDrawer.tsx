@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { Supplier, money } from "../inventory/types";
@@ -54,7 +55,7 @@ export default function SupplierDrawer({ supplier, onClose, onSaved }: { supplie
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={onClose} />
       <div className="relative h-full w-full max-w-[680px] bg-raised shadow-clay-card flex flex-col border-l border-slate-200/90">
         {/* header */}
         <div className="px-6 pt-5 border-b border-slate-100">
@@ -201,9 +202,9 @@ function PriceListTab({ supplierId, onDone }: { supplierId: string; onDone: (m: 
               <div key={i} className="flex items-center gap-2 text-xs">
                 <span className="tabular-nums text-ink-secondary flex-1 truncate">{h || `col ${i + 1}`}</span>
                 <span className="text-ink-tertiary">→</span>
-                <select value={map[i] || ""} onChange={(e) => setMap({ ...map, [i]: e.target.value as Field })} className="glass-input rounded-lg px-2 py-1 text-xs">
+                <TeklySelect value={map[i] || ""} onChange={(e) => setMap({ ...map, [i]: e.target.value as Field })} className="glass-input rounded-lg px-2 py-1 text-xs">
                   {opts.map((o) => <option key={o} value={o}>{o === "" ? "— ignore —" : o}</option>)}
-                </select>
+                </TeklySelect>
               </div>
             ))}
           </div>

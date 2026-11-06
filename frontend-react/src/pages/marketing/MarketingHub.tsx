@@ -1,8 +1,10 @@
 import SkeletonRows from "../../components/SkeletonRows";
+import TeklySelect from "../../components/TeklySelect";
 import { humanize } from "../../lib/humanize";
 import { safeHttpsUrl } from "../../lib/safeHtml";
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
+import Tabs from "../../components/Tabs";
 import { api } from "../../api/client";
 import Pager from "../../components/Pager";
 import { confirmDialog, alertDialog } from "../../lib/dialog";
@@ -11,6 +13,7 @@ import { Avatar } from "../orders/look";
 import { PhoneIncoming, PhoneOutgoing } from "lucide-react";
 import { buttonClass } from "../../components/Button";
 import { Badge, type BadgeTone } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 // Marketing: campaigns (SMS/email blasts by segment) + call log — legacy /comms surface.
 const CHANNEL: Record<string, string> = { sms: "SMS", email: "Email" };
@@ -55,13 +58,8 @@ export default function MarketingHub() {
 
   return (
     <Shell title="Marketing">
-      <div className="px-4 md:px-6 pt-3 border-b border-slate-200/60 flex-shrink-0">
-        <nav className="flex space-x-6 -mb-px text-xs font-semibold overflow-x-auto whitespace-nowrap">
-          {([["campaigns", "Campaigns"], ["calls", "Call log"]] as [typeof tab, string][]).map(([id, l]) => (
-            <button key={id} onClick={() => setTab(id)} className={`pb-3 border-b-2 transition-colors ${tab === id ? "text-primary border-primary" : "text-ink-secondary hover:text-ink-primary border-transparent"}`}>{l}</button>
-          ))}
-        </nav>
-      </div>
+      <Tabs label="Marketing sections" className="px-4 md:px-6 pt-3 flex-shrink-0" value={tab} onChange={setTab}
+        tabs={([["campaigns", "Campaigns"], ["calls", "Call log"]] as [typeof tab, string][]).map(([id, label]) => ({ id, label }))} />
 
       <div className="flex-1 overflow-y-auto px-4 md:px-6 py-5">
         {tab === "campaigns" && (
@@ -70,7 +68,7 @@ export default function MarketingHub() {
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
               <div className="overflow-x-auto">
               <table className="w-full min-w-[640px] text-left text-xs">
-                <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-xs font-semibold"><th className="py-3 px-4">Name</th><th className="py-3 px-4">Channel</th><th className="py-3 px-4">Segment</th><th className="py-3 px-4">Status</th><th className="py-3 px-4 text-right">Recipients</th><th className="py-3 px-4 text-right">Action</th></tr></thead>
+                <thead><tr className={theadRowClass}><th className="py-3 px-4">Name</th><th className="py-3 px-4">Channel</th><th className="py-3 px-4">Segment</th><th className="py-3 px-4">Status</th><th className="py-3 px-4 text-right">Recipients</th><th className="py-3 px-4 text-right">Action</th></tr></thead>
                 <tbody className="divide-y divide-slate-100">
                   {!camps && <SkeletonRows cols={6} />}
                   {camps?.length === 0 && <tr><td colSpan={6} className="py-10 px-4 text-center text-xs text-ink-secondary">No campaigns yet. Write one SMS or email and send it to a group of clients.</td></tr>}
@@ -96,7 +94,7 @@ export default function MarketingHub() {
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
             <div className="overflow-x-auto">
             <table className="w-full min-w-[760px] text-left text-xs">
-              <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-xs font-semibold"><th className="py-3 px-4 font-semibold">When</th><th className="py-3 px-4 font-semibold">Direction</th><th className="py-3 px-4 font-semibold">Contact</th><th className="py-3 px-4 font-semibold">Status</th><th className="py-3 px-4 font-semibold text-right">Duration</th><th className="py-3 px-4 font-semibold">Recording</th></tr></thead>
+              <thead><tr className={theadRowClass}><th className="py-3 px-4">When</th><th className="py-3 px-4">Direction</th><th className="py-3 px-4">Contact</th><th className="py-3 px-4">Status</th><th className="py-3 px-4 text-right">Duration</th><th className="py-3 px-4">Recording</th></tr></thead>
               <tbody className="divide-y divide-slate-100 text-ink-secondary">
                 {!calls && <SkeletonRows cols={6} />}
                 {calls?.length === 0 && (
@@ -148,8 +146,8 @@ export default function MarketingHub() {
             <div className="p-5 space-y-3">
               <input value={draft.name || ""} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Campaign name" className={inp} />
               <div className="grid grid-cols-2 gap-2">
-                <select value={draft.channel} onChange={(e) => setDraft({ ...draft, channel: e.target.value })} className={inp}><option value="sms">SMS</option><option value="email">Email</option></select>
-                <select value={draft.segment} onChange={(e) => setDraft({ ...draft, segment: e.target.value })} className={inp}><option value="all">All clients</option><option value="loyalty">Loyalty members</option><option value="lapsed">Lapsed clients</option></select>
+                <TeklySelect value={draft.channel} onChange={(e) => setDraft({ ...draft, channel: e.target.value })} className={inp}><option value="sms">SMS</option><option value="email">Email</option></TeklySelect>
+                <TeklySelect value={draft.segment} onChange={(e) => setDraft({ ...draft, segment: e.target.value })} className={inp}><option value="all">All clients</option><option value="loyalty">Loyalty members</option><option value="lapsed">Lapsed clients</option></TeklySelect>
               </div>
               {draft.channel === "email" && <input value={draft.subject || ""} onChange={(e) => setDraft({ ...draft, subject: e.target.value })} placeholder="Email subject" className={inp} />}
               <textarea value={draft.body || ""} onChange={(e) => setDraft({ ...draft, body: e.target.value })} placeholder="Message…" className={`${inp} h-24 resize-none`} />

@@ -3,6 +3,7 @@ import PageSummary, { type SummaryStat } from "../../components/PageSummary";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
+import Tabs from "../../components/Tabs";
 import DateField from "../../components/DateField";
 import { api, openAuthedDoc } from "../../api/client";
 import Pager from "../../components/Pager";
@@ -18,6 +19,7 @@ import VoidableList from "../../components/VoidableList";
 import PayrollCalcPanel from "./PayrollCalcPanel";
 import { loadFailed } from "../../lib/notice";
 import { Badge } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 type Tab = "cashboxes" | "overview" | "pnl" | "reconcile" | "balances" | "refunds" | "payroll";
 type Account = { id: string; name?: string; balance?: number; payment_option?: string; is_virtual?: boolean };
@@ -146,13 +148,8 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
 
   return (
     <Shell title="Finance">
-      <div className="px-6 pt-3 border-b border-slate-200/60 bg-white/40 flex-shrink-0">
-        <nav className="flex space-x-6 -mb-px text-xs font-semibold overflow-x-auto whitespace-nowrap">
-          {([...(can("can_view_cashbox") ? [["cashboxes", "Cashboxes"]] as [Tab, string][] : []), ["overview", "Overview"], ["pnl", "Profit & loss"], ["reconcile", "Reconcile"], ["balances", "Client balances"], ["refunds", "Refunds"], ...(hasFeature(me, "payroll") ? [["payroll", "Payroll"]] as [Tab, string][] : [])] as [Tab, string][]).map(([id, label]) => (
-            <button key={id} onClick={() => setTab(id)} className={`pb-3 shrink-0 border-b-2 transition-colors ${tab === id ? "text-primary border-primary" : "text-ink-secondary hover:text-ink-primary border-transparent"}`}>{label}</button>
-          ))}
-        </nav>
-      </div>
+      <Tabs label="Finance sections" className="px-6 pt-3 bg-white/40 flex-shrink-0" value={tab} onChange={setTab}
+        tabs={([...(can("can_view_cashbox") ? [["cashboxes", "Cashboxes"]] as [Tab, string][] : []), ["overview", "Overview"], ["pnl", "Profit & loss"], ["reconcile", "Reconcile"], ["balances", "Client balances"], ["refunds", "Refunds"], ...(hasFeature(me, "payroll") ? [["payroll", "Payroll"]] as [Tab, string][] : [])] as [Tab, string][]).map(([id, label]) => ({ id, label }))} />
 
       {tab === "cashboxes" ? <CashPanel /> : (
       <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
@@ -261,7 +258,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
               <div className="p-3.5 border-b border-slate-100 text-xs font-bold text-ink-primary ">Payroll runs</div>
               <table className="w-full text-left border-collapse text-xs">
-                <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
+                <thead><tr className={theadRowClass}>
                   <th className="py-3 px-4">Period</th><th className="py-3 px-4">Status</th><th className="py-3 px-4 text-right">Gross</th><th className="py-3 px-4">Accrued</th><th className="py-3 px-4 text-right">Action</th>
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
@@ -302,7 +299,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
         {tab === "balances" && (
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
             <table className="w-full text-left border-collapse text-xs">
-              <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
+              <thead><tr className={theadRowClass}>
                 <th className="py-3 px-4">Client</th><th className="py-3 px-4">Phone</th><th className="py-3 px-4 text-right">Balance</th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">

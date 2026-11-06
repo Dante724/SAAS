@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { createPortal } from "react-dom";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
@@ -174,17 +175,17 @@ function ReaderDrawer({ cfg, reader, locs, hasStripeReader, onClose, onSaved }: 
       </>}>
       {!reader && (
         <div><label htmlFor="rd-prov" className={lab}>Provider</label>
-          <select id="rd-prov" value={provider} onChange={(e) => setProvider(e.target.value)} className={field}>
+          <TeklySelect id="rd-prov" value={provider} onChange={(e) => setProvider(e.target.value)} className={field}>
             {options.map((o) => <option key={o} value={o}>{PROVIDER[o]}</option>)}
-          </select></div>
+          </TeklySelect></div>
       )}
       <div><label htmlFor="rd-label" className={lab}>Name</label>
         <input id="rd-label" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Front desk" className={field} /></div>
       <div><label htmlFor="rd-loc" className={lab}>Location</label>
-        <select id="rd-loc" value={locationId} onChange={(e) => setLocationId(e.target.value)} className={field}>
+        <TeklySelect id="rd-loc" value={locationId} onChange={(e) => setLocationId(e.target.value)} className={field}>
           <option value="">Any location</option>
           {locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-        </select></div>
+        </TeklySelect></div>
       {!reader && provider === "stripe" && <>
         <div><label htmlFor="rd-code" className={lab}>Registration code</label>
           <input id="rd-code" value={code} onChange={(e) => setCode(e.target.value)} className={field} />
@@ -205,9 +206,9 @@ function ReaderDrawer({ cfg, reader, locs, hasStripeReader, onClose, onSaved }: 
       {!reader && provider === "square" && (
         <div><label htmlFor="rd-dev" className={lab}>Device</label>
           {test
-            ? <select id="rd-dev" value={device} onChange={(e) => setDevice(e.target.value)} className={field}>
+            ? <TeklySelect id="rd-dev" value={device} onChange={(e) => setDevice(e.target.value)} className={field}>
                 {cfg.square_sandbox_devices.map((d) => <option key={d.id} value={d.id}>Sandbox: {d.label}</option>)}
-              </select>
+              </TeklySelect>
             : <input id="rd-dev" value={device} onChange={(e) => setDevice(e.target.value)} placeholder="Device id from Square Dashboard › Devices" className={field} />}
           {test && <p className="text-xs text-ink-tertiary mt-1">Square's sandbox decides the outcome by device. Sandbox charges must be 25.00 USD or less.</p>}
         </div>

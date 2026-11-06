@@ -44,7 +44,8 @@ export default function Drawer({ title, sub, label, onClose, children, footer, t
         </div>
         {tabs && <div className="px-5 flex-shrink-0">{tabs}</div>}
         <div className="flex-1 overflow-y-auto p-5 space-y-4">{children}</div>
-        {footer && <div className="px-5 py-4 border-t border-slate-200 flex flex-wrap items-center gap-2">{footer}</div>}
+        {/* A soft edge above the footer, so content scrolling underneath reads as "more below". */}
+        {footer && <div className="relative px-5 py-4 border-t border-slate-200 bg-white shadow-[0_-6px_12px_-8px_rgb(15_23_42/0.12)] flex flex-wrap items-center gap-2">{footer}</div>}
       </div>
     </div>
   );

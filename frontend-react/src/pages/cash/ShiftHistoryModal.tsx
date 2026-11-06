@@ -6,6 +6,7 @@ import { M } from "../../components/Shell";
 import EmptyState from "../../components/EmptyState";
 import { api } from "../../api/client";
 import { money } from "../orders/types";
+import { theadRowClass } from "../../components/Table";
 
 type Shift = { id: string; open: boolean; opening_float?: number; closing_float?: number;
                expected_cash?: number | null; discrepancy?: number | null; opened_by?: string | null;
@@ -39,7 +40,7 @@ export default function ShiftHistoryModal({ sym, onClose }: { sym?: string; onCl
         {rows && !!rows.length && (
           <div className="overflow-y-auto max-h-96 -mx-1">
             <table className="w-full text-xs">
-              <thead><tr className="text-[11px] font-bold text-ink-tertiary text-left border-b border-slate-200">
+              <thead><tr className={`${theadRowClass} text-left`}>
                 <th className="py-2 px-2">Opened</th><th className="px-2">By</th><th className="px-2 text-right">Opening</th>
                 <th className="px-2 text-right">Expected</th><th className="px-2 text-right">Counted</th>
                 <th className="px-2 text-right">Diff</th><th className="px-2 text-right">Status</th></tr></thead>

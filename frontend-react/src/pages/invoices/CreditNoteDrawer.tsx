@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { M } from "../../components/Shell";
 import EmptyState from "../../components/EmptyState";
 import BulkPrintDialog from "../../components/BulkPrintDialog";
@@ -164,11 +165,11 @@ export default function CreditNoteDrawer({ id, invoice, clientId, onClose, onCha
         <div>
           <label htmlFor="cn-client" className={labelCls}>Client</label>
           {editable ? (
-            <select id="cn-client" value={client} onChange={(e) => setClient(e.target.value)} className={inputCls}>
+            <TeklySelect id="cn-client" value={client} onChange={(e) => setClient(e.target.value)} className={inputCls}>
               <option value="">{clients === null ? "Loading clients…" : "Pick a client"}</option>
               {(clients || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               {cn?.client_id && !(clients || []).some((c) => c.id === cn.client_id) && <option value={cn.client_id}>{cn.client_name}</option>}
-            </select>
+            </TeklySelect>
           ) : <div className="text-sm font-semibold text-ink-primary">{cn?.client_name || "—"}</div>}
         </div>
       )}

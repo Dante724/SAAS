@@ -1,4 +1,5 @@
 import { askCancelReason, droppedStatus } from "../../lib/cancelReason";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import { PlanBanner, CheckoutOffer } from "../memberships/WOPlan";
 import RecommendationsPanel from "./RecommendationsPanel";
@@ -51,6 +52,7 @@ import { loadFailed, saveFailed } from "../../lib/notice";
 import { clickable } from "../../lib/clickable";
 import { jobTypeLabel, type WOTypeRef } from "./jobType";
 import { Badge } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 type Emp = { id: string; name: string; in_managers?: boolean; in_assignees?: boolean };
 type Line = { id: string; kind?: string; line_type?: string; description?: string; qty?: number; unit_price?: number; discount?: number; discount_type?: string; technician_id?: string | null; work_share?: number; booked_hours?: number; co_technicians?: { employee_id: string; share: number }[]; total?: number; in_stock?: boolean; order_item_id?: string | null;
@@ -600,7 +602,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                     <div className={`w-9 h-9 rounded-xl grid place-items-center ${urgent ? "bg-rose-50 text-rose-600" : "bg-primary/10 text-primary"}`}><M n="schedule" c="text-base" /></div>
                     <div>
                       <p className="text-sm font-semibold text-ink-primary">{urgent ? ((d.priority ?? 0) >= 2 ? "Urgent job, same day" : "High priority job") : "Booked job"}</p>
-                      <p className="text-xs text-ink-secondary">{[d.scheduled_for ? `Booked for ${friendlyDate(d.scheduled_for)}` : null, d.due_at ? `due ${fmtDT(d.due_at)}` : null].filter(Boolean).join(" · ") || "Being tracked"}</p>
+                      <p className="text-xs text-ink-secondary">{[d.scheduled_for ? `Booked for ${(friendlyDate(d.scheduled_for) || "").replace(/^(Today|Yesterday|Tomorrow)\b/, (w) => w.toLowerCase())}` : null, d.due_at ? `due ${fmtDT(d.due_at)}` : null].filter(Boolean).join(" · ") || "Being tracked"}</p>
                     </div>
                   </div>
                   {due ? <span className={`text-[11px] font-semibold px-2.5 py-1 rounded-full ${due[1] ? "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200" : "bg-slate-100 text-ink-secondary"}`}>{due[0]}</span>
@@ -930,10 +932,10 @@ function JobItems({ orderId, onFlash, onChanged }: { orderId: string; onFlash: (
         <div className="px-4 py-3 bg-slate-50/70 border-b border-slate-100 space-y-2">
           <div className="flex flex-wrap gap-2">
             {cands.length > 0 && (
-              <select value={pickAsset} onChange={(e) => { setPickAsset(e.target.value); if (e.target.value) setLabel(""); }} aria-label="Customer's item" className="glass-input rounded-lg px-2 py-2 text-xs font-medium min-w-[200px]">
+              <TeklySelect value={pickAsset} onChange={(e) => { setPickAsset(e.target.value); if (e.target.value) setLabel(""); }} aria-label="Customer's item" className="glass-input rounded-lg px-2 py-2 text-xs font-medium min-w-[200px]">
                 <option value="">Pick one of the customer's items…</option>
                 {cands.map((a) => <option key={a.id} value={a.id}>{[a.brand, a.model].filter(Boolean).join(" ") || "Item"}{a.serial ? ` · ${a.serial}` : ""}</option>)}
-              </select>
+              </TeklySelect>
             )}
             <input value={label} onChange={(e) => { setLabel(e.target.value); if (e.target.value) setPickAsset(""); }} placeholder={cands.length ? "Or type what it is" : "Makita grinder"} aria-label="Item name" className="glass-input flex-1 min-w-[180px] rounded-lg px-3 py-2 text-xs" />
           </div>
@@ -1039,11 +1041,11 @@ function Ro({ label, children }: { label: string; children: React.ReactNode }) {
 function Pick({ value, opts, onChange, label, red }: { value: string; opts: { value: string; label: string }[]; onChange: (v: string) => void; label: string; red?: boolean }) {
   return (
     <div className="relative">
-      <select value={value} onChange={(e) => onChange(e.target.value)} aria-label={label}
-        className={`glass-input w-full py-2 px-3 pr-8 text-xs rounded-xl appearance-none ${red ? "font-semibold text-rose-700" : "font-medium text-ink-primary"}`}>
+      <TeklySelect value={value} onChange={(e) => onChange(e.target.value)} aria-label={label}
+        className={`glass-input bg-none w-full h-9 px-3 pr-8 text-sm rounded-xl appearance-none ${red ? "font-semibold text-rose-700" : "font-medium text-ink-primary"}`}>
         {opts.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
-      <M n="expand_more" c="absolute right-2.5 top-2.5 text-ink-tertiary pointer-events-none text-sm" />
+      </TeklySelect>
+      <M n="expand_more" c="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary pointer-events-none text-sm" />
     </div>
   );
 }
@@ -1055,11 +1057,11 @@ function SelEmp({ value, emps, onChange, label }: { value: string; emps: Emp[]; 
   return (
     <div className="relative">
       <span className="absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none"><Avatar name={emps.find((e) => e.id === value)?.name} size={22} /></span>
-      <select value={value} onChange={(e) => onChange(e.target.value)} aria-label={label} className="glass-input w-full py-2 pl-9 pr-3 text-xs font-medium text-ink-primary rounded-xl appearance-none">
+      <TeklySelect value={value} onChange={(e) => onChange(e.target.value)} aria-label={label} className="glass-input bg-none w-full h-9 pl-9 pr-8 text-sm font-medium text-ink-primary rounded-xl appearance-none">
         <option value="">Unassigned</option>
         {emps.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
-      </select>
-      <M n="expand_more" c="absolute right-2.5 top-2.5 text-ink-tertiary pointer-events-none text-sm" />
+      </TeklySelect>
+      <M n="expand_more" c="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary pointer-events-none text-sm" />
     </div>
   );
 }
@@ -1468,10 +1470,10 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, onFla
             {editable ? <span {...clickable(() => setQtyOpen(l.id))} className="cursor-pointer hover:text-ink-primary">{amountTxt}</span> : amountTxt}
             {onPlan && (l as any).kind !== "membership" && <Badge tone="info" size="sm" className="ml-1.5 gap-1"><M n="workspace_premium" c="text-[11px]" />{Number(l.discount) >= 100 ? "Covered by plan" : `Plan ${l.discount}% off`}</Badge>}</p>
           {tagging && (
-            <select value={l.order_item_id || ""} onChange={(e) => patchLine(l.id, { order_item_id: e.target.value })} aria-label={`Which item ${l.description || "this line"} is for`}
+            <TeklySelect value={l.order_item_id || ""} onChange={(e) => patchLine(l.id, { order_item_id: e.target.value })} aria-label={`Which item ${l.description || "this line"} is for`}
               className={`mt-1.5 max-w-[240px] ${houseInput}`}>
               <option value="">For: whole job</option>{jobItems.map((it) => <option key={it.id} value={it.id}>For: {itemName(it)}</option>)}
-            </select>
+            </TeklySelect>
           )}
         </div>
         <div className="flex items-center">
@@ -1537,7 +1539,7 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, onFla
                     const first = (id?: string | null) => empName(id).split(" ")[0];
                     return (
                       <div className="text-[13px]">
-                        <div className="px-2.5 pt-1 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-tertiary">Technician for this line</div>
+                        <div className="px-2.5 pt-1 pb-1.5 text-[11px] font-semibold text-ink-tertiary">Technician for this line</div>
                         {(emps || []).length > 6 && (
                           <input autoFocus value={techQuery} onChange={(e) => setTechQuery(e.target.value)} placeholder="Search technicians"
                             onKeyDown={(e) => { if (e.key === "Enter" && list[0]) pickTech(list[0].id); }}
@@ -1648,9 +1650,9 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, onFla
             <div className="flex-1 min-w-[160px]"><label className="block text-xs font-medium text-ink-secondary mb-1">Item</label>
               <div className={`${houseInput} text-xs font-semibold flex items-center justify-between`}><span className="truncate">{binPick.name}</span><button type="button" aria-label="Cancel" onClick={() => { setBinPick(null); setStock(null); }} className="text-ink-tertiary hover:text-rose-600 ml-2"><M n="close" c="text-sm" /></button></div></div>
             <div className="min-w-[180px]"><label className="block text-xs font-medium text-ink-secondary mb-1">Take from</label>
-              <select value={takeBin} onChange={(e) => setTakeBin(e.target.value)} aria-label="Which bin to take it from" className={`${houseInput} w-full text-xs font-semibold text-ink-primary`}>
+              <TeklySelect value={takeBin} onChange={(e) => setTakeBin(e.target.value)} aria-label="Which bin to take it from" className={`${houseInput} w-full text-xs font-semibold text-ink-primary`}>
                 <option value="">Any (unbinned stock first)</option>{binChoices(stock.items, locationId).map((b) => <option key={b.bin_id} value={b.bin_id}>{b.label}</option>)}
-              </select></div>
+              </TeklySelect></div>
             <button type="button" onClick={() => addLine(binPick)} disabled={adding} className={btnPrimary}>{adding ? "Adding…" : "Add"}</button>
             <div className="w-full text-xs text-ink-secondary">In stock: <b className="text-emerald-600">{stock.total_available}</b> · {byLocation(stock.items).filter((i) => i.available > 0).map((i) => `${i.location} ${i.available}`).join(" · ") || "—"}</div>
           </div>
@@ -1664,10 +1666,10 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, onFla
               type={filter === "Services" ? "service" : filter === "Products" ? "product" : filter === "Kits" ? "bundle" : "all"}
               placeholder={filter === "Services" ? "Search services…" : filter === "Products" ? "Search products…" : filter === "Kits" ? "Search kits…" : "Search services, products and kits…"} /></div>
             {tagging && !intoKit && (
-              <select value={forItem} onChange={(e) => setForItem(e.target.value)} aria-label="Which item new lines are for"
+              <TeklySelect value={forItem} onChange={(e) => setForItem(e.target.value)} aria-label="Which item new lines are for"
                 className="glass-input max-w-[180px] px-2 py-2 rounded-lg text-xs font-semibold text-ink-primary">
                 <option value="">For: whole job</option>{jobItems.map((it) => <option key={it.id} value={it.id}>For: {itemName(it)}</option>)}
-              </select>
+              </TeklySelect>
             )}
             {(can("can_add_custom_product") || can("can_add_custom_service")) && (
               <button type="button" onClick={() => setCustom(true)} className="h-9 px-2.5 rounded-xl text-xs font-semibold text-primary hover:bg-primary/5 flex items-center gap-1.5 whitespace-nowrap"><M n="add" c="text-sm" />Custom line</button>
@@ -1779,10 +1781,10 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
       <Section title="Apply a checklist" icon="fact_check">
         {templates.length ? (
           <div className="flex flex-wrap items-center gap-2">
-            <select value={pick} onChange={(e) => setPick(e.target.value)} aria-label="Checklist template" className={`${houseInput} flex-1 min-w-[200px]`}>
+            <TeklySelect value={pick} onChange={(e) => setPick(e.target.value)} aria-label="Checklist template" className={`${houseInput} flex-1 min-w-[200px]`}>
               <option value="">Choose a template…</option>
               {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
+            </TeklySelect>
             <button onClick={apply} disabled={!pick || busy} className={btnPrimary}>Apply</button>
           </div>
         ) : (
@@ -1829,9 +1831,9 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
                     )}
                     {/* Templates save "dropdown" (pick one) and "multiselect" (pick several); older ones "select". */}
                     {(i.field_kind === "select" || i.field_kind === "dropdown") && (
-                      <select aria-label={i.label} value={v ?? ""} onChange={(e) => fill(c.id, i.id, e.target.value)} className={`${houseInput} w-full mt-2`}>
+                      <TeklySelect aria-label={i.label} value={v ?? ""} onChange={(e) => fill(c.id, i.id, e.target.value)} className={`${houseInput} w-full mt-2`}>
                         <option value="">Choose…</option>{(i.options || []).map((o: string) => <option key={o} value={o}>{o}</option>)}
-                      </select>
+                      </TeklySelect>
                     )}
                     {i.field_kind === "multiselect" && (
                       <div role="group" aria-label={`${i.label} options`} className="flex flex-wrap gap-1.5 mt-2">
@@ -2007,7 +2009,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
         return (
           <section aria-label="Balance" className={`${sectionCard} relative overflow-hidden p-6`}>
             <div aria-hidden="true" className={`absolute inset-x-0 top-0 h-0.5 ${tone.edge}`} />
-            <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-ink-tertiary">Still to pay</span>
+            <span className="text-xs font-medium text-ink-tertiary">Still to pay</span>
             <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-2">
               <h2 className={`flex items-start tabular-nums ${state === "due" ? "text-ink-primary" : "text-ink-tertiary"}`} aria-label={`Still to pay ${shown}`}>
                 {m ? <><span className="mt-1.5 mr-0.5 text-xl font-medium text-ink-tertiary">{m[1].trim()}</span><span className="text-hero leading-none font-medium tracking-[-0.035em]">{m[2]}</span></>
@@ -2034,9 +2036,9 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
         {multiCurrency && (
           <div className="mt-3 flex items-center gap-2">
             <label htmlFor={`wo-currency-${orderId}`} className="text-xs font-medium text-ink-secondary">Currency</label>
-            <select id={`wo-currency-${orderId}`} value={currencyCode || base?.code || ""} onChange={(e) => changeCurrency(e.target.value)} className={houseInput}>
+            <TeklySelect id={`wo-currency-${orderId}`} value={currencyCode || base?.code || ""} onChange={(e) => changeCurrency(e.target.value)} className={houseInput}>
               {curOpts.map(([c, l]) => <option key={c} value={c}>{l}</option>)}
-            </select>
+            </TeklySelect>
           </div>
         )}
         {((!settled && t > 0) || link) && (
@@ -2085,7 +2087,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
       {data && data.invoices.length > 0 && (
         <Section flush title="Invoices" meta={data.invoices.length}>
           <table className="w-full text-xs text-left">
-            <thead className="bg-slate-50 text-xs text-ink-tertiary font-medium"><tr><th className="py-2.5 px-4 font-medium">Invoice</th><th className="py-2.5 px-4 font-medium">Status</th><th className="py-2.5 px-4 font-medium text-right">Amount</th><th className="py-2.5 px-4"><span className="sr-only">Send</span></th></tr></thead>
+            <thead><tr className={theadRowClass}><th className="py-2.5 px-4">Invoice</th><th className="py-2.5 px-4">Status</th><th className="py-2.5 px-4 text-right">Amount</th><th className="py-2.5 px-4"><span className="sr-only">Send</span></th></tr></thead>
             <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
               {data.invoices.map((i) => (
                 <tr key={i.id} className="hover:bg-slate-50/50"><td className="py-2.5 px-4 font-mono font-semibold text-primary">{i.invoice_number}</td>
@@ -2129,7 +2131,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
               )}</div>
             <div className="grid grid-cols-2 gap-3 items-start">
               <div><label className="block text-xs font-medium text-ink-secondary mb-1">Method</label>
-                <select value={method} onChange={(e) => { setMethod(e.target.value); setAccount(pickDefaultAccount(accountsFor(allAccts, e.target.value as PaymentOption), ctx.location_id)); }} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl"><option value="cash">Cash</option><option value="cashless">Cashless / UPI</option><option value="card">Card</option></select></div>
+                <TeklySelect value={method} onChange={(e) => { setMethod(e.target.value); setAccount(pickDefaultAccount(accountsFor(allAccts, e.target.value as PaymentOption), ctx.location_id)); }} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl"><option value="cash">Cash</option><option value="cashless">Cashless / UPI</option><option value="card">Card</option></TeklySelect></div>
               {accountsFor(allAccts, method as PaymentOption).length > 0 && <div><label htmlFor="wo-pay-account" className="block text-xs font-medium text-ink-secondary mb-1">Account</label>
                 <AccountPicker id="wo-pay-account" accounts={allAccts} paymentOption={method as PaymentOption} locationId={ctx.location_id} value={account} onChange={setAccount} onCreated={addAccount} /></div>}
             </div>

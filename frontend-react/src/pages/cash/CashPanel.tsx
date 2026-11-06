@@ -1,4 +1,5 @@
 import SkeletonRows from "../../components/SkeletonRows";
+import TeklySelect from "../../components/TeklySelect";
 import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
@@ -16,6 +17,7 @@ import { btnGhost, btnPrimary } from "../invoices/billing";
 import { loadFailed } from "../../lib/notice";
 import { clickable } from "../../lib/clickable";
 import { Badge } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 type TxnSummary = { count: number; income: number; expense: number; today_in?: number; today_out?: number; today_net?: number };
 type Txn = { id: string; txn_type?: string; amount?: number; account?: string; account_id?: string; cash_flow_item?: string; comment?: string; actual_date?: string; status?: string; balance_after?: number; reverses_txn_id?: string; void_reason?: string };
@@ -179,7 +181,7 @@ export default function CashPanel() {
             </div>
             <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
-              <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
+              <thead><tr className={theadRowClass}>
                 <th className="py-3 px-4">Created</th><th className="py-3 px-4">Comment</th><th className="py-3 px-4">Category</th><th className="py-3 px-4 text-right">Income</th><th className="py-3 px-4 text-right">Expense</th><th className="py-3 px-4 text-right">Balance</th><th className="py-3 px-4 text-right">Actions</th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
@@ -232,11 +234,11 @@ export default function CashPanel() {
           <div className="relative bg-white rounded-2xl shadow-clay-drawer border border-slate-200 w-full max-w-md p-5 space-y-4">
             <div className="flex items-center justify-between"><h4 className="text-sm font-bold text-ink-primary">{modal === "transfer" ? "Transfer money" : `Record ${modal}`} · {sel.name}</h4><button aria-label="Close" onClick={() => setModal(null)} className="text-ink-tertiary hover:text-ink-primary"><M n="close" c="text-lg" /></button></div>
             {modal === "transfer" && (
-              <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">To account</label><select value={form.to_account_id} onChange={(e) => setForm({ ...form, to_account_id: e.target.value })} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl">{accounts.filter((a) => a.id !== sel.id).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></div>
+              <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">To account</label><TeklySelect value={form.to_account_id} onChange={(e) => setForm({ ...form, to_account_id: e.target.value })} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl">{accounts.filter((a) => a.id !== sel.id).map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</TeklySelect></div>
             )}
             <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Amount ({sym})</label><input type="number" value={form.amount} onChange={(e) => setForm({ ...form, amount: e.target.value })} className="glass-input w-full py-2 px-3 text-sm font-bold tabular-nums rounded-xl" /></div>
             {modal !== "transfer" && (
-              <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Category</label><select value={form.cash_flow_item_id} onChange={(e) => setForm({ ...form, cash_flow_item_id: e.target.value })} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl"><option value="">— None —</option>{flow.filter((f) => !f.direction || f.direction === modal).map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</select></div>
+              <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Category</label><TeklySelect value={form.cash_flow_item_id} onChange={(e) => setForm({ ...form, cash_flow_item_id: e.target.value })} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl"><option value="">— None —</option>{flow.filter((f) => !f.direction || f.direction === modal).map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</TeklySelect></div>
             )}
             <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Comment</label><input value={form.comment} onChange={(e) => setForm({ ...form, comment: e.target.value })} className="glass-input w-full py-2 px-3 text-xs rounded-xl" placeholder="Optional…" /></div>
             <div className="flex justify-end gap-2 pt-1"><button onClick={() => setModal(null)} className={btnGhost}>Cancel</button><button onClick={submit} className={btnPrimary}>{KIND_LABEL[modal]}</button></div>

@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { Link } from "react-router-dom";
 import { M } from "../../components/Shell";
 import SkeletonRows from "../../components/SkeletonRows";
@@ -11,6 +12,7 @@ import { Avatar } from "../orders/look";
 import { btnGhost } from "../invoices/billing";
 import { clickableRow } from "../../lib/clickable";
 import { Badge, type BadgeTone } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 /* Finance › Payroll calculation: the month's live pay per person, narrowed by location, role
    and employee. A row opens to the commissions behind it (rule → job → line item) plus the
@@ -115,26 +117,26 @@ export default function PayrollCalcPanel({ month, onMonth, headerAction }: { mon
       <div className="flex items-center gap-2 flex-wrap" role="group" aria-label="Payroll filters">
         <M n="filter_list" c="text-sm text-ink-tertiary" />
         {locations.length > 1 && (
-          <select value={filters.location_id} onChange={set("location_id")} aria-label="Location" className={sel}>
+          <TeklySelect value={filters.location_id} onChange={set("location_id")} aria-label="Location" className={sel}>
             <option value="">All locations</option>
             {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-          </select>
+          </TeklySelect>
         )}
-        <select value={filters.role_id} onChange={set("role_id")} aria-label="Role" className={sel}>
+        <TeklySelect value={filters.role_id} onChange={set("role_id")} aria-label="Role" className={sel}>
           <option value="">All roles</option>
           {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-        </select>
-        <select value={filters.employee_id} onChange={set("employee_id")} aria-label="Employee" className={sel}>
+        </TeklySelect>
+        <TeklySelect value={filters.employee_id} onChange={set("employee_id")} aria-label="Employee" className={sel}>
           <option value="">Everyone</option>
           {people.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
+        </TeklySelect>
         {active > 0 && <button onClick={() => setFilters({ location_id: "", role_id: "", employee_id: "" })} className="text-xs font-semibold text-primary hover:underline">Clear filters</button>}
         {rows && rows.length > 0 && <span className="ml-auto text-xs text-ink-tertiary">{rows.length} {rows.length === 1 ? "person" : "people"} · <span className="font-semibold text-ink-primary tabular-nums">{money(total)}</span></span>}
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-200/90 overflow-x-auto">
         <table className="w-full min-w-[840px] text-left border-collapse text-xs">
-          <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-xs font-semibold">
+          <thead><tr className={theadRowClass}>
             <th className="py-3 pl-3 pr-1 w-8"></th><th className="py-3 px-3">Employee</th><th className="py-3 px-3">Position</th><th className="py-3 px-3">Wage type</th>
             <th className="py-3 px-3 text-right">Base</th><th className="py-3 px-3 text-right">Hourly</th><th className="py-3 px-3 text-right">Commission</th>
             <th className="py-3 px-3 text-right">Bonus</th><th className="py-3 px-3 text-right">Penalty</th><th className="py-3 px-3 text-right">Total</th><th className="py-3 px-3"></th>

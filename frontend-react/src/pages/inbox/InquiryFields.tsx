@@ -2,6 +2,7 @@
 // type, the device (brand / model / serial or IMEI), what they asked for, and the shop's own
 // custom fields (Settings → Forms → Inquiry).
 import CustomFields from "../../components/CustomFields";
+import TeklySelect from "../../components/TeklySelect";
 import { CHANNELS, type Lead, type LeadType } from "./inquiries";
 
 const lbl = "block font-semibold text-ink-secondary mb-1";
@@ -24,14 +25,14 @@ export default function InquiryFields({ value, onChange, types, creating, showSl
       </div>
       <div className="grid grid-cols-2 gap-3">
         <div><label htmlFor="inq-type" className={lbl}>Type</label>
-          <select id="inq-type" value={value.lead_type_id || ""} onChange={(e) => set("lead_type_id", e.target.value || null)} className={`${fld} font-semibold appearance-none`}>
+          <TeklySelect id="inq-type" value={value.lead_type_id || ""} onChange={(e) => set("lead_type_id", e.target.value || null)} className={`${fld} font-semibold appearance-none`}>
             <option value="">No type</option>
             {active.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-          </select></div>
+          </TeklySelect></div>
         <div><label htmlFor="inq-channel" className={lbl}>Channel</label>
-          <select id="inq-channel" value={value.source || "phone"} onChange={(e) => set("source", e.target.value)} className={`${fld} font-semibold appearance-none`}>
+          <TeklySelect id="inq-channel" value={value.source || "phone"} onChange={(e) => set("source", e.target.value)} className={`${fld} font-semibold appearance-none`}>
             {CHANNELS.map(([k, v]) => <option key={k} value={k}>{v}</option>)}
-          </select></div>
+          </TeklySelect></div>
       </div>
       {showSla && (picked
         ? <p className="text-[11px] text-ink-tertiary">Respond within {picked.sla_minutes >= 120 ? `${Math.round(picked.sla_minutes / 60)} hours` : `${picked.sla_minutes} minutes`} (set by the {picked.name} type).</p>

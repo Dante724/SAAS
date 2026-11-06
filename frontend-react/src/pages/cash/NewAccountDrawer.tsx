@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { buttonClass } from "../../components/Button";
@@ -57,7 +58,7 @@ export default function NewAccountDrawer({ edit, onClose, onSaved }: Props) {
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 60 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={onClose} />
       <div className="relative h-full w-full max-w-[540px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <header className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
@@ -78,7 +79,7 @@ export default function NewAccountDrawer({ edit, onClose, onSaved }: Props) {
             </div>
             <div><label className="block font-semibold text-ink-secondary mb-1">Title <span className="text-rose-500">*</span></label><input autoFocus value={name} onChange={(e) => setName(e.target.value)} className="glass-input w-full px-3 py-2.5 rounded-lg text-sm font-semibold text-ink-primary" placeholder="e.g. Main Register" /></div>
             <div><label className="block font-semibold text-ink-secondary mb-1">Currency <span className="text-rose-500">*</span></label>
-              <select value={currency} onChange={(e) => setCurrency(e.target.value)} disabled={!!edit} className="glass-input w-full px-3 py-2.5 rounded-lg text-sm font-semibold text-ink-primary appearance-none disabled:opacity-60">{curOpts.map(([c, l]) => <option key={c} value={c}>{l}</option>)}</select>
+              <TeklySelect value={currency} onChange={(e) => setCurrency(e.target.value)} disabled={!!edit} className="glass-input w-full px-3 py-2.5 rounded-lg text-sm font-semibold text-ink-primary appearance-none disabled:opacity-60">{curOpts.map(([c, l]) => <option key={c} value={c}>{l}</option>)}</TeklySelect>
               {edit && <p className="text-[11px] text-ink-tertiary mt-1">Currency is locked after creation.</p>}</div>
             <div><label className="block font-semibold text-ink-secondary mb-1.5">Type</label><Seg opts={[["company", "Company account"], ["location", "Location account"]]} value={type} onChange={(v) => setType(v as any)} /></div>
             <Check v={virtual} set={setVirtual} label="Virtual account" />

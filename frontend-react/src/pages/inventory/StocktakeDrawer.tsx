@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { loadFailed } from "../../lib/notice";
 import { M } from "../../components/Shell";
 import SkeletonRows from "../../components/SkeletonRows";
@@ -9,6 +10,7 @@ import { countRows } from "./countSheet";
 import type { Product } from "./types";
 import { buttonClass } from "../../components/Button";
 import { Badge } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 type StLine = { id: string; part_id: string; part_name: string; sku?: string | null; bin_id?: string | null; bin?: string | null;
   system_qty: number | null; counted_qty: number | null; variance: number | null; is_unknown?: boolean; serial_mismatch?: boolean; note?: string | null };
@@ -152,7 +154,7 @@ export default function StocktakeDrawer({ id, onClose, onDone }:
           {!stId ? (
             <>
               <div><label className={lbl}>Location</label>
-                <select value={form.location_id} onChange={(e) => setForm({ ...form, location_id: e.target.value, bin_id: "" })} aria-label="Location" className={fld}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+                <TeklySelect value={form.location_id} onChange={(e) => setForm({ ...form, location_id: e.target.value, bin_id: "" })} aria-label="Location" className={fld}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</TeklySelect></div>
               <div><label className={lbl}>What to count</label>
                 <div className="flex gap-2">
                   <button onClick={() => setForm({ ...form, scope: "all" })} className={choice(form.scope === "all")}>Whole location<span className="block font-normal text-ink-tertiary mt-0.5">Every product here.</span></button>
@@ -161,13 +163,13 @@ export default function StocktakeDrawer({ id, onClose, onDone }:
                 </div></div>
               {form.scope === "bin" && (
                 <div><label className={lbl}>Bin</label>
-                  <select value={form.bin_id} onChange={(e) => setForm({ ...form, bin_id: e.target.value })} aria-label="Bin to count" className={fld}>
-                    <option value="">Pick a bin…</option>{locBins.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
+                  <TeklySelect value={form.bin_id} onChange={(e) => setForm({ ...form, bin_id: e.target.value })} aria-label="Bin to count" className={fld}>
+                    <option value="">Pick a bin…</option>{locBins.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</TeklySelect></div>
               )}
               {form.scope === "category" && (
                 <div><label className={lbl}>Category</label>
-                  <select value={form.category_id} onChange={(e) => setForm({ ...form, category_id: e.target.value })} aria-label="Category to count" className={fld}>
-                    <option value="">Pick a category…</option>{cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+                  <TeklySelect value={form.category_id} onChange={(e) => setForm({ ...form, category_id: e.target.value })} aria-label="Category to count" className={fld}>
+                    <option value="">Pick a category…</option>{cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</TeklySelect></div>
               )}
               <div><label className={lbl}>Count type</label>
                 <div className="flex gap-2">
@@ -210,7 +212,7 @@ export default function StocktakeDrawer({ id, onClose, onDone }:
               </div>
               <div className="rounded-xl border border-slate-200 overflow-hidden">
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50/60 text-[11px] font-bold text-ink-tertiary"><tr>
+                  <thead><tr className={theadRowClass}>
                     <th className="py-2 px-3">Product</th>{showBin && <th className="py-2 px-3">Bin</th>}
                     <th className="py-2 px-3 text-right">Book</th><th className="py-2 px-3 text-right w-24">Counted</th><th className="py-2 px-3 text-right">Difference</th>
                   </tr></thead>

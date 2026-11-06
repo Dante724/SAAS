@@ -25,6 +25,7 @@ import { hueText, tint } from "../../lib/tint";
 import { clickableRow } from "../../lib/clickable";
 import ImportDrawer from "../../components/ImportDrawer";
 import { buttonClass } from "../../components/Button";
+import { theadRowClass } from "../../components/Table";
 
 type Client = { id: string; name?: string; phone?: string; email?: string; loyalty_tier?: string; balance?: number; devices?: any[]; order_count?: number };
 type Tab = "clients" | "memberships" | "suppliers";
@@ -188,10 +189,10 @@ export default function ClientsHub() {
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
               <div className="overflow-x-auto">
               <table className="w-full min-w-[860px] text-left border-collapse text-xs">
-                <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-xs font-semibold">
+                <thead><tr className={theadRowClass}>
                   <th className="py-3 pl-4 pr-1 w-8"><input type="checkbox" aria-label="Select all" checked={allSel} onChange={toggleAll} className="accent-primary cursor-pointer" /></th>
                   <th className="py-3 px-4">Client</th><th className="py-3 px-4">Phone</th><th className="py-3 px-4">Email</th>
-                  <th className="py-3 px-4">Tier</th><th className="py-3 px-4 text-right">Balance</th><th className="py-3 px-4">{term.assets}</th><th className="py-3 px-4">Orders</th><th className="py-3 pl-2 pr-3 w-12"><span className="sr-only">Actions</span></th>
+                  <th className="py-3 px-4">Tier</th><th className="py-3 px-4 text-right">Balance</th><th className="py-3 px-4 text-right tabular-nums">{term.assets}</th><th className="py-3 px-4 text-right tabular-nums">Orders</th><th className="py-3 pl-2 pr-3 w-12"><span className="sr-only">Actions</span></th>
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
                   {err && <tr><td colSpan={9} className="py-6 px-4 text-status-overdue-ink">Error: {err}</td></tr>}
@@ -214,8 +215,8 @@ export default function ClientsHub() {
                       <td className="py-3 px-4 text-ink-tertiary">{c.email || "—"}</td>
                       <td className="py-3 px-4"><TierPill tier={c.loyalty_tier} /></td>
                       <td className="py-3 px-4 text-right tabular-nums font-semibold text-ink-primary">{money(c.balance ?? 0)}</td>
-                      <td className="py-3 px-4 tabular-nums font-semibold text-ink-primary">{c.devices?.length ?? 0}</td>
-                      <td className="py-3 px-4 tabular-nums font-semibold text-ink-primary">{c.order_count ?? 0}</td>
+                      <td className="py-3 px-4 text-right tabular-nums font-semibold text-ink-primary">{c.devices?.length ?? 0}</td>
+                      <td className="py-3 px-4 text-right tabular-nums font-semibold text-ink-primary">{c.order_count ?? 0}</td>
                       <td className="py-1.5 pl-2 pr-3" onClick={(e) => e.stopPropagation()}>
                         <MoreMenu label={`More actions for ${c.name || "client"}`} items={[
                           { label: "Open", icon: "open_in_new", onClick: () => setOpenClient(c.id) },
@@ -236,7 +237,7 @@ export default function ClientsHub() {
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
               <div className="overflow-x-auto">
               <table className="w-full min-w-[720px] text-left border-collapse text-xs">
-                <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-xs font-semibold">
+                <thead><tr className={theadRowClass}>
                   <th className="py-3 px-4">Supplier</th><th className="py-3 px-4">Contact</th><th className="py-3 px-4">Phone</th><th className="py-3 px-4">Email</th>
                   <th className="py-3 px-4 text-right">Lead days</th><th className="py-3 px-4 text-right">Balance</th>
                 </tr></thead>
@@ -285,7 +286,7 @@ function MergePreviewDialog({ preview, busy, onCancel, onConfirm }: { preview: a
   const FLD: Record<string, string> = { phone: "Phone", email: "Email", address: "Address", notes: "Notes", discount_card: "Discount card", source: "Lead source", manager_id: "Manager" };
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={busy ? undefined : onCancel} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={busy ? undefined : onCancel} />
       <div className="relative bg-white rounded-2xl shadow-clay-drawer border border-slate-200 w-full max-w-md max-h-[85vh] overflow-y-auto">
         <div className="p-5 border-b border-slate-200 flex items-center gap-2">
           <span className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 grid place-items-center border border-amber-100"><M n="merge" c="text-base" /></span>
@@ -342,7 +343,7 @@ function NewSupplierDrawer({ onClose, onCreated }: { onClose: () => void; onCrea
   }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[440px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h2 className="font-bold text-ink-primary">New supplier</h2>

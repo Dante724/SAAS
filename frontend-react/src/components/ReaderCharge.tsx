@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import TeklySelect from "./TeklySelect";
 import { createPortal } from "react-dom";
 import { M } from "./Shell";
 import { api } from "../api/client";
@@ -129,9 +130,9 @@ export default function ReaderCharge({ orderId, saleId, amount, accountId, title
           <>
             <div>
               <label htmlFor="reader-pick" className="block text-xs font-semibold text-ink-tertiary mb-1">Card reader</label>
-              <select id="reader-pick" value={readerId} onChange={(e) => setReaderId(e.target.value)} className={inputCls}>
+              <TeklySelect id="reader-pick" value={readerId} onChange={(e) => setReaderId(e.target.value)} className={inputCls}>
                 {readers.map((r) => <option key={r.id} value={r.id}>{r.label} · {PROVIDER[r.provider] || r.provider}</option>)}
-              </select>
+              </TeklySelect>
             </div>
             <button onClick={send} disabled={busy || !readerId || amount <= 0} className="w-full h-11 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary-container disabled:opacity-50 flex items-center justify-center gap-2 tabular-nums">
               <M n="contactless" c="text-base" />{busy ? "Sending…" : `Send ${money(amount)} to reader`}

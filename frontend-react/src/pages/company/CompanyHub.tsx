@@ -1,4 +1,5 @@
 import SkeletonRows from "../../components/SkeletonRows";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import PageSummary, { type SummaryStat } from "../../components/PageSummary";
 import { useEffect, useState } from "react";
@@ -17,6 +18,7 @@ import { inputCls } from "../invoices/billing";
 import { clickable, clickableRow } from "../../lib/clickable";
 import ImportDrawer from "../../components/ImportDrawer";
 import { Badge } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 const CO_PAGE = 50;
 
@@ -24,7 +26,6 @@ const CO_PAGE = 50;
 const filterCls = (on: boolean) => `h-9 text-xs font-semibold rounded-xl border px-3 cursor-pointer ${on ? "bg-primary/10 text-primary border-primary/30" : "bg-white text-ink-secondary border-slate-200 hover:bg-slate-50"}`;
 const primaryBtn = buttonClass("primary", "md");
 const ghostBtn = buttonClass("secondary", "md");
-const thCls = "border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary";
 
 export type RowMenuItem = { label: string; icon: string; onClick: () => void; danger?: boolean };
 /* The "⋮" at the end of a row. The row itself opens the record; this holds the extra actions.
@@ -315,7 +316,7 @@ export function EmployeeHours() {
       </div>
       <div className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-card overflow-hidden">
         <table className="w-full text-left border-collapse">
-          <thead className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary "><tr>
+          <thead><tr className={theadRowClass}>
             <th className="py-3 px-5">Employee</th><th className="py-3 px-3">Work order</th><th className="py-3 px-3">Type</th>
             <th className="py-3 px-3">Started</th><th className="py-3 px-3 text-right">Duration</th><th className="py-3 px-3">Status</th>
           </tr></thead>
@@ -374,10 +375,10 @@ export function Services({ onOpen, refresh }: { onOpen: (s?: Service) => void; r
         <button onClick={() => onOpen()} className={`${primaryBtn} min-w-[8.5rem] justify-center`}><M n="add" c="text-sm" />New service</button>
         {can("can_edit_labors") && <button onClick={() => setImporting(true)} className={ghostBtn}><M n="upload" c="text-sm" />Import</button>}
         <button onClick={() => setCat(true)} className={ghostBtn}><M n="inventory" c="text-sm" />Categories</button>
-        <select aria-label="Category" value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className={filterCls(!!catFilter)}>
+        <TeklySelect aria-label="Category" value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className={filterCls(!!catFilter)}>
           <option value="">Category: All</option>
           {cats.map((c) => <option key={c.id} value={c.id}>{`${"  ".repeat(c.depth)}${c.name}`}</option>)}
-        </select>
+        </TeklySelect>
         <div className="relative flex-1 min-w-[240px] max-w-md">
           <M n="search" c="absolute left-3 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search services…" aria-label="Search services" className={`${inputCls} pl-9`} />
@@ -386,8 +387,8 @@ export function Services({ onOpen, refresh }: { onOpen: (s?: Service) => void; r
       <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
         <div className="overflow-x-auto">
         <table className="w-full min-w-[560px] text-left border-collapse">
-          <thead className={thCls}><tr>
-            <th className="py-3 px-5 font-semibold">Service</th><th className="py-3 px-3 font-semibold">Category</th><th className="py-3 px-3 text-right font-semibold">Duration</th><th className="py-3 px-3 text-right font-semibold">Price</th><th className="py-3 pr-4 w-12"><span className="sr-only">Actions</span></th>
+          <thead><tr className={theadRowClass}>
+            <th className="py-3 px-5">Service</th><th className="py-3 px-3">Category</th><th className="py-3 px-3 text-right">Duration</th><th className="py-3 px-3 text-right">Price</th><th className="py-3 pr-4 w-12"><span className="sr-only">Actions</span></th>
           </tr></thead>
           <tbody className="divide-y divide-slate-100 text-xs">
             {!items && <SkeletonRows cols={5} />}
@@ -454,10 +455,10 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
         <button onClick={() => onOpen()} className={`${primaryBtn} min-w-[8.5rem] justify-center`}><M n="add" c="text-sm" />New product</button>
         {(can("can_create_products") || can("can_edit_products") || can("can_manage_inventory")) && <button onClick={() => setImporting(true)} className={ghostBtn}><M n="upload" c="text-sm" />Import</button>}
         <button onClick={() => setCat(true)} className={ghostBtn}><M n="inventory" c="text-sm" />Categories</button>
-        <select aria-label="Category" value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className={filterCls(!!catFilter)}>
+        <TeklySelect aria-label="Category" value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className={filterCls(!!catFilter)}>
           <option value="">Category: All</option>
           {cats.map((c) => <option key={c.id} value={c.id}>{`${"  ".repeat(c.depth)}${c.name}`}</option>)}
-        </select>
+        </TeklySelect>
         <div className="relative flex-1 min-w-[240px] max-w-md">
           <M n="search" c="absolute left-3 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search products, SKU, MPN…" aria-label="Search products" className={`${inputCls} pl-9`} />
@@ -466,8 +467,8 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
       <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
         <div className="overflow-x-auto">
         <table className="w-full min-w-[720px] text-left border-collapse">
-          <thead className={thCls}><tr>
-            <th className="py-3 px-5 font-semibold">Product</th><th className="py-3 px-3 font-semibold">Category</th><th className="py-3 px-3 font-semibold">SKU</th><th className="py-3 px-3 font-semibold">MPN</th><th className="py-3 px-3 text-right font-semibold">Cost</th><th className="py-3 px-3 text-right font-semibold">Sell price</th><th className="py-3 px-3 text-right font-semibold">In stock</th><th className="py-3 pr-4 w-12"><span className="sr-only">Actions</span></th>
+          <thead><tr className={theadRowClass}>
+            <th className="py-3 px-5">Product</th><th className="py-3 px-3">Category</th><th className="py-3 px-3">SKU</th><th className="py-3 px-3">MPN</th><th className="py-3 px-3 text-right">Cost</th><th className="py-3 px-3 text-right">Sell price</th><th className="py-3 px-3 text-right">In stock</th><th className="py-3 pr-4 w-12"><span className="sr-only">Actions</span></th>
           </tr></thead>
           <tbody className="divide-y divide-slate-100 text-xs">
             {!items && <SkeletonRows cols={8} />}
