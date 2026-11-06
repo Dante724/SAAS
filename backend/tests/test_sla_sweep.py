@@ -89,6 +89,19 @@ async def test_minute_boundary(db):
     assert got[first.id]["minutes_in_status"] == 31 and got[first.id]["over_by_min"] == 1
 
 
+async def test_out_of_range_limits(db):
+    """time_limit_min isn't range-checked on input: a huge limit never breaches, a negative one
+    is already breached on entry (whole minutes in status > limit)."""
+    now = now_utc()
+    org, loc = await _shop(db, [("slow", 2_000_000_000, False), ("neg", -5, False)])
+    await _order(db, org, loc, "slow", now - timedelta(days=3650))
+    neg = await _order(db, org, loc, "neg", now)
+    await db.commit()
+    got = await find_breaches(db, org, now=now)
+    assert [(b["order_id"], b["minutes_in_status"], b["over_by_min"]) for b in got] == [(neg.id, 0, 5)]
+    assert await sweep_breaches(db, now=now) == 1
+
+
 async def test_sweep_writes_one_event_per_breach_and_dedupes(db):
     now = now_utc()
     org, loc = await _shop(db, [("work", 30, False)])
