@@ -5,7 +5,11 @@
   single-process deploy; swap the store for Redis in multi-process.
 - Request metrics (count, latency histogram buckets, status classes) exposed in
   Prometheus text format at /metrics — no prometheus_client dependency.
+- Slow-query log: statements slower than SLOW_QUERY_MS log a WARNING and count in
+  repairos_slow_queries_total.
 """
+import logging
+import re
 import time
 from collections import defaultdict
 
@@ -18,6 +22,7 @@ _LAT_BUCKETS = (0.01, 0.05, 0.1, 0.25, 0.5, 1.0, 2.5, 5.0)
 _LAT_HIST: dict = defaultdict(int)         # bucket_le -> count
 _LAT_SUM = [0.0]
 _LAT_N = [0]
+_SLOW_QUERIES = [0]
 
 
 def render_metrics() -> str:
@@ -34,6 +39,9 @@ def render_metrics() -> str:
     lines.append(f'repairos_request_latency_seconds_bucket{{le="+Inf"}} {_LAT_N[0]}')
     lines.append(f"repairos_request_latency_seconds_sum {_LAT_SUM[0]:.4f}")
     lines.append(f"repairos_request_latency_seconds_count {_LAT_N[0]}")
+    lines += ["# HELP repairos_slow_queries_total SQL statements slower than SLOW_QUERY_MS",
+              "# TYPE repairos_slow_queries_total counter",
+              f"repairos_slow_queries_total {_SLOW_QUERIES[0]}"]
     return "\n".join(lines) + "\n"
 
 
@@ -52,6 +60,49 @@ class MetricsMiddleware(BaseHTTPMiddleware):
         response = await call_next(request)
         _observe(request.method, response.status_code, time.perf_counter() - t0)
         return response
+
+
+# ── slow-query log ───────────────────────────────────────────────────────────
+_slow_log = logging.getLogger("tekly.db.slow")
+_clock = time.perf_counter          # patched by tests
+_SLOW_STMT_CHARS = 200
+_WS = re.compile(r"\s+")
+_T0_KEY = "tekly_slowq_t0"
+
+
+def _before_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+    conn.info[_T0_KEY] = _clock()
+
+
+def _after_cursor_execute(conn, cursor, statement, parameters, context, executemany):
+    t0 = conn.info.pop(_T0_KEY, None)
+    if t0 is None:
+        return
+    from backend.config import settings
+    threshold = int(getattr(settings, "SLOW_QUERY_MS", 0) or 0)
+    if threshold <= 0:
+        return
+    ms = (_clock() - t0) * 1000
+    if ms < threshold:
+        return
+    _SLOW_QUERIES[0] += 1
+    from backend.core.middleware import request_id_var
+    rid = request_id_var.get()
+    # The statement text only: bound parameters can hold customer emails, phones, hashes.
+    stmt = _WS.sub(" ", statement or "").strip()[:_SLOW_STMT_CHARS]
+    _slow_log.warning("slow query %.0fms (threshold %dms) request_id=%s: %s",
+                      ms, threshold, rid or "-", stmt, extra={"request_id": rid})
+
+
+def install_slow_query_log() -> None:
+    """Time every statement on every engine (the app's and any other, e.g. the test engine).
+    One start time per connection is enough: a DBAPI connection runs one statement at a time.
+    Idempotent."""
+    from sqlalchemy import event
+    from sqlalchemy.engine import Engine
+    if not event.contains(Engine, "before_cursor_execute", _before_cursor_execute):
+        event.listen(Engine, "before_cursor_execute", _before_cursor_execute)
+        event.listen(Engine, "after_cursor_execute", _after_cursor_execute)
 
 
 # ── security response headers (144bc) ────────────────────────────────────────
