@@ -137,3 +137,33 @@ def test_the_sweep_is_scheduled_daily():
     p = next((p for p in job_runner._periodics if p.name == "integrity-sweep"), None)
     assert p is not None, "integrity-sweep is not scheduled"
     assert p.interval_s == 24 * 3600
+
+
+def test_the_sweep_waits_a_day_before_its_first_run():
+    """A nightly full-database sweep must not run at every boot (each deploy and worker restart),
+    nor in the background of tests that start the app: it waits one interval first."""
+    import backend.core.scheduled  # noqa: F401
+    from backend.core.jobs import job_runner
+    p = next(p for p in job_runner._periodics if p.name == "integrity-sweep")
+    assert p.delay_first is True
+
+
+@pytest.mark.asyncio
+async def test_a_delayed_periodic_does_not_run_at_start(monkeypatch):
+    import asyncio
+
+    from backend.core import jobs
+    ran = []
+    runner = jobs.JobRunner()
+
+    @runner.every(3600, "probe-delayed", delay_first=True)
+    async def delayed():
+        ran.append("delayed")
+
+    @runner.every(3600, "probe-now")
+    async def now():
+        ran.append("now")
+    await runner.start()
+    await asyncio.sleep(0.2)
+    await runner.stop()
+    assert ran == ["now"]
