@@ -14,12 +14,14 @@ Every call refuses live credentials unless live payments are switched on (paymen
 """
 import logging
 import uuid
+from datetime import timedelta
 from typing import Optional
 
 import httpx
 from fastapi import HTTPException
 from sqlalchemy import select
 from sqlalchemy import update as sa_update
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.config import settings
@@ -56,16 +58,30 @@ STRIPE_TEST_CARDS = {"approve": "4242424242424242", "decline": "4000000000000002
 
 OPEN = ("pending",)
 FINAL_FAILED = ("declined", "canceled", "failed")
+# Charges marked failed by migration idg01 because a newer one was opened on the same reader,
+# order or sale. The provider may still hold them, so reconcile_superseded cancels them there and
+# keeps polling them for SUPERSEDED_POLL_DAYS: a capture that still happened is booked and flagged.
+SUPERSEDED_NOTE = ("Superseded: a newer charge was sent while this one was still open "
+                   "(one open charge per reader, order and sale, idg01). Check the provider before charging again.")
+SUPERSEDED_POLL_DAYS = 7
+# Shown on a charge whose reader call failed without saying whether the reader got it.
+UNCONFIRMED_NOTE = ("The reader didn't confirm it received this charge. Watch the reader: it may still "
+                    "take the card. If it shows nothing, cancel the charge here before trying again.")
 
 # Tests swap this for httpx.MockTransport; None = the real network.
 _TRANSPORT: Optional[httpx.AsyncBaseTransport] = None
 
 
 class TerminalError(HTTPException):
-    """A provider or validation problem the cashier can read."""
+    """A provider or validation problem the cashier can read. `ambiguous`: the provider didn't
+    answer or failed on its side (timeout, 5xx), so the request may still have been carried out.
+    `idem_retry_safe`: nothing was taken or left on a reader, so a retry of the same tap (same
+    Idempotency-Key) may run again (services/idempotency)."""
 
-    def __init__(self, status: int, message: str):
+    def __init__(self, status: int, message: str, *, ambiguous: bool = False):
         super().__init__(status, message)
+        self.ambiguous = ambiguous
+        self.idem_retry_safe = False
 
 
 def _client(timeout: float = 15.0) -> httpx.AsyncClient:
@@ -121,11 +137,11 @@ async def _stripe(creds: dict, method: str, path: str, data: Optional[dict] = No
                                 auth=(creds["secret_key"], ""))
     except httpx.HTTPError as e:
         log.warning("Stripe %s %s failed: %s", method, path, type(e).__name__)
-        raise TerminalError(502, "Couldn't reach Stripe. Try again in a minute.") from e
+        raise TerminalError(502, "Couldn't reach Stripe. Try again in a minute.", ambiguous=True) from e
     body = _json(r)
     if r.status_code >= 400:
         msg = ((body.get("error") or {}).get("message")) or f"Stripe error {r.status_code}"
-        raise TerminalError(502, f"Stripe: {msg}")
+        raise TerminalError(502, f"Stripe: {msg}", ambiguous=r.status_code >= 500 or r.status_code == 429)
     return body
 
 
@@ -141,12 +157,12 @@ async def _square(creds: dict, method: str, path: str, payload: Optional[dict] =
             r = await c.request(method, _square_base(creds) + path, json=payload, headers=headers)
     except httpx.HTTPError as e:
         log.warning("Square %s %s failed: %s", method, path, type(e).__name__)
-        raise TerminalError(502, "Couldn't reach Square. Try again in a minute.") from e
+        raise TerminalError(502, "Couldn't reach Square. Try again in a minute.", ambiguous=True) from e
     body = _json(r)
     if r.status_code >= 400:
         errs = body.get("errors") or [{}]
         msg = errs[0].get("detail") or errs[0].get("code") or f"Square error {r.status_code}"
-        raise TerminalError(502, f"Square: {msg}")
+        raise TerminalError(502, f"Square: {msg}", ambiguous=r.status_code >= 500 or r.status_code == 429)
     return body
 
 
@@ -344,38 +360,87 @@ async def start_charge(db: AsyncSession, *, org_id: str, actor_id: str, terminal
                         sale_id=sale_id, account_id=acc.id, amount=amount, currency=currency,
                         status="pending", created_by_id=actor_id)
     db.add(ch)
-    await db.flush()
+    try:
+        await db.flush()
+    except IntegrityError as e:
+        # Two starts on one reader at the same moment both passed the check above; the partial
+        # unique index (one open charge per reader) lets only the first one through.
+        await db.rollback()
+        why = str(getattr(e, "orig", e))
+        if "uq_terminal_charges_open_per_reader" in why or "terminal_charges.terminal_id" in why:
+            raise TerminalError(409, "A charge is already in progress on this reader. "
+                                     "Finish or cancel it first.")
+        if any(k in why for k in ("uq_terminal_charges_open_per_order", "terminal_charges.order_id",
+                                  "uq_terminal_charges_open_per_sale", "terminal_charges.sale_id")):
+            raise TerminalError(409, f"A charge for this {'order' if order_id else 'sale'} is already waiting "
+                                     "on a reader. Finish or cancel it first.")
+        raise
+    # Review #4: a provider call that fails without saying whether it was carried out (timeout,
+    # 5xx) must not lead to a second card charge. Each provider request is retried once with the
+    # same provider idempotency key (derived from this charge, so the provider answers with what
+    # it already did). If the reader may still hold the charge, the charge stays waiting (the poll
+    # and the webhook settle it, or staff cancel it) and the tap's answer is that charge, so a
+    # retry of the same tap (same Idempotency-Key) gets it back. Only a failure that leaves
+    # nothing on a reader frees the tap to be sent again.
+    async def again(call):
+        try:
+            return await call()
+        except TerminalError as e:
+            if not e.ambiguous:
+                raise
+            return await call()
+
+    unconfirmed = False
     try:
         if t.provider == "stripe":
-            pi = await _stripe(creds, "POST", "/v1/payment_intents", {
+            # A card_present intent is only collected through the reader call below, so an intent
+            # left behind by a failure here can never take money.
+            pi = await again(lambda: _stripe(creds, "POST", "/v1/payment_intents", {
                 "amount": str(minor_units(amount, currency)), "currency": currency,
                 "payment_method_types[]": "card_present", "capture_method": "automatic",
                 "description": what, "metadata[charge_id]": ch.id, "metadata[org_id]": org_id,
-            }, idempotency_key=f"tekly-charge-{ch.id}")
+            }, idempotency_key=f"tekly-charge-{ch.id}"))
             ch.provider_ref = pi["id"]
             await db.commit()   # keep the PI id even if the reader call fails, so it can be canceled
             try:
-                await _stripe(creds, "POST", f"/v1/terminal/readers/{t.reader_id}/process_payment_intent",
-                              {"payment_intent": pi["id"]}, idempotency_key=f"tekly-process-{ch.id}")
-            except HTTPException:
+                await again(lambda: _stripe(
+                    creds, "POST", f"/v1/terminal/readers/{t.reader_id}/process_payment_intent",
+                    {"payment_intent": pi["id"]}, idempotency_key=f"tekly-process-{ch.id}"))
+            except TerminalError as e:
                 try:
                     await _stripe(creds, "POST", f"/v1/payment_intents/{pi['id']}/cancel")
-                except HTTPException:
-                    pass
-                raise
+                except TerminalError:
+                    # Not canceled: the reader may still collect it. Keep it waiting.
+                    log.warning("charge %s: reader call failed (%s) and the intent wasn't canceled; "
+                                "left waiting", ch.id, e.detail)
+                    unconfirmed = True
+                else:
+                    raise
         elif t.provider == "square":
-            body = await _square(creds, "POST", "/v2/terminals/checkouts", {
-                "idempotency_key": ch.id,
-                "checkout": {"amount_money": {"amount": minor_units(amount, currency), "currency": currency.upper()},
-                             "device_options": {"device_id": t.reader_id},
-                             "reference_id": ch.id, "note": what[:250]}})
-            ch.provider_ref = (body.get("checkout") or {}).get("id")
+            # Same idempotency_key on the retry: Square answers with the checkout it already made.
+            try:
+                body = await again(lambda: _square(creds, "POST", "/v2/terminals/checkouts", {
+                    "idempotency_key": ch.id,
+                    "checkout": {"amount_money": {"amount": minor_units(amount, currency), "currency": currency.upper()},
+                                 "device_options": {"device_id": t.reader_id},
+                                 "reference_id": ch.id, "note": what[:250]}}))
+                ch.provider_ref = (body.get("checkout") or {}).get("id")
+            except TerminalError as e:
+                if not e.ambiguous:
+                    raise
+                # The device may show it; the webhook finds it by reference_id (= this charge).
+                log.warning("charge %s: Square checkout unconfirmed (%s); left waiting", ch.id, e.detail)
+                unconfirmed = True
         else:
             ch.provider_ref = f"simchg_{ch.id[:12]}"
     except HTTPException as e:
         ch.status, ch.error = "failed", str(e.detail)[:500]
         await db.commit()
+        if isinstance(e, TerminalError):
+            e.idem_retry_safe = True   # nothing is on the reader: the same tap may be sent again
         raise
+    if unconfirmed:
+        ch.error = UNCONFIRMED_NOTE
     await db.commit()
     await db.refresh(ch)
     return ch
@@ -384,7 +449,7 @@ async def start_charge(db: AsyncSession, *, org_id: str, actor_id: str, terminal
 async def refresh(db: AsyncSession, ch: TerminalCharge) -> TerminalCharge:
     """Poll the provider for a waiting charge and settle it if it has finished. A provider that's
     down leaves the charge waiting; the next poll (or the webhook) tries again."""
-    if ch.status not in OPEN or not ch.provider_ref or ch.provider == "simulated":
+    if (ch.status not in OPEN and not _recently_superseded(ch)) or not ch.provider_ref or ch.provider == "simulated":
         return ch
     try:
         creds = await provider_creds(db, ch.org_id, ch.provider)
@@ -396,6 +461,36 @@ async def refresh(db: AsyncSession, ch: TerminalCharge) -> TerminalCharge:
     except HTTPException as e:
         log.info("status poll for charge %s failed: %s", ch.id, e.detail)
         return ch
+
+
+def _recently_superseded(ch: TerminalCharge) -> bool:
+    if ch.status != "failed" or not (ch.error or "").startswith("Superseded"):
+        return False
+    made = ch.created_at.replace(tzinfo=None) if ch.created_at else None
+    return made is not None and made >= now_utc().replace(tzinfo=None) - timedelta(days=SUPERSEDED_POLL_DAYS)
+
+
+async def reconcile_superseded(db: AsyncSession) -> int:
+    """Charges migration idg01 marked superseded: cancel each at the provider where it can be,
+    then poll it, so a card that was taken anyway is booked (and flagged as a possible double
+    payment by settle_succeeded) without waiting for a webhook. Runs for SUPERSEDED_POLL_DAYS.
+    Returns how many were checked."""
+    since = now_utc().replace(tzinfo=None) - timedelta(days=SUPERSEDED_POLL_DAYS)
+    rows = (await db.execute(select(TerminalCharge).where(
+        TerminalCharge.status == "failed", TerminalCharge.error.like("Superseded%"),
+        TerminalCharge.provider_ref.is_not(None), TerminalCharge.provider != "simulated",
+        TerminalCharge.created_at >= since))).scalars().all()
+    for ch in rows:
+        try:
+            creds = await provider_creds(db, ch.org_id, ch.provider)
+            if ch.provider == "stripe":
+                await _stripe(creds, "POST", f"/v1/payment_intents/{ch.provider_ref}/cancel")
+            elif ch.provider == "square":
+                await _square(creds, "POST", f"/v2/terminals/checkouts/{ch.provider_ref}/cancel")
+        except HTTPException as e:
+            log.info("superseded charge %s not canceled at %s: %s", ch.id, ch.provider, e.detail)
+        await refresh(db, ch)
+    return len(rows)
 
 
 async def apply_stripe_intent(db: AsyncSession, ch: TerminalCharge, pi: dict) -> TerminalCharge:
@@ -749,6 +844,23 @@ async def find_charge(db: AsyncSession, provider: str, provider_ref: Optional[st
     if org_id:
         q = q.where(TerminalCharge.org_id == org_id)
     return (await db.execute(q)).scalar_one_or_none()
+
+
+async def find_unconfirmed_charge(db: AsyncSession, provider: str, reference_id: Optional[str],
+                                  provider_ref: Optional[str], org_id: Optional[str] = None) -> Optional[TerminalCharge]:
+    """A Square checkout whose create call never answered: the charge has no provider_ref yet, but
+    the checkout carries our charge id as reference_id. Adopt the checkout id."""
+    if not reference_id or not provider_ref:
+        return None
+    q = select(TerminalCharge).where(TerminalCharge.id == reference_id, TerminalCharge.provider == provider,
+                                     TerminalCharge.provider_ref.is_(None))
+    if org_id:
+        q = q.where(TerminalCharge.org_id == org_id)
+    ch = (await db.execute(q)).scalar_one_or_none()
+    if ch is not None:
+        ch.provider_ref = provider_ref
+        await db.flush()
+    return ch
 
 
 async def claim_event(db: AsyncSession, provider: str, event_id: str, org_id: str) -> bool:

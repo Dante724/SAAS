@@ -6,7 +6,7 @@ services/credit_notes.py.
 """
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -157,9 +157,18 @@ async def get_credit_note(
 @router.post("", status_code=201)
 async def create_credit_note(
     data: CreditNoteIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_create_credit_notes")),
 ):
+    """A draft credit note. A retry with the same Idempotency-Key gets the first draft back
+    instead of making a second one."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "credit_notes.create", data,
+                          lambda: _create_credit_note(data, db, current))
+
+
+async def _create_credit_note(data: CreditNoteIn, db: AsyncSession, current: Employee):
     cn = CreditNote(org_id=current.org_id, status="draft", created_by_id=current.id, lines=[])
     await _apply(db, current.org_id, cn, data)
     db.add(cn)
