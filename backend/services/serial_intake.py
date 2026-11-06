@@ -24,7 +24,9 @@ from backend.services import identifiers as _ids
 
 MAX_SERIALS = 500
 MAX_LEN = 120
-IN_STOCK = ("in_stock", "allocated_to_order")
+# council M6: a unit on a transfer is live too — receiving its serial again made two live rows
+# for one serial, and the transfer then wedged with 409 on completion.
+IN_STOCK = ("in_stock", "allocated_to_order", "in_transit")
 _SPLIT = re.compile(r"[\r\n,;\t]+")
 
 # One entered serial, as request bodies take it (lists of these are capped at MAX_SERIALS).
@@ -123,7 +125,8 @@ async def check(db, org_id: str, values: Iterable[str]) -> list[dict]:
             live = next((h for h in hist if h[0] in IN_STOCK), None)
             if live:
                 row.update(status="block", reason="in_stock", part_name=live[1],
-                           message=f"Already in stock as {live[1]}.")
+                           message=(f"On a transfer as {live[1]}." if live[0] == "in_transit"
+                                    else f"Already in stock as {live[1]}."))
             elif hist:
                 row.update(status="warn", reason="sold_before", part_name=hist[0][1],
                            message=f"Had this before ({_STATUS_WORDS.get(hist[0][0], hist[0][0])}) — "
@@ -188,6 +191,9 @@ async def validate_intake(db, org_id: str, part, qty: float, serials: Optional[l
         if r["reason"] == "duplicate" or (seen is not None and r["serial"] in seen):
             raise HTTPException(409, f"{r['serial']} is entered twice. Each unit needs its own serial.")
         if r["reason"] == "in_stock":
+            if r["message"].startswith("On a transfer"):
+                raise HTTPException(409, f"{r['serial']} is on a transfer ({r['part_name']}). "
+                                         "Receive or cancel the transfer first.")
             raise HTTPException(409, f"{r['serial']} is already in stock ({r['part_name']}). "
                                      "Remove it, or write the old unit off first.")
         if r["status"] == "block":
