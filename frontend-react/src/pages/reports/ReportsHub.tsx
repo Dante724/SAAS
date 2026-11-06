@@ -4,6 +4,7 @@ import { downloadSheet } from "../../lib/downloadSheet";
 import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
+import EmptyState, { TableEmpty } from "../../components/EmptyState";
 import DateField from "../../components/DateField";
 import { api } from "../../api/client";
 import { money } from "../orders/types";
@@ -603,7 +604,7 @@ export default function ReportsHub() {
                       <th className="py-3 px-4">Date</th><th className="py-3 px-4">Order</th><th className="py-3 px-4">Rating</th><th className="py-3 px-4">Comment</th>
                     </tr></thead>
                     <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
-                      {submitted.length === 0 && <tr><td colSpan={4} className="py-6 px-4 text-ink-tertiary">No feedback submitted yet.</td></tr>}
+                      {submitted.length === 0 && <TableEmpty cols={4} icon={<M n="reviews" c="text-lg" />} title="No feedback submitted yet." />}
                       {submitted.map((f: any, i: number) => (
                         <tr key={f?.id || i} className="odd:bg-slate-50/40 hover:bg-blue-50/50 transition-colors">
                           <td className="py-2.5 px-4">{f?.submitted_at ? new Date(f.submitted_at).toLocaleDateString() : "—"}</td>
@@ -847,7 +848,7 @@ function FleetAnalytics() {
         <div className={box}>
           <div className={th}>Business accounts ({fleet.length})</div>
           <div className="divide-y divide-slate-100 max-h-80 overflow-y-auto">
-            {fleet.length === 0 && <p className="px-4 py-3 text-xs text-ink-tertiary">No business accounts yet.</p>}
+            {fleet.length === 0 && <EmptyState size="section" icon={<M n="business" c="text-lg" />} title="No business accounts yet." />}
             {fleet.map((c) => (
               <div key={c.client_id} className="px-4 py-2.5 flex items-center justify-between text-xs">
                 <span className="font-bold text-ink-primary truncate">{c.name}</span>

@@ -7,6 +7,7 @@ import { useMe } from "../../context/Me";
 import { confirmDialog } from "../../lib/dialog";
 import Switch from "../../components/Switch";
 import { Drawer, ErrorNote, MoreMenu, btnGhost, btnPrimary, inputCls, labelCls } from "../invoices/billing";
+import { Badge } from "../../components/Card";
 
 // Settings › Integrations › API keys. Create a key with the access it needs (read only by
 // default) — everything, or only some things (WS-C resource scopes, API v2) — an expiry, its own
@@ -77,8 +78,7 @@ export function lastUsedText(iso?: string | null): string {
 function StatusPill({ k }: { k: ApiKey }) {
   const status = k.status || (k.active ? "active" : "revoked");
   if (status === "active") return null;
-  const cls = status === "expired" ? "bg-amber-50 text-amber-800 border-amber-200" : "bg-slate-100 text-ink-secondary border-slate-200";
-  return <span className={`px-2 py-0.5 rounded-full border text-[11px] font-semibold ${cls}`}>{status === "expired" ? "Expired" : "Revoked"}</span>;
+  return <Badge tone={status === "expired" ? "warning" : "neutral"} size="sm">{status === "expired" ? "Expired" : "Revoked"}</Badge>;
 }
 
 export default function ApiKeysCard() {

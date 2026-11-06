@@ -10,6 +10,7 @@ import EarningsBreakdown, { type BreakdownRule } from "./EarningsBreakdown";
 import { Avatar } from "../orders/look";
 import { btnGhost } from "../invoices/billing";
 import { clickableRow } from "../../lib/clickable";
+import { Badge, type BadgeTone } from "../../components/Card";
 
 /* Finance › Payroll calculation: the month's live pay per person, narrowed by location, role
    and employee. A row opens to the commissions behind it (rule → job → line item) plus the
@@ -39,9 +40,9 @@ export function amountTone(v: number | null | undefined, tone: "gain" | "loss"):
   return tone === "gain" ? "text-emerald-700" : "text-rose-600";
 }
 
-const ACCRUAL: Record<string, [string, string]> = {
-  accrued: ["Accrued", "bg-blue-50 text-primary"], paid: ["Paid", "bg-emerald-50 text-emerald-700"],
-  draft: ["Draft", "bg-amber-50 text-amber-700"], void: ["Voided", "bg-slate-100 text-ink-tertiary"],
+const ACCRUAL: Record<string, [string, BadgeTone]> = {
+  accrued: ["Accrued", "info"], paid: ["Paid", "success"],
+  draft: ["Draft", "warning"], void: ["Voided", "neutral"],
 };
 
 export default function PayrollCalcPanel({ month, onMonth, headerAction }: { month: string; onMonth: (m: string) => void; headerAction?: React.ReactNode }) {
@@ -150,7 +151,7 @@ export default function PayrollCalcPanel({ month, onMonth, headerAction }: { mon
                 <Fragment key={p.employee_id}>
                   <tr className={`hover:bg-blue-50/30 cursor-pointer ${isOpen ? "bg-blue-50/40" : ""}`} {...clickableRow(() => toggle(p.employee_id))}>
                     <td className="py-2 pl-3 pr-1"><button type="button" aria-expanded={isOpen} aria-label={`${isOpen ? "Hide" : "Show"} breakdown for ${p.name || "employee"}`} onClick={(e) => { e.stopPropagation(); toggle(p.employee_id); }} className="w-7 h-7 rounded-md grid place-items-center text-ink-tertiary hover:bg-slate-100"><M n={isOpen ? "expand_more" : "chevron_right"} c="text-sm" /></button></td>
-                    <td className="py-2 px-3"><span className="flex items-center gap-2.5 min-w-0"><Avatar name={p.name} size={26} /><span className="font-semibold text-ink-primary truncate">{p.name || "—"}</span>{acc && <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${acc[1]}`}>{acc[0]}</span>}</span></td>
+                    <td className="py-2 px-3"><span className="flex items-center gap-2.5 min-w-0"><Avatar name={p.name} size={26} /><span className="font-semibold text-ink-primary truncate">{p.name || "—"}</span>{acc && <Badge tone={acc[1]} size="sm">{acc[0]}</Badge>}</span></td>
                     <td className="py-2.5 px-3">{p.position || "—"}</td>
                     <td className="py-2.5 px-3">{WAGE[p.wage_type || ""] || "—"}</td>
                     <td className={`py-2.5 px-3 text-right tabular-nums ${Number(p.base_salary) ? "" : "text-ink-tertiary"}`}>{money(p.base_salary)}</td>

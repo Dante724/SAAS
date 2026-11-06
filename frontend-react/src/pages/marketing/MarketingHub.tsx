@@ -10,6 +10,7 @@ import { Link } from "react-router-dom";
 import { Avatar } from "../orders/look";
 import { PhoneIncoming, PhoneOutgoing } from "lucide-react";
 import { buttonClass } from "../../components/Button";
+import { Badge, type BadgeTone } from "../../components/Card";
 
 // Marketing: campaigns (SMS/email blasts by segment) + call log — legacy /comms surface.
 const CHANNEL: Record<string, string> = { sms: "SMS", email: "Email" };
@@ -41,7 +42,7 @@ export default function MarketingHub() {
     try { const r = await api.post<any>(`/comms/campaigns/${c.id}/send`, {}); loadCamps(); flash(`Sent to ${r.recipients ?? 0} recipient(s)`); }
     catch (e: any) { await alertDialog(e.message || "Send failed"); } finally { setBusy(false); }
   }
-  const pill = (s: string) => s === "sent" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700";
+  const pill = (s: string): BadgeTone => s === "sent" ? "success" : "warning";
   const inp = "w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 text-ink-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/10";
   // Pagination — one shared page (campaigns/calls tabs never show at once).
   const MK_PAGE = 50;
@@ -78,7 +79,7 @@ export default function MarketingHub() {
                       <td className="py-2.5 px-4 font-semibold text-ink-primary">{c.name}</td>
                       <td className="py-2.5 px-4">{CHANNEL[c.channel] || humanize(c.channel)}</td>
                       <td className="py-2.5 px-4">{SEGMENT[c.segment] || humanize(c.segment)}</td>
-                      <td className="py-2.5 px-4"><span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${pill(c.status)}`}>{humanize(c.status)}</span>{c.sent_at ? <span className="block text-[11px] text-ink-tertiary">{d(c.sent_at)}</span> : null}</td>
+                      <td className="py-2.5 px-4"><Badge tone={pill(c.status)} size="sm">{humanize(c.status)}</Badge>{c.sent_at ? <span className="block text-[11px] text-ink-tertiary">{d(c.sent_at)}</span> : null}</td>
                       <td className="py-2.5 px-4 text-right tabular-nums">{c.recipients ?? "—"}</td>
                       <td className="py-2.5 px-4 text-right">{c.status !== "sent" && <button onClick={() => send(c)} disabled={busy} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50">Send</button>}</td>
                     </tr>

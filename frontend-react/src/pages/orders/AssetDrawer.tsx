@@ -5,6 +5,7 @@ import { useNavigate } from "react-router-dom";
 import { balanceView } from "../../lib/balance";
 import { sectionCard } from "../../components/Section";
 import { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import { api } from "../../api/client";
 import { useClientSearch } from "../../hooks/useClientSearch";
 import { confirmDialog } from "../../lib/dialog";
@@ -18,6 +19,7 @@ import { useFormLayout, LayoutFields, reqStar, missingRequired, has } from "../.
 import { loadFailed } from "../../lib/notice";
 import { MembershipsCard } from "../memberships/shared";
 import { MembershipDrawer } from "../memberships/MembershipsView";
+import { Badge } from "../../components/Card";
 
 const TABS = ["General", "Work orders", "History"];
 
@@ -100,7 +102,7 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
         <header className="px-6 pt-4 border-b border-slate-200/90 bg-white">
           <div className="flex items-center gap-2 mb-3">
             <button onClick={onClose} className="flex items-center gap-1.5 text-xs font-semibold text-primary"><M n="arrow_back" c="text-sm" /> {woNum ? `Back to ${woNum}` : "Back"}</button>
-            <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-ink-secondary border border-slate-200">{assetNoun(a, term)}</span>
+            <Badge size="sm">{assetNoun(a, term)}</Badge>
             <div className="flex-1" />
             <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100"><M n="close" c="text-lg" /></button>
           </div>
@@ -191,7 +193,7 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
                   <div className="divide-y divide-slate-100">
                     {a.history.map((o) => (
                       <button type="button" key={o.id} onClick={() => openOrder(o.id)} aria-label={`Open work order ${o.order_number || ""}`.trim()} className="w-full text-left grid grid-cols-[1fr_auto_auto] gap-3 px-4 py-2.5 items-center text-xs hover:bg-slate-50 transition-colors">
-                        <div><span className="font-bold text-ink-primary font-mono">{o.order_number || o.id.slice(0, 8)}</span>{o.status && <span className="ml-2 px-1.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-ink-secondary capitalize">{o.status.replace(/_/g, " ")}</span>}</div>
+                        <div><span className="font-bold text-ink-primary font-mono">{o.order_number || o.id.slice(0, 8)}</span>{o.status && <Badge size="sm" className="ml-2 capitalize">{o.status.replace(/_/g, " ")}</Badge>}</div>
                         <span className="text-right tabular-nums font-semibold text-ink-primary">{money(o.total ?? 0)}</span>
                         <span className="text-right text-ink-tertiary whitespace-nowrap">{fmtDate(o.created_at)}</span>
                       </button>
@@ -205,7 +207,7 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
             moves === null
               ? <p className="text-xs text-ink-tertiary">Loading history…</p>
               : moves.length === 0
-                ? <p className="text-xs text-ink-tertiary">No lifecycle events logged yet.</p>
+                ? <EmptyState size="inline" title="No lifecycle events logged yet." />
                 : <div className={`${sectionCard} divide-y divide-slate-100`}>
                     {moves.map((m, i) => (
                       <div key={i} className="px-4 py-3 flex items-start gap-3">

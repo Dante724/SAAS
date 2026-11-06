@@ -9,6 +9,7 @@ import { currencySymbol, money } from "./types";
 import { flashDelivery, type Flash } from "../../lib/delivery";
 import { serverDate } from "../../lib/serverTime";
 import { sectionCard } from "../../components/Section";
+import { Badge, type BadgeTone } from "../../components/Card";
 
 /* Recommendations on a job: the extra work the technician thinks the customer should do.
    Staff add them here (title, price, why, urgency, photo), send them to the customer's
@@ -25,11 +26,11 @@ export type RecRow = {
 type Item = { id: string; name: string };
 
 const URGENCY_LABEL: Record<string, string> = { now: "Needs it now", soon: "Soon" };
-const STATUS: Record<string, { label: string; cls: string }> = {
-  draft: { label: "Draft", cls: "bg-slate-100 text-ink-secondary" },
-  sent: { label: "Waiting for the customer", cls: "bg-blue-50 text-blue-700" },
-  approved: { label: "Added to the job", cls: "bg-emerald-50 text-emerald-700" },
-  declined: { label: "Saved for later", cls: "bg-amber-50 text-amber-800" },
+const STATUS: Record<string, { label: string; tone: BadgeTone }> = {
+  draft: { label: "Draft", tone: "neutral" },
+  sent: { label: "Waiting for the customer", tone: "info" },
+  approved: { label: "Added to the job", tone: "success" },
+  declined: { label: "Saved for later", tone: "warning" },
 };
 const fmtDay = (iso?: string | null) => serverDate(iso)?.toLocaleDateString([], { month: "short", day: "numeric" }) || "";
 
@@ -216,9 +217,9 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-1.5">
                     <span className="text-sm font-semibold text-ink-primary">{r.title}</span>
-                    <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${st.cls}`}>{st.label}</span>
-                    {r.urgency && <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${r.urgency === "now" ? "bg-amber-50 text-amber-800" : "bg-slate-100 text-ink-secondary"}`}>{URGENCY_LABEL[r.urgency]}</span>}
-                    {r.source === "checklist" && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-ink-tertiary">From checklist</span>}
+                    <Badge tone={st.tone} size="sm">{st.label}</Badge>
+                    {r.urgency && <Badge tone={r.urgency === "now" ? "warning" : "neutral"} size="sm">{URGENCY_LABEL[r.urgency]}</Badge>}
+                    {r.source === "checklist" && <Badge size="sm">From checklist</Badge>}
                   </div>
                   {r.note && <p className="mt-0.5 text-xs text-ink-secondary">{r.note}</p>}
                   <p className="mt-0.5 text-[11px] text-ink-tertiary">

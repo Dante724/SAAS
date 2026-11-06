@@ -4,6 +4,7 @@ import DeviceList from "../../components/DeviceList";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import DateField from "../../components/DateField";
 import { api } from "../../api/client";
 import type { FormKey } from "../../components/FormCustomizer";
@@ -23,6 +24,7 @@ import { SettingRow, SettingGroup, NumField } from "../../components/SettingRow"
 import { money } from "../orders/types";
 import { loadFailed } from "../../lib/notice";
 import { clickable, clickableRow } from "../../lib/clickable";
+import { Badge, type BadgeTone } from "../../components/Card";
 
 // Each settings page is its own chunk, fetched when its section opens (the hub was one ~470 kB file).
 const TemplateEditorDrawer = lazy(() => import("./TemplateEditorDrawer"));
@@ -1191,13 +1193,13 @@ function IntegrationsHub({ data, goSection, reload, pro = { accounting: true, ap
     try { navigator.clipboard.writeText(snip); alertDialog("Website status-widget embed snippet copied to clipboard."); }
     catch { await promptDialog("Copy the embed snippet:", { defaultValue: snip }); }
   };
-  type Badge = { text: string; tone: "on" | "off" | "neutral" };
+  type CardBadge = { text: string; tone: "on" | "off" | "neutral" };
   // A Pro connector on Starter: say so and point at Billing instead of offering setup.
-  const proCard = { badge: { text: "Pro plan", tone: "neutral" } as Badge, hint: "Upgrade to Pro to use this",
+  const proCard = { badge: { text: "Pro plan", tone: "neutral" } as CardBadge, hint: "Upgrade to Pro to use this",
     action: { label: "See plans", onClick: () => goSection("billing") } };
-  const B = { on: "bg-emerald-100 text-emerald-700", off: "bg-slate-100 text-ink-secondary", neutral: "bg-indigo-50 text-indigo-700" } as const;
+  const B = { on: "success", off: "neutral", neutral: "info" } as const;
   type Webhook = { url: string; help: string };
-  const allGroups: { group: string; cards: { name: string; desc: string; badge: Badge; hint?: string; action?: { label: string; onClick: () => void }; webhook?: Webhook }[] }[] = [
+  const allGroups: { group: string; cards: { name: string; desc: string; badge: CardBadge; hint?: string; action?: { label: string; onClick: () => void }; webhook?: Webhook }[] }[] = [
     { group: "Payments", cards: [
       { name: "Online payments (Stripe)", desc: "Hosted checkout & payment links; reconciles into your cashboxes.",
         badge: payLive ? { text: `Live: ${payGw}`, tone: "on" } : keyBadge("stripe"),
@@ -1260,7 +1262,7 @@ function IntegrationsHub({ data, goSection, reload, pro = { accounting: true, ap
                 <div key={c.name} className="border border-slate-200/90 rounded-xl p-3.5 flex flex-col gap-1.5 bg-white hover:border-slate-300 transition-colors">
                   <div className="flex items-start justify-between gap-2">
                     <span className="text-sm font-semibold text-ink-primary leading-tight">{c.name}</span>
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${B[c.badge.tone]}`}>{c.badge.text}</span>
+                    <Badge tone={B[c.badge.tone]} size="sm">{c.badge.text}</Badge>
                   </div>
                   <p className="text-xs text-ink-secondary leading-snug">{c.desc}</p>
                   {c.hint && <p className="text-xs text-ink-tertiary mt-0.5">{c.hint}</p>}
@@ -1374,7 +1376,7 @@ function SectionCard({ title, count, onAdd, children }: { title: string; count?:
   return (
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
       <div className="p-3.5 border-b border-slate-100">
-        <h3 className="text-sm font-semibold text-ink-primary flex items-center">{title}{count != null && <span className="ml-2 text-xs font-medium bg-slate-100 text-ink-secondary px-2 py-0.5 rounded-full">{count}</span>}</h3>
+        <h3 className="text-sm font-semibold text-ink-primary flex items-center">{title}{count != null && <Badge size="sm" className="ml-2">{count}</Badge>}</h3>
         {onAdd && <button type="button" onClick={onAdd} className={`mt-2.5 ${btnPrimary}`}><M n="add" c="text-sm" />Add</button>}
       </div>
       {children}
@@ -1687,7 +1689,7 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
           <div className="rounded-xl border border-slate-200 divide-y divide-slate-100">
             {!fields && <div className="p-4 text-xs text-ink-tertiary">Loading…</div>}
-            {fields?.length === 0 && <div className="p-4 text-xs text-ink-tertiary">No custom fields yet.</div>}
+            {fields?.length === 0 && <EmptyState size="section" icon={<M n="tune" c="text-lg" />} title="No custom fields yet." />}
             {fields?.map((f) => (
               <div key={f.id} className="flex items-center justify-between px-4 py-2.5 text-xs">
                 <div><span className="font-bold text-ink-primary">{f.field_label}</span><span className="ml-2 text-[11px] bg-slate-100 text-ink-tertiary px-1.5 py-0.5 rounded">{f.field_type}</span>{f.required && <span className="ml-1 text-[11px] text-rose-600 font-semibold">required</span>}{f.show_when_field_key && <span className="ml-1 text-[11px] text-primary font-semibold">conditional</span>}{f.upsell_comparator && <span className="ml-1 text-[11px] text-amber-700 font-semibold">upsell</span>}{f.gate_status_key && <span className="ml-1 text-[11px] text-rose-600 font-semibold">gate</span>}</div>
@@ -2135,7 +2137,7 @@ function EcommerceSettings() {
             <span className="text-xs text-ink-tertiary">{[i.sync_products && "Products", i.sync_orders && "Orders"].filter(Boolean).join(" + ")}</span>
             <div className="flex-1" />
             <span className="text-xs text-ink-tertiary">{i.last_synced_at ? `Synced ${new Date(i.last_synced_at).toLocaleDateString()}` : "Never synced"}</span>
-            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${i.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-ink-secondary"}`}>{i.active ? "Active" : "Off"}</span>
+            <Badge tone={i.active ? "success" : "neutral"} size="sm">{i.active ? "Active" : "Off"}</Badge>
           </div>
         ))}
         {items && items.length === 0 && <div className="px-5 py-3 text-xs text-ink-tertiary">No stores connected.</div>}
@@ -2193,7 +2195,7 @@ function SsoSettings() {
             <span className="font-medium text-ink-primary">{s.display_name}</span>
             {s.email_domain && <span className="text-xs text-ink-tertiary">@{s.email_domain}</span>}
             <div className="flex-1" />
-            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${s.enabled ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-ink-secondary"}`}>{s.enabled ? "Enabled" : "Disabled"}</span>
+            <Badge tone={s.enabled ? "success" : "neutral"} size="sm">{s.enabled ? "Enabled" : "Disabled"}</Badge>
             <button type="button" aria-label="Delete" onClick={() => del(s.id)} className="w-8 h-8 grid place-items-center rounded-lg text-ink-tertiary hover:text-rose-600 hover:bg-rose-50"><M n="delete" c="text-sm" /></button>
           </div>
         ))}
@@ -2215,7 +2217,7 @@ function ApprovalsSettings() {
     try { await api.post(`/approvals/${id}/decide`, { decision }); reload(); }
     catch (e: any) { alertDialog(e.message || "Failed"); } finally { setBusy(false); }
   }
-  const pill = (s: string) => s === "approved" ? "bg-emerald-100 text-emerald-700" : s === "rejected" ? "bg-rose-100 text-rose-700" : "bg-amber-100 text-amber-700";
+  const pill = (s: string): BadgeTone => s === "approved" ? "success" : s === "rejected" ? "danger" : "warning";
   return (
     <div className="max-w-3xl"><SectionCard title="Approval requests" count={items?.length}>
       <div className="px-5 py-2.5 border-b border-slate-100">
@@ -2235,7 +2237,7 @@ function ApprovalsSettings() {
             <div className="flex-1" />
             {r.status === "pending"
               ? <><button type="button" onClick={() => decide(r.id, "approve")} disabled={busy} className={btnPrimary}>Approve</button><button type="button" onClick={() => decide(r.id, "reject")} disabled={busy} className="h-9 px-3.5 rounded-xl border border-rose-200 bg-white text-rose-600 text-xs font-semibold hover:bg-rose-50 disabled:opacity-50">Reject</button></>
-              : <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${pill(r.status)}`}>{humanize(r.status || "")}</span>}
+              : <Badge tone={pill(r.status)} size="sm">{humanize(r.status || "")}</Badge>}
           </div>
         ))}
       </div>
