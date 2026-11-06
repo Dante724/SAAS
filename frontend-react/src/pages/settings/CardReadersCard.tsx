@@ -172,8 +172,8 @@ function ReaderDrawer({ cfg, reader, locs, hasStripeReader, onClose, onSaved }: 
   return createPortal(
     <Drawer z={90} width={448} label={title} title={title} sub={reader ? PROVIDER[reader.provider] || reader.provider : undefined} onClose={onClose}
       footer={<>
-        <button onClick={onClose} className={btnGhost}>Cancel</button>
         <button onClick={save} disabled={busy || (!reader && !provider)} className={btnPrimary}>{busy ? "Saving…" : reader ? "Save" : "Add reader"}</button>
+        <button onClick={onClose} className={btnGhost}>Cancel</button>
       </>}>
       {!reader && (
         <div><label htmlFor="rd-prov" className={lab}>Provider</label>

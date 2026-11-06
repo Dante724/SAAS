@@ -766,17 +766,17 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
           )}
         </div>
 
-        {/* Footer: print on the left; close and save on the right (the drawer convention) */}
+        {/* Footer: save and close first, on the left (the drawer convention); print and signature on the right */}
         <footer className="px-6 py-3.5 border-t border-slate-200/90 bg-white flex flex-wrap items-center justify-between gap-3 flex-shrink-0">
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2">
+            <button onClick={saveAndClose} disabled={saving} className={`${btnPrimary} shadow-clay-sm`}><M n="check" c="text-sm" />{saving ? "Saving…" : "Save and close"}</button>
+            <button onClick={tryClose} className={btnSecondary}>Close</button>
+          </div>
+          <div className="ml-auto flex flex-wrap items-center gap-2">
             <PrintMenu key={order.id} orderId={order.id} status={d.status} canInvoices={can("can_view_invoices")} onSticker={printWO}
               onItemised={hasKit && can("can_print_itemised_copy") ? printItemised : undefined} itemisedType={(order as any).is_estimate ? "estimate" : "work_order"}
               autoPrint={(order as any).is_estimate ? undefined : { canChange: can("can_manage_settings") }} onError={flash} />
             <button onClick={() => setSigOpen(true)} className={btnSecondary}><M n="draw" c="text-sm" />{d.signature ? "Sign again" : "Customer signature"}</button>
-          </div>
-          <div className="flex items-center gap-2">
-            <button onClick={tryClose} className={btnSecondary}>Close</button>
-            <button onClick={saveAndClose} disabled={saving} className={`${btnPrimary} shadow-clay-sm`}><M n="check" c="text-sm" />{saving ? "Saving…" : "Save and close"}</button>
           </div>
         </footer>
 

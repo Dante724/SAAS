@@ -159,11 +159,11 @@ export default function PhotoAnnotator({ src, onSave, onClose }: {
         </div>
 
         <div className="px-4 py-3 border-t border-slate-100 flex items-center justify-between bg-slate-50/70">
-          <span className="text-[11px] text-ink-tertiary">Saved as a new marked-up photo on this order.</span>
           <div className="flex gap-2">
-            <button onClick={onClose} className="px-4 py-2 rounded-lg text-xs font-bold text-ink-secondary hover:bg-slate-100">Cancel</button>
             <button onClick={save} disabled={saving || !ready} className={buttonClass("primary", "md")}>{saving ? "Saving…" : "Save markup"}</button>
+            <button onClick={onClose} className="px-4 py-2 rounded-lg text-xs font-bold text-ink-secondary hover:bg-slate-100">Cancel</button>
           </div>
+          <span className="text-[11px] text-ink-tertiary">Saved as a new marked-up photo on this order.</span>
         </div>
       </div>
     </div>

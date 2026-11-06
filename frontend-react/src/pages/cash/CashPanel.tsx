@@ -245,7 +245,7 @@ export default function CashPanel() {
               <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Category</label><TeklySelect value={form.cash_flow_item_id} onChange={(e) => setForm({ ...form, cash_flow_item_id: e.target.value })} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl"><option value="">— None —</option>{flow.filter((f) => !f.direction || f.direction === modal).map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</TeklySelect></div>
             )}
             <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Comment</label><input value={form.comment} onChange={(e) => setForm({ ...form, comment: e.target.value })} className="glass-input w-full py-2 px-3 text-xs rounded-xl" placeholder="Optional…" /></div>
-            <div className="flex justify-end gap-2 pt-1"><button onClick={() => setModal(null)} className={btnGhost}>Cancel</button><button onClick={submit} className={btnPrimary}>{KIND_LABEL[modal]}</button></div>
+            <div className="flex justify-start gap-2 pt-1"><button onClick={submit} className={btnPrimary}>{KIND_LABEL[modal]}</button><button onClick={() => setModal(null)} className={btnGhost}>Cancel</button></div>
           </div>
         </div>
       )}
