@@ -14,8 +14,24 @@
 /* Glass input + clay scrollbars (from the Stitch export) */
 .glass-input { background: #fff; border: 1px solid rgb(226 232 240); box-shadow: 0 1px 2px rgba(15,23,42,.04); transition: border-color .15s, box-shadow .15s; }
 .glass-input:hover { border-color: rgb(203 213 225); }
-.glass-input::placeholder { color: rgb(148 163 184); font-weight: 400; }
+.glass-input::placeholder { color: rgb(var(--c-ink-placeholder)); font-weight: 400; }
 .glass-input:focus { background:#fff; border-color:#0059ba; box-shadow: 0 0 0 3px rgba(0,89,186,.12); outline: none; }
+/* Tekly dropdown arrow: one lucide chevron-down on every single-value select, in place of
+   the browser's own arrow. A select that draws its own chevron icon opts out with `bg-none`.
+   background-image (not the shorthand) so .glass-input's `background: #fff` can't drop it;
+   the selector outranks .glass-input/.glass-input:focus on specificity. */
+.tk-select:not(.bg-none), select:not([multiple]):not([size]):not(.bg-none) {
+  appearance: none;
+  -webkit-appearance: none;
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%235e6b88' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+  background-repeat: no-repeat;
+  background-position: right .625rem center;
+  background-size: 16px;
+  padding-right: 2rem !important;
+}
+.dark .tk-select:not(.bg-none), .dark select:not([multiple]):not([size]):not(.bg-none) {
+  background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2399a4bc' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
+}
 ::-webkit-scrollbar { width: 5px; height: 5px; }
 ::-webkit-scrollbar-track { background: transparent; }
 ::-webkit-scrollbar-thumb { background: rgba(160,175,205,.45); border-radius: 999px; }
@@ -69,8 +85,8 @@ table[data-density="compact"] > tbody > tr > td { padding-top: .4rem; padding-bo
 /* Dark mode — every surface, border, text colour, the primary and the soft tints come from
    theme tokens (theme.tokens.js → CSS variables on :root / .dark), so nothing needs a patch
    here. What's left is the few things a utility can't express. */
-:root { --tint-boost: 1; --hue-lift: 0%; }
-.dark { --tint-boost: 1.8; --hue-lift: 35%; }
+:root { --tint-boost: 1; --hue-lift: 0%; --hue-sink: 45%; }
+.dark { --tint-boost: 1.8; --hue-lift: 35%; --hue-sink: 0%; }
 body { background: rgb(var(--c-canvas)); color: rgb(var(--c-ink-primary)); }
 ::selection { background: rgb(var(--c-primary-fill) / .25); }
 .dark ::selection { background: rgb(147 184 255 / .3); }
@@ -110,6 +126,22 @@ body { background: rgb(var(--c-canvas)); color: rgb(var(--c-ink-primary)); }
 @media (max-width: 899.98px) {
   /* …except while the only row is the empty message: it stays readable instead of scrolling sideways. */
   .app-main table:has(> thead > tr > th:nth-child(5)):not(:has(> tbody > tr:only-child > td[colspan]:only-child)) { min-width: 680px; }
+  /* A soft shadow shows on an edge only while there is more table to scroll that way. */
+  .app-main .overflow-hidden:has(> table) {
+    background-color: rgb(var(--c-card));
+    background-image:
+      linear-gradient(to right, rgb(var(--c-card)) 30%, rgb(var(--c-card) / 0)),
+      linear-gradient(to left, rgb(var(--c-card)) 30%, rgb(var(--c-card) / 0)),
+      radial-gradient(farthest-side at 0 50%, rgb(15 23 42 / .14), transparent),
+      radial-gradient(farthest-side at 100% 50%, rgb(15 23 42 / .14), transparent);
+    background-position: left center, right center, left center, right center;
+    background-repeat: no-repeat;
+    background-size: 40px 100%, 40px 100%, 12px 100%, 12px 100%;
+    background-attachment: local, local, scroll, scroll;
+  }
+  /* The name column stays put while the rest scrolls (tables that start with a checkbox keep theirs). */
+  .app-main table:not(:has(> thead > tr > th:first-child input)) > tbody > tr > :first-child { position: sticky; left: 0; z-index: 1; background: rgb(var(--c-card)); }
+  .app-main table:not(:has(> thead > tr > th:first-child input)) > thead > tr > :first-child { position: sticky; left: 0; z-index: 1; background: rgb(var(--c-slate-50)); }
 }
 /* Page scroll areas keep the scrollbar's space even when nothing scrolls, so switching to a
    longer or shorter tab never nudges the content sideways. */
@@ -123,6 +155,11 @@ body { background: rgb(var(--c-canvas)); color: rgb(var(--c-ink-primary)); }
 @media (max-width: 1279.98px) {
   .app-main :is(th, td):is(.px-4, .px-5, .px-6) { padding-left: .625rem; padding-right: .625rem; }
 }
+/* Every checkbox and radio gets the Tekly sapphire tick (light and dark), a pointer and the same focus
+   ring as buttons, at its normal size so nothing moves. */
+input[type="checkbox"], input[type="radio"] { accent-color: rgb(var(--c-primary-fill)); cursor: pointer; }
+input[type="checkbox"]:disabled, input[type="radio"]:disabled { cursor: not-allowed; }
+input[type="checkbox"]:focus-visible, input[type="radio"]:focus-visible { outline: 2px solid rgb(var(--c-primary-fill) / .45); outline-offset: 2px; }
 /* Touch / narrow screens: native checkboxes and radios grow to a 24px tap target (WCAG 2.5.8). */
 @media (max-width: 899.98px), (pointer: coarse) {
   input[type="checkbox"], input[type="radio"] { width: 1.5rem; height: 1.5rem; flex-shrink: 0; }

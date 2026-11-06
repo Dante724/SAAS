@@ -1,7 +1,4 @@
 import { useEffect, useState } from "react";
-import SettingsPage from "../../components/SettingsPage";
-import Button, { IconButton } from "../../components/Button";
-import { sectionCard } from "../../components/Section";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
@@ -43,13 +40,12 @@ function Thumb({ t }: { t: any }) {
   </style></head><body>${html || ""}</body></html>`;
   return (
     <div className={`relative overflow-hidden bg-white ${label ? "h-[120px]" : "h-[210px]"}`}>
-      {html === null ? <div className="absolute inset-0 sk" aria-label="Loading preview" /> : (
+      {html === null ? <div className="absolute inset-0 grid place-items-center text-[11px] text-ink-tertiary">Loading preview…</div> : (
         // sandbox="" — no scripts, no navigation; it's only a picture of the page.
         <iframe title={`Preview of ${t.name}`} sandbox="" srcDoc={doc} tabIndex={-1}
           className="absolute top-0 left-0 origin-top-left pointer-events-none border-0"
           style={{ width: label ? 520 : 794, height: label ? 300 : 1123, transform: `scale(${label ? 0.4 : 0.3})` }} />
       )}
-      <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-white to-transparent" />
     </div>
   );
 }
@@ -85,19 +81,19 @@ export default function DocumentTemplatesPage({ templates, onOpen, onChanged, on
 
   // A plain function (not a component), so the previews aren't remounted (and re-fetched) on every render.
   const card = (t: any) => (
-    <div key={t.id} className={`group relative ${sectionCard} overflow-hidden hover:border-slate-300 transition-colors`}>
-      <button type="button" onClick={() => onOpen(t)} className="block w-full text-left" aria-label={`Edit ${t.name}`}>
+    <div key={t.id} className="group relative rounded-2xl border border-slate-200/90 bg-white shadow-clay-card overflow-hidden hover:border-slate-300 hover:shadow-clay-drawer transition-shadow">
+      <button onClick={() => onOpen(t)} className="block w-full text-left" aria-label={`Edit ${t.name}`}>
         <Thumb t={t} />
         <div className="px-3.5 py-3 border-t border-slate-100">
           <div className="flex items-center gap-2">
             <span className="text-sm font-medium text-ink-primary truncate">{t.name}</span>
-            {t.is_default && <span className="text-2xs font-semibold px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 flex-shrink-0">Default</span>}
+            {t.is_default && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-md bg-emerald-50 text-emerald-700 flex-shrink-0">Default</span>}
           </div>
-          <div className="text-2xs text-ink-tertiary">{t.doc_type === "label" ? "Label" : (t.page_size || "a4").toUpperCase()}{(t.print_statuses || []).length ? ` · only in ${(t.print_statuses || []).length} status${(t.print_statuses || []).length === 1 ? "" : "es"}` : ""}{autoText(t.auto_print_events)}</div>
+          <div className="text-[11px] text-ink-tertiary">{t.doc_type === "label" ? "Label" : (t.page_size || "a4").toUpperCase()}{(t.print_statuses || []).length ? ` · only in ${(t.print_statuses || []).length} status${(t.print_statuses || []).length === 1 ? "" : "es"}` : ""}{autoText(t.auto_print_events)}</div>
         </div>
       </button>
-      <IconButton variant="secondary" size="sm" label={`More actions for ${t.name}`} onClick={(e) => { e.stopPropagation(); setMenu(menu === t.id ? null : t.id); }}
-        icon={<M n="more_horiz" c="text-base" />} className="!absolute top-2 right-2 sm:opacity-0 group-hover:opacity-100 focus:opacity-100" />
+      <button aria-label={`More actions for ${t.name}`} onClick={(e) => { e.stopPropagation(); setMenu(menu === t.id ? null : t.id); }}
+        className="absolute top-2 right-2 w-8 h-8 rounded-lg grid place-items-center bg-white/90 border border-slate-200 text-ink-secondary opacity-0 group-hover:opacity-100 focus:opacity-100 shadow-sm"><M n="more_horiz" c="text-base" /></button>
       {menu === t.id && (
         <div className="absolute top-11 right-2 z-20 w-44 bg-white rounded-xl border border-slate-200 shadow-clay-drawer py-1 text-xs" onClick={(e) => e.stopPropagation()}>
           <button onClick={() => { setMenu(null); onOpen(t); }} className="w-full text-left px-3 py-2 hover:bg-slate-50 flex items-center gap-2"><M n="edit" c="text-sm" />Edit</button>
@@ -110,28 +106,33 @@ export default function DocumentTemplatesPage({ templates, onOpen, onChanged, on
   );
 
   return (
-    <SettingsPage wide title="Document templates" sub="Receipts, estimates, invoices and labels. Each preview is filled with your latest job so you see exactly what customers get."
-      actions={<Button variant="primary" onClick={() => onOpen(null)} icon={<M n="add" c="text-sm" />}>New template</Button>}>
+    <div className="max-w-5xl space-y-6 pb-10">
+      <div>
+        <h2 className="text-base font-semibold text-ink-primary">Documents you print</h2>
+        <p className="text-xs text-ink-tertiary">Receipts, estimates, invoices and labels. Each preview is filled with your latest job so you see exactly what customers get.</p>
+        <button onClick={() => onOpen(null)} className="mt-3 inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90"><M n="add" c="text-sm" />New template</button>
+      </div>
+
       <PrintSetupCard />
 
-      {templates == null && <div className="grid gap-3 grid-cols-2 sm:grid-cols-3 lg:grid-cols-4" aria-busy="true">{[0, 1, 2, 3].map((i) => <div key={i} className="sk h-[262px] rounded-2xl" />)}</div>}
+      {templates == null && <div className="text-xs text-ink-tertiary">Loading…</div>}
       {templates && KINDS.map((k) => {
         const mine = all.filter((t) => t.doc_type === k.key).sort((a, b) => Number(!!b.is_default) - Number(!!a.is_default));
         if (!mine.length && (k.key === "other" || k.key === "receipt")) return null;
         return (
           <section key={k.key}>
-            <div className="flex flex-wrap items-center gap-2 mb-2.5">
-              <span className="w-7 h-7 rounded-lg bg-primary/10 text-primary grid place-items-center"><M n={k.icon} c="text-sm" /></span>
-              <h3 className="text-sm font-semibold text-ink-primary">{k.label}</h3>
-              <span className="text-2xs text-ink-tertiary">{k.hint}</span>
+            <div className="flex items-center gap-2 mb-2.5">
+              <span className="w-7 h-7 rounded-lg bg-primary/10 text-primary grid place-items-center"><M n={k.icon} c="text-[15px]" /></span>
+              <span className="text-sm font-semibold text-ink-primary">{k.label}</span>
+              <span className="text-[11px] text-ink-tertiary">{k.hint}</span>
             </div>
             <div className={`grid gap-3 ${k.key === "label" ? "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4" : "grid-cols-2 sm:grid-cols-3 lg:grid-cols-4"}`}>
               {mine.map((t) => card(t))}
-              <button type="button" onClick={() => onOpen({ doc_type: k.key, name: mine.length ? "" : k.label })}
+              <button onClick={() => onOpen({ doc_type: k.key, name: mine.length ? "" : k.label })}
                 className={`rounded-2xl border border-dashed border-slate-300 grid place-items-center text-xs font-semibold text-ink-secondary hover:bg-white hover:border-slate-400 transition-colors ${k.key === "label" ? "min-h-[170px]" : "min-h-[262px]"}`}>
                 <span className="flex flex-col items-center gap-1.5 px-4 text-center">
                   <M n="add_circle" c="text-xl" />
-                  {mine.length ? "Another design" : <>Create {/^[aeiou]/i.test(k.label) ? "an" : "a"} {k.label.toLowerCase()}<span className="text-2xs font-normal text-ink-tertiary">None yet. The standard layout is used until you make one.</span></>}
+                  {mine.length ? "Another design" : <>Create {/^[aeiou]/i.test(k.label) ? "an" : "a"} {k.label.toLowerCase()}<span className="text-[11px] font-normal text-ink-tertiary">None yet. The standard layout is used until you make one.</span></>}
                 </span>
               </button>
             </div>
@@ -141,18 +142,18 @@ export default function DocumentTemplatesPage({ templates, onOpen, onChanged, on
 
       {blocks.length > 0 && (
         <section>
-          <div className="flex flex-wrap items-center gap-2 mb-2.5">
-            <span className="w-7 h-7 rounded-lg bg-slate-100 text-ink-secondary grid place-items-center"><M n="dashboard" c="text-sm" /></span>
-            <h3 className="text-sm font-semibold text-ink-primary">Reusable blocks</h3>
-            <span className="text-2xs text-ink-tertiary">Pieces you drop into several documents, like a footer</span>
+          <div className="flex items-center gap-2 mb-2.5">
+            <span className="w-7 h-7 rounded-lg bg-slate-100 text-ink-secondary grid place-items-center"><M n="dashboard" c="text-[15px]" /></span>
+            <span className="text-sm font-semibold text-ink-primary">Reusable blocks</span>
+            <span className="text-[11px] text-ink-tertiary">Pieces you drop into several documents, like a footer</span>
           </div>
           <div className="flex flex-wrap gap-2">
             {blocks.map((b) => (
-              <Button key={b.id} onClick={() => onOpen(b)} icon={<M n="dashboard" c="text-sm text-ink-tertiary" />}>{b.name}</Button>
+              <button key={b.id} onClick={() => onOpen(b)} className="inline-flex items-center gap-2 px-3 py-2 rounded-xl border border-slate-200 bg-white text-xs text-ink-primary hover:border-slate-300"><M n="dashboard" c="text-sm text-ink-tertiary" />{b.name}</button>
             ))}
           </div>
         </section>
       )}
-    </SettingsPage>
+    </div>
   );
 }

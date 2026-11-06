@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import BulkPrintDialog from "../../components/BulkPrintDialog";
 import { api, idempotencyKey, openAuthedDoc } from "../../api/client";
 import { alertDialog, confirmDialog } from "../../lib/dialog";
@@ -151,7 +153,7 @@ export default function CreditNoteDrawer({ id, invoice, clientId, onClose, onCha
       footer={<>
         {editable && can("can_issue_credit_notes") && <button onClick={issue} disabled={busy || total <= 0} className={btnPrimary}>Issue {cash(total)}</button>}
         {editable && <button onClick={() => run(saveDraft)} disabled={busy} className={btnGhost}>{busy ? "Saving…" : "Save draft"}</button>}
-        <MoreMenu className="ml-auto" items={[
+        <MoreMenu className="ml-auto" align="end" items={[
           { label: "Download PDF", icon: "download", hidden: !cn, onClick: () => { if (cn) openAuthedDoc(`/print/credit-notes/${cn.id}`).catch(() => alertDialog("Could not open the PDF")); } },
           { label: "Print", icon: "print", hidden: !cn, onClick: () => setPrintOpen(true) },
           { label: "Delete draft", icon: "delete", danger: true, disabled: busy, hidden: !(cn?.status === "draft" && can("can_create_credit_notes")), onClick: remove },
@@ -166,11 +168,11 @@ export default function CreditNoteDrawer({ id, invoice, clientId, onClose, onCha
         <div>
           <label htmlFor="cn-client" className={labelCls}>Client</label>
           {editable ? (
-            <select id="cn-client" value={client} onChange={(e) => setClient(e.target.value)} className={inputCls}>
+            <TeklySelect id="cn-client" value={client} onChange={(e) => setClient(e.target.value)} className={inputCls}>
               <option value="">{clients === null ? "Loading clients…" : "Pick a client"}</option>
               {(clients || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               {cn?.client_id && !(clients || []).some((c) => c.id === cn.client_id) && <option value={cn.client_id}>{cn.client_name}</option>}
-            </select>
+            </TeklySelect>
           ) : <div className="text-sm font-semibold text-ink-primary">{cn?.client_name || "—"}</div>}
         </div>
       )}
@@ -206,7 +208,7 @@ export default function CreditNoteDrawer({ id, invoice, clientId, onClose, onCha
               <span className="tabular-nums font-semibold text-ink-primary">{cash(amounts[i].total)}</span>
             </div>
           ))}
-          {editable && lines.length === 0 && <div className="text-xs text-ink-tertiary">No lines yet.</div>}
+          {editable && lines.length === 0 && <EmptyState size="inline" title="No lines yet." />}
         </div>
       </div>
       <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 space-y-1.5 text-sm">

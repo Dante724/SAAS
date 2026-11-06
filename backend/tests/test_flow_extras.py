@@ -4,11 +4,12 @@ job items (type/priority, timers on close, QuickBooks lines), the Xero push, and
 recommended work going through the normal status change.
 """
 import uuid
-from datetime import date, timedelta
+from datetime import timedelta
 
 from sqlalchemy import insert, select
 
 from backend.models import Task, TimeEntry
+from backend.services.dates import shop_today
 
 PNG = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGA"
        "hKmMIQAAAABJRU5ErkJggg==")
@@ -53,17 +54,18 @@ async def _track(client, tok):
 
 
 # ── E5: valid until ──
-async def test_estimate_valid_until_is_shown_and_an_expired_one_is_refused(client):
-    H, _, loc, cid = await _shop(client)
+async def test_estimate_valid_until_is_shown_and_an_expired_one_is_refused(client, db):
+    H, me, loc, cid = await _shop(client)
     o, tok = await _estimate(client, H, loc, cid)
-    soon = (date.today() + timedelta(days=14)).isoformat()
+    today = await shop_today(db, me["org_id"], loc)    # "valid until" is a day on the shop's clock
+    soon = (today + timedelta(days=14)).isoformat()
     r = await client.patch(f"/api/orders/{o['id']}/estimate", json={"valid_until": soon}, headers=H)
     assert r.status_code == 200, r.text
     assert (await client.get(f"/api/orders/{o['id']}", headers=H)).json()["estimate_valid_until"] == soon
     page = await _track(client, tok)
     assert page["valid_until"] == soon and page["expired"] is False and page["awaiting_approval"] is True
 
-    past = (date.today() - timedelta(days=1)).isoformat()
+    past = (today - timedelta(days=1)).isoformat()
     await client.patch(f"/api/orders/{o['id']}/estimate", json={"valid_until": past}, headers=H)
     page = await _track(client, tok)
     assert page["expired"] is True and page["awaiting_approval"] is False

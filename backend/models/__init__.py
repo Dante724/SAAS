@@ -2921,7 +2921,7 @@ class ApiKey(OrgScoped, Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     name: Mapped[str] = mapped_column(String(120), default="API key")
-    prefix: Mapped[str] = mapped_column(String(16), index=True)      # rok_xxxxxxxx (shown in UI)
+    prefix: Mapped[str] = mapped_column(String(16), index=True)      # tk_xxxxxxxx (rok_ for keys made before the rename; shown in UI)
     key_hash: Mapped[str] = mapped_column(String(64), index=True)    # sha256 of the full key
     scopes: Mapped[str] = mapped_column(String(300), default="read,write")  # csv
     rate_limit_per_min: Mapped[Optional[int]] = mapped_column(Integer)   # WS-C: null = the default limit

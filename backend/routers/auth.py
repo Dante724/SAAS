@@ -875,6 +875,8 @@ async def me(current: Employee = Depends(get_current_employee),
         "active": current.active,
         "currency": (org.currency if org else None) or _symbol_for(org.currency_code if org else None, ""),
         "currency_code": (org.currency_code if org else None) or "",
+        # ISO alpha-2 shop country: the UI spells "Labor" for US shops and "Labour" elsewhere.
+        "country": (org.country if org else None) or None,
         "role": role_name,
         "is_owner": current.role_id is None and shop_owner,   # a roleless invitee is not the owner
         # The shop's creator (organisations.owner_id), who may also hold a role: owner-only

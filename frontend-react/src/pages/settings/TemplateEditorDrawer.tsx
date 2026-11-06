@@ -1,8 +1,7 @@
 import { useEffect, useMemo, useRef, useState } from "react";
-import Button, { IconButton } from "../../components/Button";
+import TeklySelect from "../../components/TeklySelect";
 import Tabs from "../../components/Tabs";
-import { SettingRow } from "../../components/SettingRow";
-import { fieldClass, labelClass } from "../../components/Field";
+import { buttonClass } from "../../components/Button";
 import LabelBarcodePicker, { LABEL_DOC_TYPES } from "./LabelBarcodePicker";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
@@ -311,66 +310,66 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
   }
 
   const TB = ({ cmd, val, icon, title }: { cmd: string; val?: string; icon: string; title: string }) => (
-    <IconButton size="sm" label={title} onMouseDown={(e) => { e.preventDefault(); exec(cmd, val); }} icon={<M n={icon} c="text-lg" />} />
+    <button type="button" aria-label={title} title={title} onMouseDown={(e) => { e.preventDefault(); exec(cmd, val); }} className="w-8 h-8 rounded-md hover:bg-slate-200/70 flex items-center justify-center text-ink-secondary"><M n={icon} c="text-[18px]" /></button>
   );
 
   return (
-    <div className="fixed inset-0 z-50 flex flex-col bg-slate-100" role="dialog" aria-modal="true" aria-label="Template editor">
-      {/* top bar: actions on the left, main (Save) first; view switch in the middle; tools on the right */}
-      <div className="flex flex-wrap items-center gap-2 px-4 py-2.5 min-h-14 bg-white border-b border-slate-200 shrink-0">
-        <IconButton label="Close" onClick={onClose} icon={<M n="arrow_back" c="text-lg" />} />
-        <Button variant="primary" onClick={save} disabled={busy}>{busy ? "Saving…" : "Save"}</Button>
-        <Button onClick={newDoc} icon={<M n="add" c="text-base" />} className="shrink-0">New</Button>
+    <div className="fixed inset-0 z-50 flex flex-col bg-slate-100">
+      {/* top bar */}
+      <div className="flex items-center gap-3 px-4 h-14 bg-white border-b border-slate-200 shrink-0">
+        <button aria-label="Close" onClick={onClose} title="Close" className="w-9 h-9 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="arrow_back" c="text-lg" /></button>
+        <button onClick={newDoc} className={buttonClass("secondary", "md", "shrink-0")}><M n="add" c="text-[16px]" /> New</button>
         {templates.length > 0 && (
-          <select value={currentId || ""} onChange={(e) => { const t = templates.find((x) => x.id === e.target.value); if (t) openTpl(t); }}
+          <TeklySelect value={currentId || ""} onChange={(e) => { const t = templates.find((x) => x.id === e.target.value); if (t) openTpl(t); }}
             className="glass-input h-9 max-w-[180px] rounded-xl px-3 text-sm">
             <option value="" disabled>Switch template…</option>
             {templates.map((t) => <option key={t.id} value={t.id}>{t.name}{t.is_default ? " (default)" : ""}</option>)}
-          </select>
+          </TeklySelect>
         )}
-        <input value={meta.name} onChange={(e) => setMeta({ ...meta, name: e.target.value })} placeholder="Untitled template" aria-label="Template name" className="text-sm font-semibold text-ink-primary bg-transparent border-0 focus:outline-none focus:bg-slate-100 rounded px-2 py-1 w-44" />
+        <input value={meta.name} onChange={(e) => setMeta({ ...meta, name: e.target.value })} placeholder="Untitled template" className="text-[15px] font-semibold text-ink-primary bg-transparent border-0 focus:outline-none focus:bg-slate-100 rounded px-2 py-1 w-44" />
         {/* Actions menu — replaces separate rename/delete icons */}
         <div className="relative">
-          <IconButton label="Actions" onClick={() => setActionsOpen((o) => !o)} aria-expanded={actionsOpen} icon={<M n="more_vert" c="text-lg" />} />
+          <button aria-label="Actions" onClick={() => setActionsOpen((o) => !o)} title="Actions" className="w-9 h-9 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="more_vert" c="text-lg" /></button>
           {actionsOpen && (
             <div className="absolute left-0 top-11 z-20 w-48 bg-white border border-slate-200 rounded-xl shadow-drawer p-1">
-              <button onClick={duplicate} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-100 text-left text-sm text-ink-secondary"><M n="content_copy" c="text-[16px] text-ink-tertiary" /> Duplicate</button>
-              <button onClick={setDefault} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-100 text-left text-sm text-ink-secondary"><M n="check_circle" c="text-[16px] text-ink-tertiary" /> Set as default</button>
-              <button onClick={del} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-rose-50 text-left text-sm text-rose-600"><M n="delete" c="text-[16px]" /> Delete</button>
+              <button onClick={duplicate} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-100 text-left text-sm text-ink-secondary"><M n="content_copy" c="text-ink-tertiary" /> Duplicate</button>
+              <button onClick={setDefault} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-100 text-left text-sm text-ink-secondary"><M n="check_circle" c="text-ink-tertiary" /> Set as default</button>
+              <button onClick={del} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-rose-50 text-left text-sm text-rose-600"><M n="delete" c="" /> Delete</button>
             </div>
           )}
         </div>
-        <Tabs look="segmented" label="Editor view" value={mode} onChange={(v) => (v === "edit" ? toEdit() : toPreview())} className="mx-auto"
+        <Tabs look="segmented" label="Editor view" className="mx-auto" value={mode === "preview" ? "preview" : "edit"}
+          onChange={(v) => (v === "edit" ? toEdit() : toPreview())}
           tabs={[{ id: "edit", label: "Edit", icon: <M n="edit" c="text-sm" /> }, { id: "preview", label: "Preview", icon: <M n="visibility" c="text-sm" /> }]} />
         <div className="relative">
-          <IconButton label="Document settings" onClick={() => setSettings((s) => !s)} aria-expanded={settings} icon={<M n="tune" c="text-lg" />} />
+          <button aria-label="Document settings" onClick={() => setSettings((s) => !s)} title="Document settings" className="w-9 h-9 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="tune" c="text-lg" /></button>
           {settings && (
             <div className="absolute right-0 top-11 z-20 w-64 bg-white border border-slate-200 rounded-xl shadow-drawer p-3 space-y-3">
-              <div><label className={labelClass}>Type</label>
-                <select value={meta.doc_type} onChange={(e) => setMeta({ ...meta, doc_type: e.target.value, auto_print_on: keepAllowed(meta.auto_print_on, e.target.value) })} className={fieldClass("capitalize pr-8")}>{DOC_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}</select></div>
-              <div><label className={labelClass}>Paper / label size</label>
-                <select value={meta.page_size} onChange={(e) => setMeta({ ...meta, page_size: e.target.value })} className={fieldClass()}>
+              <div><label className="block text-sm font-medium text-ink-primary mb-1">Type</label>
+                <TeklySelect value={meta.doc_type} onChange={(e) => setMeta({ ...meta, doc_type: e.target.value, auto_print_on: keepAllowed(meta.auto_print_on, e.target.value) })} className="glass-input w-full rounded-xl px-3 py-2 text-sm capitalize">{DOC_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}</TeklySelect></div>
+              <div><label className="block text-sm font-medium text-ink-primary mb-1">Paper / label size</label>
+                <TeklySelect value={meta.page_size} onChange={(e) => setMeta({ ...meta, page_size: e.target.value })} className="glass-input w-full rounded-xl px-3 py-2 text-sm">
                   <option value="a4">A4 (210×297mm)</option>
                   <option value="letter">Letter (8.5×11in)</option>
                   <option value="receipt80">Receipt 80mm</option>
                   <option value="receipt58">Receipt 58mm</option>
                   <option value="label">Custom label (mm)…</option>
-                </select></div>
+                </TeklySelect></div>
               {meta.page_size === "label" && (
                 <div className="grid grid-cols-2 gap-2">
-                  <div><label className={labelClass}>Width mm</label>
-                    <input type="number" value={meta.page_w_mm ?? ""} onChange={(e) => setMeta({ ...meta, page_w_mm: e.target.value ? +e.target.value : null })} placeholder="40" className={fieldClass()} /></div>
-                  <div><label className={labelClass}>Height mm</label>
-                    <input type="number" value={meta.page_h_mm ?? ""} onChange={(e) => setMeta({ ...meta, page_h_mm: e.target.value ? +e.target.value : null })} placeholder="30" className={fieldClass()} /></div>
+                  <div><label className="block text-sm font-medium text-ink-primary mb-1">Width mm</label>
+                    <input type="number" value={meta.page_w_mm ?? ""} onChange={(e) => setMeta({ ...meta, page_w_mm: e.target.value ? +e.target.value : null })} placeholder="40" className="glass-input w-full rounded-xl px-3 py-2 text-sm" /></div>
+                  <div><label className="block text-sm font-medium text-ink-primary mb-1">Height mm</label>
+                    <input type="number" value={meta.page_h_mm ?? ""} onChange={(e) => setMeta({ ...meta, page_h_mm: e.target.value ? +e.target.value : null })} placeholder="30" className="glass-input w-full rounded-xl px-3 py-2 text-sm" /></div>
                 </div>
               )}
-              <div><label className={labelClass}>Margin mm (blank = auto)</label>
-                <input type="number" value={meta.margin_mm ?? ""} onChange={(e) => setMeta({ ...meta, margin_mm: e.target.value ? +e.target.value : null })} placeholder={(meta.page_size === "a4" || meta.page_size === "letter") ? "10" : "0"} className={fieldClass()} /></div>
-              <div><label className={labelClass}>Default font</label>
-                <select value={meta.font_family} onChange={(e) => setMeta({ ...meta, font_family: e.target.value })} className={fieldClass()}>{FONTS.map((f) => <option key={f} value={f}>{f}</option>)}</select></div>
-              <SettingRow label="Default for this type"><Switch label="Default for this type" on={!!meta.is_default} onChange={(v) => setMeta({ ...meta, is_default: v })} /></SettingRow>
+              <div><label className="block text-sm font-medium text-ink-primary mb-1">Margin mm (blank = auto)</label>
+                <input type="number" value={meta.margin_mm ?? ""} onChange={(e) => setMeta({ ...meta, margin_mm: e.target.value ? +e.target.value : null })} placeholder={(meta.page_size === "a4" || meta.page_size === "letter") ? "10" : "0"} className="glass-input w-full rounded-xl px-3 py-2 text-sm" /></div>
+              <div><label className="block text-sm font-medium text-ink-primary mb-1">Default font</label>
+                <TeklySelect value={meta.font_family} onChange={(e) => setMeta({ ...meta, font_family: e.target.value })} className="glass-input w-full rounded-xl px-3 py-2 text-sm">{FONTS.map((f) => <option key={f} value={f}>{f}</option>)}</TeklySelect></div>
+              <div className="flex items-center gap-2 text-sm text-ink-secondary"><Switch size="sm" label="Default for this type" on={!!meta.is_default} onChange={(v) => setMeta({ ...meta, is_default: v })} /> Default for this type</div>
               {autoPrintChoices(meta.doc_type).length > 0 && (
-                <fieldset><legend className={labelClass}>Print automatically when</legend>
+                <fieldset><legend className="block text-sm font-medium text-ink-primary mb-1">Print automatically when</legend>
                   {autoPrintChoices(meta.doc_type).map(([ev, label]) => {
                     const on = (meta.auto_print_on || "").split(",").includes(ev);
                     return (
@@ -378,7 +377,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
                         <input type="checkbox" checked={on} onChange={() => setMeta({ ...meta, auto_print_on: toggleEvent(meta.auto_print_on, ev) })} /> {label}</label>
                     );
                   })}
-                  <span className="block text-2xs text-ink-tertiary mt-1">{meta.doc_type === "label"
+                  <span className="block text-[11px] text-ink-tertiary mt-1">{meta.doc_type === "label"
                     ? "One label per item on the job. Only labels that use {Asset …} variables can print by themselves."
                     : "Nothing ticked: it only prints when someone presses Print."}</span>
                 </fieldset>
@@ -387,12 +386,11 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
             </div>
           )}
         </div>
-        {flash && <span role="status" className="text-xs text-emerald-700 font-semibold">{flash}</span>}
-        <Button onClick={() => setRail((r) => r === "blocks" ? null : "blocks")} aria-pressed={rail === "blocks"} icon={<M n="dashboard" c="text-base" />}
-          className={rail === "blocks" ? "!border-primary/40 !text-primary !bg-primary/5" : ""}>Blocks</Button>
-        <Button onClick={() => setRail((r) => r === "vars" ? null : "vars")} aria-pressed={rail === "vars"} icon={<M n="data_object" c="text-base" />}
-          className={rail === "vars" ? "!border-primary/40 !text-primary !bg-primary/5" : ""}>Variables</Button>
-        <IconButton variant="secondary" label="Print at exact size" onClick={printDoc} icon={<M n="print" c="text-lg" />} />
+        <button onClick={() => setRail((r) => r === "blocks" ? null : "blocks")} className={`h-9 px-3 rounded-lg border text-xs font-semibold flex items-center gap-1 ${rail === "blocks" ? "border-primary text-primary bg-primary/5" : "border-slate-200 text-ink-secondary hover:bg-slate-100"}`}><M n="dashboard" c="text-[16px]" /> Blocks</button>
+        <button onClick={() => setRail((r) => r === "vars" ? null : "vars")} className={`h-9 px-3 rounded-lg border text-xs font-semibold flex items-center gap-1 ${rail === "vars" ? "border-primary text-primary bg-primary/5" : "border-slate-200 text-ink-secondary hover:bg-slate-100"}`}><M n="data_object" c="text-[16px]" /> Variables</button>
+        {flash && <span className="text-xs text-emerald-600 font-semibold">{flash}</span>}
+        <button aria-label="Print at exact size" onClick={printDoc} title="Print at exact size" className={buttonClass("secondary", "md", "w-9 px-0")}><M n="print" c="text-lg" /></button>
+        <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save"}</button>
       </div>
 
       {/* formatting toolbar (edit only) */}
@@ -401,11 +399,11 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
           <select title="Font" onMouseDown={saveSel} onChange={(e) => applyFont(e.target.value)} defaultValue="" className="h-8 border border-slate-200 rounded-md text-xs px-1.5 text-ink-secondary bg-white">
             <option value="" disabled>Font</option>{FONTS.map((f) => <option key={f} value={f} style={{ fontFamily: f }}>{f}</option>)}
           </select>
-          <select title="Size" value={size} onMouseDown={saveSel} onChange={(e) => { const px = Number(e.target.value); setSize(px); applySize(px); }} className="h-8 border border-slate-200 rounded-md text-xs px-1.5 text-ink-secondary bg-white w-16">
+          <select title="Size" value={size} onMouseDown={saveSel} onChange={(e) => { const px = Number(e.target.value); setSize(px); applySize(px); }} className="h-8 border border-slate-200 rounded-md text-xs px-1.5 text-ink-secondary bg-white w-16 bg-none">
             {SIZES.map((s) => <option key={s} value={s}>{s}px</option>)}
           </select>
-          <label title="Text colour" className="w-8 h-8 rounded-md hover:bg-slate-200/70 flex items-center justify-center text-ink-secondary cursor-pointer relative"><M n="format_color_text" c="text-[18px]" /><input type="color" onMouseDown={saveSel} onChange={(e) => applyColor(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" /></label>
-          <label title="Highlight" className="w-8 h-8 rounded-md hover:bg-slate-200/70 flex items-center justify-center text-ink-secondary cursor-pointer relative"><M n="format_ink_highlighter" c="text-[18px]" /><input type="color" onMouseDown={saveSel} onChange={(e) => applyHilite(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" /></label>
+          <label title="Text colour" className="w-8 h-8 rounded-md hover:bg-slate-200/70 flex items-center justify-center text-ink-secondary cursor-pointer relative"><M n="format_color_text" c="text-lg" /><input type="color" onMouseDown={saveSel} onChange={(e) => applyColor(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" /></label>
+          <label title="Highlight" className="w-8 h-8 rounded-md hover:bg-slate-200/70 flex items-center justify-center text-ink-secondary cursor-pointer relative"><M n="format_ink_highlighter" c="text-lg" /><input type="color" onMouseDown={saveSel} onChange={(e) => applyHilite(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" /></label>
           <span className="w-px h-5 bg-slate-200 mx-1" />
           <TB cmd="bold" icon="format_bold" title="Bold" />
           <TB cmd="italic" icon="format_italic" title="Italic" />
@@ -419,25 +417,25 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
           <TB cmd="justifyRight" icon="format_align_right" title="Align right" />
           <TB cmd="insertHorizontalRule" icon="horizontal_rule" title="Divider" />
           <span className="w-px h-5 bg-slate-200 mx-1" />
-          <Button variant="ghost" size="sm" onMouseDown={(e) => { e.preventDefault(); insertVar("{Company Logo}"); }} icon={<M n="image" c="text-base" />}>Logo</Button>
-          <Button variant="ghost" size="sm" onMouseDown={(e) => { e.preventDefault(); insertHTML(itemsTableHTML()); }} icon={<M n="table" c="text-base" />}>Items table</Button>
-          <IconButton size="sm" label="Edit HTML source" aria-pressed={code !== null} onClick={toggleCode} className={code !== null ? "!bg-primary/10 !text-primary" : ""} icon={<M n="code" c="text-lg" />} />
-          <Button variant="ghost" size="sm" onClick={() => setShowSmart((s) => !s)} aria-pressed={showSmart} className={`ml-auto ${showSmart ? "!bg-primary/10 !text-primary" : ""}`} icon={<M n="bolt" c="text-base" />}>Smart builder</Button>
+          <button type="button" onMouseDown={(e) => { e.preventDefault(); insertVar("{Company Logo}"); }} className="h-8 px-2 rounded-md hover:bg-slate-200/70 flex items-center gap-1 text-xs text-ink-secondary"><M n="image" c="text-[16px]" /> Logo</button>
+          <button type="button" onMouseDown={(e) => { e.preventDefault(); insertHTML(itemsTableHTML()); }} className="h-8 px-2 rounded-md hover:bg-slate-200/70 flex items-center gap-1 text-xs text-ink-secondary"><M n="table" c="text-[16px]" /> Items table</button>
+          <button aria-label="Edit HTML source" type="button" title="Edit HTML source" onClick={toggleCode} className={`w-8 h-8 rounded-md flex items-center justify-center ${code !== null ? "bg-primary/10 text-primary" : "hover:bg-slate-200/70 text-ink-secondary"}`}><M n="code" c="text-[18px]" /></button>
+          <button type="button" onClick={() => setShowSmart((s) => !s)} className={`h-8 px-2 rounded-md flex items-center gap-1 text-xs ml-auto ${showSmart ? "bg-primary/10 text-primary" : "hover:bg-slate-200/70 text-ink-secondary"}`}><M n="bolt" c="text-[16px]" /> Smart builder</button>
         </div>
       )}
 
       {/* Smart builder — Tekly's own document intelligence (offline presets + describe) */}
       {mode === "edit" && showSmart && (
         <div className="px-4 py-2 bg-primary/5 border-b border-slate-200 flex items-center gap-2 flex-wrap shrink-0">
-          <span className="inline-flex items-center gap-1 text-2xs font-semibold text-primary"><M n="bolt" c="text-[15px]" /> Smart builder</span>
+          <span className="inline-flex items-center gap-1 text-2xs font-semibold text-primary"><M n="bolt" c="" /> Smart builder</span>
           {presets.map((p) => (
-            <button key={p.key} onClick={() => buildDoc(p.key)} disabled={aiBusy} className="text-2xs px-2 py-1 rounded-full border border-slate-200 bg-white hover:border-primary hover:text-primary disabled:opacity-60">{p.label}</button>
+            <button key={p.key} onClick={() => buildDoc(p.key)} disabled={aiBusy} className="text-[11px] px-2 py-1 rounded-full border border-slate-200 bg-white hover:border-primary hover:text-primary disabled:opacity-60">{p.label}</button>
           ))}
           <span className="w-px h-5 bg-slate-200 mx-0.5" />
           <input value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") buildDoc(); }}
             placeholder="…or describe one — e.g. “estimate with logo, parts table, deposit line and signature”"
             className="glass-input flex-1 min-w-[220px] rounded-xl px-3 py-2 text-sm" />
-          <Button variant="primary" size="sm" onClick={() => buildDoc()} disabled={aiBusy || !aiPrompt.trim()}>{aiBusy ? "Building…" : "Build"}</Button>
+          <button onClick={() => buildDoc()} disabled={aiBusy || !aiPrompt.trim()} className="h-8 px-3 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60 flex items-center gap-1 whitespace-nowrap">{aiBusy ? "Building…" : "Build"}</button>
         </div>
       )}
 
@@ -447,26 +445,26 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
         {mode === "edit" && rail === "blocks" && (
           <aside className="w-56 bg-white border-r border-slate-200 flex flex-col shrink-0">
             <div className="px-3 py-2.5 border-b border-slate-200 flex items-center justify-between">
-              <span className="text-2xs font-semibold text-ink-secondary ">Blocks</span>
+              <span className="text-[11px] font-bold text-ink-secondary ">Blocks</span>
               <div className="relative">
-                <Button variant="link" onClick={() => setAddOpen((a) => !a)} aria-expanded={addOpen}><M n="add" c="text-sm" />Add</Button>
+                <button onClick={() => setAddOpen((a) => !a)} className="text-xs font-semibold text-primary flex items-center gap-0.5 hover:underline"><M n="add" c="text-[15px]" /> Add</button>
                 {addOpen && (
                   <div className="absolute right-0 top-7 z-20 w-48 bg-white border border-slate-200 rounded-xl shadow-drawer p-1">
                     {BLOCKS.map((b) => (
-                      <button key={b.key} onClick={() => addBlock(b.key)} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-100 text-left text-sm text-ink-secondary"><M n={b.icon} c="text-[16px] text-ink-tertiary" /> {b.label}</button>
+                      <button key={b.key} onClick={() => addBlock(b.key)} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-100 text-left text-sm text-ink-secondary"><M n={b.icon} c="text-ink-tertiary" /> {b.label}</button>
                     ))}
                   </div>
                 )}
               </div>
             </div>
             <div className="flex-1 overflow-y-auto p-2 space-y-1">
-              {blocks.length === 0 && <p className="text-2xs text-ink-tertiary px-1 py-2">Add blocks to build your document, or just type on the page.</p>}
+              {blocks.length === 0 && <p className="text-[11px] text-ink-tertiary px-1 py-2">Add blocks to build your document, or just type on the page.</p>}
               {blocks.map((b) => (
                 <div key={b.id} draggable onDragStart={() => { dragId.current = b.id; }} onDragOver={(e) => e.preventDefault()} onDrop={() => { if (dragId.current) moveBlock(dragId.current, b.id); dragId.current = null; }}
                   className="group flex items-center gap-1.5 px-2 py-1.5 rounded-lg border border-slate-200 bg-white hover:border-slate-300 cursor-grab active:cursor-grabbing">
-                  <M n="drag_indicator" c="text-[16px] text-ink-tertiary" />
+                  <M n="drag_indicator" c="text-ink-tertiary" />
                   <button onClick={() => jumpBlock(b.id)} className="flex-1 text-left text-xs font-medium text-ink-primary truncate">{b.label}</button>
-                  <IconButton size="sm" label="Remove" onClick={() => removeBlock(b.id)} icon={<M n="close" c="text-sm" />} className="!h-7 !w-7 sm:opacity-0 group-hover:opacity-100 focus:opacity-100 hover:!text-rose-600" />
+                  <button aria-label="Remove" onClick={() => removeBlock(b.id)} title="Remove" className="w-6 h-6 rounded grid place-items-center text-ink-tertiary opacity-0 group-hover:opacity-100 hover:bg-rose-50 hover:text-rose-500"><M n="close" c="text-[13px]" /></button>
                 </div>
               ))}
             </div>
@@ -477,7 +475,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
         <div className="relative flex-1 min-w-0 overflow-auto">
           {code !== null && mode === "edit" && (
             <div className="absolute inset-0 z-10 flex flex-col bg-slate-900">
-              <div className="px-4 py-1.5 text-2xs font-semibold text-slate-300 border-b border-slate-700 flex items-center gap-1"><M n="code" c="text-[14px]" /> HTML source — click the &lt;/&gt; button again to apply</div>
+              <div className="px-4 py-1.5 text-2xs font-semibold text-slate-300 border-b border-slate-700 flex items-center gap-1"><M n="code" c="text-xs" /> HTML source — click the &lt;/&gt; button again to apply</div>
               <textarea value={code} onChange={(e) => setCode(e.target.value)} spellCheck={false}
                 className="flex-1 w-full bg-slate-900 text-slate-100 tabular-nums text-xs p-4 outline-none resize-none" />
             </div>
@@ -486,28 +484,28 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
             {mode === "edit" && empty && !blankOk && code === null && presets.length > 0 && (
               <div className="absolute top-20 left-1/2 -translate-x-1/2 z-[5] w-[420px] max-w-[90%] bg-white rounded-2xl border border-slate-200 shadow-clay-drawer p-5">
                 <div className="text-sm font-semibold text-ink-primary">Start from a layout</div>
-                <div className="text-2xs text-ink-tertiary mb-3">Pick one and change anything you like. Your logo and details fill in automatically.</div>
+                <div className="text-[11px] text-ink-tertiary mb-3">Pick one and change anything you like. Your logo and details fill in automatically.</div>
                 <div className="space-y-1.5">
                   {[...presets].sort((a, b) => Number(b.doc_type === meta.doc_type) - Number(a.doc_type === meta.doc_type)).map((p) => (
                     <button key={p.key} onClick={() => { setBlankOk(true); buildDoc(p.key); }} disabled={aiBusy}
                       className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-colors disabled:opacity-60 ${p.doc_type === meta.doc_type ? "border-primary/40 bg-primary/5" : "border-slate-200 hover:border-slate-300"}`}>
                       <M n="description" c="text-base text-primary" />
                       <span className="text-sm text-ink-primary flex-1">{p.label}</span>
-                      {p.doc_type === meta.doc_type && <span className="text-2xs font-semibold text-primary">Suggested</span>}
+                      {p.doc_type === meta.doc_type && <span className="text-[11px] font-semibold text-primary">Suggested</span>}
                     </button>
                   ))}
                 </div>
-                <Button variant="ghost" onClick={() => { setBlankOk(true); focusEditor(); }} className="mt-3 w-full">Start with a blank page</Button>
+                <button onClick={() => { setBlankOk(true); focusEditor(); }} className="mt-3 w-full text-center text-xs font-semibold text-ink-secondary hover:text-ink-primary py-1.5">Start with a blank page</button>
               </div>
             )}
             <div ref={edRef} contentEditable={mode === "edit"} suppressContentEditableWarning onInput={refreshBlocks} onKeyUp={saveSel} onMouseUp={saveSel}
-              className={`doc-canvas bg-white shadow-lg outline-none text-sm text-ink-primary ${mode === "edit" ? "editing" : ""}`}
+              className={`doc-canvas bg-paper shadow-lg outline-none text-sm text-paper-ink ${mode === "edit" ? "editing" : ""}`}
               style={{ width: pageW, maxWidth: "100%", minHeight: pageMinH, padding: padPx, fontFamily: meta.font_family || "Inter", lineHeight: 1.5, display: mode === "edit" ? "block" : "none" }} />
             {mode === "preview" && (
-              <div className="doc-canvas bg-white shadow-lg text-sm text-ink-primary" style={{ width: pageW, maxWidth: "100%", minHeight: pageMinH, padding: padPx, fontFamily: meta.font_family || "Inter", lineHeight: 1.5 }} dangerouslySetInnerHTML={{ __html: preview ? sanitizeHtml(preview) : "<p style='color:#999'>Loading preview…</p>" }} />
+              <div className="doc-canvas bg-paper shadow-lg text-sm text-paper-ink" style={{ width: pageW, maxWidth: "100%", minHeight: pageMinH, padding: padPx, fontFamily: meta.font_family || "Inter", lineHeight: 1.5 }} dangerouslySetInnerHTML={{ __html: preview ? sanitizeHtml(preview) : "<p style='color:#999'>Loading preview…</p>" }} />
             )}
           </div>
-          {mode === "preview" && sample && <div className="absolute top-3 left-1/2 -translate-x-1/2 text-2xs text-ink-tertiary bg-white/80 border border-slate-200 rounded-full px-3 py-1">Preview using {sample}</div>}
+          {mode === "preview" && sample && <div className="absolute top-3 left-1/2 -translate-x-1/2 text-[11px] text-ink-tertiary bg-white/80 border border-slate-200 rounded-full px-3 py-1">Preview using {sample}</div>}
         </div>
 
         {/* variables rail */}
@@ -515,17 +513,17 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
           <aside className="w-[300px] bg-white border-l border-slate-200 flex flex-col shrink-0">
             <div className="p-2.5 border-b border-slate-200 flex items-center gap-2">
               <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search variables…" className="flex-1 bg-white border border-slate-200 rounded-md text-xs px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary" />
-              <IconButton size="sm" label="Close" onClick={() => setRail("blocks")} icon={<M n="close" c="text-base" />} />
+              <button aria-label="Close" onClick={() => setRail("blocks")} className="w-7 h-7 rounded-md hover:bg-slate-100 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
             </div>
             <div className="flex-1 overflow-y-auto p-1.5 space-y-1">
-              <p className="text-2xs text-ink-tertiary px-2 pt-1 pb-2">Click a variable to drop it into the page at your cursor.</p>
+              <p className="text-[11px] text-ink-tertiary px-2 pt-1 pb-2">Click a variable to drop it into the page at your cursor.</p>
               {shown.length === 0 && <div className="text-xs text-ink-tertiary px-2 py-3">No matches.</div>}
               {shown.map((g) => {
                 const isOpen = ql ? true : (open[g.group] ?? g.group === "Most used");
                 return (
                   <div key={g.group}>
-                    <button type="button" onClick={() => setOpen((o) => ({ ...o, [g.group]: !isOpen }))} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-200/60 text-left"><M n={GROUP_ICON[g.group] || "label"} c="text-[16px] text-ink-tertiary shrink-0" /><span className="text-2xs font-semibold text-ink-secondary flex-1">{g.group}</span><M n={isOpen ? "expand_less" : "expand_more"} c="text-sm text-ink-tertiary" /></button>
-                    {isOpen && <div className="pb-1">{g.items.map((tok) => (<button key={tok} type="button" title={`Insert ${tok}`} onMouseDown={(e) => { e.preventDefault(); insertVar(tok); }} className="group/var w-full flex items-center gap-1.5 pl-3 pr-2 py-1 text-[13px] text-primary text-left rounded hover:bg-primary/5"><span className="truncate">{tok.replace(/^\{|\}$/g, "")}</span><M n="add" c="text-[13px] text-ink-tertiary opacity-0 group-hover/var:opacity-100 ml-auto shrink-0" /></button>))}</div>}
+                    <button type="button" onClick={() => setOpen((o) => ({ ...o, [g.group]: !isOpen }))} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-200/60 text-left"><M n={GROUP_ICON[g.group] || "label"} c="text-ink-tertiary shrink-0" /><span className="text-2xs font-semibold text-ink-secondary flex-1">{g.group}</span><M n={isOpen ? "expand_less" : "expand_more"} c="text-sm text-ink-tertiary" /></button>
+                    {isOpen && <div className="pb-1">{g.items.map((tok) => (<button key={tok} type="button" title={`Insert ${tok}`} onMouseDown={(e) => { e.preventDefault(); insertVar(tok); }} className="group/var w-full flex items-center gap-1.5 pl-3 pr-2 py-1 text-xs text-primary text-left rounded hover:bg-primary/5"><span className="truncate">{tok.replace(/^\{|\}$/g, "")}</span><M n="add" c="text-xs text-ink-tertiary opacity-0 group-hover/var:opacity-100 ml-auto shrink-0" /></button>))}</div>}
                   </div>
                 );
               })}
