@@ -74,7 +74,7 @@ export default function PlansTab() {
             </button>
             {starter && (
               <div role="menu" className="absolute left-0 top-full mt-1.5 z-40 w-80 bg-raised rounded-2xl border border-slate-200/80 shadow-clay-card p-1.5">
-                <div className="px-3 pt-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-tertiary">Start from your trade</div>
+                <div className="px-3 pt-2 pb-1.5 text-[11px] font-semibold text-ink-tertiary">Start from your trade</div>
                 {STARTER_TEMPLATES.map((t) => (
                   <button key={t.k} role="menuitem" onClick={() => fromStarter(t.k)}
                     className="w-full flex items-start gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-slate-50 focus-visible:outline-none focus-visible:bg-slate-50">
@@ -162,7 +162,7 @@ function PlanEditor({ plan, onClose, onSaved }: { plan: Omit<Plan, "id" | "membe
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={onClose} />
       <div className="relative h-full w-full max-w-[560px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90">
         <header className="px-6 py-4 border-b border-slate-200/90 flex items-center gap-2">
           <div className="text-base font-semibold text-ink-primary">{p.id ? "Edit plan" : "New plan"}</div>

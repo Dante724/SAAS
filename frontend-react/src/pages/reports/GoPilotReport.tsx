@@ -7,6 +7,7 @@ import { buttonClass } from "../../components/Button";
 import { api, openAuthedDoc } from "../../api/client";
 import { alertDialog } from "../../lib/dialog";
 import DateField from "../../components/DateField";
+import { theadRowClass } from "../../components/Table";
 
 type Counts = { total: number; go: number };
 export type PilotRow = {
@@ -54,7 +55,7 @@ export default function GoPilotReport() {
   }
 
   const h = rep?.headline;
-  const th = "py-2 px-3 text-left text-[11px] font-semibold text-ink-tertiary whitespace-nowrap";
+  const th = "py-2 px-3 text-left whitespace-nowrap";
   const td = "py-2 px-3 text-xs tabular-nums whitespace-nowrap";
   return (
     <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
@@ -84,8 +85,8 @@ export default function GoPilotReport() {
       {rep && (
         <div className="bg-white rounded-2xl border border-slate-200 overflow-x-auto">
           <table className="w-full">
-            <thead className="border-b border-slate-100">
-              <tr>
+            <thead>
+              <tr className={theadRowClass}>
                 <th className={th}>Person</th><th className={th}>Status changes (phone / all)</th><th className={th}>Photos (phone / all)</th>
                 <th className={th}>Messages from Go</th><th className={th}>Scans</th>
                 {LOOKUP_KINDS.map(([k, l]) => <th key={k} className={th}>Lookups: {l}</th>)}

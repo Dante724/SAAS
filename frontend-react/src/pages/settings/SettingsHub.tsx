@@ -834,7 +834,7 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[440px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <div>
@@ -1055,7 +1055,7 @@ function NotifTemplateDrawer({ tpl, module, onClose, onSaved }: {
   }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[720px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h2 className="font-bold text-ink-primary">{tpl?.id ? "Edit template" : "New template"}</h2>
@@ -1442,7 +1442,7 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
   const fld = "w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-ink-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/10";
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[540px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="px-5 pt-5 pb-3">
@@ -1580,7 +1580,7 @@ function PayrollRuleDrawer({ rule, employees, statuses, onClose, onSaved }: { ru
   const isPct = f.calc_type === "percent";
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[520px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
@@ -1680,7 +1680,7 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
   async function del(id: string) { try { await api.del(`/forms/fields/${id}`); load(); onChanged(); } catch { /* ignore */ } }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[480px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <div><h2 className="font-bold text-ink-primary">Custom fields</h2><p className="text-[11px] text-ink-tertiary">{type.name || type.label}</p></div>
@@ -1892,7 +1892,7 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
   }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className={`relative ${hasVars ? "w-[720px]" : "w-[440px]"} max-w-full bg-white h-full shadow-drawer flex flex-col`}>
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h2 className="font-bold text-ink-primary">{title}</h2>
@@ -2564,7 +2564,7 @@ function FormsDesigner({ types, onAddType, onEditType, onDeleteType, onAdvanced,
         {open && <div className="fixed inset-0 z-30" aria-hidden="true" onClick={() => setOpen("")} />}
         {isOrder && type ? (<div className="space-y-3">
           <div className="flex flex-wrap items-center gap-3">
-            <span className="text-2xs font-semibold uppercase tracking-wider text-ink-tertiary">Job type</span>
+            <span className="text-xs font-semibold text-ink-tertiary">Job type</span>
             <div className="relative">
               <button type="button" onClick={() => setOpen(open === "types" ? "" : "types")} aria-haspopup="menu" aria-expanded={open === "types"}
                 className="h-9 pl-3 pr-2.5 rounded-xl border border-slate-200 bg-white hover:border-slate-300 inline-flex items-center gap-2 text-xs font-semibold text-ink-primary transition-colors">

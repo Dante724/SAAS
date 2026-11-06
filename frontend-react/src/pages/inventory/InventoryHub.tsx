@@ -41,6 +41,7 @@ import { productGlyph } from "../sales/SalesPOS";
 import { RowMenu } from "../company/CompanyHub";
 import { loadFailed } from "../../lib/notice";
 import { clickableRow } from "../../lib/clickable";
+import { theadRowClass } from "../../components/Table";
 
 type Tab = "stock" | "devices" | "services" | "bundles" | "purchase-orders"
   | "postings" | "reservations" | "conversions" | "transfers" | "stock-takes" | "write-offs" | "returns" | "bins";
@@ -439,7 +440,7 @@ export default function InventoryHub() {
                     <div className="fixed inset-0 z-30" aria-hidden="true" onClick={() => setNavMore(false)} />
                     {/* A rich menu (icon, name, one line on what it holds) that opens under More; the tabs never move. */}
                     <div role="menu" className="absolute left-0 top-full mt-1 w-[24rem] max-w-[calc(100vw-2rem)] bg-white rounded-2xl border border-slate-200/90 shadow-drawer ring-1 ring-black/[0.02] z-40 p-1.5">
-                      <p className="px-3 pt-2 pb-1.5 text-2xs font-semibold uppercase tracking-wider text-ink-tertiary">Stock records</p>
+                      <p className="px-3 pt-2 pb-1.5 text-xs font-semibold text-ink-tertiary">Stock records</p>
                       {overflowTabs.map((t) => {
                         const meta = AUDIT[t.id];
                         const on = tab === t.id;
@@ -539,7 +540,7 @@ export default function InventoryHub() {
           <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
             <div className="overflow-x-auto">
             <table data-density={density} className="w-full min-w-[880px] text-left border-collapse">
-              <thead><tr className="border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary">
+              <thead><tr className={theadRowClass}>
                 <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" aria-label="Select all" checked={pAllSel} onChange={pToggleAll} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
                 <th className="py-3.5 px-3">Product</th><th className="py-3.5 px-3">Category</th><th className="py-3.5 px-3">Unit</th>
                 <th className="py-3.5 px-3 text-right">Cost</th><th className="py-3.5 px-3 text-right">Sell price</th><th className="py-3.5 px-3 text-right">Margin</th><th className="py-3.5 px-3 text-right">In stock</th>{cfg.enable_reservations && <th className="py-3.5 px-3 text-right">Reserved</th>}<th className="py-3.5 pr-5 pl-2 w-12"><span className="sr-only">Actions</span></th>
@@ -642,7 +643,7 @@ export default function InventoryHub() {
           <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
             <div className="overflow-x-auto">
             <table className="w-full min-w-[720px] text-left border-collapse">
-              <thead className="border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary"><tr>
+              <thead><tr className={theadRowClass}>
                 <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" aria-label="Select all" checked={!!assets?.length && assets.every((a) => asel.has(a.id))} onChange={(e) => setAsel((s) => { const n = new Set(s); (assets || []).forEach((a) => (e.target.checked ? n.add(a.id) : n.delete(a.id))); return n; })} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
                 <th className="py-3.5 px-3">Device / Model</th><th className="py-3.5 px-3">Serial / IMEI</th><th className="py-3.5 px-3">Ownership</th><th className="py-3.5 pl-3 pr-5">Status</th>
               </tr></thead>
@@ -673,7 +674,7 @@ export default function InventoryHub() {
           <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
             <div className="overflow-x-auto">
             <table className="w-full min-w-[720px] text-left border-collapse">
-              <thead className="border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary"><tr>
+              <thead><tr className={theadRowClass}>
                 <th className="py-3.5 pl-5 px-3">PO number</th><th className="py-3.5 px-3">Supplier</th><th className="py-3.5 px-3">Expected</th><th className="py-3.5 px-3 text-right">Total ({currencySymbol()})</th><th className="py-3.5 px-3 text-center">Status</th><th className="py-3.5 pr-5 pl-2 w-12"><span className="sr-only">Print</span></th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 text-xs">
@@ -715,7 +716,7 @@ export default function InventoryHub() {
             <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
               <div className="overflow-x-auto">
               <table className="w-full min-w-[640px] text-left border-collapse text-xs">
-                <thead className="border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary"><tr>
+                <thead><tr className={theadRowClass}>
                   {(AUDIT_COLS[tab] || []).map(([h]) => <th key={h} className={`py-3 px-4 ${AUDIT_NUM.has(h) ? "text-right" : ""}`}>{h}</th>)}
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100 text-ink-secondary">
@@ -1004,7 +1005,7 @@ function ReorderModal({ onClose, onCreated }: { onClose: () => void; onCreated?:
             <>
               <p className="text-xs text-ink-tertiary mb-3">Products at or below their minimum stock. Suggested qty brings each back to 2× min.</p>
               <table className="w-full text-xs">
-                <thead className="text-ink-tertiary text-[11px] font-semibold"><tr><th className="text-left py-2">Product</th><th className="text-right py-2">Available</th><th className="text-right py-2">Min</th><th className="text-right py-2">Suggested</th></tr></thead>
+                <thead><tr className={theadRowClass}><th className="text-left py-2">Product</th><th className="text-right py-2">Available</th><th className="text-right py-2">Min</th><th className="text-right py-2">Suggested</th></tr></thead>
                 <tbody className="divide-y divide-slate-100">
                   {items == null && <SkeletonRows cols={4} />}
                   {items?.length === 0 && <tr><td colSpan={4} className="py-6 text-center text-ink-tertiary">Nothing to reorder. Everything is above its minimum.</td></tr>}
@@ -1018,7 +1019,7 @@ function ReorderModal({ onClose, onCreated }: { onClose: () => void; onCreated?:
             <>
               <p className="text-xs text-ink-tertiary mb-3">Based on 28-day sales velocity. Suggested qty covers each supplier's lead time plus a 14-day buffer, netting off what's already on order. Check the ones to buy, then create draft POs grouped by supplier.</p>
               <table className="w-full text-xs">
-                <thead className="text-ink-tertiary text-[11px] font-semibold"><tr><th className="py-2 w-6"></th><th className="text-left py-2">Product</th><th className="text-right py-2">Free</th><th className="text-right py-2">Days left</th><th className="text-right py-2">Order</th><th className="text-left py-2 pl-2">Supplier</th></tr></thead>
+                <thead><tr className={theadRowClass}><th className="py-2 w-6"></th><th className="text-left py-2">Product</th><th className="text-right py-2">Free</th><th className="text-right py-2">Days left</th><th className="text-right py-2">Order</th><th className="text-left py-2 pl-2">Supplier</th></tr></thead>
                 <tbody className="divide-y divide-slate-100">
                   {fc == null && <SkeletonRows cols={6} />}
                   {fc?.length === 0 && <tr><td colSpan={6} className="py-6 text-center text-ink-tertiary">Nothing is forecast to run out.</td></tr>}
@@ -1424,7 +1425,7 @@ function PartsToOrderModal({ onClose, onCreated }: { onClose: () => void; onCrea
                 <button onClick={() => createPO(g)} disabled={!!busy} className="h-[28px] px-3 rounded-lg bg-primary text-white text-[11px] font-semibold hover:bg-primary-container disabled:opacity-60 flex items-center gap-1"><M n="receipt_long" c="text-[13px]" />{busy === g.sid ? "Creating…" : "Create PO"}</button>
               </div>
               <table className="w-full text-left text-xs">
-                <thead className="text-[11px] font-semibold text-ink-tertiary "><tr><th className="py-1.5 px-3">Product</th><th className="py-1.5 px-2 text-right">Need</th><th className="py-1.5 px-2 text-right">Have</th><th className="py-1.5 px-2 text-right">On order</th><th className="py-1.5 px-2 text-right">Order</th><th className="py-1.5 px-3">Jobs</th></tr></thead>
+                <thead><tr className={theadRowClass}><th className="py-1.5 px-3">Product</th><th className="py-1.5 px-2 text-right">Need</th><th className="py-1.5 px-2 text-right">Have</th><th className="py-1.5 px-2 text-right">On order</th><th className="py-1.5 px-2 text-right">Order</th><th className="py-1.5 px-3">Jobs</th></tr></thead>
                 <tbody className="divide-y divide-slate-100">
                   {g.rows.map((r) => (
                     <tr key={r.part_id}>

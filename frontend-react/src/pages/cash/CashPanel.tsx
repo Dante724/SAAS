@@ -16,6 +16,7 @@ import { btnGhost, btnPrimary } from "../invoices/billing";
 import { loadFailed } from "../../lib/notice";
 import { clickable } from "../../lib/clickable";
 import { Badge } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 type TxnSummary = { count: number; income: number; expense: number; today_in?: number; today_out?: number; today_net?: number };
 type Txn = { id: string; txn_type?: string; amount?: number; account?: string; account_id?: string; cash_flow_item?: string; comment?: string; actual_date?: string; status?: string; balance_after?: number; reverses_txn_id?: string; void_reason?: string };
@@ -179,7 +180,7 @@ export default function CashPanel() {
             </div>
             <div className="overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs">
-              <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
+              <thead><tr className={theadRowClass}>
                 <th className="py-3 px-4">Created</th><th className="py-3 px-4">Comment</th><th className="py-3 px-4">Category</th><th className="py-3 px-4 text-right">Income</th><th className="py-3 px-4 text-right">Expense</th><th className="py-3 px-4 text-right">Balance</th><th className="py-3 px-4 text-right">Actions</th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">

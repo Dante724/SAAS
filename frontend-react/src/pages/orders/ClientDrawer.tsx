@@ -28,6 +28,7 @@ import { MembershipsCard } from "../memberships/shared";
 import { MembershipDrawer } from "../memberships/MembershipsView";
 import { laborText } from "../../lib/labor";
 import { Badge } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 const BASE_TABS = ["General info", "Devices & assets", "Work orders", "Purchases", "Loyalty & payout", "Communications"];
 const LABEL = "text-xs font-medium text-ink-secondary";
@@ -317,7 +318,7 @@ function PurchasesTab({ clientId }: { clientId: string }) {
       {items.length === 0 ? <Empty t="Nothing purchased yet." /> : (
         <div className={`${sectionCard} overflow-hidden`}>
           <table className="w-full text-left text-xs">
-            <thead><tr className="bg-slate-50/60 text-[11px] font-bold text-ink-tertiary "><th className="py-2 px-3">Date</th><th className="py-2 px-3">Item</th><th className="py-2 px-3 text-right">Qty</th><th className="py-2 px-3 text-right">Total</th></tr></thead>
+            <thead><tr className={theadRowClass}><th className="py-2 px-3">Date</th><th className="py-2 px-3">Item</th><th className="py-2 px-3 text-right">Qty</th><th className="py-2 px-3 text-right">Total</th></tr></thead>
             <tbody className="divide-y divide-slate-100">
               {items.map((it: any, i: number) => (
                 <tr key={i}><td className="py-2 px-3 text-ink-tertiary whitespace-nowrap">{d(it.date)}</td><td className="py-2 px-3"><span className="font-semibold text-ink-primary">{it.item}</span> <span className="text-[11px] text-ink-tertiary">({it.kind})</span>{it.source_ref ? <span className="block text-[11px] text-ink-tertiary">{it.source_ref}</span> : null}</td><td className="py-2 px-3 text-right font-mono">{it.qty}</td><td className="py-2 px-3 text-right font-mono font-bold text-ink-primary">{money(it.total)}</td></tr>

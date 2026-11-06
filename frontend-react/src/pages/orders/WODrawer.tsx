@@ -51,6 +51,7 @@ import { loadFailed, saveFailed } from "../../lib/notice";
 import { clickable } from "../../lib/clickable";
 import { jobTypeLabel, type WOTypeRef } from "./jobType";
 import { Badge } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 type Emp = { id: string; name: string; in_managers?: boolean; in_assignees?: boolean };
 type Line = { id: string; kind?: string; line_type?: string; description?: string; qty?: number; unit_price?: number; discount?: number; discount_type?: string; technician_id?: string | null; work_share?: number; booked_hours?: number; co_technicians?: { employee_id: string; share: number }[]; total?: number; in_stock?: boolean; order_item_id?: string | null;
@@ -1537,7 +1538,7 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, onFla
                     const first = (id?: string | null) => empName(id).split(" ")[0];
                     return (
                       <div className="text-[13px]">
-                        <div className="px-2.5 pt-1 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-tertiary">Technician for this line</div>
+                        <div className="px-2.5 pt-1 pb-1.5 text-[11px] font-semibold text-ink-tertiary">Technician for this line</div>
                         {(emps || []).length > 6 && (
                           <input autoFocus value={techQuery} onChange={(e) => setTechQuery(e.target.value)} placeholder="Search technicians"
                             onKeyDown={(e) => { if (e.key === "Enter" && list[0]) pickTech(list[0].id); }}
@@ -2007,7 +2008,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
         return (
           <section aria-label="Balance" className={`${sectionCard} relative overflow-hidden p-6`}>
             <div aria-hidden="true" className={`absolute inset-x-0 top-0 h-0.5 ${tone.edge}`} />
-            <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-ink-tertiary">Still to pay</span>
+            <span className="text-xs font-medium text-ink-tertiary">Still to pay</span>
             <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-2">
               <h2 className={`flex items-start tabular-nums ${state === "due" ? "text-ink-primary" : "text-ink-tertiary"}`} aria-label={`Still to pay ${shown}`}>
                 {m ? <><span className="mt-1.5 mr-0.5 text-xl font-medium text-ink-tertiary">{m[1].trim()}</span><span className="text-hero leading-none font-medium tracking-[-0.035em]">{m[2]}</span></>
@@ -2085,7 +2086,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
       {data && data.invoices.length > 0 && (
         <Section flush title="Invoices" meta={data.invoices.length}>
           <table className="w-full text-xs text-left">
-            <thead className="bg-slate-50 text-xs text-ink-tertiary font-medium"><tr><th className="py-2.5 px-4 font-medium">Invoice</th><th className="py-2.5 px-4 font-medium">Status</th><th className="py-2.5 px-4 font-medium text-right">Amount</th><th className="py-2.5 px-4"><span className="sr-only">Send</span></th></tr></thead>
+            <thead><tr className={theadRowClass}><th className="py-2.5 px-4">Invoice</th><th className="py-2.5 px-4">Status</th><th className="py-2.5 px-4 text-right">Amount</th><th className="py-2.5 px-4"><span className="sr-only">Send</span></th></tr></thead>
             <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
               {data.invoices.map((i) => (
                 <tr key={i.id} className="hover:bg-slate-50/50"><td className="py-2.5 px-4 font-mono font-semibold text-primary">{i.invoice_number}</td>

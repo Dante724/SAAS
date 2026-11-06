@@ -11,6 +11,7 @@ import { clickableRow } from "../../lib/clickable";
 import { KIND_LABEL, drillRows, trend, type Drill, type ProfitRow } from "./profitView";
 import { laborText, laborWord } from "../../lib/labor";
 import { Badge } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 type Bucket = { count: number; revenue: number; tax: number; cogs?: number; labour_cost: number; commission: number; profit?: number; written_off: number };
 type Group = Bucket & { name: string; jobs: number; dropped: number; sales: number; location_id?: string | null; employee_id?: string | null };
@@ -159,7 +160,7 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
               <div key={title} className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
                 <div className="p-3 border-b border-slate-100 text-xs font-bold text-ink-primary">{title}</div>
                 <table className="w-full text-left text-xs">
-                  <thead><tr className="text-[11px] font-bold text-ink-tertiary bg-slate-50/60">
+                  <thead><tr className={theadRowClass}>
                     <th className="py-2 px-3">Name</th><th className="py-2 px-3 text-right">Jobs (incl. dropped) · Sales</th>
                     <th className="py-2 px-3 text-right">Sales</th><th className="py-2 px-3 text-right">{costsHidden ? "" : "Profit"}</th>
                   </tr></thead>
@@ -189,7 +190,7 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
               </div>
               <div className="overflow-auto max-h-[50vh]">
                 <table className="w-full text-left text-xs">
-                  <thead className="sticky top-0"><tr className="text-[11px] font-bold text-ink-tertiary bg-slate-50">
+                  <thead className="sticky top-0 bg-white"><tr className={theadRowClass}>
                     <th className="py-2 px-3">Number</th><th className="py-2 px-3">What</th><th className="py-2 px-3">Date</th>
                     <th className="py-2 px-3">Customer</th><th className="py-2 px-3 text-right">Sales</th><th className="py-2 px-3 text-right">Tax</th>
                     {!costsHidden && <th className="py-2 px-3 text-right">Parts</th>}

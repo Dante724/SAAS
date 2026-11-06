@@ -10,6 +10,7 @@ import AssetStateTabs, { AssetCounts, useAssetState } from "../../components/Ass
 import { clickableRow } from "../../lib/clickable";
 import ImportDrawer from "../../components/ImportDrawer";
 import { useMe } from "../../context/Me";
+import { theadRowClass } from "../../components/Table";
 
 type Asset = { id: string; asset_status?: string; asset_type?: string; asset_label?: string; template_key?: string; brand?: string; model?: string; serial?: string; imei?: string; owner_type?: string; owner_name?: string; condition?: string; order_count?: number };
 
@@ -55,7 +56,7 @@ export default function AssetsHub() {
         </div>
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
           <table className="w-full text-left border-collapse text-xs">
-            <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
+            <thead><tr className={theadRowClass}>
               <th className="py-3 px-4">Type</th><th className="py-3 px-4">{term.asset}</th><th className="py-3 px-4">Serial / IMEI</th>
               <th className="py-3 px-4">Owner</th><th className="py-3 px-4">Condition</th><th className="py-3 px-4">Orders</th><th className="py-3 px-4 w-12 text-center">Action</th>
             </tr></thead>

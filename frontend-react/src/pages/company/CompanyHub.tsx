@@ -17,6 +17,7 @@ import { inputCls } from "../invoices/billing";
 import { clickable, clickableRow } from "../../lib/clickable";
 import ImportDrawer from "../../components/ImportDrawer";
 import { Badge } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 const CO_PAGE = 50;
 
@@ -24,7 +25,6 @@ const CO_PAGE = 50;
 const filterCls = (on: boolean) => `h-9 text-xs font-semibold rounded-xl border px-3 cursor-pointer ${on ? "bg-primary/10 text-primary border-primary/30" : "bg-white text-ink-secondary border-slate-200 hover:bg-slate-50"}`;
 const primaryBtn = buttonClass("primary", "md");
 const ghostBtn = buttonClass("secondary", "md");
-const thCls = "border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary";
 
 export type RowMenuItem = { label: string; icon: string; onClick: () => void; danger?: boolean };
 /* The "⋮" at the end of a row. The row itself opens the record; this holds the extra actions.
@@ -315,7 +315,7 @@ export function EmployeeHours() {
       </div>
       <div className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-card overflow-hidden">
         <table className="w-full text-left border-collapse">
-          <thead className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary "><tr>
+          <thead><tr className={theadRowClass}>
             <th className="py-3 px-5">Employee</th><th className="py-3 px-3">Work order</th><th className="py-3 px-3">Type</th>
             <th className="py-3 px-3">Started</th><th className="py-3 px-3 text-right">Duration</th><th className="py-3 px-3">Status</th>
           </tr></thead>
@@ -386,8 +386,8 @@ export function Services({ onOpen, refresh }: { onOpen: (s?: Service) => void; r
       <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
         <div className="overflow-x-auto">
         <table className="w-full min-w-[560px] text-left border-collapse">
-          <thead className={thCls}><tr>
-            <th className="py-3 px-5 font-semibold">Service</th><th className="py-3 px-3 font-semibold">Category</th><th className="py-3 px-3 text-right font-semibold">Duration</th><th className="py-3 px-3 text-right font-semibold">Price</th><th className="py-3 pr-4 w-12"><span className="sr-only">Actions</span></th>
+          <thead><tr className={theadRowClass}>
+            <th className="py-3 px-5">Service</th><th className="py-3 px-3">Category</th><th className="py-3 px-3 text-right">Duration</th><th className="py-3 px-3 text-right">Price</th><th className="py-3 pr-4 w-12"><span className="sr-only">Actions</span></th>
           </tr></thead>
           <tbody className="divide-y divide-slate-100 text-xs">
             {!items && <SkeletonRows cols={5} />}
@@ -466,8 +466,8 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
       <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
         <div className="overflow-x-auto">
         <table className="w-full min-w-[720px] text-left border-collapse">
-          <thead className={thCls}><tr>
-            <th className="py-3 px-5 font-semibold">Product</th><th className="py-3 px-3 font-semibold">Category</th><th className="py-3 px-3 font-semibold">SKU</th><th className="py-3 px-3 font-semibold">MPN</th><th className="py-3 px-3 text-right font-semibold">Cost</th><th className="py-3 px-3 text-right font-semibold">Sell price</th><th className="py-3 px-3 text-right font-semibold">In stock</th><th className="py-3 pr-4 w-12"><span className="sr-only">Actions</span></th>
+          <thead><tr className={theadRowClass}>
+            <th className="py-3 px-5">Product</th><th className="py-3 px-3">Category</th><th className="py-3 px-3">SKU</th><th className="py-3 px-3">MPN</th><th className="py-3 px-3 text-right">Cost</th><th className="py-3 px-3 text-right">Sell price</th><th className="py-3 px-3 text-right">In stock</th><th className="py-3 pr-4 w-12"><span className="sr-only">Actions</span></th>
           </tr></thead>
           <tbody className="divide-y divide-slate-100 text-xs">
             {!items && <SkeletonRows cols={8} />}

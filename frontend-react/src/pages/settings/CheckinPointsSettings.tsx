@@ -212,7 +212,7 @@ export default function CheckinPointsSettings() {
       {points === null && <p className="text-xs text-ink-tertiary">Loading…</p>}
       {[...byLoc.entries()].map(([loc, list]) => (
         <div key={loc} className="space-y-2">
-          <div className="flex items-center gap-1.5 px-1 text-xs font-semibold uppercase tracking-wide text-ink-tertiary"><M n="location_on" c="text-sm" />{loc}</div>
+          <div className="flex items-center gap-1.5 px-1 text-xs font-semibold text-ink-tertiary"><M n="location_on" c="text-sm" />{loc}</div>
           <div className="rounded-2xl border border-slate-200/90 bg-white shadow-clay-sm divide-y divide-slate-100 overflow-visible">
             {list.map((p) => <PointRow key={p.id} p={p} types={types} canEdit={canEdit} onFlash={flash}
               onSaved={(np) => setPoints((ps) => (ps || []).map((x) => (x.id === np.id ? np : x)))} />)}

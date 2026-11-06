@@ -19,6 +19,7 @@ import { loadFailed } from "../../lib/notice";
 import { clickableRow } from "../../lib/clickable";
 import { laborText } from "../../lib/labor";
 import { Badge } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 // Invoices are day-to-day front-desk work (issue, take payment, resend), so they get their own
 // page next to Sales instead of a tab inside Finance — which also kept staff who only need
@@ -141,9 +142,9 @@ export default function InvoicesHub() {
             </ul>
             <div className="hidden sm:block overflow-x-auto">
             <table className="w-full text-left border-collapse text-xs min-w-[820px]">
-              <thead><tr className="bg-slate-50/60 border-b border-slate-200/80 text-ink-tertiary text-xs font-medium">
-                <th className="py-3 pl-4 pr-2 w-10 font-medium"><input type="checkbox" aria-label="Select all" checked={!!invoices?.length && invoices.every((i) => invSel.has(i.id))} onChange={(e) => setInvSel((s) => { const n = new Set(s); (invoices || []).forEach((i) => (e.target.checked ? n.add(i.id) : n.delete(i.id))); return n; })} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
-                <th className="py-3 px-4 font-medium">Invoice</th><th className="py-3 px-4 font-medium">Customer</th><th className="py-3 px-4 font-medium">Date</th><th className="py-3 px-4 font-medium">Job</th><th className="py-3 px-4 font-medium">Status</th><th className="py-3 px-4 font-medium text-right">Total</th><th className="py-3 px-4 font-medium text-right">Paid</th><th className="py-3 px-4 font-medium text-right">Balance</th>{einv && <th className="py-3 px-4 font-medium">E-invoice</th>}<th className="py-3 px-2 w-12"><span className="sr-only">Actions</span></th>
+              <thead><tr className={theadRowClass}>
+                <th className="py-3 pl-4 pr-2 w-10"><input type="checkbox" aria-label="Select all" checked={!!invoices?.length && invoices.every((i) => invSel.has(i.id))} onChange={(e) => setInvSel((s) => { const n = new Set(s); (invoices || []).forEach((i) => (e.target.checked ? n.add(i.id) : n.delete(i.id))); return n; })} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
+                <th className="py-3 px-4">Invoice</th><th className="py-3 px-4">Customer</th><th className="py-3 px-4">Date</th><th className="py-3 px-4">Job</th><th className="py-3 px-4">Status</th><th className="py-3 px-4 text-right">Total</th><th className="py-3 px-4 text-right">Paid</th><th className="py-3 px-4 text-right">Balance</th>{einv && <th className="py-3 px-4">E-invoice</th>}<th className="py-3 px-2 w-12"><span className="sr-only">Actions</span></th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 text-ink-secondary">
                 {!invoices && !ip.err && <SkeletonRows cols={cols} />}
