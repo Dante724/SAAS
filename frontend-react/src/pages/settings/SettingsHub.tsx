@@ -1518,11 +1518,11 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
             <div className="space-y-4">
                 <div className="flex items-end gap-2">
                 <div className="flex-1"><label className={lblc}>Set new password</label><input value={pw} onChange={(e) => setPw(e.target.value)} type="text" placeholder="Min 8 chars" className={fld} /></div>
-                <button onClick={resetPassword} disabled={!pw.trim()} className="px-3 py-2 rounded-lg border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50 disabled:opacity-50">Set</button>
+                <button onClick={resetPassword} disabled={!pw.trim()} className={buttonClass("secondary", "md")}>Set</button>
               </div>
               <div className="flex gap-2">
-                <button onClick={sendReset} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">Email reset link</button>
-                <button onClick={resetMfa} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">Reset 2FA</button>
+                <button onClick={sendReset} className={buttonClass("secondary", "sm")}>Email reset link</button>
+                <button onClick={resetMfa} className={buttonClass("secondary", "sm")}>Reset 2FA</button>
               </div>
               {!isSelf && (
                 <div className="border-t border-slate-100 pt-4">
@@ -2379,7 +2379,7 @@ function IndustryNote({ onChange }: { onChange: () => void }) {
         <div className="text-sm text-ink-primary">{cur ? <>Your shop repairs: <span className="font-semibold">{cur.label}</span></> : "What your shop repairs"}</div>
         <div className="text-[11px] text-ink-tertiary">The brands, models and groups below follow this. Change it in General.</div>
       </div>
-      <button onClick={onChange} className="ml-auto px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50 flex-shrink-0">Change</button>
+      <button onClick={onChange} className={buttonClass("secondary", "md", "ml-auto flex-shrink-0")}>Change</button>
     </div>
   );
 }
@@ -2406,10 +2406,7 @@ function MultiAssetSwitch() {
           <div className="text-xs text-ink-tertiary leading-relaxed">For customers who drop off a batch, like six tools at once. One job holds every item, each with its own problem and result, and each service or part can be marked for one item.</div>
           {err && <div className="mt-1 text-xs text-rose-600">{err}</div>}
         </div>
-        <button type="button" role="switch" aria-checked={st.on} aria-label="Several items per job" disabled={busy} onClick={flip}
-          className={`ml-auto w-10 h-6 rounded-full relative transition-colors flex-shrink-0 disabled:opacity-60 ${st.on ? "bg-primary" : "bg-slate-300"}`}>
-          <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${st.on ? "left-[18px]" : "left-0.5"}`} />
-        </button>
+        <span className="ml-auto"><Switch on={st.on} onChange={() => flip()} label="Several items per job" disabled={busy} /></span>
       </div>
     </div>
   );
@@ -2505,10 +2502,7 @@ function CloseRules({ type, onChanged, inline }: { type: any; onChanged?: () => 
     <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
       {rows.map(([k, label]) => (
         <label key={k} className="flex items-center gap-2.5 text-xs text-ink-secondary cursor-pointer">
-          <button type="button" role="switch" aria-checked={v[k]} aria-label={label} disabled={busy} onClick={() => flip(k)}
-            className={`w-9 h-5 rounded-full transition-colors relative shrink-0 disabled:opacity-60 ${v[k] ? "bg-primary" : "bg-slate-300"}`}>
-            <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${v[k] ? "left-[18px]" : "left-0.5"}`} />
-          </button>
+          <Switch size="sm" on={v[k]} onChange={() => flip(k)} label={label} disabled={busy} />
           <span title={label}>{short[k]}</span>
         </label>
       ))}
@@ -2520,10 +2514,7 @@ function CloseRules({ type, onChanged, inline }: { type: any; onChanged?: () => 
       <div className="text-xs font-semibold text-ink-primary">Before a {type.name} job can be closed</div>
       {rows.map(([k, label]) => (
         <label key={k} className="flex items-center gap-2.5 text-xs text-ink-secondary cursor-pointer">
-          <button type="button" role="switch" aria-checked={v[k]} aria-label={label} disabled={busy} onClick={() => flip(k)}
-            className={`w-9 h-5 rounded-full transition-colors relative shrink-0 disabled:opacity-60 ${v[k] ? "bg-primary" : "bg-slate-300"}`}>
-            <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${v[k] ? "left-[18px]" : "left-0.5"}`} />
-          </button>
+          <Switch size="sm" on={v[k]} onChange={() => flip(k)} label={label} disabled={busy} />
           <span>{label}</span>
         </label>
       ))}

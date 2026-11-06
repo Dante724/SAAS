@@ -127,7 +127,6 @@
     "text-px": 4
   },
   "pages/orders/CreateOrderDrawer.tsx": {
-    "button-look": 1,
     "text-px": 13,
     "blur": 1
   },
@@ -218,7 +217,6 @@
     "text-px": 5
   },
   "pages/settings/SettingsHub.tsx": {
-    "button-look": 1,
     "text-px": 45,
     "blur": 6
   },
@@ -233,8 +231,7 @@
     "text-px": 6
   },
   "pages/settings/TemplateEditorDrawer.tsx": {
-    "button-look": 2,
-    "text-px": 21
+    "text-px": 19
   },
   "pages/settings/WebhooksSettings.tsx": {
     "text-px": 3
@@ -247,8 +244,7 @@
     "text-px": 7
   },
   "pages/timesheets/MyWorkHub.tsx": {
-    "button-look": 1,
-    "text-px": 22
+    "text-px": 21
   },
   "pages/timesheets/TimesheetsHub.tsx": {
     "text-px": 16,

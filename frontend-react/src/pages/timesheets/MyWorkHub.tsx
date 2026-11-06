@@ -1,4 +1,5 @@
 import { humanize } from "../../lib/humanize";
+import { buttonClass } from "../../components/Button";
 import { useEffect, useState, useCallback } from "react";
 import Shell, { M } from "../../components/Shell";
 import { api } from "../../api/client";
@@ -87,7 +88,7 @@ export default function MyWorkHub() {
             {w?.active ? (
               <div className="mt-1 flex items-center justify-between">
                 <span className="flex items-center gap-1.5 text-sm font-bold text-emerald-700"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />{w.active.order_number || "running"}</span>
-                <button onClick={stop} className="px-2.5 py-1 rounded-lg text-[11px] font-bold text-white bg-emerald-600 hover:bg-emerald-700">Stop</button>
+                <button onClick={stop} className={buttonClass("success", "sm")}>Stop</button>
               </div>
             ) : <div className="mt-1 text-sm text-ink-tertiary">Not clocked in</div>}
           </div>

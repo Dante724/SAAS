@@ -278,7 +278,7 @@ export default function PartsPOPanel({ orderId, lines, canBuy, isEstimate, onClo
                     <button key={d} type="button" onClick={() => setHoldDays(d)} aria-pressed={holdDays === d}
                       className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${holdDays === d ? "bg-blue-50 text-primary border-blue-200" : "bg-white text-ink-secondary border-slate-200 hover:bg-slate-50"}`}>{d} days</button>
                   ))}
-                  <button type="button" onClick={reserve} disabled={busy !== null} className="ml-auto px-3.5 py-2 rounded-lg bg-white border border-slate-200 text-ink-primary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50">{busy === "hold" ? "Holding…" : "Hold stock"}</button>
+                  <button type="button" onClick={reserve} disabled={busy !== null} className={buttonClass("secondary", "md", "ml-auto")}>{busy === "hold" ? "Holding…" : "Hold stock"}</button>
                 </div>
               </div>
             </section>

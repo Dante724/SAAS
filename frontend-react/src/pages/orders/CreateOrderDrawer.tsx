@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactElement } from "react";
+import { buttonClass } from "../../components/Button";
 import { sectionCard } from "../../components/Section";
 import HexTile from "../../components/HexTile";
 import { Avatar } from "./look";
@@ -545,16 +546,16 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
         <footer className="px-7 py-3.5 border-t border-slate-200/80 bg-white flex items-center justify-between">
           {step === 1 ? (
             <div className="w-full flex items-center justify-between">
-              <button type="button" onClick={onClose} className="h-10 px-4 rounded-xl text-sm font-medium text-ink-secondary border border-slate-200 bg-white hover:bg-slate-50 transition-colors">Cancel</button>
-              <button type="button" onClick={next} className="h-10 px-5 rounded-xl bg-primary text-white text-sm font-semibold shadow-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><span>Next: services and products</span><M n="arrow_forward" c="text-sm" /></button>
+              <button type="button" onClick={onClose} className={buttonClass("secondary", "lg")}>Cancel</button>
+              <button type="button" onClick={next} className={buttonClass("primary", "lg")}><span>Next: services and products</span><M n="arrow_forward" c="text-sm" /></button>
             </div>
           ) : (
             <div className="w-full flex items-center justify-between">
-              <button type="button" onClick={() => setStep(1)} className="h-10 px-4 rounded-xl text-sm font-medium text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 transition-colors flex items-center gap-1.5"><M n="arrow_back" c="text-sm" /><span>Back</span></button>
+              <button type="button" onClick={() => setStep(1)} className={buttonClass("secondary", "lg")}><M n="arrow_back" c="text-sm" /><span>Back</span></button>
               <div className="flex items-center space-x-2">
                 {!estimate && <AutoPrintPicker event="create" />}
-                <button type="button" disabled={busy} onClick={() => submit(true)} className="hidden sm:inline-flex h-10 items-center px-4 rounded-xl text-sm font-medium text-ink-primary bg-white border border-slate-200 hover:bg-slate-50 transition-colors">Save and create another</button>
-                <button type="button" disabled={busy} onClick={() => submit(false)} className="h-10 px-5 rounded-xl bg-primary text-white text-sm font-semibold shadow-sm hover:brightness-110 transition-all">{busy ? "Creating…" : `Create ${estimate ? "estimate" : "work order"}`}</button>
+                <button type="button" disabled={busy} onClick={() => submit(true)} className={buttonClass("secondary", "lg", "hidden sm:inline-flex")}>Save and create another</button>
+                <button type="button" disabled={busy} onClick={() => submit(false)} className={buttonClass("primary", "lg")}>{busy ? "Creating…" : `Create ${estimate ? "estimate" : "work order"}`}</button>
               </div>
             </div>
           )}

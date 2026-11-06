@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { buttonClass } from "../../components/Button";
 import { useNavigate } from "react-router-dom";
 import { api, openAuthedDoc } from "../../api/client";
 import { alertDialog } from "../../lib/dialog";
@@ -99,7 +100,7 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
         {/* the CSV route also checks this permission */}
         {can("can_export_sales") && (
           <button type="button" onClick={exportCsv}
-            className="px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-ink-secondary hover:bg-slate-50 text-xs font-bold flex items-center gap-1.5 shadow-clay-sm"><M n="download" c="text-sm" />Export</button>
+            className={buttonClass("secondary", "sm")}><M n="download" c="text-sm" />Export</button>
         )}
       </div>
 

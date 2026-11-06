@@ -3,6 +3,7 @@
 // looked jobs up. The headline is the share of status changes made on a phone against the 50%
 // decision rule. See docs/pilot/tekly-go-shop-pilot.md.
 import { useEffect, useState } from "react";
+import { buttonClass } from "../../components/Button";
 import { api, openAuthedDoc } from "../../api/client";
 import { alertDialog } from "../../lib/dialog";
 import DateField from "../../components/DateField";
@@ -62,7 +63,7 @@ export default function GoPilotReport() {
           <DateField mode="date" label="From" value={from} max={to} onChange={setFrom} className="w-40" /></div>
         <div className="space-y-1"><span className="block text-[11px] font-semibold text-ink-secondary">To</span>
           <DateField mode="date" label="To" value={to} min={from} onChange={setTo} className="w-40" /></div>
-        <button type="button" onClick={csv} className="px-3 py-2 rounded-xl text-xs font-semibold border border-slate-200 hover:bg-slate-50">Download CSV</button>
+        <button type="button" onClick={csv} className={buttonClass("secondary", "md")}>Download CSV</button>
         <p className="text-[11px] text-ink-tertiary">Dates are UTC. Jobs: those that got a pilot QR label.</p>
       </div>
 
