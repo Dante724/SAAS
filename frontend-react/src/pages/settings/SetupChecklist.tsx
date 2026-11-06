@@ -58,7 +58,7 @@ export function SetupChecklist({ goSection, load = loadSetupState, navigate = (t
     <section className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden" aria-label="Setup guide">
       <div className="flex flex-wrap items-center gap-x-4 gap-y-3 px-5 pt-5 pb-4">
         <svg width="64" height="64" viewBox="0 0 64 64" className="flex-shrink-0" aria-hidden>
-          <circle cx="32" cy="32" r={R} fill="none" stroke="#e2e8f0" strokeWidth="6" />
+          <circle cx="32" cy="32" r={R} fill="none" stroke="rgb(var(--c-line-200))" strokeWidth="6" />
           <circle cx="32" cy="32" r={R} fill="none" stroke="currentColor" strokeWidth="6" strokeLinecap="round" className="text-primary transition-all duration-700"
             strokeDasharray={C} strokeDashoffset={state ? C * (1 - pct / 100) : C} transform="rotate(-90 32 32)" />
           <text x="32" y="36" textAnchor="middle" className="fill-current text-ink-primary" fontSize="13" fontWeight="600">{state ? `${pct}%` : ""}</text>

@@ -156,7 +156,7 @@ export function StatusList({ statuses, recordType, onRecordType, onOpen, onAdd, 
                     <button aria-label={`Move ${s.name} down`} disabled={idx === statuses.length - 1} onClick={() => onMove(idx, idx + 1)} className="text-ink-tertiary hover:text-primary disabled:opacity-20 leading-none"><M n="expand_more" c="text-sm" /></button>
                   </div>
                 </div>
-                <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: s.color || "#94a3b8", boxShadow: `0 0 0 3px #fff, 0 0 0 4px ${(s.color || "#94a3b8")}55` }} />
+                <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: s.color || "#94a3b8", boxShadow: `0 0 0 3px rgb(var(--c-card)), 0 0 0 4px ${(s.color || "#94a3b8")}55` }} />
                 <span className="text-sm font-medium text-ink-primary truncate">{s.name}</span>
                 {s.is_default && <span className="text-[11px] text-ink-tertiary">starts every job</span>}
                 <span className="ml-auto flex items-center gap-1.5">
