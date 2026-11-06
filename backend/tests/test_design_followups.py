@@ -81,7 +81,7 @@ async def test_location_revenue_adds_up_to_business_insights(client, tenant, db)
                                    headers=tenant)).status_code == 200
     ins = (await client.get("/api/analytics/business-insights?days=30", headers=tenant)).json()
     comp = (await client.get("/api/analytics/location-comparison?days=30", headers=tenant)).json()
-    assert sum(l["orders_closed"] for l in comp["locations"]) == ins["orders_closed"] == 2
-    assert sum(l["revenue"] for l in comp["locations"]) == pytest.approx(ins["revenue"])
+    assert sum(loc["orders_closed"] for loc in comp["locations"]) == ins["orders_closed"] == 2
+    assert sum(loc["revenue"] for loc in comp["locations"]) == pytest.approx(ins["revenue"])
     tr = (await client.get("/api/analytics/trends?days=30", headers=tenant)).json()
     assert sum(p["revenue"] for p in tr["series"]) == pytest.approx(ins["revenue"])
