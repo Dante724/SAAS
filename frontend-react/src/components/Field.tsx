@@ -1,3 +1,4 @@
+import TeklySelect from "./TeklySelect";
 import { forwardRef, type InputHTMLAttributes, type ReactNode, type SelectHTMLAttributes } from "react";
 
 // The app's one field look: 36px tall, 12px corners, the glass-input border and focus ring.
@@ -11,9 +12,10 @@ export const Input = forwardRef<HTMLInputElement, InputHTMLAttributes<HTMLInputE
   return <input ref={ref} className={fieldClass(className)} {...rest} />;
 });
 
-export const Select = forwardRef<HTMLSelectElement, SelectHTMLAttributes<HTMLSelectElement>>(function Select({ className = "", ...rest }, ref) {
-  return <select ref={ref} className={fieldClass(`pr-8 ${className}`)} {...rest} />;
-});
+// The shared Tekly dropdown (a Tekly panel on desktop, the native picker on touch screens).
+export function Select({ className = "", ...rest }: SelectHTMLAttributes<HTMLSelectElement>) {
+  return <TeklySelect className={fieldClass(`pr-8 ${className}`)} {...rest} />;
+}
 
 // A labelled field: label above, the control, then a hint or an error under it.
 export function Field({ label, htmlFor, hint, error, children, className = "" }: {

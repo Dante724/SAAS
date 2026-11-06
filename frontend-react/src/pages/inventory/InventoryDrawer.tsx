@@ -1,4 +1,5 @@
 import { humanize } from "../../lib/humanize";
+import TeklySelect from "../../components/TeklySelect";
 import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import EmptyState from "../../components/EmptyState";
@@ -401,11 +402,11 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                     <input value={newCode} onChange={(e) => setNewCode(e.target.value)} maxLength={100} aria-label="Add a barcode"
                       onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCode(); } }}
                       placeholder="Scan or type another barcode" className={`${field} font-mono`} />
-                    <select value={newType} onChange={(e) => setNewType(e.target.value)} aria-label="Barcode type"
+                    <TeklySelect value={newType} onChange={(e) => setNewType(e.target.value)} aria-label="Barcode type"
                       className={`${field} w-auto appearance-none`}>
                       <option value="">Any type</option>
                       {BARCODE_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
-                    </select>
+                    </TeklySelect>
                     <ScanButton title="Scan a barcode" onScan={(c) => addCode(c)} />
                     <button type="button" onClick={() => addCode()} disabled={codeBusy || !newCode.trim()}
                       className="px-2.5 py-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-ink-secondary text-xs font-medium disabled:opacity-50 whitespace-nowrap">Add</button>
@@ -477,9 +478,9 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
               <div className="mb-3 rounded-2xl bg-slate-50/70 border border-slate-200/80 p-3.5 space-y-3">
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Location</label>
-                    <div className="relative"><select value={adjLoc} onChange={(e) => setAdjLoc(e.target.value)} className="glass-input bg-none block w-full h-9 px-3 pr-8 text-sm font-semibold text-ink-primary rounded-xl appearance-none">{locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select><M n="expand_more" c="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary pointer-events-none text-sm" /></div></div>
+                    <div className="relative"><TeklySelect value={adjLoc} onChange={(e) => setAdjLoc(e.target.value)} className="glass-input bg-none block w-full h-9 px-3 pr-8 text-sm font-semibold text-ink-primary rounded-xl appearance-none">{locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</TeklySelect><M n="expand_more" c="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary pointer-events-none text-sm" /></div></div>
                   <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Type</label>
-                    <div className="relative"><select value={adjType} onChange={(e) => setAdjType(e.target.value)} className="glass-input bg-none block w-full h-9 px-3 pr-8 text-sm font-semibold text-ink-primary rounded-xl appearance-none"><option value="receive">Receive (+)</option><option value="writeoff">Write off (damaged or lost)</option><option value="adjust">Correction</option></select><M n="expand_more" c="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary pointer-events-none text-sm" /></div></div>
+                    <div className="relative"><TeklySelect value={adjType} onChange={(e) => setAdjType(e.target.value)} className="glass-input bg-none block w-full h-9 px-3 pr-8 text-sm font-semibold text-ink-primary rounded-xl appearance-none"><option value="receive">Receive (+)</option><option value="writeoff">Write off (damaged or lost)</option><option value="adjust">Correction</option></TeklySelect><M n="expand_more" c="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary pointer-events-none text-sm" /></div></div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Quantity</label><input type="number" value={adjQty} onChange={(e) => setAdjQty(e.target.value)} className="glass-input font-mono block w-full h-9 px-3 text-sm font-semibold text-ink-primary rounded-xl" placeholder="0" /></div>
@@ -696,10 +697,10 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className={lbl}>Pricing</label>
-                  <select value={p.price_mode || "sum"} onChange={(e) => set("price_mode", e.target.value)} className={field}>
+                  <TeklySelect value={p.price_mode || "sum"} onChange={(e) => set("price_mode", e.target.value)} className={field}>
                     <option value="sum">Sum of items</option>
                     <option value="fixed">Fixed kit price</option>
-                  </select>
+                  </TeklySelect>
                 </div>
                 <div>
                   <label className={lbl}>{(p.price_mode || "sum") === "fixed" ? `Kit price (${currencySymbol()})` : "Price (auto)"}</label>

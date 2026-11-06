@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "../TeklySelect";
 import { M } from "../Shell";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
@@ -265,9 +266,9 @@ function AgentControls({ s, busy, save }: { s: SenseSettings; busy: boolean; sav
                       onSave={(v) => save({ agents: { [r.k]: { [r.wait]: v } } })} />
                   </SettingRow>
                   <SettingRow label="Send by" htmlFor={`sense-agent-${r.k}-channel`}>
-                    <select id={`sense-agent-${r.k}-channel`} aria-label={`${r.label} channel`} value={c.channel} disabled={busy} onChange={(e) => save({ agents: { [r.k]: { channel: e.target.value } } })}
+                    <TeklySelect id={`sense-agent-${r.k}-channel`} aria-label={`${r.label} channel`} value={c.channel} disabled={busy} onChange={(e) => save({ agents: { [r.k]: { channel: e.target.value } } })}
                       className="glass-input rounded-xl px-3 py-2 text-sm">
-                      {r.k !== "win_back" && <option value="sms">Text</option>}<option value="email">Email</option></select>
+                      {r.k !== "win_back" && <option value="sms">Text</option>}<option value="email">Email</option></TeklySelect>
                   </SettingRow>
                 </div>
                 {r.k === "win_back" && <p className="mt-3 text-xs text-ink-tertiary">Email only, to customers who gave marketing consent. Your shop address from Settings goes at the bottom, as the law requires.</p>}
@@ -298,8 +299,8 @@ function BriefControls({ s, busy, save }: { s: SenseSettings; busy: boolean; sav
     <div className={subPanel}>
       <div className="divide-y divide-slate-200/70">
         <SettingRow label="Send at" htmlFor="sense-brief-hour">
-          <select id="sense-brief-hour" aria-label="Brief send time" value={b.hour} disabled={busy} onChange={(e) => save({ brief: { hour: Number(e.target.value) } })}
-            className="glass-input rounded-xl px-3 py-2 text-sm">{HOURS.map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}</select>
+          <TeklySelect id="sense-brief-hour" aria-label="Brief send time" value={b.hour} disabled={busy} onChange={(e) => save({ brief: { hour: Number(e.target.value) } })}
+            className="glass-input rounded-xl px-3 py-2 text-sm">{HOURS.map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}</TeklySelect>
         </SettingRow>
         <SettingRow label="Email" help="Send the brief by email too">
           <Switch size="sm" on={b.email} label="Email" onChange={() => save({ brief: { email: !b.email } })} />

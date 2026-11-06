@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { buttonClass } from "../../components/Button";
@@ -78,7 +79,7 @@ export default function NewAccountDrawer({ edit, onClose, onSaved }: Props) {
             </div>
             <div><label className="block font-semibold text-ink-secondary mb-1">Title <span className="text-rose-500">*</span></label><input autoFocus value={name} onChange={(e) => setName(e.target.value)} className="glass-input w-full px-3 py-2.5 rounded-lg text-sm font-semibold text-ink-primary" placeholder="e.g. Main Register" /></div>
             <div><label className="block font-semibold text-ink-secondary mb-1">Currency <span className="text-rose-500">*</span></label>
-              <select value={currency} onChange={(e) => setCurrency(e.target.value)} disabled={!!edit} className="glass-input w-full px-3 py-2.5 rounded-lg text-sm font-semibold text-ink-primary appearance-none disabled:opacity-60">{curOpts.map(([c, l]) => <option key={c} value={c}>{l}</option>)}</select>
+              <TeklySelect value={currency} onChange={(e) => setCurrency(e.target.value)} disabled={!!edit} className="glass-input w-full px-3 py-2.5 rounded-lg text-sm font-semibold text-ink-primary appearance-none disabled:opacity-60">{curOpts.map(([c, l]) => <option key={c} value={c}>{l}</option>)}</TeklySelect>
               {edit && <p className="text-[11px] text-ink-tertiary mt-1">Currency is locked after creation.</p>}</div>
             <div><label className="block font-semibold text-ink-secondary mb-1.5">Type</label><Seg opts={[["company", "Company account"], ["location", "Location account"]]} value={type} onChange={(v) => setType(v as any)} /></div>
             <Check v={virtual} set={setVirtual} label="Virtual account" />

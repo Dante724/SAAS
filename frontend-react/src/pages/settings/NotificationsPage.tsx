@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState, type ReactNode } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
@@ -325,10 +326,10 @@ function ReminderQuickAdd({ rules, onChanged, flash }: { rules: Rule[]; onChange
       ))}
       {open ? (
         <span className="flex items-center gap-1.5">
-          <select value={ch} onChange={(e) => setCh(e.target.value)} aria-label="Send by" className="glass-input rounded-xl px-3 py-2 text-sm"><option value="sms">Text</option><option value="email">Email</option></select>
-          <select value={off} onChange={(e) => setOff(Number(e.target.value))} aria-label="How long before" className="glass-input rounded-xl px-3 py-2 text-sm">
+          <TeklySelect value={ch} onChange={(e) => setCh(e.target.value)} aria-label="Send by" className="glass-input rounded-xl px-3 py-2 text-sm"><option value="sms">Text</option><option value="email">Email</option></TeklySelect>
+          <TeklySelect value={off} onChange={(e) => setOff(Number(e.target.value))} aria-label="How long before" className="glass-input rounded-xl px-3 py-2 text-sm">
             {[[60, "1 hour"], [180, "3 hours"], [1440, "1 day"], [2880, "2 days"]].map(([v, l]) => <option key={v} value={v}>{l} before</option>)}
-          </select>
+          </TeklySelect>
           <button onClick={add} className={buttonClass("primary", "md")}>Add</button>
         </span>
       ) : <button onClick={() => setOpen(true)} className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90"><M n="add" c="text-sm" />Add reminder</button>}

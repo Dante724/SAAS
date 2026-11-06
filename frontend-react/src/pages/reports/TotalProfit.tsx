@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import { useNavigate } from "react-router-dom";
 import { api, openAuthedDoc } from "../../api/client";
@@ -86,15 +87,15 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 flex items-center gap-2 flex-wrap text-xs">
         <h3 className="text-sm font-bold text-ink-primary mr-auto">Total profit</h3>
         {locs.length > 1 && (
-          <select aria-label="Location" value={locId} onChange={(e) => setLocId(e.target.value)} className="glass-input px-2.5 py-1.5 rounded-lg">
+          <TeklySelect aria-label="Location" value={locId} onChange={(e) => setLocId(e.target.value)} className="glass-input px-2.5 py-1.5 rounded-lg">
             <option value="">All locations</option>
             {locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-          </select>
+          </TeklySelect>
         )}
-        <select aria-label="Technician" value={techId} onChange={(e) => setTechId(e.target.value)} className="glass-input px-2.5 py-1.5 rounded-lg">
+        <TeklySelect aria-label="Technician" value={techId} onChange={(e) => setTechId(e.target.value)} className="glass-input px-2.5 py-1.5 rounded-lg">
           <option value="">Everyone</option>
           {techs.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-        </select>
+        </TeklySelect>
         <DateField mode="date" value={from} onChange={setFrom} className="w-36" />
         <span className="text-ink-tertiary">→</span>
         <DateField mode="date" value={to} onChange={setTo} className="w-36" />

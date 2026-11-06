@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { createPortal } from "react-dom";
 import { KeyRound } from "lucide-react";
 import { M } from "../../components/Shell";
@@ -242,10 +243,10 @@ function CreateKeyDrawer({ onClose, onCreated }: { onClose: () => void; onCreate
           {RESOURCES.map(([k, label]) => (
             <div key={k} className="flex items-center justify-between gap-3 px-3 py-2">
               <label htmlFor={`ak-scope-${k}`} className="text-sm text-ink-primary">{label}</label>
-              <select id={`ak-scope-${k}`} value={pick[k] || ""} onChange={(e) => setPick({ ...pick, [k]: e.target.value as ScopePick[string] })}
+              <TeklySelect id={`ak-scope-${k}`} value={pick[k] || ""} onChange={(e) => setPick({ ...pick, [k]: e.target.value as ScopePick[string] })}
                 className="glass-input rounded-xl px-3 py-2 text-sm">
                 <option value="">No access</option><option value="read">Read</option><option value="write">Read and change</option>
-              </select>
+              </TeklySelect>
             </div>
           ))}
         </div>
@@ -258,9 +259,9 @@ function CreateKeyDrawer({ onClose, onCreated }: { onClose: () => void; onCreate
       )}
       <div className="grid grid-cols-2 gap-3">
         <div><label htmlFor="ak-exp" className={labelCls}>Expires after</label>
-          <select id="ak-exp" value={expiry} onChange={(e) => setExpiry(e.target.value)} className={inputCls}>
+          <TeklySelect id="ak-exp" value={expiry} onChange={(e) => setExpiry(e.target.value)} className={inputCls}>
             {EXPIRY.map(([l]) => <option key={l} value={l}>{l}</option>)}
-          </select></div>
+          </TeklySelect></div>
         <div><label htmlFor="ak-rate" className={labelCls}>Requests a minute</label>
           <input id="ak-rate" type="number" inputMode="numeric" min={1} max={6000} value={rate} onChange={(e) => setRate(e.target.value)} placeholder={String(DEFAULT_RATE)} className={`${inputCls} tabular-nums`} /></div>
       </div>

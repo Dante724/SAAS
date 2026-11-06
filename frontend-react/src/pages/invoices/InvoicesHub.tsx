@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import Shell, { M } from "../../components/Shell";
 import Tabs from "../../components/Tabs";
 import EmptyState from "../../components/EmptyState";
@@ -231,7 +232,7 @@ function NewInvoiceDrawer({ onClose, onCreated }: { onClose: () => void; onCreat
       <ErrorNote msg={err} />
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div><label htmlFor="ni-client" className={labelCls}>Client</label>
-          <select id="ni-client" value={clientId} onChange={(e) => setClientId(e.target.value)} className={inputCls}><option value="">Walk-in / none</option>{clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+          <TeklySelect id="ni-client" value={clientId} onChange={(e) => setClientId(e.target.value)} className={inputCls}><option value="">Walk-in / none</option>{clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</TeklySelect></div>
         <div><span className={labelCls}>Due date</span>
           <DateField mode="date" value={due} onChange={setDue} /></div>
       </div>
@@ -241,7 +242,7 @@ function NewInvoiceDrawer({ onClose, onCreated }: { onClose: () => void; onCreat
         <div className="space-y-2">
           {lines.map((l, i) => (
             <div key={i} className="grid grid-cols-[auto_4rem_1fr_auto] sm:flex items-center gap-2 pb-2 border-b border-slate-100 last:border-0 sm:pb-0 sm:border-0">
-              <select value={l.kind} onChange={(e) => setLine(i, "kind", e.target.value)} title="Line type" aria-label={`Line ${i + 1} type`} className={`${inputCls} !w-auto !px-2`}><option value="custom">Custom</option><option value="service">Service</option><option value="product">Product</option><option value="labor">{laborText("Labor")}</option></select>
+              <TeklySelect value={l.kind} onChange={(e) => setLine(i, "kind", e.target.value)} title="Line type" aria-label={`Line ${i + 1} type`} className={`${inputCls} !w-auto !px-2`}><option value="custom">Custom</option><option value="service">Service</option><option value="product">Product</option><option value="labor">{laborText("Labor")}</option></TeklySelect>
               <input value={l.description} onChange={(e) => setLine(i, "description", e.target.value)} placeholder="Description" aria-label={`Line ${i + 1} description`} className={`${inputCls} col-span-4 order-first sm:order-none sm:!w-auto sm:flex-1 sm:min-w-[140px]`} />
               <input type="number" min={0} value={l.qty} onChange={(e) => setLine(i, "qty", Number(e.target.value))} title="Qty" aria-label={`Line ${i + 1} quantity`} className={`${inputCls} sm:!w-16 text-right tabular-nums`} />
               <input type="number" min={0} value={l.unit_price} onChange={(e) => setLine(i, "unit_price", Number(e.target.value))} placeholder="Price" aria-label={`Line ${i + 1} price`} className={`${inputCls} sm:!w-24 text-right tabular-nums`} />
