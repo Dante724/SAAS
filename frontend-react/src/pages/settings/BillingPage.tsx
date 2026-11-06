@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { useMe, type PlanId, type PlanLimits } from "../../context/Me";
@@ -152,7 +153,7 @@ export default function BillingPage({ load, post, go }: Deps = {}) {
             )}
             {b.has_billing_account && !custom && (
               <button onClick={manage} disabled={!!busy || !b.configured}
-                className="mt-3 px-3 py-2 rounded-lg bg-white border border-slate-200 text-xs font-semibold text-ink-primary hover:border-slate-300 disabled:opacity-50">
+                className={buttonClass("secondary", "md", "mt-3")}>
                 {busy === "portal" ? "Opening…" : "Manage billing"}
               </button>
             )}

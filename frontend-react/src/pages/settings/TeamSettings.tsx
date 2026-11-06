@@ -183,7 +183,7 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
             <div className="p-6 text-center">
               <div className="text-sm text-ink-primary">No commission rules yet</div>
               <div className="text-xs text-ink-tertiary mt-0.5 mb-3">Pay a percent or a flat amount when work is done or a part is sold.</div>
-              <button onClick={onNewRule} className="px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-ink-primary hover:bg-slate-50">Create a rule</button>
+              <button onClick={onNewRule} className={buttonClass("secondary", "md")}>Create a rule</button>
             </div>
           )}
           {(rules || []).map((r) => {

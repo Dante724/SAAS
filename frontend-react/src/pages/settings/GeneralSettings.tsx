@@ -62,7 +62,7 @@ function AccountId({ value }: { value: string }) {
         <div className="text-[11px] font-semibold text-ink-tertiary">Tekly account ID</div>
         <div className="font-mono text-sm text-ink-primary select-all">{value}</div>
       </div>
-      <button type="button" onClick={copy} className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">
+      <button type="button" onClick={copy} className={buttonClass("secondary", "sm", "ml-auto")}>
         <M n={copied ? "check" : "content_copy"} c="text-sm" />{copied ? "Copied" : "Copy"}</button>
       <div className="w-full text-[11px] text-ink-tertiary">Give this to Tekly support so they can find your shop.</div>
     </div>

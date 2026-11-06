@@ -342,7 +342,7 @@ export default function WorkOrdersHub() {
             </div>
             <div className="ml-auto flex shrink-0 items-center gap-2">
               <div className="relative w-56"><M n="search" c="absolute left-3 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" /><input value={q} onChange={(e) => setQ(e.target.value)} className="glass-input w-full rounded-xl pl-9 pr-3 py-2 text-sm" aria-label="Search work orders" placeholder="Search work orders…" /></div>
-              <button data-wo-menu="filter" aria-expanded={menu === "filter"} aria-label="Filter" title="Filter" onClick={() => toggleMenu("filter")} className={`h-9 px-3 rounded-xl text-xs font-semibold flex items-center gap-1.5 border whitespace-nowrap flex-shrink-0 ${activeFacets ? "bg-primary/10 text-primary border-primary/30" : "bg-white text-ink-secondary hover:bg-slate-100 border-slate-200"}`}><M n="filter_list" c="text-sm" /><span className="hidden xl:inline">Filter</span>{/* The count keeps its space (hidden at 0), so Search never shifts when a filter is applied. */}<span className={`ml-0.5 px-1.5 rounded-full bg-primary text-white text-[11px] font-bold tabular-nums ${activeFacets ? "" : "invisible"}`} aria-hidden={!activeFacets || undefined}>{activeFacets || 0}</span></button>
+              <button data-wo-menu="filter" aria-expanded={menu === "filter"} aria-label="Filter" title="Filter" onClick={() => toggleMenu("filter")} className={`${toolBtn} flex-shrink-0 ${activeFacets ? "!bg-primary/10 !text-primary !border-primary/30" : ""}`}><M n="filter_list" c="text-sm" /><span className="hidden xl:inline">Filter</span>{/* The count keeps its space (hidden at 0), so Search never shifts when a filter is applied. */}<span className={`ml-0.5 px-1.5 rounded-full bg-primary text-white text-[11px] font-bold tabular-nums ${activeFacets ? "" : "invisible"}`} aria-hidden={!activeFacets || undefined}>{activeFacets || 0}</span></button>
               {/* Always rendered, so Search and Filter never slide when the view changes; greyed out off the table. */}
               <button data-wo-menu="cols" aria-expanded={menu === "cols"} aria-label="Columns" title={view === "table" ? "Columns" : "Columns apply to the table view"} disabled={view !== "table"} onClick={() => toggleMenu("cols")} className={`${toolBtn} disabled:opacity-40 disabled:cursor-not-allowed`}><M n="view_column" c="text-sm" /><span className="hidden xl:inline">Columns</span></button>
             </div>
@@ -415,7 +415,7 @@ export default function WorkOrdersHub() {
             </select></label>
             <div className="h-4 w-px bg-slate-200" />
             <JobLabelsButton pick={{ orderIds: [...sel] }} label="Print QR labels" className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50" />
-            {canArchive && <button disabled={busy} onClick={bulkArchive} className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 flex items-center gap-1"><M n="archive" c="text-[13px]" />Archive</button>}
+            {canArchive && <button disabled={busy} onClick={bulkArchive} className={buttonClass("secondary", "sm")}><M n="archive" c="text-[13px]" />Archive</button>}
             <button onClick={() => setSel(new Set())} className="ml-auto px-2.5 py-1 rounded-lg text-ink-secondary hover:bg-slate-100">Clear selection</button>
           </div>
         )}
