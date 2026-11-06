@@ -4,6 +4,7 @@
 // Backend: GET/POST /feed/order/{id}, PATCH /feed/item/{id}.
 import { useEffect, useRef, useState } from "react";
 import { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import { api } from "../../api/client";
 import { sectionCard } from "../../components/Section";
 import { useMe } from "../../context/Me";
@@ -99,7 +100,7 @@ export default function NotesPanel({ orderId, onFlash }: { orderId: string; onFl
       </div>
       <div className="max-h-72 overflow-y-auto divide-y divide-slate-100">
         {!items && <div className="text-xs text-ink-tertiary py-5 text-center">Loading…</div>}
-        {items?.length === 0 && <div className="text-xs text-ink-tertiary py-5 px-4 text-center">No comments or files yet.</div>}
+        {items?.length === 0 && <EmptyState size="inline" className="px-4 text-center" title="No comments or files yet." />}
         {(items || []).map((it) => (
           <div key={it.id} className="px-4 py-2.5 flex items-start gap-3">
             <div className="min-w-0 flex-1">

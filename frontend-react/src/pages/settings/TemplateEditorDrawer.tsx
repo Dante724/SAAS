@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import Tabs from "../../components/Tabs";
 import { buttonClass } from "../../components/Button";
 import LabelBarcodePicker, { LABEL_DOC_TYPES } from "./LabelBarcodePicker";
 import { M } from "../../components/Shell";
@@ -316,7 +317,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
       {/* top bar */}
       <div className="flex items-center gap-3 px-4 h-14 bg-white border-b border-slate-200 shrink-0">
         <button aria-label="Close" onClick={onClose} title="Close" className="w-9 h-9 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="arrow_back" c="text-lg" /></button>
-        <button onClick={newDoc} className="h-9 px-3 rounded-lg border border-slate-200 text-ink-secondary font-semibold text-xs hover:bg-slate-100 hover:border-slate-300 flex items-center gap-1 shrink-0"><M n="add" c="text-[16px]" /> New</button>
+        <button onClick={newDoc} className={buttonClass("secondary", "md", "shrink-0")}><M n="add" c="text-[16px]" /> New</button>
         {templates.length > 0 && (
           <select value={currentId || ""} onChange={(e) => { const t = templates.find((x) => x.id === e.target.value); if (t) openTpl(t); }}
             className="glass-input h-9 max-w-[180px] rounded-xl px-3 text-sm">
@@ -336,10 +337,9 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
             </div>
           )}
         </div>
-        <div className="mx-auto inline-flex rounded-full border border-slate-300 overflow-hidden text-xs font-semibold">
-          <button onClick={toEdit} className={`px-4 py-1.5 flex items-center gap-1 ${mode === "edit" ? "bg-primary text-white" : "text-ink-secondary hover:bg-slate-100"}`}><M n="edit" c="text-[15px]" /> Edit</button>
-          <button onClick={toPreview} className={`px-4 py-1.5 flex items-center gap-1 ${mode === "preview" ? "bg-primary text-white" : "text-ink-secondary hover:bg-slate-100"}`}><M n="visibility" c="text-[15px]" /> Preview</button>
-        </div>
+        <Tabs look="segmented" label="Editor view" className="mx-auto" value={mode === "preview" ? "preview" : "edit"}
+          onChange={(v) => (v === "edit" ? toEdit() : toPreview())}
+          tabs={[{ id: "edit", label: "Edit", icon: <M n="edit" c="text-sm" /> }, { id: "preview", label: "Preview", icon: <M n="visibility" c="text-sm" /> }]} />
         <div className="relative">
           <button aria-label="Document settings" onClick={() => setSettings((s) => !s)} title="Document settings" className="w-9 h-9 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="tune" c="text-lg" /></button>
           {settings && (
@@ -388,7 +388,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
         <button onClick={() => setRail((r) => r === "blocks" ? null : "blocks")} className={`h-9 px-3 rounded-lg border text-xs font-semibold flex items-center gap-1 ${rail === "blocks" ? "border-primary text-primary bg-primary/5" : "border-slate-200 text-ink-secondary hover:bg-slate-100"}`}><M n="dashboard" c="text-[16px]" /> Blocks</button>
         <button onClick={() => setRail((r) => r === "vars" ? null : "vars")} className={`h-9 px-3 rounded-lg border text-xs font-semibold flex items-center gap-1 ${rail === "vars" ? "border-primary text-primary bg-primary/5" : "border-slate-200 text-ink-secondary hover:bg-slate-100"}`}><M n="data_object" c="text-[16px]" /> Variables</button>
         {flash && <span className="text-xs text-emerald-600 font-semibold">{flash}</span>}
-        <button aria-label="Print at exact size" onClick={printDoc} title="Print at exact size" className="w-9 h-9 rounded-lg border border-slate-200 hover:bg-slate-100 flex items-center justify-center text-ink-secondary"><M n="print" c="text-lg" /></button>
+        <button aria-label="Print at exact size" onClick={printDoc} title="Print at exact size" className={buttonClass("secondary", "md", "w-9 px-0")}><M n="print" c="text-lg" /></button>
         <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save"}</button>
       </div>
 

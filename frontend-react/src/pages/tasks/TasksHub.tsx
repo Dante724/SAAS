@@ -2,6 +2,7 @@ import SkeletonRows from "../../components/SkeletonRows";
 import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import DateField from "../../components/DateField";
 import { api } from "../../api/client";
 import { useMe, hasFeature } from "../../context/Me";
@@ -10,6 +11,7 @@ import JobPicker from "../../components/JobPicker";
 import { loadFailed } from "../../lib/notice";
 import { clickableRow } from "../../lib/clickable";
 import { buttonClass } from "../../components/Button";
+import { Badge } from "../../components/Card";
 
 type Task = { id: string; title?: string; description?: string; status?: string; priority?: number; assigned_to_id?: string | null; assignee_name?: string; assignee_ids?: string[]; assignee_names?: string[]; due_at?: string | null; completed_at?: string | null; overdue?: boolean; order_id?: string | null; order_number?: string | null; client_name?: string };
 type Emp = { id: string; name: string };
@@ -103,8 +105,8 @@ export default function TasksHub() {
                 <tr key={t.id} className="hover:bg-blue-50/30 cursor-pointer" {...clickableRow(() => openTask(t))}>
                   <td className="py-3 pl-5 pr-2" onClick={(e) => e.stopPropagation()}><button onClick={() => toggleDone(t)} aria-label={t.completed_at ? `Mark "${t.title}" not done` : `Mark "${t.title}" done`} aria-pressed={!!t.completed_at} className={`w-6 h-6 rounded-md border-2 flex items-center justify-center ${t.completed_at ? "bg-emerald-500 border-emerald-500 text-white" : "border-slate-300 hover:border-primary"}`}>{t.completed_at && <M n="check" c="text-xs" />}</button></td>
                   <td className="py-3 px-3"><span className={`font-bold ${t.completed_at ? "text-ink-tertiary line-through" : "text-ink-primary"}`}>{t.title}</span></td>
-                  <td className="py-3 px-3"><span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${t.completed_at ? "bg-emerald-100 text-emerald-800" : t.status === "in_progress" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"}`}>{t.completed_at ? "Done" : STATUS_LABEL[t.status || "todo"]}</span></td>
-                  <td className="py-3 px-3">{t.order_id ? <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-blue-100 text-blue-800 inline-flex items-center gap-1"><M n="handyman" c="text-[11px]" />{t.order_number || "WO"}</span> : "—"}</td>
+                  <td className="py-3 px-3"><Badge tone={t.completed_at ? "success" : t.status === "in_progress" ? "warning" : "neutral"} size="sm">{t.completed_at ? "Done" : STATUS_LABEL[t.status || "todo"]}</Badge></td>
+                  <td className="py-3 px-3">{t.order_id ? <Badge tone="info" size="sm" className="gap-1"><M n="handyman" c="text-[11px]" />{t.order_number || "WO"}</Badge> : "—"}</td>
                   <td className="py-3 px-3">{(t.assignee_names && t.assignee_names.length) ? (t.assignee_names.length > 2 ? `${t.assignee_names.slice(0, 2).join(", ")} +${t.assignee_names.length - 2}` : t.assignee_names.join(", ")) : (t.assignee_name || "—")}</td>
                   <td className={`py-3 px-3 ${t.overdue ? "text-rose-600 font-bold" : ""}`}>{fmt(t.due_at)}</td>
                 </tr>
@@ -163,7 +165,7 @@ export default function TasksHub() {
                   <button onClick={() => postComment(sel.id)} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:brightness-110">Post</button>
                 </div>
                 <div className="space-y-2.5">
-                  {feed.length === 0 && <p className="text-[11px] text-ink-tertiary">No activity yet.</p>}
+                  {feed.length === 0 && <EmptyState size="inline" title="No activity yet." />}
                   {feed.map((f) => (
                     <div key={f.id} className="flex gap-2.5">
                       <div className={`w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-white text-[11px] font-bold ${f.kind === "comment" ? "bg-primary" : "bg-slate-400"}`}>{f.kind === "comment" ? (f.author_name || "?").slice(0, 1).toUpperCase() : <M n="bolt" c="text-xs" />}</div>

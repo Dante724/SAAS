@@ -3,6 +3,7 @@
 // surface (the GET /shifts endpoint requires can_view_finance).
 import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import { api } from "../../api/client";
 import { money } from "../orders/types";
 
@@ -26,7 +27,7 @@ export default function ShiftHistoryModal({ sym, onClose }: { sym?: string; onCl
   }, []);
 
   return (
-    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-black/30 p-4" role="presentation" onClick={onClose}>
+    <div className="fixed inset-0 z-[60] flex items-center justify-center bg-ink-primary/40 p-4" role="presentation" onClick={onClose}>
       <div className="relative bg-white rounded-2xl shadow-clay-drawer border border-slate-200 w-full max-w-2xl p-5" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center justify-between mb-3">
           <h3 className="text-sm font-bold text-ink-primary flex items-center gap-2"><M n="history" c="text-base text-primary" />Drawer history &amp; reconciliation</h3>
@@ -34,7 +35,7 @@ export default function ShiftHistoryModal({ sym, onClose }: { sym?: string; onCl
         </div>
         {err && <p className="text-xs text-rose-600 py-4">{err}</p>}
         {!rows && !err && <p className="text-xs text-ink-tertiary py-6 text-center">Loading…</p>}
-        {rows && !rows.length && <p className="text-xs text-ink-tertiary py-6 text-center">No drawers opened yet.</p>}
+        {rows && !rows.length && <EmptyState size="section" icon={<M n="history" c="text-lg" />} title="No drawers opened yet." />}
         {rows && !!rows.length && (
           <div className="overflow-y-auto max-h-96 -mx-1">
             <table className="w-full text-xs">

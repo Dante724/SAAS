@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
 import { money } from "../orders/types";
@@ -9,6 +10,7 @@ import { type Plan, type PlanItem } from "./shared";
 import { loadFailed } from "../../lib/notice";
 import { NumField } from "../../components/SettingRow";
 import { laborText } from "../../lib/labor";
+import { Badge } from "../../components/Card";
 
 // Catalog › Plans: what the shop sells as a membership. Each plan is a short list of what's
 // included; the editor keeps the everyday fields up front and the season options tucked away.
@@ -90,11 +92,10 @@ export default function PlansTab() {
       </div>
       {plans === null && <p className="text-xs text-ink-tertiary">Loading…</p>}
       {plans && plans.length === 0 && (
-        <div className="rounded-2xl border border-dashed border-slate-300 bg-white/60 p-8 text-center">
-          <div className="mx-auto h-11 w-11 rounded-2xl grid place-items-center bg-primary/10 text-primary"><M n="workspace_premium" c="text-xl" /></div>
-          <div className="mt-3 text-sm font-semibold text-ink-primary">No plans yet</div>
-          <div className="mt-1 text-xs text-ink-tertiary">Start from a template for your trade, then adjust the prices.</div>
-          {canEdit && <button onClick={() => setStarter(true)} className="mt-4 h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 inline-flex items-center gap-1.5"><M n="workspace_premium" c="text-sm text-ink-tertiary" />Choose a template</button>}
+        <div className="rounded-2xl border border-dashed border-slate-300 bg-white/60">
+          <EmptyState size="section" icon={<M n="workspace_premium" c="text-lg" />} title="No plans yet"
+            body="Start from a template for your trade, then adjust the prices."
+            action={canEdit && <button onClick={() => setStarter(true)} className="h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 inline-flex items-center gap-1.5"><M n="workspace_premium" c="text-sm text-ink-tertiary" />Choose a template</button>} />
         </div>
       )}
       <div className="grid gap-3 sm:grid-cols-2 xl:grid-cols-3">
@@ -122,7 +123,7 @@ export default function PlansTab() {
                 {r && (r.money_in > 0 || r.value_given > 0) && (
                   <div className="mt-3 flex items-center gap-2 border-t border-slate-100 pt-3 text-[11px] text-ink-tertiary">
                     <span>12 months: <b className="text-ink-primary tabular-nums">{money(r.money_in)}</b> in · <b className="text-ink-primary tabular-nums">{money(r.value_given)}</b> work given</span>
-                    <span className={`ml-auto rounded-full px-1.5 py-px font-semibold ${r.money_in >= r.value_given ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700"}`}>{r.money_in >= r.value_given ? "Paying off" : "Giving more"}</span>
+                    <Badge tone={r.money_in >= r.value_given ? "success" : "warning"} size="sm" className="ml-auto">{r.money_in >= r.value_given ? "Paying off" : "Giving more"}</Badge>
                   </div>
                 )}
                 {p.term === "season" && <div className="mt-2 text-[11px] text-ink-tertiary">Season {p.season_start} → {p.season_end}</div>}

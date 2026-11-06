@@ -3,6 +3,7 @@ import { buttonClass } from "../../components/Button";
 import { useEffect, useState, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
+import EmptyState, { TableEmpty } from "../../components/EmptyState";
 import ScanStockPanel from "../../components/ScanStockPanel";
 import { api, idempotencyKey, openAuthedDoc } from "../../api/client";
 import { downloadSheet } from "../../lib/downloadSheet";
@@ -563,18 +564,16 @@ export default function InventoryHub() {
                   <tr><td colSpan={stockCols} className="py-14 px-5"><StockLoadError onRetry={loadProducts} /></td></tr>
                 )}
                 {products && !productsFailed && shownProducts.length === 0 && (
-                  <tr><td colSpan={stockCols} className="py-14 px-5">
+                  <tr><td colSpan={stockCols} className="p-0">
                     {products.length === 0 ? (
-                      <div className="flex flex-col items-center text-center gap-3 max-w-sm mx-auto">
-                        <div className="w-11 h-11 rounded-full bg-slate-100 text-ink-tertiary flex items-center justify-center"><M n="inventory_2" c="text-2xl" /></div>
-                        <div><div className="font-semibold text-ink-primary text-sm">No stock yet</div><div className="text-ink-tertiary mt-0.5">Add your first product, or paste a stock sheet to bring your inventory in.</div></div>
-                        <div className="flex gap-2 mt-1">
+                      <EmptyState size="section" icon={<M n="inventory_2" c="text-lg" />} title="No stock yet"
+                        body="Add your first product, or paste a stock sheet to bring your inventory in."
+                        action={<div className="flex gap-2">
                           <button onClick={() => setDrawer({ kind: "product" })} className={primaryBtn}><M n="add" c="text-sm" />New product</button>
                           <button onClick={() => setPostingOpen(true)} className={ghostBtn}><M n="content_paste" c="text-sm" />New stock posting</button>
-                        </div>
-                      </div>
+                        </div>} />
                     ) : (
-                      <div className="flex flex-col items-center text-center gap-3 max-w-sm mx-auto">
+                      <div className="py-14 px-5"><div className="flex flex-col items-center text-center gap-3 max-w-sm mx-auto">
                         <div className="w-11 h-11 rounded-full bg-slate-100 text-ink-tertiary flex items-center justify-center"><M n="search_off" c="text-2xl" /></div>
                         {hiddenByAvail > 0 ? (
                           <>
@@ -587,7 +586,7 @@ export default function InventoryHub() {
                             <button onClick={() => { setAvail("in"); setCat(""); setWh(""); setPq(""); }} className={`${ghostBtn} mt-1`}><M n="filter_alt_off" c="text-sm" />Clear filters</button>
                           </>
                         )}
-                      </div>
+                      </div></div>
                     )}
                   </td></tr>
                 )}
@@ -679,7 +678,7 @@ export default function InventoryHub() {
               </tr></thead>
               <tbody className="divide-y divide-slate-100 text-xs">
                 {!pos && <SkeletonRows cols={6} />}
-                {pos?.length === 0 && <tr><td colSpan={6} className="py-6 px-5 text-ink-tertiary">No purchase orders yet.</td></tr>}
+                {pos?.length === 0 && <TableEmpty cols={6} icon={<M n="local_shipping" c="text-lg" />} title="No purchase orders yet." />}
                 {!!pos?.length && shownPos.length === 0 && <tr><td colSpan={6} className="py-6 px-5 text-ink-tertiary">No purchase orders match "{poQ.trim()}".</td></tr>}
                 {pagePos.map((po) => {
                   const st = (po.status || "draft").toLowerCase();

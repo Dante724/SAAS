@@ -27,6 +27,7 @@ import { loadFailed } from "../../lib/notice";
 import { MembershipsCard } from "../memberships/shared";
 import { MembershipDrawer } from "../memberships/MembershipsView";
 import { laborText } from "../../lib/labor";
+import { Badge } from "../../components/Card";
 
 const BASE_TABS = ["General info", "Devices & assets", "Work orders", "Purchases", "Loyalty & payout", "Communications"];
 const LABEL = "text-xs font-medium text-ink-secondary";
@@ -142,9 +143,9 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
         <header className="px-6 pt-4 border-b border-slate-200/90 bg-white">
           <div className="flex items-center gap-2 mb-3">
             <button onClick={onClose} className="flex items-center gap-1.5 text-xs font-semibold text-primary"><M n="arrow_back" c="text-sm" /> {woNum ? `Back to ${woNum}` : "Back"}</button>
-            <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-800 border border-emerald-200">Customer</span>
-            {isSupplier && <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-blue-100 text-blue-800 border border-blue-200 flex items-center gap-1"><M n="local_shipping" c="text-[13px]" />Supplier</span>}
-            {c.source === "call" && <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-ink-secondary border border-slate-200 flex items-center gap-1"><M n="smartphone" c="text-[13px]" />Created from call</span>}
+            <Badge tone="success" size="sm">Customer</Badge>
+            {isSupplier && <Badge tone="info" size="sm" className="gap-1"><M n="local_shipping" c="text-[13px]" />Supplier</Badge>}
+            {c.source === "call" && <Badge size="sm" className="gap-1"><M n="smartphone" c="text-[13px]" />Created from call</Badge>}
             <div className="flex-1" />
             <CallButton phone={c.phone} clientId={clientId} />
             <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100"><M n="close" c="text-lg" /></button>
@@ -292,7 +293,7 @@ function WorkOrdersTab({ clientId, onOpen }: { clientId: string; onOpen: (id: st
         <button type="button" key={o.id} onClick={() => onOpen(o.id)} aria-label={`Open work order ${o.order_number || o.code || ""}`.trim()}
           className={`${sectionCard} w-full text-left p-3.5 flex items-center gap-3 hover:border-slate-300 transition-colors`}>
           <div className="flex-1"><div className="text-xs font-bold text-ink-primary">{o.order_number || o.code || "Work order"}</div><div className="text-[11px] text-ink-tertiary">{[d(o.created_at), o.device_name].filter(Boolean).join(" · ")}</div></div>
-          {o.status && <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-ink-secondary border border-slate-200 capitalize">{String(o.status).replace(/_/g, " ")}</span>}
+          {o.status && <Badge size="sm" className="capitalize">{String(o.status).replace(/_/g, " ")}</Badge>}
           <span className="tabular-nums font-bold text-ink-primary text-xs">{money(o.total ?? o.grand_total ?? 0)}</span>
           <M n="chevron_right" c="text-ink-tertiary text-base" />
         </button>
@@ -383,7 +384,7 @@ function LoyaltyTab({ clientId }: { clientId: string }) {
   const bv = balanceView(bal.balance);
   const PRIMARY = "h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold disabled:opacity-50";
   const pill = (tone: "muted" | "ok" | "bad", t: string) => (
-    <span className={`px-2 py-0.5 rounded-full text-[11px] font-bold border ${tone === "muted" ? "bg-slate-100 text-ink-tertiary border-slate-200" : tone === "ok" ? "bg-emerald-100 text-emerald-700 border-emerald-200" : "bg-rose-100 text-rose-700 border-rose-200"}`}>{t}</span>
+    <Badge tone={tone === "muted" ? "neutral" : tone === "ok" ? "success" : "danger"} size="sm">{t}</Badge>
   );
   return (
     <div className="space-y-3">

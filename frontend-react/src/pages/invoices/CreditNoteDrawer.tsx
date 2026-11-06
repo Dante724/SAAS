@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import BulkPrintDialog from "../../components/BulkPrintDialog";
 import { api, openAuthedDoc } from "../../api/client";
 import { alertDialog, confirmDialog } from "../../lib/dialog";
@@ -203,7 +204,7 @@ export default function CreditNoteDrawer({ id, invoice, clientId, onClose, onCha
               <span className="tabular-nums font-semibold text-ink-primary">{cash(amounts[i].total)}</span>
             </div>
           ))}
-          {editable && lines.length === 0 && <div className="text-xs text-ink-tertiary">No lines yet.</div>}
+          {editable && lines.length === 0 && <EmptyState size="inline" title="No lines yet." />}
         </div>
       </div>
       <div className="rounded-xl bg-slate-50 border border-slate-200 p-3 space-y-1.5 text-sm">

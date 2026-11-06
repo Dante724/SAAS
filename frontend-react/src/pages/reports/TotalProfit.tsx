@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { buttonClass } from "../../components/Button";
 import { useNavigate } from "react-router-dom";
 import { api, openAuthedDoc } from "../../api/client";
 import { alertDialog } from "../../lib/dialog";
@@ -9,6 +10,7 @@ import { money } from "../orders/types";
 import { clickableRow } from "../../lib/clickable";
 import { KIND_LABEL, drillRows, trend, type Drill, type ProfitRow } from "./profitView";
 import { laborText, laborWord } from "../../lib/labor";
+import { Badge } from "../../components/Card";
 
 type Bucket = { count: number; revenue: number; tax: number; cogs?: number; labour_cost: number; commission: number; profit?: number; written_off: number };
 type Group = Bucket & { name: string; jobs: number; dropped: number; sales: number; location_id?: string | null; employee_id?: string | null };
@@ -27,11 +29,11 @@ const n = (v: number | undefined) => (typeof v === "number" ? v : null);
 function TrendChip({ cur, prev }: { cur: number | null; prev: number | null }) {
   if (cur == null || prev == null) return null;
   const t = trend(cur, prev);
-  const tone = t.dir === "up" ? "text-emerald-700 bg-emerald-50" : t.dir === "down" ? "text-rose-700 bg-rose-50" : "text-ink-secondary bg-slate-100";
+  const tone = t.dir === "up" ? "success" : t.dir === "down" ? "danger" : "neutral";
   return (
-    <span className={`inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-2xs font-semibold ${tone}`} title={`Last period: ${money(prev)}`}>
+    <span className="inline-flex" title={`Last period: ${money(prev)}`}><Badge tone={tone} size="sm" className="gap-0.5">
       <M n={t.dir === "up" ? "trending_up" : t.dir === "down" ? "trending_down" : "trending_flat"} c="text-xs" />{t.label}
-    </span>
+    </Badge></span>
   );
 }
 
@@ -99,7 +101,7 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
         {/* the CSV route also checks this permission */}
         {can("can_export_sales") && (
           <button type="button" onClick={exportCsv}
-            className="px-3 py-1.5 rounded-lg bg-white border border-slate-200 text-ink-secondary hover:bg-slate-50 text-xs font-bold flex items-center gap-1.5 shadow-clay-sm"><M n="download" c="text-sm" />Export</button>
+            className={buttonClass("secondary", "sm")}><M n="download" c="text-sm" />Export</button>
         )}
       </div>
 

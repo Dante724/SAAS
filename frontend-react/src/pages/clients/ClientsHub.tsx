@@ -3,6 +3,7 @@ import { useMe, hasFeature } from "../../context/Me";
 import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
+import { TableEmpty } from "../../components/EmptyState";
 import { api } from "../../api/client";
 import { downloadSheet } from "../../lib/downloadSheet";
 import { isoDate } from "../../lib/localDate";
@@ -241,14 +242,9 @@ export default function ClientsHub() {
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
                   {!suppliers && <SkeletonRows cols={6} />}
-                  {suppliers && sRows.length === 0 && <tr><td colSpan={6} className="py-10 px-4 text-center">
-                    {q ? <p className="text-ink-tertiary">No suppliers found.</p> : (
-                      <div className="space-y-3">
-                        <p className="text-ink-secondary">No suppliers yet.</p>
-                        <button onClick={() => setNewSupplier(true)} className={`${btnPrimary} min-w-[8.5rem] justify-center`}><M n="add" c="text-sm" />New supplier</button>
-                      </div>
-                    )}
-                  </td></tr>}
+                  {suppliers && sRows.length === 0 && <TableEmpty cols={6} icon={<M n="local_shipping" c="text-lg" />}
+                    title={q ? "No suppliers found." : "No suppliers yet."}
+                    action={q ? undefined : <button onClick={() => setNewSupplier(true)} className={`${btnPrimary} min-w-[8.5rem] justify-center`}><M n="add" c="text-sm" />New supplier</button>} />}
                   {pageS.map((s) => (
                     <tr key={s.id} {...clickableRow(() => s.client_id ? setOpenClient(s.client_id) : setOpenSupplier(s))} className="hover:bg-slate-50 cursor-pointer">
                       <td className="py-3 px-4 font-semibold text-ink-primary">{s.name || "—"}</td>

@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import Shell, { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import SkeletonRows from "../../components/SkeletonRows";
 import DateField from "../../components/DateField";
 import CatalogPicker from "../../components/CatalogPicker";
@@ -17,6 +18,7 @@ import { DISPLAY_MODES, Drawer, cash, ErrorNote, MoreMenu, StatusPill, btnGhost,
 import { loadFailed } from "../../lib/notice";
 import { clickableRow } from "../../lib/clickable";
 import { laborText } from "../../lib/labor";
+import { Badge } from "../../components/Card";
 
 // Invoices are day-to-day front-desk work (issue, take payment, resend), so they get their own
 // page next to Sales instead of a tab inside Finance — which also kept staff who only need
@@ -100,11 +102,10 @@ export default function InvoicesHub() {
             )}
           </div>
           {invoices?.length === 0 && !ip.err ? (
-            <div className="bg-white rounded-2xl border border-slate-200/90 px-6 py-12 text-center">
-              <span className="mx-auto mb-3 w-10 h-10 rounded-full bg-slate-100 text-ink-tertiary grid place-items-center"><M n="receipt_long" c="text-xl" /></span>
-              <p className="text-sm font-semibold text-ink-primary">No invoices yet</p>
-              <p className="mt-1 text-xs text-ink-tertiary max-w-sm mx-auto">Invoices you send show here, with what each customer has paid and what they still owe.</p>
-              <button onClick={() => setNewInv(true)} className={`${btnPrimary} mt-4`}><M n="add" c="text-sm" />Create your first invoice</button>
+            <div className="bg-white rounded-2xl border border-slate-200/90">
+              <EmptyState size="section" icon={<M n="receipt_long" c="text-lg" />} title="No invoices yet"
+                body="Invoices you send show here, with what each customer has paid and what they still owe."
+                action={<button onClick={() => setNewInv(true)} className={btnPrimary}><M n="add" c="text-sm" />Create your first invoice</button>} />
             </div>
           ) : (
           <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
@@ -171,7 +172,7 @@ export default function InvoicesHub() {
                           <button onClick={() => issueEinvoice(i.id)} disabled={!!issuingId} className="h-8 px-3 rounded-xl border border-slate-200 bg-white text-ink-secondary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50">{issuingId === i.id ? "Issuing…" : "Issue e-invoice"}</button>
                         ) : (
                           <div className="flex items-center gap-1.5">
-                            <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${i.einvoice_status === "cleared" ? "bg-emerald-50 text-emerald-700" : i.einvoice_status === "rejected" ? "bg-rose-50 text-rose-700" : "bg-slate-100 text-ink-secondary"}`}>{humanize(i.einvoice_status)}</span>
+                            <Badge tone={i.einvoice_status === "cleared" ? "success" : i.einvoice_status === "rejected" ? "danger" : "neutral"} size="sm">{humanize(i.einvoice_status)}</Badge>
                             <button aria-label="Download XML" onClick={() => openAuthedDoc(`/finance/invoices/${i.id}/einvoice.xml`).catch(() => alertDialog("Could not open e-invoice"))} title="Download XML" className="p-1 rounded-lg text-ink-tertiary hover:text-primary hover:bg-slate-100"><M n="download" c="text-sm" /></button>
                             {i.einvoice_status === "issued" && <button aria-label="Mark cleared" onClick={() => markEinvoiceCleared(i.id)} title="Mark cleared" className="p-1 rounded-lg text-ink-tertiary hover:text-emerald-600 hover:bg-slate-100"><M n="check" c="text-sm" /></button>}
                           </div>

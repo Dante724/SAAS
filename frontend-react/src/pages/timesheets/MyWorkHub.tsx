@@ -1,6 +1,8 @@
 import { humanize } from "../../lib/humanize";
+import { buttonClass } from "../../components/Button";
 import { useEffect, useState, useCallback } from "react";
 import Shell, { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import { api } from "../../api/client";
 import { promptDialog } from "../../lib/dialog";
 import { fmtServerTime } from "../../lib/serverTime";
@@ -87,7 +89,7 @@ export default function MyWorkHub() {
             {w?.active ? (
               <div className="mt-1 flex items-center justify-between">
                 <span className="flex items-center gap-1.5 text-sm font-bold text-emerald-700"><span className="w-2 h-2 rounded-full bg-emerald-500 animate-pulse" />{w.active.order_number || "running"}</span>
-                <button onClick={stop} className="px-2.5 py-1 rounded-lg text-[11px] font-bold text-white bg-emerald-600 hover:bg-emerald-700">Stop</button>
+                <button onClick={stop} className={buttonClass("success", "sm")}>Stop</button>
               </div>
             ) : <div className="mt-1 text-sm text-ink-tertiary">Not clocked in</div>}
           </div>
@@ -161,7 +163,7 @@ export default function MyWorkHub() {
         {/* my recent entries + dispute */}
         <div className={card}>
           <div className="px-4 py-2.5 border-b border-slate-200 flex items-center gap-2"><M n="history" c="text-primary text-sm" /><h3 className="text-xs font-bold text-ink-primary">My recent time</h3></div>
-          {entries.length === 0 ? <p className="p-4 text-xs text-ink-tertiary">No time logged yet.</p> : (
+          {entries.length === 0 ? <EmptyState size="section" icon={<M n="history" c="text-lg" />} title="No time logged yet." /> : (
             <div className="divide-y divide-slate-100">
               {entries.map((e) => (
                 <div key={e.id} className="p-3.5">

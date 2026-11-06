@@ -1,6 +1,7 @@
 import { useEffect, useMemo, useState } from "react";
 import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import Switch from "../../components/Switch";
 import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
@@ -180,11 +181,9 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
       {tab === "pay" && (
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-2">
           {(rules || []).length === 0 && (
-            <div className="p-6 text-center">
-              <div className="text-sm text-ink-primary">No commission rules yet</div>
-              <div className="text-xs text-ink-tertiary mt-0.5 mb-3">Pay a percent or a flat amount when work is done or a part is sold.</div>
-              <button onClick={onNewRule} className="px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-ink-primary hover:bg-slate-50">Create a rule</button>
-            </div>
+            <EmptyState size="section" icon={<M n="percent" c="text-lg" />} title="No commission rules yet"
+              body="Pay a percent or a flat amount when work is done or a part is sold."
+              action={<button onClick={onNewRule} className={buttonClass("secondary", "md")}>Create a rule</button>} />
           )}
           {(rules || []).map((r) => {
             const who = people.find((p) => p.id === r.employee_id);
@@ -413,7 +412,7 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
                 <Choice value={payrollScope} set={setPayrollScope} options={[["all", "Everyone"], ["own", "Only themselves"], ["selected", "Only some people"]]} />
                 {payrollScope === "selected" && (
                   <div className="flex flex-wrap gap-1.5 mt-2" role="group" aria-label="People whose pay they can see">
-                    {people.length === 0 && <span className="text-xs text-ink-tertiary">No team members yet.</span>}
+                    {people.length === 0 && <EmptyState size="inline" title="No team members yet." />}
                     {people.map((p) => { const on = payrollIds.includes(p.id); return (
                       <button key={p.id} type="button" onClick={() => setPayrollIds((s) => (on ? s.filter((x) => x !== p.id) : [...s, p.id]))} aria-pressed={on}
                         className={`inline-flex items-center gap-1.5 pl-1 pr-2.5 py-1 rounded-full text-xs border ${on ? "bg-white border-primary/40 text-ink-primary shadow-sm" : "border-dashed border-slate-300 text-ink-tertiary"}`}>
@@ -431,7 +430,7 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
                 </div>
               </Row>
               <Row icon="visibility_off" title="Hidden statuses" hint="Jobs in these statuses don't appear for this role.">
-                {statuses.length === 0 ? <div className="text-xs text-ink-tertiary">No statuses yet.</div> : (
+                {statuses.length === 0 ? <EmptyState size="inline" title="No statuses yet." /> : (
                   <div className="flex flex-wrap gap-1.5">
                     {statuses.map((s) => { const on = hiddenStatuses.includes(s.key); return (
                       <button key={s.key} type="button" onClick={() => setHiddenStatuses((h) => (on ? h.filter((k) => k !== s.key) : [...h, s.key]))} aria-pressed={on}

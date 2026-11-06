@@ -123,6 +123,11 @@ body { background: rgb(var(--c-canvas)); color: rgb(var(--c-ink-primary)); }
 @media (max-width: 1279.98px) {
   .app-main :is(th, td):is(.px-4, .px-5, .px-6) { padding-left: .625rem; padding-right: .625rem; }
 }
+/* Every checkbox and radio gets the Tekly sapphire tick (light and dark), a pointer and the same focus
+   ring as buttons, at its normal size so nothing moves. */
+input[type="checkbox"], input[type="radio"] { accent-color: rgb(var(--c-primary-fill)); cursor: pointer; }
+input[type="checkbox"]:disabled, input[type="radio"]:disabled { cursor: not-allowed; }
+input[type="checkbox"]:focus-visible, input[type="radio"]:focus-visible { outline: 2px solid rgb(var(--c-primary-fill) / .45); outline-offset: 2px; }
 /* Touch / narrow screens: native checkboxes and radios grow to a 24px tap target (WCAG 2.5.8). */
 @media (max-width: 899.98px), (pointer: coarse) {
   input[type="checkbox"], input[type="radio"] { width: 1.5rem; height: 1.5rem; flex-shrink: 0; }

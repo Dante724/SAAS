@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api/client";
 import { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import { Avatar } from "./look";
 import { buttonClass } from "../../components/Button";
 
@@ -60,7 +61,7 @@ export default function JobTasks({ orderId, emps, onFlash }: { orderId: string; 
         </div>
       )}
       {items === null ? <p className="text-xs text-ink-tertiary">Loading…</p>
-        : items.length === 0 ? (!adding && <p className="text-xs text-ink-tertiary">No tasks on this job yet.</p>)
+        : items.length === 0 ? (!adding && <EmptyState size="inline" title="No tasks on this job yet." />)
         : (
           <ul className="divide-y divide-slate-100">
             {items.map((t) => (

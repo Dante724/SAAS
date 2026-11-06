@@ -17,6 +17,7 @@ import { deliveryText, deliveryTone, flashDelivery, type Delivery, type Flash, t
 import PhotoAnnotator from "./PhotoAnnotator";
 import TagChips from "../../components/TagChips";
 import { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import DateField from "../../components/DateField";
 import FloatingMenu from "../../components/FloatingMenu";
 import PrintMenu from "./PrintMenu";
@@ -49,6 +50,7 @@ import { binChoices, byLocation, needsBinChoice } from "../../lib/stockBins";
 import { loadFailed, saveFailed } from "../../lib/notice";
 import { clickable } from "../../lib/clickable";
 import { jobTypeLabel, type WOTypeRef } from "./jobType";
+import { Badge } from "../../components/Card";
 
 type Emp = { id: string; name: string; in_managers?: boolean; in_assignees?: boolean };
 type Line = { id: string; kind?: string; line_type?: string; description?: string; qty?: number; unit_price?: number; discount?: number; discount_type?: string; technician_id?: string | null; work_share?: number; booked_hours?: number; co_technicians?: { employee_id: string; share: number }[]; total?: number; in_stock?: boolean; order_item_id?: string | null;
@@ -394,14 +396,14 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             <StatusControl statuses={statuses} currentKey={d.status} elapsedMin={timing?.elapsed_min}
               isEstimate={isEst} onChange={changeStatus} />
             {urgent && (
-              <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200 flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />{(d.priority ?? 0) >= 2 ? "Urgent" : "High priority"}
-              </span>
+              <Badge tone="danger" size="sm" dot>
+                {(d.priority ?? 0) >= 2 ? "Urgent" : "High priority"}
+              </Badge>
             )}
             {!!(d as any).estimate_approved_at && (
-              <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200 flex items-center gap-1">
+              <Badge tone="success" size="sm" className="gap-1">
                 <M n="check" c="text-xs" />Customer approved
-              </span>
+              </Badge>
             )}
           </div>
           <div className="flex items-center gap-1.5 ml-auto">
@@ -699,7 +701,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                   <Ro label="Due">
                     <ReadOnly>
                       <span className={due?.[1] ? "text-rose-700 font-medium" : d.due_at ? "" : "text-ink-tertiary"}>{d.due_at ? fmtDT(d.due_at) : "No due date"}</span>
-                      {due && <span className={`ml-2 px-2 py-0.5 rounded-full text-[11px] font-semibold ${due[1] ? "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200" : "bg-slate-100 text-ink-secondary"}`}>{due[0]}</span>}
+                      {due && <Badge tone={due[1] ? "danger" : "neutral"} size="sm" className="ml-2">{due[0]}</Badge>}
                     </ReadOnly>
                   </Ro>
                 </div>
@@ -1464,7 +1466,7 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, onFla
           <h5 className="text-[13px] font-medium text-ink-primary truncate" title={full}>{displayName(full, kit?.name)}</h5>
           <p className="text-xs text-ink-secondary tabular-nums">{lineKindLabel(l)}{" · "}
             {editable ? <span {...clickable(() => setQtyOpen(l.id))} className="cursor-pointer hover:text-ink-primary">{amountTxt}</span> : amountTxt}
-            {onPlan && (l as any).kind !== "membership" && <span className="ml-1.5 inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-primary/10 px-1.5 py-px text-[11px] font-semibold text-primary"><M n="workspace_premium" c="text-[11px]" />{Number(l.discount) >= 100 ? "Covered by plan" : `Plan ${l.discount}% off`}</span>}</p>
+            {onPlan && (l as any).kind !== "membership" && <Badge tone="info" size="sm" className="ml-1.5 gap-1"><M n="workspace_premium" c="text-[11px]" />{Number(l.discount) >= 100 ? "Covered by plan" : `Plan ${l.discount}% off`}</Badge>}</p>
           {tagging && (
             <select value={l.order_item_id || ""} onChange={(e) => patchLine(l.id, { order_item_id: e.target.value })} aria-label={`Which item ${l.description || "this line"} is for`}
               className={`mt-1.5 max-w-[240px] ${houseInput}`}>
@@ -1784,14 +1786,14 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
             <button onClick={apply} disabled={!pick || busy} className={btnPrimary}>Apply</button>
           </div>
         ) : (
-          <p className="text-xs text-ink-tertiary">
+          <EmptyState size="inline" title={<>
             No checklist templates yet. <Link to="/settings?section=checklists" className="font-semibold text-primary hover:underline">Create one in Settings › Checklists</Link>
-          </p>
+          </>} />
         )}
       </Section>
 
       {cls === null && <p className="text-xs text-ink-tertiary">Loading checklists…</p>}
-      {cls?.length === 0 && <p className="text-xs text-ink-tertiary">No checklists on this job yet.</p>}
+      {cls?.length === 0 && <EmptyState size="inline" title="No checklists on this job yet." />}
       {cls?.map((c: any) => {
         const items = c.items || []; const done = items.filter((i: any) => i.done).length; const pct = items.length ? Math.round((done / items.length) * 100) : 0;
         return (
@@ -2087,7 +2089,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
             <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
               {data.invoices.map((i) => (
                 <tr key={i.id} className="hover:bg-slate-50/50"><td className="py-2.5 px-4 font-mono font-semibold text-primary">{i.invoice_number}</td>
-                  <td className="py-2.5 px-4"><span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${/(paid|settled)/i.test(i.status) ? "bg-emerald-100 text-emerald-800" : "bg-blue-100 text-blue-800"}`}>{humanize(i.status)}</span></td>
+                  <td className="py-2.5 px-4"><Badge tone={/(paid|settled)/i.test(i.status) ? "success" : "info"} size="sm">{humanize(i.status)}</Badge></td>
                   <td className="py-2.5 px-4 text-right tabular-nums font-semibold text-ink-primary">{money(i.total)}</td>
                   <td className="py-2 px-4 text-right">{!/(cancel|void)/i.test(i.status || "") && <SendMenu small primary={false} label="Send invoice" busy={sendingInv === i.id} onSend={(w) => sendInv(i.id, w)} />}</td></tr>
               ))}
@@ -2111,7 +2113,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
 
       <CardPaymentsList orderId={orderId} reloadKey={data?.payments.length} onChanged={load} />
 
-      {data && data.invoices.length === 0 && data.payments.length === 0 && <p className="text-xs text-ink-tertiary">No invoices or payments yet.</p>}
+      {data && data.invoices.length === 0 && data.payments.length === 0 && <EmptyState size="inline" title="No invoices or payments yet." />}
 
       {/* Portaled to <body>: inside the drawer the header (z-20) painted over the scrim as a white strip. */}
       {modal && ctx && createPortal(
@@ -2244,7 +2246,7 @@ export function JobNotes({ orderId, filter, onFlash }: { orderId: string; filter
                   {!isImg && i.media_name && <p className="text-xs text-ink-secondary flex items-center gap-1"><M n="description" c="text-sm" />{i.media_name}</p>}
                   <p className="text-[11px] text-ink-tertiary flex flex-wrap items-center gap-1.5">
                     <span>{i.item_type === "system" ? "Automatic" : i.author_name || "Staff"} · {fmtServerTime(i.created_at)}</span>
-                    {i.visibility === "client" && <span className="px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-200 font-semibold flex items-center gap-0.5"><M n="visibility" c="text-[11px]" />Customer can see</span>}
+                    {i.visibility === "client" && <Badge tone="warning" size="sm" className="gap-0.5"><M n="visibility" c="text-[11px]" />Customer can see</Badge>}
                   </p>
                 </div>
               </li>
@@ -2312,7 +2314,7 @@ function ActivityTab({ orderId, clientPhone, onFlash, threadKey, onSent }: { ord
       {f === "Payments" && <p className="text-xs text-ink-tertiary">Payments for this job are on the Invoices &amp; payments tab.</p>}
       {showLogs && <Section title="Notifications & delivery" icon="notifications">
         {logs.length === 0 ? (
-          <div className="text-xs text-ink-tertiary">No messages sent for this job yet.</div>
+          <EmptyState size="inline" title="No messages sent for this job yet." />
         ) : (
           <div className="relative pl-6 space-y-4 before:absolute before:left-2 before:top-2 before:bottom-2 before:w-[2px] before:bg-slate-200 text-xs">
             {logs.map((l) => (
@@ -2321,7 +2323,7 @@ function ActivityTab({ orderId, clientPhone, onFlash, threadKey, onSent }: { ord
                 <div>
                   <p className="font-semibold text-ink-primary flex flex-wrap items-center gap-2">
                     {(l.subject || humanize(l.trigger_event) || "Notification")}
-                    {l.channel && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-ink-secondary">{channelLabel(l.channel)}</span>}
+                    {l.channel && <Badge size="sm">{channelLabel(l.channel)}</Badge>}
                     <span className={`text-[11px] font-semibold ${l.status === "failed" ? "text-rose-600" : l.status === "sent" ? "text-emerald-600" : "text-amber-600"}`}>{humanize(l.status)}</span>
                   </p>
                   {l.body && <p className="text-xs text-ink-secondary line-clamp-2">{l.body}</p>}
