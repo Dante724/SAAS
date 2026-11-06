@@ -714,14 +714,8 @@ function NotificationsSettings({ fixedView, rules, templates, automations, reloa
 
           {/* Workflows splits into Jobs vs Estimates (Orderry parity) */}
           {module === "order" && (
-            <div className="flex gap-4 text-xs font-semibold border-b border-slate-200">
-              {([["work_order", "Jobs"], ["estimate", "Estimates"]] as const).map(([k, l]) => (
-                <button key={k} onClick={() => setRecType(k)}
-                  className={"py-2 border-b-2 transition-colors " + (recType === k ? "text-primary border-primary" : "text-ink-tertiary border-transparent hover:text-ink-secondary")}>
-                  {l}
-                </button>
-              ))}
-            </div>
+            <Tabs label="Workflow type" value={recType} onChange={setRecType}
+              tabs={[{ id: "work_order", label: "Jobs" }, { id: "estimate", label: "Estimates" }]} />
           )}
 
           <SectionCard
@@ -972,7 +966,7 @@ function RichTextEditor({ value, onChange, registerInsert }: {
     <div className="border border-slate-200 rounded-lg overflow-hidden bg-white">
       <div className="flex flex-wrap items-center gap-0.5 border-b border-slate-200 bg-slate-50 px-2 py-1">
         <select title="Font" onMouseDown={saveSel} onChange={(e) => applyFont(e.target.value)} defaultValue="" className="h-8 border border-slate-200 rounded-md text-xs px-1.5 bg-white text-ink-secondary"><option value="" disabled>Font</option>{fonts.map((ff) => <option key={ff} value={ff} style={{ fontFamily: ff }}>{ff}</option>)}</select>
-        <select title="Size" onMouseDown={saveSel} onChange={(e) => applySize(Number(e.target.value))} defaultValue="" className="h-8 border border-slate-200 rounded-md text-xs px-1.5 bg-white text-ink-secondary w-16"><option value="" disabled>Size</option>{sizes.map((s) => <option key={s} value={s}>{s}px</option>)}</select>
+        <select title="Size" onMouseDown={saveSel} onChange={(e) => applySize(Number(e.target.value))} defaultValue="" className="h-8 border border-slate-200 rounded-md text-xs px-1.5 bg-white text-ink-secondary w-16 bg-none"><option value="" disabled>Size</option>{sizes.map((s) => <option key={s} value={s}>{s}px</option>)}</select>
         <label className={btn + " relative cursor-pointer"} title="Text colour"><M n="format_color_text" c="text-lg" /><input type="color" onMouseDown={saveSel} onChange={(e) => applyColor(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" /></label>
         <label className={btn + " relative cursor-pointer"} title="Highlight"><M n="format_ink_highlighter" c="text-lg" /><input type="color" onMouseDown={saveSel} onChange={(e) => applyHilite(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" /></label>
         <span className="w-px h-5 bg-slate-200 mx-1" />

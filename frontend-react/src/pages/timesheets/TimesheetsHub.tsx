@@ -3,6 +3,7 @@ import PageSummary from "../../components/PageSummary";
 import { useEffect, useState } from "react";
 import { useVisibleInterval } from "../../hooks/useVisibleInterval";
 import Shell, { M } from "../../components/Shell";
+import Tabs from "../../components/Tabs";
 import DateField from "../../components/DateField";
 import { api } from "../../api/client";
 import { money } from "../orders/types";
@@ -61,12 +62,8 @@ export default function TimesheetsHub() {
 
   return (
     <Shell title="Timesheets">
-      <div className="px-6 pt-4 flex items-center gap-1 border-b border-slate-200/70">
-        {([["timesheet", "Timesheet"], ["hours", "Employee hours"]] as [typeof topTab, string][]).map(([id, label]) => (
-          <button key={id} onClick={() => setTopTab(id)}
-            className={`px-3 py-2 text-sm font-semibold rounded-t-lg -mb-px border-b-2 ${topTab === id ? "text-primary border-primary" : "text-ink-tertiary border-transparent hover:text-ink-primary"}`}>{label}</button>
-        ))}
-      </div>
+      <Tabs label="Timesheet sections" className="px-6 pt-4" value={topTab} onChange={setTopTab}
+        tabs={([["timesheet", "Timesheet"], ["hours", "Employee hours"]] as [typeof topTab, string][]).map(([id, label]) => ({ id, label }))} />
       {topTab === "hours" ? (
         <div className="flex-1 overflow-y-auto px-6 py-5"><EmployeeHours /></div>
       ) : (

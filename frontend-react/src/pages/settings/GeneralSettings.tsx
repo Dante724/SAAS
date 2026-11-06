@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import HexTile from "../../components/HexTile";
 import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import CurrencyManager from "../../components/CurrencyManager";
@@ -38,7 +39,7 @@ function Section({ icon, title, hint, children }: { icon: string; title: string;
   return (
     <section className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card">
       <div className="flex items-start gap-3 px-5 pt-4 pb-3">
-        <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n={icon} c="text-lg" /></span>
+        <span className="w-9 h-9 grid place-items-center flex-shrink-0"><HexTile icon={icon} /></span>
         <div className="min-w-0">
           <h3 className="text-sm font-semibold text-ink-primary">{title}</h3>
           {hint && <p className="text-xs text-ink-tertiary">{hint}</p>}

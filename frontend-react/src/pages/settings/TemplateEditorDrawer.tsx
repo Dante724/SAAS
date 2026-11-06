@@ -398,7 +398,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
           <select title="Font" onMouseDown={saveSel} onChange={(e) => applyFont(e.target.value)} defaultValue="" className="h-8 border border-slate-200 rounded-md text-xs px-1.5 text-ink-secondary bg-white">
             <option value="" disabled>Font</option>{FONTS.map((f) => <option key={f} value={f} style={{ fontFamily: f }}>{f}</option>)}
           </select>
-          <select title="Size" value={size} onMouseDown={saveSel} onChange={(e) => { const px = Number(e.target.value); setSize(px); applySize(px); }} className="h-8 border border-slate-200 rounded-md text-xs px-1.5 text-ink-secondary bg-white w-16">
+          <select title="Size" value={size} onMouseDown={saveSel} onChange={(e) => { const px = Number(e.target.value); setSize(px); applySize(px); }} className="h-8 border border-slate-200 rounded-md text-xs px-1.5 text-ink-secondary bg-white w-16 bg-none">
             {SIZES.map((s) => <option key={s} value={s}>{s}px</option>)}
           </select>
           <label title="Text colour" className="w-8 h-8 rounded-md hover:bg-slate-200/70 flex items-center justify-center text-ink-secondary cursor-pointer relative"><M n="format_color_text" c="text-lg" /><input type="color" onMouseDown={saveSel} onChange={(e) => applyColor(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" /></label>

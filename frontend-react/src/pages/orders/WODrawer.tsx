@@ -601,7 +601,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                     <div className={`w-9 h-9 rounded-xl grid place-items-center ${urgent ? "bg-rose-50 text-rose-600" : "bg-primary/10 text-primary"}`}><M n="schedule" c="text-base" /></div>
                     <div>
                       <p className="text-sm font-semibold text-ink-primary">{urgent ? ((d.priority ?? 0) >= 2 ? "Urgent job, same day" : "High priority job") : "Booked job"}</p>
-                      <p className="text-xs text-ink-secondary">{[d.scheduled_for ? `Booked for ${friendlyDate(d.scheduled_for)}` : null, d.due_at ? `due ${fmtDT(d.due_at)}` : null].filter(Boolean).join(" · ") || "Being tracked"}</p>
+                      <p className="text-xs text-ink-secondary">{[d.scheduled_for ? `Booked for ${(friendlyDate(d.scheduled_for) || "").replace(/^(Today|Yesterday|Tomorrow)\b/, (w) => w.toLowerCase())}` : null, d.due_at ? `due ${fmtDT(d.due_at)}` : null].filter(Boolean).join(" · ") || "Being tracked"}</p>
                     </div>
                   </div>
                   {due ? <span className={`text-[11px] font-semibold px-2.5 py-1 rounded-full ${due[1] ? "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200" : "bg-slate-100 text-ink-secondary"}`}>{due[0]}</span>
@@ -1041,10 +1041,10 @@ function Pick({ value, opts, onChange, label, red }: { value: string; opts: { va
   return (
     <div className="relative">
       <select value={value} onChange={(e) => onChange(e.target.value)} aria-label={label}
-        className={`glass-input w-full py-2 px-3 pr-8 text-xs rounded-xl appearance-none ${red ? "font-semibold text-rose-700" : "font-medium text-ink-primary"}`}>
+        className={`glass-input bg-none w-full h-9 px-3 pr-8 text-sm rounded-xl appearance-none ${red ? "font-semibold text-rose-700" : "font-medium text-ink-primary"}`}>
         {opts.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
       </select>
-      <M n="expand_more" c="absolute right-2.5 top-2.5 text-ink-tertiary pointer-events-none text-sm" />
+      <M n="expand_more" c="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary pointer-events-none text-sm" />
     </div>
   );
 }
@@ -1056,11 +1056,11 @@ function SelEmp({ value, emps, onChange, label }: { value: string; emps: Emp[]; 
   return (
     <div className="relative">
       <span className="absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none"><Avatar name={emps.find((e) => e.id === value)?.name} size={22} /></span>
-      <select value={value} onChange={(e) => onChange(e.target.value)} aria-label={label} className="glass-input w-full py-2 pl-9 pr-3 text-xs font-medium text-ink-primary rounded-xl appearance-none">
+      <select value={value} onChange={(e) => onChange(e.target.value)} aria-label={label} className="glass-input bg-none w-full h-9 pl-9 pr-8 text-sm font-medium text-ink-primary rounded-xl appearance-none">
         <option value="">Unassigned</option>
         {emps.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
       </select>
-      <M n="expand_more" c="absolute right-2.5 top-2.5 text-ink-tertiary pointer-events-none text-sm" />
+      <M n="expand_more" c="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary pointer-events-none text-sm" />
     </div>
   );
 }

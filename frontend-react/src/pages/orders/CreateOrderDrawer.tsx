@@ -252,17 +252,17 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
     ),
     priority: (
 <div className="space-y-1.5"><label className={lbl}>Priority{star("priority")}</label>
-                  <div className="relative"><select value={priority} onChange={(e) => setPriority(Number(e.target.value))} className={`${inp} pr-8 appearance-none`}><option value={0}>Normal</option><option value={1}>High</option><option value={2}>Urgent</option></select><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div>
+                  <div className="relative"><select value={priority} onChange={(e) => setPriority(Number(e.target.value))} className={`${inp} pr-8 appearance-none bg-none`}><option value={0}>Normal</option><option value={1}>High</option><option value={2}>Urgent</option></select><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div>
                 </div>
     ),
     manager: (
 <div className="space-y-1.5"><label className={lbl}>Manager{star("manager")}</label>
-                  <div className="relative"><select value={managerId} onChange={(e) => setManagerId(e.target.value)} className={`${inp} pr-8 appearance-none`}><option value="">Choose a manager</option>{emps.filter((e) => e.in_managers !== false).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div>
+                  <div className="relative"><select value={managerId} onChange={(e) => setManagerId(e.target.value)} className={`${inp} pr-8 appearance-none bg-none`}><option value="">Choose a manager</option>{emps.filter((e) => e.in_managers !== false).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div>
                 </div>
     ),
     assignee: (
 <div className="space-y-1.5"><label className={lbl}>Technician{star("assignee")}</label>
-                <div className="relative"><select value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)} className={`${inp} pr-8 appearance-none`}><option value="">Unassigned</option>{emps.filter((e) => e.in_assignees !== false).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div>
+                <div className="relative"><select value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)} className={`${inp} pr-8 appearance-none bg-none`}><option value="">Unassigned</option>{emps.filter((e) => e.in_assignees !== false).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div>
               </div>
     ),
     scheduled_for: (
@@ -305,7 +305,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                   <div className="sm:col-span-8 space-y-3">
                     <div className="grid grid-cols-2 gap-3">
                       <div className="space-y-1"><label className="block text-xs font-medium text-ink-secondary">Group</label>
-                        <div className="relative"><select value={group} onChange={(e) => setGroup(e.target.value)} className="glass-input block w-full h-10 px-3 text-sm font-medium text-ink-primary rounded-xl appearance-none">{(term.groups.length ? term.groups.map((g) => g.label) : ["Device", "Vehicle", "Equipment"]).map((g) => <option key={g}>{g}</option>)}</select><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div></div>
+                        <div className="relative"><select value={group} onChange={(e) => setGroup(e.target.value)} className="glass-input block w-full h-10 px-3 text-sm font-medium text-ink-primary rounded-xl appearance-none bg-none">{(term.groups.length ? term.groups.map((g) => g.label) : ["Device", "Vehicle", "Equipment"]).map((g) => <option key={g}>{g}</option>)}</select><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div></div>
                       <div className="space-y-1"><label className="block text-xs font-medium text-ink-secondary">Brand</label><NameSuggestInput field="brand" group={group} template={term.key} value={brand} onChange={setBrand} className="glass-input block w-full h-10 px-3 text-sm font-medium text-ink-primary rounded-xl" placeholder="Samsung" /></div>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
@@ -340,7 +340,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div className="space-y-1"><label className="block text-xs font-medium text-ink-secondary">Condition</label>
-                        <div className="relative"><select value={condition} onChange={(e) => setCondition(e.target.value)} className="glass-input block w-full h-10 px-3 text-sm font-medium text-ink-primary rounded-xl appearance-none"><option value="">—</option>{["New", "Good", "Fair", "Poor", "For parts"].map((c) => <option key={c} value={c}>{c}</option>)}</select><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div></div>
+                        <div className="relative"><select value={condition} onChange={(e) => setCondition(e.target.value)} className="glass-input block w-full h-10 px-3 text-sm font-medium text-ink-primary rounded-xl appearance-none bg-none"><option value="">—</option>{["New", "Good", "Fair", "Poor", "For parts"].map((c) => <option key={c} value={c}>{c}</option>)}</select><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div></div>
                       <div className="space-y-1"><label className="block text-xs font-medium text-ink-secondary">Color</label><input value={color} onChange={(e) => setColor(e.target.value)} className="glass-input block w-full h-10 px-3 text-sm font-medium text-ink-primary rounded-xl" placeholder="Titanium Black" /></div>
                     </div>
                     {moreIds.length > 0 && (
