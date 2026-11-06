@@ -315,9 +315,9 @@ function MergePreviewDialog({ preview, busy, onCancel, onConfirm }: { preview: a
           </div>
           <div className="flex items-start gap-1.5 p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-[11px] text-ink-secondary"><M n="history" c="text-sm mt-0.5" /><span>The source contacts are removed, but you can undo this right after if it's wrong.</span></div>
         </div>
-        <div className="p-4 border-t border-slate-200 flex justify-end gap-2">
-          <button onClick={onCancel} disabled={busy} className={buttonClass("secondary", "md")}>Cancel</button>
+        <div className="p-4 border-t border-slate-200 flex justify-start gap-2">
           <button onClick={onConfirm} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Merging…" : "Merge contacts"}</button>
+          <button onClick={onCancel} disabled={busy} className={buttonClass("secondary", "md")}>Cancel</button>
         </div>
       </div>
     </div>
@@ -358,9 +358,9 @@ function NewSupplierDrawer({ onClose, onCreated }: { onClose: () => void; onCrea
             </div>
           ))}
         </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2">
-          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
+        <div className="px-5 py-4 border-t border-slate-200 flex justify-start gap-2">
           <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Create supplier"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
         </div>
       </div>
     </div>

@@ -899,8 +899,8 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
           <ToggleRow label="Active" on={f.active} onToggle={() => set("active", !f.active)} />
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
-          <button onClick={onClose} className={buttonClass("secondary", "md", "ml-auto")}>Cancel</button>
           <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
         </div>
       </div>
     </div>
@@ -1091,10 +1091,10 @@ function NotifTemplateDrawer({ tpl, module, onClose, onSaved }: {
           <ToggleRow label="Active" on={f.active} onToggle={() => set("active", !f.active)} />
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
-          <button onClick={sendTest} className={buttonClass("secondary", "md")}>Send test</button>
-          {testMsg && <span className="text-[11px] text-emerald-600 font-medium">{testMsg}</span>}
-          <button onClick={onClose} className={buttonClass("secondary", "md", "ml-auto")}>Cancel</button>
           <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
+          <button onClick={sendTest} className={buttonClass("secondary", "md", "ml-auto")}>Send test</button>
+          {testMsg && <span className="text-[11px] text-emerald-600 font-medium">{testMsg}</span>}
         </div>
       </div>
     </div>
@@ -1350,13 +1350,13 @@ function CredDrawer({ provider, status, onClose, onSaved }: {
           {err && <div className="text-xs text-rose-600">{err}</div>}
         </div>
         <div className="px-5 py-3 border-t border-slate-100 flex items-center justify-between">
+          <div className="flex gap-2">
+            <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save keys"}</button>
+            <button onClick={onClose} className="px-3 py-2 rounded-lg text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>
+          </div>
           {status?.source === "org" || status?.source === "unreadable"
             ? <button onClick={clearKeys} disabled={busy} className="text-[12px] font-semibold text-rose-600 hover:underline">Remove keys</button>
             : <span />}
-          <div className="flex gap-2">
-            <button onClick={onClose} className="px-3 py-2 rounded-lg text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>
-            <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save keys"}</button>
-          </div>
         </div>
       </div>
     </div>, document.body);
@@ -1531,8 +1531,8 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
           )}
         </div>
         <div className="px-5 py-4 border-t border-slate-100 flex items-center gap-2">
-          <button onClick={onClose} className={buttonClass("secondary", "md", "ml-auto")}>Cancel</button>
           <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : isNew ? "Add teammate" : "Save"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
         </div>
       </div>
     </div>
@@ -1640,11 +1640,11 @@ function PayrollRuleDrawer({ rule, employees, statuses, onClose, onSaved }: { ru
           </div>
         </div>
         <div className="px-5 py-4 border-t border-slate-100 flex items-center justify-between gap-2 bg-slate-50/60">
-          {!isNew ? <button onClick={del} className="px-3 py-2 rounded-lg text-xs font-bold text-rose-600 hover:bg-rose-50">Delete</button> : <span />}
           <div className="flex gap-2">
-            <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
             <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : isNew ? "Add rule" : "Save"}</button>
+            <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
           </div>
+          {!isNew ? <button onClick={del} className="px-3 py-2 rounded-lg text-xs font-bold text-rose-600 hover:bg-rose-50">Delete</button> : <span />}
         </div>
       </div>
     </div>
@@ -1943,9 +1943,9 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
           ))}
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
-          {onDelete && initial?.id && <button onClick={async () => { if (await confirmDialog("Delete this item?", { danger: true, confirmLabel: "Delete" })) { await onDelete(); } }} className="h-9 px-3.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 mr-auto">Delete</button>}
-          <button onClick={onClose} className={buttonClass("secondary", "md", "ml-auto")}>Cancel</button>
           <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
+          {onDelete && initial?.id && <button onClick={async () => { if (await confirmDialog("Delete this item?", { danger: true, confirmLabel: "Delete" })) { await onDelete(); } }} className="ml-auto h-9 px-3.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 mr-auto">Delete</button>}
         </div>
       </div>
     </div>

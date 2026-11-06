@@ -713,9 +713,9 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
           })()}
         </div>
 
-        <div className="p-4 border-t border-slate-100 flex items-center justify-between bg-slate-50/70">
-          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
+        <div className="p-4 border-t border-slate-100 flex items-center justify-start gap-2 bg-slate-50/70">
           <button onClick={save} className={buttonClass("primary", "md")}>{footerLabel}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
         </div>
         {toast && <div className="absolute bottom-20 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2 rounded-xl shadow-clay-drawer z-20">{toast}</div>}
       </div>

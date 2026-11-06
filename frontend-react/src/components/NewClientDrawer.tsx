@@ -76,9 +76,9 @@ export default function NewClientDrawer({ prefillName, onClose, onCreated }: { p
           {err && <div className="text-status-overdue-ink font-semibold">{err}</div>}
         </div>
 
-        <div className="p-4 border-t border-slate-100 flex items-center justify-between bg-slate-50/70">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Cancel</button>
+        <div className="p-4 border-t border-slate-100 flex items-center justify-start gap-2 bg-slate-50/70">
           <button onClick={save} disabled={busy} className="px-5 py-2 rounded-lg bg-primary text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-50">{busy ? "Creating…" : "Create client"}</button>
+          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Cancel</button>
         </div>
       </div>
     </div>
