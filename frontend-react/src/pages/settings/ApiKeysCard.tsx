@@ -227,8 +227,8 @@ function CreateKeyDrawer({ onClose, onCreated }: { onClose: () => void; onCreate
   return createPortal(
     <Drawer z={90} width={448} label="Create API key" title="Create API key" onClose={onClose}
       footer={<>
-        <button onClick={onClose} className={btnGhost}>Cancel</button>
         <button onClick={create} disabled={busy} className={btnPrimary}>{busy ? "Creating…" : "Create key"}</button>
+        <button onClick={onClose} className={btnGhost}>Cancel</button>
       </>}>
       <div><label htmlFor="ak-name" className={labelCls}>Name</label>
         <input id="ak-name" value={name} maxLength={120} onChange={(e) => setName(e.target.value)} placeholder="e.g. Zapier" className={inputCls} /></div>

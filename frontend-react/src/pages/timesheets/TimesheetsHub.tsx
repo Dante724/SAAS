@@ -193,7 +193,7 @@ function ManualEntryDrawer({ employees, defaultEmp, onClose, onDone }: { employe
           <label className="flex items-center gap-2 text-xs font-medium text-ink-secondary"><input type="checkbox" checked={f.billable} onChange={(e) => set("billable", e.target.checked)} className="accent-primary" />Billable</label>
           <div><label className={lbl}>Note</label><textarea value={f.note} onChange={(e) => set("note", e.target.value)} rows={2} className={fld} /></div>
         </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2"><button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button><button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Add entry"}</button></div>
+        <div className="px-5 py-4 border-t border-slate-200 flex justify-start gap-2"><button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Add entry"}</button><button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button></div>
       </div>
     </div>
   );
@@ -236,7 +236,7 @@ function ScheduleDrawer({ employees, defaultEmp, onClose, onDone }: { employees:
           )}
           <div><label className={lbl}>Note</label><input value={f.note} onChange={(e) => set("note", e.target.value)} placeholder="Optional" className={fld} /></div>
         </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2"><button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button><button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Add to schedule"}</button></div>
+        <div className="px-5 py-4 border-t border-slate-200 flex justify-start gap-2"><button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Add to schedule"}</button><button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button></div>
       </div>
     </div>
   );

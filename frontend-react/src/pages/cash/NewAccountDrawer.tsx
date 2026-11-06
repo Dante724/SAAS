@@ -106,9 +106,9 @@ export default function NewAccountDrawer({ edit, onClose, onSaved }: Props) {
           {err && <div className="text-status-overdue-ink font-semibold">{err}</div>}
         </div>
 
-        <div className="p-4 border-t border-slate-100 bg-blue-50/30 flex items-center justify-end gap-2">
-          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
+        <div className="p-4 border-t border-slate-100 bg-blue-50/30 flex items-center justify-start gap-2">
           <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : edit ? "Save changes" : "Create"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
         </div>
       </div>
     </div>

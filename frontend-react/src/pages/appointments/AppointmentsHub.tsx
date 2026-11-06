@@ -311,7 +311,7 @@ export default function AppointmentsHub() {
               {!bkDate && <p className="text-ink-tertiary">Pick a date to see open times.</p>}
               <div><label className="block font-semibold text-ink-secondary mb-1">Note</label><textarea value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} className={`${inp} h-20 resize-none`} placeholder="Optional…" /></div>
             </div>
-            <div className="p-4 border-t border-slate-100 bg-slate-50/70 flex items-center justify-end gap-2"><button onClick={() => setDrawer(false)} className="h-9 px-3.5 rounded-xl border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button><button onClick={create} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Creating…" : "Create appointment"}</button></div>
+            <div className="p-4 border-t border-slate-100 bg-slate-50/70 flex items-center justify-start gap-2"><button onClick={create} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Creating…" : "Create appointment"}</button><button onClick={() => setDrawer(false)} className="h-9 px-3.5 rounded-xl border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button></div>
           </div>
         </div>
       )}

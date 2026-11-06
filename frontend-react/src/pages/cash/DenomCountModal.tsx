@@ -68,9 +68,9 @@ export default function DenomCountModal({
           <span className="text-xs font-bold text-ink-tertiary">Counted total</span>
           <span className="text-lg font-bold tabular-nums text-ink-primary">{money(total, sym)}</span>
         </div>
-        <div className="mt-4 flex gap-2 justify-end">
-          <button onClick={onCancel} className="px-3 py-2 rounded-lg text-xs font-semibold text-ink-tertiary hover:bg-slate-100">Cancel</button>
+        <div className="mt-4 flex gap-2 justify-start">
           <button onClick={confirm} disabled={busy} className={buttonClass("primary", "md")}>{confirmLabel || "Confirm"}</button>
+          <button onClick={onCancel} className="px-3 py-2 rounded-lg text-xs font-semibold text-ink-tertiary hover:bg-slate-100">Cancel</button>
         </div>
       </div>
     </div>

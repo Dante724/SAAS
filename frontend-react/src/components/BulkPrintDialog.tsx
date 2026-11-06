@@ -78,9 +78,9 @@ export default function BulkPrintDialog({ open, onClose, ids, noun, endpoint, id
           <label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Copies each</label>
           <input type="number" min={1} max={500} value={nCopies} onChange={(e) => setNCopies(Math.max(1, +e.target.value || 1))} className="w-full bg-white border border-slate-200 rounded-lg text-sm px-2.5 py-2 mb-4" />
         </>)}
-        <div className="flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Cancel</button>
+        <div className="flex justify-start gap-2">
           <button onClick={run} disabled={!tplId || busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60 flex items-center gap-1"><M n="print" c="text-[15px]" /> Print {total} {total === 1 ? "page" : "pages"}</button>
+          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Cancel</button>
         </div>
       </div>
     </div>

@@ -197,9 +197,9 @@ export function EndpointDrawer({ endpoint, catalogue, onClose, onSaved, onDelete
   return createPortal(
     <Drawer z={90} width={520} label={title} title={title} sub={endpoint ? endpoint.url : undefined} onClose={onClose}
       footer={<>
-        {endpoint && <button onClick={() => onDelete(endpoint)} className={`${btnDanger} mr-auto`}>Delete</button>}
-        <button onClick={onClose} className={btnGhost}>Cancel</button>
         <button onClick={save} disabled={busy} className={btnPrimary}>{busy ? "Saving…" : endpoint ? "Save" : "Add webhook"}</button>
+        <button onClick={onClose} className={btnGhost}>Cancel</button>
+        {endpoint && <button onClick={() => onDelete(endpoint)} className={`${btnDanger} ml-auto`}>Delete</button>}
       </>}>
       {endpoint?.disabled_reason && !endpoint.active && (
         <p className="text-xs text-amber-800 bg-amber-50 border border-amber-200 rounded-lg px-3 py-2 leading-relaxed">{endpoint.disabled_reason}. Fix the endpoint, send a test event, then turn it back on.</p>

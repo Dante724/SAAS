@@ -548,17 +548,17 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
         <footer className="px-7 py-3.5 border-t border-slate-200/80 bg-white flex items-center justify-between">
           {step === 1 ? (
             <div className="w-full flex items-center justify-between">
-              <button type="button" onClick={onClose} className={buttonClass("secondary", "lg")}>Cancel</button>
               <button type="button" onClick={next} className={buttonClass("primary", "lg")}><span>Next: services and products</span><M n="arrow_forward" c="text-sm" /></button>
+              <button type="button" onClick={onClose} className={buttonClass("secondary", "lg")}>Cancel</button>
             </div>
           ) : (
             <div className="w-full flex items-center justify-between">
-              <button type="button" onClick={() => setStep(1)} className={buttonClass("secondary", "lg")}><M n="arrow_back" c="text-sm" /><span>Back</span></button>
               <div className="flex items-center space-x-2">
+                <button type="button" disabled={busy} onClick={() => submit(false)} className={buttonClass("primary", "lg")}>{busy ? "Creating…" : `Create ${estimate ? "estimate" : "work order"}`}</button>
                 {!estimate && <AutoPrintPicker event="create" />}
                 <button type="button" disabled={busy} onClick={() => submit(true)} className={buttonClass("secondary", "lg", "hidden sm:inline-flex")}>Save and create another</button>
-                <button type="button" disabled={busy} onClick={() => submit(false)} className={buttonClass("primary", "lg")}>{busy ? "Creating…" : `Create ${estimate ? "estimate" : "work order"}`}</button>
               </div>
+              <button type="button" onClick={() => setStep(1)} className={buttonClass("secondary", "lg")}><M n="arrow_back" c="text-sm" /><span>Back</span></button>
             </div>
           )}
         </footer>
