@@ -11,7 +11,6 @@ from backend.services import memberships as svc
 from backend.services.dates import today_in
 from backend.services.permissions import grant_membership_codes
 
-
 SHOP_TZ = "UTC"
 
 
