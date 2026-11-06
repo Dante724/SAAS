@@ -40,6 +40,7 @@ import JobCardFields from "../../components/JobCardFields";
 import ReaderCharge from "../../components/ReaderCharge";
 import AccountPicker, { type PayAccount, type PaymentOption, accountsFor, pickDefaultAccount } from "../../components/AccountPicker";
 import CardPaymentsList from "../../components/CardPaymentsList";
+import { useCardReaders } from "../../lib/cardReaders";
 import LineQtyEditor from "./LineQtyEditor";
 import AutoPrintPicker from "../../components/AutoPrintPicker";
 import KitGroupHeader from "./KitGroupHeader";
@@ -1970,6 +1971,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
   // from the server instead of posting the money again. A new key once it has gone through.
   const payKey = useRef(idempotencyKey());
   const [onReader, setOnReader] = useState(false);   // F2/F3: card taken on a reader instead of recorded by hand
+  const cardReaders = useCardReaders();   // off: card is only recorded by hand
   const submit = async () => {
     if (payBusyRef.current) return;
     payBusyRef.current = true; setPayBusy(true);
@@ -2138,7 +2140,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
             {accountsFor(allAccts, method as PaymentOption).length === 0 && (
               <AccountPicker accounts={allAccts} paymentOption={method as PaymentOption} locationId={ctx.location_id} value={account} onChange={setAccount} onCreated={addAccount} />
             )}
-            {modal === "pay" && method === "card" && can("can_take_card_payments") && (
+            {cardReaders && modal === "pay" && method === "card" && can("can_take_card_payments") && (
               <button onClick={() => setOnReader(true)} disabled={!(parseFloat(amount) > 0)} className="w-full py-2 rounded-xl border border-primary/30 bg-white text-primary text-xs font-semibold hover:bg-blue-50 disabled:opacity-50 flex items-center justify-center gap-2"><M n="contactless" c="text-base" />Charge on reader</button>
             )}
             {/* Like Orderry: what prints by itself is chosen where it happens. Shop-wide, kept until changed. */}
@@ -2152,7 +2154,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
           </div>
         </div>
       , document.body)}
-      {onReader && <ReaderCharge orderId={orderId} amount={parseFloat(amount) || 0} accountId={account || undefined}
+      {cardReaders && onReader && <ReaderCharge orderId={orderId} amount={parseFloat(amount) || 0} accountId={account || undefined}
         onApproved={() => { onFlash("Card payment approved"); load(); }}
         onClose={(c) => { setOnReader(false); if (c?.status === "succeeded") setModal(null); }} />}
     </div>

@@ -25,6 +25,11 @@ from main import app
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
+@pytest.fixture(autouse=True)
+def _readers_on(card_readers_on):
+    """Several of these cover the card-reader routes: run with the feature switched on."""
+
+
 def _released_together(monkeypatch, parties: int):
     """Every request waits at one barrier once its DB session is open, so `parties` requests
     run their handlers at the same time."""
@@ -43,11 +48,10 @@ def _released_together(monkeypatch, parties: int):
 
 
 async def _race(monkeypatch, send, parties=3):
-    _released_together(monkeypatch, parties)
-    try:
+    # Its own patch context: undoing it must not undo the test's other patches (card readers on).
+    with pytest.MonkeyPatch.context() as mp:
+        _released_together(mp, parties)
         return await asyncio.gather(*[send() for _ in range(parties)])
-    finally:
-        monkeypatch.undo()
 
 
 async def _count(db, model, *where):
@@ -236,7 +240,7 @@ async def test_two_charges_at_once_on_one_reader_send_one(client, tenant, db, mo
     monkeypatch.setattr(svc, "_org_currency", held)
     rs = await asyncio.gather(*[client.post("/api/payments/terminal/charge",
                                             json={"terminal_id": tid, "order_id": o}, headers=tenant) for o in oids])
-    monkeypatch.undo()
+    monkeypatch.setattr(svc, "_org_currency", orig)   # put it back (keep the other patches)
     codes = sorted(r.status_code for r in rs)
     assert codes == [201, 409], [r.text for r in rs]
     lost = next(r for r in rs if r.status_code == 409)
@@ -372,7 +376,7 @@ async def test_two_readers_charging_one_order_at_once_send_one(client, tenant, d
     monkeypatch.setattr(svc, "_org_currency", held)
     rs = await asyncio.gather(*[client.post("/api/payments/terminal/charge",
                                             json={"terminal_id": t, "order_id": oid}, headers=tenant) for t in readers])
-    monkeypatch.undo()
+    monkeypatch.setattr(svc, "_org_currency", orig)   # put it back (keep the other patches)
     assert sorted(r.status_code for r in rs) == [201, 409], [r.text for r in rs]
     lost = next(r for r in rs if r.status_code == 409)
     assert "already waiting on a reader" in lost.json()["detail"]

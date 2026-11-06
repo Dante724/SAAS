@@ -26,6 +26,7 @@ import { money } from "../orders/types";
 import { loadFailed } from "../../lib/notice";
 import { clickable, clickableRow } from "../../lib/clickable";
 import { Badge, type BadgeTone } from "../../components/Card";
+import { useCardReaders } from "../../lib/cardReaders";
 
 // Each settings page is its own chunk, fetched when its section opens (the hub was one ~470 kB file).
 const TemplateEditorDrawer = lazy(() => import("./TemplateEditorDrawer"));
@@ -186,6 +187,7 @@ export default function SettingsHub() {
   const [lists, setLists] = useState<Record<string, any[] | null>>({});
   const [roles, setRoles] = useState<any[] | null>(null);
   const { me: hubMe } = useMe();
+  const cardReaders = useCardReaders();   // off: no Card readers card in Integrations
   const [toast, setToast] = useState<string | null>(null);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2200); };
   useEffect(() => { if (movedFrom) flash(MOVED_SECTIONS[movedFrom].note); }, [movedFrom]);  // eslint-disable-line react-hooks/exhaustive-deps
@@ -526,7 +528,7 @@ export default function SettingsHub() {
           {sec === "integrations" && (
             <div className="max-w-4xl space-y-5">
               <IntegrationsHub data={integrations} goSection={setSec} reload={() => setIntegrations(null)} pro={{ accounting: proOk("accounting_sync"), api: proOk("api_keys") }} />
-              <CardReadersCard />
+              {cardReaders && <CardReadersCard />}
               <TelephonySettings />
               {proOk("api_keys") && <ApiKeysCard />}
               <WebhooksCard />

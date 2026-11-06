@@ -281,6 +281,14 @@ def _fresh_rate_limits():
     yield
 
 
+@pytest.fixture
+def card_readers_on(monkeypatch):
+    """Card readers are off by default (settings.CARD_READERS_ENABLED); tests of the reader
+    feature switch it on."""
+    from backend.config import settings
+    monkeypatch.setattr(settings, "CARD_READERS_ENABLED", True)
+
+
 @pytest_asyncio.fixture
 async def client():
     transport = ASGITransport(app=app)
