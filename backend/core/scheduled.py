@@ -259,3 +259,15 @@ async def sweep_sense_agents() -> None:
                 log.exception("sense-agents-sweep failed for org %s", oid)
         if made:
             log.info("sense-agents-sweep: %d message(s) drafted or scheduled", made)
+
+
+@job_runner.every(24 * 3600, "integrity-sweep")
+async def sweep_integrity() -> None:
+    """Nightly: every stored running total must equal the ledger it summarises (tills, client
+    balances, invoice amount_paid, on-hand stock). Mismatches are logged at ERROR and counted in
+    /metrics as repairos_integrity_mismatches; nothing is changed. See services/reconcile.py."""
+    from backend.db.database import AsyncSessionLocal
+    from backend.services.reconcile import sweep
+
+    async with AsyncSessionLocal() as db:
+        await sweep(db)
