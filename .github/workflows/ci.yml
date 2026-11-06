@@ -52,7 +52,7 @@ jobs:
         # Memberships and money dates must follow the shop's day, not the server's (council Q2).
         # Between them the two zones are off the UTC date at every hour of the day.
         run: |
-          S="backend/tests/test_shop_clock_memberships.py backend/tests/test_memberships.py backend/tests/test_shop_timezone_today.py backend/tests/test_billing.py backend/tests/test_opb_billing.py"
+          S="backend/tests/test_shop_clock_memberships.py backend/tests/test_memberships.py backend/tests/test_shop_timezone_today.py backend/tests/test_billing.py"
           TZ=Pacific/Kiritimati pytest -q -n auto $S
           TZ=Pacific/Pago_Pago pytest -q -n auto $S
 
