@@ -8,6 +8,7 @@ import { useMe } from "../../context/Me";
 import { Avatar } from "../orders/look";
 import { hueText, tint } from "../../lib/tint";
 import { clickableRow } from "../../lib/clickable";
+import { theadRowClass } from "../../components/Table";
 
 export type ChatStatus = "new" | "reply_needed" | "replied" | "completed";
 type Thread = { id: string; channel?: string; contact_phone?: string; contact_name?: string; client_name?: string; last_body?: string; last_message_at?: string; order_id?: string | null; status?: ChatStatus; is_spam?: boolean };
@@ -175,8 +176,8 @@ export default function ChatsHub() {
         <div className="flex-1 overflow-y-auto p-4 md:p-6">
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-x-auto">
             <table className="w-full min-w-[720px] text-left border-collapse text-xs">
-              <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-xs font-semibold">
-                <th className="py-3 px-4 font-semibold">Contact</th><th className="py-3 px-4 font-semibold">Status</th><th className="py-3 px-4 font-semibold">Channel</th><th className="py-3 px-4 font-semibold">Last message</th><th className="py-3 px-4 font-semibold">When</th><th className="py-3 px-4 font-semibold">Linked</th>
+              <thead><tr className={theadRowClass}>
+                <th className="py-3 px-4">Contact</th><th className="py-3 px-4">Status</th><th className="py-3 px-4">Channel</th><th className="py-3 px-4">Last message</th><th className="py-3 px-4">When</th><th className="py-3 px-4">Linked</th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 text-ink-secondary">
                 {!threads && <SkeletonRows cols={6} />}

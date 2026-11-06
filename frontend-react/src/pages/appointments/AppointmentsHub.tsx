@@ -243,7 +243,7 @@ export default function AppointmentsHub() {
 
       {drawer && (
         <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={() => setDrawer(false)} />
+          <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={() => setDrawer(false)} />
           <div className="relative h-full w-full max-w-[460px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
             <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
             <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70"><h3 className="text-base font-bold text-ink-primary">New appointment</h3><button aria-label="Close" onClick={() => setDrawer(false)} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
@@ -316,7 +316,7 @@ export default function AppointmentsHub() {
       )}
       {sel && (
         <div className="fixed inset-0 flex justify-end" style={{ zIndex: 55 }}>
-          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={() => setSel(null)} />
+          <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={() => setSel(null)} />
           <div className="relative h-full w-full max-w-[460px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
             <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
               <div><h3 className="text-base font-bold text-ink-primary">{sel.service_name || "Appointment"}</h3><div className="text-[11px] text-ink-tertiary">{dayKey(sel.scheduled_for)} · {time(sel.scheduled_for)}</div></div>

@@ -12,6 +12,7 @@ import { EmployeeHours } from "../company/CompanyHub";
 import { fmtServerTime } from "../../lib/serverTime";
 import { loadFailed } from "../../lib/notice";
 import { buttonClass } from "../../components/Button";
+import { theadRowClass } from "../../components/Table";
 
 // Timesheets — React port of legacy timesheets.js. Per-employee grid + approve,
 // manual entry add/void/reopen, and a live "who's on the clock" roster.
@@ -21,8 +22,10 @@ type Sheet = { total_hours?: number; straight_hours?: number; overtime_hours?: n
 
 function weekAgo() { const d = new Date(); d.setDate(d.getDate() - 6); return isoDate(d); }
 const today = () => isoDate();
-const STATE_LABEL: Record<string, string> = { logged: "Logged", running: "Running", approved: "Approved" };
+const STATE_LABEL: Record<string, string> = { logged: "Logged", running: "Running", approved: "Approved", stopped: "Stopped" };
 const hm = (min?: number) => { const m = Math.round(min || 0); return `${Math.floor(m / 60)}h ${m % 60}m`; };
+// Hours as "Xh Ym" (0.0111h → "0h 1m"), never a long decimal. Negative values keep their sign.
+const hrs = (h?: number | null) => { const v = Number(h) || 0; return `${v < 0 ? "-" : ""}${hm(Math.abs(v) * 60)}`; };
 
 export default function TimesheetsHub() {
   const [topTab, setTopTab] = useState<"timesheet" | "hours">("timesheet");
@@ -81,10 +84,10 @@ export default function TimesheetsHub() {
 
         {/* summary */}
         <PageSummary stats={[
-          { label: "Hours worked", value: `${sheet?.total_hours ?? 0}h` },
-          { label: "Regular / overtime", value: `${sheet?.straight_hours ?? 0}h / ${sheet?.overtime_hours ?? 0}h` },
-          { label: "Charged to jobs", value: `${Math.round((sheet?.billable_sec || 0) / 360) / 10}h` },
-          { label: "Share charged to jobs", value: `${Math.round((sheet?.utilization || 0) * 100)}%` },
+          { label: "Hours worked", value: hrs(sheet?.total_hours) },
+          { label: "Regular / overtime", value: `${hrs(sheet?.straight_hours)} / ${hrs(sheet?.overtime_hours)}` },
+          { label: "Charged to jobs", value: hm((sheet?.billable_sec || 0) / 60) },
+          { label: "Share charged to jobs", value: (sheet?.total_hours || 0) > 0 ? `${Math.round((sheet?.utilization || 0) * 100)}%` : "—" },
           { label: "Labor cost", value: money(sheet?.labor_cost) },
         ]} />
 
@@ -93,7 +96,7 @@ export default function TimesheetsHub() {
           <div className="lg:col-span-2 bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
             <div className="p-3.5 border-b border-slate-100 flex items-center justify-between"><span className="text-xs font-bold text-ink-primary ">Entries</span><span className="text-[11px] text-ink-tertiary">{sheet?.entry_count ?? 0} · {sheet?.approved_count ?? 0} approved</span></div>
             <table className="w-full text-xs">
-              <thead className="bg-slate-50/70 text-ink-tertiary text-[11px] font-bold"><tr><th className="text-left py-2.5 px-4">Started</th><th className="text-left py-2.5 px-4">For</th><th className="text-right py-2.5 px-4">Duration</th><th className="text-left py-2.5 px-4">State</th><th className="py-2.5 px-4"></th></tr></thead>
+              <thead><tr className={theadRowClass}><th className="text-left py-2.5 px-4">Started</th><th className="text-left py-2.5 px-4">For</th><th className="text-right py-2.5 px-4">Duration</th><th className="text-left py-2.5 px-4">State</th><th className="py-2.5 px-4"></th></tr></thead>
               <tbody className="divide-y divide-slate-100">
                 {sheet == null && <SkeletonRows cols={5} />}
                 {sheet?.entries?.length === 0 && <tr><td colSpan={5} className="py-6 text-center text-ink-tertiary">No entries in this range.</td></tr>}
@@ -102,7 +105,7 @@ export default function TimesheetsHub() {
                     <td className="py-2.5 px-4 text-ink-secondary">{fmtServerTime(e.started_at) || "—"}</td>
                     <td className="py-2.5 px-4 font-semibold text-ink-primary">{e.order_number || e.category || "—"}{e.billable ? "" : <span className="ml-1 text-[11px] text-ink-tertiary">Not billable</span>}</td>
                     <td className="py-2.5 px-4 text-right tabular-nums">{hm(e.duration_min)}</td>
-                    <td className="py-2.5 px-4"><span className={`text-[11px]  font-bold px-1.5 py-0.5 rounded ${e.state === "approved" ? "bg-emerald-100 text-emerald-700" : e.state === "running" ? "bg-blue-100 text-primary" : "bg-slate-100 text-ink-secondary"}`}>{STATE_LABEL[e.state || "logged"] || e.state}</span></td>
+                    <td className="py-2.5 px-4"><span className={`text-[11px]  font-bold px-1.5 py-0.5 rounded ${e.state === "approved" ? "bg-emerald-100 text-emerald-700" : e.state === "running" ? "bg-blue-100 text-primary" : "bg-slate-100 text-ink-secondary"}`}>{STATE_LABEL[e.state || "logged"] || (e.state ? e.state.charAt(0).toUpperCase() + e.state.slice(1).replace(/_/g, " ") : "")}</span></td>
                     <td className="py-2.5 px-4 text-right whitespace-nowrap">{e.state === "approved" ? <button onClick={() => reopen(e.id)} className="text-primary font-semibold">Reopen</button> : <button onClick={() => voidEntry(e.id)} className="text-rose-600 font-semibold">Void</button>}</td>
                   </tr>
                 ))}
@@ -133,9 +136,9 @@ export default function TimesheetsHub() {
           </div>
           {cmp && (
             <div className="grid grid-cols-3 divide-x divide-slate-100 border-b border-slate-100 text-center">
-              <div className="py-3"><div className="text-[11px] font-bold text-ink-tertiary">Planned</div><div className="text-base font-bold text-ink-primary tabular-nums">{cmp.planned_hours}h</div></div>
-              <div className="py-3"><div className="text-[11px] font-bold text-ink-tertiary">Actual</div><div className="text-base font-bold text-ink-primary tabular-nums">{cmp.actual_hours}h</div></div>
-              <div className="py-3"><div className="text-[11px] font-bold text-ink-tertiary">Variance</div><div className={`text-base font-bold tabular-nums ${cmp.variance_hours < 0 ? "text-rose-600" : cmp.variance_hours > 0 ? "text-amber-600" : "text-emerald-600"}`}>{cmp.variance_hours > 0 ? "+" : ""}{cmp.variance_hours}h</div></div>
+              <div className="py-3"><div className="text-[11px] font-bold text-ink-tertiary">Planned</div><div className="text-base font-bold text-ink-primary tabular-nums">{hrs(cmp.planned_hours)}</div></div>
+              <div className="py-3"><div className="text-[11px] font-bold text-ink-tertiary">Actual</div><div className="text-base font-bold text-ink-primary tabular-nums">{hrs(cmp.actual_hours)}</div></div>
+              <div className="py-3"><div className="text-[11px] font-bold text-ink-tertiary">Variance</div><div className={`text-base font-bold tabular-nums ${cmp.variance_hours < 0 ? "text-rose-600" : cmp.variance_hours > 0 ? "text-amber-600" : "text-emerald-600"}`}>{cmp.variance_hours > 0 ? "+" : ""}{hrs(cmp.variance_hours)}</div></div>
             </div>
           )}
           <div className="divide-y divide-slate-100 text-xs">
@@ -146,7 +149,7 @@ export default function TimesheetsHub() {
                 <div className="flex items-center gap-3">
                   <span className="tabular-nums text-ink-secondary w-28">{new Date(w.day).toLocaleDateString(undefined, { weekday: "short", day: "numeric", month: "short" })}</span>
                   {w.kind === "shift"
-                    ? <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-blue-50 text-primary border border-blue-200/60 tabular-nums">{w.start}–{w.end} · {w.planned_hours}h</span>
+                    ? <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-blue-50 text-primary border border-blue-200/60 tabular-nums">{w.start}–{w.end} · {hrs(w.planned_hours)}</span>
                     : <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold bg-amber-50 text-amber-700 border border-amber-200/60 capitalize">{w.kind.replace(/_/g, " ")}</span>}
                   {w.note && <span className="text-ink-tertiary">{w.note}</span>}
                 </div>
@@ -178,7 +181,7 @@ function ManualEntryDrawer({ employees, defaultEmp, onClose, onDone }: { employe
   const lbl = "block text-[11px] font-bold text-ink-tertiary  mb-1";
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[460px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200"><h2 className="font-bold text-ink-primary">Add time entry</h2><button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
@@ -217,7 +220,7 @@ function ScheduleDrawer({ employees, defaultEmp, onClose, onDone }: { employees:
   const lbl = "block text-[11px] font-bold text-ink-tertiary  mb-1";
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[460px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200"><h2 className="font-bold text-ink-primary">Add planned shift</h2><button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
         <div className="flex-1 overflow-y-auto p-5 space-y-4">

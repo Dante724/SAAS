@@ -410,7 +410,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 45 }}>
-      <div className="absolute inset-0 bg-ink-primary/30 backdrop-blur-[2.5px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/30" aria-hidden="true" onClick={onClose} />
       <div className="intake relative h-full w-full max-w-[780px] bg-slate-50 shadow-clay-drawer flex flex-col border-l border-slate-200/80 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
 

@@ -10,6 +10,7 @@ import { barcodeTypeLabel } from "../../lib/barcodes";
 import { confirmDialog } from "../../lib/dialog";
 import { buttonClass } from "../../components/Button";
 import { Badge } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 type Bin = { id: string; name: string; location_id: string; warehouse_id?: string | null; zone?: string | null; shelf?: string | null;
   bin_number?: string | null; barcode?: string | null; barcode_type?: string; is_default?: boolean; qty_on_hand?: number };
@@ -88,7 +89,7 @@ export default function BinsPanel() {
 
       <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
         <table className="w-full text-xs">
-          <thead className="bg-slate-50/70 text-ink-tertiary text-[11px] font-bold"><tr>
+          <thead><tr className={theadRowClass}>
             <th className="py-2.5 pl-4 w-8"><input type="checkbox" aria-label="Select all bins" checked={allSel} onChange={() => setSel(allSel ? new Set() : new Set(shown.map((b) => b.id)))} /></th>
             <th className="text-left py-2.5 px-3">Bin</th><th className="text-left py-2.5 px-3">Label code</th><th className="text-left py-2.5 px-3">Location</th>
             <th className="text-left py-2.5 px-3">Zone / shelf</th><th className="text-right py-2.5 px-3">Holds</th><th className="py-2.5 px-3"></th></tr></thead>

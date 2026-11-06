@@ -171,7 +171,7 @@ export default function PrintMenu({ orderId, status, canInvoices = true, onStick
           <div className="-m-1.5">
             {/* Print now: click a row and it prints. The sticker sits in the same list. */}
             <div className="p-1.5">
-              <div className="px-3 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-tertiary">Print now</div>
+              <div className="px-3 pb-1 pt-1.5 text-[11px] font-semibold text-ink-tertiary">Print now</div>
               {listed.map((t) => (<Fragment key={t.id}>
                 {printRow(onItemised && t.id === itemisedAnchor && kitItems ? ITEMISED : t.id, t.name, { auto: autoOn(t.id) })}
                 {/* The itemised copy isn't another document: it's this one with every kit item listed. */}
@@ -198,7 +198,7 @@ export default function PrintMenu({ orderId, status, canInvoices = true, onStick
             {autoPrint && autoTpls && autoTpls.length > 0 && (
               <div className="rounded-b-xl border-t border-slate-200 bg-slate-50 px-1.5 pb-2 pt-2">
                 <div className="flex items-baseline justify-between px-3 pb-1">
-                  <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-tertiary">Automatic</span>
+                  <span className="text-[11px] font-semibold text-ink-tertiary">Automatic</span>
                   <span className="text-[11px] text-ink-tertiary">Applies to every job</span>
                 </div>
                 {autoTpls.map((t) => {

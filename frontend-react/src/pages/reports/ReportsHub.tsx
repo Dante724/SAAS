@@ -21,6 +21,7 @@ import { cachedPref, loadPref, savePref } from "../../lib/userPref";
 import GoPilotReport from "./GoPilotReport";
 import { loadFailed } from "../../lib/notice";
 import { buttonClass } from "../../components/Button";
+import { theadRowClass } from "../../components/Table";
 
 const REPORT_PAGE = 50;
 
@@ -297,14 +298,14 @@ export function CustomView() {
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
               <div className="overflow-auto max-h-[62vh]">
                 <table className="w-full text-left border-collapse text-xs">
-                  <thead className="sticky top-0 z-10"><tr className="bg-slate-50 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold shadow-[0_1px_0_rgba(0,0,0,0.04)]">
+                  <thead className="sticky top-0 z-10"><tr className={`${theadRowClass} shadow-[0_1px_0_rgba(0,0,0,0.04)]`}>
                     {res.columns.map((c) => <th key={c.key} className={`py-3 px-4 bg-slate-50 ${c.align === "right" ? "text-right" : ""}`}>{c.label}</th>)}
                   </tr></thead>
                   <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
                     {res.rows.length === 0 && <tr><td colSpan={res.columns.length} className="py-6 px-4 text-ink-tertiary">No data for this query.</td></tr>}
                     {cShown.map((row, ri) => (
                       <tr key={(cSafe - 1) * REPORT_PAGE + ri} className="odd:bg-slate-50/40 hover:bg-blue-50/50 transition-colors">
-                        {res.columns.map((c, ci) => <td key={ci} className={`py-2.5 px-4 text-ink-primary ${c.align === "right" ? "text-right font-mono" : ""}`}>{typeof row[ci] === "number" ? row[ci].toLocaleString(getLocale()) : String(row[ci] ?? "—")}</td>)}
+                        {res.columns.map((c, ci) => <td key={ci} className={`py-2.5 px-4 text-ink-primary ${c.align === "right" ? "text-right tabular-nums" : ""}`}>{typeof row[ci] === "number" ? row[ci].toLocaleString(getLocale()) : String(row[ci] ?? "—")}</td>)}
                       </tr>
                     ))}
                   </tbody>
@@ -458,7 +459,7 @@ export default function ReportsHub() {
   const colLabel = (c: any) => typeof c === "string" ? c : (c.label || c.key);
   const colKey = (c: any, i: number) => typeof c === "string" ? c : (c.key ?? i);
   // Raw keys from the server ("technician", "in_repair") read as words; names and emails are left alone.
-  const cell = (v: any) => (typeof v === "number" ? <span className={`font-mono tabular-nums ${v < 0 ? "text-rose-600 font-semibold" : ""}`}>{v.toLocaleString(getLocale())}</span>
+  const cell = (v: any) => (typeof v === "number" ? <span className={`tabular-nums ${v < 0 ? "text-rose-600 font-semibold" : ""}`}>{v.toLocaleString(getLocale())}</span>
     : typeof v === "string" && /^[a-z]+(_[a-z]+)*$/.test(v) ? humanize(v) : String(v ?? "—"));
   const cellVal = (row: any, c: any, ci: number) => Array.isArray(row) ? row[ci] : row[colKey(c, ci)];
 
@@ -526,7 +527,7 @@ export default function ReportsHub() {
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
               <div className="p-3.5 border-b border-slate-100 text-xs font-bold text-ink-primary ">Job profitability</div>
               <table className="w-full text-left border-collapse text-xs">
-                <thead><tr className="bg-slate-50/60 border-b border-slate-100 text-ink-tertiary text-[11px] font-bold ">
+                <thead><tr className={theadRowClass}>
                   <th className="py-3 px-4">Order</th><th className="py-3 px-4">Client</th><th className="py-3 px-4 text-right">Sales</th><th className="py-3 px-4 text-right">Costs</th><th className="py-3 px-4 text-right">Profit</th><th className="py-3 px-4 text-right">Margin</th>
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
@@ -600,7 +601,7 @@ export default function ReportsHub() {
                 <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
                   <div className="p-3.5 border-b border-slate-100 text-xs font-bold text-ink-primary ">Comments</div>
                   <table className="w-full text-left border-collapse text-xs">
-                    <thead><tr className="bg-slate-50/60 border-b border-slate-100 text-ink-tertiary text-[11px] font-bold ">
+                    <thead><tr className={theadRowClass}>
                       <th className="py-3 px-4">Date</th><th className="py-3 px-4">Order</th><th className="py-3 px-4">Rating</th><th className="py-3 px-4">Comment</th>
                     </tr></thead>
                     <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
@@ -731,7 +732,7 @@ export default function ReportsHub() {
               {!loading && result && (
                 <div className="overflow-auto max-h-[62vh]">
                   <table className="w-full text-left border-collapse text-xs">
-                    <thead className="sticky top-0 z-10"><tr className="bg-slate-50 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold shadow-[0_1px_0_rgba(0,0,0,0.04)]">
+                    <thead className="sticky top-0 z-10"><tr className={`${theadRowClass} shadow-[0_1px_0_rgba(0,0,0,0.04)]`}>
                       {cols.map((c, i) => (
                         <th key={colKey(c, i)} scope="col" role="button" tabIndex={0}
                             aria-sort={sort?.i === i ? (sort.dir === 1 ? "ascending" : "descending") : "none"}
@@ -758,14 +759,17 @@ export default function ReportsHub() {
                           const prev = prevTotals?.[ci];
                           const d = prev != null ? deltaPct(totals[ci]!, prev) : null;
                           const up = (totals[ci]! - (prev ?? 0)) >= 0;
+                          const flat = prev != null && totals[ci]! === prev;   // includes 0 vs 0: no arrow, no colour
                           return (
                             <td key={ci} className="py-2.5 px-4">
                               <span className="tabular-nums block">{totals[ci]!.toLocaleString(getLocale(), { maximumFractionDigits: 2 })}</span>
-                              {prev != null && (
+                              {prev != null && (flat ? (
+                                <span className="text-[11px] font-semibold text-ink-tertiary" title={`Previous: ${prev.toLocaleString(getLocale())}`}>—</span>
+                              ) : (
                                 <span className={`text-[11px] font-semibold ${up ? "text-emerald-600" : "text-rose-600"}`} title={`Previous: ${prev.toLocaleString(getLocale())}`}>
                                   {up ? "▲" : "▼"} {d == null ? "—" : `${Math.abs(d).toFixed(1)}%`}
                                 </span>
-                              )}
+                              ))}
                             </td>
                           );
                         })}
@@ -806,12 +810,12 @@ function FleetAnalytics() {
     api.get<any>(`/analytics/technician-productivity?days=${days}`).then((r) => setTechs(r.technicians || [])).catch(() => setTechs([]));
     api.get<any>(`/analytics/location-comparison?days=${days}`).then((r) => setLocs(r.locations || [])).catch(() => setLocs([]));
   }, [days]);
-  const kpis: { l: string; v: string; icon: string; tint: string; accent: string }[] = ins ? [
-    { l: "Revenue", v: m(ins.revenue), icon: "trending_up", tint: "bg-emerald-50 text-emerald-600", accent: "from-emerald-300 to-emerald-500" },
-    { l: "Orders closed", v: String(ins.orders_closed ?? 0), icon: "task_alt", tint: "bg-blue-50 text-primary", accent: "from-blue-400 to-primary" },
-    { l: "Close rate", v: `${ins.close_rate_pct ?? 0}%`, icon: "percent", tint: "bg-indigo-50 text-indigo-600", accent: "from-indigo-300 to-indigo-500" },
-    { l: "Avg ticket", v: m(ins.avg_ticket_value), icon: "receipt_long", tint: "bg-violet-50 text-violet-600", accent: "from-violet-300 to-violet-500" },
-    { l: "Avg turnaround", v: `${ins.avg_turnaround_hours ?? 0}h`, icon: "schedule", tint: "bg-amber-50 text-amber-600", accent: "from-amber-300 to-amber-500" },
+  const kpis: { l: string; v: string }[] = ins ? [
+    { l: "Revenue", v: m(ins.revenue) },
+    { l: "Orders closed", v: String(ins.orders_closed ?? 0) },
+    { l: "Close rate", v: `${ins.close_rate_pct ?? 0}%` },
+    { l: "Avg ticket", v: m(ins.avg_ticket_value) },
+    { l: "Avg turnaround", v: `${ins.avg_turnaround_hours ?? 0}h` },
   ] : [];
   const box = "bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden";
   const th = "px-4 py-2.5 border-b border-slate-100 text-[11px] font-bold   text-ink-tertiary";
@@ -826,15 +830,13 @@ function FleetAnalytics() {
 
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         {kpis.map((k) => (
-          <div key={k.l} className="group relative overflow-hidden bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-4">
+          <div key={k.l} className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-4">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <div className="text-[11px] font-bold text-ink-tertiary">{k.l}</div>
-                <div className="mt-1 text-2xl font-bold text-ink-primary leading-tight truncate">{k.v}</div>
+                <div className="text-[11px] font-semibold text-ink-tertiary">{k.l}</div>
+                <div className="mt-1 text-2xl font-semibold text-ink-primary leading-tight truncate tabular-nums">{k.v}</div>
               </div>
-              <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${k.tint}`}><M n={k.icon} c="text-base" /></div>
             </div>
-            <div className={`absolute inset-x-0 bottom-0 h-1 bg-gradient-to-r ${k.accent} opacity-70`} />
           </div>
         ))}
         {!ins && Array.from({ length: 5 }).map((_, i) => (
