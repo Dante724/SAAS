@@ -1,6 +1,7 @@
 import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import { useMe, hasFeature } from "../../context/Me";
 import { api } from "../../api/client";
 import { BARCODE_TYPES, barcodeTypeLabel, sortBarcodes } from "../../lib/barcodes";
@@ -25,6 +26,7 @@ import Switch from "../../components/Switch";
 import { sectionCard } from "../../components/Section";
 import { fitWithin } from "../../go/lib/photos";
 import { buttonClass } from "../../components/Button";
+import { Badge } from "../../components/Card";
 
 export type DrawerKind = "product" | "service" | "asset" | "bundle";
 type Props = { kind: DrawerKind; id?: string | null; initial?: any; onClose: () => void; onSaved?: () => void };
@@ -301,7 +303,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                 <p className="text-[11px] text-ink-tertiary font-mono truncate">{p.sku || p.code}{p.barcode ? ` · ${p.barcode}` : ""}</p>
               )}
             </div>
-            {kind === "product" && editing && p.low_stock && <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-800 border border-rose-200 shrink-0">Low stock</span>}
+            {kind === "product" && editing && p.low_stock && <Badge tone="danger" size="sm" className="shrink-0">Low stock</Badge>}
           </div>
           <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary hover:text-ink-primary shrink-0"><M n="close" c="text-base" /></button>
         </div>
@@ -392,7 +394,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                             className="ml-auto w-6 h-6 rounded-md grid place-items-center text-ink-tertiary hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"><M n="close" c="text-sm" /></button>
                         </li>
                       ))}
-                      {codes.length === 0 && <li className="text-[11px] text-ink-tertiary">No barcode yet.</li>}
+                      {codes.length === 0 && <li><EmptyState size="inline" title="No barcode yet." /></li>}
                     </ul>
                   )}
                   <div className="mt-1.5 flex items-center gap-2">
@@ -429,7 +431,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
               pricing: { el: <>
                 <div className={`${sectionCard} p-4 space-y-3`}>
                   <div className="flex items-center justify-between"><span className="text-[11px] font-bold text-ink-primary">{seeCost ? "Pricing & margin" : "Pricing"}</span>
-                    {seeCost && <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${margin < 0 ? "bg-rose-50 text-rose-700" : "bg-slate-100 text-ink-secondary"}`}>Margin {margin}%</span>}</div>
+                    {seeCost && <Badge tone={margin < 0 ? "danger" : "neutral"} size="sm">Margin {margin}%</Badge>}</div>
                   <div className="grid grid-cols-2 gap-3">
                     {seeCost && <div><label htmlFor="prod-cost" className={lbl}>Cost price ({currencySymbol()})</label><input id="prod-cost" type="number" min={0} value={p.cost_price ?? 0} onChange={(e) => set("cost_price", e.target.value)} className={`${field} font-mono font-bold bg-white`} /></div>}
                     <div><label htmlFor="prod-sell" className={lbl}>Store price ({currencySymbol()})</label><input id="prod-sell" type="number" min={0} value={p.sell_price ?? 0} onChange={(e) => set("sell_price", e.target.value)} className={`${field} font-mono font-bold bg-white`} /></div>
@@ -495,7 +497,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
             {stock === null
               ? <p className="text-ink-tertiary">Loading stock…</p>
               : stock.items.length === 0
-                ? <p className="text-ink-tertiary">No stock at any location yet.</p>
+                ? <EmptyState size="inline" title="No stock at any location yet." />
                 : <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
                     <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-3 px-4 py-2.5 border-b border-slate-100 text-[11px] font-bold text-ink-tertiary"><span>Location · bin</span><span className="text-right">Reserved</span><span className="text-right">In stock</span><span className="text-right">Value</span><span className="w-12" /></div>
                     <div className="divide-y divide-slate-100">
@@ -571,7 +573,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
             moves === null
               ? <p className="text-ink-tertiary">Loading movements…</p>
               : moves.length === 0
-                ? <p className="text-ink-tertiary">No stock movements yet.</p>
+                ? <EmptyState size="inline" title="No stock movements yet." />
                 : (() => {
                     const shown = moves.filter((m) => mvFilter === "all" || (mvFilter === "in" ? m.qty >= 0 : m.qty < 0));
                     return <>
@@ -609,7 +611,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                 : <div className="divide-y divide-slate-100">
                     {pos.map((o) => (
                       <div key={o.id} className="px-4 py-2.5 flex items-center justify-between">
-                        <div><span className="font-bold text-ink-primary font-mono">{o.po_number || o.id.slice(0, 8)}</span><span className="ml-2 px-1.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-ink-secondary">{sentence(o.status)}</span></div>
+                        <div><span className="font-bold text-ink-primary font-mono">{o.po_number || o.id.slice(0, 8)}</span><Badge size="sm" className="ml-2">{sentence(o.status)}</Badge></div>
                         <div className="text-right text-ink-secondary"><span className="tabular-nums font-semibold">{o.qty_received ?? 0}/{o.qty_ordered ?? 0}</span><span className="text-ink-tertiary"> · exp {fmtDate(o.expected_at)}</span></div>
                       </div>
                     ))}
@@ -660,7 +662,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
               <div><label className={lbl}>Job kit name <span className="text-rose-500">*</span></label><input value={p.name || ""} onChange={(e) => set("name", e.target.value)} className={field} /></div>
               <div className="p-4 rounded-xl bg-slate-50/90 border border-slate-200/80 space-y-2.5">
                 <div className="text-[11px] font-bold text-ink-primary ">Services & products</div>
-                {comps.length === 0 && <p className="text-[11px] text-ink-tertiary">No items yet</p>}
+                {comps.length === 0 && <EmptyState size="inline" title="No items yet" />}
                 {comps.map((c: any, idx: number) => (
                   <div key={c.ref_id + idx} className="bg-white rounded-lg border border-slate-200/80 px-2.5 py-1.5 space-y-1">
                     <div className="flex items-center gap-2">

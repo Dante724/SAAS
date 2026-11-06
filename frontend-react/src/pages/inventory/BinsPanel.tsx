@@ -9,6 +9,7 @@ import { api } from "../../api/client";
 import { barcodeTypeLabel } from "../../lib/barcodes";
 import { confirmDialog } from "../../lib/dialog";
 import { buttonClass } from "../../components/Button";
+import { Badge } from "../../components/Card";
 
 type Bin = { id: string; name: string; location_id: string; warehouse_id?: string | null; zone?: string | null; shelf?: string | null;
   bin_number?: string | null; barcode?: string | null; barcode_type?: string; is_default?: boolean; qty_on_hand?: number };
@@ -100,7 +101,7 @@ export default function BinsPanel() {
                   <td className="py-2.5 pl-4"><input type="checkbox" aria-label={`Select bin ${b.name}`} checked={sel.has(b.id)} onChange={() => { const n = new Set(sel); n.has(b.id) ? n.delete(b.id) : n.add(b.id); setSel(n); }} /></td>
                   <td className="py-2.5 px-3 font-bold text-ink-primary">
                     <button onClick={() => toggleOpen(b.id)} className="inline-flex items-center gap-1 hover:text-primary"><M n={open === b.id ? "expand_less" : "expand_more"} c="text-sm text-ink-tertiary" />{b.name}</button>
-                    {b.is_default && <span className="ml-2 px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/70 text-2xs font-bold">Default</span>}
+                    {b.is_default && <Badge tone="success" size="sm" className="ml-2">Default</Badge>}
                   </td>
                   <td className="py-2.5 px-3 tabular-nums text-ink-secondary">{b.barcode || "—"}<span className="ml-1.5 text-2xs text-ink-tertiary font-sans">{barcodeTypeLabel(b.barcode_type)}</span></td>
                   <td className="py-2.5 px-3 text-ink-secondary">{locName(b.location_id)}</td>

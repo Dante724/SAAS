@@ -3,6 +3,7 @@ import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { useMe, type PlanId, type PlanLimits } from "../../context/Me";
+import { Badge } from "../../components/Card";
 
 /* Settings › Billing — the shop's Tekly plan: trial days left, read-only state, Solo / Shop / Pro
    with monthly or yearly billing (yearly = 10 months), and the Stripe Customer Portal for cards,
@@ -221,8 +222,8 @@ export default function BillingPage({ load, post, go }: Deps = {}) {
                 className={`bg-white rounded-2xl border p-5 flex flex-col ${plan.id === "shop" ? "border-primary/40 shadow-clay-card" : "border-slate-200/90"}`}>
                 <div className="flex flex-wrap items-center gap-2">
                   <span className="text-sm font-bold text-ink-primary">{plan.name}</span>
-                  {plan.id === "shop" && <span className="px-2 py-0.5 rounded-full bg-indigo-50 text-indigo-700 text-[11px] font-bold">Most popular</span>}
-                  {fits && <span className="px-2 py-0.5 rounded-full bg-emerald-50 text-emerald-700 text-[11px] font-bold">Fits your shop</span>}
+                  {plan.id === "shop" && <Badge tone="info" size="sm">Most popular</Badge>}
+                  {fits && <Badge tone="success" size="sm">Fits your shop</Badge>}
                 </div>
                 <div className="mt-2">
                   <span className="text-2xl font-bold text-ink-primary tabular-nums">{money(pr.base[period])}</span>

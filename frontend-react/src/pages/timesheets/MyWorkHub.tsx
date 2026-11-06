@@ -2,6 +2,7 @@ import { humanize } from "../../lib/humanize";
 import { buttonClass } from "../../components/Button";
 import { useEffect, useState, useCallback } from "react";
 import Shell, { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import { api } from "../../api/client";
 import { promptDialog } from "../../lib/dialog";
 import { fmtServerTime } from "../../lib/serverTime";
@@ -162,7 +163,7 @@ export default function MyWorkHub() {
         {/* my recent entries + dispute */}
         <div className={card}>
           <div className="px-4 py-2.5 border-b border-slate-200 flex items-center gap-2"><M n="history" c="text-primary text-sm" /><h3 className="text-xs font-bold text-ink-primary">My recent time</h3></div>
-          {entries.length === 0 ? <p className="p-4 text-xs text-ink-tertiary">No time logged yet.</p> : (
+          {entries.length === 0 ? <EmptyState size="section" icon={<M n="history" c="text-lg" />} title="No time logged yet." /> : (
             <div className="divide-y divide-slate-100">
               {entries.map((e) => (
                 <div key={e.id} className="p-3.5">

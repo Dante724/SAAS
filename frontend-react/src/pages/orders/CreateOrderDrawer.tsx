@@ -26,6 +26,7 @@ import IdentifyHint, { type IdMatch } from "../../components/IdentifyHint";
 import NameSuggestInput from "../../components/NameSuggestInput";
 import { loadFailed } from "../../lib/notice";
 import { JobSuggestions } from "../../components/sense/Sense";
+import { Badge } from "../../components/Card";
 
 type ClientLite = { id: string; name?: string; phone?: string; email?: string };
 type Emp = { id: string; name: string; in_managers?: boolean; in_assignees?: boolean };
@@ -417,7 +418,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
         <header className="px-7 pt-5 pb-4 flex items-center justify-between bg-white">
           <div className="flex items-center gap-3">
             <h2 className="text-xl font-semibold tracking-tight text-ink-primary">New {estimate ? "estimate" : "work order"}</h2>
-            {estimate && <span className="rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-800 ring-1 ring-inset ring-amber-200">Not billed until approved</span>}
+            {estimate && <Badge tone="warning" size="sm">Not billed until approved</Badge>}
           </div>
           <div className="flex items-center gap-1">
             {canCustomize && typeId && (

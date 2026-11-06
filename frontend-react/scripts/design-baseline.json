@@ -1,6 +1,6 @@
 {
   "pages/appointments/AppointmentsHub.tsx": {
-    "text-px": 18,
+    "text-px": 17,
     "blur": 2
   },
   "pages/assets/AssetsHub.tsx": {
@@ -10,7 +10,7 @@
     "text-px": 2
   },
   "pages/cash/CashPanel.tsx": {
-    "text-px": 15
+    "text-px": 12
   },
   "pages/cash/DenomCountModal.tsx": {
     "text-px": 1
@@ -40,19 +40,16 @@
     "text-px": 1
   },
   "pages/company/CompanyHub.tsx": {
-    "text-px": 10
+    "text-px": 8
   },
   "pages/finance/FinanceHub.tsx": {
-    "text-px": 11
+    "text-px": 9
   },
   "pages/finance/MyEarnings.tsx": {
     "text-px": 1
   },
-  "pages/finance/PayrollCalcPanel.tsx": {
-    "text-px": 1
-  },
   "pages/inbox/InquiriesHub.tsx": {
-    "text-px": 12,
+    "text-px": 8,
     "blur": 2
   },
   "pages/inbox/InquiryDrawer.tsx": {
@@ -69,7 +66,7 @@
     "text-px": 10
   },
   "pages/inventory/InventoryDrawer.tsx": {
-    "text-px": 52
+    "text-px": 47
   },
   "pages/inventory/InventoryHub.tsx": {
     "text-px": 47
@@ -87,20 +84,20 @@
     "text-px": 3
   },
   "pages/inventory/StocktakeDrawer.tsx": {
-    "text-px": 9
+    "text-px": 6
   },
   "pages/invoices/CreditNotesList.tsx": {
     "text-px": 1
   },
   "pages/invoices/InvoicesHub.tsx": {
-    "text-px": 2
+    "text-px": 1
   },
   "pages/invoices/billing.tsx": {
     "text-px": 1,
     "blur": 1
   },
   "pages/marketing/MarketingHub.tsx": {
-    "text-px": 3
+    "text-px": 2
   },
   "pages/memberships/MembershipsView.tsx": {
     "text-px": 4,
@@ -118,10 +115,10 @@
     "blur": 1
   },
   "pages/orders/AssetDrawer.tsx": {
-    "text-px": 12
+    "text-px": 10
   },
   "pages/orders/ClientDrawer.tsx": {
-    "text-px": 21
+    "text-px": 16
   },
   "pages/orders/ConversationPanel.tsx": {
     "text-px": 4
@@ -152,13 +149,13 @@
     "text-px": 9
   },
   "pages/orders/RecommendationsPanel.tsx": {
-    "text-px": 12
+    "text-px": 9
   },
   "pages/orders/WODrawer.tsx": {
-    "text-px": 70
+    "text-px": 64
   },
   "pages/orders/WorkOrdersHub.tsx": {
-    "text-px": 45
+    "text-px": 43
   },
   "pages/reports/GoPilotReport.tsx": {
     "text-px": 5
@@ -173,11 +170,8 @@
   "pages/sales/SalesPOS.tsx": {
     "text-px": 15
   },
-  "pages/settings/ApiKeysCard.tsx": {
-    "text-px": 1
-  },
   "pages/settings/BillingPage.tsx": {
-    "text-px": 14
+    "text-px": 12
   },
   "pages/settings/CheckinPointsSettings.tsx": {
     "text-px": 1
@@ -237,7 +231,7 @@
     "text-px": 3
   },
   "pages/tasks/TasksHub.tsx": {
-    "text-px": 17,
+    "text-px": 14,
     "blur": 2
   },
   "pages/timesheets/BayChecklist.tsx": {

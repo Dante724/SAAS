@@ -8,6 +8,7 @@ import { alertDialog, confirmDialog } from "../../lib/dialog";
 import { countRows } from "./countSheet";
 import type { Product } from "./types";
 import { buttonClass } from "../../components/Button";
+import { Badge } from "../../components/Card";
 
 type StLine = { id: string; part_id: string; part_name: string; sku?: string | null; bin_id?: string | null; bin?: string | null;
   system_qty: number | null; counted_qty: number | null; variance: number | null; is_unknown?: boolean; serial_mismatch?: boolean; note?: string | null };
@@ -139,9 +140,9 @@ export default function StocktakeDrawer({ id, onClose, onDone }:
       <div className="relative w-[680px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h2 className="font-bold text-ink-primary flex items-center gap-2"><M n="fact_check" c="text-base text-primary" />{stId ? (posted ? "Stock take (posted)" : "Count in progress") : "New stock take"}
-            {sheet && !posted && <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200/70 text-[11px] font-bold">Draft</span>}
-            {sheet?.blind && <span className="px-2 py-0.5 rounded-full bg-slate-100 text-ink-secondary border border-slate-200 text-[11px] font-bold">Blind</span>}
-            {sheet?.by_bin && <span className="px-2 py-0.5 rounded-full bg-blue-50 text-primary border border-blue-100 text-[11px] font-bold">Bin by bin</span>}
+            {sheet && !posted && <Badge tone="warning" size="sm">Draft</Badge>}
+            {sheet?.blind && <Badge size="sm">Blind</Badge>}
+            {sheet?.by_bin && <Badge tone="info" size="sm">Bin by bin</Badge>}
           </h2>
           <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
         </div>

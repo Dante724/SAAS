@@ -15,6 +15,7 @@ import { fmtServerTime } from "../../lib/serverTime";
 import { btnGhost, btnPrimary } from "../invoices/billing";
 import { loadFailed } from "../../lib/notice";
 import { clickable } from "../../lib/clickable";
+import { Badge } from "../../components/Card";
 
 type TxnSummary = { count: number; income: number; expense: number; today_in?: number; today_out?: number; today_net?: number };
 type Txn = { id: string; txn_type?: string; amount?: number; account?: string; account_id?: string; cash_flow_item?: string; comment?: string; actual_date?: string; status?: string; balance_after?: number; reverses_txn_id?: string; void_reason?: string };
@@ -147,7 +148,7 @@ export default function CashPanel() {
             <div className="flex items-center gap-2.5 mb-3">
               <div className="w-9 h-9 rounded-full bg-primary text-white flex items-center justify-center shadow-clay-sm"><M n={sel ? iconFor(sel) : "account_balance"} c="text-base" /></div>
               <div className="text-sm font-bold text-ink-primary">{sel?.name || "—"}</div>
-              {sel?.payment_option && <span className="text-[11px] font-bold text-ink-tertiary bg-slate-100 px-2 py-0.5 rounded-full">{payLabel(sel.payment_option)}</span>}
+              {sel?.payment_option && <Badge size="sm">{payLabel(sel.payment_option)}</Badge>}
             </div>
             <div className="text-xs font-bold text-ink-tertiary">{sel?.payment_option === "cash" ? "In the till right now" : "Balance"}</div>
             <div className="tabular-nums text-5xl font-bold text-ink-primary tracking-tight leading-none mt-1">{money(sel?.balance, sym)}</div>
@@ -193,7 +194,7 @@ export default function CashPanel() {
                   return (
                     <tr key={t.id} className={`hover:bg-blue-50/30 ${del ? "opacity-50 line-through" : ""}`} title={del ? `Deleted${t.void_reason ? `: ${t.void_reason}` : ""}` : corrected ? "Corrected — see the linked adjustment row" : ""}>
                       <td className="py-2.5 px-4 text-ink-tertiary">{fmtServerTime(t.actual_date, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }) || "—"}</td>
-                      <td className="py-2.5 px-4 text-ink-primary font-semibold">{t.comment || "—"}{corrected && <span className="ml-2 px-1.5 py-0.5 rounded-full bg-amber-50 text-[11px] font-semibold text-amber-700 no-underline">Corrected</span>}{t.reverses_txn_id && <span className="ml-2 px-1.5 py-0.5 rounded-full bg-sky-50 text-[11px] font-semibold text-sky-700 no-underline">Adjustment</span>}</td>
+                      <td className="py-2.5 px-4 text-ink-primary font-semibold">{t.comment || "—"}{corrected && <Badge tone="warning" size="sm" className="ml-2 no-underline">Corrected</Badge>}{t.reverses_txn_id && <Badge tone="info" size="sm" className="ml-2 no-underline">Adjustment</Badge>}</td>
                       <td className="py-2.5 px-4">{t.cash_flow_item || "—"}</td>
                       <td className="py-2.5 px-4 text-right tabular-nums font-bold text-emerald-600">{inc ? money(Math.abs(t.amount || 0), sym) : ""}</td>
                       <td className="py-2.5 px-4 text-right tabular-nums font-bold text-rose-600">{!inc ? money(Math.abs(t.amount || 0), sym) : ""}</td>

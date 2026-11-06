@@ -6,6 +6,7 @@ import PageSummary, { type SummaryStat } from "../../components/PageSummary";
 import { useEffect, useState } from "react";
 import { useSearchParams } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import { api } from "../../api/client";
 import { alertDialog, promptDialog } from "../../lib/dialog";
 import { Order, deviceName, money } from "./types";
@@ -19,6 +20,7 @@ import { Gate, useMe } from "../../context/Me";
 import FloatingMenu from "../../components/FloatingMenu";
 import { loadFailed, showNotice } from "../../lib/notice";
 import { clickable, clickableRow } from "../../lib/clickable";
+import { Badge } from "../../components/Card";
 
 type Kpis = { new?: number; urgent?: number; overdue?: number; receivables?: number };
 type Status = { id: string; name?: string; key?: string; status_group?: string; color?: string };
@@ -221,7 +223,7 @@ export default function WorkOrdersHub() {
     return () => { live = false; };
   }, [flagIds]);
   const stalledTag = (id: string) => flags[id]?.stalled ? (
-    <span className="inline-flex items-center gap-0.5 px-1.5 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-700 border border-rose-200" title={flags[id]?.over_by_min ? `About ${Math.round(flags[id]!.over_by_min!)} min over typical` : "Running long"}><M n="timer" c="text-[11px]" />Stalled</span>
+    <span className="inline-flex" title={flags[id]?.over_by_min ? `About ${Math.round(flags[id]!.over_by_min!)} min over typical` : "Running long"}><Badge tone="danger" size="sm" className="gap-0.5"><M n="timer" c="text-[11px]" />Stalled</Badge></span>
   ) : null;
   function refetch() {
     setTick((t) => t + 1);
@@ -271,15 +273,11 @@ export default function WorkOrdersHub() {
   const filtersOn = !!(filter || activeFacets || q.trim());
   const clearFilters = () => { setFilter(null); setFAssignee(""); setFPriority(""); setFScheduled(""); setQ(""); };
   const emptyState = filtersOn ? (
-    <div className="text-center text-xs text-ink-tertiary space-y-3">
-      <p>No work orders match these filters.</p>
-      <button onClick={clearFilters} className={buttonClass("secondary", "md")}>Clear filters</button>
-    </div>
+    <EmptyState size="section" icon={<M n="search_off" c="text-lg" />} title="No work orders match these filters."
+      action={<button onClick={clearFilters} className={buttonClass("secondary", "md")}>Clear filters</button>} />
   ) : (
-    <div className="text-center text-xs text-ink-tertiary space-y-3">
-      <p>No work orders yet.</p>
-      <Gate perm="can_create_tickets"><button onClick={() => setCreate("order")} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 inline-flex items-center gap-1.5"><M n="add" c="text-sm" />New work order</button></Gate>
-    </div>
+    <EmptyState size="section" icon={<M n="build" c="text-lg" />} title="No work orders yet."
+      action={<Gate perm="can_create_tickets"><button onClick={() => setCreate("order")} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 inline-flex items-center gap-1.5"><M n="add" c="text-sm" />New work order</button></Gate>} />
   );
   // Numbered pagination — table view only (board = kanban columns, scheduler = calendar).
   const woPages = Math.max(1, Math.ceil(total / WO_PAGE_SIZE));
@@ -351,7 +349,7 @@ export default function WorkOrdersHub() {
             <FloatingMenu anchorSel='[data-wo-menu="views"]' onClose={closeMenu} width={240}>
               <button onClick={() => { closeMenu(); saveView(); }} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-lg hover:bg-slate-50 focus:bg-slate-50 outline-none text-primary text-xs font-semibold"><M n="add" c="text-sm" />Save current view</button>
               <div className="border-t border-slate-100 my-1" />
-              {views.length === 0 && <div className="px-2 py-2 text-[11px] text-ink-tertiary">No saved views yet.</div>}
+              {views.length === 0 && <EmptyState size="inline" className="px-2" title="No saved views yet." />}
               {views.map((v) => (
                 <div key={v.id} className="group flex items-center gap-1 rounded-lg hover:bg-slate-50 focus-within:bg-slate-50">
                   <button onClick={() => applyView(v)} className="flex-1 min-w-0 flex items-center gap-2 px-2 py-1.5 text-left text-xs font-medium text-ink-primary outline-none">
@@ -427,7 +425,7 @@ export default function WorkOrdersHub() {
           <ul className="sm:hidden divide-y divide-slate-100" aria-label="Work orders">
             {err && <li className="p-4 text-xs text-status-overdue-ink">Couldn't load the work orders. {err}</li>}
             {!orders && !err && <li className="p-4 text-xs text-ink-tertiary">Loading orders…</li>}
-            {orders && rows.length === 0 && <li className="p-6">{emptyState}</li>}
+            {orders && rows.length === 0 && <li>{emptyState}</li>}
             {pageRows.map((o) => (
               <li key={o.id}>
                 <button onClick={() => setOpen(o)} className={`w-full text-left px-4 py-3 flex flex-col gap-1 hover:bg-slate-50/80 ${sel.has(o.id) ? "bg-primary/5" : ""}`}>
@@ -461,7 +459,7 @@ export default function WorkOrdersHub() {
             <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
               {err && <tr><td colSpan={colSpan} className="py-6 px-4 text-status-overdue-ink">Couldn't load the work orders. {err}</td></tr>}
               {!orders && !err && <tr><td colSpan={colSpan} className="py-6 px-4 text-ink-tertiary">Loading orders…</td></tr>}
-              {orders && rows.length === 0 && <tr><td colSpan={colSpan} className="py-10 px-4">{emptyState}</td></tr>}
+              {orders && rows.length === 0 && <tr><td colSpan={colSpan} className="p-0">{emptyState}</td></tr>}
               {pageRows.map((o) => (
                 <tr key={o.id} {...clickableRow(() => setOpen(o))} className={`hover:bg-slate-50/80 cursor-pointer transition-colors group ${sel.has(o.id) ? "bg-primary/5" : ""}`}>
                   <td className="py-3.5 px-4" onClick={(e) => e.stopPropagation()}><input className="rounded text-primary border-slate-300" type="checkbox" aria-label={`Select ${o.order_number || o.id}`} checked={sel.has(o.id)} onChange={() => toggle(o.id)} /></td>

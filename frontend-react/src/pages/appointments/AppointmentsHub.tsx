@@ -1,12 +1,14 @@
 import { useEffect, useState } from "react";
 import { buttonClass } from "../../components/Button";
 import Shell, { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import DateField from "../../components/DateField";
 import { api, getLocationScope } from "../../api/client";
 import { loadFailed } from "../../lib/notice";
 import { clickable } from "../../lib/clickable";
 import { useClientSearch } from "../../hooks/useClientSearch";
 import { fmtDay, wallDate } from "../../lib/serverTime";
+import { Badge } from "../../components/Card";
 
 type Appointment = { id: string; client_name?: string; service_name?: string; employee_name?: string; scheduled_for?: string; ends_at?: string; duration_min?: number; status?: string; note?: string; order_id?: string | null };
 type Emp = { id: string; name: string };
@@ -217,7 +219,7 @@ export default function AppointmentsHub() {
             </div>
           );
         })()}
-        {view === "agenda" && rows?.length === 0 && <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-12 text-center"><M n="calendar_month" c="mx-auto mb-2 text-3xl text-ink-placeholder" /><p className="text-sm font-bold text-ink-secondary mt-2">No appointments yet</p><p className="text-xs text-ink-tertiary">Create an appointment or wait for online requests.</p><button onClick={() => openNew()} className="mt-4 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 inline-flex items-center gap-1.5"><M n="add" c="text-sm" />New appointment</button></div>}
+        {view === "agenda" && rows?.length === 0 && <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card"><EmptyState size="section" icon={<M n="calendar_month" c="text-lg" />} title="No appointments yet" body="Create an appointment or wait for online requests." action={<button onClick={() => openNew()} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 inline-flex items-center gap-1.5"><M n="add" c="text-sm" />New appointment</button>} /></div>}
         {view === "agenda" && Object.entries(groups).map(([day, list]) => (
           <div key={day}>
             <div className="text-[11px] font-bold text-ink-tertiary mb-2">{day}</div>
@@ -229,7 +231,7 @@ export default function AppointmentsHub() {
                     <div className="text-center flex-shrink-0 w-16"><div className="text-sm font-bold tabular-nums text-ink-primary">{time(b.scheduled_for)}</div>{b.duration_min && <div className="text-[11px] text-ink-tertiary">{b.duration_min}m</div>}</div>
                     <div className="w-px h-9 bg-slate-200" />
                     <div className="flex-1 min-w-0"><div className="text-sm font-bold text-ink-primary truncate">{b.service_name || "Appointment"}</div><div className="text-[11px] text-ink-tertiary">{b.client_name || "Walk-in"}{b.employee_name ? ` · ${b.employee_name}` : ""}</div></div>
-                    {b.order_id && <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-blue-50 text-primary border border-blue-100">Work order created</span>}
+                    {b.order_id && <Badge tone="info" size="sm">Work order created</Badge>}
                     <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${STATUS[st] || STATUS.booked}`}>{STATUS_LABEL[st] || st}</span>
                   </div>
                 );

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import { buttonClass } from "../../components/Button";
 import Shell, { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import { api, idempotencyKey } from "../../api/client";
 import { useMe } from "../../context/Me";
 import VoidableList from "../../components/VoidableList";
@@ -400,11 +401,7 @@ export default function SalesPOS() {
           {/* lines */}
           <div className="flex-1 overflow-y-auto px-5 py-3 space-y-2">
             {cart.length === 0 && !pending && (
-              <div className="text-center py-12 px-4">
-                <span className="w-10 h-10 mx-auto rounded-full bg-slate-100 text-ink-tertiary flex items-center justify-center"><M n="shopping_cart" c="text-base" /></span>
-                <div className="text-sm font-semibold text-ink-primary mt-3">No items yet</div>
-                <div className="text-xs text-ink-tertiary mt-1">Tap a product or service, or scan a barcode.</div>
-              </div>
+              <EmptyState size="section" icon={<M n="shopping_cart" c="text-lg" />} title="No items yet" body="Tap a product or service, or scan a barcode." />
             )}
             {cart.map((l) => (
               <div key={l.key} data-testid="cart-line" className={`rounded-xl border px-3 py-2.5 transition-colors ${lit && lit.id === l.ref_id && l.kind === "product" ? "bg-emerald-50 border-emerald-300" : "bg-white border-slate-200"}`}>

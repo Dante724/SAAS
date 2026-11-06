@@ -6,6 +6,7 @@ import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { useMe } from "../../context/Me";
 import Shell, { M } from "../../components/Shell";
+import { TableEmpty } from "../../components/EmptyState";
 import { api } from "../../api/client";
 import { AgentDraftsCard, MorningBriefCard, WatchdogPanel } from "../../components/sense/Sense";
 import { Product, Service, Bundle, money } from "../inventory/types";
@@ -15,6 +16,7 @@ import { useServerPage } from "../../hooks/useServerPage";
 import { inputCls } from "../invoices/billing";
 import { clickable, clickableRow } from "../../lib/clickable";
 import ImportDrawer from "../../components/ImportDrawer";
+import { Badge } from "../../components/Card";
 
 const CO_PAGE = 50;
 
@@ -319,7 +321,7 @@ export function EmployeeHours() {
           </tr></thead>
           <tbody className="divide-y divide-slate-100 text-xs">
             {!entries && <SkeletonRows cols={6} />}
-            {entries?.length === 0 && <tr><td colSpan={6} className="py-6 px-5 text-ink-tertiary">No time entries yet.</td></tr>}
+            {entries?.length === 0 && <TableEmpty cols={6} icon={<M n="schedule" c="text-lg" />} title="No time entries yet." />}
             {pageEntries.map((e) => (
               <tr key={e.id} className="hover:bg-blue-50/30">
                 <td className="py-3 px-5 font-bold text-ink-primary">{e.employee_name || "—"}</td>
@@ -328,8 +330,8 @@ export function EmployeeHours() {
                 <td className="py-3 px-3 text-ink-secondary">{e.started_at ? new Date(e.started_at).toLocaleString() : "—"}</td>
                 <td className="py-3 px-3 text-right tabular-nums font-bold text-ink-primary">{hm(e.duration_min)}</td>
                 <td className="py-3 px-3">{e.running
-                  ? <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-700">Running</span>
-                  : <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-ink-secondary">Done</span>}</td>
+                  ? <Badge tone="success" size="sm">Running</Badge>
+                  : <Badge size="sm">Done</Badge>}</td>
               </tr>
             ))}
           </tbody>
@@ -390,12 +392,10 @@ export function Services({ onOpen, refresh }: { onOpen: (s?: Service) => void; r
           <tbody className="divide-y divide-slate-100 text-xs">
             {!items && <SkeletonRows cols={5} />}
             {items && err && <tr><td colSpan={5} className="py-6 px-5 text-rose-600">Couldn't load services. <button onClick={load} className="font-semibold underline">Try again</button></td></tr>}
-            {items && !err && rows.length === 0 && <tr><td colSpan={5} className="py-12 px-5 text-center">
-              {items.length
-                ? <><div className="text-sm font-semibold text-ink-primary">No services match</div><div className="text-xs text-ink-tertiary mt-1">Try another name, or clear the category filter.</div></>
-                : <><div className="text-sm font-semibold text-ink-primary">No services yet</div><div className="text-xs text-ink-tertiary mt-1">Services are the work you charge for. Add one to put it on jobs, sales and online booking.</div>
-                    <button onClick={() => onOpen()} className={`${primaryBtn} mx-auto mt-3`}><M n="add" c="text-sm" />New service</button></>}
-            </td></tr>}
+            {items && !err && rows.length === 0 && (items.length
+              ? <TableEmpty cols={5} icon={<M n="search_off" c="text-lg" />} title="No services match" body="Try another name, or clear the category filter." />
+              : <TableEmpty cols={5} icon={<M n="handyman" c="text-lg" />} title="No services yet" body="Services are the work you charge for. Add one to put it on jobs, sales and online booking."
+                  action={<button onClick={() => onOpen()} className={primaryBtn}><M n="add" c="text-sm" />New service</button>} />)}
             {pageRows.map((s) => (
               <tr key={s.id} className="hover:bg-slate-50 cursor-pointer" {...clickableRow(() => onOpen(s))}>
                 <td className="py-3 px-5">
@@ -472,12 +472,10 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
           <tbody className="divide-y divide-slate-100 text-xs">
             {!items && <SkeletonRows cols={8} />}
             {items && err && <tr><td colSpan={8} className="py-6 px-5 text-rose-600">Couldn't load products. <button onClick={load} className="font-semibold underline">Try again</button></td></tr>}
-            {items && !err && rows.length === 0 && <tr><td colSpan={8} className="py-12 px-5 text-center">
-              {items.length
-                ? <><div className="text-sm font-semibold text-ink-primary">No products match</div><div className="text-xs text-ink-tertiary mt-1">Search by name, SKU, MPN or barcode, or clear the category filter.</div></>
-                : <><div className="text-sm font-semibold text-ink-primary">No products yet</div><div className="text-xs text-ink-tertiary mt-1">Products are the parts and items you sell. Add one to use it on jobs and at the till.</div>
-                    <button onClick={() => onOpen()} className={`${primaryBtn} mx-auto mt-3`}><M n="add" c="text-sm" />New product</button></>}
-            </td></tr>}
+            {items && !err && rows.length === 0 && (items.length
+              ? <TableEmpty cols={8} icon={<M n="search_off" c="text-lg" />} title="No products match" body="Search by name, SKU, MPN or barcode, or clear the category filter." />
+              : <TableEmpty cols={8} icon={<M n="inventory_2" c="text-lg" />} title="No products yet" body="Products are the parts and items you sell. Add one to use it on jobs and at the till."
+                  action={<button onClick={() => onOpen()} className={primaryBtn}><M n="add" c="text-sm" />New product</button>} />)}
             {pageRows.map((p) => (
               <tr key={p.id} className="hover:bg-slate-50 cursor-pointer" {...clickableRow(() => onOpen(p))}>
                 <td className="py-3 px-5 font-semibold text-ink-primary">{p.name}</td>
