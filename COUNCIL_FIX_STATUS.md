@@ -62,3 +62,13 @@ Four open PRs each add a migration that revises `trg01`: #95 `nob01`, #99 `idg01
 
 ## Base branch
 #157 fixes a red `ruff correctness rules (whole backend)` check on `roadmap/orderry-parity`, from an unused import added in 8ba3ca32. Any PR that merges the base after that commit shows the same red check until #157 lands.
+
+## Round 3: infrastructure (after the council)
+
+| PR | What changed | Test that failed before the fix | CI | Ready for PM merge |
+|---|---|---|---|---|
+| #157 | **Base is red:** an unused `import re` (whole-backend ruff, since 8ba3ca32) and E741 in `test_design_followups.py` (lint, since #156) | Both ruff commands fail on the base | pending | yes, **merge first** |
+| #162 | Nightly integrity sweep: till, client, invoice and stock totals vs their ledgers; ERROR log plus the `repairos_integrity_mismatches` metric; read-only. Automated restore drill `scripts/restore_drill.py`, run in CI; runbook `docs/runbooks/restore-drill-and-integrity.md` | Metric and schedule tests failed before the wiring. Probe across 104 money/stock files: 0 false alarms on money; 6 on stock, all from tests that seed stock directly | pending | yes, if CI is green. **Owner:** run the drill once on a real production dump |
+| #161 | M21: the SLA sweep runs in SQL and skips shops with no time limits | 60 orders read for a shop with no limits (now 0); 83 vs 9 statements as breaches grow (now equal) | pending | yes, if CI is green |
+| #164 | `SLOW_QUERY_MS` slow-query WARNING (no parameters, with request id) and `repairos_slow_queries_total`; the dashboard cache in Redis with an in-process fallback; `pg_stat_statements` in DEPLOY.md | No slow-query log; nothing written to Redis; a Redis failure not handled | pending | yes, if CI is green. Expect a small `render_metrics` conflict with #162 |
+| (Q2) | Memberships and billing on the shop's clock | in progress | — | no |
