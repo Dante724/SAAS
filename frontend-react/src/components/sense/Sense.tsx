@@ -185,7 +185,7 @@ const FEATURE_ROWS: { group: string; rows: { k: SenseFeature; label: string; hin
     { k: "ready_time_why", label: "Explain the ready-time estimate", hint: "Shows what the estimate is based on" },
   ] },
   { group: "For you", rows: [
-    { k: "morning_brief", label: "Morning Brief", hint: "Yesterday, today and what needs you, on your Today page" },
+    { k: "morning_brief", label: "Morning brief", hint: "Yesterday, today and what needs you, on your Today page" },
     { k: "margin_check", label: "Margin check", hint: "A note when a job makes far less than your usual margin" },
     { k: "watchdog", label: "Watchdog and team scorecard", hint: "Unusual discounts, refunds, voids and cash shortfalls, for your eyes only" },
   ] },
@@ -396,10 +396,10 @@ export function MorningBriefCard({ onOpen }: { onOpen: (to: string) => void }) {
   const y = b.yesterday;
   const items = b.attention || [];
   return (
-    <section aria-label="Morning Brief" className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-sm p-4">
+    <section aria-label="Morning brief" className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-sm p-4">
       <button onClick={() => setOpen((v) => !v)} aria-expanded={open} className="w-full flex items-center gap-2 text-left focus:outline-none">
         <M n={open ? "expand_more" : "chevron_right"} c="text-ink-tertiary text-base" />
-        <h3 className="text-sm font-semibold text-ink-primary flex items-center gap-1.5"><Spark /> Morning Brief</h3>
+        <h3 className="text-sm font-semibold text-ink-primary flex items-center gap-1.5"><Spark /> Morning brief</h3>
         <span className="ml-auto text-[11px] text-ink-tertiary">Learned from your own jobs</span>
       </button>
       {open && (

@@ -3,6 +3,7 @@ import { humanize } from "../../lib/humanize";
 import { safeHttpsUrl } from "../../lib/safeHtml";
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
+import Tabs from "../../components/Tabs";
 import { api } from "../../api/client";
 import Pager from "../../components/Pager";
 import { confirmDialog, alertDialog } from "../../lib/dialog";
@@ -56,13 +57,8 @@ export default function MarketingHub() {
 
   return (
     <Shell title="Marketing">
-      <div className="px-4 md:px-6 pt-3 border-b border-slate-200/60 flex-shrink-0">
-        <nav className="flex space-x-6 -mb-px text-xs font-semibold overflow-x-auto whitespace-nowrap">
-          {([["campaigns", "Campaigns"], ["calls", "Call log"]] as [typeof tab, string][]).map(([id, l]) => (
-            <button key={id} onClick={() => setTab(id)} className={`pb-3 border-b-2 transition-colors ${tab === id ? "text-primary border-primary" : "text-ink-secondary hover:text-ink-primary border-transparent"}`}>{l}</button>
-          ))}
-        </nav>
-      </div>
+      <Tabs label="Marketing sections" className="px-4 md:px-6 pt-3 flex-shrink-0" value={tab} onChange={setTab}
+        tabs={([["campaigns", "Campaigns"], ["calls", "Call log"]] as [typeof tab, string][]).map(([id, label]) => ({ id, label }))} />
 
       <div className="flex-1 overflow-y-auto px-4 md:px-6 py-5">
         {tab === "campaigns" && (

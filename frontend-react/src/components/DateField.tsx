@@ -272,7 +272,7 @@ export default function DateField({
         aria-label={ariaName ? `${ariaName}: ${label}` : undefined}
         aria-expanded={open}
         onClick={toggle}
-        className={`glass-input rounded-xl px-3 py-2 text-sm w-full flex items-center justify-between gap-2 text-left disabled:opacity-50 disabled:cursor-not-allowed ${empty ? "text-ink-tertiary" : "text-ink-primary"}`}
+        className={`glass-input rounded-xl h-9 px-3 text-sm w-full flex items-center justify-between gap-2 text-left disabled:opacity-50 disabled:cursor-not-allowed ${empty ? "text-ink-tertiary" : "text-ink-primary"}`}
       >
         <span className="truncate">{label}</span>
         <M n={mode === "time" ? "schedule" : "calendar_today"} c="text-lg text-ink-tertiary shrink-0" />

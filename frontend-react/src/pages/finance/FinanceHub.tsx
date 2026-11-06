@@ -3,6 +3,7 @@ import PageSummary, { type SummaryStat } from "../../components/PageSummary";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
+import Tabs from "../../components/Tabs";
 import DateField from "../../components/DateField";
 import { api, openAuthedDoc } from "../../api/client";
 import Pager from "../../components/Pager";
@@ -147,13 +148,8 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
 
   return (
     <Shell title="Finance">
-      <div className="px-6 pt-3 border-b border-slate-200/60 bg-white/40 flex-shrink-0">
-        <nav className="flex space-x-6 -mb-px text-xs font-semibold overflow-x-auto whitespace-nowrap">
-          {([...(can("can_view_cashbox") ? [["cashboxes", "Cashboxes"]] as [Tab, string][] : []), ["overview", "Overview"], ["pnl", "Profit & loss"], ["reconcile", "Reconcile"], ["balances", "Client balances"], ["refunds", "Refunds"], ...(hasFeature(me, "payroll") ? [["payroll", "Payroll"]] as [Tab, string][] : [])] as [Tab, string][]).map(([id, label]) => (
-            <button key={id} onClick={() => setTab(id)} className={`pb-3 shrink-0 border-b-2 transition-colors ${tab === id ? "text-primary border-primary" : "text-ink-secondary hover:text-ink-primary border-transparent"}`}>{label}</button>
-          ))}
-        </nav>
-      </div>
+      <Tabs label="Finance sections" className="px-6 pt-3 bg-white/40 flex-shrink-0" value={tab} onChange={setTab}
+        tabs={([...(can("can_view_cashbox") ? [["cashboxes", "Cashboxes"]] as [Tab, string][] : []), ["overview", "Overview"], ["pnl", "Profit & loss"], ["reconcile", "Reconcile"], ["balances", "Client balances"], ["refunds", "Refunds"], ...(hasFeature(me, "payroll") ? [["payroll", "Payroll"]] as [Tab, string][] : [])] as [Tab, string][]).map(([id, label]) => ({ id, label }))} />
 
       {tab === "cashboxes" ? <CashPanel /> : (
       <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">

@@ -4,6 +4,7 @@ import { downloadSheet } from "../../lib/downloadSheet";
 import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
+import Tabs from "../../components/Tabs";
 import EmptyState, { TableEmpty } from "../../components/EmptyState";
 import DateField from "../../components/DateField";
 import { api } from "../../api/client";
@@ -389,7 +390,7 @@ export default function ReportsHub() {
     ["This month", () => { const n = new Date(); return [new Date(n.getFullYear(), n.getMonth(), 1), n]; }],
     ["Last month", () => { const n = new Date(); return [new Date(n.getFullYear(), n.getMonth() - 1, 1), new Date(n.getFullYear(), n.getMonth(), 0)]; }],
     ["This quarter", () => { const n = new Date(); const q0 = Math.floor(n.getMonth() / 3) * 3; return [new Date(n.getFullYear(), q0, 1), n]; }],
-    ["YTD", () => { const n = new Date(); return [new Date(n.getFullYear(), 0, 1), n]; }],
+    ["Year to date", () => { const n = new Date(); return [new Date(n.getFullYear(), 0, 1), n]; }],
   ];
   function applyPreset(fn: () => [Date, Date]) {
     const [s, e] = fn(); const f = iso(s), t = iso(e);
@@ -508,13 +509,8 @@ export default function ReportsHub() {
 
   return (
     <Shell title="Reports">
-      <div className="px-6 pt-3 border-b border-slate-200/60 bg-white/40 flex-shrink-0">
-        <nav className="flex space-x-1 -mb-px text-xs font-semibold overflow-x-auto">
-          {([["reports", "Reports", "summarize"], ...(can("can_see_profit") ? [["total_profit", "Total profit", "savings"]] : []), ["custom", "Custom report", "tune"], ["fleet", "Business & analytics", "insights"], ["profitability", "Job profitability", "payments"], ["insights", "Insights", "lightbulb"], ["feedback", "Feedback", "reviews"], ...(can("can_manage_settings") ? [["gopilot", "Go pilot", "qr_code_scanner"]] : [])] as [typeof view, string, string][]).map(([id, label, icon]) => (
-            <button key={id} onClick={() => setView(id)} className={`flex items-center gap-1.5 px-3 pb-3 pt-1 border-b-2 whitespace-nowrap transition-colors ${view === id ? "text-primary border-primary" : "text-ink-secondary hover:text-ink-primary hover:bg-slate-100/60 rounded-t-lg border-transparent"}`}><M n={icon} c="text-sm" />{label}</button>
-          ))}
-        </nav>
-      </div>
+      <Tabs label="Reports sections" className="px-6 pt-3 bg-white/40 flex-shrink-0" value={view} onChange={setView}
+        tabs={([["reports", "Reports", "summarize"], ...(can("can_see_profit") ? [["total_profit", "Total profit", "savings"]] : []), ["custom", "Custom report", "tune"], ["fleet", "Business & analytics", "insights"], ["profitability", "Job profitability", "payments"], ["insights", "Insights", "lightbulb"], ["feedback", "Feedback", "reviews"], ...(can("can_manage_settings") ? [["gopilot", "Go pilot", "qr_code_scanner"]] : [])] as [typeof view, string, string][]).map(([id, label, icon]) => ({ id, label, icon: <M n={icon} c="text-sm" /> }))} />
 
       {view === "custom" && <CustomView />}
       {view === "total_profit" && <div className="flex-1 overflow-y-auto px-6 py-5"><TotalProfit locs={locs} /></div>}
@@ -633,7 +629,7 @@ export default function ReportsHub() {
             {!cat && <div className="p-3 text-xs text-ink-tertiary">Loading…</div>}
             {cat?.tabs.map((t) => (
               <div key={t.name} className="mb-2">
-                <div className="text-[11px] font-bold text-ink-tertiary px-2 py-1.5">{t.name}</div>
+                <div className="text-[11px] font-bold text-ink-tertiary px-2 py-1.5">{t.name === "Work Orders" ? "Work orders" : t.name}</div>
                 {t.reports.map((r) => (
                   <button key={r.key} onClick={() => run(r.key)} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center gap-2 border-l-2 transition-colors ${active === r.key ? "bg-blue-50/80 text-primary font-semibold border-primary" : "text-ink-secondary hover:bg-slate-100 border-transparent"}`}><M n="bar_chart" c={`text-sm ${active === r.key ? "text-primary" : "text-ink-tertiary"}`} /><span className="truncate">{r.title}</span></button>
                 ))}

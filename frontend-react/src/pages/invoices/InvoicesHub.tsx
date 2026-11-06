@@ -1,5 +1,6 @@
 import { useEffect, useRef, useState } from "react";
 import Shell, { M } from "../../components/Shell";
+import Tabs from "../../components/Tabs";
 import EmptyState from "../../components/EmptyState";
 import SkeletonRows from "../../components/SkeletonRows";
 import DateField from "../../components/DateField";
@@ -88,12 +89,8 @@ export default function InvoicesHub() {
     <Shell title="Invoices">
       <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-4">
           {can("can_view_credit_notes") && (
-            <div className="flex gap-5 border-b border-slate-200 text-sm font-semibold" role="tablist" aria-label="Billing documents">
-              {([["invoices", "Invoices"], ["credit_notes", "Credit notes"]] as const).map(([k, l]) => (
-                <button key={k} role="tab" aria-selected={view === k} onClick={() => setView(k)}
-                  className={`py-2 -mb-px border-b-2 ${view === k ? "text-primary border-primary" : "text-ink-tertiary border-transparent hover:text-ink-primary"}`}>{l}</button>
-              ))}
-            </div>
+            <Tabs label="Billing documents" value={view} onChange={setView}
+              tabs={[{ id: "invoices", label: "Invoices" }, { id: "credit_notes", label: "Credit notes" }]} />
           )}
           {view === "credit_notes" ? <CreditNotesList /> : <>
           <div className="flex items-center gap-2">
