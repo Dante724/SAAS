@@ -20,6 +20,7 @@ from backend.services.currency import symbol_for as _symbol_for  # sign-up sends
 from backend.services.auth import (account_off_message, assert_org_active, create_access_token,
                                    get_current_employee, hash_password, is_old_default_password,
                                    is_shop_owner, norm_email, verify_password)
+from backend.services.notification_rules import send_account_email
 from backend.services.notifications import send_direct_email
 from backend.services.ratelimit import client_ip as _ip
 from backend.services.ratelimit import aenforce as _rate
@@ -49,10 +50,11 @@ async def _send_verification(db: AsyncSession, employee: "Employee") -> str:
     raw = await _tok.issue(db, employee_id=employee.id, kind="verify")
     await db.commit()
     url = _link(f"/verify-email?token={raw}")
-    await send_direct_email(
-        employee.email, "Verify your Tekly email",
+    await send_account_email(
+        send_direct_email, employee.email, "Verify your Tekly email",
         f"Welcome to Tekly. Confirm this address to secure your account:\n\n{url}\n\n"
-        f"This link expires in 48 hours. If you didn't sign up, ignore this email.")
+        f"This link expires in 48 hours. If you didn't sign up, ignore this email.",
+        what="verification")
     return raw
 
 
@@ -228,11 +230,11 @@ async def register(data: RegisterRequest, request: Request, db: AsyncSession = D
         # Don't confirm that the address has an account: pay the same hashing cost as a real
         # sign-up and tell the address's owner instead (they may simply have forgotten).
         await asyncio.to_thread(hash_password, data.password)
-        _later(send_direct_email(
-            data.email, "Your Tekly account",
+        _later(send_account_email(
+            send_direct_email, data.email, "Your Tekly account",
             "Someone tried to create a new Tekly account with this email address. You already have "
             f"one: sign in at {_link('/login')} or reset your password at {_link('/reset-password')}.\n\n"
-            "If it wasn't you, you can ignore this email."))
+            "If it wasn't you, you can ignore this email.", what="existing-account"))
         raise HTTPException(400, "We couldn't create an account with these details. If you already "
                                  "have one, sign in or reset your password.")
 
@@ -708,10 +710,11 @@ async def _email_reset_link(db, emp, *, quiet_limit: bool = False, after_reply: 
     raw = await _tok.issue(db, employee_id=emp.id, kind="reset")
     await db.commit()
     url = _link(f"/reset-password?token={raw}")
-    mail = send_direct_email(
-        emp.email, "Reset your Tekly password",
+    mail = send_account_email(
+        send_direct_email, emp.email, "Reset your Tekly password",
         f"Someone asked to reset your password. If it was you, open this link:\n\n{url}\n\n"
-        f"It expires in 1 hour and can be used once. If it wasn't you, ignore this email.")
+        f"It expires in 1 hour and can be used once. If it wasn't you, ignore this email.",
+        what="password reset")
     if after_reply:
         _later(mail)
     else:

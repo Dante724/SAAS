@@ -1986,25 +1986,46 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
             await db.refresh(order, ["lines"])
             await eng.accrue_on_status(order, order.status)
 
-    await db.commit()
-
-    # Customer/staff messages go out only AFTER the status change is committed — sending them
-    # inside the transaction meant a failed commit still texted the customer about a change
-    # that never happened.
+    # Customer/staff messages are queued (outbox), never sent here: nothing in this request calls
+    # Twilio/SMTP, and the notification sweep delivers them. Order of work:
+    #   1. commit the status change. (CommissionEngine above already commits it for jobs; this
+    #      makes it explicit, and the place where a failed save is reported as such.)
+    #   2. queue the messages in a short transaction of their own, in this request's session.
+    #      Not in a savepoint opened before the rules' reads: on SQLite that transaction keeps a
+    #      read snapshot, and when another connection commits meanwhile (the webhook outbox, a
+    #      second request on the job) its first insert fails with "database is locked".
+    #      A rule error rolls back only the queueing and is logged; the status change stands.
+    #   3. send staff web pushes, after everything is committed (sending writes and blocks).
+    import logging
+    from backend.services import notification_rules as _nr
+    from backend.services import push as _push
+    _ev = "closed" if is_closing else "status_changed"
+    _pushes: list = []
     try:
-        from backend.services import notification_rules as _nr
-        _ev = "closed" if is_closing else "status_changed"
+        await db.commit()
+    except Exception:
+        logging.getLogger("tekly.notifications").exception(
+            "status change failed for org %s order %s (%s to %s)", current.org_id, order.id, _ev, data.status)
+        raise
+    try:
         await _nr.evaluate(db, org_id=current.org_id, order_id=order.id,
-                           event=_ev, status_key=data.status)
+                           event=_ev, status_key=data.status, commit=False)
         # 144jb: Internal › Workflows — notify the assignee + manager (staff-scoped rules).
         await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
-                                     event=_ev, status_key=data.status, actor_id=current.id)
-    except Exception:  # noqa: BLE001
-        pass
-    # No legacy fallback: the old "templates when no rule matched and the status has
-    # triggers_notification" path is gone so one setting (Settings › Notifications) decides
-    # what the customer gets. Flagged statuses were converted to equivalent per-status rules.
-    await db.commit()   # persist the notification log rows written above
+                                     event=_ev, status_key=data.status, actor_id=current.id,
+                                     commit=False, push_later=_pushes)
+        # No legacy fallback: the old "templates when no rule matched and the status has
+        # triggers_notification" path is gone so one setting (Settings › Notifications) decides
+        # what the customer gets. Flagged statuses were converted to equivalent per-status rules.
+        await db.commit()
+    except Exception:  # noqa: BLE001 — never fails the status change, which is already saved
+        await db.rollback()
+        _pushes.clear()                 # their bell items were rolled back too
+        logging.getLogger("tekly.notifications").exception(
+            "notification rules failed for org %s order %s (%s to %s); status change kept",
+            current.org_id, order.id, _ev, data.status)
+        await db.refresh(order)         # the rollback expired it; the code below reads it
+    await _push.dispatch_deferred(db, _pushes)
 
     # Notify the assigned technician their job's status moved (unless they did it).
     if order.assigned_to_id and order.assigned_to_id != current.id:

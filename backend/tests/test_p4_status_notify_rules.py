@@ -34,6 +34,12 @@ async def _move(client, h, oid, key):
     assert r.status_code == 200, r.text
 
 
+async def _flush(db, org):
+    """Status changes only queue messages; this is the outbox sweep that sends them."""
+    from backend.services import notification_rules as nr
+    await nr.run_due(db, org_id=org)
+
+
 async def _logs(db, oid, event):
     db.expire_all()
     return (await db.execute(select(NotificationLog).where(
@@ -91,6 +97,7 @@ async def test_seeded_shop_sends_one_email_per_status_change(client, tenant, db)
 
     oid = await _order(client, tenant)
     await _move(client, tenant, oid, "diagnosed")
+    await _flush(db, org)                                   # the outbox sweep sends it
     logs = await _logs(db, oid, "status_changed")
     assert [(lg.channel, lg.status) for lg in logs] == [("email", "sent")]
     await _move(client, tenant, oid, "done")
@@ -277,8 +284,10 @@ async def test_rule_email_goes_out_from_connected_mailbox(client, tenant, db, mo
 
     # No connected account yet → the seeded email rule falls back to SMTP / simulated.
     oid = await _order(client, tenant)
+    await _flush(db, org)
     smtp_sent.clear()                                       # ignore any order-created sends
     await _move(client, tenant, oid, "diagnosed")
+    await _flush(db, org)                                   # the outbox sweep sends it
     assert [(lg.channel, lg.status) for lg in await _logs(db, oid, "status_changed")] == [("email", "sent")]
     assert oauth_sent == [] and smtp_sent == [("email", "sam@example.com")]
 
@@ -288,6 +297,7 @@ async def test_rule_email_goes_out_from_connected_mailbox(client, tenant, db, mo
     await db.commit()
     smtp_sent.clear()
     await _move(client, tenant, oid, "ready")
+    await _flush(db, org)                                   # the outbox sweep sends it
     logs = await _logs(db, oid, "status_changed")
     assert [(lg.channel, lg.status) for lg in logs] == [("email", "sent"), ("email", "sent")]
     assert oauth_sent == [("shop@acme.test", "sam@example.com")]
