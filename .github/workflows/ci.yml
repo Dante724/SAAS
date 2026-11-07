@@ -25,7 +25,7 @@ permissions:
 jobs:
   lint-migrations:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     env:
       ENVIRONMENT: test
@@ -48,6 +48,13 @@ jobs:
         # migration (e.g. a duplicate index, or SQLite-incompatible batch DDL) before it reaches a
         # production deploy, where the app runs migrations rather than create_all.
         run: alembic -c backend/alembic.ini upgrade head
+      - name: Shop-clock subset with the server far from UTC
+        # Memberships and money dates must follow the shop's day, not the server's (council Q2).
+        # Between them the two zones are off the UTC date at every hour of the day.
+        run: |
+          S="backend/tests/test_shop_clock_memberships.py backend/tests/test_memberships.py backend/tests/test_shop_timezone_today.py backend/tests/test_billing.py"
+          TZ=Pacific/Kiritimati pytest -q -n auto $S
+          TZ=Pacific/Pago_Pago pytest -q -n auto $S
 
   test:
     # The suite is split into parallel shards (whole files, balanced by test count — see the

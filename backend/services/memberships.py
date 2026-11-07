@@ -39,6 +39,7 @@ from backend.models import (
     Tag,
     Taggable,
 )
+from backend.services.dates import day_start_utc, now_utc, org_today, shop_today, shop_tzname, utc_to_wall
 from backend.services.money import q2
 
 log = logging.getLogger("tekly.memberships")
@@ -243,7 +244,7 @@ async def _new_invoice(db: AsyncSession, org_id: str, client_id: str, plan: Memb
     from backend.services.numbering import next_number
     inv = Invoice(invoice_number=await next_number(db, org_id, "invoice"), org_id=org_id,
                   client_id=client_id, status="draft", subtotal=amount, discount=0.0, tax=0.0,
-                  total=amount, amount_paid=0.0, issued_at=datetime.utcnow(),
+                  total=amount, amount_paid=0.0, issued_at=now_utc(),
                   due_at=datetime.combine(due, datetime.min.time()),
                   comment=f"{plan.name} membership")
     db.add(inv)
@@ -263,7 +264,7 @@ def _line_text(plan: MembershipPlan, billing: str, device: Optional[Device], sta
 async def sell(db: AsyncSession, *, org_id: str, actor: Employee, plan_id: str, client_id: str,
                device_id: Optional[str], billing: str, order_id: Optional[str] = None,
                manager_id: Optional[str] = None, today: Optional[date] = None) -> Membership:
-    today = today or date.today()
+    today = today or await shop_today(db, org_id)
     if billing not in BILLING:
         raise HTTPException(422, "Choose monthly or yearly")
     plan = (await db.execute(select(MembershipPlan).where(
@@ -372,7 +373,7 @@ async def allowance(db: AsyncSession, m: Membership, item: MembershipPlanItem) -
     total = float(item.qty or 0)
     if item.rollover:
         prev_start = add_months(m.term_start, -12)
-        if m.created_at and m.created_at.date() <= prev_start:
+        if m.created_at and utc_to_wall(m.created_at, await shop_tzname(db, m.org_id)).date() <= prev_start:
             used_prev = await _used(db, m, item, prev_start)
             total += max(0.0, float(item.qty or 0) - used_prev)
     return total
@@ -505,6 +506,7 @@ async def record_usage(db: AsyncSession, order: Order) -> int:
         OrderLine.order_id == order.id, OrderLine.membership_id.isnot(None),
         OrderLine.kind != "membership"))).scalars().all()
     n = 0
+    tz = None
     for line in lines:
         if (await db.execute(select(MembershipUsage.id).where(
                 MembershipUsage.order_line_id == line.id))).scalar_one_or_none():
@@ -521,9 +523,11 @@ async def record_usage(db: AsyncSession, order: Order) -> int:
                 item = it
         gross = q2((line.qty or 0) * (line.unit_price or 0))
         # The plan year the job was opened in (a job reopened after renewal still counts in its year).
+        # Plan years are the shop's days; created_at is UTC, so read it on the shop's clock.
+        tz = tz or await shop_tzname(db, order.org_id)
         term = m.term_start
-        opened = order.created_at.date() if order.created_at else term
-        joined = m.created_at.date() if m.created_at else term
+        opened = utc_to_wall(order.created_at, tz).date() if order.created_at else term
+        joined = utc_to_wall(m.created_at, tz).date() if m.created_at else term
         while opened < term and term > joined:
             term = add_months(term, -12)
         db.add(MembershipUsage(org_id=order.org_id, membership_id=m.id, term_start=term,
@@ -542,7 +546,7 @@ async def record_usage(db: AsyncSession, order: Order) -> int:
 async def offer_for_order(db: AsyncSession, org: Organisation, order: Order,
                           today: Optional[date] = None) -> Optional[dict]:
     """The plan worth offering a non-member at checkout, or None (§7.3)."""
-    today = today or date.today()
+    today = today or org_today(org)
     if not org.membership_checkout_prompt or not order.client_id:
         return None
     client = (await db.execute(select(Client).where(Client.id == order.client_id))).scalar_one_or_none()
@@ -648,7 +652,7 @@ async def sync_tags(db: AsyncSession, org_id: str, client_id: str) -> None:
 
 async def end(db: AsyncSession, m: Membership, reason: str, today: Optional[date] = None) -> None:
     m.status = "lapsed" if reason == "unpaid" else "cancelled"
-    m.ended_on = today or date.today()
+    m.ended_on = today or await shop_today(db, m.org_id)
     m.ended_reason = reason
     m.renews = False
     await db.flush()
@@ -690,11 +694,13 @@ async def sync_payments(db: AsyncSession, org_id: str, membership_id: Optional[s
     if membership_id:
         q = q.where(MembershipPeriod.membership_id == membership_id)
     n = 0
+    today = None
     for p in (await db.execute(q)).scalars().all():
         if await period_paid(db, p):
-            p.paid_at = datetime.utcnow()
+            p.paid_at = now_utc()
             m = (await db.execute(select(Membership).where(Membership.id == p.membership_id))).scalar_one_or_none()
-            if m and m.status == "paused" and not await _unpaid_started(db, m, date.today()):
+            today = today or await shop_today(db, org_id)
+            if m and m.status == "paused" and not await _unpaid_started(db, m, today):
                 m.status = "active"
             n += 1
     if n:
@@ -730,7 +736,7 @@ async def tell_client(db: AsyncSession, org_id: str, client: Client, key: str, s
     recipient = client.phone if channel == "sms" else client.email
     row = NotificationLog(org_id=org_id, scope="client", channel=channel, trigger_event=log_key(key),
                           client_id=client.id, recipient=recipient, subject=subject, body=body,
-                          send_at=datetime.utcnow())
+                          send_at=now_utc())
     db.add(row)
     if not recipient:
         row.status, row.error = "skipped", "Client has no phone or email on file"
@@ -814,7 +820,7 @@ async def _next_period(db: AsyncSession, m: Membership, plan: MembershipPlan, to
 
 async def sweep(db: AsyncSession, org: Organisation, today: Optional[date] = None) -> dict:
     """Daily membership work for one shop; safe to run every hour (idempotent per day)."""
-    today = today or date.today()
+    today = today or org_today(org)
     stats = {"invoiced": 0, "paused": 0, "lapsed": 0, "ended": 0, "messages": 0, "failed": 0}
     org_id = org.id
     grace, lapse = org.membership_grace_days or 0, org.membership_lapse_days or 0
@@ -923,7 +929,7 @@ async def sweep(db: AsyncSession, org: Organisation, today: Optional[date] = Non
                             db.add(NotificationLog(org_id=org_id, scope="employee", channel="push", trigger_event=key,
                                                    client_id=client.id, recipient=m.manager_id or "",
                                                    subject="window", body="", status="sent",
-                                                   send_at=datetime.utcnow()))
+                                                   send_at=now_utc()))
                             await alert_manager(db, m, f"{client.name}: {name} not booked",
                                                 f"Included in {plan.name}; the window closes "
                                                 f"{(win[1] - timedelta(days=1)):%d %b}.")
@@ -945,6 +951,9 @@ async def sweep(db: AsyncSession, org: Organisation, today: Optional[date] = Non
 # ── reporting ────────────────────────────────────────────────────────────────────────────────────
 
 async def profitability(db: AsyncSession, org_id: str, start: date, end_: date) -> dict:
+    """Per plan, [start, end_) in the shop's days. Paid and used times are stored in UTC."""
+    tz = await shop_tzname(db, org_id)
+    t0, t1 = day_start_utc(start, tz), day_start_utc(end_, tz)
     plans = (await db.execute(select(MembershipPlan).where(MembershipPlan.org_id == org_id))).scalars().all()
     out = []
     for plan in plans:
@@ -955,12 +964,10 @@ async def profitability(db: AsyncSession, org_id: str, start: date, end_: date) 
         if mids:
             money_in = float((await db.execute(select(func.coalesce(func.sum(MembershipPeriod.amount), 0)).where(
                 MembershipPeriod.membership_id.in_(mids), MembershipPeriod.paid_at.isnot(None),
-                MembershipPeriod.paid_at >= datetime.combine(start, datetime.min.time()),
-                MembershipPeriod.paid_at < datetime.combine(end_, datetime.min.time())))).scalar_one() or 0)
+                MembershipPeriod.paid_at >= t0, MembershipPeriod.paid_at < t1))).scalar_one() or 0)
             given = float((await db.execute(select(func.coalesce(func.sum(MembershipUsage.value), 0)).where(
                 MembershipUsage.membership_id.in_(mids),
-                MembershipUsage.used_at >= datetime.combine(start, datetime.min.time()),
-                MembershipUsage.used_at < datetime.combine(end_, datetime.min.time())))).scalar_one() or 0)
+                MembershipUsage.used_at >= t0, MembershipUsage.used_at < t1))).scalar_one() or 0)
         out.append({"plan_id": plan.id, "name": plan.name, "members": live, "money_in": q2(money_in),
                     "value_given": q2(given), "margin": q2(money_in - given)})
     return {"plans": out, "prepaid_unearned": await prepaid_unearned(db, org_id)}
@@ -968,7 +975,7 @@ async def profitability(db: AsyncSession, org_id: str, start: date, end_: date) 
 
 async def prepaid_unearned(db: AsyncSession, org_id: str, today: Optional[date] = None) -> float:
     """Paid plan money for days not yet reached (what spreading revenue holds back)."""
-    today = today or date.today()
+    today = today or await shop_today(db, org_id)
     rows = (await db.execute(select(MembershipPeriod).where(
         MembershipPeriod.org_id == org_id, MembershipPeriod.paid_at.isnot(None),
         MembershipPeriod.period_end > today))).scalars().all()

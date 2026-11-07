@@ -25,6 +25,7 @@ from backend.models import (
 )
 from backend.services import memberships as svc
 from backend.services.auth import get_current_employee, has_perm, require_perm
+from backend.services.dates import org_today, shop_today
 
 router = APIRouter(prefix="/api/memberships", tags=["memberships"])
 
@@ -160,14 +161,15 @@ async def _membership_out(db: AsyncSession, m: Membership, *, detail: bool = Fal
     client = (await db.execute(select(Client).where(Client.id == m.client_id))).scalar_one_or_none()
     device = (await db.execute(select(Device).where(Device.id == m.device_id))).scalar_one_or_none() \
         if m.device_id else None
+    today = await shop_today(db, m.org_id)
     unpaid = (await db.execute(select(func.coalesce(func.sum(MembershipPeriod.amount), 0)).where(
         MembershipPeriod.membership_id == m.id, MembershipPeriod.paid_at.is_(None),
-        MembershipPeriod.due_on <= date.today()))).scalar_one() or 0
+        MembershipPeriod.due_on <= today))).scalar_one() or 0
     saved = (await db.execute(select(func.coalesce(func.sum(MembershipUsage.value), 0)).where(
         MembershipUsage.membership_id == m.id, MembershipUsage.term_start == m.term_start))).scalar_one() or 0
     oldest_due = (await db.execute(select(func.min(MembershipPeriod.due_on)).where(
         MembershipPeriod.membership_id == m.id, MembershipPeriod.paid_at.is_(None),
-        MembershipPeriod.due_on <= date.today()))).scalar_one()
+        MembershipPeriod.due_on <= today))).scalar_one()
     row = {
         "id": m.id, "plan_id": plan.id, "plan": plan.name, "color": plan.color,
         "client_id": m.client_id, "client": client.name if client else "",
@@ -181,7 +183,7 @@ async def _membership_out(db: AsyncSession, m: Membership, *, detail: bool = Fal
     if show_money:
         row["saved"] = float(saved)
     if m.status in svc.LIVE and oldest_due and unpaid:
-        days = (date.today() - oldest_due).days
+        days = (today - oldest_due).days
         row["attention"] = {"kind": "unpaid", "text": "Payment due today" if days == 0 else f"Unpaid {days} day{'s' if days != 1 else ''}"}
     if show_money:
         row.update({"price": m.price, "owed": float(unpaid)})
@@ -200,8 +202,8 @@ async def _membership_out(db: AsyncSession, m: Membership, *, detail: bool = Fal
                 if win:
                     entry["window"] = [win[0].isoformat(), (win[1] - timedelta(days=1)).isoformat()]
                     closes = win[1] - timedelta(days=1)
-                    if row["attention"] is None and entry["left"] > 0 and win[0] <= date.today() <= closes \
-                            and (closes - date.today()).days <= 30:
+                    if row["attention"] is None and entry["left"] > 0 and win[0] <= today <= closes \
+                            and (closes - today).days <= 30:
                         row["attention"] = {"kind": "window",
                                             "text": f"{entry['text'].split(' × ')[0]} not booked · closes {closes:%d %b}"}
             items.append(entry)
@@ -300,7 +302,7 @@ async def list_memberships(
     await svc.sync_payments(db, current.org_id)
     await db.commit()
     stmt = select(Membership).where(Membership.org_id == current.org_id)
-    today = date.today()
+    today = await shop_today(db, current.org_id)
     if view == "former":
         stmt = stmt.where(Membership.status.in_(svc.ENDED))
     else:
@@ -447,7 +449,7 @@ async def snooze_offer(order_id: str, db: AsyncSession = Depends(get_db),
         raise HTTPException(404, "Order not found")
     org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one()
     client = (await db.execute(select(Client).where(Client.id == order.client_id))).scalar_one()
-    client.membership_offer_snoozed_until = date.today() + timedelta(days=org.membership_prompt_snooze_days or 0)
+    client.membership_offer_snoozed_until = org_today(org) + timedelta(days=org.membership_prompt_snooze_days or 0)
     await db.commit()
     return {"ok": True}
 
@@ -493,7 +495,7 @@ async def get_membership(mid: str, db: AsyncSession = Depends(get_db),
         paid = float((await db.execute(select(func.coalesce(func.sum(MembershipPeriod.amount), 0)).where(
             MembershipPeriod.membership_id == m.id, MembershipPeriod.paid_at.isnot(None),
             MembershipPeriod.period_start == m.period_start))).scalar_one() or 0)
-        out["refund_if_cancelled_now"] = svc.refund_estimate(m, paid, used, date.today())
+        out["refund_if_cancelled_now"] = svc.refund_estimate(m, paid, used, await shop_today(db, m.org_id))
     return out
 
 
@@ -511,7 +513,7 @@ async def cancel_membership(mid: str, data: CancelIn, db: AsyncSession = Depends
         paid = float((await db.execute(select(func.coalesce(func.sum(MembershipPeriod.amount), 0)).where(
             MembershipPeriod.membership_id == m.id, MembershipPeriod.paid_at.isnot(None),
             MembershipPeriod.period_start == m.period_start))).scalar_one() or 0)
-        refund = svc.refund_estimate(m, paid, given, date.today())
+        refund = svc.refund_estimate(m, paid, given, await shop_today(db, m.org_id))
         # Unpaid periods are dropped with the plan, but only if the plan hasn't given any work
         # yet: otherwise the open invoice stays, so "sell, use, cancel" can't make work free.
         from backend.models import Invoice
@@ -542,7 +544,7 @@ async def resume_membership(mid: str, db: AsyncSession = Depends(get_db),
         raise HTTPException(409, "This membership has ended. Sell the plan again to re-join.")
     m.renews = True
     m.ended_reason = None
-    if m.status == "paused" and not await svc._unpaid_started(db, m, date.today()):
+    if m.status == "paused" and not await svc._unpaid_started(db, m, await shop_today(db, m.org_id)):
         m.status = "active"
     await db.commit()
     return await _membership_out(db, m, detail=True, show_money=await _money(db, current))
@@ -663,6 +665,6 @@ async def put_settings(data: SettingsIn, db: AsyncSession = Depends(get_db),
 @router.get("/reports/profitability")
 async def report(start: Optional[date] = None, end: Optional[date] = None, db: AsyncSession = Depends(get_db),
                  current: Employee = Depends(require_perm("can_see_profit"))):
-    end = end or date.today() + timedelta(days=1)
+    end = end or await shop_today(db, current.org_id) + timedelta(days=1)
     start = start or end - timedelta(days=365)
     return await svc.profitability(db, current.org_id, start, end)

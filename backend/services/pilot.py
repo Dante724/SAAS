@@ -214,9 +214,10 @@ def render_job_labels(labels: list[dict], *, paper: str = "a4", org_name: str = 
 
 
 # ── report ───────────────────────────────────────────────────────────────────
-def day_range(start: date, end: date) -> tuple[datetime, datetime]:
-    """[start 00:00, end+1 00:00) in the server's clock (UTC, like every created_at)."""
-    return datetime.combine(start, datetime.min.time()), datetime.combine(end + timedelta(days=1), datetime.min.time())
+def day_range(start: date, end: date, tzname: Optional[str] = "UTC") -> tuple[datetime, datetime]:
+    """[start 00:00, end+1 00:00) on the shop's clock, as the naive UTC instants every created_at uses."""
+    from backend.services.dates import day_end_utc, day_start_utc
+    return day_start_utc(start, tzname), day_end_utc(end, tzname)
 
 
 def _share(go: int, total: int) -> Optional[float]:
@@ -242,14 +243,14 @@ async def pilot_job_ids(db, org_id: str, until: datetime) -> list[str]:
 
 async def go_report(db, org_id: str, start: date, end: date, *,
                     order_ids: Optional[Iterable[str]] = None,
-                    employee_ids: Optional[Iterable[str]] = None) -> dict:
+                    employee_ids: Optional[Iterable[str]] = None, tzname: Optional[str] = "UTC") -> dict:
     """Per-employee counts of what was done on Tekly Go vs everywhere, on the pilot's jobs.
 
     Jobs: `order_ids` if given (only this org's count), else every job that got a pilot label.
     Lookups (scans and counter searches) aren't tied to one job, so they cover the whole range.
     The headline counts the employees in `employee_ids` (e.g. just the techs) when given.
     """
-    t0, t1 = day_range(start, end)
+    t0, t1 = day_range(start, end, tzname)
     if order_ids is not None:
         wanted = [i for i in dict.fromkeys(order_ids) if i]
         jobs = (await db.execute(select(Order.id).where(
@@ -354,7 +355,7 @@ async def go_report(db, org_id: str, start: date, end: date, *,
             lookups[k] += v
 
     return {
-        "range": {"from": start.isoformat(), "to": end.isoformat(), "timezone": "UTC"},
+        "range": {"from": start.isoformat(), "to": end.isoformat(), "timezone": tzname or "UTC"},
         "jobs": {"source": source, "count": len(jobset), "ids": sorted(jobset)},
         "headline": {
             "status_changes_total": total, "status_changes_go": go,
