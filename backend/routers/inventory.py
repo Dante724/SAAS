@@ -1160,7 +1160,7 @@ async def _release_expired(db: AsyncSession, org_id: str):
 class ReserveIn(BaseModel):
     part_id: str
     location_id: str
-    qty: float
+    qty: float = Field(gt=0, le=MAX_STOCK_QTY)     # a hold is always positive: a negative one released other jobs' stock
     order_id: Optional[str] = None
     hold_days: int = 7
 
@@ -1179,6 +1179,15 @@ async def reserve_stock(
         Location.id == data.location_id, Location.org_id == current.org_id))).scalar_one_or_none()
     if not part or not loc:      # checked first: another shop's stock levels never show
         raise HTTPException(404, "Product not found")
+    if data.order_id:
+        from backend.models import Order
+        if not (await db.execute(select(Order.id).where(
+                Order.id == data.order_id, Order.org_id == current.org_id))).scalar_one_or_none():
+            raise HTTPException(404, "Order not found")
+    hold_days = max(1, min(int(data.hold_days or 7), 180))       # same clamp as the work-order hold
+    # Lock the stock rows before counting (same order as stock_consume.lock_rows): two reserves of
+    # the last unit used to both read "1 free" and both get it.
+    await stock_rows.rows(db, data.part_id, data.location_id, lock=True)
     avail, held = await stock_rows.totals(db, data.part_id, data.location_id)
     free = avail - held
     if data.qty > free:
@@ -1188,7 +1197,7 @@ async def reserve_stock(
     await stock_rows.reserve(db, data.part_id, data.location_id, data.qty)
     r = StockReservation(org_id=current.org_id, part_id=data.part_id, location_id=data.location_id,
                          order_id=data.order_id, qty=data.qty,
-                         expires_at=now_utc() + timedelta(days=data.hold_days))
+                         expires_at=now_utc() + timedelta(days=hold_days))
     db.add(r)
     await db.commit()
     await db.refresh(r)
