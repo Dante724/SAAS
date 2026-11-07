@@ -98,6 +98,19 @@ async def _get_aredis():
         return None
 
 
+def aredis_failed() -> None:
+    """Mark the shared async client down (after a failed call): callers fall back in-process
+    and the connection is retried after _REDIS_RETRY_S. Used by other Redis users (the reports
+    dashboard cache) so one outage is handled the same way everywhere."""
+    global _aredis, _aredis_retry_at
+    _aredis, _aredis_retry_at = False, time.time() + _REDIS_RETRY_S
+
+
+async def get_aredis():
+    """The shared redis.asyncio client, or None (no REDIS_URL, or Redis down: fall back)."""
+    return await _get_aredis()
+
+
 async def aenforce(bucket: str, key: str, limit: int, window_sec: int) -> int:
     """Async enforce(): allow `limit` events per `window_sec` for (bucket, key); else 429.
     Returns how many events are left in the current window (for X-RateLimit-Remaining).
