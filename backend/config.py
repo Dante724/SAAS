@@ -16,6 +16,10 @@ _PLACEHOLDER_SECRETS = {
 }
 
 
+# FORWARDED_ALLOW_IPS values that trust no real proxy (uvicorn's default is 127.0.0.1).
+_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+
+
 def _valid_fernet_keys(raw: str) -> bool:
     keys = [k.strip() for k in (raw or "").split(",") if k.strip()]
     if not keys:
@@ -72,6 +76,15 @@ class Settings(BaseSettings):
     # address appended by the N-th proxy from the right. Alternatively run uvicorn with
     # --proxy-headers --forwarded-allow-ips=<proxy ip> and leave this at 0.
     TRUSTED_PROXY_HOPS: int = 0
+    # Deployed, the app refuses to boot until proxy trust is configured (TRUSTED_PROXY_HOPS >= 1,
+    # or FORWARDED_ALLOW_IPS set to the load balancer's address): otherwise every anonymous user
+    # behind the balancer shares one rate-limit bucket. Set this true only when nothing sits in
+    # front of the app and clients connect straight to uvicorn.
+    NO_REVERSE_PROXY: bool = False
+    # Deployed, the app refuses to boot without REDIS_URL: with several workers or replicas,
+    # in-process counters let each one allow the full limit. Set this true only to promise one
+    # worker on one instance (the beta setup); WEB_CONCURRENCY > 1 is still refused.
+    SINGLE_WORKER: bool = False
     # Global request ceilings per minute (core.observability.RateLimitMiddleware). Static files are
     # never counted. Signed-in requests count per user; anonymous ones per client IP.
     RATE_LIMIT_USER_PER_MIN: int = 600
@@ -348,10 +361,9 @@ class Settings(BaseSettings):
             self.META_VERIFY_TOKEN, self.META_PAGE_TOKEN,
             self.META_IG_TOKEN, self.WHATSAPP_TOKEN,
         ])
-        import logging
         import os
-        _log = logging.getLogger(__name__)
-        # (several workers without REDIS_URL is refused by _shared_rate_limits below)
+        # (WEB_CONCURRENCY > 1 without REDIS_URL is refused by _shared_rate_limits below, even
+        # with SINGLE_WORKER)
         # Uploads written under /tmp vanish on the next container restart (photos, signatures,
         # attachments). The db and s3 backends never touch MEDIA_LOCAL_DIR.
         if (self.MEDIA_BACKEND or "").lower() == "local" and _is_temp_dir(self.MEDIA_LOCAL_DIR):
@@ -360,10 +372,24 @@ class Settings(BaseSettings):
                 "files would be lost on every restart. Use MEDIA_BACKEND=s3 with MEDIA_S3_BUCKET "
                 "(recommended), or point MEDIA_LOCAL_DIR at a persistent volume.")
         # Behind a load balancer with neither setting changed, every anonymous request looks
-        # like it comes from the balancer, so they all share one rate-limit bucket.
-        if self.TRUSTED_PROXY_HOPS == 0 and os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1") == "127.0.0.1":
-            _log.warning("TRUSTED_PROXY_HOPS=0 and FORWARDED_ALLOW_IPS=127.0.0.1: if a load balancer "
-                         "sits in front, set one of them so rate limits see real client IPs.")
+        # like it comes from the balancer, so they all share one rate-limit bucket (M18).
+        forwarded = {p.strip() for p in os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1").split(",")
+                     if p.strip()}
+        if (self.TRUSTED_PROXY_HOPS < 1 and forwarded <= _LOOPBACK and not self.NO_REVERSE_PROXY):
+            raise ValueError(
+                "Proxy trust is not configured: with TRUSTED_PROXY_HOPS=0 and FORWARDED_ALLOW_IPS="
+                "127.0.0.1, every user behind a load balancer shares one rate limit. Set "
+                "FORWARDED_ALLOW_IPS to the load balancer's address/CIDR (or TRUSTED_PROXY_HOPS to "
+                "the number of proxies in front), or NO_REVERSE_PROXY=true if clients connect "
+                "straight to this server. See DEPLOY.md.")
+        # Rate limits counted per process let N workers or replicas allow N times every limit
+        # (M20). WEB_CONCURRENCY can't see `--workers N` or replicas, so require the shared
+        # store unless the operator explicitly promises a single worker.
+        if not self.REDIS_URL and not self.SINGLE_WORKER:
+            raise ValueError(
+                "REDIS_URL must be set in production/staging so rate limits are shared by every "
+                "worker and instance. Running exactly one worker on one instance? Set "
+                "SINGLE_WORKER=true. See DEPLOY.md.")
         if _meta_configured and not self.META_APP_SECRET:
             import logging
             logging.getLogger(__name__).warning(
@@ -379,7 +405,8 @@ class Settings(BaseSettings):
         import os
         if self.is_deployed and not self.REDIS_URL and int(os.environ.get("WEB_CONCURRENCY", "1") or 1) > 1:
             raise ValueError("REDIS_URL must be set when WEB_CONCURRENCY > 1 in production/staging, so "
-                             "rate limits are shared by every worker. Set REDIS_URL or run one worker.")
+                             "rate limits are shared by every worker. Set REDIS_URL or run one worker "
+                             "(SINGLE_WORKER=true promises exactly one).")
         return self
 
 

@@ -15,7 +15,8 @@ deployment steps — do these before opening to real customers.
 - [ ] **Set `ENVIRONMENT=production`** — enables fail-closed secret/CORS checks, hides `/docs`, strips demo creds.
 - [ ] **Set a strong `SECRET_KEY`** (≥32 chars): `python -c "import secrets; print(secrets.token_urlsafe(48))"`. Rotate the old dev key that once leaked in a tarball `.env`.
 - [ ] **Set `CORS_ORIGINS`** to your real domains (no `*`).
-- [ ] **Set `REDIS_URL`** if running more than one instance.
+- [ ] **Set `REDIS_URL`** (a deployed instance refuses to start without it), or `SINGLE_WORKER=true` for exactly one worker on one instance.
+- [ ] **Set `FORWARDED_ALLOW_IPS`** to the load balancer (or `TRUSTED_PROXY_HOPS`, or `NO_REVERSE_PROXY=true` with nothing in front): a deployed instance refuses to start otherwise.
 - [ ] **DB least-privilege** — the app's Postgres role gets CRUD on its tables only, no superuser/DDL. Migrations run as a separate admin role via `alembic upgrade head`.
 - [ ] **Staging auth** — put HTTP auth / IP allowlist in front of any non-prod deploy; never load prod data there.
 - [ ] **CI secret masking** — mark all secrets masked; never `echo` them.
