@@ -27,6 +27,11 @@ from backend.services.dates import now_utc
 from backend.tests.test_opf_card_readers import SQ_OK_DEVICE, FakeSquare, FakeStripe
 
 
+@pytest.fixture(autouse=True)
+def _readers_on(card_readers_on):
+    """These cover the card-reader routes: run them with the feature switched on."""
+
+
 # ── fakes ────────────────────────────────────────────────────────────────────
 class SlowSquare(FakeSquare):
     """FakeSquare plus: checkout search, a stall on the first create, and a create whose answer
