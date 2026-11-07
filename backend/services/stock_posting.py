@@ -76,11 +76,12 @@ async def apply_receipt_line(
                                lot_number=(lot or "").strip()[:40] or None)
         db.add(batch)
         await db.flush()
-        from datetime import date, timedelta
+        from datetime import timedelta
 
         from backend.models import _uuid
         from backend.services import serial_log
-        until = (date.today() + timedelta(days=int(part.supplier_warranty_days))
+        from backend.services.dates import shop_today
+        until = (await shop_today(db, org_id, location_id) + timedelta(days=int(part.supplier_warranty_days))
                  if part.supplier_warranty_days else None)
         for sn in (serials or [])[:int(qty)]:
             unit = SerializedItem(id=_uuid(), org_id=org_id, part_id=part.id, serial_number=sn, bin_id=bin_id,

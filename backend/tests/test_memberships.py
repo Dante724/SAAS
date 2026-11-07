@@ -8,6 +8,7 @@ from sqlalchemy import select
 
 from backend.models import Membership, MembershipPeriod, Organisation
 from backend.services import memberships as svc
+from backend.services.dates import shop_today
 from backend.services.permissions import grant_membership_codes
 
 
@@ -109,14 +110,14 @@ async def test_plan_setup_validates_and_lists_what_it_includes(client):
 
 
 @pytest.mark.asyncio
-async def test_selling_a_yearly_plan_invoices_it_and_tags_the_member(client):
-    H, _ = await _register(client)
+async def test_selling_a_yearly_plan_invoices_it_and_tags_the_member(client, db):
+    H, org_id = await _register(client)
     oil = await _service(client, H, "Oil change", 80)
     plan = await _plan(client, H, oil)
     cid, boat = await _client_and_boat(client, H)
     m = await _sell(client, H, plan["id"], cid, boat)
     assert m["status"] == "active" and m["billing"] == "yearly" and m["invoice_id"]
-    assert m["renews_on"] == (svc.add_months(date.today(), 12)).isoformat()
+    assert m["renews_on"] == (svc.add_months(await shop_today(db, org_id), 12)).isoformat()   # the shop's day
     inv = (await client.get(f"/api/finance/invoices/{m['invoice_id']}", headers=H)).json()
     assert inv["total"] == 449
     assert "Boat Care member" in await _tags(client, H, cid)
@@ -210,7 +211,7 @@ async def test_monthly_billing_pauses_then_lapses_when_unpaid_and_paying_restore
     await client.post(f"/api/finance/invoices/{m['invoice_id']}/pay", headers=H,
                       json={"amount": 45, "method": "cash", "account_id": acc})
     org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one()
-    start = date.today()
+    start = await shop_today(db, org_id)              # plans run on the shop's calendar
     nxt = svc.add_months(start, 1)
 
     stats = await svc.sweep(db, org, today=nxt)                 # month 2 invoiced
@@ -478,3 +479,76 @@ async def test_security_review_regressions(client):
     T = await _teammate(client, H, "can_view_client_info")
     r = (await client.get(f"/api/memberships/{m['id']}", headers=T)).json()
     assert "price" not in r and "periods" not in r
+
+
+# ── the shop's clock, not the machine's (hardening council Q2) ──────────────────────────────────
+# Memberships took "today" from the machine (date.today()): a production host not on UTC sold plans
+# that started on the wrong day, and a job opened just after midnight could fall outside the plan.
+# Every date is now the shop's day. These freeze the app clock (services/dates._clock) so they
+# don't depend on when or where they run.
+
+def _freeze(monkeypatch, wall: str, tz: str):
+    """Set the app clock to `wall` (YYYY-MM-DD HH:MM) on the clock of time zone `tz`."""
+    from datetime import datetime, timezone
+    from zoneinfo import ZoneInfo
+
+    from backend.services import dates
+    at = datetime.fromisoformat(wall).replace(tzinfo=ZoneInfo(tz)).astimezone(timezone.utc)
+    monkeypatch.setattr(dates, "_clock", lambda: at)
+
+
+async def _shop_on(db, org_id, tz):
+    org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one()
+    org.timezone = tz
+    await db.commit()
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("tz, sold, opened", [
+    ("Pacific/Honolulu", "2026-03-14 23:50", "2026-03-15 00:10"),     # shop behind UTC: sold on UTC's next day
+    ("Pacific/Kiritimati", "2026-03-14 23:50", "2026-03-15 00:10"),   # shop ahead of UTC
+    ("Pacific/Kiritimati", "2026-03-14 00:05", "2026-03-14 00:10"),   # shop day began on UTC's previous day
+])
+async def test_a_plan_sold_late_in_the_shop_day_covers_a_job_opened_after_midnight(client, db, monkeypatch,
+                                                                                    tz, sold, opened):
+    from backend.models import MembershipUsage
+    H, org_id = await _register(client)
+    await _shop_on(db, org_id, tz)
+    oil = await _service(client, H, "Oil change", 80)
+    plan = await _plan(client, H, oil, items=[{"kind": "service", "service_id": oil, "qty": 1}])
+    cid, boat = await _client_and_boat(client, H)
+
+    _freeze(monkeypatch, sold, tz)
+    m = await _sell(client, H, plan["id"], cid, boat)
+    sold_day = sold[:10]
+    assert m["starts_on"] == sold_day, m                   # the shop's day it was sold on
+    assert m["renews_on"] == f"{int(sold_day[:4]) + 1}{sold_day[4:]}", m
+
+    _freeze(monkeypatch, opened, tz)
+    oid = await _order(client, H, cid, boat)
+    line = await _add(client, H, oid, kind="service", ref_id=oil, description="Oil change", unit_price=80)
+    assert line["discount"] == 100, line                   # the plan covers it
+    await _close(client, H, oid)
+    card = (await client.get(f"/api/memberships/for?device_id={boat}", headers=H)).json()
+    assert card["live"][0]["items"][0]["left"] == 0, card  # and it counts in the year it was sold
+    await db.commit()
+    usage = (await db.execute(select(MembershipUsage).where(
+        MembershipUsage.membership_id == m["id"]))).scalars().all()
+    assert [u.term_start.isoformat() for u in usage] == [sold_day]
+
+
+@pytest.mark.asyncio
+async def test_first_payment_is_due_on_the_shop_day_it_was_sold(client, db, monkeypatch):
+    H, org_id = await _register(client)
+    await _shop_on(db, org_id, "Pacific/Kiritimati")
+    oil = await _service(client, H, "Oil change", 80)
+    plan = await _plan(client, H, oil)
+    cid, boat = await _client_and_boat(client, H)
+    _freeze(monkeypatch, "2026-03-14 00:05", "Pacific/Kiritimati")      # UTC: 13 Mar, 10:05
+    m = await _sell(client, H, plan["id"], cid, boat, billing="monthly")
+    await db.commit()
+    period = (await db.execute(select(MembershipPeriod).where(
+        MembershipPeriod.membership_id == m["id"]))).scalars().one()
+    assert (period.period_start, period.due_on) == (date(2026, 3, 14), date(2026, 3, 14))
+    detail = (await client.get(f"/api/memberships/{m['id']}", headers=H)).json()
+    assert detail["unpaid"] is True and detail["attention"]["text"] == "Payment due today", detail
