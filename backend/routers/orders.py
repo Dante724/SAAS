@@ -2126,7 +2126,7 @@ async def convert_estimate_endpoint(
     job needs the same permission as creating one at the counter, and the record must be
     within the person's access (E1)."""
     est = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
-        .options(selectinload(Order.lines)).with_for_update(of=Order))).scalar_one_or_none()
+        .options(selectinload(Order.lines)).with_for_update(of=Order, key_share=True))).scalar_one_or_none()
     if not est:
         raise HTTPException(404, "Estimate not found")
     await _guard_order_access(db, current, est)
@@ -3391,9 +3391,19 @@ async def reserve_stock_for_order(
     from datetime import timedelta
     from backend.models import Part, StockReservation
 
+    # council M7: holds past their date used to block until someone opened the reservations list.
+    # First, before the job is loaded: the sweep commits, and a commit after the job's row lock
+    # (#108) would drop it and let a second reserve click in.
+    from backend.routers.inventory import _release_expired
+    await _release_expired(db, current.org_id)
+
+    # Lock the job first (Order FOR NO KEY UPDATE, then its stock rows sorted by product): two
+    # reserve clicks at once each read "nothing held yet" and together held twice what the job
+    # needs. NO KEY UPDATE, like the money paths, so rows that only reference the job by FK
+    # (invoices, holds) don't queue behind it.
     order = (await db.execute(
         select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
-        .options(selectinload(Order.lines)))).scalar_one_or_none()
+        .options(selectinload(Order.lines)).with_for_update(of=Order, key_share=True))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, order)
@@ -3420,11 +3430,16 @@ async def reserve_stock_for_order(
     reserved, short = [], []
     part_names = await names_by_id(db, Part.id, Part.name, list(need),
                                    org_col=Part.org_id, org_id=current.org_id)
-    for part_id, qty_needed in need.items():
+    # product-id order, so two jobs needing the same products lock their stock rows the same way
+    # round (a job needing [X, Y] and one needing [Y, X] deadlocked)
+    for part_id, qty_needed in sorted(need.items()):
         want = qty_needed - held.get(part_id, 0)      # still to hold for this job
         if want <= 0:
             continue
         from backend.services import stock_rows
+        # lock the rows before counting (stock_consume.lock_rows order): two jobs reserving the
+        # last unit at once both used to get it
+        await stock_rows.rows(db, part_id, order.location_id, lock=True)
         free = await stock_rows.free(db, part_id, order.location_id)
         take = min(want, max(free, 0))
         if take <= 0:
@@ -3612,6 +3627,25 @@ async def _archive_order(db, current, order_id, reason, do_refund):
                     await detach_order(db, _inv, order.id)
                 except HTTPException:
                     pass          # this job's money is on it: it stays, as the refund left it
+    # Stock lock order: Order → StockLevel sorted by (part_id, location_id) → holds. Every stock row
+    # this archive touches — what its lines drew and what it holds — is locked here, sorted, before
+    # the lines are put back and the holds released below; putting a drawn Y back and then
+    # releasing a held X (X < Y) took them in the reverse of a reserve needing [X, Y], and deadlocked.
+    from backend.models import StockReservation
+    from backend.services import stock_rows
+    _hold_q = (select(StockReservation).where(
+        StockReservation.org_id == current.org_id, StockReservation.order_id == order_id,
+        StockReservation.released == False)  # noqa: E712
+        .order_by(StockReservation.part_id, StockReservation.location_id))
+    _holds = (await db.execute(_hold_q)).scalars().all()
+    _stock_keys = {(_h.part_id, _h.location_id) for _h in _holds}
+    if not order.is_estimate:
+        _stock_keys |= {tuple(k) for k in (await db.execute(
+            select(StockMovement.part_id, StockMovement.location_id).where(
+                StockMovement.ref_id == order.id, StockMovement.ref_type == "order",
+                StockMovement.movement_type.in_(("use", "return"))).distinct())).all()}
+    for _pid, _lid in sorted(k for k in _stock_keys if k[0] and k[1]):
+        await stock_rows.rows(db, _pid, _lid, lock=True)
     # Return consumed stock to inventory — archiving an order must not silently lose the parts it
     # deducted (reuses the same reversal the delete-line/reopen paths use). Safe against re-run:
     # archiving an already-archived order is rejected above.
@@ -3626,6 +3660,20 @@ async def _archive_order(db, current, order_id, reason, do_refund):
                     # The parts are back on the shelf: the line no longer holds stock. Without this,
                     # restore -> archive (or delete the line) returned the same parts again.
                     _l.pending_stock = _l.qty or 0
+    # Its stock holds go with it: an archived job must not keep its units reserved (up to 180
+    # days) from every other job and transfer. Same release as the expiry sweep. Restore un-hides
+    # only — reserve again by hand if the job still needs the parts.
+    # The holds are locked after their stock rows (above) — the work-order draw locks the stock rows
+    # and then takes units off these holds (an override), so locking the holds first deadlocked an
+    # archive against a job drawing this one's units. Re-read locked: one drawn down meanwhile is
+    # already released.
+    _holds = (await db.execute(_hold_q.where(StockReservation.id.in_([_h.id for _h in _holds]))
+                               .with_for_update().execution_options(populate_existing=True))).scalars().all()
+    for _h in _holds:
+        if _h.released:
+            continue
+        await stock_rows.reserve(db, _h.part_id, _h.location_id, -float(_h.qty or 0))
+        _h.released = True
     if not order.is_estimate:
         from backend.services.payroll import CommissionEngine
         await CommissionEngine(db, current.org_id).reverse_for_deletion(order)

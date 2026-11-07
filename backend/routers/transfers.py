@@ -255,6 +255,11 @@ async def change_status(
         raise HTTPException(400, "Goods already shipped: pass return_location_id to choose the warehouse taking them back")
     if new == "canceled" and data.return_location_id:
         await require_location(db, current.org_id, data.return_location_id)
+    if new == "ready":
+        # council M7: holds past their date used to block the box-up until someone opened the
+        # reservations list. Released before the claim below, so nothing of this move is committed yet.
+        from backend.routers.inventory import _release_expired
+        await _release_expired(db, current.org_id)
     # A transfer made "ready" before the count-once fix held its units as reserved AND off the
     # shelf, and logged nothing until it shipped: those still release the hold the old way.
     # (Read before the claim below moves t.status on.)

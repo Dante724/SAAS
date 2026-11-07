@@ -1142,25 +1142,36 @@ DEFAULT_PO_CHARGE_TYPES = ["Shipping", "In-transit"]
 async def _release_expired(db: AsyncSession, org_id: str):
     """Release reservations whose hold period has elapsed (Orderry auto-release)."""
     now = now_utc()
-    rows = (await db.execute(
-        select(StockReservation).where(
+    q = (select(StockReservation).where(
             StockReservation.org_id == org_id,
             StockReservation.released == False,  # noqa: E712
             StockReservation.expires_at != None,  # noqa: E711
             StockReservation.expires_at < now,
-        )
-    )).scalars().all()
+        ).order_by(StockReservation.part_id, StockReservation.location_id))
+    rows = (await db.execute(q)).scalars().all()
+    if not rows:
+        return
+    # Lock order: the stock rows (by product, location), then the holds, re-read locked — an
+    # archive of the hold's job may have released it meanwhile, and releasing it twice took a
+    # unit off another job's hold.
+    for pid, lid in sorted({(r.part_id, r.location_id) for r in rows}):
+        await stock_rows.rows(db, pid, lid, lock=True)
+    # only the holds whose stock rows were just locked: one that expired in between waits for the
+    # next sweep rather than being locked out of order
+    rows = (await db.execute(q.where(StockReservation.id.in_([r.id for r in rows])).with_for_update()
+                             .execution_options(populate_existing=True))).scalars().all()
     for r in rows:
+        if r.released:
+            continue
         await stock_rows.reserve(db, r.part_id, r.location_id, -r.qty)
         r.released = True
-    if rows:
-        await db.commit()
+    await db.commit()
 
 
 class ReserveIn(BaseModel):
     part_id: str
     location_id: str
-    qty: float
+    qty: float = Field(gt=0, le=MAX_STOCK_QTY)     # a hold is always positive: a negative one released other jobs' stock
     order_id: Optional[str] = None
     hold_days: int = 7
 
@@ -1173,12 +1184,23 @@ async def reserve_stock(
 ):
     """Reserve stock for an order. Reserved qty is excluded from available."""
     from backend.models import Location
+    # council M7: holds past their date used to block until someone opened the reservations list
+    await _release_expired(db, current.org_id)
     part = (await db.execute(select(Part.id).where(
         Part.id == data.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
     loc = (await db.execute(select(Location.id).where(
         Location.id == data.location_id, Location.org_id == current.org_id))).scalar_one_or_none()
     if not part or not loc:      # checked first: another shop's stock levels never show
         raise HTTPException(404, "Product not found")
+    if data.order_id:
+        from backend.models import Order
+        if not (await db.execute(select(Order.id).where(
+                Order.id == data.order_id, Order.org_id == current.org_id))).scalar_one_or_none():
+            raise HTTPException(404, "Order not found")
+    hold_days = max(1, min(int(data.hold_days or 7), 180))       # same clamp as the work-order hold
+    # Lock the stock rows before counting (same order as stock_consume.lock_rows): two reserves of
+    # the last unit used to both read "1 free" and both get it.
+    await stock_rows.rows(db, data.part_id, data.location_id, lock=True)
     avail, held = await stock_rows.totals(db, data.part_id, data.location_id)
     free = avail - held
     if data.qty > free:
@@ -1188,7 +1210,7 @@ async def reserve_stock(
     await stock_rows.reserve(db, data.part_id, data.location_id, data.qty)
     r = StockReservation(org_id=current.org_id, part_id=data.part_id, location_id=data.location_id,
                          order_id=data.order_id, qty=data.qty,
-                         expires_at=now_utc() + timedelta(days=data.hold_days))
+                         expires_at=now_utc() + timedelta(days=hold_days))
     db.add(r)
     await db.commit()
     await db.refresh(r)
@@ -1204,6 +1226,14 @@ async def release_reservation(
     r = (await db.execute(select(StockReservation).where(
         StockReservation.id == res_id, StockReservation.org_id == current.org_id))).scalar_one_or_none()
     if not r or r.released:
+        raise HTTPException(404, "Reservation not found or already released")
+    # Lock order: the stock rows, then the hold, re-read locked — an archive of its job or the
+    # expiry sweep may have released it meanwhile, and releasing it twice took a unit off
+    # another job's hold.
+    await stock_rows.rows(db, r.part_id, r.location_id, lock=True)
+    r = (await db.execute(select(StockReservation).where(StockReservation.id == res_id)
+                          .with_for_update().execution_options(populate_existing=True))).scalar_one()
+    if r.released:
         raise HTTPException(404, "Reservation not found or already released")
     await stock_rows.reserve(db, r.part_id, r.location_id, -r.qty)
     r.released = True
