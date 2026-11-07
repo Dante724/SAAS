@@ -8,6 +8,7 @@ import { confirmDialog } from "../../lib/dialog";
 import { Drawer, MoreMenu, btnGhost, btnPrimary, inputCls, labelCls } from "../invoices/billing";
 import ModePill from "./ModePill";
 import { loadFailed } from "../../lib/notice";
+import { useCardReaders } from "../../lib/cardReaders";
 
 // F2/F3/F4 — Settings › Integrations › Card readers. Register Stripe Terminal or Square Terminal
 // readers (or a simulated one while testing locally), rename / move them, remove them, and see
@@ -41,7 +42,8 @@ export default function CardReadersCard() {
       .then(([c, r]) => { setCfg(c); setReaders(r.items || []); })
       .catch((e) => setErr(e.message || "Couldn't load card readers"));
   };
-  const allowed = can("can_take_card_payments") || canManage;
+  // Card readers switched off on the server: the card isn't shown at all.
+  const allowed = useCardReaders() && (can("can_take_card_payments") || canManage);
   useEffect(() => {
     if (!allowed) return;
     load(); api.get<{ items: Loc[] }>("/staff/locations").then((r) => setLocs(r.items || [])).catch(loadFailed("locations"));

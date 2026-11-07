@@ -16,6 +16,7 @@ import ScanButton from "../../components/ScanButton";
 import UnitSerials, { unnamedUnits } from "../../components/UnitSerials";
 import ReaderCharge from "../../components/ReaderCharge";
 import CardPaymentsList from "../../components/CardPaymentsList";
+import { useCardReaders } from "../../lib/cardReaders";
 import { scanBeep, useWedgeScanner } from "../../lib/scanner";
 import { inputCls } from "../invoices/billing";
 import { Avatar, deviceIcon } from "../orders/look";
@@ -103,6 +104,8 @@ export default function SalesPOS() {
   const [toast, setToast] = useState<string | null>(null);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2600); };
   const { can } = useMe();
+  // Card readers switched off on the server: no "Charge on reader", no reader payments list.
+  const readerOk = useCardReaders() && can("can_take_card_payments");
   const [recent, setRecent] = useState(false);
   const [recentKey, setRecentKey] = useState(0);   // bumped after a charge so the list re-reads
   const saleRows = useRef<Record<string, SaleRow>>({});
@@ -332,7 +335,7 @@ export default function SalesPOS() {
                   return can("can_create_returns") ? <button onClick={() => setReturnFor(s.id)} aria-label={`Return items from sale ${s.sale_number}`}
                     className="h-8 px-3 rounded-xl border border-slate-200 text-[11px] font-semibold text-ink-secondary hover:bg-slate-50">Return items</button> : null;
                 }} />
-              {can("can_take_card_payments") && <div className="border-t border-slate-100 p-2"><CardPaymentsList sales reloadKey={recentKey} /></div>}
+              {readerOk && <div className="border-t border-slate-100 p-2"><CardPaymentsList sales reloadKey={recentKey} /></div>}
             </div>
           )}
           <div className="flex-1 overflow-y-auto px-6 pb-6">
@@ -445,7 +448,7 @@ export default function SalesPOS() {
                 {payTendered != null && payTendered >= pending.due && row("Change due", cash(payTendered - pending.due), true)}
                 <button onClick={payPending} disabled={busy || !payAccount || (payTendered != null && payTendered + 0.005 < pending.due)} className={buttonClass("primary", "lg", "w-full tabular-nums")}>Take payment {cash(pending.due)}</button>
                 <div className="flex gap-2">
-                  {can("can_take_card_payments") && pending.due > 0 && <button onClick={() => setReaderFor(pending)} disabled={busy} className="flex-1 h-9 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50 flex items-center justify-center gap-1.5"><M n="contactless" c="text-sm text-ink-tertiary" />Try the card again</button>}
+                  {readerOk && pending.due > 0 && <button onClick={() => setReaderFor(pending)} disabled={busy} className="flex-1 h-9 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50 flex items-center justify-center gap-1.5"><M n="contactless" c="text-sm text-ink-tertiary" />Try the card again</button>}
                   {can("can_delete_sales") && <button onClick={deletePending} disabled={busy} className={buttonClass("secondary", "md", "text-rose-700")}>Delete sale</button>}
                   {!pending.fromCart && <button onClick={() => setPending(null)} className="h-9 px-3 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Not now</button>}
                 </div>
@@ -485,7 +488,7 @@ export default function SalesPOS() {
             {short && <p role="alert" className="text-[11px] text-rose-700">Cash received is less than the total.</p>}
             {quoteErr && <p role="alert" className="text-[11px] text-rose-700">{quoteErr}</p>}
             <button onClick={() => charge()} disabled={busy || !quote || blocked || short} className="w-full h-11 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary-container disabled:opacity-50 flex items-center justify-center gap-2 tabular-nums">{busy ? "Processing…" : cart.length === 0 ? "Charge" : quote ? `Charge ${cash(quote.due)}` : quoteErr ? "Can't price this sale" : "Pricing…"}</button>
-            {can("can_take_card_payments") && <button onClick={() => charge(true)} disabled={busy || !quote || blocked || quote.due <= 0} className="w-full h-9 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50 flex items-center justify-center gap-2"><M n="contactless" c="text-base text-ink-tertiary" />Charge on reader</button>}
+            {readerOk && <button onClick={() => charge(true)} disabled={busy || !quote || blocked || quote.due <= 0} className="w-full h-9 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50 flex items-center justify-center gap-2"><M n="contactless" c="text-base text-ink-tertiary" />Charge on reader</button>}
             <div className="flex justify-center"><AutoPrintPicker event="sale" /></div>
             </>)}
           </div>
@@ -493,7 +496,7 @@ export default function SalesPOS() {
       </div>
       {toast && <div role="status" className="fixed bottom-6 left-1/2 -translate-x-1/2 max-w-[calc(100vw-32px)] bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-clay-drawer z-[60]">{toast}</div>}
       {matches && <MatchPicker code={matches.code} items={matches.items} onPick={(m) => { addMatch(m); flash(`Added ${m.name}`); setMatches(null); setQ(""); }} onClose={() => setMatches(null)} />}
-      {readerFor && <ReaderCharge saleId={readerFor.id} amount={readerFor.due} accountId={cardAccount} title={`Sale ${readerFor.number}`}
+      {readerOk && readerFor && <ReaderCharge saleId={readerFor.id} amount={readerFor.due} accountId={cardAccount} title={`Sale ${readerFor.number}`}
         onApproved={() => setRecentKey((k) => k + 1)}
         onClose={(c) => {
           const p = readerFor;
