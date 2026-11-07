@@ -728,9 +728,10 @@ async def _pay_order(order_id: str, data: OrderPaymentIn, db: AsyncSession, curr
     from backend.services.invoice_money import apply_order_payment, notify_payment_received
     if data.method == "balance":
         # Paid out of credit the client already has with the shop (an advance, an overpayment).
-        # No money moves and the ledger already holds that credit, so nothing is posted to it:
-        # posting "income" here erased real debt when the client had no credit at all (B3).
-        from backend.services.ledger import available_credit
+        # No money moves: posting "income" here erased real debt when the client had no credit at
+        # all (B3). The credit is spent by charging the job up front (spend_credit), so the same
+        # credit can't pay a second job before this one closes.
+        from backend.services.ledger import available_credit, spend_credit
         credit = await available_credit(db, current.org_id, o.client_id, order_id)
         if q2(amount) > credit:
             raise HTTPException(400, f"This client has only {credit:.2f} of credit to pay from. "
@@ -738,6 +739,8 @@ async def _pay_order(order_id: str, data: OrderPaymentIn, db: AsyncSession, curr
         await _before_new_invoice(db, current.org_id, o, True)
         await apply_order_payment(db, o, amount, method="balance", received_by_id=current.id,
                                   reference="Paid from client credit")
+        await spend_credit(db, current.org_id, o.client_id, amount, order_id=order_id,
+                           parts=[(order_id, amount)], label=o.order_number, created_by_id=current.id)
         await log_system_event(db, current.org_id, "order", order_id,
                                f"Paid from client credit: {amount}")
         await db.flush()
