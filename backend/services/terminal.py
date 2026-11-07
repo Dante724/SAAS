@@ -64,6 +64,11 @@ FINAL_FAILED = ("declined", "canceled", "failed")
 SUPERSEDED_NOTE = ("Superseded: a newer charge was sent while this one was still open "
                    "(one open charge per reader, order and sale, idg01). Check the provider before charging again.")
 SUPERSEDED_POLL_DAYS = 7
+# Pending charges the sweep cancels so the reader isn't held by the one-open-charge index:
+# a charge the reader never confirmed, after UNCONFIRMED_GRACE_MINUTES (the customer may still be
+# tapping), and any charge still waiting after STALE_PENDING_MINUTES (readers time out well before).
+UNCONFIRMED_GRACE_MINUTES = 2
+STALE_PENDING_MINUTES = 15
 # Shown on a charge whose reader call failed without saying whether the reader got it.
 UNCONFIRMED_NOTE = ("The reader didn't confirm it received this charge. Watch the reader: it may still "
                     "take the card. If it shows nothing, cancel the charge here before trying again.")
@@ -361,7 +366,10 @@ async def start_charge(db: AsyncSession, *, org_id: str, actor_id: str, terminal
                         status="pending", created_by_id=actor_id)
     db.add(ch)
     try:
-        await db.flush()
+        # Committed before the provider is called (follow-up to #99): the charge exists before the
+        # reader can, and a request stalled inside the provider call has committed, so a retry of
+        # the same tap can't take its Idempotency-Key over and send a second checkout.
+        await db.commit()
     except IntegrityError as e:
         # Two starts on one reader at the same moment both passed the check above; the partial
         # unique index (one open charge per reader) lets only the first one through.
@@ -449,6 +457,15 @@ async def start_charge(db: AsyncSession, *, org_id: str, actor_id: str, terminal
 async def refresh(db: AsyncSession, ch: TerminalCharge) -> TerminalCharge:
     """Poll the provider for a waiting charge and settle it if it has finished. A provider that's
     down leaves the charge waiting; the next poll (or the webhook) tries again."""
+    if ch.provider == "square" and not ch.provider_ref and ch.status in OPEN:
+        try:
+            _searched, co = await _square_find_checkout(db, ch)
+        except HTTPException as e:
+            log.info("checkout search for charge %s failed: %s", ch.id, e.detail)
+            return ch
+        if co is None:
+            return ch
+        return await apply_square_checkout(db, ch, co)
     if (ch.status not in OPEN and not _recently_superseded(ch)) or not ch.provider_ref or ch.provider == "simulated":
         return ch
     try:
@@ -461,6 +478,29 @@ async def refresh(db: AsyncSession, ch: TerminalCharge) -> TerminalCharge:
     except HTTPException as e:
         log.info("status poll for charge %s failed: %s", ch.id, e.detail)
         return ch
+
+
+async def _square_find_checkout(db: AsyncSession, ch: TerminalCharge) -> tuple[bool, Optional[dict]]:
+    """A Square charge whose create call never answered has no checkout id. Search the device's
+    recent checkouts for ours (reference_id = charge id) and adopt its id. Returns (searched,
+    checkout): searched is True when Square answered, so None then means it never made one."""
+    t = (await db.execute(select(PaymentTerminal).where(PaymentTerminal.id == ch.terminal_id))).scalar_one()
+    creds = await provider_creds(db, ch.org_id, "square")
+    made = ch.created_at.replace(tzinfo=None) if ch.created_at else now_utc().replace(tzinfo=None)
+    query = {"query": {"filter": {"device_id": t.reader_id, "created_at": {
+        "start_at": (made - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")}}}, "limit": 100}
+    for _page in range(5):
+        body = await _square(creds, "POST", "/v2/terminals/checkouts/search", query)
+        for co in body.get("checkouts") or []:
+            if co.get("reference_id") == ch.id:
+                if co.get("id") and not ch.provider_ref:
+                    ch.provider_ref = co["id"]
+                    await db.commit()
+                return True, co
+        if not body.get("cursor"):
+            break
+        query = {**query, "cursor": body["cursor"]}
+    return True, None
 
 
 def _recently_superseded(ch: TerminalCharge) -> bool:
@@ -490,6 +530,38 @@ async def reconcile_superseded(db: AsyncSession) -> int:
         except HTTPException as e:
             log.info("superseded charge %s not canceled at %s: %s", ch.id, ch.provider, e.detail)
         await refresh(db, ch)
+    return len(rows) + await _cancel_stuck(db)
+
+
+async def _cancel_stuck(db: AsyncSession) -> int:
+    """Pending charges that hold their reader (and order / sale) through the one-open-charge
+    indexes but will not finish on their own: ones the reader never confirmed, after a grace
+    period, and any still waiting after STALE_PENDING_MINUTES. Each is polled first (it may have
+    been paid), then canceled at the provider; it stays pending, and is tried again next sweep,
+    until the provider confirms. Returns how many were looked at."""
+    now = now_utc().replace(tzinfo=None)
+    rows = (await db.execute(select(TerminalCharge).where(
+        TerminalCharge.status.in_(OPEN),
+        ((TerminalCharge.error == UNCONFIRMED_NOTE)
+         & (TerminalCharge.created_at < now - timedelta(minutes=UNCONFIRMED_GRACE_MINUTES)))
+        | (TerminalCharge.created_at < now - timedelta(minutes=STALE_PENDING_MINUTES))))).scalars().all()
+    for ch in rows:
+        try:
+            if ch.provider == "square" and not ch.provider_ref:
+                searched, co = await _square_find_checkout(db, ch)
+                if co is not None:
+                    await apply_square_checkout(db, ch, co)
+                elif searched:
+                    # Square never made the checkout: nothing can be taken on it.
+                    await settle_failed(db, ch, "canceled", "Never reached the reader")
+                    continue
+            else:
+                await refresh(db, ch)
+            if ch.status not in OPEN:
+                continue
+            await cancel(db, ch, by="Canceled automatically: the reader didn't finish it")
+        except HTTPException as e:
+            log.info("stuck charge %s not canceled yet: %s", ch.id, e.detail)
     return len(rows)
 
 
@@ -561,8 +633,14 @@ async def _checked_capture(db: AsyncSession, ch: TerminalCharge, minor, currency
 
 
 async def settle_failed(db: AsyncSession, ch: TerminalCharge, status: str, error: str) -> TerminalCharge:
+    # A superseded charge (already "failed", still watched for 7 days) is settled too, so once the
+    # provider says it's canceled the sweep stops canceling it again.
+    if _recently_superseded(ch):
+        error = f"{error}. It had been superseded (idg01)"
+    waiting = TerminalCharge.status.in_(OPEN) | (
+        (TerminalCharge.status == "failed") & TerminalCharge.error.like("Superseded%"))
     res = await db.execute(sa_update(TerminalCharge)
-                           .where(TerminalCharge.id == ch.id, TerminalCharge.status.in_(OPEN))
+                           .where(TerminalCharge.id == ch.id, waiting)
                            .values(status=status, error=error[:500], updated_at=now_utc())
                            .execution_options(synchronize_session=False))
     await db.commit()
@@ -673,7 +751,7 @@ async def _post_fee(db, ch, acc, ref_type, ref_id, number) -> None:
                            employee_id=ch.created_by_id)
 
 
-async def cancel(db: AsyncSession, ch: TerminalCharge) -> TerminalCharge:
+async def cancel(db: AsyncSession, ch: TerminalCharge, *, by: str = "Canceled by staff") -> TerminalCharge:
     if ch.status not in OPEN:
         raise TerminalError(409, "Only a waiting charge can be canceled.")
     t = (await db.execute(select(PaymentTerminal).where(PaymentTerminal.id == ch.terminal_id))).scalar_one()
@@ -701,7 +779,7 @@ async def cancel(db: AsyncSession, ch: TerminalCharge) -> TerminalCharge:
             if ch.status not in OPEN:
                 return ch
             raise
-    return await settle_failed(db, ch, "canceled", "Canceled by staff")
+    return await settle_failed(db, ch, "canceled", by)
 
 
 async def simulate(db: AsyncSession, ch: TerminalCharge, outcome: str) -> TerminalCharge:
