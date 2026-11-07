@@ -517,6 +517,8 @@ async def edit_write_off_line(
             await _take_stock(db, ln.part_id, w, delta, doc="write off", bin_id=getattr(ln, "bin_id", None))
         else:
             await _give_stock(db, ln.part_id, w, -delta, w.location_id if w else None, bin_id=getattr(ln, "bin_id", None))
+            if w:   # council M5: the units go back on the cost layers too, as a revert does
+                await _restore_batches(db, ln.part_id, w, -delta)
         db.add(StockMovement(
             part_id=ln.part_id, location_id=w.location_id if w else None,
             warehouse_id=doc.warehouse_id, movement_type="writeoff_adjust",
