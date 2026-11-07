@@ -18,6 +18,7 @@ import { deliveryText, deliveryTone, flashDelivery, type Delivery, type Flash, t
 import PhotoAnnotator from "./PhotoAnnotator";
 import TagChips from "../../components/TagChips";
 import { M } from "../../components/Shell";
+import Tabs from "../../components/Tabs";
 import EmptyState from "../../components/EmptyState";
 import DateField from "../../components/DateField";
 import FloatingMenu from "../../components/FloatingMenu";
@@ -373,9 +374,9 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   // 144dd — tab badges reflect real state (no always-on dots). Amber Checklists dot only when a
   // required checklist item is still undone; red Activity count only when a customer message is unread.
   const unread = Number((d as any).client_msg_unread || 0);
-  const ALL_TABS: { id: Tab; label: string; badge?: string; dot?: string }[] = [
+  const ALL_TABS: { id: Tab; label: string; count?: number | null; badge?: string; dot?: string }[] = [
     { id: "general", label: "General info" },
-    { id: "services", label: `Services & products${d.lines?.length ? ` (${d.lines.length})` : ""}` },
+    { id: "services", label: "Services & products", count: d.lines?.length || null },
     { id: "checklists", label: "Checklists", dot: (d as any).checklists_pending ? "bg-amber-500" : undefined },
     { id: "invoices", label: "Invoices & payments", badge: (d as any).payment_due ? "Due" : undefined },
     { id: "activity", label: "Activity", badge: (unread > 0 && tab !== "activity") ? String(unread) : undefined },
@@ -581,16 +582,15 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
         {isEst && <EstimateTerms orderId={order.id} d={d as any} onChanged={() => { reload(); onChanged?.(); }} onFlash={flash} />}
 
         {/* Tabs */}
-        <nav className="px-4 sm:px-6 border-b border-slate-200/80 flex space-x-6 text-xs font-medium bg-white flex-shrink-0 overflow-x-auto whitespace-nowrap">
-          {TABS.map((t) => (
-            <button key={t.id} onClick={() => setTab(t.id)}
-              className={`py-3 border-b-2 transition-colors flex items-center gap-1.5 ${tab === t.id ? "text-ink-primary border-primary" : "text-ink-secondary hover:text-ink-primary border-transparent"}`}>
+        <Tabs look="underline" label="Work order sections" className="px-4 sm:px-6 border-slate-200/80 bg-white flex-shrink-0" value={tab} onChange={setTab}
+          tabs={TABS.map((t) => ({
+            id: t.id, count: t.count,
+            label: <>
               <span>{t.label}</span>
               {t.badge && <span className="text-[11px] bg-rose-100 text-rose-700 px-1.5 rounded-full tabular-nums font-semibold">{t.badge}</span>}
               {t.dot && <span role="img" aria-label="Checklist incomplete" title="Checklist incomplete" className={`w-2 h-2 rounded-full ${t.dot}`} />}
-            </button>
-          ))}
-        </nav>
+            </>,
+          }))} />
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-6 bg-slate-50/70 space-y-6">

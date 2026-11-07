@@ -2,6 +2,7 @@ import { humanize } from "../../lib/humanize";
 import TeklySelect from "../../components/TeklySelect";
 import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
+import Tabs from "../../components/Tabs";
 import EmptyState from "../../components/EmptyState";
 import { useMe, hasFeature } from "../../context/Me";
 import { api } from "../../api/client";
@@ -310,11 +311,8 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
         </div>
 
         {kind === "product" && editing && (
-          <nav className="px-6 border-b border-slate-200 flex gap-6 text-xs font-semibold bg-slate-50/70">
-            {(([["details", "Details"], ["stock", "Stock"], ...(p.serialized ? [["units", "Units"]] : []), ["batches", "Batches"], ["movements", "Movements"], ["purchasing", "Purchasing"]] as [ProdTab, string][]).filter(([t]) => stockTabs || t === "details")).map(([t, label]) => (
-              <button key={t} onClick={() => setPtab(t)} className={`py-3 border-b-2 transition-colors ${ptab === t ? "text-primary border-primary" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{label}</button>
-            ))}
-          </nav>
+          <Tabs look="underline" label="Product sections" className="px-6 bg-slate-50/70" value={ptab} onChange={setPtab}
+            tabs={(([["details", "Details"], ["stock", "Stock"], ...(p.serialized ? [["units", "Units"]] : []), ["batches", "Batches"], ["movements", "Movements"], ["purchasing", "Purchasing"]] as [ProdTab, string][]).filter(([t]) => stockTabs || t === "details")).map(([id, label]) => ({ id, label }))} />
         )}
 
         <div className="flex-1 overflow-y-auto p-6 space-y-5 text-xs">

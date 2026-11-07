@@ -1,4 +1,5 @@
 import NameSuggestInput from "../../components/NameSuggestInput";
+import Tabs from "../../components/Tabs";
 import { buttonClass } from "../../components/Button";
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
@@ -110,9 +111,8 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
             <div className="w-11 h-11 rounded-xl bg-slate-100 text-ink-secondary grid place-items-center border border-slate-200"><M n="smartphone" c="text-xl" /></div>
             <div><div className="text-base font-bold text-ink-primary">{creating ? `New ${assetNoun(a, term).toLowerCase()}` : title}{!creating && a.color ? ` (${a.color})` : ""}</div><div className="text-xs text-ink-tertiary">{creating ? `Register a ${assetNoun(a, term).toLowerCase()}` : (a.owner_name ? `Owned by ${a.owner_name}` : "Company-owned")}</div></div>
           </div>
-          <div className="flex gap-6 text-xs font-semibold">
-            {(creating ? [TABS[0]] : TABS).map((t, i) => <button key={t} onClick={() => setTab(i)} className={`py-3 border-b-2 transition-colors ${tab === i ? "text-primary border-primary" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{t}</button>)}
-          </div>
+          <Tabs look="underline" label="Asset sections" className="border-b-0" value={String(tab)} onChange={(id) => setTab(Number(id))}
+            tabs={(creating ? [TABS[0]] : TABS).map((t, i) => ({ id: String(i), label: t }))} />
         </header>
         <div className="flex-1 overflow-y-auto p-6 bg-canvas space-y-4">
           {tab === 0 ? (
