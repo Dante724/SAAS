@@ -331,11 +331,20 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
             Account.org_id == intent.org_id, Account.active == True)  # noqa: E712
             .order_by(Account.is_company.desc()))).scalars().first()
 
+    # Order -> Invoice -> Client, taken before the cashbox posting below (M22): a link settling
+    # on a job held the till and the job, then wrote the shared invoice that Record payment was
+    # holding while it waited for the same till. FOR UPDATE is a no-op on SQLite.
+    from backend.services.invoice_money import lock_invoices_of, lock_order
     inv = None
-    if intent.invoice_id:
-        inv = (await db.execute(select(Invoice).where(Invoice.id == intent.invoice_id))).scalar_one_or_none()
     order = (await db.execute(select(Order).where(Order.id == intent.order_id))).scalar_one_or_none() \
         if intent.order_id else None
+    if order is not None:
+        await lock_order(db, order.id)
+    if intent.invoice_id:
+        inv = (await db.execute(select(Invoice).where(Invoice.id == intent.invoice_id)
+                                .with_for_update())).scalar_one_or_none()
+    elif order is not None:
+        await lock_invoices_of(db, order.id)
 
     # post income to the cashbox (reuse the canonical transaction poster)
     if account:
@@ -373,7 +382,8 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
                            kind="payment", amount=q2(amount - take), **fields)
             db.add(rest)
             if not held_on:     # no job to hold it on: it's an overpayment on the invoice itself
-                inv.amount_paid = q2(float(inv.amount_paid or 0) + float(rest.amount))
+                from backend.services.money import add_to_column
+                await add_to_column(db, inv, "amount_paid", float(rest.amount))
             pays.append(rest)
     elif order:
         pays = await im.apply_order_payment(db, order, amount, **fields)
