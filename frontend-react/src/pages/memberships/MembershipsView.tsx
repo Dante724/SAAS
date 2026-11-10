@@ -128,7 +128,7 @@ export function MembershipDrawer({ id, onClose, onChanged }: { id: string; onClo
   const btn = buttonClass("secondary", "md");
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 55 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={onClose} />
       <div className="relative h-full w-full max-w-[520px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90">
         <header className="px-6 py-4 border-b border-slate-200/90 flex items-center gap-2">
           {m && <Avatar name={m.client} size={44} />}
@@ -177,7 +177,7 @@ export function MembershipDrawer({ id, onClose, onChanged }: { id: string; onClo
             {canChange && <button disabled={busy} className={btn} onClick={() => act(() => api.post(`/memberships/${m.id}/billing`, { billing: m.billing === "monthly" ? "yearly" : "monthly" }), `Switches to ${m.billing === "monthly" ? "yearly" : "monthly"} from the next payment`)}>
               Switch to {m.billing === "monthly" ? "yearly" : "monthly"}</button>}
             {canChange && (!m.renews || m.status === "paused") && <button disabled={busy} className={btn} onClick={() => act(() => api.post(`/memberships/${m.id}/resume`, {}), "Back on")}>Resume</button>}
-            {canChange && m.renews && <button disabled={busy} onClick={() => setAsking(true)} className="h-9 px-3.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50">Cancel plan</button>}
+            {canChange && m.renews && <button disabled={busy} onClick={() => setAsking(true)} className="ml-auto h-9 px-3.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50">Cancel plan</button>}
           </footer>
         )}
       </div>

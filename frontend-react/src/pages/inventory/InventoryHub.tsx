@@ -1,4 +1,5 @@
 import SkeletonRows from "../../components/SkeletonRows";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import { useEffect, useState, useRef } from "react";
 import { useSearchParams } from "react-router-dom";
@@ -41,6 +42,7 @@ import { productGlyph } from "../sales/SalesPOS";
 import { RowMenu } from "../company/CompanyHub";
 import { loadFailed } from "../../lib/notice";
 import { clickableRow } from "../../lib/clickable";
+import { theadRowClass } from "../../components/Table";
 
 type Tab = "stock" | "devices" | "services" | "bundles" | "purchase-orders"
   | "postings" | "reservations" | "conversions" | "transfers" | "stock-takes" | "write-offs" | "returns" | "bins";
@@ -439,7 +441,7 @@ export default function InventoryHub() {
                     <div className="fixed inset-0 z-30" aria-hidden="true" onClick={() => setNavMore(false)} />
                     {/* A rich menu (icon, name, one line on what it holds) that opens under More; the tabs never move. */}
                     <div role="menu" className="absolute left-0 top-full mt-1 w-[24rem] max-w-[calc(100vw-2rem)] bg-white rounded-2xl border border-slate-200/90 shadow-drawer ring-1 ring-black/[0.02] z-40 p-1.5">
-                      <p className="px-3 pt-2 pb-1.5 text-2xs font-semibold uppercase tracking-wider text-ink-tertiary">Stock records</p>
+                      <p className="px-3 pt-2 pb-1.5 text-xs font-semibold text-ink-tertiary">Stock records</p>
                       {overflowTabs.map((t) => {
                         const meta = AUDIT[t.id];
                         const on = tab === t.id;
@@ -489,17 +491,17 @@ export default function InventoryHub() {
               )}
             </div>
             <div className="ml-auto flex items-center gap-1.5 flex-wrap justify-end">
-              <select aria-label="Location" value={wh} onChange={(e) => setWh(e.target.value)} className={filterSel(!!wh)}>
+              <TeklySelect aria-label="Location" value={wh} onChange={(e) => setWh(e.target.value)} className={filterSel(!!wh)}>
                 <option value="">Location: All</option>
                 {warehouses.map((w) => <option key={w.id} value={w.id}>{w.name}</option>)}
-              </select>
-              <select aria-label="Availability" value={avail} onChange={(e) => setAvail(e.target.value as any)} className={filterSel(avail !== "in")}>
+              </TeklySelect>
+              <TeklySelect aria-label="Availability" value={avail} onChange={(e) => setAvail(e.target.value as any)} className={filterSel(avail !== "in")}>
                 {(["all", "in", "low", "out"] as const).map((k) => <option key={k} value={k}>Availability: {AVAIL_LABEL[k]}</option>)}
-              </select>
-              <select aria-label="Category" value={cat} onChange={(e) => setCat(e.target.value)} className={filterSel(!!cat)}>
+              </TeklySelect>
+              <TeklySelect aria-label="Category" value={cat} onChange={(e) => setCat(e.target.value)} className={filterSel(!!cat)}>
                 <option value="">Category: All</option>
                 {cats.map((c) => <option key={c.id} value={c.id}>{`${"  ".repeat(c.depth)}${c.name}`}</option>)}
-              </select>
+              </TeklySelect>
               {(cat || wh || avail !== "in") && (
                 <button onClick={() => { setCat(""); setWh(""); setAvail("in"); }} className="h-8 px-2.5 text-xs font-semibold rounded-lg text-primary hover:bg-primary/10 flex items-center gap-1"><M n="filter_alt_off" c="text-sm" />Clear <span className="px-1.5 rounded-full bg-primary/15 text-[11px] tabular-nums">{(cat ? 1 : 0) + (wh ? 1 : 0) + (avail !== "in" ? 1 : 0)}</span></button>
               )}
@@ -539,7 +541,7 @@ export default function InventoryHub() {
           <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
             <div className="overflow-x-auto">
             <table data-density={density} className="w-full min-w-[880px] text-left border-collapse">
-              <thead><tr className="border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary">
+              <thead><tr className={theadRowClass}>
                 <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" aria-label="Select all" checked={pAllSel} onChange={pToggleAll} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
                 <th className="py-3.5 px-3">Product</th><th className="py-3.5 px-3">Category</th><th className="py-3.5 px-3">Unit</th>
                 <th className="py-3.5 px-3 text-right">Cost</th><th className="py-3.5 px-3 text-right">Sell price</th><th className="py-3.5 px-3 text-right">Margin</th><th className="py-3.5 px-3 text-right">In stock</th>{cfg.enable_reservations && <th className="py-3.5 px-3 text-right">Reserved</th>}<th className="py-3.5 pr-5 pl-2 w-12"><span className="sr-only">Actions</span></th>
@@ -626,9 +628,9 @@ export default function InventoryHub() {
           <div className="flex items-center gap-3 mb-5 flex-wrap">
             <button onClick={() => setAssetCreate(true)} className={primaryBtn}><M n="add" c="text-sm" />Add {term.asset}</button>
             <AssetStateTabs value={aState} onChange={setAState} counts={ap.extra?.counts} />
-            <select value={aOwner} onChange={(e) => setAOwner(e.target.value as "" | "company" | "client")} aria-label="Ownership" className={`${inputCls} w-auto h-8 py-0 text-xs font-semibold`}>
+            <TeklySelect value={aOwner} onChange={(e) => setAOwner(e.target.value as "" | "company" | "client")} aria-label="Ownership" className={`${inputCls} w-auto h-8 py-0 text-xs font-semibold`}>
               <option value="">Ownership: all</option><option value="company">Company-owned</option><option value="client">Client-owned</option>
-            </select>
+            </TeklySelect>
             {searchBar("Search serial, IMEI, plate, client…", aq, setAq)}
           </div>
           {asel.size > 0 && (
@@ -642,7 +644,7 @@ export default function InventoryHub() {
           <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
             <div className="overflow-x-auto">
             <table className="w-full min-w-[720px] text-left border-collapse">
-              <thead className="border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary"><tr>
+              <thead><tr className={theadRowClass}>
                 <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" aria-label="Select all" checked={!!assets?.length && assets.every((a) => asel.has(a.id))} onChange={(e) => setAsel((s) => { const n = new Set(s); (assets || []).forEach((a) => (e.target.checked ? n.add(a.id) : n.delete(a.id))); return n; })} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
                 <th className="py-3.5 px-3">Device / Model</th><th className="py-3.5 px-3">Serial / IMEI</th><th className="py-3.5 px-3">Ownership</th><th className="py-3.5 pl-3 pr-5">Status</th>
               </tr></thead>
@@ -673,7 +675,7 @@ export default function InventoryHub() {
           <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
             <div className="overflow-x-auto">
             <table className="w-full min-w-[720px] text-left border-collapse">
-              <thead className="border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary"><tr>
+              <thead><tr className={theadRowClass}>
                 <th className="py-3.5 pl-5 px-3">PO number</th><th className="py-3.5 px-3">Supplier</th><th className="py-3.5 px-3">Expected</th><th className="py-3.5 px-3 text-right">Total ({currencySymbol()})</th><th className="py-3.5 px-3 text-center">Status</th><th className="py-3.5 pr-5 pl-2 w-12"><span className="sr-only">Print</span></th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 text-xs">
@@ -715,7 +717,7 @@ export default function InventoryHub() {
             <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
               <div className="overflow-x-auto">
               <table className="w-full min-w-[640px] text-left border-collapse text-xs">
-                <thead className="border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary"><tr>
+                <thead><tr className={theadRowClass}>
                   {(AUDIT_COLS[tab] || []).map(([h]) => <th key={h} className={`py-3 px-4 ${AUDIT_NUM.has(h) ? "text-right" : ""}`}>{h}</th>)}
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100 text-ink-secondary">
@@ -743,10 +745,10 @@ export default function InventoryHub() {
             <div className="flex items-center justify-between mb-3"><h3 className="text-base font-semibold text-ink-primary">Print labels</h3><button aria-label="Close" onClick={() => setLabelDlg(false)} className="w-7 h-7 rounded-lg hover:bg-slate-100 grid place-items-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
             <p className="text-xs text-ink-tertiary mb-3">{labelSelCount} {labelMode === "asset" ? "asset" : "product"}{labelSelCount === 1 ? "" : "s"} selected. Each prints at the template's exact label size.</p>
             <label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Label template</label>
-            <select value={labelTplId} onChange={(e) => setLabelTplId(e.target.value)} className="w-full glass-input rounded-xl px-3 py-2 text-xs mb-3">
+            <TeklySelect value={labelTplId} onChange={(e) => setLabelTplId(e.target.value)} className="w-full glass-input rounded-xl px-3 py-2 text-xs mb-3">
               {labelTpls.length === 0 && <option value="">No label templates. Create one in Settings.</option>}
               {labelTpls.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
+            </TeklySelect>
             <label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Copies each</label>
             <input type="number" min={1} max={500} value={labelCopies} onChange={(e) => setLabelCopies(Math.max(1, +e.target.value || 1))} className="w-full glass-input rounded-xl px-3 py-2 text-xs mb-4" />
             {labelErr && <div role="alert" className="mb-3 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{labelErr}</div>}
@@ -849,9 +851,9 @@ function ActionModal({ kind, products, preselected, onClose, onDone }:
           {kind === "transfer" ? (
             <div className="grid grid-cols-2 gap-3">
               <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">From location</label>
-                <select value={fromLoc} onChange={(e) => setFromLoc(e.target.value)} className="w-full glass-input rounded-xl px-3 py-2 text-xs">{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+                <TeklySelect value={fromLoc} onChange={(e) => setFromLoc(e.target.value)} className="w-full glass-input rounded-xl px-3 py-2 text-xs">{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</TeklySelect></div>
               <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">To location</label>
-                <select value={toLoc} onChange={(e) => setToLoc(e.target.value)} className="w-full glass-input rounded-xl px-3 py-2 text-xs">{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+                <TeklySelect value={toLoc} onChange={(e) => setToLoc(e.target.value)} className="w-full glass-input rounded-xl px-3 py-2 text-xs">{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</TeklySelect></div>
             </div>
           ) : kind === "return" ? (
             <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Reason</label>
@@ -859,7 +861,7 @@ function ActionModal({ kind, products, preselected, onClose, onDone }:
           ) : (
             <div className="grid grid-cols-2 gap-3">
               <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Location</label>
-                <select value={fromLoc} onChange={(e) => setFromLoc(e.target.value)} className="w-full glass-input rounded-xl px-3 py-2 text-xs">{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+                <TeklySelect value={fromLoc} onChange={(e) => setFromLoc(e.target.value)} className="w-full glass-input rounded-xl px-3 py-2 text-xs">{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</TeklySelect></div>
               <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Reason</label>
                 <input value={reason} onChange={(e) => setReason(e.target.value)} placeholder="Damaged / lost / expired" className="w-full glass-input rounded-xl px-3 py-2 text-xs" /></div>
             </div>
@@ -871,10 +873,10 @@ function ActionModal({ kind, products, preselected, onClose, onDone }:
               {lines.map((l, i) => (
                 <div key={i}>
                 <div className="flex items-center gap-2">
-                  <select value={l.part_id} onChange={(e) => setLines(lines.map((x, j) => j === i ? { ...x, part_id: e.target.value, serials: [] } : x))} className="flex-1 glass-input rounded-xl px-3 py-2 text-xs">
+                  <TeklySelect value={l.part_id} onChange={(e) => setLines(lines.map((x, j) => j === i ? { ...x, part_id: e.target.value, serials: [] } : x))} className="flex-1 glass-input rounded-xl px-3 py-2 text-xs">
                     <option value="">Select product…</option>
                     {products.map((p) => <option key={p.id} value={p.id}>{p.name}{p.sku ? ` (${p.sku})` : ""}</option>)}
-                  </select>
+                  </TeklySelect>
                   <input type="number" min={0} value={l.qty} onChange={(e) => setLine(i, "qty", Number(e.target.value))} className="w-20 glass-input rounded-xl px-3 py-2 text-xs text-right" />
                   <button aria-label="Remove line" onClick={() => rmLine(i)} className="w-8 h-8 rounded-lg hover:bg-rose-50 text-ink-tertiary hover:text-rose-600 flex items-center justify-center"><M n="delete" c="text-sm" /></button>
                 </div>
@@ -941,7 +943,7 @@ function ConversionModal({ onClose, onDone }: { onClose: () => void; onDone: () 
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
           {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
           <div><label className={lbl}>Asset to convert</label>
-            <select value={deviceId} onChange={(e) => setDeviceId(e.target.value)} className={fld}><option value="">Select {term.asset.toLowerCase()}…</option>{assets.map((a) => <option key={a.id} value={a.id}>{[a.brand, a.model].filter(Boolean).join(" ") || term.asset}{a.serial ? ` · ${a.serial}` : ""}</option>)}</select></div>
+            <TeklySelect value={deviceId} onChange={(e) => setDeviceId(e.target.value)} className={fld}><option value="">Select {term.asset.toLowerCase()}…</option>{assets.map((a) => <option key={a.id} value={a.id}>{[a.brand, a.model].filter(Boolean).join(" ") || term.asset}{a.serial ? ` · ${a.serial}` : ""}</option>)}</TeklySelect></div>
           <div className="grid grid-cols-2 gap-3">
             <div><label className={lbl}>Product name</label><input value={name} onChange={(e) => setName(e.target.value)} className={fld} /></div>
             <div><label className={lbl}>SKU (optional)</label><input value={sku} onChange={(e) => setSku(e.target.value)} className={fld} placeholder="Set your own" /></div>
@@ -952,7 +954,7 @@ function ConversionModal({ onClose, onDone }: { onClose: () => void; onDone: () 
             <div><label className={lbl}>Sell price</label><input type="number" min={0} value={sell} onChange={(e) => setSell(Number(e.target.value))} className={`${fld} text-right`} /></div>
           </div>
           <label className="flex items-center gap-2 text-xs font-medium text-ink-secondary"><input type="checkbox" checked={stockUnit} onChange={(e) => setStockUnit(e.target.checked)} className="accent-primary" />Also create a stock unit at a location</label>
-          {stockUnit && <div><label className={lbl}>Location</label><select value={locId} onChange={(e) => setLocId(e.target.value)} className={fld}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>}
+          {stockUnit && <div><label className={lbl}>Location</label><TeklySelect value={locId} onChange={(e) => setLocId(e.target.value)} className={fld}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</TeklySelect></div>}
           <div><label className={lbl}>Note</label><textarea value={note} onChange={(e) => setNote(e.target.value)} rows={2} className={fld} /></div>
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2"><button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Converting…" : "Convert"}</button><button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button></div>
@@ -1004,7 +1006,7 @@ function ReorderModal({ onClose, onCreated }: { onClose: () => void; onCreated?:
             <>
               <p className="text-xs text-ink-tertiary mb-3">Products at or below their minimum stock. Suggested qty brings each back to 2× min.</p>
               <table className="w-full text-xs">
-                <thead className="text-ink-tertiary text-[11px] font-semibold"><tr><th className="text-left py-2">Product</th><th className="text-right py-2">Available</th><th className="text-right py-2">Min</th><th className="text-right py-2">Suggested</th></tr></thead>
+                <thead><tr className={theadRowClass}><th className="text-left py-2">Product</th><th className="text-right py-2">Available</th><th className="text-right py-2">Min</th><th className="text-right py-2">Suggested</th></tr></thead>
                 <tbody className="divide-y divide-slate-100">
                   {items == null && <SkeletonRows cols={4} />}
                   {items?.length === 0 && <tr><td colSpan={4} className="py-6 text-center text-ink-tertiary">Nothing to reorder. Everything is above its minimum.</td></tr>}
@@ -1018,7 +1020,7 @@ function ReorderModal({ onClose, onCreated }: { onClose: () => void; onCreated?:
             <>
               <p className="text-xs text-ink-tertiary mb-3">Based on 28-day sales velocity. Suggested qty covers each supplier's lead time plus a 14-day buffer, netting off what's already on order. Check the ones to buy, then create draft POs grouped by supplier.</p>
               <table className="w-full text-xs">
-                <thead className="text-ink-tertiary text-[11px] font-semibold"><tr><th className="py-2 w-6"></th><th className="text-left py-2">Product</th><th className="text-right py-2">Free</th><th className="text-right py-2">Days left</th><th className="text-right py-2">Order</th><th className="text-left py-2 pl-2">Supplier</th></tr></thead>
+                <thead><tr className={theadRowClass}><th className="py-2 w-6"></th><th className="text-left py-2">Product</th><th className="text-right py-2">Free</th><th className="text-right py-2">Days left</th><th className="text-right py-2">Order</th><th className="text-left py-2 pl-2">Supplier</th></tr></thead>
                 <tbody className="divide-y divide-slate-100">
                   {fc == null && <SkeletonRows cols={6} />}
                   {fc?.length === 0 && <tr><td colSpan={6} className="py-6 text-center text-ink-tertiary">Nothing is forecast to run out.</td></tr>}
@@ -1192,8 +1194,8 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
           {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
           {info && <div className="rounded-lg bg-blue-50 border border-blue-200 text-primary text-xs px-3 py-2">{info}</div>}
           <div className="grid grid-cols-2 gap-3">
-            <div><label className={lbl2}>Location</label><select value={locId} onChange={(e) => { setLocId(e.target.value); setPutBin(null); }} className={`${fld} w-full`}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
-            <div><label className={lbl2}>Supplier (optional)</label><select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} className={`${fld} w-full`}><option value="">None</option>{suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
+            <div><label className={lbl2}>Location</label><TeklySelect value={locId} onChange={(e) => { setLocId(e.target.value); setPutBin(null); }} className={`${fld} w-full`}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</TeklySelect></div>
+            <div><label className={lbl2}>Supplier (optional)</label><TeklySelect value={supplierId} onChange={(e) => setSupplierId(e.target.value)} className={`${fld} w-full`}><option value="">None</option>{suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</TeklySelect></div>
           </div>
           <div><label className={lbl2}>Put away into a bin (optional — otherwise the default bin)</label>
             <BinScanField label="Into" current={putBin} locationId={locId} onBin={setPutBin} onClear={() => setPutBin(null)} /></div>
@@ -1223,9 +1225,9 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
                 <div className="flex gap-2 overflow-x-auto pb-1">
                   {mapCols.map((f, c) => (
                     <div key={c} className="shrink-0">
-                      <select value={f} onChange={(e) => remap(c, e.target.value as PasteField)} className={`${fld} w-32`}>
+                      <TeklySelect value={f} onChange={(e) => remap(c, e.target.value as PasteField)} className={`${fld} w-32`}>
                         {FIELD_ORDER.map((opt) => <option key={opt} value={opt}>{FIELD_LABELS[opt]}</option>)}
-                      </select>
+                      </TeklySelect>
                       <div className="text-[11px] text-ink-tertiary mt-1 px-1 truncate w-32" title={dataGrid[0]?.[c] || ""}>{dataGrid[0]?.[c] || ""}</div>
                     </div>
                   ))}
@@ -1268,18 +1270,18 @@ function PostingModal({ onClose, onDone }: { products: Product[]; onClose: () =>
                     <div className="flex-1 min-w-0">
                       <div className="text-xs font-semibold text-ink-primary truncate">{r.part_name || r.name || r.code || r.mpn || ""}</div>
                       {(r.candidates && r.candidates.length > 0) ? (
-                        <select value={r.chosen} onChange={(e) => setReviewRow(i, { chosen: e.target.value })} className="mt-1 glass-input rounded-xl text-[11px] px-2 py-1 w-full">
+                        <TeklySelect value={r.chosen} onChange={(e) => setReviewRow(i, { chosen: e.target.value })} className="mt-1 glass-input rounded-xl text-[11px] px-2 py-1 w-full">
                           {r.candidates.map((c) => <option key={c.id} value={c.id}>{c.name}{c.sku ? ` (${c.sku})` : ""}</option>)}
                           <option value="__new__">+ Create new: {r.name || r.code}</option>
-                        </select>
+                        </TeklySelect>
                       ) : (
                         <div className="text-[11px] text-ink-tertiary">{r.part_id ? (r.sku ? `SKU ${r.sku}` : "") : `New product${r.code ? ` · SKU ${r.code}` : ""}${r.mpn ? ` · MPN ${r.mpn}` : ""}`}</div>
                       )}
                     </div>
                     {isNew ? (
-                      <select value={r.ptype} onChange={(e) => setReviewRow(i, { ptype: e.target.value as PType })} aria-label="Product type" className="glass-input rounded-xl text-[11px] px-2 py-1">
+                      <TeklySelect value={r.ptype} onChange={(e) => setReviewRow(i, { ptype: e.target.value as PType })} aria-label="Product type" className="glass-input rounded-xl text-[11px] px-2 py-1">
                         <option value="standard">Standard</option><option value="serialized">Serial-tracked</option><option value="expiry">Expiry-tracked</option>
-                      </select>
+                      </TeklySelect>
                     ) : (ser || exp) && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded bg-slate-100 text-ink-secondary">{ser ? "Serial-tracked" : "Expiry-tracked"}</span>}
                     <span className="text-[11px] text-ink-tertiary">×{r.qty}</span>
                     <span className="text-[11px] tabular-nums text-ink-secondary w-14 text-right">{money(r.purchase_price || 0)}</span>
@@ -1347,7 +1349,7 @@ function BulkAdjustModal({ items, onClose, onDone }: { items: Product[]; onClose
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
           {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
           <div className="grid grid-cols-2 gap-3">
-            <div><label className={lbl2}>Location</label><select value={locId} onChange={(e) => setLocId(e.target.value)} className={`${fld} w-full`}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+            <div><label className={lbl2}>Location</label><TeklySelect value={locId} onChange={(e) => setLocId(e.target.value)} className={`${fld} w-full`}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</TeklySelect></div>
             <div><label className={lbl2}>Mode</label>
               <div className="flex gap-1.5">
                 <button onClick={() => setMode("set")} className={`flex-1 rounded-lg border px-2 py-2 text-xs font-semibold ${mode === "set" ? "border-primary bg-primary/5 text-primary" : "border-slate-200 text-ink-secondary"}`}>Set to</button>
@@ -1412,7 +1414,7 @@ function PartsToOrderModal({ onClose, onCreated }: { onClose: () => void; onCrea
               <span className="font-semibold text-ink-primary">{summary.parts} product{summary.parts === 1 ? "" : "s"} short</span>
               <span className="text-ink-tertiary">{summary.jobs_waiting} job{summary.jobs_waiting === 1 ? "" : "s"} waiting</span>
               <div className="ml-auto flex items-center gap-2"><span className="text-[11px] text-ink-tertiary">Order into</span>
-                <select value={locId} onChange={(e) => setLocId(e.target.value)} className="glass-input rounded-xl px-3 py-2 text-xs">{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+                <TeklySelect value={locId} onChange={(e) => setLocId(e.target.value)} className="glass-input rounded-xl px-3 py-2 text-xs">{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</TeklySelect></div>
             </div>
           )}
           {rows == null && <p className="text-xs text-ink-tertiary">Loading…</p>}
@@ -1424,7 +1426,7 @@ function PartsToOrderModal({ onClose, onCreated }: { onClose: () => void; onCrea
                 <button onClick={() => createPO(g)} disabled={!!busy} className="h-[28px] px-3 rounded-lg bg-primary text-white text-[11px] font-semibold hover:bg-primary-container disabled:opacity-60 flex items-center gap-1"><M n="receipt_long" c="text-[13px]" />{busy === g.sid ? "Creating…" : "Create PO"}</button>
               </div>
               <table className="w-full text-left text-xs">
-                <thead className="text-[11px] font-semibold text-ink-tertiary "><tr><th className="py-1.5 px-3">Product</th><th className="py-1.5 px-2 text-right">Need</th><th className="py-1.5 px-2 text-right">Have</th><th className="py-1.5 px-2 text-right">On order</th><th className="py-1.5 px-2 text-right">Order</th><th className="py-1.5 px-3">Jobs</th></tr></thead>
+                <thead><tr className={theadRowClass}><th className="py-1.5 px-3">Product</th><th className="py-1.5 px-2 text-right">Need</th><th className="py-1.5 px-2 text-right">Have</th><th className="py-1.5 px-2 text-right">On order</th><th className="py-1.5 px-2 text-right">Order</th><th className="py-1.5 px-3">Jobs</th></tr></thead>
                 <tbody className="divide-y divide-slate-100">
                   {g.rows.map((r) => (
                     <tr key={r.part_id}>

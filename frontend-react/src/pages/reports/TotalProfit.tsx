@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import { useNavigate } from "react-router-dom";
 import { api, openAuthedDoc } from "../../api/client";
@@ -11,6 +12,7 @@ import { clickableRow } from "../../lib/clickable";
 import { KIND_LABEL, drillRows, trend, type Drill, type ProfitRow } from "./profitView";
 import { laborText, laborWord } from "../../lib/labor";
 import { Badge } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 type Bucket = { count: number; revenue: number; tax: number; cogs?: number; labour_cost: number; commission: number; profit?: number; written_off: number };
 type Group = Bucket & { name: string; jobs: number; dropped: number; sales: number; location_id?: string | null; employee_id?: string | null };
@@ -85,15 +87,15 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 flex items-center gap-2 flex-wrap text-xs">
         <h3 className="text-sm font-bold text-ink-primary mr-auto">Total profit</h3>
         {locs.length > 1 && (
-          <select aria-label="Location" value={locId} onChange={(e) => setLocId(e.target.value)} className="glass-input px-2.5 py-1.5 rounded-lg">
+          <TeklySelect aria-label="Location" value={locId} onChange={(e) => setLocId(e.target.value)} className="glass-input px-2.5 py-1.5 rounded-lg">
             <option value="">All locations</option>
             {locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-          </select>
+          </TeklySelect>
         )}
-        <select aria-label="Technician" value={techId} onChange={(e) => setTechId(e.target.value)} className="glass-input px-2.5 py-1.5 rounded-lg">
+        <TeklySelect aria-label="Technician" value={techId} onChange={(e) => setTechId(e.target.value)} className="glass-input px-2.5 py-1.5 rounded-lg">
           <option value="">Everyone</option>
           {techs.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-        </select>
+        </TeklySelect>
         <DateField mode="date" value={from} onChange={setFrom} className="w-36" />
         <span className="text-ink-tertiary">→</span>
         <DateField mode="date" value={to} onChange={setTo} className="w-36" />
@@ -159,7 +161,7 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
               <div key={title} className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
                 <div className="p-3 border-b border-slate-100 text-xs font-bold text-ink-primary">{title}</div>
                 <table className="w-full text-left text-xs">
-                  <thead><tr className="text-[11px] font-bold text-ink-tertiary bg-slate-50/60">
+                  <thead><tr className={theadRowClass}>
                     <th className="py-2 px-3">Name</th><th className="py-2 px-3 text-right">Jobs (incl. dropped) · Sales</th>
                     <th className="py-2 px-3 text-right">Sales</th><th className="py-2 px-3 text-right">{costsHidden ? "" : "Profit"}</th>
                   </tr></thead>
@@ -189,7 +191,7 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
               </div>
               <div className="overflow-auto max-h-[50vh]">
                 <table className="w-full text-left text-xs">
-                  <thead className="sticky top-0"><tr className="text-[11px] font-bold text-ink-tertiary bg-slate-50">
+                  <thead className="sticky top-0 bg-white"><tr className={theadRowClass}>
                     <th className="py-2 px-3">Number</th><th className="py-2 px-3">What</th><th className="py-2 px-3">Date</th>
                     <th className="py-2 px-3">Customer</th><th className="py-2 px-3 text-right">Sales</th><th className="py-2 px-3 text-right">Tax</th>
                     {!costsHidden && <th className="py-2 px-3 text-right">Parts</th>}

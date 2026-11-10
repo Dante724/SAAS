@@ -11,6 +11,7 @@ import { callsLabel, channelLabel, deviceLine, fmt, newIdempotencyKey, sla, SRC_
 import { clickableRow } from "../../lib/clickable";
 import { buttonClass } from "../../components/Button";
 import { Badge } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 const COL_ACCENT: Record<string, string> = { new: "bg-blue-500", in_progress: "bg-amber-500", won: "bg-emerald-500", lost: "bg-slate-400" };
 const STATUS_LABEL: Record<string, string> = { new: "New", in_progress: "In progress", won: "Won", lost: "Lost" };
@@ -23,7 +24,7 @@ export function TypesManager({ types, onClose, onChanged }: { types: LeadType[];
   const act = async (fn: () => Promise<any>) => { try { setErr(null); await fn(); onChanged(); } catch (e: any) { setErr(e.message); } };
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={onClose} />
       <div role="dialog" aria-label="Inquiry types" className="relative bg-white rounded-2xl shadow-clay-drawer border border-slate-200 w-full max-w-md p-5 space-y-4 text-xs">
         <div className="flex items-center justify-between"><h3 className="text-sm font-bold text-ink-primary">Inquiry types</h3>
           <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
@@ -129,7 +130,7 @@ export default function InquiriesHub() {
           <div className="flex-1 overflow-y-auto px-6 pb-6">
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
               <table className="w-full text-left border-collapse text-xs">
-                <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
+                <thead><tr className={theadRowClass}>
                   <th className="py-3 px-4">Inquiry</th><th className="py-3 px-4">Channel</th><th className="py-3 px-4">Device</th><th className="py-3 px-4">Message</th><th className="py-3 px-4">Status</th><th className="py-3 px-4">Respond by</th><th className="py-3 px-4">Result</th>
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
@@ -192,12 +193,12 @@ export default function InquiriesHub() {
 
       {create && (
         <div className="fixed inset-0 flex justify-end" style={{ zIndex: 55 }}>
-          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={() => setCreate(false)} />
+          <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={() => setCreate(false)} />
           <div role="dialog" aria-label="New inquiry" className="relative h-full w-full max-w-[460px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90">
             <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70"><h3 className="text-base font-bold text-ink-primary">New inquiry</h3><button aria-label="Close" onClick={() => setCreate(false)} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
             <div className="flex-1 overflow-y-auto p-6"><InquiryFields value={cf} onChange={setCf} types={types} creating showSla /></div>
             {createErr && <p role="alert" className="mx-6 mb-2 p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-[11px] font-semibold">{createErr}</p>}
-            <div className="p-4 border-t border-slate-100 bg-slate-50/70 flex items-center justify-end gap-2"><button onClick={() => setCreate(false)} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button><button onClick={createLead} disabled={saving} className={buttonClass("primary", "md")}>Log inquiry</button></div>
+            <div className="p-4 border-t border-slate-100 bg-slate-50/70 flex items-center justify-start gap-2"><button onClick={createLead} disabled={saving} className={buttonClass("primary", "md")}>Log inquiry</button><button onClick={() => setCreate(false)} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button></div>
           </div>
         </div>
       )}

@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import EmptyState from "../../components/EmptyState";
@@ -112,7 +113,7 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
                     <span className="block text-sm text-ink-primary truncate">{i.name || i.email}</span>
                     <span className="block text-xs text-ink-tertiary truncate">{i.name ? `${i.email} · ` : ""}{roleName(i.role_id) || "No role yet"}</span>
                   </span>
-                  <span className={`ml-auto text-[11px] font-semibold px-2 py-0.5 rounded-md ${i.expired ? "bg-rose-50 text-rose-600" : "bg-amber-50 text-amber-700"}`}>{i.expired ? "Invite expired" : "Invited"}</span>
+                  <span className={`ml-auto text-[11px] font-semibold px-2 py-0.5 rounded-full ${i.expired ? "bg-rose-50 text-rose-600" : "bg-amber-50 text-amber-700"}`}>{i.expired ? "Invite expired" : "Invited"}</span>
                   <button onClick={() => cancelInvite(i)} aria-label={`Cancel invite for ${i.email}`} className="w-7 h-7 rounded-lg grid place-items-center text-ink-tertiary hover:bg-rose-50 hover:text-rose-600 opacity-0 group-hover:opacity-100 focus:opacity-100"><M n="close" c="text-base" /></button>
                 </div>
               ))}
@@ -131,9 +132,9 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
               </span>
               <span className="ml-auto flex items-center gap-2 flex-shrink-0">
                 {roleName(p.role_id)
-                  ? <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-slate-100 text-ink-secondary">{roleName(p.role_id)}</span>
-                  : <span className="text-[11px] px-2 py-0.5 rounded-md border border-dashed border-slate-300 text-ink-tertiary">No role</span>}
-                {p.active === false && <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-rose-50 text-rose-600">Blocked</span>}
+                  ? <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-ink-secondary inline-block first-letter:uppercase">{roleName(p.role_id)}</span>
+                  : <span className="text-[11px] px-2 py-0.5 rounded-full border border-dashed border-slate-300 text-ink-tertiary">No role</span>}
+                {p.active === false && <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-rose-50 text-rose-600">Blocked</span>}
                 <M n="chevron_right" c="text-base text-ink-tertiary" />
               </span>
             </div>
@@ -447,10 +448,10 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
           {tab === "home" && (
             <div>
               <Row icon="dashboard" title="Opens on" hint="Where someone with this role lands when they open the app.">
-                <select value={homeRoute} onChange={(e) => setHomeRoute(e.target.value)} aria-label="Landing page"
+                <TeklySelect value={homeRoute} onChange={(e) => setHomeRoute(e.target.value)} aria-label="Landing page"
                   className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-primary">
                   {LANDING_PAGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                </select>
+                </TeklySelect>
               </Row>
               <Row icon="notifications" title="Alerts on Home" hint="Pick what shows up. Pick none to show everything.">
                 <div className="flex flex-wrap gap-1.5">
@@ -467,11 +468,11 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
         </div>
 
         <div className="px-5 py-4 border-t border-slate-100 flex items-center gap-2">
-          {!isNew && (members > 0
-            ? <span className="text-xs text-ink-tertiary">{members} {members === 1 ? "person has" : "people have"} this role</span>
-            : <button onClick={remove} disabled={busy} className="px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50">Delete role</button>)}
-          <button onClick={onClose} className={buttonClass("secondary", "md", "ml-auto")}>Cancel</button>
           <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : isNew ? "Create role" : "Save"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
+          {!isNew && (members > 0
+            ? <span className="ml-auto text-xs text-ink-tertiary">{members} {members === 1 ? "person has" : "people have"} this role</span>
+            : <button onClick={remove} disabled={busy} className="ml-auto px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50">Delete role</button>)}
         </div>
       </div>
     </div>
@@ -506,10 +507,10 @@ export function DeviceLimitCard({ onFlash }: { onFlash: (m: string) => void }) {
           <p className="mt-1 text-xs text-ink-tertiary">How many devices one login can use at the same time. When someone hits the limit,
             they pick a device to sign out before they can sign in somewhere new. The phone app counts as a device.</p>
         </div>
-        <select id="device-limit" value={value ?? ""} disabled={value === null || busy} onChange={(e) => save(e.target.value)}
+        <TeklySelect id="device-limit" value={value ?? ""} disabled={value === null || busy} onChange={(e) => save(e.target.value)}
           className="glass-input rounded-xl px-3 py-2 text-sm font-semibold text-ink-primary">
           {LIMITS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-        </select>
+        </TeklySelect>
       </div>
       <p className="mt-3 text-xs text-ink-tertiary">People already over a new limit stay signed in until they sign out.
         Each person can see and sign out their devices under Security &amp; sign-in.</p>

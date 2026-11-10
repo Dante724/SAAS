@@ -21,6 +21,7 @@ export type Me = {
   pin_set?: boolean;   // Tekly Go payment PIN
   location_id?: string | null;
   support?: { email?: string; url?: string };
+  card_readers?: boolean;   // card readers switched on for this server (off by default)
   billing?: Billing | null;
 };
 

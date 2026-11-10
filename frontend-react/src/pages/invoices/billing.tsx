@@ -130,20 +130,21 @@ export function MoreMenu({ items, label = "More actions", className = "", align 
   );
 }
 
-/* Right-hand drawer used by every billing panel. `z` lets a drawer open on top of another. */
+/* Right-hand drawer used by every billing panel. `z` lets a drawer open on top of another.
+   The footer's main button comes first, on the left. */
 export function Drawer({ title, sub, onClose, children, footer, z = 50, width = 560, label }: {
   title: ReactNode; sub?: ReactNode; onClose: () => void; children: ReactNode; footer?: ReactNode; z?: number; width?: number; label: string;
 }) {
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: z }} role="dialog" aria-modal="true" aria-label={label}>
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className="relative max-w-full bg-white h-full shadow-drawer flex flex-col" style={{ width }}>
         <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-slate-200">
           <div className="min-w-0"><h2 className="text-base font-semibold text-ink-primary truncate">{title}</h2>{sub && <div className="text-xs text-ink-tertiary mt-0.5">{sub}</div>}</div>
           <button aria-label="Close" onClick={onClose} className="w-8 h-8 flex-shrink-0 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
         </div>
         <div className="flex-1 overflow-y-auto p-5 space-y-4">{children}</div>
-        {footer && <div className="px-5 py-4 border-t border-slate-200 flex flex-wrap items-center justify-end gap-2">{footer}</div>}
+        {footer && <div className="px-5 py-4 border-t border-slate-200 flex flex-wrap items-center justify-start gap-2">{footer}</div>}
       </div>
     </div>
   );

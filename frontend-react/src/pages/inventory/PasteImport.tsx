@@ -1,4 +1,5 @@
 import { useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { money } from "./types";
@@ -100,9 +101,9 @@ export default function PasteImport({ onAdd, onClose, canCreate }: { onAdd: (lin
         <div className="flex gap-2 overflow-x-auto pb-1" aria-label="Column mapping">
           {map.map((f, c) => (
             <div key={c} className="shrink-0">
-              <select value={f} onChange={(e) => remap(c, e.target.value as PasteField)} aria-label={`Column ${c + 1}`} className={`${fld} w-28`}>
+              <TeklySelect value={f} onChange={(e) => remap(c, e.target.value as PasteField)} aria-label={`Column ${c + 1}`} className={`${fld} w-28`}>
                 {FIELD_ORDER.map((o) => <option key={o} value={o}>{FIELD_LABELS[o]}</option>)}
-              </select>
+              </TeklySelect>
               <div className="text-[11px] text-ink-tertiary mt-0.5 px-1 truncate w-28" title={grid[0]?.[c] || ""}>{grid[0]?.[c] || "—"}</div>
             </div>
           ))}
@@ -120,15 +121,15 @@ export default function PasteImport({ onAdd, onClose, canCreate }: { onAdd: (lin
               <div className="flex-1 min-w-0">
                 <div className="text-xs font-semibold text-ink-primary truncate">{r.name || r.code || r.mpn}</div>
                 {r.candidates && r.candidates.length > 0 ? (
-                  <select value={r.chosen} aria-label={`Product for ${r.name || r.code}`} onChange={(e) => setReview(review.map((x, j) => j === i ? { ...x, chosen: e.target.value } : x))} className={`${fld} mt-1 w-full py-1`}>
+                  <TeklySelect value={r.chosen} aria-label={`Product for ${r.name || r.code}`} onChange={(e) => setReview(review.map((x, j) => j === i ? { ...x, chosen: e.target.value } : x))} className={`${fld} mt-1 w-full py-1`}>
                     {r.candidates.map((c) => <option key={c.id} value={c.id}>{c.name}{c.sku ? ` (${c.sku})` : ""}</option>)}
                     <option value="__new__">+ Create new: {r.name || r.code}</option>
-                  </select>
+                  </TeklySelect>
                 ) : r.match_status === "matched" && r.part_id ? (
-                  <select value={r.chosen} aria-label={`Product for ${r.name || r.code}`} onChange={(e) => setReview(review.map((x, j) => j === i ? { ...x, chosen: e.target.value } : x))} className={`${fld} mt-1 w-full py-1`}>
+                  <TeklySelect value={r.chosen} aria-label={`Product for ${r.name || r.code}`} onChange={(e) => setReview(review.map((x, j) => j === i ? { ...x, chosen: e.target.value } : x))} className={`${fld} mt-1 w-full py-1`}>
                     <option value={r.part_id}>{`${r.part_name || "Existing product"}${r.sku ? ` · our SKU ${r.sku}` : ""} — matched by ${matchedBy(r)}`}</option>
                     <option value="__new__">+ Create new: {r.name || r.code}</option>
-                  </select>
+                  </TeklySelect>
                 ) : <div className="text-[11px] text-ink-tertiary truncate">{`Will be created${r.code ? ` · supplier code ${r.code}` : ""}`}</div>}
               </div>
               <span className="text-[11px] text-ink-tertiary tabular-nums">×{r.qty}</span>

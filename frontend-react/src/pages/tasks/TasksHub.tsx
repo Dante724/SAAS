@@ -1,4 +1,5 @@
 import SkeletonRows from "../../components/SkeletonRows";
+import TeklySelect from "../../components/TeklySelect";
 import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
@@ -12,6 +13,7 @@ import { loadFailed } from "../../lib/notice";
 import { clickableRow } from "../../lib/clickable";
 import { buttonClass } from "../../components/Button";
 import { Badge } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 type Task = { id: string; title?: string; description?: string; status?: string; priority?: number; assigned_to_id?: string | null; assignee_name?: string; assignee_ids?: string[]; assignee_names?: string[]; due_at?: string | null; completed_at?: string | null; overdue?: boolean; order_id?: string | null; order_number?: string | null; client_name?: string };
 type Emp = { id: string; name: string };
@@ -89,7 +91,7 @@ export default function TasksHub() {
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
           {/* Fixed column widths on desktop: switching filters never re-sizes the columns. */}
           <table className="w-full text-left border-collapse text-xs xl:table-fixed">
-            <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
+            <thead><tr className={theadRowClass}>
               <th className="py-3 pl-5 pr-2 w-10 xl:w-12"></th><th className="py-3 px-3">Task</th><th className="py-3 px-3 xl:w-32">Status</th><th className="py-3 px-3 xl:w-48">Links</th><th className="py-3 px-3 xl:w-40">Assigned to</th><th className="py-3 px-3 xl:w-32">Due</th>
             </tr></thead>
             <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
@@ -120,7 +122,7 @@ export default function TasksHub() {
       {/* task detail drawer */}
       {sel && (
         <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={() => setSel(null)} />
+          <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={() => setSel(null)} />
           <div className="relative h-full w-full max-w-[480px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
             <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
             <header className="px-6 py-4 border-b border-slate-100 flex items-start justify-between bg-slate-50/70">
@@ -182,7 +184,7 @@ export default function TasksHub() {
       {/* new task drawer */}
       {create && (
         <div className="fixed inset-0 flex justify-end" style={{ zIndex: 55 }}>
-          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={() => setCreate(false)} />
+          <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={() => setCreate(false)} />
           <div className="relative h-full w-full max-w-[440px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
             <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70"><h3 className="text-base font-bold text-ink-primary">New task</h3><button aria-label="Close" onClick={() => setCreate(false)} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
             <div className="flex-1 overflow-y-auto p-6 space-y-4 text-xs">
@@ -202,7 +204,7 @@ export default function TasksHub() {
                   ))}
                 </div>
               </div>
-              <div><label className="block font-semibold text-ink-secondary mb-1">Priority</label><select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} className={inp}><option value={0}>Normal</option><option value={1}>High</option><option value={2}>Urgent</option></select></div>
+              <div><label className="block font-semibold text-ink-secondary mb-1">Priority</label><TeklySelect value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} className={inp}><option value={0}>Normal</option><option value={1}>High</option><option value={2}>Urgent</option></TeklySelect></div>
               <div><label className="block font-semibold text-ink-secondary mb-1">Link to work order <span className="text-ink-tertiary font-normal">(optional)</span></label><JobPicker value={form.order_id ? { id: form.order_id, order_number: form.order_number } : null} onChange={(j) => setForm({ ...form, order_id: j?.id || "", order_number: j?.order_number || "" })} /></div>
               <div><label className="block font-semibold text-ink-secondary mb-1">Due</label><DateField mode="datetime" value={form.due_at} onChange={(v) => setForm({ ...form, due_at: v })} /></div>
             </div>

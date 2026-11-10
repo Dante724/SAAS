@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
@@ -8,6 +9,7 @@ import PasteImport, { ImportedLine } from "./PasteImport";
 import { useMe } from "../../context/Me";
 import { loadFailed } from "../../lib/notice";
 import { FIELD_LABELS, FIELD_ORDER, fileToGrid, gridToRows, mapByHeader, type PasteField } from "./pasteMap";
+import { theadRowClass } from "../../components/Table";
 
 /** Create a purchase order: supplier + location + line items → POST /inventory/po.
  * This is the entry point that was missing — the toolbar button used to open the
@@ -165,16 +167,16 @@ export default function NewPODrawer({ products, onClose, onCreated }:
                   <button type="button" onClick={addSupplier} disabled={supBusy || !supName.trim()} className={buttonClass("primary", "md")}>Add</button>
                 </div>
               ) : (
-                <select value={supplierId} onChange={(e) => setSupplierId(e.target.value)} className={fld}>
+                <TeklySelect value={supplierId} onChange={(e) => setSupplierId(e.target.value)} className={fld}>
                   <option value="">Select supplier…</option>
                   {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                </select>
+                </TeklySelect>
               )}
             </div>
             <div><label className={lbl}>Location *</label>
-              <select value={locId} onChange={(e) => setLocId(e.target.value)} className={fld}>
+              <TeklySelect value={locId} onChange={(e) => setLocId(e.target.value)} className={fld}>
                 {locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-              </select></div>
+              </TeklySelect></div>
             <div><label className={lbl}>Expected</label>
               <DateField value={expected} onChange={setExpected} /></div>
             <label className="flex items-end gap-2 pb-2 text-sm text-ink-secondary cursor-pointer">
@@ -183,17 +185,17 @@ export default function NewPODrawer({ products, onClose, onCreated }:
 
           <div className="rounded-2xl border border-slate-200/80 overflow-hidden">
             <table className="w-full text-left text-xs">
-              <thead className="bg-slate-50/70 text-[11px] font-semibold text-ink-tertiary">
-                <tr><th className="py-2.5 px-3">Product</th><th className="py-2.5 px-2 text-right w-16">Qty</th><th className="py-2.5 px-2 text-right w-24">Unit cost</th><th className="py-2.5 px-2 text-right w-24">Total</th><th className="w-8" /></tr>
+              <thead>
+                <tr className={theadRowClass}><th className="py-2.5 px-3">Product</th><th className="py-2.5 px-2 text-right w-16">Qty</th><th className="py-2.5 px-2 text-right w-24">Unit cost</th><th className="py-2.5 px-2 text-right w-24">Total</th><th className="w-8" /></tr>
               </thead>
               <tbody className="divide-y divide-slate-100">
                 {rows.map((r, i) => (
                   <tr key={i}>
                     <td className="py-2 px-3">
-                      <select value={r.part_id} onChange={(e) => pickPart(i, e.target.value)} className="glass-input rounded-xl px-2 py-1.5 text-xs w-full">
+                      <TeklySelect value={r.part_id} onChange={(e) => pickPart(i, e.target.value)} className="glass-input rounded-xl px-2 py-1.5 text-xs w-full">
                         <option value="">Select product…</option>
                         {pool.map((p) => <option key={p.id} value={p.id}>{p.name}{p.sku ? ` · ${p.sku}` : ""}</option>)}
-                      </select>
+                      </TeklySelect>
                     </td>
                     <td className="py-2 px-2"><input type="number" min={1} value={r.qty} onChange={(e) => setRow(i, { qty: Math.max(1, Number(e.target.value) || 1) })} className="glass-input rounded-xl px-2 py-1.5 text-xs w-full text-right font-mono" /></td>
                     <td className="py-2 px-2"><input type="number" min={0} value={r.cost} onChange={(e) => setRow(i, { cost: Math.max(0, Number(e.target.value) || 0) })} className="glass-input rounded-xl px-2 py-1.5 text-xs w-full text-right font-mono" /></td>
@@ -228,9 +230,9 @@ export default function NewPODrawer({ products, onClose, onCreated }:
               <div className="flex gap-2 overflow-x-auto pb-1">
                 {sheet.headers.map((h, c) => (
                   <div key={h} className="shrink-0 w-32">
-                    <select aria-label={`Field for ${h}`} value={sheet.map[c]} onChange={(e) => remapSheet(c, e.target.value as PasteField)} className="glass-input rounded-lg px-2 py-1.5 text-xs w-full">
+                    <TeklySelect aria-label={`Field for ${h}`} value={sheet.map[c]} onChange={(e) => remapSheet(c, e.target.value as PasteField)} className="glass-input rounded-lg px-2 py-1.5 text-xs w-full">
                       {FIELD_ORDER.map((f) => <option key={f} value={f}>{FIELD_LABELS[f]}</option>)}
-                    </select>
+                    </TeklySelect>
                     <div className="text-[11px] text-ink-tertiary mt-1 px-1 truncate" title={h}>{h}</div>
                   </div>
                 ))}

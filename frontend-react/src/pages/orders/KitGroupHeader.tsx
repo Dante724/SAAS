@@ -82,7 +82,7 @@ export default function KitGroupHeader({ orderId, groupId, name, qty, mode, lock
             <FloatingMenu anchorSel={menuSel} onClose={() => setMenuOpen(false)} width={256}>
               <div className="text-[13px]">
                 {canPrint && <>
-                  <div className="px-2.5 pt-1 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-tertiary">Customer sees</div>
+                  <div className="px-2.5 pt-1 pb-1.5 text-[11px] font-semibold text-ink-tertiary">Customer sees</div>
                   {KIT_PRINT_LABELS.map((o) => (
                     <button type="button" key={o.value} role="menuitemradio" aria-checked={mode === o.value} title={o.hint}
                       onClick={pick(() => { if (o.value !== mode) save({ print_mode: o.value }, "Kit print setting saved"); })}

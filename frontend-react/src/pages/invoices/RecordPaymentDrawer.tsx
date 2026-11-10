@@ -76,8 +76,8 @@ export default function RecordPaymentDrawer({ invoice, onClose, onPaid }: { invo
   return (
     <Drawer z={60} width={440} label="Record payment" onClose={onClose}
       title="Record payment" sub={<>Invoice {invoice.invoice_number} · balance due <span className="font-semibold text-ink-primary">{cash(due)}</span></>}
-      footer={<><button onClick={onClose} className={btnGhost}>Cancel</button>
-        <button onClick={save} disabled={busy || !!problem} className={btnPrimary}>{busy ? "Saving…" : `Record ${cash(amt)}`}</button></>}>
+      footer={<><button onClick={save} disabled={busy || !!problem} className={btnPrimary}>{busy ? "Saving…" : `Record ${cash(amt)}`}</button>
+        <button onClick={onClose} className={btnGhost}>Cancel</button></>}>
       <ErrorNote msg={err} />
       <div>
         <label htmlFor="pay-amount" className={labelCls}>Amount</label>

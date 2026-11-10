@@ -1,4 +1,5 @@
 import { askCancelReason, droppedStatus } from "../../lib/cancelReason";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import { fmtDay } from "../../lib/serverTime";
 import { tint } from "../../lib/tint";
@@ -365,14 +366,14 @@ export default function WorkOrdersHub() {
               <div className="p-1.5 space-y-3">
                 <div className="flex items-center justify-between"><span className="text-[11px] font-semibold text-ink-tertiary">Filter work orders</span>{activeFacets ? <button onClick={() => { setFAssignee(""); setFPriority(""); setFScheduled(""); }} className="text-[11px] font-semibold text-primary">Clear</button> : null}</div>
                 <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Technician</span>
-                  <select value={fAssignee} onChange={(e) => setFAssignee(e.target.value)} className="glass-input w-full rounded-xl px-3 py-2 text-sm"><option value="">Any</option><option value="__none">Unassigned</option>{assignees.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</select></label>
+                  <TeklySelect value={fAssignee} onChange={(e) => setFAssignee(e.target.value)} className="glass-input w-full rounded-xl px-3 py-2 text-sm"><option value="">Any</option><option value="__none">Unassigned</option>{assignees.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}</TeklySelect></label>
                 {fAssignee && fAssignee !== "__none" && (
                   <JobLabelsButton pick={{ assignedToId: fAssignee }} label="Print QR labels for all their open jobs" className="text-[11px] font-semibold text-primary hover:underline text-left" />
                 )}
                 <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Priority</span>
-                  <select value={fPriority} onChange={(e) => setFPriority(e.target.value)} className="glass-input w-full rounded-xl px-3 py-2 text-sm"><option value="">Any</option><option value="0">Normal</option><option value="1">High</option><option value="2">Urgent</option><option value="urgent">High or urgent</option></select></label>
+                  <TeklySelect value={fPriority} onChange={(e) => setFPriority(e.target.value)} className="glass-input w-full rounded-xl px-3 py-2 text-sm"><option value="">Any</option><option value="0">Normal</option><option value="1">High</option><option value="2">Urgent</option><option value="urgent">High or urgent</option></TeklySelect></label>
                 {view !== "scheduler" && <label className="block space-y-1"><span className="text-[11px] font-semibold text-ink-secondary">Scheduling</span>
-                  <select value={fScheduled} onChange={(e) => setFScheduled(e.target.value as "" | "yes" | "no")} className="glass-input w-full rounded-xl px-3 py-2 text-sm"><option value="">Any</option><option value="yes">Scheduled</option><option value="no">Unscheduled</option></select></label>}
+                  <TeklySelect value={fScheduled} onChange={(e) => setFScheduled(e.target.value as "" | "yes" | "no")} className="glass-input w-full rounded-xl px-3 py-2 text-sm"><option value="">Any</option><option value="yes">Scheduled</option><option value="no">Unscheduled</option></TeklySelect></label>}
               </div>
             </FloatingMenu>
           )}
@@ -407,10 +408,10 @@ export default function WorkOrdersHub() {
             <span className="tabular-nums">{sel.size} selected</span>
             <div className="h-4 w-px bg-slate-200" />
             <label className="flex items-center gap-2"><span className="text-ink-secondary font-medium">Set status</span>
-            <select disabled={busy} onChange={(e) => { bulkStatus(e.target.value); e.target.value = ""; }} className="bg-white border border-slate-200 rounded-lg px-2 py-1 text-ink-primary text-xs focus:outline-none focus:ring-2 focus:ring-primary/30">
+            <TeklySelect disabled={busy} onChange={(e) => { bulkStatus(e.target.value); e.target.value = ""; }} className="bg-white border border-slate-200 rounded-lg px-2 py-1 text-ink-primary text-xs focus:outline-none focus:ring-2 focus:ring-primary/30">
               <option value="">Choose…</option>
               {statuses.map((s) => <option key={s.id} value={s.key || norm(s.name)}>{s.name}</option>)}
-            </select></label>
+            </TeklySelect></label>
             <div className="h-4 w-px bg-slate-200" />
             <JobLabelsButton pick={{ orderIds: [...sel] }} label="Print QR labels" className="px-2.5 py-1 rounded-lg border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50" />
             {canArchive && <button disabled={busy} onClick={bulkArchive} className={buttonClass("secondary", "sm")}><M n="archive" c="text-[13px]" />Archive</button>}
@@ -447,7 +448,7 @@ export default function WorkOrdersHub() {
             <thead>
               <tr className="bg-slate-50/60 border-b border-slate-200/80 text-ink-tertiary text-[11px] font-semibold ">
                 <th className="py-3 px-4 w-10 xl:w-12"><input className="rounded text-primary border-slate-300" type="checkbox" aria-label="Select all work orders" checked={rows.length > 0 && sel.size === rows.length} onChange={toggleAll} /></th>
-                {showCol("order_id") && <th className="py-3 px-4 xl:w-28">Work order</th>}
+                {showCol("order_id") && <th className="py-3 px-4 xl:w-40">Work order</th>}
                 {showCol("client") && <th className="py-3 px-4">Customer</th>}
                 {showCol("device") && <th className="py-3 px-4">Device / Asset</th>}
                 {showCol("status") && <th className="py-3 px-4 xl:w-36">Status</th>}
@@ -463,7 +464,7 @@ export default function WorkOrdersHub() {
               {pageRows.map((o) => (
                 <tr key={o.id} {...clickableRow(() => setOpen(o))} className={`hover:bg-slate-50/80 cursor-pointer transition-colors group ${sel.has(o.id) ? "bg-primary/5" : ""}`}>
                   <td className="py-3.5 px-4" onClick={(e) => e.stopPropagation()}><input className="rounded text-primary border-slate-300" type="checkbox" aria-label={`Select ${o.order_number || o.id}`} checked={sel.has(o.id)} onChange={() => toggle(o.id)} /></td>
-                  {showCol("order_id") && <td className="py-3.5 px-4 font-medium tabular-nums text-primary whitespace-nowrap"><span className="inline-flex items-center gap-1.5">{o.order_number || o.id}{(o.priority || 0) >= 1 && <span role="img" aria-label="Urgent" title="Urgent"><M n="flag" c="text-[14px] text-rose-600" /></span>}{!!(o.client_msg_unread && o.client_msg_unread > 0) && <span title={`${o.client_msg_unread} unread customer message(s)`} className="inline-flex items-center gap-0.5 text-[11px] font-bold bg-primary text-white px-1.5 py-0.5 rounded-full"><M n="forum" c="text-[11px]" />{o.client_msg_unread}</span>}{(o as any).checklists_pending && <span role="img" aria-label="Checklist incomplete" title="Checklist incomplete" className="w-2 h-2 rounded-full bg-amber-500" />}</span></td>}
+                  {showCol("order_id") && <td className="py-3.5 px-4 font-medium tabular-nums text-primary whitespace-nowrap"><span className="inline-flex items-center gap-1.5">{o.order_number || o.id}{(o.priority || 0) >= 1 && <span role="img" aria-label="Urgent" title="Urgent"><M n="flag" c="text-[14px] text-rose-600" /></span>}{!!(o.client_msg_unread && o.client_msg_unread > 0) && <span role="img" aria-label={`${o.client_msg_unread} unread customer message${o.client_msg_unread === 1 ? "" : "s"}`} title={`${o.client_msg_unread} unread customer message${o.client_msg_unread === 1 ? "" : "s"}`} className="inline-flex items-center gap-0.5 text-2xs font-semibold text-primary"><M n="forum" c="text-xs" />{o.client_msg_unread}</span>}{(o as any).checklists_pending && <span role="img" aria-label="Checklist incomplete" title="Checklist incomplete" className="w-2 h-2 rounded-full bg-amber-500" />}</span></td>}
                   {showCol("client") && <td className="py-3.5 px-4"><span className="flex items-center gap-2.5"><Avatar name={o.client?.name} size={30} /><span className="min-w-0"><span className="block font-semibold text-[13px] text-ink-primary truncate">{o.client?.name || "Walk-in"}</span>{o.client?.phone && <span className="text-[11px] font-normal text-ink-tertiary block">{o.client.phone}</span>}</span></span></td>}
                   {showCol("device") && <td className="py-3.5 px-4 text-ink-primary font-semibold">{deviceName(o.device) === "—" ? "" : deviceName(o.device)}</td>}
                   {showCol("status") && <td className="py-3.5 px-4"><div className="flex items-center gap-1.5">{pill(o.status, stOf(o))}{stalledTag(o.id)}</div></td>}
