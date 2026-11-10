@@ -108,7 +108,7 @@ export default function ItemsSheet({ open, onClose, orderId, deviceId, onAdded, 
           )}
         </div>
         {scanning && (
-          <div className="relative mb-3 aspect-[4/3] w-full overflow-hidden rounded-xl bg-[#0b1020]">
+          <div className="relative mb-3 aspect-[4/3] w-full overflow-hidden rounded-xl bg-camera">
             <video ref={video} className="h-full w-full object-cover" playsInline muted />
             <div className="pointer-events-none absolute inset-x-8 top-1/2 h-0.5 -translate-y-1/2 bg-rose-500/80" />
             <p className="absolute inset-x-0 bottom-2 text-center text-go-sub text-white/90">Point at the part's barcode</p>

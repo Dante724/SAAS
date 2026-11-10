@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import TeklySelect from "./TeklySelect";
 import { M } from "./Shell";
 import { api } from "../api/client";
 import ScanButton from "./ScanButton";
@@ -57,10 +58,10 @@ export default function ScanStockPanel({ onClose, onPosted }: { onClose: () => v
         <div className="p-4 space-y-3">
           <div className="grid grid-cols-2 gap-2">
             <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Location</label>
-              <select value={loc} onChange={(e) => setLoc(e.target.value)} className="glass-input rounded-xl px-3 py-2 text-xs w-full">{locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+              <TeklySelect value={loc} onChange={(e) => setLoc(e.target.value)} className="glass-input rounded-xl px-3 py-2 text-xs w-full">{locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</TeklySelect></div>
             <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Action</label>
-              <select value={mode} onChange={(e) => setMode(e.target.value as any)} className="glass-input rounded-xl px-3 py-2 text-xs w-full">
-                <option value="receive">Receive</option><option value="writeoff">Write off</option><option value="adjust">Count / adjust</option></select></div>
+              <TeklySelect value={mode} onChange={(e) => setMode(e.target.value as any)} className="glass-input rounded-xl px-3 py-2 text-xs w-full">
+                <option value="receive">Receive</option><option value="writeoff">Write off</option><option value="adjust">Count / adjust</option></TeklySelect></div>
           </div>
           <div className="flex items-end gap-2">
             <div className="w-20"><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Qty</label>
