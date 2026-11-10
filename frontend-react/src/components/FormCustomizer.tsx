@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import TeklySelect from "./TeklySelect";
 import { M } from "./Shell";
 import { api } from "../api/client";
 import { confirmDialog, promptDialog } from "../lib/dialog";
@@ -252,13 +253,13 @@ function FieldPanel({ it, dirs, form, onLabel, onField, onRequired, onHide, onDe
       )}
       {it.kind === "custom" && f && (<>
         <div><label className={lbl}>Answer type</label>
-          <select value={f.field_type} onChange={(e) => onField({ field_type: e.target.value })} className="glass-input w-full rounded-lg px-3 py-2 text-sm">
-            {TYPES.map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select></div>
+          <TeklySelect value={f.field_type} onChange={(e) => onField({ field_type: e.target.value })} className="glass-input w-full rounded-lg px-3 py-2 text-sm">
+            {TYPES.map(([k, v]) => <option key={k} value={k}>{v}</option>)}</TeklySelect></div>
         {isChoice && (
           <div><label className={lbl}>Choices</label>
-            <select value={f.directory_key || ""} onChange={(e) => onField({ directory_key: e.target.value || null })} className="glass-input w-full rounded-lg px-3 py-2 text-sm mb-2">
+            <TeklySelect value={f.directory_key || ""} onChange={(e) => onField({ directory_key: e.target.value || null })} className="glass-input w-full rounded-lg px-3 py-2 text-sm mb-2">
               <option value="">Type the choices here</option>
-              {dirs.map((d) => <option key={d.key} value={d.key}>Use the “{d.name}” list</option>)}</select>
+              {dirs.map((d) => <option key={d.key} value={d.key}>Use the “{d.name}” list</option>)}</TeklySelect>
             {!f.directory_key && <input value={opts} onChange={(e) => setOpts(e.target.value)} onBlur={() => onField({ options: opts.split(",").map((o) => o.trim()).filter(Boolean) })}
               placeholder="Charger, Case, SIM card" className="glass-input w-full rounded-lg px-3 py-2 text-sm" />}
           </div>

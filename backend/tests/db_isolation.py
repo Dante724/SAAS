@@ -152,6 +152,30 @@ async def incarnation(url: str):
         await conn.close()
 
 
+# Every other session in this process's database: who is waiting, on whom, and since when. Printed
+# when a test hangs or the per-test cleanup times out on a lock, so the log names the blocker.
+ACTIVITY_SQL = """
+SELECT pid, state, wait_event_type, wait_event, pg_blocking_pids(pid) AS blocked_by,
+       round(extract(epoch FROM now() - xact_start)) AS xact_s, left(query, 200) AS query
+FROM pg_stat_activity
+WHERE datname = current_database() AND pid <> pg_backend_pid() AND backend_type = 'client backend'
+ORDER BY xact_start NULLS LAST
+"""
+
+
+async def activity(url: str) -> list[str]:
+    """ACTIVITY_SQL for this process's own database, one line per session."""
+    import asyncpg
+
+    conn = await asyncpg.connect(_asyncpg_dsn(url, make_url(url).database), timeout=10, command_timeout=30)
+    try:
+        rows = await conn.fetch(ACTIVITY_SQL)
+    finally:
+        await conn.close()
+    return [f"pid={r['pid']} state={r['state']} wait={r['wait_event_type']}/{r['wait_event']} "
+            f"blocked_by={list(r['blocked_by'])} xact_s={r['xact_s']} query={r['query']!r}" for r in rows]
+
+
 async def drop_postgres(url: str, base_db: str) -> None:
     conn = await _admin_connect(url, base_db)
     try:
