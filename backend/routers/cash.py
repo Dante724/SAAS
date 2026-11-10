@@ -281,9 +281,18 @@ class TxnIn(BaseModel):
 @router.post("/transactions", status_code=201)
 async def create_transaction(
     data: TxnIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
+    """A manual income or expense. A retry with the same Idempotency-Key gets the first answer
+    back instead of posting twice."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "cash.transaction", data,
+                          lambda: _create_transaction(data, db, current))
+
+
+async def _create_transaction(data: TxnIn, db: AsyncSession, current: Employee):
     if data.txn_type not in ("income", "expense"):
         raise HTTPException(400, "Use income or expense (transfer has its own endpoint)")
     await assert_perm(db, current, "can_create_incomes" if data.txn_type == "income" else "can_create_expenses")
@@ -471,9 +480,18 @@ async def _registry_rate(db, org_id: str, code: str) -> Optional[float]:
 @router.post("/transfer", status_code=201)
 async def transfer(
     data: TransferIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_transfer_money")),
 ):
+    """Move money between two accounts. A retry with the same Idempotency-Key gets the first
+    answer back instead of moving it twice."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "cash.transfer", data,
+                          lambda: _transfer(data, db, current))
+
+
+async def _transfer(data: TransferIn, db: AsyncSession, current: Employee):
     if data.from_account_id == data.to_account_id:
         raise HTTPException(400, "Choose two different accounts")
     if data.amount <= 0:

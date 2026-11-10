@@ -3,17 +3,24 @@ one, follow the charge (polling), cancel, refund, and (outside production) prese
 The money side lives in services/terminal.py; provider webhooks arrive in routers/payments.py."""
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import settings
 from backend.db.database import get_db
 from backend.models import Employee, Location, PaymentTerminal, TerminalCharge
 from backend.services import terminal as svc
 from backend.services.auth import assert_perm, get_current_employee, has_perm, require_perm
 
-router = APIRouter(prefix="/api/payments/terminal", tags=["payments"])
+def _card_readers_on() -> None:
+    """Card readers are switched off (settings.CARD_READERS_ENABLED): every route here is a 404."""
+    if not settings.CARD_READERS_ENABLED:
+        raise HTTPException(404, "Card readers aren't available")
+
+
+router = APIRouter(prefix="/api/payments/terminal", tags=["payments"], dependencies=[Depends(_card_readers_on)])
 
 
 async def _readers_viewer(db: AsyncSession = Depends(get_db),
@@ -158,9 +165,16 @@ class ChargeIn(BaseModel):
 
 
 @router.post("/charge", status_code=201)
-async def charge(data: ChargeIn, db: AsyncSession = Depends(get_db),
+async def charge(data: ChargeIn, request: Request, db: AsyncSession = Depends(get_db),
                  current: Employee = Depends(require_perm("can_take_card_payments"))):
-    """Send an amount to a reader. The reader then waits for the card; poll GET /charges/{id}."""
+    """Send an amount to a reader. The reader then waits for the card; poll GET /charges/{id}.
+    A retry with the same Idempotency-Key gets the first charge back instead of sending another."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "terminal.charge", data,
+                          lambda: _charge_start(data, db, current))
+
+
+async def _charge_start(data: ChargeIn, db: AsyncSession, current: Employee):
     if data.order_id:
         await assert_perm(db, current, "can_view_finance")   # same gate as taking any order payment
     if data.sale_id:

@@ -1,24 +1,20 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import TeklySelect from "../../components/TeklySelect";
+import HexTile from "../../components/HexTile";
+import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import CurrencyManager from "../../components/CurrencyManager";
 import Switch from "../../components/Switch";
-import SettingsPage from "../../components/SettingsPage";
-import Card from "../../components/Section";
-import Button from "../../components/Button";
-import Tabs from "../../components/Tabs";
-import SaveFooter from "../../components/SaveFooter";
-import { SettingRow } from "../../components/SettingRow";
-import { fieldClass, labelClass } from "../../components/Field";
-import { sectionCard } from "../../components/Section";
 import { getLang, setLang, LANGS } from "../../i18n";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
 import { SenseSettingsSection } from "../../components/sense/Sense";
 import { laborText } from "../../lib/labor";
+import SaveFooter from "../../components/SaveFooter";
 
-/* Settings › General — the shop's profile. Edits land in local state and save together from one
-   SaveFooter that stays at the bottom of the form column; a live preview shows how customers see
-   the shop on paperwork and in texts. Same /staff/company payload as before (the hub saves it). */
+/* Settings › General — the shop's profile. Edits land in local state and save together from a
+   bar that only appears when something changed; a live preview shows how customers see the
+   shop on paperwork and in texts. Same /staff/company payload as before (the hub saves it). */
 
 type Opts = {
   countries: [string, string, string, string, string][];   // iso, name, timezone, currency code, symbol
@@ -40,12 +36,22 @@ const INDUSTRY_ICON: Record<string, string> = {
 };
 const LEGACY: Record<string, string> = { generic: "general", device_repair: "mobile_phone", auto_repair: "auto", tool_repair: "tools", appliance_repair: "general" };
 
-// A General card: the shared settings card with its icon, title and one line of help.
 function Section({ icon, title, hint, children }: { icon: string; title: string; hint?: string; children: ReactNode }) {
-  return <Card icon={icon} title={title} description={hint}>{children}</Card>;
+  return (
+    <section className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card">
+      <div className="flex items-start gap-3 px-5 pt-4 pb-3">
+        <span className="w-9 h-9 grid place-items-center flex-shrink-0"><HexTile icon={icon} /></span>
+        <div className="min-w-0">
+          <h3 className="text-sm font-semibold text-ink-primary">{title}</h3>
+          {hint && <p className="text-xs text-ink-tertiary">{hint}</p>}
+        </div>
+      </div>
+      <div className="px-5 pb-5">{children}</div>
+    </section>
+  );
 }
 
-const inp = fieldClass();
+const inp = "glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary placeholder:text-ink-tertiary";
 /** The shop's Tekly account ID: read-only, with a copy button. Tekly support asks for it. */
 function AccountId({ value }: { value: string }) {
   const [copied, setCopied] = useState(false);
@@ -55,11 +61,12 @@ function AccountId({ value }: { value: string }) {
   return (
     <div className="mt-5 pt-4 border-t border-slate-100 flex flex-wrap items-center gap-3">
       <div className="min-w-0">
-        <div className="text-2xs font-semibold text-ink-tertiary">Tekly account ID</div>
+        <div className="text-[11px] font-semibold text-ink-tertiary">Tekly account ID</div>
         <div className="font-mono text-sm text-ink-primary select-all">{value}</div>
       </div>
-      <Button size="sm" onClick={copy} className="ml-auto" icon={<M n={copied ? "check" : "content_copy"} c="text-sm" />}>{copied ? "Copied" : "Copy"}</Button>
-      <div className="w-full text-2xs text-ink-tertiary">Give this to Tekly support so they can find your shop.</div>
+      <button type="button" onClick={copy} className={buttonClass("secondary", "sm", "ml-auto")}>
+        <M n={copied ? "check" : "content_copy"} c="text-sm" />{copied ? "Copied" : "Copy"}</button>
+      <div className="w-full text-[11px] text-ink-tertiary">Give this to Tekly support so they can find your shop.</div>
     </div>
   );
 }
@@ -67,17 +74,15 @@ function AccountId({ value }: { value: string }) {
 function Field({ label, hint, children, wide }: { label: string; hint?: string; children: ReactNode; wide?: boolean }) {
   return (
     <label className={`block ${wide ? "sm:col-span-2" : ""}`}>
-      <span className={labelClass}>{label}</span>
+      <span className="block text-sm font-medium text-ink-primary mb-1.5">{label}</span>
       {children}
       {hint && <span className="block text-xs text-ink-tertiary mt-1">{hint}</span>}
     </label>
   );
 }
 
-export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, onRebuild, opts, after }: {
+export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, onRebuild, opts }: {
   co: any; setCo: (fn: (s: any) => any) => void; saved: { current: any }; onSave: () => Promise<boolean>; rebuilding: boolean; onRebuild: () => void; opts: Opts;
-  /** Extra cards at the end of the form column (the hub passes "Keep old records"). */
-  after?: ReactNode;
 }) {
   // `saved` lives in the hub so leaving the section and coming back still shows unsaved edits.
   if (saved.current == null) saved.current = co;
@@ -123,17 +128,27 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
 
   // Plain functions (not components), so the rows aren't remounted on every change.
   const sw = (k: string, label: string, hint?: string) => (
-    <SettingRow key={k} label={label} help={hint}><Switch label={label} on={!!co?.[k]} onChange={(v) => set(k, v)} /></SettingRow>
+    <div className="flex items-center gap-3 py-3 border-t border-slate-100 first:border-0">
+      <span className="min-w-0"><span className="block text-sm text-ink-primary">{label}</span>{hint && <span className="block text-xs text-ink-tertiary">{hint}</span>}</span>
+      <span className="ml-auto"><Switch label={label} on={!!co?.[k]} onChange={(v) => set(k, v)} /></span>
+    </div>
   );
 
   // Private / Shown to customer, for the defaults on new comments and files.
   const visibility = (k: string, label: string, hint: string) => {
     const v = co?.[k] === "public" ? "public" : "private";
     return (
-      <SettingRow key={k} stack label={label} help={hint}>
-        <Tabs look="segmented" label={label} value={v} onChange={(val) => set(k, val)}
-          tabs={[{ id: "private", label: "Private", icon: <M n="lock" c="text-sm" /> }, { id: "public", label: "Shown to customer", icon: <M n="visibility" c="text-sm" /> }]} />
-      </SettingRow>
+      <div className="flex flex-wrap items-center gap-3 py-3 border-t border-slate-100 first:border-0">
+        <span className="min-w-0"><span className="block text-sm text-ink-primary">{label}</span><span className="block text-xs text-ink-tertiary">{hint}</span></span>
+        <div role="radiogroup" aria-label={label} className="ml-auto inline-flex rounded-lg bg-slate-100 p-0.5 flex-shrink-0">
+          {([["private", "Private", "lock"], ["public", "Shown to customer", "visibility"]] as const).map(([val, text, icon]) => (
+            <button key={val} type="button" role="radio" aria-checked={v === val} onClick={() => set(k, val)}
+              className={`px-2.5 py-1.5 rounded-md text-xs font-semibold flex items-center gap-1 transition-colors ${v === val ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>
+              <M n={icon} c="text-[14px]" />{text}
+            </button>
+          ))}
+        </div>
+      </div>
     );
   };
 
@@ -142,13 +157,14 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
   const first = (co.name || "Your shop").trim();
 
   return (
-    <SettingsPage wide title="General" sub="How your business shows up on invoices, receipts, texts and the customer tracking page."
-      actions={<>
-        <Button variant="primary" onClick={save} disabled={saving || !dirty}>{saving ? "Saving…" : "Save changes"}</Button>
-        {dirty && <span className="text-2xs text-ink-tertiary">Unsaved changes</span>}
-      </>}>
-      <div className="grid xl:grid-cols-[minmax(0,1fr)_300px] gap-4 items-start">
-        <div className="space-y-4 min-w-0">
+    <div className="max-w-5xl pb-24">
+      <div className="mb-5">
+        <h2 className="text-base font-semibold text-ink-primary">Your shop</h2>
+        <p className="text-xs text-ink-tertiary">How your business shows up on invoices, receipts, texts and the customer tracking page.</p>
+      </div>
+
+      <div className="grid xl:grid-cols-[minmax(0,1fr)_300px] gap-5 items-start">
+        <div className="space-y-5 min-w-0">
           <Section icon="storefront" title="Shop details" hint="Shown on every document and message.">
             <div className="flex items-center gap-4 mb-5">
               <button type="button" onClick={() => fileRef.current?.click()}
@@ -162,7 +178,7 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
               <div className="min-w-0">
                 <div className="text-sm text-ink-primary">{co.logo_data ? "Your logo" : "Add your logo"}</div>
                 <div className="text-xs text-ink-tertiary">Drop an image here or click to choose. A square PNG looks best.</div>
-                {co.logo_data && <Button variant="link" onClick={() => set("logo_data", "")} className="mt-1 !text-rose-600">Remove logo</Button>}
+                {co.logo_data && <button onClick={() => set("logo_data", "")} className="mt-1 text-[11px] font-semibold text-rose-600 hover:underline">Remove logo</button>}
               </div>
             </div>
             <div className="grid sm:grid-cols-2 gap-4">
@@ -178,30 +194,30 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
           <Section icon="language" title="Region, money and language" hint="Picking a country fills in the time zone and currency. You can still change them.">
             <div className="grid sm:grid-cols-2 gap-4">
               <Field label="Country">
-                <select value={co.country || ""} onChange={(e) => pickCountry(e.target.value)} className={inp}>
+                <TeklySelect value={co.country || ""} onChange={(e) => pickCountry(e.target.value)} className={inp}>
                   <option value="">Choose a country</option>{opts.countries.map((c) => <option key={c[0]} value={c[0]}>{c[1]}</option>)}
-                </select>
+                </TeklySelect>
               </Field>
               <Field label="Time zone">
-                <select value={co.timezone || ""} onChange={(e) => set("timezone", e.target.value)} className={inp}>
+                <TeklySelect value={co.timezone || ""} onChange={(e) => set("timezone", e.target.value)} className={inp}>
                   <option value="">Choose a time zone</option>{opts.timezones.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}
-                </select>
+                </TeklySelect>
               </Field>
               <Field label="Currency">
-                <select value={co.currency_code || ""} onChange={(e) => pickCurrency(e.target.value)} className={inp}>
+                <TeklySelect value={co.currency_code || ""} onChange={(e) => pickCurrency(e.target.value)} className={inp}>
                   <option value="">Choose a currency</option>{opts.currencies.map(([c, s]) => <option key={c} value={c}>{c} ({s})</option>)}
-                </select>
+                </TeklySelect>
               </Field>
               <Field label="Currency symbol"><input value={co.currency || ""} onChange={(e) => set("currency", e.target.value)} className={inp} /></Field>
               <Field label="Language on printed documents">
-                <select value={co.document_language || "en"} onChange={(e) => set("document_language", e.target.value)} className={inp}>
+                <TeklySelect value={co.document_language || "en"} onChange={(e) => set("document_language", e.target.value)} className={inp}>
                   {opts.docLangs.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                </select>
+                </TeklySelect>
               </Field>
               <Field label="My language in the app" hint="Just for you, on this device. Saved right away.">
-                <select value={getLang()} onChange={(e) => setLang(e.target.value as any)} className={inp}>
+                <TeklySelect value={getLang()} onChange={(e) => setLang(e.target.value as any)} className={inp}>
                   {LANGS.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
-                </select>
+                </TeklySelect>
               </Field>
             </div>
           </Section>
@@ -222,55 +238,49 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
                 return (
                   <button key={v} type="button" onClick={() => set("industry_template", v)} aria-pressed={on}
                     className={`relative text-left rounded-xl border p-3 transition-colors ${on ? "border-primary bg-primary/5 ring-2 ring-primary/15" : "border-slate-200 hover:border-slate-300 hover:bg-slate-50"}`}>
-                    {on && <span className="absolute top-2 right-2 w-5 h-5 rounded-full bg-primary text-white grid place-items-center"><M n="check" c="text-xs" /></span>}
+                    {on && <span className="absolute top-2 right-2 w-5 h-5 rounded-full bg-primary text-white grid place-items-center"><M n="check" c="text-[12px]" /></span>}
                     <span className={`w-8 h-8 rounded-lg grid place-items-center mb-2 ${on ? "bg-primary text-white" : "bg-slate-100 text-ink-secondary"}`}><M n={INDUSTRY_ICON[v] || "inventory_2"} c="text-base" /></span>
                     <span className="block text-xs font-semibold text-ink-primary pr-5">{name}</span>
-                    {noun && <span className="block text-2xs text-ink-tertiary">{noun}</span>}
+                    {noun && <span className="block text-[11px] text-ink-tertiary">{noun}</span>}
                   </button>
                 );
               })}
             </div>
           </Section>
 
-          <Section icon="timer" title="Time tracking">
-            <div className="divide-y divide-slate-100">
+          <div className="grid md:grid-cols-2 gap-5">
+            <Section icon="timer" title="Time tracking">
               {sw("clock_wo_enabled", "Job and task timer", "Track time spent on jobs")}
               {sw("clock_attendance_enabled", "Clock in and out", "Shop attendance")}
               {sw("clock_labour_billing", "Bill labour from the timer", "Time × the tech's rate adds a labour line")}
-            </div>
-          </Section>
-          <Section icon="verified_user" title="Rules and security">
-            <div className="divide-y divide-slate-100">
+            </Section>
+            <Section icon="verified_user" title="Rules and security">
               {sw("prohibit_dup_phone", "No duplicate phone numbers", "Stops two customers with the same phone")}
               {sw("prohibit_dup_email", "No duplicate emails")}
               {sw("rounding_enabled", "Round invoice totals")}
               {sw("require_mfa", "Two-step sign-in for everyone", "Staff can't turn it off for themselves")}
-            </div>
-          </Section>
+            </Section>
+          </div>
 
           {(me?.is_shop_owner || me?.is_owner) && <SenseSettingsSection />}
           <Section icon="chat" title="Comments and files on jobs" hint="What new comments and files start as. Anyone posting can still switch a single one.">
-            <div className="divide-y divide-slate-100">
-              {visibility("default_comment_visibility", "New comments", "Shown to customer means it appears on their tracking page")}
-              {visibility("default_file_visibility", "New files and photos", "Intake photos and checklist files stay private")}
-            </div>
+            {visibility("default_comment_visibility", "New comments", "Shown to customer means it appears on their tracking page")}
+            {visibility("default_file_visibility", "New files and photos", "Intake photos and checklist files stay private")}
           </Section>
 
-          {/* Everything above saves together: one save bar at the end of the form, in the page flow
-              (never floating over the fields). The same Save sits under the page title too. */}
-          <div className={sectionCard}>
-            <SaveFooter dirty={dirty} busy={saving} onSave={save} onDiscard={discard} saveLabel="Save changes" />
+          <div className="flex items-start gap-3 rounded-2xl border border-slate-200/90 bg-white px-5 py-4">
+            <span className="w-9 h-9 rounded-xl bg-slate-100 text-ink-secondary grid place-items-center flex-shrink-0"><M n="refresh" c="text-lg" /></span>
+            <div className="min-w-0">
+              <div className="text-sm text-ink-primary">Recalculate balances</div>
+              <div className="text-xs text-ink-tertiary">Rebuilds every customer and supplier balance from history. Safe to run any time.</div>
+              <button onClick={onRebuild} disabled={rebuilding} className={buttonClass("secondary", "md", "mt-3")}>{rebuilding ? "Working…" : "Recalculate"}</button>
+            </div>
           </div>
-
-          {after}
-
-          <Card icon="refresh" title="Recalculate balances" description="Rebuilds every customer and supplier balance from history. Safe to run any time."
-            actions={<Button onClick={onRebuild} disabled={rebuilding}>{rebuilding ? "Working…" : "Recalculate"}</Button>} />
         </div>
 
         {/* Live preview */}
         <aside className="xl:sticky xl:top-4 space-y-3" aria-label="Preview">
-          <div className="text-2xs font-semibold text-ink-tertiary px-1">How customers see you</div>
+          <div className="text-[11px] font-semibold text-ink-tertiary px-1">How customers see you</div>
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
             <div className="h-1.5 bg-primary" />
             <div className="p-4">
@@ -280,33 +290,38 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
                 </span>
                 <div className="min-w-0">
                   <div className="text-sm font-semibold text-ink-primary truncate">{first}</div>
-                  {co.company_address && <div className="text-2xs text-ink-tertiary leading-snug">{co.company_address}</div>}
+                  {co.company_address && <div className="text-[11px] text-ink-tertiary leading-snug">{co.company_address}</div>}
                 </div>
-                <span className="ml-auto text-2xs font-semibold text-ink-tertiary ">INVOICE</span>
+                <span className="ml-auto text-[11px] font-semibold text-ink-tertiary ">INVOICE</span>
               </div>
-              {contact.length > 0 && <div className="mt-2 text-2xs text-ink-secondary leading-relaxed break-words">{contact.join(" · ")}</div>}
-              {co.company_details && <div className="text-2xs text-ink-tertiary">{co.company_details}</div>}
-              <div className="mt-3 border-t border-dashed border-slate-200 pt-3 space-y-1.5 text-2xs">
+              {contact.length > 0 && <div className="mt-2 text-[11px] text-ink-secondary leading-relaxed break-words">{contact.join(" · ")}</div>}
+              {co.company_details && <div className="text-[11px] text-ink-tertiary">{co.company_details}</div>}
+              <div className="mt-3 border-t border-dashed border-slate-200 pt-3 space-y-1.5 text-[11px]">
                 <div className="flex justify-between text-ink-secondary"><span>Screen replacement</span><span>{co.currency || "$"}189.00</span></div>
                 <div className="flex justify-between text-ink-secondary"><span>{laborText("Labour")}</span><span>{co.currency || "$"}40.00</span></div>
                 <div className="flex justify-between font-semibold text-ink-primary pt-1"><span>Total</span><span>{co.currency || "$"}229.00</span></div>
               </div>
-              {co.company_note && <div className="mt-3 text-2xs text-ink-tertiary italic leading-snug">{co.company_note}</div>}
+              {co.company_note && <div className="mt-3 text-[11px] text-ink-tertiary italic leading-snug">{co.company_note}</div>}
             </div>
           </div>
           <div className="flex items-end gap-2">
-            <span className="w-7 h-7 rounded-full bg-slate-100 grid place-items-center flex-shrink-0 text-ink-secondary"><M n="smartphone" c="text-sm" /></span>
-            <div className="bg-white border border-slate-200/90 rounded-2xl rounded-bl-md px-3 py-2 text-xs text-ink-primary leading-snug shadow-clay-card">
+            <span className="w-7 h-7 rounded-full bg-slate-100 grid place-items-center flex-shrink-0 text-ink-secondary"><M n="smartphone" c="text-[13px]" /></span>
+            <div className="bg-white border border-slate-200/90 rounded-2xl rounded-bl-md px-3 py-2 text-[12px] text-ink-primary leading-snug shadow-clay-card">
               {first}: Hi Sam, your repair is ready for pickup. Total {co.currency || "$"}229.00.
             </div>
           </div>
           <div className="flex flex-wrap gap-1.5 px-1">
-            {country && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-2xs text-ink-secondary"><M n="public" c="text-xs" />{country[1]}</span>}
-            {co.timezone && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-2xs text-ink-secondary"><M n="public" c="text-xs" />{co.timezone.replace(/_/g, " ")}</span>}
-            {co.currency_code && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-2xs text-ink-secondary"><M n="payments" c="text-xs" />{co.currency_code}</span>}
+            {country && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-[11px] text-ink-secondary"><M n="public" c="text-[12px]" />{country[1]}</span>}
+            {co.timezone && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-[11px] text-ink-secondary"><M n="public" c="text-[12px]" />{co.timezone.replace(/_/g, " ")}</span>}
+            {co.currency_code && <span className="inline-flex items-center gap-1 px-2 py-0.5 rounded-md bg-slate-100 text-[11px] text-ink-secondary"><M n="payments" c="text-[12px]" />{co.currency_code}</span>}
           </div>
         </aside>
       </div>
-    </SettingsPage>
+
+      {/* Save sits at the end of the page in a normal bar (never floating over the fields). */}
+      <div className="mt-4 rounded-2xl border border-slate-200/90 bg-white shadow-clay-sm">
+        <SaveFooter dirty={dirty} busy={saving} onSave={save} onDiscard={discard} saveLabel="Save changes" />
+      </div>
+    </div>
   );
 }

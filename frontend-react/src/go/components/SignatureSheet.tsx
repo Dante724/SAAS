@@ -101,7 +101,7 @@ export default function SignatureSheet({ open, onClose, orderId, customer, onSav
         <div className="relative rounded-xl border border-slate-200 bg-white" style={{ height: intro ? "min(32vh, 20rem)" : "min(46vh, 22rem)" }}>
           <canvas ref={canvas} className="absolute inset-0 h-full w-full rounded-xl" style={{ touchAction: "none", background: "#fff" }}
             onPointerDown={down} onPointerMove={move} onPointerUp={up} onPointerCancel={up} onPointerLeave={up} aria-label="Signature pad" />
-          {!inked && <p className="pointer-events-none absolute inset-x-0 bottom-10 text-center text-go-sub text-slate-400">Sign here</p>}
+          {!inked && <p className="pointer-events-none absolute inset-x-0 bottom-10 text-center text-go-sub text-ink-tertiary">Sign here</p>}
           <div className="pointer-events-none absolute inset-x-6 bottom-8 border-b border-slate-300" />
         </div>
         <div className="mt-3 flex gap-2">
