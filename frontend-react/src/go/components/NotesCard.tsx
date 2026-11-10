@@ -7,6 +7,7 @@ import { api } from "../../api/client";
 import { Card, GoButton, PrimaryButton, Sheet, goArea } from "./ui";
 import { haptic } from "../lib/scanner";
 import { useToast } from "../lib/useGo";
+import EmptyState from "../../components/EmptyState";
 
 const area = goArea("min-h-[7rem]");
 
@@ -39,7 +40,7 @@ export default function NotesCard({ orderId, techNotes, conclusion, readOnly, on
     <div className="mt-4">
       <h2 className="px-4 mb-1.5 text-go-sub font-medium text-ink-tertiary">Bench notes</h2>
       <Card className="p-4">
-        {empty ? <p className="text-go-body text-ink-tertiary">No notes yet.</p> : (
+        {empty ? <EmptyState size="inline" title="No notes yet." /> : (
           <div className="space-y-3">
             {techNotes && <div><p className="text-go-sub text-ink-tertiary">Working notes · team only</p><p className="text-go-body text-ink-primary whitespace-pre-wrap break-words">{techNotes}</p></div>}
             {conclusion && <div><p className="text-go-sub text-ink-tertiary">For the customer</p><p className="text-go-body text-ink-primary whitespace-pre-wrap break-words">{conclusion}</p></div>}

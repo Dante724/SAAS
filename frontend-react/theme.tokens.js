@@ -36,11 +36,13 @@ export const NEUTRALS = {
   // text
   "ink-primary": ["#14213f", "#e4e8f2"],
   "ink-secondary": ["#435577", "#aab4c9"],
-  // tertiary/placeholder were 4.3:1 and 2.4:1 on white; now 5.3:1 (AA text) and 3.2:1 (AA non-text)
-  "ink-tertiary": ["#5e6b88", "#8e9ab4"],
-  "ink-placeholder": ["#8290ad", "#76829d"],
-  "text-slate-400": [colors.slate[400], "#76829d"],
-  "text-slate-500": [colors.slate[500], "#8e9ab4"],
+  // tertiary was 4.3:1 on white; now 5.3:1. Placeholders count as text (WCAG), so the placeholder
+  // grey is 4.5:1+ too: light #63708c on the header search fill, dark 4.5:1+ on every surface up to
+  // slate-100. Dark tertiary is 5.3:1+ on every surface up to slate-200.
+  "ink-tertiary": ["#5e6b88", "#99a4bc"],
+  "ink-placeholder": ["#63708c", "#8a95ae"],
+  "text-slate-400": ["#63708c", "#8a95ae"],   // legacy grey text: same as the placeholder grey
+  "text-slate-500": [colors.slate[500], "#99a4bc"],
   "text-slate-600": [colors.slate[600], "#aab4c9"],
   "text-slate-700": [colors.slate[700], "#c3cbdb"],
   "text-slate-800": [colors.slate[800], "#d6dce8"],
@@ -79,7 +81,9 @@ export function cssVars() {
     const set = (k, l, d) => { light[`--c-${fam}-${k}`] = hex(l); dark[`--c-${fam}-${k}`] = hex(d); };
     set("bg50", c[50], t.bg50); set("bg100", c[100], t.bg100);
     set("line100", c[100], t.line); set("line200", c[200], t.line); set("line300", c[300], t.line3);
-    set("t500", c[500], t.text); set("t600", c[600], t.text); set("t700", c[700], t.text); set("t800", c[800], t.text); set("t900", c[900], t.text);
+    // Light mode: coloured TEXT in the 500/600 shades renders at the 700 shade, so small red / green /
+    // amber text (required asterisks, amounts, "Delete") reaches 4.5:1 on white and the canvas.
+    set("t500", c[700], t.text); set("t600", c[700], t.text); set("t700", c[700], t.text); set("t800", c[800], t.text); set("t900", c[900], t.text);
   }
   // Shadows: flat and quiet in light (hairline border + a 1–2px lift, no glossy inset highlight);
   // in dark depth comes from surfaces, so shadows go quiet.

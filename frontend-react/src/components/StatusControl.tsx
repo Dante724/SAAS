@@ -1,6 +1,6 @@
 import { useId, useMemo, useState } from "react";
 import { nextStep } from "../lib/nextStatus";
-import { tint } from "../lib/tint";
+import { tint, hueText } from "../lib/tint";
 import { M } from "./Shell";
 import FloatingMenu from "./FloatingMenu";
 
@@ -134,7 +134,7 @@ export default function StatusControl({
         <span className="flex items-center gap-2 min-w-0">
           <span className="w-2 h-2 rounded-full flex-shrink-0" style={{ background: s.color || DEFAULT_COLOR }} />
           <span className="text-xs font-semibold text-ink-primary truncate">{s.name}</span>
-          {recommended && <span className="text-[11px] font-bold " style={{ color: s.color || DEFAULT_COLOR }}>next</span>}
+          {recommended && <span className="text-2xs font-bold" style={{ color: hueText(s.color || DEFAULT_COLOR) }}>next</span>}
         </span>
         {h && <span className="text-[11px] text-ink-tertiary whitespace-nowrap flex-shrink-0">{h}</span>}
       </button>
@@ -147,7 +147,7 @@ export default function StatusControl({
         type="button" data-status-anchor={anchorId} aria-haspopup="menu" aria-expanded={open}
         onClick={() => (open ? close() : setOpen(true))}
         className="inline-flex items-center gap-1.5 text-xs font-semibold py-1 pl-2.5 pr-2 rounded-full border shadow-2xs cursor-pointer focus:outline-none"
-        style={{ background: tintBg(cur?.color), borderColor: tintBorder(cur?.color), color: cur?.color || DEFAULT_COLOR }}
+        style={{ background: tintBg(cur?.color), borderColor: tintBorder(cur?.color), color: hueText(cur?.color || DEFAULT_COLOR) }}
       >
         <span className="w-1.5 h-1.5 rounded-full" style={{ background: cur?.color || DEFAULT_COLOR }} />
         {cur?.name || "—"}
