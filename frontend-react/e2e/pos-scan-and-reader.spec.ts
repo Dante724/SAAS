@@ -3,6 +3,7 @@ import { test, expect, type Page } from "@playwright/test";
 // F1 + F2: scan a barcode into the POS cart with a keyboard-wedge burst, then take the payment on
 // a simulated card reader and approve the test card. Needs a local (non-production) server, since
 // the simulated reader only exists there. Creates its own product and reader and removes the reader.
+// Card readers are switched off by default: start that server with CARD_READERS_ENABLED=true.
 
 async function api<T = any>(page: Page, method: string, path: string, body?: unknown): Promise<T> {
   return page.evaluate(async ({ method, path, body }) => {
@@ -20,6 +21,8 @@ async function api<T = any>(page: Page, method: string, path: string, body?: unk
 
 test("scan a barcode into the cart and charge it on a simulated reader", async ({ page }) => {
   await page.goto("/sales");
+  const me = await api(page, "GET", "/auth/me");
+  test.skip(!me.card_readers, "card readers are switched off on this server (CARD_READERS_ENABLED)");
   const barcode = `E2E${Date.now()}`;
   const name = `E2E cable ${barcode.slice(-5)}`;
   const product = await api(page, "POST", "/catalog/products", { name, sell_price: 12, barcode });

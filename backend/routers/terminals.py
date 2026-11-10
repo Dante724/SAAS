@@ -8,12 +8,19 @@ from pydantic import BaseModel, Field
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.config import settings
 from backend.db.database import get_db
 from backend.models import Employee, Location, PaymentTerminal, TerminalCharge
 from backend.services import terminal as svc
 from backend.services.auth import assert_perm, get_current_employee, has_perm, require_perm
 
-router = APIRouter(prefix="/api/payments/terminal", tags=["payments"])
+def _card_readers_on() -> None:
+    """Card readers are switched off (settings.CARD_READERS_ENABLED): every route here is a 404."""
+    if not settings.CARD_READERS_ENABLED:
+        raise HTTPException(404, "Card readers aren't available")
+
+
+router = APIRouter(prefix="/api/payments/terminal", tags=["payments"], dependencies=[Depends(_card_readers_on)])
 
 
 async def _readers_viewer(db: AsyncSession = Depends(get_db),
