@@ -111,9 +111,15 @@ async def _save_creds(client, h, provider, data):
     assert r.status_code == 200, r.text
 
 
+@pytest.fixture(autouse=True)
+def _readers_on(card_readers_on):
+    """These are the card-reader feature's own tests: run them with the feature switched on."""
+
+
 @pytest_asyncio.fixture
 async def stripe(monkeypatch, client, tenant):
     """The shop's OWN Stripe test keys (card readers never use the operator env keys, review P8)."""
+    monkeypatch.setattr(settings, "CARD_READERS_ENABLED", True)   # also for files that import this fixture
     fake = FakeStripe()
     monkeypatch.setattr(settings, "STRIPE_WEBHOOK_SECRET", "whsec_fake", raising=False)
     monkeypatch.setattr(svc, "_TRANSPORT", httpx.MockTransport(fake))
@@ -123,6 +129,7 @@ async def stripe(monkeypatch, client, tenant):
 
 @pytest_asyncio.fixture
 async def square(monkeypatch, client, tenant):
+    monkeypatch.setattr(settings, "CARD_READERS_ENABLED", True)
     fake = FakeSquare()
     monkeypatch.setattr(settings, "SQUARE_ENV", "sandbox", raising=False)
     monkeypatch.setattr(settings, "SQUARE_WEBHOOK_SIGNATURE_KEY", "sq-sig-key", raising=False)

@@ -1,7 +1,10 @@
 import { useEffect, useRef, useState } from "react";
-import { Check, ChevronDown, Clock, Loader2 } from "lucide-react";
+import TeklySelect from "../components/TeklySelect";
+import { Check, ChevronDown, Clock, Loader2, X } from "lucide-react";
 import ScanButton from "../components/ScanButton";
-import { Field as Float, inputCls, selectCls, useDeviceTheme } from "./authUi";
+import Button, { buttonClass } from "../components/Button";
+import EmptyState from "../components/EmptyState";
+import PublicLayout, { Field as Float, PublicTitle, accentFill, inputCls, onColor, publicCard, selectCls, shopAccent, textareaCls } from "./PublicLayout";
 
 // Self check-in (docs/SPEC_self_checkin.md). /c/<token> is a check-in point's QR: the form comes
 // from the server (the shop's industry template, the job types this point offers and the fields
@@ -47,13 +50,7 @@ export function visible(f: Field, values: Record<string, unknown>): boolean {
   return r.op === "gt" ? n > w : r.op === "lt" ? n < w : true;
 }
 
-function readable(hex?: string | null) {
-  const h = (hex || "").replace("#", "");
-  if (h.length !== 6) return "#ffffff";
-  const [r, g, b] = [0, 2, 4].map((i) => parseInt(h.slice(i, i + 2), 16));
-  return r * 0.299 + g * 0.587 + b * 0.114 > 160 ? "#111827" : "#ffffff";
-}
-const initials = (s?: string) => (s || "").split(/\s+/).filter(Boolean).slice(0, 2).map((w) => w[0]!.toUpperCase()).join("") || "•";
+const readable = (hex: string) => onColor(hex);
 
 async function post<T>(url: string, body: unknown): Promise<T> {
   const r = await fetch(url, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(body) });
@@ -62,32 +59,19 @@ async function post<T>(url: string, body: unknown): Promise<T> {
   return j as T;
 }
 
-// Same frame as the tracking page and portal: the shop's logo (or initials) tile, one column, a
-// quiet Tekly footer. Every colour is a theme token, so the page follows the phone's light/dark.
-function Shell({ shop, foot, children }: { shop?: Page["shop"]; foot?: string; children: React.ReactNode }) {
-  const accent = shop?.color || "#0059ba";
+// The shared customer-page frame (PublicLayout): the shop's logo or initials tile, one width,
+// the one "Powered by Tekly" footer, always light.
+function Shell({ shop, foot, children }: { shop?: Page["shop"] | null; foot?: string; children: React.ReactNode }) {
   return (
-    <div className="flex min-h-screen flex-col bg-canvas font-sans text-ink-primary">
-      <div className="mx-auto w-full max-w-[480px] flex-1 px-4 pt-6 sm:pt-10">
-        {shop && (
-          <div className="flex items-center gap-3">
-            {shop.logo
-              ? <img src={shop.logo} alt="" className="h-9 w-9 shrink-0 rounded-[10px] bg-white object-contain" />
-              : <div className="grid h-9 w-9 shrink-0 place-items-center rounded-[10px] text-[14px] font-semibold" style={{ background: accent, color: readable(accent) }}>{initials(shop.name)}</div>}
-            <div className="min-w-0 truncate text-[15px] font-semibold">{shop.name}</div>
-          </div>
-        )}
-        {children}
-      </div>
-      <footer className="px-4 py-6 text-center text-[12px] text-ink-tertiary">{foot ? `${foot} · ` : ""}Checked in with Tekly</footer>
-    </div>
+    <PublicLayout shop={shop === undefined ? undefined : shop && { name: shop.name, logo: shop.logo }} title="Check in" place={foot}>
+      {children}
+    </PublicLayout>
   );
 }
 
-const card = "rounded-2xl border border-slate-200 bg-white shadow-clay-card";
-const H2 = ({ children }: { children: React.ReactNode }) => <h2 className="mb-3 text-[17px] font-semibold tracking-[-0.01em]">{children}</h2>;
+const card = publicCard;
+const H2 = ({ children }: { children: React.ReactNode }) => <h2 className="mb-3 text-title font-semibold">{children}</h2>;
 const sec = "mt-6 border-t border-slate-200 pt-6";
-const link = "text-[14px] font-medium text-ink-secondary underline-offset-2 hover:underline";
 
 function Chips<T extends string>({ items, value, onPick, accent }: { items: { k: T; label: string }[]; value: string; onPick: (k: T) => void; accent: string }) {
   return (
@@ -96,7 +80,7 @@ function Chips<T extends string>({ items, value, onPick, accent }: { items: { k:
         const on = value === x.k;
         return (
           <button key={x.k} type="button" aria-pressed={on} onClick={() => onPick(x.k)}
-            className={`h-11 rounded-full border px-4 text-[15px] font-medium transition ${on ? "shadow-clay-sm" : "border-slate-200 bg-white text-ink-primary hover:border-slate-400"}`}
+            className={`h-11 rounded-full border px-4 text-base font-medium transition ${on ? "" : "border-slate-200 bg-white text-ink-primary hover:border-slate-400"}`}
             style={on ? { background: accent, color: readable(accent), borderColor: accent } : undefined}>{x.label}</button>
         );
       })}
@@ -109,15 +93,15 @@ function FieldInput({ f, value, onChange }: { f: Field; value: unknown; onChange
   const v = value == null ? "" : String(value);
   const label = `${f.label}${f.required ? "" : " (optional)"}`;
   if (f.type === "bool") {
-    return <label className="flex items-center gap-3 text-[15px]"><input id={id} type="checkbox" checked={value === true} onChange={(e) => onChange(e.target.checked)} className="h-5 w-5" />{f.label}</label>;
+    return <label className="flex min-h-11 items-center gap-3 text-base"><input id={id} type="checkbox" checked={value === true} onChange={(e) => onChange(e.target.checked)} className="h-5 w-5" />{f.label}</label>;
   }
   if (f.type === "select") {
     return (
       <Float id={id} label={label} select right={<ChevronDown size={18} className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-ink-tertiary" />}>
-        <select id={id} value={v} onChange={(e) => onChange(e.target.value)} className={selectCls}>
+        <TeklySelect id={id} value={v} onChange={(e) => onChange(e.target.value)} className={selectCls}>
           <option value="">Choose…</option>
           {(f.options || []).map((o) => <option key={o} value={o}>{o}</option>)}
-        </select>
+        </TeklySelect>
       </Float>
     );
   }
@@ -152,11 +136,11 @@ function SignaturePad({ onChange }: { onChange: (png: string | null) => void }) 
   function clear() { const c = ref.current!; c.getContext("2d")?.clearRect(0, 0, c.width, c.height); setInked(false); onChange(null); }
   return (
     // Paper-white in both themes: the ink stays readable and the saved signature prints cleanly.
-    <div className="relative overflow-hidden rounded-xl border border-slate-300" style={{ background: "#ffffff" }}>
+    <div className="relative overflow-hidden rounded-xl border border-slate-300 bg-paper">
       <canvas ref={ref} aria-label="Sign here" className="block h-[120px] w-full touch-none" />
-      {!inked && <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-[15px]" style={{ color: "#94a3b8" }}>Sign here with your finger</span>}
+      {!inked && <span className="pointer-events-none absolute left-4 top-1/2 -translate-y-1/2 text-base" style={{ color: "#94a3b8" }}>Sign here with your finger</span>}
       <div className="pointer-events-none absolute bottom-6 left-4 right-4 border-b" style={{ borderColor: "#e2e8f0" }} />
-      {inked && <button type="button" onClick={clear} className="absolute right-2 top-2 rounded-md px-2 py-1 text-[13px] font-medium" style={{ color: "#475569" }}>Clear</button>}
+      {inked && <button type="button" onClick={clear} className="absolute right-1 top-1 h-9 rounded-lg px-3 text-sm font-medium" style={{ color: "#475569" }}>Clear</button>}
     </div>
   );
 }
@@ -176,11 +160,10 @@ const ME_KEY = "tekly.checkin.me";
 const titleCase = (s?: string) => (s && s.length > 3 && s === s.toUpperCase() ? s.toLowerCase().replace(/(^|[\s-])\w/g, (m) => m.toUpperCase()) : s || "");
 
 function WaitPill({ accent, children }: { accent: string; children: React.ReactNode }) {
-  return <span className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-[13px] font-semibold" style={{ background: `${accent}1f`, color: accent }}><Clock size={14} />{children}</span>;
+  return <span className="inline-flex items-center gap-1.5 rounded-full px-3 py-1.5 text-sm font-semibold" style={{ background: `${accent}1f`, color: accent }}><Clock size={14} />{children}</span>;
 }
 
 export default function PublicCheckin({ token }: { token: string }) {
-  useDeviceTheme();
   const [page, setPage] = useState<Page | null>(null);
   const [gone, setGone] = useState<string | null>(null);
   const [jobType, setJobType] = useState<string>("");
@@ -230,12 +213,11 @@ export default function PublicCheckin({ token }: { token: string }) {
     return () => clearTimeout(t);
   }, [done, page]);
 
-  if (gone) return <Shell><p role="alert" className={`${card} mt-8 p-5 text-[15px]`}>{gone}</p></Shell>;
-  if (!page) return <Shell><div className="mt-16 flex justify-center text-ink-tertiary"><Loader2 className="animate-spin" /></div></Shell>;
+  if (gone) return <Shell><div role="alert" className={card}><EmptyState size="page" icon={<X size={20} />} title="This check-in code isn't working" body={gone} /></div></Shell>;
+  if (!page) return <Shell shop={null}><div className="mt-8 flex justify-center text-ink-tertiary"><Loader2 className="animate-spin" /></div></Shell>;
 
   const { form, shop } = page;
-  const accent = shop.color || "#0059ba";
-  const onAccent = readable(accent);
+  const accent = shopAccent(shop.color);
   const keyDrop = page.mode === "key_drop";
   const g = form.groups.find((x) => x.key === group);
   const idKind = g?.identifier.primary || form.groups[0]?.identifier.primary || "serial";
@@ -313,7 +295,7 @@ export default function PublicCheckin({ token }: { token: string }) {
         <Confirmation accent={accent} title={`You're checked in, ${name.split(" ")[0]}`} kind={done.kind} queueNo={done.queue_no}
           line={done.ahead === 0 ? "You're next" : `${done.ahead} ahead of you`} wait={done.wait_min}
           qr={`/api/public/checkin/s/${done.status_token}/qr.svg`} qrNote="Scan this with your phone to follow your place." />
-        <a href="/login" className="mt-6 block text-center text-[13px] text-ink-tertiary underline">Staff: exit kiosk</a>
+        <a href="/login" className="mt-6 block text-center text-sm text-ink-tertiary underline">Staff: exit kiosk</a>
       </Shell>
     );
   }
@@ -324,9 +306,8 @@ export default function PublicCheckin({ token }: { token: string }) {
 
   return (
     <Shell shop={shop} foot={page.location.name}>
-      <div className="mt-8">
-        <h1 className="text-[28px] font-semibold leading-tight tracking-[-0.02em]">{keyDrop ? "Dropping off keys" : "Check in"}</h1>
-        <p className="mt-1.5 text-[15px] text-ink-tertiary">{intro}</p>
+      <div>
+        <PublicTitle title={keyDrop ? "Dropping off keys" : "Check in"} sub={intro} />
         {!keyDrop && page.wait_min ? (
           <div className="mt-3"><WaitPill accent={accent}>About {page.wait_min} min wait{page.waiting ? ` · ${page.waiting} ahead` : ""}</WaitPill></div>
         ) : null}
@@ -339,16 +320,16 @@ export default function PublicCheckin({ token }: { token: string }) {
           <Chips items={form.job_types.map((t) => ({ k: t.id, label: t.name }))} value={jobType} onPick={setJobType} accent={accent} />
           <div className="h-5" />
         </>)}
-        <label htmlFor="ci-issue" className={form.job_types.length > 1 ? "mb-2 block text-[15px] font-semibold" : "mb-3 block text-[17px] font-semibold tracking-[-0.01em]"}>What's wrong?</label>
+        <label htmlFor="ci-issue" className={form.job_types.length > 1 ? "mb-2 block text-base font-semibold" : "mb-3 block text-title font-semibold"}>What's wrong?</label>
         <textarea id="ci-issue" value={issue} onChange={(e) => setIssue(e.target.value)} rows={3}
           placeholder={jt ? `A few words about the ${jt.name.toLowerCase()} problem` : "A few words is plenty"}
-          className="w-full rounded-xl border border-slate-300 bg-white px-4 py-3 text-[16px] text-ink-primary outline-none transition placeholder:text-ink-tertiary focus:border-primary focus:ring-[3px] focus:ring-primary/20" />
+          className={textareaCls} />
         {mustAsk.length > 0 && <div className="mt-3 space-y-3">{mustAsk.map((f) => <FieldInput key={f.key} f={f} value={answers[f.key]} onChange={(v) => setAnswer(f.key, v)} />)}</div>}
 
         {keyDrop && (
           <div className="mt-3 grid grid-cols-2 gap-3">
             <Float id="ci-tag" label="Key tag number"><input id="ci-tag" value={keyTag} onChange={(e) => setKeyTag(e.target.value)} placeholder=" " className={inputCls} /></Float>
-            <label className="flex h-[58px] cursor-pointer items-center justify-center rounded-xl border border-slate-300 bg-white px-3 text-center text-[14px] font-medium">
+            <label className={buttonClass("secondary", "lg", "mt-6 w-full cursor-pointer text-center")}>
               {photos.length ? `${photos.length} photo${photos.length > 1 ? "s" : ""} · add` : `Dashboard photo${form.require_photo ? "" : " (optional)"}`}
               <input id="ci-photo" type="file" accept="image/*" capture="environment" onChange={(e) => addPhoto(e.target.files)} className="sr-only" />
             </label>
@@ -362,10 +343,10 @@ export default function PublicCheckin({ token }: { token: string }) {
             <div className="flex items-center gap-3 rounded-xl border border-slate-200 bg-slate-50 px-4 py-3">
               <div className="grid h-9 w-9 shrink-0 place-items-center rounded-full" style={{ background: `${accent}1f`, color: accent }}><Check size={18} /></div>
               <div className="min-w-0 flex-1">
-                <div className="text-[15px] font-semibold leading-snug">{car}</div>
-                <div className="truncate text-[13px] text-ink-tertiary">{idLabel} ···{ident.trim().slice(-4).toUpperCase()}</div>
+                <div className="text-base font-semibold leading-snug">{car}</div>
+                <div className="truncate text-sm text-ink-tertiary">{idLabel} ···{ident.trim().slice(-4).toUpperCase()}</div>
               </div>
-              <button type="button" onClick={changeCar} className="shrink-0 text-[14px] font-medium" style={{ color: accent }}>Change</button>
+              <Button variant="link" onClick={changeCar} className="shrink-0 text-sm">Change</Button>
             </div>
           ) : (<>
             {form.groups.length > 1 && <div className="mb-3"><Chips items={form.groups.map((x) => ({ k: x.key, label: x.label }))} value={group} onPick={setGroup} accent={accent} /></div>}
@@ -376,9 +357,9 @@ export default function PublicCheckin({ token }: { token: string }) {
                     placeholder=" " autoCapitalize="characters" className={inputCls} />
                 </Float>
               </div>
-              <div className="flex h-[58px] items-center"><ScanButton onScan={(code) => { setIdent(code); identify(code); }} title={`Scan the ${idLabel}`} /></div>
+              <div className="flex h-11 items-center self-end"><ScanButton onScan={(code) => { setIdent(code); identify(code); }} title={`Scan the ${idLabel}`} /></div>
             </div>
-            <p className={`mt-1.5 px-1 text-[13px] ${hint ? "text-amber-700" : "text-ink-tertiary"}`}>{hint || `${ID_HINT[idKind] || ""}${ID_HINT[idKind] ? ". " : ""}No ${idLabel}? Just tell us below.`}</p>
+            <p className={`mt-1.5 text-sm ${hint ? "text-amber-700" : "text-ink-tertiary"}`}>{hint || `${ID_HINT[idKind] || ""}${ID_HINT[idKind] ? ". " : ""}No ${idLabel}? Just tell us below.`}</p>
             {core.length > 0 && <div className="mt-3 grid grid-cols-2 gap-3">{core.map((f) => <FieldInput key={f.key} f={f} value={answers[f.key]} onChange={(v) => setAnswer(f.key, v)} />)}</div>}
           </>)}
 
@@ -394,7 +375,7 @@ export default function PublicCheckin({ token }: { token: string }) {
                 {mayAsk.map((f) => <div key={f.key} className="col-span-2"><FieldInput f={f} value={answers[f.key]} onChange={(v) => setAnswer(f.key, v)} /></div>)}
               </div>
             ) : (
-              <button type="button" onClick={() => setMore(true)} className={`${link} mt-3`}>+ Add more details{form.reading ? ` (${[...extra.map((f) => f.label), form.reading.label].slice(0, 3).join(", ").toLowerCase()})` : ""}</button>
+              <Button variant="link" onClick={() => setMore(true)} className="mt-3 text-sm">+ Add more details{form.reading ? ` (${[...extra.map((f) => f.label), form.reading.label].slice(0, 3).join(", ").toLowerCase()})` : ""}</Button>
             )
           )}
         </div>
@@ -402,16 +383,16 @@ export default function PublicCheckin({ token }: { token: string }) {
         {/* 3 · the customer */}
         <div className={sec}>
           <div className="mb-3 flex items-baseline justify-between gap-3">
-            <h2 className="text-[17px] font-semibold tracking-[-0.01em]">{remembered ? `Welcome back, ${name.split(" ")[0]}` : "Your details"}</h2>
-            {remembered && <button type="button" onClick={forget} className={link}>Not you?</button>}
+            <h2 className="text-title font-semibold">{remembered ? `Welcome back, ${name.split(" ")[0]}` : "Your details"}</h2>
+            {remembered && <Button variant="link" onClick={forget} className="text-sm">Not you?</Button>}
           </div>
           <div className="space-y-3">
             <Float id="ci-name" label="Your name"><input id="ci-name" value={name} onChange={(e) => setName(e.target.value)} autoComplete="name" placeholder=" " className={inputCls} /></Float>
             <Float id="ci-phone" label="Mobile"><input id="ci-phone" value={phone} onChange={(e) => setPhone(e.target.value)} type="tel" inputMode="tel" autoComplete="tel" placeholder=" " className={inputCls} /></Float>
-            <p className="-mt-1 px-1 text-[13px] text-ink-tertiary">Only to text you about this visit.</p>
+            <p className="-mt-1.5 text-sm text-ink-tertiary">Only to text you about this visit.</p>
             {moreYou || email ? (
               <Float id="ci-email" label="Email (optional)"><input id="ci-email" value={email} onChange={(e) => setEmail(e.target.value)} type="email" autoComplete="email" placeholder=" " className={inputCls} /></Float>
-            ) : <button type="button" onClick={() => setMoreYou(true)} className={link}>+ Add email</button>}
+            ) : <Button variant="link" onClick={() => setMoreYou(true)} className="text-sm">+ Add email</Button>}
           </div>
         </div>
 
@@ -419,25 +400,23 @@ export default function PublicCheckin({ token }: { token: string }) {
         <div className={sec}>
           <H2>Sign</H2>
           <SignaturePad onChange={setSig} />
-          <p className="mt-2 px-1 text-[13px] text-ink-tertiary">
+          <p className="mt-2 text-sm text-ink-tertiary">
             By signing you agree to the{" "}
             <button type="button" onClick={() => setTerms((x) => !x)} aria-expanded={terms} className="font-medium text-ink-secondary underline">shop's terms</button>.
           </p>
-          {terms && <div className="mt-2 max-h-48 overflow-y-auto whitespace-pre-line rounded-xl bg-slate-50 p-4 text-[13px] text-ink-secondary">{form.terms}</div>}
+          {terms && <div className="mt-2 max-h-48 overflow-y-auto whitespace-pre-line rounded-xl bg-slate-50 p-4 text-sm text-ink-secondary">{form.terms}</div>}
         </div>
 
         {/* the button stays in reach while scrolling on a phone */}
-        <div className="sticky bottom-0 -mx-5 mt-6 rounded-b-2xl bg-white/90 px-5 pb-[max(16px,env(safe-area-inset-bottom))] pt-3 backdrop-blur sm:-mx-6 sm:px-6">
-          {err && <p role="alert" className="mb-3 rounded-xl bg-rose-50 px-4 py-2.5 text-[14px] text-rose-700">{err}</p>}
-          <button type="submit" disabled={busy}
-            className="flex h-[52px] w-full items-center justify-center gap-2 rounded-xl text-[16px] font-semibold shadow-clay-sm transition active:scale-[.995] disabled:opacity-60"
-            style={{ background: accent, color: onAccent }}>
-            {busy && <Loader2 size={18} className="animate-spin" />}
+        <div className="sticky bottom-0 -mx-5 mt-6 rounded-b-2xl border-t border-slate-200 bg-white px-5 pb-[max(16px,env(safe-area-inset-bottom))] pt-3 sm:-mx-6 sm:px-6">
+          {err && <p role="alert" className="mb-3 rounded-xl bg-rose-50 px-4 py-2.5 text-sm text-rose-700">{err}</p>}
+          <Button type="submit" variant="primary" size="lg" busy={busy} className="w-full" style={accentFill(accent)}
+            icon={busy ? <Loader2 size={18} className="animate-spin" /> : undefined}>
             {busy ? "Checking in…" : keyDrop ? "Leave my keys" : "Check in"}
-          </button>
+          </Button>
         </div>
       </form>
-      {page.point.kiosk && <a href="/login" className="mt-6 block text-center text-[13px] text-ink-tertiary underline">Staff: exit kiosk</a>}
+      {page.point.kiosk && <a href="/login" className="mt-6 block text-center text-sm text-ink-tertiary underline">Staff: exit kiosk</a>}
     </Shell>
   );
 }
@@ -447,23 +426,23 @@ function Confirmation({ accent, title, kind, queueNo, line, wait, qr, qrNote, ro
   qr?: string; qrNote?: string; rows?: [string, string][];
 }) {
   return (
-    <div className={`${card} mt-8 p-6 text-center`}>
+    <div className={`${card} p-6 text-center`}>
       <div className="mx-auto grid h-14 w-14 place-items-center rounded-full" style={{ background: `${accent}1f`, color: accent }}><Check size={28} /></div>
-      <h1 className="mt-4 text-[22px] font-semibold leading-tight tracking-[-0.02em]">{title}</h1>
+      <h1 className="mt-4 text-2xl font-semibold leading-tight tracking-tight">{title}</h1>
       {kind === "walk_in" && queueNo != null ? (<>
-        <div className="mt-4 text-[64px] font-semibold leading-none tracking-[-0.03em] tabular-nums" style={{ color: accent }}>#{queueNo}</div>
+        <div className="mt-4 text-7xl font-bold leading-none tracking-tight tabular-nums" style={{ color: accent }}>#{queueNo}</div>
         {line && <div className="mt-3"><WaitPill accent={accent}>{line}{wait ? ` · about ${wait} min` : ""}</WaitPill></div>}
-      </>) : kind === "key_drop" ? <p className="mt-2 text-[15px] text-ink-tertiary">We've got your keys and details. We'll be in touch once we've looked at it.</p> : null}
+      </>) : kind === "key_drop" ? <p className="mt-2 text-base text-ink-tertiary">We've got your keys and details. We'll be in touch once we've looked at it.</p> : null}
       {rows && rows.length > 0 && (
-        <dl className="mt-6 divide-y divide-slate-200 border-y border-slate-200 text-left text-[14px]">
+        <dl className="mt-6 divide-y divide-slate-200 border-y border-slate-200 text-left text-sm">
           {rows.map(([k, v]) => <div key={k} className="flex justify-between gap-4 py-2.5"><dt className="text-ink-tertiary">{k}</dt><dd className="text-right font-medium">{v}</dd></div>)}
         </dl>
       )}
       {qr && (<>
-        <div className="mx-auto mt-6 w-fit rounded-2xl border border-slate-200 p-3 shadow-clay-sm" style={{ background: "#ffffff" }}>
+        <div className="mx-auto mt-6 w-fit rounded-2xl border border-slate-200 bg-paper p-3">
           <img src={qr} alt="Your check-in code" className="h-36 w-36" />
         </div>
-        {qrNote && <p className="mt-3 text-[13px] text-ink-tertiary">{qrNote}</p>}
+        {qrNote && <p className="mt-3 text-sm text-ink-tertiary">{qrNote}</p>}
       </>)}
     </div>
   );
@@ -475,7 +454,6 @@ type Status = {
 };
 
 export function PublicCheckinStatus({ token }: { token: string }) {
-  useDeviceTheme();
   const [s, setS] = useState<Status | null>(null);
   const [err, setErr] = useState<string | null>(null);
   useEffect(() => {
@@ -494,9 +472,9 @@ export function PublicCheckinStatus({ token }: { token: string }) {
     setS((x) => (x ? { ...x, state: "cancelled" } : x));
   }
 
-  if (err) return <Shell><p role="alert" className={`${card} mt-8 p-5 text-[15px]`}>{err}</p></Shell>;
-  if (!s) return <Shell><div className="mt-16 flex justify-center text-ink-tertiary"><Loader2 className="animate-spin" /></div></Shell>;
-  const accent = s.shop?.color || "#0059ba";
+  if (err) return <Shell><div role="alert" className={card}><EmptyState size="page" icon={<X size={20} />} title={err} body="The link may be old or mistyped. Ask at the counter and the shop will find your place." /></div></Shell>;
+  if (!s) return <Shell shop={null}><div className="mt-8 flex justify-center text-ink-tertiary"><Loader2 className="animate-spin" /></div></Shell>;
+  const accent = shopAccent(s.shop?.color);
   const head = s.state === "called" ? "You're up. Please come to the counter."
     : s.state === "converted" ? "You're being looked after."
     : s.state === "cancelled" ? "You've left the queue."
@@ -512,8 +490,8 @@ export function PublicCheckinStatus({ token }: { token: string }) {
         line={s.ahead === 0 ? "You're next" : `${s.ahead} ahead of you`} wait={s.wait_min} rows={rows}
         qr={live ? `/api/public/checkin/s/${token}/qr.svg` : undefined}
         qrNote="Show this at the counter. This page updates by itself, so keep it open." />
-      {s.track_url && <a href={s.track_url} className="mt-4 flex h-[52px] items-center justify-center rounded-xl text-[16px] font-semibold shadow-clay-sm" style={{ background: accent, color: readable(accent) }}>Follow your job</a>}
-      {s.state === "waiting" && <button type="button" onClick={leave} className="mt-5 w-full text-center text-[13px] text-ink-tertiary underline">I can't wait, take me out of the queue</button>}
+      {s.track_url && <a href={s.track_url} className={buttonClass("primary", "lg", "mt-4 w-full")} style={accentFill(accent)}>Follow your job</a>}
+      {s.state === "waiting" && <div className="mt-4 flex justify-center"><Button variant="ghost" onClick={leave}>I can't wait, take me out of the queue</Button></div>}
     </Shell>
   );
 }
