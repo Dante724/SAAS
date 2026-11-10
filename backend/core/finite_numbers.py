@@ -123,17 +123,22 @@ def _non_finite(v) -> bool:
 
 @event.listens_for(Session, "before_flush")
 def _refuse_non_finite_writes(session: Session, flush_context, instances) -> None:
-    for obj in list(session.new) + list(session.dirty):
+    # session.new builds a fresh set on every access: read it once, or a 33k-row import flush
+    # would rebuild it per object (quadratic).
+    new = list(session.new)
+    for obj, is_new in [(o, True) for o in new] + [(o, False) for o in session.dirty]:
         state = inspect(obj)
-        is_new = obj in session.new
         for key in _number_attrs(state.mapper):
             vals = [getattr(obj, key, None)] if is_new else state.attrs[key].history.added
             if any(_non_finite(v) for v in vals):
                 raise NonFiniteValue(f"{state.mapper.local_table.name}.{key}")
 
 
-async def too_large_number_handler(_request, _exc):
-    return JSONResponse({"detail": "That number is too large."}, 422)
+async def too_large_number_handler(request, exc):
+    # Mostly a finite number too large to round to cents; any other uncaught decimal error is
+    # logged so a real bug isn't hidden behind the 422.
+    log.warning("decimal.InvalidOperation on %s %s: %r", request.method, request.url.path, exc)
+    return JSONResponse({"detail": "That number is too large or isn't a valid number."}, 422)
 
 
 def _finite(v):
