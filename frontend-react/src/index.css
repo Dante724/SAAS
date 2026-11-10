@@ -29,7 +29,13 @@
   background-size: 16px;
   padding-right: 2rem !important;
 }
-.dark .tk-select:not(.bg-none), .dark select:not([multiple]):not([size]):not(.bg-none) {
+/* Dark mode: `.dark .glass-input { background: … }` is a shorthand that comes later with equal
+   specificity, so it reset repeat/position/size and tiled the chevron across the whole field.
+   Restate the longhands here and out-rank .dark .glass-input:focus (doubled class). */
+.dark .tk-select.tk-select:not(.bg-none), .dark select:not([multiple]):not([size]):not(.bg-none) {
+  background-repeat: no-repeat;
+  background-position: right .625rem center;
+  background-size: 16px;
   background-image: url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='16' height='16' viewBox='0 0 24 24' fill='none' stroke='%2399a4bc' stroke-width='2' stroke-linecap='round' stroke-linejoin='round'%3E%3Cpath d='m6 9 6 6 6-6'/%3E%3C/svg%3E");
 }
 ::-webkit-scrollbar { width: 5px; height: 5px; }
