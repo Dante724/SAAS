@@ -55,7 +55,7 @@ export default function Scan() {
   const cameraOn = state.kind === "camera";
   return (
     <Page title="Scan" subtitle="Work order, part, or a device's serial, IMEI or VIN">
-      <div className="relative aspect-[4/3] md:aspect-video w-full overflow-hidden rounded-xl bg-[#0b1020]">
+      <div className="relative aspect-[4/3] md:aspect-video w-full overflow-hidden rounded-xl bg-camera">
         <video ref={video} className={`h-full w-full object-cover ${cameraOn ? "" : "opacity-0"}`} playsInline muted />
         {cameraOn && (
           <div className="pointer-events-none absolute inset-0 flex items-center justify-center" aria-hidden>

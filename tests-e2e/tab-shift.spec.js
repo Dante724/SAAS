@@ -33,11 +33,15 @@ test.beforeAll(async ({ request }) => {
 function tagGroups() {
   const vis = (el) => { const r = el.getBoundingClientRect(); return r.width > 0 && r.height > 0; };
   const main = document.querySelector('main.app-main') || document.body;
-  const groups = [...main.querySelectorAll('[role=tablist], [role=group]')].filter((g) => vis(g) && !g.closest('[role=dialog]'))
-    .filter((g) => g.matches('[role=tablist]') || g.querySelectorAll(':scope > [aria-pressed]').length >= 2);
+  // Shared <Tabs> (tab roles / pressed buttons) and the hand-built underline tab bars (2+ sibling
+  // buttons with a bottom border that marks the selected one).
+  const isTab = (t) => t.matches('[role=tab], [aria-pressed]') || (t.tagName === 'BUTTON' && /\bborder-b-2\b/.test(t.className));
+  const parents = new Set([...main.querySelectorAll('[role=tablist], [role=group], button')].map((e) => (e.matches('button') ? e.parentElement : e)));
+  const groups = [...parents].filter((g) => g && vis(g) && !g.closest('[role=dialog], aside, main.app-main > header'))
+    .filter((g) => g.matches('[role=tablist]') || [...g.children].filter(isTab).length >= 2);
   groups.forEach((g, i) => {
     g.setAttribute('data-ts-group', String(i));
-    g.querySelectorAll(':scope > [role=tab], :scope > [aria-pressed]').forEach((t) => t.setAttribute('data-ts-tab', ''));
+    [...g.children].filter(isTab).forEach((t) => t.setAttribute('data-ts-tab', ''));
   });
   return groups.length;
 }
