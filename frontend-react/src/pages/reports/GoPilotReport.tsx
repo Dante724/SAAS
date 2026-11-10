@@ -3,12 +3,11 @@
 // looked jobs up. The headline is the share of status changes made on a phone against the 50%
 // decision rule. See docs/pilot/tekly-go-shop-pilot.md.
 import { useEffect, useState } from "react";
+import { buttonClass } from "../../components/Button";
 import { api, openAuthedDoc } from "../../api/client";
 import { alertDialog } from "../../lib/dialog";
-import { M } from "../../components/Shell";
-import Button from "../../components/Button";
-import PageLayout, { PanelHeader } from "../../components/PageLayout";
-import ReportsToolbar from "./ReportsToolbar";
+import DateField from "../../components/DateField";
+import { theadRowClass } from "../../components/Table";
 
 type Counts = { total: number; go: number };
 export type PilotRow = {
@@ -37,7 +36,7 @@ export function reportQuery(from: string, to: string, extra = ""): string {
   return `/pilot/go-report?${p}`;
 }
 
-export default function GoPilotReport({ locs = [] }: { locs?: { id: string; name: string }[] } = {}) {
+export default function GoPilotReport() {
   const [to, setTo] = useState(iso(new Date()));
   const [from, setFrom] = useState(iso(new Date(Date.now() - 6 * 864e5)));
   const [rep, setRep] = useState<PilotReport | null>(null);
@@ -56,22 +55,26 @@ export default function GoPilotReport({ locs = [] }: { locs?: { id: string; name
   }
 
   const h = rep?.headline;
-  const th = "py-3 px-3 text-right text-2xs font-semibold text-ink-tertiary whitespace-nowrap";
-  const td = "py-2.5 px-3 text-xs text-right tabular-nums whitespace-nowrap";
+  const th = "py-2 px-3 text-left whitespace-nowrap";
+  const td = "py-2 px-3 text-xs tabular-nums whitespace-nowrap";
   return (
-    <PageLayout>
-      {/* Its own range goes in the shared From/To slots; there is no location filter here, so that one is greyed. */}
-      <ReportsToolbar actions={<Button icon={<M n="download" c="text-sm" />} onClick={csv}>Download CSV</Button>}
-        locs={locs} from={from} to={to} onFrom={setFrom} onTo={setTo} />
-      <PanelHeader title="Go pilot" sub="How much of the pilot's work happened on a phone. Days run midnight to midnight UTC; jobs count once they got a pilot QR label." />
+    <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+      <div className="flex flex-wrap items-end gap-3">
+        <div className="space-y-1"><span className="block text-[11px] font-semibold text-ink-secondary">From</span>
+          <DateField mode="date" label="From" value={from} max={to} onChange={setFrom} className="w-40" /></div>
+        <div className="space-y-1"><span className="block text-[11px] font-semibold text-ink-secondary">To</span>
+          <DateField mode="date" label="To" value={to} min={from} onChange={setTo} className="w-40" /></div>
+        <button type="button" onClick={csv} className={buttonClass("secondary", "md")}>Download CSV</button>
+        <p className="text-[11px] text-ink-tertiary">Dates are UTC. Jobs: those that got a pilot QR label.</p>
+      </div>
 
-      {err && <p role="alert" className="text-sm text-rose-700">{err}</p>}
+      {err && <p className="text-sm text-red-700">{err}</p>}
 
       {h && rep && (
         <div className="bg-white rounded-2xl border border-slate-200 p-5 space-y-2">
-          <div className="text-xs font-medium text-ink-tertiary">Status changes made on a phone · {rep.jobs.count} pilot job{rep.jobs.count === 1 ? "" : "s"}</div>
+          <div className="text-[11px] font-semibold text-ink-tertiary">Status changes made on a phone · {rep.jobs.count} pilot job{rep.jobs.count === 1 ? "" : "s"}</div>
           <div className="flex items-baseline gap-3">
-            <span className="text-3xl font-semibold tracking-tight tabular-nums" data-testid="pilot-share">{pct(h.share_status_changes_on_phone)}</span>
+            <span className="text-3xl font-bold tabular-nums" data-testid="pilot-share">{pct(h.share_status_changes_on_phone)}</span>
             <span className="text-sm text-ink-secondary tabular-nums">{h.status_changes_go} of {h.status_changes_total} · decision line {pct(h.threshold)}</span>
           </div>
           <p className="text-sm text-ink-primary">{h.reading}</p>
@@ -82,18 +85,18 @@ export default function GoPilotReport({ locs = [] }: { locs?: { id: string; name
       {rep && (
         <div className="bg-white rounded-2xl border border-slate-200 overflow-x-auto">
           <table className="w-full">
-            <thead className="bg-slate-50/80 border-b border-slate-200">
-              <tr>
-                <th className={`${th} !text-left`}>Person</th><th className={th}>Status changes (phone / all)</th><th className={th}>Photos (phone / all)</th>
+            <thead>
+              <tr className={theadRowClass}>
+                <th className={th}>Person</th><th className={th}>Status changes (phone / all)</th><th className={th}>Photos (phone / all)</th>
                 <th className={th}>Messages from Go</th><th className={th}>Scans</th>
-                {LOOKUP_KINDS.map(([k, l]) => <th key={k} className={th}>Found by {l.toLowerCase()}</th>)}
+                {LOOKUP_KINDS.map(([k, l]) => <th key={k} className={th}>Lookups: {l}</th>)}
               </tr>
             </thead>
             <tbody>
-              {rep.employees.length === 0 && <tr><td className={`${td} !text-left text-ink-tertiary`} colSpan={5 + LOOKUP_KINDS.length}>Nothing recorded in this range yet.</td></tr>}
+              {rep.employees.length === 0 && <tr><td className={`${td} text-ink-tertiary`} colSpan={5 + LOOKUP_KINDS.length}>Nothing recorded in this range yet.</td></tr>}
               {rep.employees.map((r) => (
                 <tr key={r.employee_id} className="border-b border-slate-50">
-                  <td className={`${td} !text-left font-semibold`}>{r.name}</td>
+                  <td className={`${td} font-semibold`}>{r.name}</td>
                   <td className={td}>{r.status_changes.go} / {r.status_changes.total} <span className="text-ink-tertiary">({pct(r.status_changes.share_go)})</span></td>
                   <td className={td}>{r.photos.go} / {r.photos.total}</td>
                   <td className={td}>{r.messages.go}</td>
@@ -105,6 +108,6 @@ export default function GoPilotReport({ locs = [] }: { locs?: { id: string; name
           </table>
         </div>
       )}
-    </PageLayout>
+    </div>
   );
 }
