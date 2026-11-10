@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
-import { M } from "../../components/Shell";
 import { buttonClass } from "../../components/Button";
+import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { money } from "./types";
 import { fmtDay } from "../../lib/serverTime";
@@ -29,14 +29,14 @@ export default function PurchasingCockpit({ onClose, onOpenPO, onReorder }: {
     return (
       <div className="rounded-2xl border border-slate-200/80 overflow-hidden">
         <div className={`px-4 py-2.5 flex items-center gap-2 text-xs font-semibold ${tone}`}>
-          <M n={icon} c="text-base" />{title}<span className="ml-auto px-1.5 py-0.5 rounded-full bg-white/70 text-2xs">{rows.length}</span>
+          <M n={icon} c="text-base" />{title}<span className="ml-auto px-1.5 py-0.5 rounded-full bg-white/70 text-[11px]">{rows.length}</span>
         </div>
         <div className="divide-y divide-slate-100">{rows.map((r, i) => <div key={i} className="px-4 py-2.5 flex items-center gap-3 text-xs hover:bg-slate-50/70">{children(r)}</div>)}</div>
       </div>
     );
   };
-  const poCell = (r: Row) => (<><span className="tabular-nums font-semibold text-ink-primary">{r.po_number}</span><span className="text-ink-tertiary truncate">{r.supplier}</span></>);
-  const openBtn = (id: string, label = "Open") => <button onClick={() => onOpenPO(id)} className={buttonClass("secondary", "sm", "ml-auto whitespace-nowrap")}>{label}</button>;
+  const poCell = (r: Row) => (<><span className="font-mono font-semibold text-ink-primary">{r.po_number}</span><span className="text-ink-tertiary truncate">{r.supplier}</span></>);
+  const openBtn = (id: string, label = "Open") => <button onClick={() => onOpenPO(id)} className="ml-auto h-8 px-3 rounded-xl border border-slate-200 bg-white text-primary text-[11px] font-semibold hover:bg-slate-50 whitespace-nowrap">{label}</button>;
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
@@ -46,7 +46,7 @@ export default function PurchasingCockpit({ onClose, onOpenPO, onReorder }: {
           <div className="flex items-center gap-2.5">
             <div className="w-10 h-10 rounded-xl bg-blue-50 text-primary grid place-items-center"><M n="target" c="text-xl" /></div>
             <div><h2 className="text-base font-semibold text-ink-primary leading-tight">Purchasing cockpit</h2>
-              <span className="text-2xs text-ink-tertiary">What needs you right now</span></div>
+              <span className="text-[11px] text-ink-tertiary">What needs you right now</span></div>
           </div>
           <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-full grid place-items-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100"><M n="close" c="text-lg" /></button>
         </div>
@@ -65,10 +65,10 @@ export default function PurchasingCockpit({ onClose, onOpenPO, onReorder }: {
               {(r) => (<>{poCell(r)}<span className="text-amber-700 font-semibold">+{money(r.freight_gap)}</span>{openBtn(r.po_id, "Recost")}</>)}
             </Section>
             <Section k="awaiting_invoice" title="Awaiting supplier invoice" icon="request_quote" tone="bg-blue-50 text-primary">
-              {(r) => (<>{poCell(r)}<span className="tabular-nums text-ink-tertiary">{money(r.total)}</span>{openBtn(r.po_id, "Add invoice")}</>)}
+              {(r) => (<>{poCell(r)}<span className="font-mono text-ink-tertiary">{money(r.total)}</span>{openBtn(r.po_id, "Add invoice")}</>)}
             </Section>
             <Section k="below_min" title="Below minimum, not on order" icon="inventory_2" tone="bg-orange-50 text-orange-700">
-              {(r) => (<><span className="font-semibold text-ink-primary truncate">{r.name}</span><span className="text-ink-tertiary">{r.available}/{r.min_stock}</span><button onClick={onReorder} className={buttonClass("secondary", "sm", "ml-auto whitespace-nowrap")}>Create PO</button></>)}
+              {(r) => (<><span className="font-semibold text-ink-primary truncate">{r.name}</span><span className="text-ink-tertiary">{r.available}/{r.min_stock}</span><button onClick={onReorder} className={buttonClass("secondary", "sm", "ml-auto text-primary")}>Create PO</button></>)}
             </Section>
             <Section k="supplier_balances" title="Supplier balances owed" icon="account_balance_wallet" tone="bg-slate-100 text-ink-secondary">
               {(r) => (<><span className="font-semibold text-ink-primary truncate">{r.name}</span><span className="ml-auto tabular-nums font-semibold text-rose-600">{money(r.balance)}</span></>)}

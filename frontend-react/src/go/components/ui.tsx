@@ -174,9 +174,10 @@ export function PrimaryButton({ className = "", ...rest }: Omit<GoButtonProps, "
 
 /** A round 44px icon-only button (refresh, close, more…). `label` is its accessible name. */
 export function IconButton({ label, icon, tone = "secondary", className = "", type = "button", ...rest }: Omit<ButtonHTMLAttributes<HTMLButtonElement>, "children"> & {
-  label: string; icon: ReactNode; tone?: "secondary" | "tertiary" | "primary";
+  label: string; icon: ReactNode; tone?: "secondary" | "tertiary" | "primary" | "filled";
 }) {
-  const ink = tone === "primary" ? "text-primary" : tone === "tertiary" ? "text-ink-tertiary" : "text-ink-secondary";
+  // "filled": a sapphire disc with a white icon (a send button next to a reply box).
+  const ink = tone === "filled" ? "bg-primary text-white active:bg-primary-container" : tone === "primary" ? "text-primary" : tone === "tertiary" ? "text-ink-tertiary" : "text-ink-secondary";
   return (
     <button type={type} aria-label={label} className={`h-11 w-11 shrink-0 inline-flex items-center justify-center rounded-full ${ink} active:bg-slate-100 disabled:opacity-50 ${className}`} {...rest}>
       {icon}

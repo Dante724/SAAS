@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "./TeklySelect";
 import { api } from "../api/client";
 import { promptDialog } from "../lib/dialog";
 import { humanize } from "../lib/humanize";
@@ -38,13 +39,13 @@ export default function DirectorySelect({ dirKey, value, onChange, className = "
     onChange(v);
   }
   return (
-    <select value={value || ""} onChange={(e) => pick(e.target.value)} className={className} disabled={items === null}>
+    <TeklySelect value={value || ""} onChange={(e) => pick(e.target.value)} className={className} disabled={items === null}>
       <option value="">{items === null ? "Loading…" : placeholder}</option>
       {legacy && <option value={legacy}>{/^[a-z0-9_]+$/.test(legacy) ? humanize(legacy) : legacy}</option>}
       {values.map((v) => <option key={v} value={v}>{v}</option>)}
       <option disabled>──────────</option>
       <option value={ADD}>+ Add option…</option>
       {manageLink && <option value={MANAGE}>Manage options ↗</option>}
-    </select>
+    </TeklySelect>
   );
 }

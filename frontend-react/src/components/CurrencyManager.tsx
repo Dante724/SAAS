@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "./TeklySelect";
 import { api } from "../api/client";
 import { M } from "./Shell";
 
@@ -74,9 +75,9 @@ export default function CurrencyManager() {
           <div className="col-span-3"><label className={lbl}>Code</label><input autoFocus value={form.code} onChange={(e) => setForm({ ...form, code: e.target.value.toUpperCase() })} onBlur={(e) => { if (!form.rate) autoRate(e.target.value, (r) => setForm((f) => ({ ...f, rate: r }))); }} placeholder="EUR" className={`${field} font-mono`} /></div>
           <div className="col-span-2"><label className={lbl}>Symbol</label><input value={form.symbol} onChange={(e) => setForm({ ...form, symbol: e.target.value })} placeholder="€" className={field} /></div>
           <div className="col-span-2"><label className={lbl}>Position</label>
-            <select value={form.position} onChange={(e) => setForm({ ...form, position: e.target.value })} className={field}>
+            <TeklySelect value={form.position} onChange={(e) => setForm({ ...form, position: e.target.value })} className={field}>
               <option value="before">Before</option><option value="after">After</option>
-            </select></div>
+            </TeklySelect></div>
           <div className="col-span-3"><label className={lbl}>Rate → 1 = ? {base?.code}</label>
             <div className="flex gap-1">
               <input type="number" step="0.000001" value={form.rate} onChange={(e) => setForm({ ...form, rate: e.target.value })} placeholder="1.0" className={`${field} font-mono`} />
@@ -101,12 +102,12 @@ export default function CurrencyManager() {
               <div className="col-span-2 font-mono text-xs font-bold text-ink-primary flex items-center gap-1">{c.code}{c.in_use && <span className="text-[11px] px-1 py-0.5 rounded bg-emerald-50 text-emerald-700 font-bold">in use</span>}</div>
               <div className="col-span-2"><input defaultValue={c.symbol} onBlur={(e) => { if (e.target.value !== c.symbol) saveField(c, { symbol: e.target.value }); }} className={field} /></div>
               <div className="col-span-2">
-                <select value={c.position} onChange={(e) => saveField(c, { position: e.target.value })} className={field}>
+                <TeklySelect value={c.position} onChange={(e) => saveField(c, { position: e.target.value })} className={field}>
                   <option value="before">Before</option><option value="after">After</option>
-                </select></div>
+                </TeklySelect></div>
               <div className="col-span-3">
                 <input type="number" step="0.000001" defaultValue={c.rate} onBlur={(e) => { const v = parseFloat(e.target.value); if (v && v !== c.rate) saveRate(c, v); }} className={`${field} font-mono`} />
-                {c.updated_at && <div className="text-[11px] text-ink-placeholder mt-0.5">as of {new Date(c.updated_at).toLocaleDateString()}</div>}
+                {c.updated_at && <div className="text-2xs text-ink-tertiary mt-0.5">as of {new Date(c.updated_at).toLocaleDateString()}</div>}
               </div>
               <div className="col-span-3 flex items-center justify-end gap-1">
                 <button aria-label="Rate history" onClick={() => setHistFor(c)} title="Rate history" className="w-7 h-7 rounded-lg grid place-items-center text-ink-tertiary hover:bg-slate-100"><M n="history" c="text-base" /></button>

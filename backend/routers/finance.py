@@ -963,11 +963,19 @@ class PayoutIn(BaseModel):
 @router.post("/payouts", status_code=201)
 async def record_payout(
     data: PayoutIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
     """Record a processor deposit (manual for now; a Stripe/Square/SumUp connector will fill these
-    into the same table later). net defaults to gross − fee."""
+    into the same table later). net defaults to gross − fee. A retry with the same
+    Idempotency-Key gets the first answer back instead of recording it twice."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "finance.payout", data,
+                          lambda: _record_payout(data, db, current))
+
+
+async def _record_payout(data: PayoutIn, db: AsyncSession, current: Employee):
     from backend.models import ProcessorPayout
     net = data.net_amount if data.net_amount is not None else (data.gross_amount - data.fee_amount)
     p = ProcessorPayout(
