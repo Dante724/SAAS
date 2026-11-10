@@ -339,7 +339,7 @@ async def test_order_patch_wall_clock_and_ids(client, db):
     d = r.json()["data"]
     assert d["scheduled_for"] == "2026-10-28T10:30:00"      # 14:30Z is 10:30 on the shop's clock (EDT)
     assert d["scheduled_to"] == "2026-10-28T11:30:00"       # no offset: already wall-clock
-    assert d["due_at"] == "2026-10-29T17:00:00"             # instants are UTC
+    assert d["due_at"] == "2026-10-29T13:00:00"             # 17:00Z on the shop's clock (EDT), like scheduled_for
     assert d["priority"] == 2 and d["complaint"] == "Water damage" and d["assigned_to_id"] == tech.id
 
     r = await client.patch(f"/api/v2/orders/{oid}", json={"assigned_to_id": None, "scheduled_to": None}, headers=A)

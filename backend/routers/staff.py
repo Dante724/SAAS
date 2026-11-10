@@ -13,7 +13,7 @@ from backend.services import audit
 from backend.services import multi_asset as _ma
 from backend.services.auth import (get_current_employee, hash_password, is_old_default_password, norm_email,
                                    require_perm, verify_password)
-from backend.services.dates import now_utc
+from backend.services.dates import now_utc, parse_wall_dt
 
 router = APIRouter(prefix="/api/staff", tags=["staff"])
 
@@ -693,7 +693,8 @@ async def create_task(
         title=data.title, description=data.description,
         assigned_to_id=data.assigned_to_id, created_by_id=current.id,
         order_id=data.order_id, priority=data.priority,
-        due_at=datetime.fromisoformat(data.due_at) if data.due_at else None,
+        # shop wall-clock, like /api/tasks: an offset is converted to the shop's clock
+        due_at=await parse_wall_dt(db, current.org_id, None, data.due_at, "due_at") if data.due_at else None,
         status="todo",
     )
     db.add(task)

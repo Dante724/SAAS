@@ -261,3 +261,14 @@ async def test_task_finished_before_its_shop_local_due_time_is_on_time(client, d
     assert r.status_code == 200, r.text
     assert r.json()["completed_on_time"] is True
     assert r.json()["completed_at"].endswith("Z")
+
+
+async def test_legacy_staff_task_due_at_with_a_zone_is_stored_on_the_shops_clock(client, db):
+    """POST /api/staff/tasks stored an offset due_at as an aware/UTC time, off the shop's clock."""
+    from backend.models import Task
+    H, org_id = await _signup(client, country="IN")
+    r = await client.post("/api/staff/tasks", json={"title": "Order parts", "due_at": "2026-11-04T10:00:00Z"},
+                          headers=H)
+    assert r.status_code == 201, r.text
+    t = (await db.execute(select(Task).where(Task.org_id == org_id, Task.title == "Order parts"))).scalar_one()
+    assert t.due_at == datetime(2026, 11, 4, 15, 30)
