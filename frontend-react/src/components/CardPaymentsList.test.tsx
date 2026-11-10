@@ -6,6 +6,9 @@ import userEvent from "@testing-library/user-event";
 vi.mock("./Shell", () => ({ M: ({ n }: { n: string }) => <i data-icon={n} /> }));
 vi.mock("../lib/dialog", () => ({ promptDialog: vi.fn(async () => "15") }));
 
+const readers = vi.hoisted(() => ({ on: true }));   // card readers are off by default; these test the feature
+vi.mock("../lib/cardReaders", () => ({ useCardReaders: () => readers.on }));
+
 import CardPaymentsList from "./CardPaymentsList";
 
 const reply = (body: unknown) => ({ ok: true, status: 200, headers: new Headers(), json: async () => body, text: async () => JSON.stringify(body) }) as Response;
