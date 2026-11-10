@@ -97,7 +97,7 @@ export default function CatalogPicker({ type = "all", placeholder = "Search serv
               const kindLabel = g.title && type === "all" && kind !== groups[gi - 1]?.items[0]?.kind ? ({ service: "Services", product: "Products", bundle: "" } as const)[kind] : "";
               return (
               <div key={g.title || "results"}>
-                {kindLabel && <div className={`px-2.5 pb-1 text-[11px] font-semibold uppercase tracking-wide text-ink-tertiary ${gi ? "mt-1.5 border-t border-slate-100 pt-3" : "pt-1"}`}>{kindLabel}</div>}
+                {kindLabel && <div className={`px-2.5 pb-1 text-[11px] font-semibold text-ink-tertiary ${gi ? "mt-1.5 border-t border-slate-100 pt-3" : "pt-1"}`}>{kindLabel}</div>}
                 {g.title && (
                   <button type="button" aria-expanded={isOpen} onClick={() => toggleCat(g.title)}
                     className="flex w-full items-center gap-2 rounded-xl px-2.5 py-2 text-left hover:bg-slate-50">
