@@ -1,11 +1,10 @@
-import { useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode } from "react";
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import { M } from "../../components/Shell";
 import { hueText, tint } from "../../lib/tint";
 import { money } from "../orders/types";
 import { api } from "../../api/client";
 import { deliveryText, deliveryTone, type Delivery, type Tone } from "../../lib/delivery";
-import { buttonClass, IconButton } from "../../components/Button";
-import SharedDrawer from "../../components/Drawer";
+import { buttonClass } from "../../components/Button";
 
 /* Shared bits for the billing drawers (invoice view, record payment, credit notes). */
 
@@ -28,19 +27,6 @@ export const DISPLAY_MODES: { key: string; label: string; hint: string }[] = [
   { key: "simplified", label: "Simplified", hint: "One line per work order" },
   { key: "one_line", label: "One line", hint: "A single line for the whole invoice" },
 ];
-
-/* How the invoice prints its lines, as the app's segmented look (Tabs "segmented"). It stays a
-   radio group: one of three, always one picked. */
-export function DisplayModes({ value, onChange, disabled }: { value: string; onChange: (k: string) => void; disabled?: boolean }) {
-  return (
-    <div role="radiogroup" aria-label="Display on the invoice" className="inline-flex max-w-full gap-0.5 rounded-xl bg-slate-100 p-1">
-      {DISPLAY_MODES.map((m) => (
-        <button key={m.key} type="button" role="radio" aria-checked={value === m.key} title={m.hint} disabled={disabled} onClick={() => onChange(m.key)}
-          className={`h-7 px-3 rounded-lg text-xs font-semibold whitespace-nowrap transition-colors disabled:cursor-not-allowed ${value === m.key ? "bg-white text-ink-primary shadow-2xs" : "text-ink-secondary hover:text-ink-primary disabled:hover:text-ink-secondary"}`}>{m.label}</button>
-      ))}
-    </div>
-  );
-}
 
 /** I6 — email or text an invoice to the customer. Returns the sentence to show: the server's
  *  delivery message, so the screen never says "sent" when it wasn't. Throws on an API error. */
@@ -70,10 +56,8 @@ export const todayIso = () => {
 export const fmtDate = (iso?: string | null) =>
   iso ? new Date(iso).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }) : "—";
 
-// The field kit's size (components/Field.tsx): 36px tall, 12px corners, sapphire focus ring.
-// min-h rather than h so a textarea that shares it still grows.
-export const inputCls = "w-full bg-white border border-slate-200 rounded-xl min-h-9 px-3 py-1.5 text-sm text-ink-primary outline-none hover:border-slate-300 focus:border-primary focus:ring-2 focus:ring-primary/10 disabled:opacity-60";
-export { labelClass as labelCls } from "../../components/Field";
+export const inputCls = "w-full bg-white border border-slate-200 rounded-xl text-sm px-3 py-2 outline-none focus:border-primary focus:ring-2 focus:ring-primary/10";
+export const labelCls = "block text-xs font-medium text-ink-secondary mb-1";
 
 /* Days an invoice is late: only once it has a due date in the past and still owes money.
    This is the one thing on an invoice that turns red. */
@@ -93,7 +77,7 @@ const STATUS_HUE: Record<string, string> = {
 };
 export function StatusPill({ status, label }: { status?: string; label: string }) {
   const hue = STATUS_HUE[status || ""] || "#64748b";
-  return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-semibold whitespace-nowrap" style={{ background: tint(hue), color: hueText(hue) }}>{label}</span>;
+  return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap" style={{ background: tint(hue), color: hueText(hue) }}>{label}</span>;
 }
 
 /* "⋮" menu for the extra actions on a row or in a drawer footer. Items render only while it
@@ -108,8 +92,7 @@ export function MoreMenu({ items, label = "More actions", className = "", align 
   useEffect(() => {
     if (!pos) return;
     const away = (e: MouseEvent) => { if (!ref.current?.contains(e.target as Node)) setPos(null); };
-    // Escape closes the menu only, not the drawer it sits in.
-    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") { e.stopPropagation(); setPos(null); } };
+    const esc = (e: KeyboardEvent) => { if (e.key === "Escape") setPos(null); };
     const close = () => setPos(null);
     document.addEventListener("mousedown", away); document.addEventListener("keydown", esc);
     window.addEventListener("resize", close); window.addEventListener("scroll", close, true);
@@ -130,7 +113,8 @@ export function MoreMenu({ items, label = "More actions", className = "", align 
   }
   return (
     <div ref={ref} className={`relative ${className}`} onClick={(e) => e.stopPropagation()}>
-      <IconButton ref={btn} label={label} aria-haspopup="menu" aria-expanded={!!pos} onClick={toggle} icon={<M n="more_vert" c="text-lg" />} />
+      <button ref={btn} type="button" aria-label={label} title={label} aria-haspopup="menu" aria-expanded={!!pos} onClick={toggle}
+        className="w-9 h-9 rounded-lg grid place-items-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100 transition-colors"><M n="more_vert" c="text-lg" /></button>
       {pos && (
         <div role="menu" style={{ position: "fixed", left: pos.left, right: pos.right, top: pos.top, bottom: pos.bottom }}
           className="z-[80] min-w-[200px] bg-white border border-slate-200 rounded-xl shadow-menu p-1.5">
@@ -146,13 +130,24 @@ export function MoreMenu({ items, label = "More actions", className = "", align 
   );
 }
 
-/* Right-hand drawer used by every billing panel: the app's one Drawer (main footer button first,
-   on the left). `width` is kept for the callers that still pass one and maps to the nearest size. */
+/* Right-hand drawer used by every billing panel. `z` lets a drawer open on top of another.
+   The footer's main button comes first, on the left. */
 export function Drawer({ title, sub, onClose, children, footer, z = 50, width = 560, label }: {
   title: ReactNode; sub?: ReactNode; onClose: () => void; children: ReactNode; footer?: ReactNode; z?: number; width?: number; label: string;
 }) {
-  const size = width <= 480 ? "sm" : width <= 640 ? "md" : "lg";
-  return <SharedDrawer title={title} sub={sub} label={label} onClose={onClose} footer={footer} size={size} z={z}>{children}</SharedDrawer>;
+  return (
+    <div className="fixed inset-0 flex justify-end" style={{ zIndex: z }} role="dialog" aria-modal="true" aria-label={label}>
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
+      <div className="relative max-w-full bg-white h-full shadow-drawer flex flex-col" style={{ width }}>
+        <div className="flex items-start justify-between gap-3 px-5 py-4 border-b border-slate-200">
+          <div className="min-w-0"><h2 className="text-base font-semibold text-ink-primary truncate">{title}</h2>{sub && <div className="text-xs text-ink-tertiary mt-0.5">{sub}</div>}</div>
+          <button aria-label="Close" onClick={onClose} className="w-8 h-8 flex-shrink-0 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
+        </div>
+        <div className="flex-1 overflow-y-auto p-5 space-y-4">{children}</div>
+        {footer && <div className="px-5 py-4 border-t border-slate-200 flex flex-wrap items-center justify-start gap-2">{footer}</div>}
+      </div>
+    </div>
+  );
 }
 
 // Kept as names for the ~14 billing screens that import them; they are the shared Button looks.
@@ -162,19 +157,4 @@ export const btnDanger = buttonClass("danger");
 
 export function ErrorNote({ msg }: { msg: string | null }) {
   return msg ? <div role="alert" className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{msg}</div> : null;
-}
-
-/* The search box every list toolbar in money and stock uses: magnifier inside, 36px, and it keeps
-   its place (disabled) on a tab where there's nothing to search. */
-export function SearchBox({ value, onChange, label, placeholder, disabled, className = "", onKeyDown, invalid }: {
-  value: string; onChange: (v: string) => void; label: string; placeholder?: string; disabled?: boolean; className?: string;
-  onKeyDown?: (e: ReactKeyboardEvent<HTMLInputElement>) => void; invalid?: boolean;
-}) {
-  return (
-    <div className={`relative w-full sm:w-64 ${className}`}>
-      <M n="search" c="absolute left-3 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" />
-      <input value={value} onChange={(e) => onChange(e.target.value)} onKeyDown={onKeyDown} aria-label={label} placeholder={placeholder} disabled={disabled}
-        className={`${inputCls} pl-9 disabled:cursor-not-allowed ${invalid ? "!border-rose-400 ring-2 ring-rose-400/30" : ""}`} />
-    </div>
-  );
 }

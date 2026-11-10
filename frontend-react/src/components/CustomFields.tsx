@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "./TeklySelect";
 import { api } from "../api/client";
 import { promptDialog } from "../lib/dialog";
 import DateField from "./DateField";
@@ -118,7 +119,7 @@ export default function CustomFields({ entity, typeId, value, onChange, creating
           <div key={f.id}>
             {label}
             {f.field_type === "textarea" ? <textarea disabled={locked} value={v} onChange={(e) => set(f.field_key, e.target.value)} placeholder={f.placeholder || ""} className={`${field} h-16 resize-none disabled:opacity-60`} />
-              : f.field_type === "select" ? <select disabled={locked} value={v} onChange={(e) => set(f.field_key, e.target.value)} className={`${field} appearance-none disabled:opacity-60`}><option value="">—</option>{optsFor(f).map((o) => <option key={o} value={o}>{o}</option>)}</select>
+              : f.field_type === "select" ? <TeklySelect disabled={locked} value={v} onChange={(e) => set(f.field_key, e.target.value)} className={`${field} appearance-none disabled:opacity-60`}><option value="">—</option>{optsFor(f).map((o) => <option key={o} value={o}>{o}</option>)}</TeklySelect>
               : f.field_type === "multiselect" ? <div className="flex flex-wrap gap-1.5">{!optsFor(f).length && <span className="text-[11px] text-ink-tertiary">No options yet</span>}{optsFor(f).map((o) => { const arr: string[] = Array.isArray(v) ? v : []; const on = arr.includes(o); return <button type="button" key={o} disabled={locked} onClick={() => set(f.field_key, on ? arr.filter((x) => x !== o) : [...arr, o])} className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${on ? "bg-primary text-white border-primary" : "bg-white text-ink-secondary border-slate-200"} disabled:opacity-60`}>{o}</button>; })}</div>
               : f.field_type === "link" ? <input disabled={locked} type="url" value={v} onChange={(e) => set(f.field_key, e.target.value)} placeholder={f.placeholder || "https://"} className={`${field} disabled:opacity-60`} />
               : f.field_type === "date" || f.field_type === "datetime"

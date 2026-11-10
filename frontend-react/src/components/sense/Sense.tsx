@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "../TeklySelect";
 import { M } from "../Shell";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
@@ -185,7 +186,7 @@ const FEATURE_ROWS: { group: string; rows: { k: SenseFeature; label: string; hin
     { k: "ready_time_why", label: "Explain the ready-time estimate", hint: "Shows what the estimate is based on" },
   ] },
   { group: "For you", rows: [
-    { k: "morning_brief", label: "Morning Brief", hint: "Yesterday, today and what needs you, on your Today page" },
+    { k: "morning_brief", label: "Morning brief", hint: "Yesterday, today and what needs you, on your Today page" },
     { k: "margin_check", label: "Margin check", hint: "A note when a job makes far less than your usual margin" },
     { k: "watchdog", label: "Watchdog and team scorecard", hint: "Unusual discounts, refunds, voids and cash shortfalls, for your eyes only" },
   ] },
@@ -256,7 +257,7 @@ function AgentControls({ s, busy, save }: { s: SenseSettings; busy: boolean; sav
               <div className={`mt-2 ${subPanel}`}>
                 <div className="divide-y divide-slate-200/70">
                   <SettingRow label="Ask me before sending" help="Drafts wait for your OK before they go out">
-                    <Switch on={!c.auto_send} label="Ask me before sending"
+                    <Switch size="sm" on={!c.auto_send} label="Ask me before sending"
                       onChange={() => save({ agents: { [r.k]: { auto_send: !c.auto_send } } })} />
                   </SettingRow>
                   <SettingRow label={r.wait === "months" ? "Customers away for" : r.k === "collections" ? "Days after it's due" : "Wait before nudging"}
@@ -265,9 +266,9 @@ function AgentControls({ s, busy, save }: { s: SenseSettings; busy: boolean; sav
                       onSave={(v) => save({ agents: { [r.k]: { [r.wait]: v } } })} />
                   </SettingRow>
                   <SettingRow label="Send by" htmlFor={`sense-agent-${r.k}-channel`}>
-                    <select id={`sense-agent-${r.k}-channel`} aria-label={`${r.label} channel`} value={c.channel} disabled={busy} onChange={(e) => save({ agents: { [r.k]: { channel: e.target.value } } })}
+                    <TeklySelect id={`sense-agent-${r.k}-channel`} aria-label={`${r.label} channel`} value={c.channel} disabled={busy} onChange={(e) => save({ agents: { [r.k]: { channel: e.target.value } } })}
                       className="glass-input rounded-xl px-3 py-2 text-sm">
-                      {r.k !== "win_back" && <option value="sms">Text</option>}<option value="email">Email</option></select>
+                      {r.k !== "win_back" && <option value="sms">Text</option>}<option value="email">Email</option></TeklySelect>
                   </SettingRow>
                 </div>
                 {r.k === "win_back" && <p className="mt-3 text-xs text-ink-tertiary">Email only, to customers who gave marketing consent. Your shop address from Settings goes at the bottom, as the law requires.</p>}
@@ -298,24 +299,23 @@ function BriefControls({ s, busy, save }: { s: SenseSettings; busy: boolean; sav
     <div className={subPanel}>
       <div className="divide-y divide-slate-200/70">
         <SettingRow label="Send at" htmlFor="sense-brief-hour">
-          <select id="sense-brief-hour" aria-label="Brief send time" value={b.hour} disabled={busy} onChange={(e) => save({ brief: { hour: Number(e.target.value) } })}
-            className="glass-input rounded-xl px-3 py-2 text-sm">{HOURS.map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}</select>
+          <TeklySelect id="sense-brief-hour" aria-label="Brief send time" value={b.hour} disabled={busy} onChange={(e) => save({ brief: { hour: Number(e.target.value) } })}
+            className="glass-input rounded-xl px-3 py-2 text-sm">{HOURS.map((h) => <option key={h} value={h}>{hourLabel(h)}</option>)}</TeklySelect>
         </SettingRow>
         <SettingRow label="Email" help="Send the brief by email too">
-          <Switch on={b.email} label="Email" onChange={() => save({ brief: { email: !b.email } })} />
+          <Switch size="sm" on={b.email} label="Email" onChange={() => save({ brief: { email: !b.email } })} />
         </SettingRow>
         <SettingRow label="Push to the phone app" help="The push only says the brief is ready">
-          <Switch on={b.push} label="Push to the phone app" onChange={() => save({ brief: { push: !b.push } })} />
+          <Switch size="sm" on={b.push} label="Push to the phone app" onChange={() => save({ brief: { push: !b.push } })} />
         </SettingRow>
         <div className="py-4 last:pb-0">
           <div className="text-sm font-medium text-ink-primary">Also send to</div>
           <p className="mt-0.5 mb-2 text-xs text-ink-tertiary">You always get it.</p>
           {others.length ? (
-            <div className="grid sm:grid-cols-2 gap-x-4">
+            <div className="flex flex-wrap gap-1.5">
               {others.map((p) => (
-                <label key={p.id} className="flex items-center gap-2 min-h-9 text-sm text-ink-primary cursor-pointer">
-                  <input type="checkbox" checked={b.recipients.includes(p.id)} disabled={busy} onChange={() => toggle(p.id)} className="w-4 h-4 rounded accent-primary" />
-                  <span className="min-w-0 truncate">{p.name}</span>
+                <label key={p.id} className={`flex items-center gap-1.5 rounded-full border px-2.5 py-1 text-xs ${b.recipients.includes(p.id) ? "border-primary/40 bg-white text-ink-primary" : "border-slate-200 bg-white text-ink-secondary"}`}>
+                  <input type="checkbox" checked={b.recipients.includes(p.id)} disabled={busy} onChange={() => toggle(p.id)} className="accent-primary" /> {p.name}
                 </label>
               ))}
             </div>
@@ -397,10 +397,10 @@ export function MorningBriefCard({ onOpen }: { onOpen: (to: string) => void }) {
   const y = b.yesterday;
   const items = b.attention || [];
   return (
-    <section aria-label="Morning Brief" className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-sm p-4">
+    <section aria-label="Morning brief" className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-sm p-4">
       <button onClick={() => setOpen((v) => !v)} aria-expanded={open} className="w-full flex items-center gap-2 text-left focus:outline-none">
         <M n={open ? "expand_more" : "chevron_right"} c="text-ink-tertiary text-base" />
-        <h3 className="text-sm font-semibold text-ink-primary flex items-center gap-1.5"><Spark /> Morning Brief</h3>
+        <h3 className="text-sm font-semibold text-ink-primary flex items-center gap-1.5"><Spark /> Morning brief</h3>
         <span className="ml-auto text-[11px] text-ink-tertiary">Learned from your own jobs</span>
       </button>
       {open && (

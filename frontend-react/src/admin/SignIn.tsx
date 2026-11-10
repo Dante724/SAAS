@@ -1,5 +1,8 @@
 import { useState, type FormEvent } from "react";
 import { adminApi, AdminApiError } from "./api";
+import { TeklyMark } from "../components/brand/TeklyLogo";
+import Button from "../components/Button";
+import { Field, Input } from "../components/Field";
 
 type Step =
   | { kind: "password" }
@@ -7,8 +10,6 @@ type Step =
   | { kind: "setup"; ticket: string; secret?: string; uri?: string }
   | { kind: "recovery"; codes: string[] };
 
-const input = "w-full px-3 py-2 rounded-lg border border-slate-300 text-sm focus:outline-none focus:ring-2 focus:ring-primary/30 focus:border-primary";
-const primaryBtn = "w-full py-2.5 rounded-lg bg-primary text-white text-sm font-semibold hover:opacity-90 disabled:opacity-60";
 
 /** Password, then a 2-step code. First sign-in sets up the authenticator app and shows
  *  the recovery codes once. */
@@ -47,33 +48,31 @@ export default function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
   }); };
 
   return (
-    <div className="min-h-screen bg-slate-50 grid place-items-center px-4">
-      <div className="w-full max-w-sm bg-white rounded-2xl border border-slate-200 shadow-sm p-7">
+    <div className="min-h-screen bg-canvas grid place-items-center px-4 font-sans">
+      <div className="w-full max-w-sm bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-7">
         <div className="mb-6">
-          <div className="text-xs font-semibold text-primary">Tekly admin</div>
-          <h1 className="text-xl font-semibold text-ink-primary mt-1">
+          <div className="flex items-center gap-2"><TeklyMark size={24} /><span className="text-sm font-semibold text-ink-primary">Tekly admin</span></div>
+          <h1 className="text-xl font-semibold text-ink-primary mt-4">
             {step.kind === "password" ? "Sign in" : step.kind === "setup" ? "Set up 2-step sign-in" : step.kind === "recovery" ? "Save your recovery codes" : "Enter your code"}
           </h1>
         </div>
 
         {step.kind === "password" && (
           <form onSubmit={submitPassword} className="space-y-3">
-            <label className="block text-xs font-semibold text-ink-secondary">Email
-              <input type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} className={`${input} mt-1`} /></label>
-            <label className="block text-xs font-semibold text-ink-secondary">Password
-              <input type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} className={`${input} mt-1`} /></label>
-            <button disabled={busy} className={primaryBtn}>{busy ? "Checking…" : "Continue"}</button>
+            <Field label="Email" htmlFor="adm-email"><Input id="adm-email" type="email" autoComplete="username" required value={email} onChange={(e) => setEmail(e.target.value)} /></Field>
+            <Field label="Password" htmlFor="adm-pass"><Input id="adm-pass" type="password" autoComplete="current-password" required value={password} onChange={(e) => setPassword(e.target.value)} /></Field>
+            <Button type="submit" variant="primary" size="lg" disabled={busy} className="w-full">{busy ? "Checking…" : "Continue"}</Button>
           </form>
         )}
 
         {step.kind === "code" && (
           <form onSubmit={submitCode} className="space-y-3">
             <p className="text-sm text-ink-secondary">{useRecovery ? "Enter one of your recovery codes. Each works once." : "Open your authenticator app and enter the 6-digit code for Tekly admin."}</p>
-            <input autoFocus inputMode={useRecovery ? "text" : "numeric"} autoComplete="one-time-code" required value={code}
-              onChange={(e) => setCode(e.target.value)} className={`${input} tracking-widest text-center text-lg`} aria-label={useRecovery ? "Recovery code" : "Code"} />
-            <button disabled={busy} className={primaryBtn}>{busy ? "Checking…" : "Sign in"}</button>
-            <button type="button" onClick={() => { setUseRecovery((v) => !v); setCode(""); }} className="w-full text-xs text-primary font-semibold">
-              {useRecovery ? "Use a code from my app" : "Lost your phone? Use a recovery code"}</button>
+            <Input autoFocus inputMode={useRecovery ? "text" : "numeric"} autoComplete="one-time-code" required value={code}
+              onChange={(e) => setCode(e.target.value)} className="h-11 tracking-widest text-center text-lg" aria-label={useRecovery ? "Recovery code" : "Code"} />
+            <Button type="submit" variant="primary" size="lg" disabled={busy} className="w-full">{busy ? "Checking…" : "Sign in"}</Button>
+            <div className="flex justify-center"><Button variant="link" onClick={() => { setUseRecovery((v) => !v); setCode(""); }}>
+              {useRecovery ? "Use a code from my app" : "Lost your phone? Use a recovery code"}</Button></div>
           </form>
         )}
 
@@ -81,10 +80,10 @@ export default function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
           <form onSubmit={confirmSetup} className="space-y-3">
             <p className="text-sm text-ink-secondary">Admin accounts need a second step. In Google Authenticator, 1Password or a similar app, add an account with this key:</p>
             <div className="font-mono text-sm bg-slate-50 border border-slate-200 rounded-lg p-3 break-all select-all" data-testid="mfa-secret">{step.secret}</div>
-            <a href={step.uri} className="block text-xs text-primary font-semibold">Open in my authenticator app</a>
-            <label className="block text-xs font-semibold text-ink-secondary">Then enter the 6-digit code it shows
-              <input inputMode="numeric" autoComplete="one-time-code" required value={code} onChange={(e) => setCode(e.target.value)} className={`${input} mt-1 tracking-widest text-center text-lg`} /></label>
-            <button disabled={busy} className={primaryBtn}>{busy ? "Checking…" : "Turn on 2-step sign-in"}</button>
+            <a href={step.uri} className="block text-xs text-primary font-semibold hover:underline">Open in my authenticator app</a>
+            <Field label="Then enter the 6-digit code it shows" htmlFor="adm-setup-code">
+              <Input id="adm-setup-code" inputMode="numeric" autoComplete="one-time-code" required value={code} onChange={(e) => setCode(e.target.value)} className="h-11 tracking-widest text-center text-lg" /></Field>
+            <Button type="submit" variant="primary" size="lg" disabled={busy} className="w-full">{busy ? "Checking…" : "Turn on 2-step sign-in"}</Button>
           </form>
         )}
 
@@ -94,7 +93,7 @@ export default function SignIn({ onSignedIn }: { onSignedIn: () => void }) {
             <div className="grid grid-cols-2 gap-2 font-mono text-sm bg-slate-50 border border-slate-200 rounded-lg p-3 select-all">
               {step.codes.map((c) => <span key={c}>{c}</span>)}
             </div>
-            <button onClick={onSignedIn} className={primaryBtn}>I've saved them</button>
+            <Button variant="primary" size="lg" onClick={onSignedIn} className="w-full">I've saved them</Button>
           </div>
         )}
 
