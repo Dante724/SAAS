@@ -11,7 +11,7 @@ const WORD: Record<Mode, string> = { test: "Test mode", live: "Live", off: "Off"
 export default function ModePill({ mode, children, testId }: { mode: Mode; children?: ReactNode; testId?: string }) {
   const hue = HUE[mode];
   return (
-    <span data-testid={testId} className="inline-flex items-center px-2 py-0.5 rounded-full text-2xs font-semibold whitespace-nowrap" style={{ background: tint(hue), color: hueText(hue) }}>
+    <span data-testid={testId} className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap" style={{ background: tint(hue), color: hueText(hue) }}>
       {children ?? WORD[mode]}
     </span>
   );

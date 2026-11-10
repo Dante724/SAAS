@@ -1,20 +1,18 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
+import { buttonClass } from "../../components/Button";
 import { useNavigate } from "react-router-dom";
 import { api, openAuthedDoc } from "../../api/client";
 import { alertDialog } from "../../lib/dialog";
 import { useMe } from "../../context/Me";
+import DateField from "../../components/DateField";
 import { M } from "../../components/Shell";
-import Button from "../../components/Button";
-import { PanelHeader } from "../../components/PageLayout";
-import ReportsToolbar from "./ReportsToolbar";
-import { fieldClass } from "../../components/Field";
-import { theadRowClass } from "../../components/Table";
-
-const sel = fieldClass("pr-8 !w-auto max-w-[12rem]");
 import { money } from "../orders/types";
 import { clickableRow } from "../../lib/clickable";
 import { KIND_LABEL, drillRows, trend, type Drill, type ProfitRow } from "./profitView";
 import { laborText, laborWord } from "../../lib/labor";
+import { Badge } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 type Bucket = { count: number; revenue: number; tax: number; cogs?: number; labour_cost: number; commission: number; profit?: number; written_off: number };
 type Group = Bucket & { name: string; jobs: number; dropped: number; sales: number; location_id?: string | null; employee_id?: string | null };
@@ -33,11 +31,11 @@ const n = (v: number | undefined) => (typeof v === "number" ? v : null);
 function TrendChip({ cur, prev }: { cur: number | null; prev: number | null }) {
   if (cur == null || prev == null) return null;
   const t = trend(cur, prev);
-  const tone = t.dir === "up" ? "text-emerald-700 bg-emerald-50" : t.dir === "down" ? "text-rose-700 bg-rose-50" : "text-ink-secondary bg-slate-100";
+  const tone = t.dir === "up" ? "success" : t.dir === "down" ? "danger" : "neutral";
   return (
-    <span className={`inline-flex items-center gap-0.5 rounded-full px-2 py-0.5 text-2xs font-semibold ${tone}`} title={`Last period: ${money(prev)}`}>
-      <M n={t.dir === "up" ? "trending_up" : t.dir === "down" ? "trending_down" : "trending_flat"} c="text-[13px]" />{t.label}
-    </span>
+    <span className="inline-flex" title={`Last period: ${money(prev)}`}><Badge tone={tone} size="sm" className="gap-0.5">
+      <M n={t.dir === "up" ? "trending_up" : t.dir === "down" ? "trending_down" : "trending_flat"} c="text-xs" />{t.label}
+    </Badge></span>
   );
 }
 
@@ -74,7 +72,7 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
   type CardKey = "jobs" | "dropped" | "sales" | "other";
   const other = rep?.buckets.other;
   const showOther = !!other && (other.revenue !== 0 || (other.profit ?? 0) !== 0 || other.tax !== 0);
-  const cards: { key: CardKey; title: string; hint: string; icon?: string }[] = [
+  const cards: { key: CardKey; title: string; hint: string; icon: string }[] = [
     { key: "jobs", title: "Jobs", hint: "Jobs closed, or invoiced and sent", icon: "build" },
     { key: "dropped", title: "Dropped jobs", hint: "Money paid and kept on jobs that weren't finished", icon: "block" },
     { key: "sales", title: "Counter sales", hint: "Sales without a job", icon: "point_of_sale" },
@@ -85,38 +83,46 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
   const shown = rep && drill ? drillRows(rep.rows, drill.d) : [];
 
   return (
-    <>
-      {/* The shared Reports toolbar: Show and Export left; Technician (this tab's own filter) before
-          the shared Location and dates, which stay pinned right as on every Reports tab. */}
-      <ReportsToolbar
-        actions={<>
-          <Button variant="primary" onClick={() => load()}>Show</Button>
-          {/* the CSV route also checks this permission */}
-          {can("can_export_sales") && <Button icon={<M n="download" c="text-sm" />} onClick={exportCsv}>Export</Button>}
-        </>}
-        extras={<select aria-label="Technician" value={techId} onChange={(e) => setTechId(e.target.value)} className={sel}>
+    <div className="space-y-4">
+      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 flex items-center gap-2 flex-wrap text-xs">
+        <h3 className="text-sm font-bold text-ink-primary mr-auto">Total profit</h3>
+        {locs.length > 1 && (
+          <TeklySelect aria-label="Location" value={locId} onChange={(e) => setLocId(e.target.value)} className="glass-input px-2.5 py-1.5 rounded-lg">
+            <option value="">All locations</option>
+            {locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
+          </TeklySelect>
+        )}
+        <TeklySelect aria-label="Technician" value={techId} onChange={(e) => setTechId(e.target.value)} className="glass-input px-2.5 py-1.5 rounded-lg">
           <option value="">Everyone</option>
           {techs.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-        </select>}
-        locs={locs} locId={locId} onLoc={setLocId} from={from} to={to} onFrom={setFrom} onTo={setTo} />
-      <PanelHeader title="Total profit" sub="What the shop kept from jobs and sales, before running costs." />
+        </TeklySelect>
+        <DateField mode="date" value={from} onChange={setFrom} className="w-36" />
+        <span className="text-ink-tertiary">→</span>
+        <DateField mode="date" value={to} onChange={setTo} className="w-36" />
+        <button onClick={() => load()} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110">Show</button>
+        {/* the CSV route also checks this permission */}
+        {can("can_export_sales") && (
+          <button type="button" onClick={exportCsv}
+            className={buttonClass("secondary", "sm")}><M n="download" c="text-sm" />Export</button>
+        )}
+      </div>
 
       {err && <div role="alert" className="text-xs text-rose-600">{err}</div>}
-      {!rep && !err && <div className="text-xs text-ink-tertiary" role="status">Adding it up…</div>}
+      {!rep && !err && <div className="text-xs text-ink-tertiary">Adding it up…</div>}
 
       {rep && (
         <>
-          <div className="bg-white rounded-2xl border border-slate-200/90 p-5 flex flex-wrap items-end gap-x-8 gap-y-3">
+          <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4 flex flex-wrap items-end gap-x-8 gap-y-3">
             <div>
-              <p className="text-xs font-medium text-ink-tertiary">Profit for the period</p>
+              <p className="text-[11px] font-bold text-ink-tertiary">Profit for the period</p>
               <p data-testid="profit-total" className={`text-3xl font-bold tabular-nums ${(n(rep.totals.profit) ?? 0) < 0 ? "text-rose-600" : "text-ink-primary"}`}>
                 {costsHidden ? "—" : money(rep.totals.profit)}
               </p>
-              {!costsHidden && <p className="text-2xs text-ink-tertiary">Before running costs like rent and wages</p>}
+              {!costsHidden && <p className="text-[11px] text-ink-tertiary">Before running costs like rent and wages</p>}
               {!costsHidden && (
                 <div className="mt-1 flex items-center gap-1.5 flex-wrap">
                   <TrendChip cur={n(rep.totals.profit)} prev={n(rep.previous.profit)} />
-                  {rep.previous.range && <span className="text-2xs text-ink-tertiary">vs {day(rep.previous.range.from)} – {day(rep.previous.range.to)}</span>}
+                  {rep.previous.range && <span className="text-[11px] text-ink-tertiary">vs {day(rep.previous.range.from)} – {day(rep.previous.range.to)}</span>}
                 </div>
               )}
             </div>
@@ -126,7 +132,7 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
               <p>Commissions <span className="font-semibold text-ink-primary tabular-nums">{money(rep.totals.commission)}</span></p>
               {rep.totals.written_off > 0 && <p>Not charged on dropped jobs (written off, not in sales) <span className="font-semibold text-ink-primary tabular-nums">{money(rep.totals.written_off)}</span></p>}
             </div>
-            {costsHidden && <p className="text-2xs text-ink-tertiary max-w-xs">Your role can't see costs, so profit is hidden. The owner can turn on "View the purchase price" for your role in Settings → Roles.</p>}
+            {costsHidden && <p className="text-[11px] text-ink-tertiary max-w-xs">Your role can't see costs, so profit is hidden. The owner can turn on "View the purchase price" for your role in Settings → Roles.</p>}
           </div>
 
           <div className={`grid grid-cols-1 gap-3 ${cards.length > 3 ? "sm:grid-cols-2 xl:grid-cols-4" : "sm:grid-cols-3"}`}>
@@ -135,15 +141,16 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
               const pb = rep.previous.buckets[c.key];
               return (
                 <button key={c.key} data-testid={`profit-card-${c.key}`} type="button" onClick={() => setDrill({ title: c.title, d: { kind: kindOf[c.key] } })}
-                  className="text-left bg-white rounded-2xl border border-slate-200/90 p-4 hover:border-primary/40 transition-colors">
+                  className="text-left bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 hover:border-primary/40 hover:shadow-clay-card transition-colors">
                   <div className="flex items-center gap-2">
-                    <span className="text-xs font-semibold text-ink-primary">{c.title}</span>
-                    {c.key !== "other" && <span className="ml-auto text-2xs text-ink-tertiary">{b.count}</span>}
+                    <M n={c.icon} c="text-base text-primary" />
+                    <span className="text-xs font-bold text-ink-primary">{c.title}</span>
+                    {c.key !== "other" && <span className="ml-auto text-[11px] text-ink-tertiary">{b.count}</span>}
                   </div>
-                  <p data-testid="card-amount" className={`mt-2 text-xl font-semibold tabular-nums ${(costsHidden ? b.revenue : b.profit ?? 0) < 0 ? "text-rose-600" : "text-ink-primary"}`}>{costsHidden ? money(b.revenue) : money(b.profit)}</p>
-                  <p className="text-2xs text-ink-tertiary">{costsHidden ? "Sales" : `Profit on ${money(b.revenue)} of sales`}</p>
+                  <p data-testid="card-amount" className={`mt-2 text-xl font-bold tabular-nums ${(costsHidden ? b.revenue : b.profit ?? 0) < 0 ? "text-rose-600" : "text-ink-primary"}`}>{costsHidden ? money(b.revenue) : money(b.profit)}</p>
+                  <p className="text-[11px] text-ink-tertiary">{costsHidden ? "Sales" : `Profit on ${money(b.revenue)} of sales`}</p>
                   {!costsHidden && pb && <div className="mt-1.5"><TrendChip cur={n(b.profit)} prev={n(pb.profit)} /></div>}
-                  <p className="mt-1.5 text-2xs text-ink-tertiary">{c.hint}</p>
+                  <p className="mt-1.5 text-[11px] text-ink-tertiary">{c.hint}</p>
                 </button>
               );
             })}
@@ -151,8 +158,8 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
 
           <div className="grid grid-cols-1 lg:grid-cols-2 gap-3">
             {([["By location", rep.by_location, "location_id"], ["By technician", rep.by_technician, "employee_id"]] as const).map(([title, list, key]) => (
-              <div key={title} className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
-                <div className="px-4 py-3 border-b border-slate-100 text-xs font-semibold text-ink-primary">{title}</div>
+              <div key={title} className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
+                <div className="p-3 border-b border-slate-100 text-xs font-bold text-ink-primary">{title}</div>
                 <table className="w-full text-left text-xs">
                   <thead><tr className={theadRowClass}>
                     <th className="py-2 px-3">Name</th><th className="py-2 px-3 text-right">Jobs (incl. dropped) · Sales</th>
@@ -164,9 +171,9 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
                       <tr key={i} {...clickableRow(() => setDrill({ title: `${key === "location_id" ? "Location" : "Technician"}: ${key === "employee_id" && !g.employee_id ? "Nobody assigned" : g.name}`, d: { [key]: (g as any)[key] ?? "" } }))}
                         className="cursor-pointer hover:bg-blue-50/50">
                         <td className="py-2 px-3 font-semibold text-ink-primary">{key === "employee_id" && !g.employee_id ? "Nobody assigned" : g.name}</td>
-                        <td className="py-2 px-3 text-right tabular-nums whitespace-nowrap">{g.jobs + g.dropped} · {g.sales}</td>
-                        <td className="py-2 px-3 text-right tabular-nums whitespace-nowrap">{money(g.revenue)}</td>
-                        <td className={`py-2 px-3 text-right tabular-nums whitespace-nowrap font-semibold ${(g.profit ?? 0) < 0 ? "text-rose-600" : "text-ink-primary"}`}>{costsHidden ? "" : money(g.profit)}</td>
+                        <td className="py-2 px-3 text-right tabular-nums">{g.jobs + g.dropped} · {g.sales}</td>
+                        <td className="py-2 px-3 text-right tabular-nums">{money(g.revenue)}</td>
+                        <td className={`py-2 px-3 text-right tabular-nums font-bold ${(g.profit ?? 0) < 0 ? "text-rose-600" : "text-ink-primary"}`}>{costsHidden ? "" : money(g.profit)}</td>
                       </tr>
                     ))}
                   </tbody>
@@ -176,15 +183,15 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
           </div>
 
           {drill && (
-            <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
-              <div className="px-4 py-2 border-b border-slate-100 flex items-center gap-2">
-                <span className="text-xs font-semibold text-ink-primary">{drill.title}</span>
-                <span className="text-2xs text-ink-tertiary">{shown.length} {shown.length === 1 ? "entry" : "entries"}</span>
-                <Button variant="ghost" size="sm" className="ml-auto" onClick={() => setDrill(null)}>Close</Button>
+            <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
+              <div className="p-3 border-b border-slate-100 flex items-center gap-2">
+                <span className="text-xs font-bold text-ink-primary">{drill.title}</span>
+                <span className="text-[11px] text-ink-tertiary">{shown.length} {shown.length === 1 ? "entry" : "entries"}</span>
+                <button type="button" onClick={() => setDrill(null)} className="ml-auto text-[11px] font-semibold text-ink-secondary hover:text-primary">Close</button>
               </div>
               <div className="overflow-auto max-h-[50vh]">
                 <table className="w-full text-left text-xs">
-                  <thead className="sticky top-0"><tr className={`${theadRowClass} !bg-slate-50`}>
+                  <thead className="sticky top-0 bg-white"><tr className={theadRowClass}>
                     <th className="py-2 px-3">Number</th><th className="py-2 px-3">What</th><th className="py-2 px-3">Date</th>
                     <th className="py-2 px-3">Customer</th><th className="py-2 px-3 text-right">Sales</th><th className="py-2 px-3 text-right">Tax</th>
                     {!costsHidden && <th className="py-2 px-3 text-right">Parts</th>}
@@ -198,19 +205,19 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
                         <td className="py-2 px-3 whitespace-nowrap">
                           {r.kind === "other" ? <span className="text-ink-tertiary">—</span>
                             : r.kind === "sale"
-                            ? <span className="tabular-nums font-semibold">{r.number}</span>
-                            : <button type="button" onClick={() => nav(`/orders?open=${r.id}`)} className="tabular-nums font-semibold text-primary hover:underline">{r.number}</button>}
+                            ? <span className="font-mono font-semibold">{r.number}</span>
+                            : <button type="button" onClick={() => nav(`/orders?open=${r.id}`)} className="font-mono font-semibold text-primary hover:underline">{r.number}</button>}
                         </td>
                         <td className="py-2 px-3">{KIND_LABEL[r.kind]}{r.reason ? <span className="text-ink-tertiary"> · {r.reason}</span> : null}
-                          {r.written_off > 0 && <span className="block text-2xs text-ink-tertiary">{money(r.written_off)} written off</span>}</td>
+                          {r.written_off > 0 && <span className="block text-[11px] text-ink-tertiary">{money(r.written_off)} written off</span>}</td>
                         <td className="py-2 px-3 whitespace-nowrap">{day(r.date)}</td>
                         <td className="py-2 px-3">{r.client_name || "—"}</td>
-                        <td className="py-2 px-3 text-right tabular-nums whitespace-nowrap">{money(r.revenue)}</td>
-                        <td className="py-2 px-3 text-right tabular-nums whitespace-nowrap">{money(r.tax)}</td>
-                        {!costsHidden && <td className="py-2 px-3 text-right tabular-nums whitespace-nowrap">{money(r.cogs)}</td>}
-                        <td className="py-2 px-3 text-right tabular-nums whitespace-nowrap">{money(r.labour_cost)}</td>
-                        <td className="py-2 px-3 text-right tabular-nums whitespace-nowrap">{money(r.commission)}</td>
-                        {!costsHidden && <td className={`py-2 px-3 text-right tabular-nums whitespace-nowrap font-semibold ${(r.profit ?? 0) < 0 ? "text-rose-600" : "text-ink-primary"}`}>{money(r.profit)}</td>}
+                        <td className="py-2 px-3 text-right tabular-nums">{money(r.revenue)}</td>
+                        <td className="py-2 px-3 text-right tabular-nums">{money(r.tax)}</td>
+                        {!costsHidden && <td className="py-2 px-3 text-right tabular-nums">{money(r.cogs)}</td>}
+                        <td className="py-2 px-3 text-right tabular-nums">{money(r.labour_cost)}</td>
+                        <td className="py-2 px-3 text-right tabular-nums">{money(r.commission)}</td>
+                        {!costsHidden && <td className={`py-2 px-3 text-right tabular-nums whitespace-nowrap font-bold ${(r.profit ?? 0) < 0 ? "text-rose-600" : "text-ink-primary"}`}>{money(r.profit)}</td>}
                       </tr>
                     ))}
                   </tbody>
@@ -218,11 +225,11 @@ export default function TotalProfit({ locs }: { locs: { id: string; name: string
               </div>
             </div>
           )}
-          <p className="text-2xs text-ink-tertiary">
+          <p className="text-[11px] text-ink-tertiary">
             Profit = sales − parts − {laborWord(true)} − commissions. Jobs count on the day they were closed, invoiced and sent, or dropped; a dropped job counts only the money you kept. Sales matches Sales on Reports and the P&L. Paid on Home is money in on the day it arrived, so it can differ. With a technician picked, refunds that aren't on a job are left out.
           </p>
         </>
       )}
-    </>
+    </div>
   );
 }
