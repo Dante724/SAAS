@@ -1,0 +1,39 @@
+# Tekly promo video: "The Day Back"
+
+Remotion (TypeScript). One composition, `TheDayBack`, props:
+
+| prop | values |
+|---|---|
+| `cut` | `"90"` (1:32), `"30"`, `"15"` (captions only, no voice) |
+| `aspect` | `"16:9"`, `"1:1"`, `"9:16"` |
+| `voiceoverPath` | file under `public/` or a URL; `""` for none |
+| `musicPath` | file under `public/` or a URL; `""` for none |
+
+The script lives in `src/captions.ts`: every scene, VO line and on-screen text with the script's
+timecodes. Captions are generated from it, so a script change is a one-file change.
+
+## Make it
+
+```bash
+npm install
+npm run capture                         # real app clips -> public/clips (+ manifest.json)
+npx tsx scripts/music.ts                # scratch score -> public/audio/music-*.wav
+npx tsx scripts/vo-mix.ts <tts-dir>     # scratch VO lines -> public/audio/vo-{90,30}.wav
+npm run render:all                      # 9 versions -> out/
+npm run contact-sheet                   # out/contact-sheet.png (one frame per scene)
+npm run verify                          # clips play, caption timing, durations
+npm run studio                          # preview / tweak
+```
+
+Scratch VO: Kokoro (open-source, runs locally), voice `af_heart` for Dani and `am_michael` for the
+closing narrator; `npx tsx scripts/vo-lines.ts` prints the lines. For the final voice-over, record one
+WAV per cut, aligned to the script timecodes, and pass it as `voiceoverPath`.
+
+Music notes (from the script): single low tone in act one; a light acoustic rhythm enters exactly on
+"Same Tuesday"; a soft chime when the job flips to Approved; no swell at the logo.
+
+## Rules this cut keeps
+
+No competitor shown or named (act one's software is abstract grey UI). No feature or claim outside
+the script: no AI features, Tekly Sense, Morning Brief, call transcription, SSO, card readers,
+supplier catalogues, labour guides or statistics. Act-one shots are stock photos for the first cut.

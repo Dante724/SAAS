@@ -1,0 +1,4 @@
+node_modules/
+out/
+capture/.tmp/
+public/audio/

@@ -1,0 +1,225 @@
+{
+  "generated": "2026-11-10T20:24:24.791Z",
+  "note": "beats t = seconds from clip start",
+  "clips": {
+    "intake-desktop": {
+      "file": "intake-desktop.webm",
+      "width": 1440,
+      "height": 900,
+      "durationSec": 40.64,
+      "fps": 25,
+      "beats": [
+        {
+          "t": 2.76,
+          "label": "New work order drawer opens"
+        },
+        {
+          "t": 6.46,
+          "label": "Customer Maya Chen picked"
+        },
+        {
+          "t": 19.1,
+          "label": "IMEI entered"
+        },
+        {
+          "t": 21.75,
+          "label": "Photo attached"
+        },
+        {
+          "t": 23.58,
+          "label": "Markup tool open"
+        },
+        {
+          "t": 25.46,
+          "label": "Crack circled"
+        },
+        {
+          "t": 28.32,
+          "label": "Markup saved"
+        },
+        {
+          "t": 34.62,
+          "label": "Screen replacement $140 added"
+        },
+        {
+          "t": 38.45,
+          "label": "Work order WO-00012 appears on the board"
+        }
+      ],
+      "poster": "intake-desktop.png"
+    },
+    "board-desktop": {
+      "file": "board-desktop.webm",
+      "width": 1440,
+      "height": 900,
+      "durationSec": 10.84,
+      "fps": 25,
+      "beats": [
+        {
+          "t": 1.2,
+          "label": "New job on the board · Awaiting approval"
+        },
+        {
+          "t": 4.57,
+          "label": "Work order opens"
+        },
+        {
+          "t": 6.62,
+          "label": "Intake photo with the circled crack"
+        },
+        {
+          "t": 10.47,
+          "label": "Marked-up photo full size"
+        }
+      ],
+      "poster": "board-desktop.png"
+    },
+    "approve-mobile": {
+      "file": "approve-mobile.webm",
+      "width": 780,
+      "height": 1688,
+      "durationSec": 27.6,
+      "fps": 25,
+      "beats": [
+        {
+          "t": 1.2,
+          "label": "Tracking page: We need your approval"
+        },
+        {
+          "t": 3.7,
+          "label": "Photo of the cracked screen"
+        },
+        {
+          "t": 5.47,
+          "label": "Photo full screen"
+        },
+        {
+          "t": 8.77,
+          "label": "Battery at 71% – replace? +$45"
+        },
+        {
+          "t": 11.53,
+          "label": "Battery declined: Not now"
+        },
+        {
+          "t": 13.55,
+          "label": "Screen replacement – $140"
+        },
+        {
+          "t": 14.6,
+          "label": "Review and sign"
+        },
+        {
+          "t": 20.28,
+          "label": "Signature done"
+        },
+        {
+          "t": 20.73,
+          "label": "Approve and sign tapped"
+        },
+        {
+          "t": 25.19,
+          "label": "Status: Approved"
+        }
+      ],
+      "poster": "approve-mobile.png"
+    },
+    "board-approved-desktop": {
+      "file": "board-approved-desktop.webm",
+      "width": 1440,
+      "height": 900,
+      "durationSec": 12.52,
+      "fps": 25,
+      "beats": [
+        {
+          "t": 1.22,
+          "label": "Status pill: Approved"
+        },
+        {
+          "t": 4.57,
+          "label": "Work order opens"
+        },
+        {
+          "t": 7.92,
+          "label": "Activity: customer approved and signed"
+        }
+      ],
+      "poster": "board-approved-desktop.png"
+    },
+    "stock-desktop": {
+      "file": "stock-desktop.webm",
+      "width": 1440,
+      "height": 900,
+      "durationSec": 20.84,
+      "fps": 25,
+      "beats": [
+        {
+          "t": 1.43,
+          "label": "iPhone 13 screen: 1 in stock, 1 reserved"
+        },
+        {
+          "t": 4.77,
+          "label": "Product opens"
+        },
+        {
+          "t": 7.78,
+          "label": "Stock by location: 1 available, 1 reserved for the job"
+        },
+        {
+          "t": 15.73,
+          "label": "Labour timer started"
+        }
+      ],
+      "poster": "stock-desktop.png",
+      "note": "Starts with the inventory page; at the 'Labour timer started' beat a page navigation to the work order happens about 1.5 s earlier (cut there if needed)."
+    },
+    "invoice-desktop": {
+      "file": "invoice-desktop.webm",
+      "width": 1440,
+      "height": 900,
+      "durationSec": 17.36,
+      "fps": 25,
+      "beats": [
+        {
+          "t": 6.33,
+          "label": "Marked Ready (repair done)"
+        },
+        {
+          "t": 8.54,
+          "label": "Invoice created automatically"
+        },
+        {
+          "t": 11.9,
+          "label": "Pay link ready"
+        },
+        {
+          "t": 15.17,
+          "label": "Invoice row: $140, ready to send"
+        }
+      ],
+      "poster": "invoice-desktop.png"
+    },
+    "eod-board-desktop": {
+      "file": "eod-board-desktop.webm",
+      "width": 1440,
+      "height": 900,
+      "durationSec": 13.08,
+      "fps": 25,
+      "beats": [
+        {
+          "t": 1,
+          "label": "End of day board"
+        },
+        {
+          "t": 1.59,
+          "label": "WO-00012 Maya Chen · Done"
+        },
+        {
+          "t": 10.87,
+          "label": "Filter: Done"
+        }
+      ],
+      "poster": "eod-board-desktop.png"
+    }
+  }
+}
