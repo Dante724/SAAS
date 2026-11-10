@@ -1,4 +1,5 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
+import TeklySelect from "./TeklySelect";
 import { createPortal } from "react-dom";
 import { M } from "./Shell";
 import { fmtDay } from "../lib/serverTime";
@@ -241,13 +242,13 @@ export default function DateField({
       {showTime && (
         <div className={`flex items-center gap-2 ${showCal ? "mt-3 pt-3 border-t border-slate-100" : ""}`}>
           <M n="schedule" c="text-base text-ink-tertiary" />
-          <select aria-label="Hour" value={th ?? "09"} onChange={(e) => pickTime(`${e.target.value}:${tm ?? "00"}`)} className="glass-input rounded-lg px-2 py-1.5 text-sm text-ink-primary">
+          <TeklySelect aria-label="Hour" value={th ?? "09"} onChange={(e) => pickTime(`${e.target.value}:${tm ?? "00"}`)} className="glass-input rounded-lg px-2 py-1.5 text-sm text-ink-primary">
             {Array.from({ length: 24 }, (_, h) => <option key={h} value={pad(h)}>{pad(h)}</option>)}
-          </select>
+          </TeklySelect>
           <span className="text-ink-tertiary">:</span>
-          <select aria-label="Minute" value={tm ?? "00"} onChange={(e) => pickTime(`${th ?? "09"}:${e.target.value}`)} className="glass-input rounded-lg px-2 py-1.5 text-sm text-ink-primary">
+          <TeklySelect aria-label="Minute" value={tm ?? "00"} onChange={(e) => pickTime(`${th ?? "09"}:${e.target.value}`)} className="glass-input rounded-lg px-2 py-1.5 text-sm text-ink-primary">
             {Array.from({ length: 12 }, (_, i) => pad(i * 5)).map((m) => <option key={m} value={m}>{m}</option>)}
-          </select>
+          </TeklySelect>
           <span className="text-xs text-ink-tertiary ml-auto">{fmtTime(`${th ?? "09"}:${tm ?? "00"}`)}</span>
         </div>
       )}
@@ -272,7 +273,7 @@ export default function DateField({
         aria-label={ariaName ? `${ariaName}: ${label}` : undefined}
         aria-expanded={open}
         onClick={toggle}
-        className={`glass-input rounded-xl px-3 py-2 text-sm w-full flex items-center justify-between gap-2 text-left disabled:opacity-50 disabled:cursor-not-allowed ${empty ? "text-ink-tertiary" : "text-ink-primary"}`}
+        className={`glass-input rounded-xl h-9 px-3 text-sm w-full flex items-center justify-between gap-2 text-left disabled:opacity-50 disabled:cursor-not-allowed ${empty ? "text-ink-tertiary" : "text-ink-primary"}`}
       >
         <span className="truncate">{label}</span>
         <M n={mode === "time" ? "schedule" : "calendar_today"} c="text-lg text-ink-tertiary shrink-0" />

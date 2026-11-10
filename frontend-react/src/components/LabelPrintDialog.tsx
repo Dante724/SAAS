@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "./TeklySelect";
 import { M } from "./Shell";
 import { api } from "../api/client";
 import { BARCODE_TYPES } from "../lib/barcodes";
@@ -47,16 +48,16 @@ export default function LabelPrintDialog({ title, count, noun, typeChoice, defau
         <div className="flex items-center justify-between mb-3"><h3 className="font-bold text-ink-primary">{title}</h3><button aria-label="Close" onClick={onClose} className="w-7 h-7 rounded-lg hover:bg-slate-100 grid place-items-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
         <p className="text-xs text-ink-tertiary mb-3">{count} {count === 1 ? noun[0] : noun[1]} selected. Each label prints at the template's exact size.</p>
         <label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Label template</label>
-        <select value={tplId} onChange={(e) => setTplId(e.target.value)} className={fld}>
+        <TeklySelect value={tplId} onChange={(e) => setTplId(e.target.value)} className={fld}>
           {tpls?.length === 0 && <option value="">No label templates — create one in Settings › Documents</option>}
           {(tpls || []).map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-        </select>
+        </TeklySelect>
         {typeChoice && (<>
           <label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Barcode type</label>
-          <select value={kind} onChange={(e) => setKind(e.target.value)} className={fld}>
+          <TeklySelect value={kind} onChange={(e) => setKind(e.target.value)} className={fld}>
             {typeChoice === "own" && <option value="">Each {noun[0]}'s own type</option>}
             {BARCODE_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
-          </select>
+          </TeklySelect>
         </>)}
         <label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Copies each</label>
         <input type="number" min={1} max={50} value={copies} onChange={(e) => setCopies(Math.max(1, Math.min(50, +e.target.value || 1)))} className={fld} />
