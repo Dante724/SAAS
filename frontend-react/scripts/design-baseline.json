@@ -1,108 +1,230 @@
 {
-  "admin/ShopPanel.tsx": {
-    "button-look": 1,
+  "pages/appointments/AppointmentsHub.tsx": {
+    "text-px": 17
+  },
+  "pages/assets/AssetsHub.tsx": {
     "text-px": 3
   },
-  "admin/Views.tsx": {
-    "button-look": 1
-  },
-  "go/components/ItemsSheet.tsx": {
-    "raw-hex": 1
-  },
-  "go/components/MessageSheet.tsx": {
-    "button-look": 1
-  },
-  "go/screens/Job.tsx": {
-    "raw-hex": 4
-  },
-  "go/screens/Scan.tsx": {
-    "raw-hex": 1
-  },
-  "pages/inbox/InquiryDrawer.tsx": {
-    "text-px": 1
-  },
-  "pages/inventory/BinsPanel.tsx": {
+  "pages/cash/CashDrawer.tsx": {
     "text-px": 2
   },
-  "pages/inventory/InventoryDrawer.tsx": {
+  "pages/cash/CashPanel.tsx": {
+    "text-px": 11
+  },
+  "pages/cash/DenomCountModal.tsx": {
     "text-px": 1
   },
+  "pages/cash/NewAccountDrawer.tsx": {
+    "text-px": 3
+  },
+  "pages/cash/ShiftHistoryModal.tsx": {
+    "text-px": 1
+  },
+  "pages/chats/ChatsHub.tsx": {
+    "text-px": 6
+  },
+  "pages/clients/ClientsHub.tsx": {
+    "text-px": 8
+  },
+  "pages/clients/SupplierDrawer.tsx": {
+    "text-px": 10
+  },
+  "pages/clients/SupplierPanel.tsx": {
+    "text-px": 11
+  },
+  "pages/clients/TagFilterChip.tsx": {
+    "text-px": 1
+  },
+  "pages/company/CompanyHub.tsx": {
+    "text-px": 7
+  },
+  "pages/finance/FinanceHub.tsx": {
+    "text-px": 7
+  },
+  "pages/finance/MyEarnings.tsx": {
+    "text-px": 1
+  },
+  "pages/inbox/InquiriesHub.tsx": {
+    "text-px": 7
+  },
+  "pages/inbox/InquiryDrawer.tsx": {
+    "text-px": 9
+  },
+  "pages/inbox/InquiryFields.tsx": {
+    "text-px": 2
+  },
+  "pages/inbox/WalkinsView.tsx": {
+    "text-px": 4
+  },
+  "pages/inventory/BinsPanel.tsx": {
+    "text-px": 9
+  },
+  "pages/inventory/InventoryDrawer.tsx": {
+    "text-px": 47
+  },
   "pages/inventory/InventoryHub.tsx": {
+    "text-px": 44
+  },
+  "pages/inventory/NewPODrawer.tsx": {
     "text-px": 4
   },
   "pages/inventory/PODrawer.tsx": {
+    "text-px": 38
+  },
+  "pages/inventory/PasteImport.tsx": {
+    "text-px": 7
+  },
+  "pages/inventory/PurchasingCockpit.tsx": {
     "text-px": 3
   },
-  "pages/memberships/PlansTab.tsx": {
-    "button-look": 1,
-    "text-px": 6,
-    "blur": 1
-  },
-  "pages/orders/CreateOrderDrawer.tsx": {
-    "bold-tab": 1
-  },
-  "pages/orders/KitGroupHeader.tsx": {
-    "text-px": 2
-  },
-  "pages/orders/LineQtyEditor.tsx": {
-    "button-look": 1
-  },
-  "pages/orders/NotesPanel.tsx": {
-    "text-px": 1
-  },
-  "pages/orders/PrintMenu.tsx": {
-    "text-px": 1
-  },
-  "pages/orders/WODrawer.tsx": {
-    "text-px": 9
-  },
-  "pages/orders/look.tsx": {
-    "text-px": 1
-  },
-  "pages/reports/TotalProfit.tsx": {
-    "text-px": 1
-  },
-  "pages/settings/DocumentTemplatesPage.tsx": {
-    "gradient": 1
-  },
-  "pages/settings/SettingsHub.tsx": {
+  "pages/inventory/StocktakeDrawer.tsx": {
     "text-px": 5
   },
-  "pages/settings/StatusesSettings.tsx": {
+  "pages/invoices/CreditNotesList.tsx": {
+    "text-px": 1
+  },
+  "pages/invoices/InvoicesHub.tsx": {
+    "text-px": 1
+  },
+  "pages/invoices/billing.tsx": {
+    "text-px": 1
+  },
+  "pages/marketing/MarketingHub.tsx": {
     "text-px": 2
   },
-  "pages/settings/TeamSettings.tsx": {
+  "pages/memberships/MembershipsView.tsx": {
     "text-px": 4
   },
-  "pages/settings/TemplateEditorDrawer.tsx": {
-    "text-px": 12
+  "pages/memberships/PlansTab.tsx": {
+    "text-px": 8
   },
-  "public/AuthPages.tsx": {
-    "text-px": 6
+  "pages/memberships/WOPlan.tsx": {
+    "text-px": 5
   },
-  "public/Login.tsx": {
-    "text-px": 11
-  },
-  "public/PublicAppointment.tsx": {
-    "text-px": 23
-  },
-  "public/PublicCheckin.tsx": {
-    "text-px": 37,
-    "blur": 1
-  },
-  "public/PublicPortal.tsx": {
+  "pages/memberships/shared.tsx": {
     "text-px": 14
   },
-  "public/PublicTrack.tsx": {
-    "text-px": 104,
-    "blur": 1
+  "pages/orders/AssetDrawer.tsx": {
+    "text-px": 10
   },
-  "public/TrackLookup.tsx": {
-    "text-px": 5,
-    "gradient": 1
+  "pages/orders/ClientDrawer.tsx": {
+    "text-px": 15
   },
-  "public/authUi.tsx": {
-    "button-look": 1,
+  "pages/orders/ConversationPanel.tsx": {
+    "text-px": 4
+  },
+  "pages/orders/CreateOrderDrawer.tsx": {
+    "text-px": 13
+  },
+  "pages/orders/EstimateTerms.tsx": {
+    "text-px": 2
+  },
+  "pages/orders/JobTasks.tsx": {
+    "text-px": 3
+  },
+  "pages/orders/KitGroupHeader.tsx": {
+    "text-px": 7
+  },
+  "pages/orders/NotesPanel.tsx": {
+    "text-px": 3
+  },
+  "pages/orders/PartsPOPanel.tsx": {
+    "text-px": 16
+  },
+  "pages/orders/PhotoAnnotator.tsx": {
+    "text-px": 2
+  },
+  "pages/orders/PrintMenu.tsx": {
+    "text-px": 9
+  },
+  "pages/orders/RecommendationsPanel.tsx": {
+    "text-px": 9
+  },
+  "pages/orders/WODrawer.tsx": {
+    "text-px": 63
+  },
+  "pages/orders/WorkOrdersHub.tsx": {
+    "text-px": 41
+  },
+  "pages/reports/GoPilotReport.tsx": {
+    "text-px": 4
+  },
+  "pages/reports/ReportsHub.tsx": {
+    "text-px": 26
+  },
+  "pages/reports/TotalProfit.tsx": {
+    "text-px": 11
+  },
+  "pages/sales/SalesPOS.tsx": {
+    "text-px": 15
+  },
+  "pages/settings/BillingPage.tsx": {
     "text-px": 12
+  },
+  "pages/settings/CheckinPointsSettings.tsx": {
+    "text-px": 1
+  },
+  "pages/settings/ChecklistSettings.tsx": {
+    "text-px": 16
+  },
+  "pages/settings/DirectoriesManager.tsx": {
+    "text-px": 15
+  },
+  "pages/settings/DocumentTemplatesPage.tsx": {
+    "text-px": 8
+  },
+  "pages/settings/FinanceNumbering.tsx": {
+    "text-px": 20
+  },
+  "pages/settings/GeneralSettings.tsx": {
+    "text-px": 21
+  },
+  "pages/settings/LabelBarcodePicker.tsx": {
+    "text-px": 3
+  },
+  "pages/settings/LocationsPage.tsx": {
+    "text-px": 18
+  },
+  "pages/settings/ModePill.tsx": {
+    "text-px": 1
+  },
+  "pages/settings/NotificationsPage.tsx": {
+    "text-px": 27
+  },
+  "pages/settings/PricingInventory.tsx": {
+    "text-px": 8
+  },
+  "pages/settings/PublicPagesSettings.tsx": {
+    "text-px": 5
+  },
+  "pages/settings/SettingsHub.tsx": {
+    "text-px": 45
+  },
+  "pages/settings/SetupChecklist.tsx": {
+    "text-px": 4
+  },
+  "pages/settings/StatusesSettings.tsx": {
+    "text-px": 14
+  },
+  "pages/settings/TeamSettings.tsx": {
+    "text-px": 6
+  },
+  "pages/settings/TemplateEditorDrawer.tsx": {
+    "text-px": 19
+  },
+  "pages/settings/WebhooksSettings.tsx": {
+    "text-px": 3
+  },
+  "pages/tasks/TasksHub.tsx": {
+    "text-px": 13
+  },
+  "pages/timesheets/BayChecklist.tsx": {
+    "text-px": 7
+  },
+  "pages/timesheets/MyWorkHub.tsx": {
+    "text-px": 21
+  },
+  "pages/timesheets/TimesheetsHub.tsx": {
+    "text-px": 15
   }
 }

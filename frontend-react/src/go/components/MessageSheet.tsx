@@ -8,7 +8,7 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { MessageCircle, MessageSquareText, Send } from "lucide-react";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
-import { GoButton, PrimaryButton, Sheet, goArea } from "./ui";
+import { GoButton, IconButton, PrimaryButton, Sheet, goArea } from "./ui";
 import Chip from "./Chip";
 import { goQueue } from "../lib/offlineQueue";
 import { smsLink, smsSegments, waLink } from "../lib/messaging";
@@ -164,8 +164,7 @@ export default function MessageSheet({ open, onClose, orderId, onRead }: {
             <div className="mt-2 flex items-end gap-2">
               <textarea value={reply} onChange={(e) => setReply(e.target.value)} rows={1} placeholder="Reply on their tracking page"
                 className={goArea("flex-1 min-h-11 max-h-32 !py-2.5")} />
-              <button onClick={sendReply} disabled={!reply.trim() || sending} aria-label="Send reply"
-                className="h-11 w-11 shrink-0 rounded-full bg-primary text-white inline-flex items-center justify-center active:bg-primary-container disabled:opacity-50"><Send size={20} /></button>
+              <IconButton onClick={sendReply} disabled={!reply.trim() || sending} label="Send reply" tone="filled" icon={<Send size={20} />} />
             </div>
           </>
         ) : (

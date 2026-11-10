@@ -32,7 +32,7 @@ export default function BinScanField({ onBin, locationId, current, onClear, labe
         {current ? (
           <span className="inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-lg bg-blue-50 border border-blue-100 text-primary text-xs font-bold">
             <M n="warehouse" c="text-sm" />{label}: {current.name}
-            {onClear && <button aria-label="Clear bin" onClick={onClear} className="ml-1 text-primary/70 hover:text-primary"><M n="close" c="text-sm" /></button>}
+            {onClear && <button aria-label="Clear bin" onClick={onClear} className="ml-1 text-primary hover:text-ink-primary"><M n="close" c="text-sm" /></button>}
           </span>
         ) : null}
         <input value={code} onChange={(e) => setCode(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); resolve(); } }}
