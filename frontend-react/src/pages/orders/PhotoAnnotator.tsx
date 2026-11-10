@@ -2,9 +2,9 @@
 // (seamstress, auto, repair) can point right at the damage. Flattens to a new JPEG and hands the data
 // URL back; the caller uploads it and swaps the photo id, so the marks show everywhere the photo does.
 import { useEffect, useRef, useState } from "react";
-import Button from "../../components/Button";
 import { M } from "../../components/Shell";
 import { loadFailed } from "../../lib/notice";
+import { buttonClass } from "../../components/Button";
 
 type Tool = "circle" | "spot" | "pen";
 type Pt = { x: number; y: number };
@@ -121,7 +121,7 @@ export default function PhotoAnnotator({ src, onSave, onClose }: {
 
   const toolBtn = (t: Tool, icon: string, label: string) => (
     <button onClick={() => setTool(t)} title={label}
-      className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-semibold ${tool === t ? "bg-primary text-white shadow-clay-sm" : "bg-white text-ink-secondary border border-slate-200 hover:bg-slate-50"}`}>
+      className={`flex items-center gap-1 px-2.5 py-1.5 rounded-lg text-xs font-bold ${tool === t ? "bg-primary text-white shadow-clay-sm" : "bg-white text-ink-secondary border border-slate-200 hover:bg-slate-50"}`}>
       <M n={icon} c="text-base" />{label}
     </button>
   );
@@ -130,8 +130,8 @@ export default function PhotoAnnotator({ src, onSave, onClose }: {
     <div className="fixed inset-0 z-[60] bg-black/70 flex items-center justify-center p-4" role="presentation" onClick={onClose}>
       <div className="bg-white rounded-2xl shadow-clay-drawer max-w-3xl w-full max-h-[92vh] flex flex-col overflow-hidden" onClick={(e) => e.stopPropagation()}>
         <div className="px-4 py-2.5 border-b border-slate-100 flex items-center gap-2">
-          <M n="edit" c="text-primary" /><h3 className="text-sm font-semibold text-ink-primary">Mark up photo</h3>
-          <span className="text-2xs text-ink-tertiary">circle the damage, drop a spot, or draw</span>
+          <M n="edit" c="text-primary" /><h3 className="text-sm font-bold text-ink-primary">Mark up photo</h3>
+          <span className="text-[11px] text-ink-tertiary">circle the damage, drop a spot, or draw</span>
           <button aria-label="Close" onClick={onClose} className="ml-auto text-ink-tertiary hover:text-ink-primary"><M n="close" /></button>
         </div>
 
@@ -159,11 +159,11 @@ export default function PhotoAnnotator({ src, onSave, onClose }: {
         </div>
 
         <div className="px-4 py-3 border-t border-slate-100 flex items-center justify-between bg-slate-50/70">
-          <span className="text-2xs text-ink-tertiary">Saved as a new marked-up photo on this order.</span>
           <div className="flex gap-2">
-            <Button variant="primary" onClick={save} disabled={saving || !ready}>{saving ? "Saving…" : "Save markup"}</Button>
-            <Button variant="ghost" onClick={onClose}>Cancel</Button>
+            <button onClick={save} disabled={saving || !ready} className={buttonClass("primary", "md")}>{saving ? "Saving…" : "Save markup"}</button>
+            <button onClick={onClose} className="px-4 py-2 rounded-lg text-xs font-bold text-ink-secondary hover:bg-slate-100">Cancel</button>
           </div>
+          <span className="text-[11px] text-ink-tertiary">Saved as a new marked-up photo on this order.</span>
         </div>
       </div>
     </div>

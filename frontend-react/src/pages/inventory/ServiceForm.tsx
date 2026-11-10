@@ -9,6 +9,7 @@ import CategoryPicker from "../../components/CategoryPicker";
 import Switch from "../../components/Switch";
 import { inputCls } from "../invoices/billing";
 import { laborText } from "../../lib/labor";
+import EmptyState from "../../components/EmptyState";
 
 const lbl = "block font-semibold text-ink-secondary mb-1";
 const field = `${inputCls} text-ink-primary`;
@@ -104,7 +105,7 @@ export default function ServiceForm({ p, set }: { p: any; set: (k: string, v: an
           <p className="text-xs text-ink-tertiary mb-1.5">None selected means anyone. Online bookings only offer these people.</p>
           {emps === null ? <p className="text-xs text-ink-tertiary">Loading team…</p>
             : empErr ? <p className="text-xs text-rose-600">Couldn't load the team. Close and reopen to try again.</p>
-            : emps.length === 0 && missing.length === 0 ? <p className="text-xs text-ink-tertiary">No team members yet.</p>
+            : emps.length === 0 && missing.length === 0 ? <EmptyState size="inline" title="No team members yet." />
             : <div className="flex flex-wrap gap-1.5">
                 {emps.map((e) => <Chip key={e.id} on={allowed.includes(e.id)} label={e.name || "Unnamed"} onClick={() => toggle("allowed_employee_ids", allowed, e.id)} />)}
                 {missing.map((id) => <Chip key={id} on label="Former team member" onClick={() => toggle("allowed_employee_ids", allowed, id)} />)}
