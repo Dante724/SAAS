@@ -4,8 +4,8 @@
 Run from the repo root:  python3 website/tools/check_legal_placeholders.py [--warn-only] [site_root]
 
 build_pages.py refuses to build with placeholders left, but the built pages are committed, so
-deploying website/ as it is would skip that check. CI runs this on the committed tree: it fails on
-main and on pull requests into main, and prints warnings everywhere else.
+deploying website/ as it is would skip that check. CI runs this on the committed tree with
+--warn-only until the founder's legal details are in.
 The sources in tools/legal/ keep the tokens until the founder fills them in, so tools/ and the
 README are not scanned.
 """
