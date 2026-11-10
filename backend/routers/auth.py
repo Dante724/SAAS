@@ -875,6 +875,8 @@ async def me(current: Employee = Depends(get_current_employee),
         "active": current.active,
         "currency": (org.currency if org else None) or _symbol_for(org.currency_code if org else None, ""),
         "currency_code": (org.currency_code if org else None) or "",
+        # ISO alpha-2 shop country: the UI spells "Labor" for US shops and "Labour" elsewhere.
+        "country": (org.country if org else None) or None,
         "role": role_name,
         "is_owner": current.role_id is None and shop_owner,   # a roleless invitee is not the owner
         # The shop's creator (organisations.owner_id), who may also hold a role: owner-only
@@ -894,6 +896,8 @@ async def me(current: Employee = Depends(get_current_employee),
         # build 144x: org master switches — effective clock = org ON *and* employee tracks it
         "clock_wo_enabled": (org.clock_wo_enabled if org and org.clock_wo_enabled is not None else True),
         "clock_attendance_enabled": (org.clock_attendance_enabled if org and org.clock_attendance_enabled is not None else True),
+        # Card readers are off until a shop can connect one: the app hides every reader entry point.
+        "card_readers": bool(settings.CARD_READERS_ENABLED),
         # where the Help & support menu and "contact support" errors point
         "support": {"email": settings.SUPPORT_EMAIL, "url": settings.SUPPORT_URL},
         # Subscription: plan, trial, read-only state and the Pro features unlocked, so the app

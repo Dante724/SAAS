@@ -6,6 +6,7 @@ import { money } from "../pages/orders/types";
 import { promptDialog } from "../lib/dialog";
 import type { Charge } from "./ReaderCharge";
 import { serverDate } from "../lib/serverTime";
+import { useCardReaders } from "../lib/cardReaders";
 
 // F2/F3 — approved card-reader payments with a Refund action: for one work order (orderId),
 // or for counter sales (sales). The refund goes back to the customer's card through the provider.
@@ -20,7 +21,9 @@ export default function CardPaymentsList({ orderId, sales, reloadKey, onChanged 
   const [err, setErr] = useState<string | null>(null);
   const [busy, setBusy] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
-  const allowed = can("can_take_card_payments");
+  // Reader-only: with card readers switched off there is nothing to list (card payments recorded
+  // by hand show in the job's / sale's own payment history as before).
+  const allowed = useCardReaders() && can("can_take_card_payments");
 
   const load = () => {
     if (!allowed) return;
