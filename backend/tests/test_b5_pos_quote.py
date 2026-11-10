@@ -207,7 +207,7 @@ async def test_pay_a_parked_sale_later(client, tenant):
 
 
 @pytest.mark.asyncio
-async def test_reader_charges_only_what_the_gift_card_left(client, tenant):
+async def test_reader_charges_only_what_the_gift_card_left(client, tenant, card_readers_on):
     await client.post("/api/cash/accounts", json={"name": "Card", "payment_option": "card"}, headers=tenant)
     acc = [a for a in (await client.get("/api/cash/accounts", headers=tenant)).json()["items"] if a["name"] == "Card"][0]["id"]
     t = (await client.post("/api/payments/terminal/readers", json={"provider": "simulated", "label": "Desk"},

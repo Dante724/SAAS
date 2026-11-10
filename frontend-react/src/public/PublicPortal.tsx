@@ -1,6 +1,9 @@
 import { useEffect, useRef, useState } from "react";
 import { ArrowLeft, ChevronRight, ShieldCheck, X } from "lucide-react";
-import { TrackView, usePublicDoc, money, onColor, initials, PaidNote } from "./PublicTrack";
+import Button from "../components/Button";
+import EmptyState from "../components/EmptyState";
+import { TrackView, usePublicDoc, money, PaidNote } from "./PublicTrack";
+import PublicLayout, { PublicTitle, publicCard, shopAccent } from "./PublicLayout";
 
 // ── Customer portal: every job of one customer, behind their magic link ────────
 // Served at /portal/:token, no auth, no shell. The job list is this page's own; opening a job
@@ -62,22 +65,19 @@ export default function PublicPortal({ token }: { token: string }) {
 
   if (err)
     return (
-      <div className="min-h-screen bg-surface text-ink-primary grid place-items-center px-5">
-        <div className="text-center">
-          <div className="mx-auto mb-4 grid h-14 w-14 place-items-center rounded-2xl bg-rose-50 text-rose-600"><X size={26} /></div>
-          <div className="text-lg font-bold">Link not found</div>
-          <div className="mt-1.5 text-sm text-ink-tertiary">This link to your repairs may be invalid or expired. Ask the shop for a new one.</div>
+      <PublicLayout title="Your repairs">
+        <div className={publicCard}>
+          <EmptyState size="page" icon={<X size={20} />} title="Link not found" body="This link to your repairs may be invalid or expired. Ask the shop for a new one." />
         </div>
-      </div>
+      </PublicLayout>
     );
-  if (!home) return <div className="min-h-screen bg-surface" />;
+  if (!home) return <PublicLayout shop={null}><span className="sr-only" role="status">Loading…</span></PublicLayout>;
   if (job) return <PortalJob key={job} base={base} id={job} home={home} onBack={() => (fromList.current ? history.back() : open(null))} onOpen={(id) => open(id, true)} />;
   return <PortalHome home={home} onOpen={open} />;
 }
 
 function PortalHome({ home, onOpen }: { home: Home; onOpen: (id: string) => void }) {
-  const accent = home.brand_color || "#0059ba";
-  const onAccent = onColor(accent);
+  const accent = shopAccent(home.brand_color);
   const all = [...home.estimates, ...home.work_orders];
   const todo = all.filter(needsYou);
   const rest = (list: Card[]) => list.filter((c) => !needsYou(c));
@@ -85,39 +85,24 @@ function PortalHome({ home, onOpen }: { home: Home; onOpen: (id: string) => void
   useEffect(() => { document.title = home.shop_name ? `Your repairs · ${home.shop_name}` : "Your repairs"; }, [home.shop_name]);
 
   return (
-    <div className="min-h-screen bg-canvas text-ink-primary font-sans">
-      <div className="mx-auto max-w-[720px] px-4 py-6 sm:py-10">
-        {/* shop bar */}
-        <div className="flex items-center gap-3">
-          {home.logo_data
-            ? <img src={home.logo_data} alt={home.shop_name || "logo"} className="h-9 w-9 shrink-0 rounded-[10px] object-contain bg-white" />
-            : <div className="grid h-9 w-9 shrink-0 place-items-center rounded-[10px] text-[14px] font-semibold" style={{ background: accent, color: onAccent }}>{initials(home.shop_name)}</div>}
-          <div className="min-w-0 flex-1 truncate text-[15px] font-semibold text-ink-primary">{home.shop_name}</div>
-        </div>
-
-        <div className="mt-8">
-          <h1 className="text-[24px] sm:text-[28px] font-semibold leading-tight tracking-[-0.02em] text-ink-primary">{firstName ? `Hi ${firstName}` : "Your repairs"}</h1>
-          <p className="mt-1.5 text-[15px] text-ink-tertiary">
-            {all.length === 0 ? `You don't have any jobs with ${home.shop_name || "us"} yet.`
-              : todo.length ? `${todo.length === 1 ? "One job needs" : `${todo.length} jobs need`} your attention.`
-              : `Everything you have with ${home.shop_name || "us"}, in one place.`}
-          </p>
-        </div>
+    <PublicLayout shop={{ name: home.shop_name, logo: home.logo_data }}>
+        <PublicTitle title={firstName ? `Hi ${firstName}` : "Your repairs"}
+          sub={all.length === 0 ? `You don't have any jobs with ${home.shop_name || "us"} yet.`
+            : todo.length ? `${todo.length === 1 ? "One job needs" : `${todo.length} jobs need`} your attention.`
+            : `Everything you have with ${home.shop_name || "us"}, in one place.`} />
 
         {todo.length > 0 && <JobList title="Needs your attention" cards={todo} accent={accent} onOpen={onOpen} />}
         {rest(home.estimates).length > 0 && <JobList title="Estimates" cards={rest(home.estimates)} accent={accent} onOpen={onOpen} />}
         {rest(home.work_orders).length > 0 && <JobList title="Repairs" cards={rest(home.work_orders)} accent={accent} onOpen={onOpen} />}
-      </div>
-      <div className="py-8 text-center text-[12px] text-ink-tertiary">{home.shop_name} · Sent with Tekly</div>
-    </div>
+    </PublicLayout>
   );
 }
 
 function JobList({ title, cards, accent, onOpen }: { title: string; cards: Card[]; accent: string; onOpen: (id: string) => void }) {
   return (
     <section className="mt-10">
-      <h2 className="mb-3 text-[17px] font-semibold text-ink-primary">{title}</h2>
-      <ul className="overflow-hidden rounded-2xl border border-slate-200 bg-white divide-y divide-slate-100">
+      <h2 className="mb-3 text-title font-semibold text-ink-primary">{title}</h2>
+      <ul className={`${publicCard} overflow-hidden divide-y divide-slate-100`}>
         {cards.map((c) => {
           const what = c.device || c.complaint || (c.is_estimate ? "Estimate" : "Repair");
           const ask = c.awaiting_approval ? (c.is_estimate ? "Ready for you to review" : "Waiting for your approval")
@@ -127,18 +112,18 @@ function JobList({ title, cards, accent, onOpen }: { title: string; cards: Card[
             <li key={c.id}>
               <button type="button" onClick={() => onOpen(c.id)} className="flex w-full items-center gap-4 px-4 py-4 text-left hover:bg-slate-50 sm:px-5">
                 <span className="min-w-0 flex-1">
-                  <span className="block truncate text-[15px] font-semibold text-ink-primary">{what}</span>
-                  <span className="mt-0.5 block text-[13px] text-ink-tertiary">
+                  <span className="block truncate text-base font-semibold text-ink-primary">{what}</span>
+                  <span className="mt-0.5 block text-sm text-ink-tertiary">
                     {[`${c.is_estimate ? "Estimate" : "Job"} ${c.order_number}`, c.stage_label, fmtDay(c.created_at)].filter(Boolean).join(" · ")}
                   </span>
-                  {ask && <span className="mt-1.5 inline-flex rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-[12px] font-medium text-amber-800">{ask}</span>}
-                  {c.warranty_until && <span className="mt-1.5 flex items-center gap-1 text-[13px] text-emerald-700"><ShieldCheck size={14} /> Under warranty until {fmtDay(c.warranty_until)}</span>}
+                  {ask && <span className="mt-1.5 inline-flex rounded-full border border-amber-200 bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-800">{ask}</span>}
+                  {c.warranty_until && <span className="mt-1.5 flex items-center gap-1 text-sm text-emerald-700"><ShieldCheck size={14} /> Under warranty until {fmtDay(c.warranty_until)}</span>}
                 </span>
                 <span className="flex flex-col items-end gap-1">
-                  <span className="text-[15px] font-semibold tabular-nums text-ink-primary">{money(c.total_converted ?? c.total, c.currency_symbol || "$")}</span>
+                  <span className="text-base font-semibold tabular-nums text-ink-primary">{money(c.total_converted ?? c.total, c.currency_symbol || "$")}</span>
                   {c.paid_in_full ? <PaidNote paidInFull sym={c.currency_symbol || "$"} />
                     : (c.amount_paid || 0) > 0 && (c.balance_due || 0) > 0
-                      ? <span className="text-[13px] font-semibold tabular-nums text-amber-700">{money(c.balance_due || 0, c.currency_symbol || "$")} due</span> : null}
+                      ? <span className="text-sm font-semibold tabular-nums text-amber-700">{money(c.balance_due || 0, c.currency_symbol || "$")} due</span> : null}
                 </span>
                 <ChevronRight size={18} className="shrink-0" style={{ color: accent }} />
               </button>
@@ -156,22 +141,18 @@ function PortalJob({ base, id, home, onBack, onOpen }: {
   const api = base + "/order/" + encodeURIComponent(id);
   const { d, err, updatedAt, load } = usePublicDoc(api);
   const back = (
-    <button type="button" onClick={onBack} className="mb-6 inline-flex items-center gap-1.5 text-[14px] font-medium text-ink-tertiary hover:text-ink-primary">
-      <ArrowLeft size={16} /> All your repairs
-    </button>
+    <div className="-ml-3.5 mb-4"><Button variant="ghost" onClick={onBack} icon={<ArrowLeft size={16} />}>All your repairs</Button></div>
   );
+  const shop = { name: home.shop_name, logo: home.logo_data };
 
   if (err)
     return (
-      <div className="min-h-screen bg-canvas text-ink-primary font-sans">
-        <div className="mx-auto max-w-[720px] px-4 py-6 sm:py-10">
-          {back}
-          <div className="text-lg font-bold">We couldn't open this job</div>
-          <div className="mt-1.5 text-sm text-ink-tertiary">It may have been removed. Go back to see all your jobs with {home.shop_name || "the shop"}.</div>
-        </div>
-      </div>
+      <PublicLayout shop={shop}>
+        {back}
+        <PublicTitle title="We couldn't open this job" sub={`It may have been removed. Go back to see all your jobs with ${home.shop_name || "the shop"}.`} />
+      </PublicLayout>
     );
-  if (!d) return <div className="min-h-screen bg-canvas" />;
+  if (!d) return <PublicLayout shop={shop}>{back}<span className="sr-only" role="status">Loading…</span></PublicLayout>;
   const trackToken = (d as { public_token?: string | null }).public_token;
   return (
     <TrackView d={d} updatedAt={updatedAt} api={api} reload={load} top={back}

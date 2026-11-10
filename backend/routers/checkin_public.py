@@ -145,7 +145,7 @@ async def checkin_status(status_token: str, db: AsyncSession = Depends(get_db)):
         "first_name": (lead.name or "").split(" ")[0], "queue_no": c.queue_no, "state": c.state,
         "kind": c.kind, "ahead": ahead, "wait_min": wait,
         "shop": {"name": org.name, "logo": getattr(org, "logo_data", None),
-                 "color": getattr(org, "brand_primary_color", None)},
+                 "color": (getattr(org, "page_color", None) or getattr(org, "brand_primary_color", None))},
         "location": loc.name if loc else "",
         "summary": {"asset": asset, "issue": (lead.inquiry or "")[:200]},
         "code": c.status_token, "track_url": track,
@@ -196,7 +196,7 @@ async def checkin_page(token: str, db: AsyncSession = Depends(get_db)):
     await db.commit()
     return {
         "shop": {"name": org.name, "logo": getattr(org, "logo_data", None),
-                 "color": getattr(org, "brand_primary_color", None)},
+                 "color": (getattr(org, "page_color", None) or getattr(org, "brand_primary_color", None))},
         "location": {"name": loc.name if loc else "", "phone": getattr(loc, "phone", None) if loc else None},
         "point": {"name": point.name, "kiosk": bool(point.kiosk),
                   "closed": point.mode == "auto" and mode == "key_drop"},
