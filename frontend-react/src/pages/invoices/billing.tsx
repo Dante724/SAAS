@@ -130,7 +130,8 @@ export function MoreMenu({ items, label = "More actions", className = "", align 
   );
 }
 
-/* Right-hand drawer used by every billing panel. `z` lets a drawer open on top of another. */
+/* Right-hand drawer used by every billing panel. `z` lets a drawer open on top of another.
+   The footer's main button comes first, on the left. */
 export function Drawer({ title, sub, onClose, children, footer, z = 50, width = 560, label }: {
   title: ReactNode; sub?: ReactNode; onClose: () => void; children: ReactNode; footer?: ReactNode; z?: number; width?: number; label: string;
 }) {
@@ -143,7 +144,7 @@ export function Drawer({ title, sub, onClose, children, footer, z = 50, width = 
           <button aria-label="Close" onClick={onClose} className="w-8 h-8 flex-shrink-0 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
         </div>
         <div className="flex-1 overflow-y-auto p-5 space-y-4">{children}</div>
-        {footer && <div className="px-5 py-4 border-t border-slate-200 flex flex-wrap items-center justify-end gap-2">{footer}</div>}
+        {footer && <div className="px-5 py-4 border-t border-slate-200 flex flex-wrap items-center justify-start gap-2">{footer}</div>}
       </div>
     </div>
   );

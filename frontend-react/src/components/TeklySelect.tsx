@@ -1,6 +1,6 @@
 import { Children, isValidElement, useEffect, useId, useLayoutEffect, useMemo, useRef, useState, type ReactNode, type SelectHTMLAttributes } from "react";
 import { createPortal } from "react-dom";
-import { ChevronDown, Check, Search } from "lucide-react";
+import { Check, Search } from "lucide-react";
 
 // The app's one dropdown. It takes the same props and children as a native <select> (value,
 // onChange, disabled, className, <option>/<optgroup>), so a `<select>` becomes `<TeklySelect>`
@@ -69,7 +69,7 @@ function Menu({ opts, value, disabled, className, id, title, style, autoFocus, a
     const r = btn.current?.getBoundingClientRect(); if (!r) return;
     const below = window.innerHeight - r.bottom - 8, above = r.top - 8;
     const width = Math.max(r.width, 200);
-    const left = Math.min(r.left, window.innerWidth - width - 8);
+    const left = Math.max(8, Math.min(r.left, window.innerWidth - width - 8));   // grows rightward up to 420px (see maxWidth)
     if (below >= 240 || below >= above) setPos({ left, top: r.bottom + 6, width, maxH: Math.min(360, below - 6) });
     else setPos({ left, bottom: window.innerHeight - r.top + 6, width, maxH: Math.min(360, above - 6) });
   };
@@ -109,14 +109,15 @@ function Menu({ opts, value, disabled, className, id, title, style, autoFocus, a
       <button ref={btn} type="button" id={id} title={title} style={style} disabled={disabled} autoFocus={autoFocus} {...aria}
         role="combobox" aria-haspopup="listbox" aria-expanded={open} aria-controls={open ? listId : undefined}
         onClick={() => setOpen((o) => !o)} onKeyDown={keys} onBlur={onBlur}
-        className={`relative text-left truncate ${/\bpr-/.test(className) ? "" : "pr-8"} ${className} ${disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
+        className={`tk-select text-left truncate ${/\bpr-/.test(className) ? "" : "pr-8"} ${className} ${disabled ? "cursor-not-allowed opacity-60" : "cursor-pointer"}`}>
+        {/* Not positioned, so an icon the caller lays over the control (a person icon, its own chevron)
+            stays visible; the arrow is a background image (index.css .tk-select), skipped with bg-none. */}
         <span className="block truncate">{cur ? cur.label : (opts[0]?.label ?? "")}</span>
-        <ChevronDown aria-hidden size={16} className={`pointer-events-none absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary transition-transform ${open ? "rotate-180" : ""}`} />
       </button>
       {open && pos && createPortal(
         <div ref={panel} onKeyDown={keys}
           className="fixed z-[200] bg-white rounded-2xl border border-slate-200/90 shadow-drawer p-1.5 flex flex-col"
-          style={{ left: pos.left, top: pos.top, bottom: pos.bottom, width: pos.width, maxHeight: pos.maxH }}>
+          style={{ left: pos.left, top: pos.top, bottom: pos.bottom, minWidth: pos.width, width: "max-content", maxWidth: Math.min(420, window.innerWidth - pos.left - 8), maxHeight: pos.maxH }}>
           {searchable && (
             <div className="relative p-1 flex-shrink-0">
               <Search aria-hidden size={15} className="absolute left-3.5 top-1/2 -translate-y-1/2 text-ink-tertiary pointer-events-none" />

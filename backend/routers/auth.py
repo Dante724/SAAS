@@ -896,6 +896,8 @@ async def me(current: Employee = Depends(get_current_employee),
         # build 144x: org master switches — effective clock = org ON *and* employee tracks it
         "clock_wo_enabled": (org.clock_wo_enabled if org and org.clock_wo_enabled is not None else True),
         "clock_attendance_enabled": (org.clock_attendance_enabled if org and org.clock_attendance_enabled is not None else True),
+        # Card readers are off until a shop can connect one: the app hides every reader entry point.
+        "card_readers": bool(settings.CARD_READERS_ENABLED),
         # where the Help & support menu and "contact support" errors point
         "support": {"email": settings.SUPPORT_EMAIL, "url": settings.SUPPORT_URL},
         # Subscription: plan, trial, read-only state and the Pro features unlocked, so the app

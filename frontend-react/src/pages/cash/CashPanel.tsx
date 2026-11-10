@@ -1,8 +1,8 @@
 import SkeletonRows from "../../components/SkeletonRows";
 import TeklySelect from "../../components/TeklySelect";
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { M } from "../../components/Shell";
-import { api } from "../../api/client";
+import { api, idempotencyKey } from "../../api/client";
 import { useMe } from "../../context/Me";
 import NewAccountDrawer, { Account } from "./NewAccountDrawer";
 import CashDrawer from "./CashDrawer";
@@ -55,16 +55,20 @@ export default function CashPanel() {
     { account_id: sel?.id, summary: "true", day: isoDate() }, { pageSize: 50, enabled: !!sel });
   const txns = sel ? tp.rows : null;
 
-  function openTxn(kind: "income" | "expense") { setForm({ amount: "", cash_flow_item_id: "", comment: "" }); setMenu(null); setModal(kind); }
-  function openTransfer() { setForm({ to_account_id: accounts.find((a) => a.id !== sel?.id)?.id || "", amount: "", comment: "" }); setMenu(null); setModal("transfer"); }
+  // One key per entry: a retry of the same entry (failed or timed-out click) reuses it, so the
+  // server posts it once; opening a new entry or a successful post starts a fresh one.
+  const entryKey = useRef(idempotencyKey());
+  function openTxn(kind: "income" | "expense") { entryKey.current = idempotencyKey(); setForm({ amount: "", cash_flow_item_id: "", comment: "" }); setMenu(null); setModal(kind); }
+  function openTransfer() { entryKey.current = idempotencyKey(); setForm({ to_account_id: accounts.find((a) => a.id !== sel?.id)?.id || "", amount: "", comment: "" }); setMenu(null); setModal("transfer"); }
 
   async function submit() {
     try {
       if (modal === "transfer") {
-        await api.post("/cash/transfer", { from_account_id: sel!.id, to_account_id: form.to_account_id, amount: parseFloat(form.amount), comment: form.comment || null });
+        await api.postOnce("/cash/transfer", { from_account_id: sel!.id, to_account_id: form.to_account_id, amount: parseFloat(form.amount), comment: form.comment || null }, entryKey.current);
       } else {
-        await api.post("/cash/transactions", { account_id: sel!.id, txn_type: modal, amount: parseFloat(form.amount), cash_flow_item_id: form.cash_flow_item_id || null, comment: form.comment || null });
+        await api.postOnce("/cash/transactions", { account_id: sel!.id, txn_type: modal, amount: parseFloat(form.amount), cash_flow_item_id: form.cash_flow_item_id || null, comment: form.comment || null }, entryKey.current);
       }
+      entryKey.current = idempotencyKey();
       flash(`${KIND_LABEL[modal || ""] || "Entry"} recorded`); setModal(null);
       const items = await loadAccounts(); const cur = (items as Account[]).find((a) => a.id === sel!.id); if (cur) setSel(cur); tp.reload();
     } catch (e: any) { flash(`Failed: ${e.message}`); }
@@ -241,7 +245,7 @@ export default function CashPanel() {
               <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Category</label><TeklySelect value={form.cash_flow_item_id} onChange={(e) => setForm({ ...form, cash_flow_item_id: e.target.value })} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl"><option value="">— None —</option>{flow.filter((f) => !f.direction || f.direction === modal).map((f) => <option key={f.id} value={f.id}>{f.name}</option>)}</TeklySelect></div>
             )}
             <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Comment</label><input value={form.comment} onChange={(e) => setForm({ ...form, comment: e.target.value })} className="glass-input w-full py-2 px-3 text-xs rounded-xl" placeholder="Optional…" /></div>
-            <div className="flex justify-end gap-2 pt-1"><button onClick={() => setModal(null)} className={btnGhost}>Cancel</button><button onClick={submit} className={btnPrimary}>{KIND_LABEL[modal]}</button></div>
+            <div className="flex justify-start gap-2 pt-1"><button onClick={submit} className={btnPrimary}>{KIND_LABEL[modal]}</button><button onClick={() => setModal(null)} className={btnGhost}>Cancel</button></div>
           </div>
         </div>
       )}

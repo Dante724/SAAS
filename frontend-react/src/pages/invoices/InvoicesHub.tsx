@@ -228,7 +228,7 @@ function NewInvoiceDrawer({ onClose, onCreated }: { onClose: () => void; onCreat
   }
   return (
     <Drawer label="New invoice" title="New invoice" width={520} onClose={onClose}
-      footer={<><button onClick={onClose} className={btnGhost}>Cancel</button><button onClick={save} disabled={busy} className={btnPrimary}>{busy ? "Saving…" : "Create invoice"}</button></>}>
+      footer={<><button onClick={save} disabled={busy} className={btnPrimary}>{busy ? "Saving…" : "Create invoice"}</button><button onClick={onClose} className={btnGhost}>Cancel</button></>}>
       <ErrorNote msg={err} />
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div><label htmlFor="ni-client" className={labelCls}>Client</label>

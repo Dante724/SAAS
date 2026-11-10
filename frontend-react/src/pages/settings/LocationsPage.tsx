@@ -375,11 +375,11 @@ function LocationDetail({ loc, companyTz, resources, onSaved, onResChanged, onCa
 
       {err && <div className="mx-5 mb-4 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
       <div className="px-5 py-3.5 border-t border-slate-100 flex items-center gap-2">
-        {loc?.id && <button onClick={archive} className="px-3 py-2 rounded-xl text-xs font-semibold text-ink-tertiary hover:text-rose-600 hover:bg-rose-50">Archive location</button>}
-        {isNew && <button onClick={onCancelNew} className="px-3 py-2 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>}
-        <span className="ml-auto text-[11px] text-ink-tertiary">{dirty && !isNew ? "Unsaved changes" : ""}</span>
-        {!isNew && dirty && <button onClick={() => { const i = JSON.parse(orig.current); setF(i[0]); setWh(i[1]); setDay(null); }} className="px-3 py-2 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Discard</button>}
         <button onClick={save} disabled={busy || !dirty} className={buttonClass("primary", "md")}>{busy ? "Saving…" : isNew ? "Add location" : "Save"}</button>
+        {!isNew && dirty && <button onClick={() => { const i = JSON.parse(orig.current); setF(i[0]); setWh(i[1]); setDay(null); }} className="px-3 py-2 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Discard</button>}
+        {isNew && <button onClick={onCancelNew} className="px-3 py-2 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>}
+        <span className="text-[11px] text-ink-tertiary">{dirty && !isNew ? "Unsaved changes" : ""}</span>
+        {loc?.id && <button onClick={archive} className="ml-auto px-3 py-2 rounded-xl text-xs font-semibold text-ink-tertiary hover:text-rose-600 hover:bg-rose-50">Archive location</button>}
       </div>
     </section>
   );

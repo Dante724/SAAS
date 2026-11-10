@@ -206,6 +206,21 @@ async def sweep_idempotency_keys() -> None:
             log.info("idempotency-sweep: %d phone message(s) never confirmed, marked unknown", expired)
 
 
+@job_runner.every(600, "superseded-charge-sweep")
+async def sweep_superseded_charges() -> None:
+    """Card-reader charges migration idg01 marked superseded: cancel them at the provider and keep
+    polling them for 7 days, so a card taken anyway is booked and flagged. Also cancels pending
+    charges the reader never confirmed, or that went stale, so they stop holding their reader
+    (services/terminal.reconcile_superseded)."""
+    from backend.db.database import AsyncSessionLocal
+    from backend.services.terminal import reconcile_superseded
+
+    async with AsyncSessionLocal() as db:
+        checked = await reconcile_superseded(db)
+        if checked:
+            log.info("superseded-charge-sweep: checked %d charge(s)", checked)
+
+
 @job_runner.every(900, "sense-brief-sweep")
 async def sweep_morning_briefs() -> None:
     """Tekly Sense: send each shop's morning brief once a day, after the owner's chosen hour

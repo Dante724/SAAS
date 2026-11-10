@@ -536,8 +536,8 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
         </div>
 
         <div className="px-5 py-4 border-t border-slate-100 flex items-center gap-2">
-          <button onClick={onClose} className={buttonClass("secondary", "md", "ml-auto")}>Cancel</button>
           <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : isNew ? "Add status" : "Save"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
         </div>
       </div>
     </div>

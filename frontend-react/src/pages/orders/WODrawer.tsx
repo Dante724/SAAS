@@ -18,6 +18,7 @@ import { deliveryText, deliveryTone, flashDelivery, type Delivery, type Flash, t
 import PhotoAnnotator from "./PhotoAnnotator";
 import TagChips from "../../components/TagChips";
 import { M } from "../../components/Shell";
+import Tabs from "../../components/Tabs";
 import EmptyState from "../../components/EmptyState";
 import DateField from "../../components/DateField";
 import FloatingMenu from "../../components/FloatingMenu";
@@ -40,6 +41,7 @@ import JobCardFields from "../../components/JobCardFields";
 import ReaderCharge from "../../components/ReaderCharge";
 import AccountPicker, { type PayAccount, type PaymentOption, accountsFor, pickDefaultAccount } from "../../components/AccountPicker";
 import CardPaymentsList from "../../components/CardPaymentsList";
+import { useCardReaders } from "../../lib/cardReaders";
 import LineQtyEditor from "./LineQtyEditor";
 import AutoPrintPicker from "../../components/AutoPrintPicker";
 import KitGroupHeader from "./KitGroupHeader";
@@ -373,9 +375,9 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   // 144dd — tab badges reflect real state (no always-on dots). Amber Checklists dot only when a
   // required checklist item is still undone; red Activity count only when a customer message is unread.
   const unread = Number((d as any).client_msg_unread || 0);
-  const ALL_TABS: { id: Tab; label: string; badge?: string; dot?: string }[] = [
+  const ALL_TABS: { id: Tab; label: string; count?: number | null; badge?: string; dot?: string }[] = [
     { id: "general", label: "General info" },
-    { id: "services", label: `Services & products${d.lines?.length ? ` (${d.lines.length})` : ""}` },
+    { id: "services", label: "Services & products", count: d.lines?.length || null },
     { id: "checklists", label: "Checklists", dot: (d as any).checklists_pending ? "bg-amber-500" : undefined },
     { id: "invoices", label: "Invoices & payments", badge: (d as any).payment_due ? "Due" : undefined },
     { id: "activity", label: "Activity", badge: (unread > 0 && tab !== "activity") ? String(unread) : undefined },
@@ -581,16 +583,15 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
         {isEst && <EstimateTerms orderId={order.id} d={d as any} onChanged={() => { reload(); onChanged?.(); }} onFlash={flash} />}
 
         {/* Tabs */}
-        <nav className="px-4 sm:px-6 border-b border-slate-200/80 flex space-x-6 text-xs font-medium bg-white flex-shrink-0 overflow-x-auto whitespace-nowrap">
-          {TABS.map((t) => (
-            <button key={t.id} onClick={() => setTab(t.id)}
-              className={`py-3 border-b-2 transition-colors flex items-center gap-1.5 ${tab === t.id ? "text-ink-primary border-primary" : "text-ink-secondary hover:text-ink-primary border-transparent"}`}>
+        <Tabs look="underline" label="Work order sections" className="px-4 sm:px-6 border-slate-200/80 bg-white flex-shrink-0" value={tab} onChange={setTab}
+          tabs={TABS.map((t) => ({
+            id: t.id, count: t.count,
+            label: <>
               <span>{t.label}</span>
               {t.badge && <span className="text-[11px] bg-rose-100 text-rose-700 px-1.5 rounded-full tabular-nums font-semibold">{t.badge}</span>}
               {t.dot && <span role="img" aria-label="Checklist incomplete" title="Checklist incomplete" className={`w-2 h-2 rounded-full ${t.dot}`} />}
-            </button>
-          ))}
-        </nav>
+            </>,
+          }))} />
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-6 bg-slate-50/70 space-y-6">
@@ -765,17 +766,17 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
           )}
         </div>
 
-        {/* Footer: print on the left; close and save on the right (the drawer convention) */}
+        {/* Footer: save and close first, on the left (the drawer convention); print and signature on the right */}
         <footer className="px-6 py-3.5 border-t border-slate-200/90 bg-white flex flex-wrap items-center justify-between gap-3 flex-shrink-0">
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2">
+            <button onClick={saveAndClose} disabled={saving} className={`${btnPrimary} shadow-clay-sm`}><M n="check" c="text-sm" />{saving ? "Saving…" : "Save and close"}</button>
+            <button onClick={tryClose} className={btnSecondary}>Close</button>
+          </div>
+          <div className="ml-auto flex flex-wrap items-center gap-2">
             <PrintMenu key={order.id} orderId={order.id} status={d.status} canInvoices={can("can_view_invoices")} onSticker={printWO}
               onItemised={hasKit && can("can_print_itemised_copy") ? printItemised : undefined} itemisedType={(order as any).is_estimate ? "estimate" : "work_order"}
               autoPrint={(order as any).is_estimate ? undefined : { canChange: can("can_manage_settings") }} onError={flash} />
             <button onClick={() => setSigOpen(true)} className={btnSecondary}><M n="draw" c="text-sm" />{d.signature ? "Sign again" : "Customer signature"}</button>
-          </div>
-          <div className="flex items-center gap-2">
-            <button onClick={tryClose} className={btnSecondary}>Close</button>
-            <button onClick={saveAndClose} disabled={saving} className={`${btnPrimary} shadow-clay-sm`}><M n="check" c="text-sm" />{saving ? "Saving…" : "Save and close"}</button>
           </div>
         </footer>
 
@@ -1970,6 +1971,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
   // from the server instead of posting the money again. A new key once it has gone through.
   const payKey = useRef(idempotencyKey());
   const [onReader, setOnReader] = useState(false);   // F2/F3: card taken on a reader instead of recorded by hand
+  const cardReaders = useCardReaders();   // off: card is only recorded by hand
   const submit = async () => {
     if (payBusyRef.current) return;
     payBusyRef.current = true; setPayBusy(true);
@@ -2138,7 +2140,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
             {accountsFor(allAccts, method as PaymentOption).length === 0 && (
               <AccountPicker accounts={allAccts} paymentOption={method as PaymentOption} locationId={ctx.location_id} value={account} onChange={setAccount} onCreated={addAccount} />
             )}
-            {modal === "pay" && method === "card" && can("can_take_card_payments") && (
+            {cardReaders && modal === "pay" && method === "card" && can("can_take_card_payments") && (
               <button onClick={() => setOnReader(true)} disabled={!(parseFloat(amount) > 0)} className="w-full py-2 rounded-xl border border-primary/30 bg-white text-primary text-xs font-semibold hover:bg-blue-50 disabled:opacity-50 flex items-center justify-center gap-2"><M n="contactless" c="text-base" />Charge on reader</button>
             )}
             {/* Like Orderry: what prints by itself is chosen where it happens. Shop-wide, kept until changed. */}
@@ -2152,7 +2154,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
           </div>
         </div>
       , document.body)}
-      {onReader && <ReaderCharge orderId={orderId} amount={parseFloat(amount) || 0} accountId={account || undefined}
+      {cardReaders && onReader && <ReaderCharge orderId={orderId} amount={parseFloat(amount) || 0} accountId={account || undefined}
         onApproved={() => { onFlash("Card payment approved"); load(); }}
         onClose={(c) => { setOnReader(false); if (c?.status === "succeeded") setModal(null); }} />}
     </div>

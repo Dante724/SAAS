@@ -1,4 +1,5 @@
 import DirectorySelect from "../../components/DirectorySelect";
+import Tabs from "../../components/Tabs";
 import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import { humanize } from "../../lib/humanize";
@@ -157,12 +158,11 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
             <div><div className="text-base font-bold text-ink-primary">{c.name || "Customer"}</div><div className="text-xs text-ink-tertiary">{c.order_count ?? 0} work orders · {c.loyalty_tier?.toLowerCase() === "vip" ? "VIP" : humanize(c.loyalty_tier) || "Standard"}</div></div>
           </div>
           <div className="pb-3"><TagChips entityType="contact" entityId={clientId} /></div>
-          <div className="flex gap-6 overflow-x-auto text-xs font-semibold">
-            {(isSupplier ? [...BASE_TABS, "Supplier"] : BASE_TABS).map((t, i) => {
-              const label = i === 1 && c.devices ? `Devices & assets (${c.devices.length})` : i === 2 && c.order_count != null ? `Work orders (${c.order_count})` : t;
-              return <button key={t} onClick={() => setTab(i)} className={`py-3 border-b-2 whitespace-nowrap transition-colors ${tab === i ? "text-primary border-primary" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{label}</button>;
-            })}
-          </div>
+          <Tabs look="underline" label="Customer sections" className="border-b-0" value={String(tab)} onChange={(id) => setTab(Number(id))}
+            tabs={(isSupplier ? [...BASE_TABS, "Supplier"] : BASE_TABS).map((t, i) => ({
+              id: String(i), label: t,
+              count: i === 1 && c.devices ? c.devices.length : i === 2 && c.order_count != null ? c.order_count : null,
+            }))} />
         </header>
         <div className="flex-1 overflow-y-auto p-6 bg-canvas space-y-4">
           {tab === 0 ? (

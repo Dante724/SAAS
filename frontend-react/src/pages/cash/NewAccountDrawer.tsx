@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import TeklySelect from "../../components/TeklySelect";
 import { M } from "../../components/Shell";
+import Tabs from "../../components/Tabs";
 import { api } from "../../api/client";
 import { buttonClass } from "../../components/Button";
 
@@ -65,9 +66,8 @@ export default function NewAccountDrawer({ edit, onClose, onSaved }: Props) {
           <h3 className="text-lg font-bold text-ink-primary">{edit ? "Configure account" : "New account"}</h3>
           <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-ink-tertiary hover:text-ink-primary"><M n="close" c="text-lg" /></button>
         </header>
-        <nav className="px-6 border-b border-slate-200 flex space-x-6 text-sm font-semibold">
-          {(["general", "access"] as const).map((t) => <button key={t} onClick={() => setTab(t)} className={`py-3 border-b-2 capitalize transition-colors ${tab === t ? "text-primary border-primary" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{t}</button>)}
-        </nav>
+        <Tabs look="underline" label="Account sections" className="px-6" value={tab} onChange={setTab}
+          tabs={[{ id: "general", label: "General" }, { id: "access", label: "Access" }]} />
 
         <div className="flex-1 overflow-y-auto p-6 space-y-5 text-xs">
           {tab === "general" ? (<>
@@ -106,9 +106,9 @@ export default function NewAccountDrawer({ edit, onClose, onSaved }: Props) {
           {err && <div className="text-status-overdue-ink font-semibold">{err}</div>}
         </div>
 
-        <div className="p-4 border-t border-slate-100 bg-blue-50/30 flex items-center justify-end gap-2">
-          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
+        <div className="p-4 border-t border-slate-100 bg-blue-50/30 flex items-center justify-start gap-2">
           <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : edit ? "Save changes" : "Create"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
         </div>
       </div>
     </div>
