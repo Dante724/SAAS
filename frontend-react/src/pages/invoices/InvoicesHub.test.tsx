@@ -70,7 +70,6 @@ describe("InvoicesHub e-invoice", () => {
     list = [];
     render(<InvoicesHub />);
     expect(await screen.findByText("No invoices yet")).toBeTruthy();
-    // The first step is the page's own "New invoice" button; the empty state doesn't repeat it.
-    expect(screen.getAllByRole("button", { name: /New invoice/ })).toHaveLength(1);
+    expect(screen.getByRole("button", { name: "Create your first invoice" })).toBeTruthy();
   });
 });

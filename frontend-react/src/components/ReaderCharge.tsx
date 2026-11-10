@@ -1,8 +1,8 @@
 import { useEffect, useRef, useState } from "react";
-import { buttonClass } from "./Button";
+import TeklySelect from "./TeklySelect";
 import { createPortal } from "react-dom";
 import { M } from "./Shell";
-import { api } from "../api/client";
+import { api, idempotencyKey } from "../api/client";
 import { money } from "../pages/orders/types";
 import { inputCls } from "../pages/invoices/billing";
 
@@ -72,18 +72,21 @@ export default function ReaderCharge({ orderId, saleId, amount, accountId, title
 
   const reader = readers?.find((r) => r.id === readerId) || null;
 
+  const sendKey = useRef(idempotencyKey());
   async function send() {
     if (busyRef.current || !readerId) return;
     busyRef.current = true; setBusy(true); setErr(null); setBusyReader(false);
     try {
       const body: Record<string, unknown> = { terminal_id: readerId, account_id: accountId || null };
       if (orderId) { body.order_id = orderId; body.amount = amount; } else body.sale_id = saleId;
-      const c = await api.post<Charge>("/payments/terminal/charge", body);
+      // A retried Send (failed or timed out) reuses the key, so the reader gets one charge.
+      const c = await api.postOnce<Charge>("/payments/terminal/charge", body, sendKey.current);
+      sendKey.current = idempotencyKey();
       try { localStorage.setItem(LAST_READER, readerId); } catch { /* ignore */ }
       setCharge(c);
     } catch (e: any) {
       setErr(errText(e));
-      setBusyReader(e?.status === 409 && /waiting/i.test(errText(e)));
+      setBusyReader(e?.status === 409 && /waiting|in progress on this reader/i.test(errText(e)));
     } finally { busyRef.current = false; setBusy(false); }
   }
   async function act(path: string, body?: unknown) {
@@ -111,7 +114,7 @@ export default function ReaderCharge({ orderId, saleId, amount, accountId, title
         <div className="flex items-start justify-between gap-3">
           <div>
             <div className="text-sm font-semibold text-ink-primary flex items-center gap-2">{title || "Charge on reader"}
-              {testMode && <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200/70 text-2xs font-semibold">Test mode</span>}
+              {testMode && <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-800 border border-amber-200/70 text-[11px] font-semibold">Test mode</span>}
             </div>
             <div className="text-2xl font-semibold text-ink-primary tabular-nums mt-1">{money(amount)}</div>
           </div>
@@ -130,9 +133,9 @@ export default function ReaderCharge({ orderId, saleId, amount, accountId, title
           <>
             <div>
               <label htmlFor="reader-pick" className="block text-xs font-semibold text-ink-tertiary mb-1">Card reader</label>
-              <select id="reader-pick" value={readerId} onChange={(e) => setReaderId(e.target.value)} className={inputCls}>
+              <TeklySelect id="reader-pick" value={readerId} onChange={(e) => setReaderId(e.target.value)} className={inputCls}>
                 {readers.map((r) => <option key={r.id} value={r.id}>{r.label} · {PROVIDER[r.provider] || r.provider}</option>)}
-              </select>
+              </TeklySelect>
             </div>
             <button onClick={send} disabled={busy || !readerId || amount <= 0} className="w-full h-11 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary-container disabled:opacity-50 flex items-center justify-center gap-2 tabular-nums">
               <M n="contactless" c="text-base" />{busy ? "Sending…" : `Send ${money(amount)} to reader`}
@@ -150,6 +153,8 @@ export default function ReaderCharge({ orderId, saleId, amount, accountId, title
             <div className="text-xs text-ink-secondary mt-0.5">
               {waiting ? `Ask the customer to tap, insert or swipe on ${reader?.label || "the reader"}.` : charge.error || (st === "succeeded" ? "Payment recorded." : "")}
             </div>
+            {/* The reader didn't confirm it got this charge: say so, and keep following it. */}
+            {waiting && charge.error && <div className="text-xs text-amber-700 mt-1">{charge.error}</div>}
             </div>
           </div>
         )}
@@ -167,16 +172,16 @@ export default function ReaderCharge({ orderId, saleId, amount, accountId, title
           <div className="rounded-xl border border-amber-200/70 bg-amber-50/60 p-3 space-y-2">
             <div className="text-xs font-semibold text-amber-900">Test card <span className="font-normal text-amber-800">· nothing is charged</span></div>
             <div className="flex gap-2">
-              <button onClick={() => act("simulate", { outcome: "approve" })} disabled={busy} className="flex-1 h-9 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50">Approve</button>
-              <button onClick={() => act("simulate", { outcome: "decline" })} disabled={busy} className="flex-1 h-9 rounded-xl bg-white border border-slate-200 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50">Decline</button>
+              <button onClick={() => act("simulate", { outcome: "approve" })} disabled={busy} className="flex-1 h-9 rounded-lg bg-white border border-slate-200 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50">Approve</button>
+              <button onClick={() => act("simulate", { outcome: "decline" })} disabled={busy} className="flex-1 h-9 rounded-lg bg-white border border-slate-200 text-xs font-semibold text-rose-700 hover:bg-rose-50 disabled:opacity-50">Decline</button>
             </div>
           </div>
         )}
 
         <div className="flex gap-2">
-          {waiting && <button onClick={() => act("cancel")} disabled={busy} className={buttonClass("danger", "md", "flex-1")}>Cancel charge</button>}
-          {failed && <button onClick={() => { setCharge(null); setErr(null); }} className={buttonClass("primary", "md", "flex-1")}>Try again</button>}
-          {!locked && <button onClick={() => onClose(charge)} className={buttonClass(st === "succeeded" ? "primary" : "secondary", "md", "flex-1")}>{st === "succeeded" ? "Done" : "Close"}</button>}
+          {waiting && <button onClick={() => act("cancel")} disabled={busy} className="flex-1 h-10 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50">Cancel charge</button>}
+          {failed && <button onClick={() => { setCharge(null); setErr(null); }} className="flex-1 h-10 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container">Try again</button>}
+          {!locked && <button onClick={() => onClose(charge)} className={`flex-1 h-10 rounded-lg text-xs font-semibold ${st === "succeeded" ? "bg-primary text-white hover:bg-primary-container" : "border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50"}`}>{st === "succeeded" ? "Done" : "Close"}</button>}
         </div>
       </div>
     </div>, document.body);
