@@ -182,10 +182,10 @@ describe("plan gating helpers", () => {
 
   it("the logo badge names the real plan", () => {
     expect(planBadge(null)).toBeNull();
-    expect(planBadge(info() as any)).toBe("TRIAL");
-    expect(planBadge(info({ status: "active", plan: "solo" }) as any)).toBe("SOLO");
-    expect(planBadge(info({ status: "active", plan: "shop" }) as any)).toBe("SHOP");
-    expect(planBadge(info({ read_only: true, plan: "pro" }) as any)).toBe("PRO");
+    expect(planBadge(info() as any)).toBe("Trial");
+    expect(planBadge(info({ status: "active", plan: "solo" }) as any)).toBe("Solo");
+    expect(planBadge(info({ status: "active", plan: "shop" }) as any)).toBe("Shop");
+    expect(planBadge(info({ read_only: true, plan: "pro" }) as any)).toBe("Pro");
   });
 
   it("the top-bar notice covers read-only, failed payment and the trial's last week with a suggestion", () => {

@@ -5,9 +5,6 @@ import { useMe } from "../../context/Me";
 import { loadFailed } from "../../lib/notice";
 import Switch from "../../components/Switch";
 import SaveFooter from "../../components/SaveFooter";
-import SettingsPage from "../../components/SettingsPage";
-import { sectionCard } from "../../components/Section";
-import { buttonClass } from "../../components/Button";
 import { SettingRow as Row, SettingGroup as Group, NumField as Num } from "../../components/SettingRow";
 
 // Settings › Memberships: the few shop-wide choices — the checkout offer, how forgiving unpaid
@@ -26,9 +23,7 @@ export default function MembershipSettings() {
   const [busy, setBusy] = useState(false);
   const [msg, setMsg] = useState<{ ok: boolean; text: string } | null>(null);
   useEffect(() => { api.get<S>("/memberships/settings/shop").then((r) => { setS(r); setSaved(r); }).catch(loadFailed("membership settings")); }, []);
-  const head = { title: "Memberships", sub: "How plans are offered, what happens when a payment is missed, and how plan money shows in your books.",
-    actions: <a href="/catalog?tab=plans" className={buttonClass("secondary")}>Manage plans<M n="arrow_forward" c="text-sm" /></a> };
-  if (!s) return <SettingsPage {...head}><div className={`${sectionCard} h-96`} aria-busy="true" /></SettingsPage>;
+  if (!s) return <p className="text-xs text-ink-tertiary">Loading…</p>;
   const set = (patch: Partial<S>) => { if (canEdit) { setS({ ...s, ...patch }); setMsg(null); } };
   const dirty = JSON.stringify(s) !== JSON.stringify(saved);
   async function save() {
@@ -39,8 +34,19 @@ export default function MembershipSettings() {
   }
   const offer = s.membership_checkout_prompt;
   return (
-    <SettingsPage {...head}>
-      <div className={`${sectionCard} divide-y divide-slate-100`}>
+    <section className="max-w-3xl space-y-5 pb-10">
+      <div className="flex items-start gap-4">
+        <div className="h-10 w-10 shrink-0 rounded-xl grid place-items-center bg-primary/10 text-primary"><M n="workspace_premium" c="text-xl" /></div>
+        <div className="min-w-0 flex-1">
+          <h2 className="text-base font-semibold text-ink-primary">Memberships</h2>
+          <p className="mt-0.5 text-sm text-ink-tertiary">How plans are offered, what happens when a payment is missed, and how plan money shows in your books.</p>
+          <a href="/catalog?tab=plans" className="mt-3 h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 inline-flex items-center gap-1.5 whitespace-nowrap">
+            Manage plans<M n="arrow_forward" c="text-sm" />
+          </a>
+        </div>
+      </div>
+
+      <div className="rounded-2xl border border-slate-200/90 bg-white shadow-clay-sm divide-y divide-slate-100">
         <Group icon="point_of_sale" title="Checkout offer">
           <Row label="Offer a plan at checkout" help="When a non-member pays, show what a plan would have saved them, with one tap to join.">
             <Switch label="Offer a plan at checkout" on={offer} onChange={(v) => set({ membership_checkout_prompt: v })} />
@@ -74,6 +80,6 @@ export default function MembershipSettings() {
 
         {canEdit && <SaveFooter dirty={dirty} busy={busy} msg={msg} onSave={save} onDiscard={() => { setS(saved); setMsg(null); }} />}
       </div>
-    </SettingsPage>
+    </section>
   );
 }

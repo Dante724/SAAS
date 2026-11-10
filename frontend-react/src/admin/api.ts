@@ -71,3 +71,31 @@ export function fmtDate(iso?: string | null) {
   const d = new Date(iso.length === 10 ? iso + "T00:00:00" : iso);
   return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
 }
+
+// What an Action log or history entry did, in plain words (the server stores a short code).
+const ACTIONS: Record<string, string> = {
+  login: "Signed in", login_2step: "Signed in with 2-step", logout: "Signed out", mfa_enrolled: "2-step sign-in on",
+  apply_code: "Applied a code", create_code: "Created a code", assign: "Handed over a shop",
+  create_admin: "Added a person", edit_admin: "Changed a person", deactivate_admin: "Removed a person", change_role: "Changed a role",
+  create_role: "Created a role", edit_role: "Changed a role's access",
+  discount: "Gave a discount", discount_removed: "Removed a discount", extend_trial: "Extended a trial", plan_change: "Changed the plan",
+  edit_subscription: "Changed billing terms", suspend: "Suspended a shop", unsuspend: "Unsuspended a shop",
+  note: "Added a note", staff_access: "Changed staff access",
+};
+export function actionLabel(code: string): string {
+  if (ACTIONS[code]) return ACTIONS[code];
+  const m = code.match(/^(approve|decline|cancel)_(.+)$/);
+  if (m) {
+    const what = (ACTIONS[m[2]] || m[2].replace(/[_.]/g, " ")).toLowerCase();
+    return `${m[1] === "approve" ? "Approved" : m[1] === "decline" ? "Declined" : "Cancelled"} a request: ${what}`;
+  }
+  const words = code.replace(/^platform\./, "").replace(/[_.]/g, " ").trim();
+  return words ? words[0].toUpperCase() + words.slice(1) : code;
+}
+
+/** Date and time in the app's own style ("4 Nov 2026, 12:59"). */
+export function fmtDateTime(iso?: string | null) {
+  if (!iso) return "—";
+  const d = new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + "Z");
+  return d.toLocaleString(undefined, { day: "numeric", month: "short", year: "numeric", hour: "numeric", minute: "2-digit" });
+}
