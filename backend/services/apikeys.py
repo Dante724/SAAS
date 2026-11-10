@@ -1,6 +1,7 @@
 """Public REST API authentication (Phase 2B, hardened in apih1).
 
-API keys look like `rok_<prefix>_<secret>`. Only the sha256 hash is stored. The
+API keys look like `tk_<prefix>_<secret>` (keys made before the Tekly rename start with `rok_` and
+keep working). Only the sha256 hash is stored. The
 public-API dependency resolves a bearer token to an org context (an ApiPrincipal),
 checks scopes, and stamps last_used. Management of keys (create/list/rotate/revoke) lives
 in routers/apikeys.py under the normal employee session.
@@ -41,16 +42,26 @@ LAST_USED_EVERY = timedelta(minutes=1)
 # auto_error=False: we raise our own 401s (same messages as before), and the scheme still lands
 # in the OpenAPI document as the bearer security requirement.
 bearer_scheme = HTTPBearer(auto_error=False, scheme_name="ApiKey",
-                           description="A Tekly API key: `Authorization: Bearer rok_…`. "
+                           description="A Tekly API key: `Authorization: Bearer tk_…`. "
                                        "Create one in Settings → Integrations → API keys.")
+
+
+# New keys start with tk_ (Tekly). Keys issued under the old RepairOS name start with rok_ and are
+# still accepted until they expire or are rotated.
+KEY_PREFIX = "tk_"
+KEY_PREFIXES = ("tk_", "rok_")
+
+
+def is_api_key(token: str) -> bool:
+    return token.startswith(KEY_PREFIXES)
 
 
 def generate_key() -> tuple[str, str, str]:
     """Return (full_plaintext_key, prefix, sha256_hash). Shown once at creation."""
     prefix = secrets.token_hex(4)            # 8 hex chars
     secret = secrets.token_urlsafe(24)
-    full = f"rok_{prefix}_{secret}"
-    return full, f"rok_{prefix}", hashlib.sha256(full.encode()).hexdigest()
+    full = f"{KEY_PREFIX}{prefix}_{secret}"
+    return full, f"{KEY_PREFIX}{prefix}", hashlib.sha256(full.encode()).hexdigest()
 
 
 def hash_key(full: str) -> str:
@@ -161,10 +172,10 @@ def key_lookup_clause(token_hash: str, now: datetime):
 async def _authenticate(creds: Optional[HTTPAuthorizationCredentials], db: AsyncSession,
                         method: str = "GET") -> tuple[ApiKey, ApiPrincipal]:
     if creds is None or not creds.credentials:
-        raise HTTPException(401, "Missing API key (Authorization: Bearer rok_...)",
+        raise HTTPException(401, "Missing API key (Authorization: Bearer tk_...)",
                             headers={"WWW-Authenticate": "Bearer"})
     token = creds.credentials.strip()
-    if not token.startswith("rok_"):
+    if not is_api_key(token):
         raise HTTPException(401, "Not a public API key", headers={"WWW-Authenticate": "Bearer"})
     now = datetime.utcnow()
     row = (await db.execute(select(ApiKey).where(key_lookup_clause(hash_key(token), now)))).scalars().first()
