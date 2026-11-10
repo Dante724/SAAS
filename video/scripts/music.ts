@@ -154,14 +154,14 @@ function render(cut: Cut) {
     bell(mus, 0.25, midi(88), 0.14); bell(mus, 0.37, midi(95), 0.1);            // hook: the Approved chime
     sweep(fx, HOOK_FRAMES / FPS - 0.75, 0.75, 0.6, false);                      // rewind
     shutter(fx, HOOK_FRAMES / FPS + 0.05, 1.0);
-    const c = at("the-customer")!; [0.2, 1.6, 4.2, 5.6].forEach((d) => ringback(fx, c + d, 1.0));
-    tone(fx, c + 3.0, 0.35, [480, 620], 0.06);                                  // no answer
-    tone(fx, c + 6.9, 0.25, [950, 1400, 1800], 0.05);                           // voicemail beep
+    const c = at("the-customer")!; [0.2, 1.2, 3.3, 4.3].forEach((d) => ringback(fx, c + d, 0.8));
+    tone(fx, c + 2.2, 0.35, [480, 620], 0.06);                                  // no answer
+    tone(fx, c + 5.3, 0.25, [950, 1400, 1800], 0.05);                           // voicemail beep
     const o = at("old-software")!; oldSoftwareClicks(false).forEach((f) => click(fx, o + f / FPS));
     tone(fx, o + OLD_LOCK_SEC, 0.25, [220, 233], 0.12);                          // error bonk
     const d = at("the-drawer")!; noiseBurst(fx, d + 0.2, 0.4, 0.12, 0.1, 6);    // drawer slides
-    const sb = at("support-and-bill")!; for (let k = 0; k < 6; k++) tone(fx, sb + k * 0.42, 0.38, [midi(64 + [0, 4, 7, 4, 0, -5][k])], 0.03); // hold music
-    ping(fx, sb + 2.8);                                                         // the renewal email
+    const sb = at("support-and-bill")!; for (let k = 0; k < 4; k++) tone(fx, sb + k * 0.42, 0.38, [midi(64 + [0, 4, 7, 4][k])], 0.03); // hold music
+    ping(fx, sb + 1.95);                                                        // the renewal email
   }
   if (cut === "30") {
     ringback(fx, 0.2, 1.4); ringback(fx, 2.0, 1.0); tone(fx, 3.3, 0.35, [480, 620], 0.06);
@@ -182,8 +182,8 @@ function render(cut: Cut) {
   // whooshes on every whip cut in act two
   const whips = ["intake", "the-approval", "the-part", "walk-in", "booking", "membership", "reports", "close-of-job", "approved", "home"];
   for (const s of tl.segments) if (s.from > turnAt + 1 && whips.includes(s.id)) whoosh(fx, s.from);
-  if (seg("walk-in")) { tone(fx, seg("walk-in")!.from + 1.0, 0.09, [2400], 0.08); tone(fx, seg("walk-in")!.from + 1.12, 0.09, [3200], 0.06); } // QR scan beep
-  if (seg("booking")) ping(fx, seg("booking")!.from + 1.6);
+  if (seg("walk-in")) { tone(fx, seg("walk-in")!.from + 1.0, 0.09, [2400], 0.08); tone(fx, seg("walk-in")!.from + 1.12, 0.09, [3200], 0.06); } // QR scan beep // QR scan beep
+  if (seg("booking")) ping(fx, seg("booking")!.from + 2.4);
   const paid = tl.segments.flatMap((s) => s.onScreen ?? []).find((o) => /^Paid/.test(o.text));
   if (paid) { bell(fx, paid.from, midi(84), 0.08, 5, 1); bell(fx, paid.from + 0.07, midi(88), 0.08, 5, 1); bell(fx, paid.from + 0.14, midi(91), 0.08, 5, 1.2); }
 

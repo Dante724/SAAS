@@ -50,7 +50,7 @@ export const CheckIn: React.FC<P> = ({ dur }) => {
         <Float3D dur={dur} from={10} to={4} tiltX={3} seed={11}><QRSign size={520 * u} /></Float3D>
       </div>
       <MobileShot shot={SHOTS.checkin} dur={dur} x={wide ? "68%" : aspect === "square" ? "70%" : "50%"} y={aspect === "tall" ? "69%" : "52%"}
-        height={aspect === "tall" ? 860 : aspect === "square" ? 800 : 860} delay={8} />
+        height={aspect === "tall" ? 860 : aspect === "square" ? 720 : 760} delay={8} />
     </Stage>
   );
 };
@@ -64,7 +64,7 @@ export const Booking: React.FC<P> = ({ dur }) => {
       <Stage photo="photos/workshop-garage-960.webp">
         <AbsoluteFill style={{ background: "linear-gradient(180deg, rgba(10,20,52,.82), rgba(16,30,72,.7))" }} />
         {wide && hasClip("booking-desktop") && <DesktopShot shot={SHOTS.bookingDesk} dur={dur} scale={0.72} dx={-230} dy={10} />}
-        <MobileShot shot={SHOTS.booking} dur={dur} x={wide ? "74%" : "50%"} height={aspect === "tall" ? 1240 : 860} delay={wide ? 6 : 0} />
+        <MobileShot shot={SHOTS.booking} dur={dur} x={wide ? "74%" : "50%"} height={aspect === "tall" ? 1120 : 760} delay={wide ? 6 : 0} />
       </Stage>
     </AbsoluteFill>
   );

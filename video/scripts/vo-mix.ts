@@ -58,7 +58,11 @@ for (const cut of ["90", "30"] as const) {
     filters.push(`[${i}:a]atrim=start=${lead.toFixed(3)},asetpts=PTS-STARTPTS,aresample=48000,atempo=${tempo.toFixed(3)},adelay=${Math.round((s.from + BREATH) * 1000)}:all=1[a${i}]`);
     console.log(`${cut} ${s.id.padEnd(18)} ${len.toFixed(2)}s in ${room.toFixed(2)}s${tempo > 1 ? `  x${tempo.toFixed(2)}` : ""}${len / tempo > room + 0.05 ? "  ! still long" : ""}`);
   });
-  filters.push(`${segs.map((_, i) => `[a${i}]`).join("")}amix=inputs=${segs.length}:normalize=0,apad=whole_dur=${TIMELINE[cut].duration},atrim=0:${TIMELINE[cut].duration}[out]`);
+  // a silent bed from 0 s: without it amix starts the output at the first line's delayed start,
+  // which shifted the whole track earlier when the timeline gained a hook before the first line.
+  const dur = TIMELINE[cut].duration;
+  filters.push(`anullsrc=r=48000:cl=mono,atrim=0:${dur}[bed]`);
+  filters.push(`[bed]${segs.map((_, i) => `[a${i}]`).join("")}amix=inputs=${segs.length + 1}:normalize=0:duration=first[out]`);
   const out = path.join(__dirname, "..", "public", "audio", `vo-${cut}.wav`);
   execFileSync(ffmpegPath(), [...args, "-filter_complex", filters.join(";"), "-map", "[out]", "-ac", "2", "-ar", "48000", out], { stdio: "pipe", env: ffEnv() });
   console.log(`-> ${out}`);

@@ -64,7 +64,7 @@ export const Chip: React.FC<{
   const sIn = spring({ frame: f, fps, config: { damping: 18, stiffness: 160 } });
   const o = fadeIO(f, dur, 6, 8);
   const dot = tone === "red" ? C.red : tone === "green" ? C.green : tone === "blue" ? C.sapphireLight : null;
-  const top = pos === "center" ? "50%" : pos === "upper" ? (aspect === "tall" ? "22%" : "16%") : aspect === "tall" ? "9%" : "7%";
+  const top = pos === "center" ? "50%" : pos === "upper" ? (aspect === "tall" ? "22%" : "16%") : aspect === "tall" ? "6%" : "3.6%";   // above the device frames
   return (
     <div style={{
       position: "absolute", left: "50%", top, opacity: o,

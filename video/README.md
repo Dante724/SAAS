@@ -4,7 +4,7 @@ Remotion (TypeScript). One composition, `TheDayBack`, props:
 
 | prop | values |
 |---|---|
-| `cut` | `"90"` (1:32), `"30"`, `"15"` (captions only, no voice) |
+| `cut` | `"90"` (main cut, 1:20 incl. 2 s hook), `"30"`, `"15"` (captions only, no voice) |
 | `aspect` | `"16:9"`, `"1:1"`, `"9:16"` |
 | `voiceoverPath` | file under `public/` or a URL; `""` for none |
 | `musicPath` | file under `public/` or a URL; `""` for none |

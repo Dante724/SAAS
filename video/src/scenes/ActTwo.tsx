@@ -44,11 +44,11 @@ export const MobileShot: React.FC<{ shot: Shot; dur: number; x?: string; y?: str
   const f = useCurrentFrame();
   const { u, aspect, fps } = useLayout();
   const c = info(shot.clip);
-  const h = (height ?? (aspect === "tall" ? 1180 : 800)) * u;
+  const h = (height ?? (aspect === "tall" ? 1120 : 760)) * u;
   const w = h * (390 / 844);
   const s = spring({ frame: f - delay, fps, config: { damping: 20, stiffness: 120 } });
   return (
-    <div style={{ position: "absolute", left: x, top: y, transform: `translate(-50%, -50%) translateY(${(1 - s) * 60 * u - (aspect === "tall" ? 70 : 45) * u}px)`, opacity: s }}>
+    <div style={{ position: "absolute", left: x, top: y, transform: `translate(-50%, -50%) translateY(${(1 - s) * 60 * u - (aspect === "tall" ? 40 : 18) * u}px)`, opacity: s }}>
       <Float3D dur={dur} from={12} to={4} tiltX={5} seed={6}>
         <PhoneFrame h={h}>
           <ClipView src={`clips/${c.file}`} clipW={c.width} clipH={c.height} boxW={w} boxH={h} startFrom={shot.from} rate={shot.rate} clipDur={c.durationSec} zoom={shot.zoom} />
@@ -108,7 +108,7 @@ export const Part: React.FC<P> = ({ dur }) => <Stage><DesktopShot shot={SHOTS.st
 // 1:30 close of job: done, invoice and pay link, then the board: her job Done and paid
 export const Close: React.FC<P> = ({ dur }) => {
   const { fps } = useLayout();
-  const a = seconds(fps, 4.2);
+  const a = seconds(fps, 3.0);
   return (
     <Stage>
       <Sequence durationInFrames={a}><Stage><DesktopShot shot={SHOTS.invoice} dur={a} /></Stage></Sequence>
@@ -122,7 +122,7 @@ export const DanisLine: React.FC<P> = ({ dur }) => {
   const f = useCurrentFrame();
   const { u, fps, aspect } = useLayout();
   const l1 = spring({ frame: f - 6, fps, config: { damping: 22, stiffness: 90 } });
-  const l2 = spring({ frame: f - Math.round(fps * 2.7), fps, config: { damping: 22, stiffness: 90 } });
+  const l2 = spring({ frame: f - Math.round(fps * 1.7), fps, config: { damping: 22, stiffness: 90 } });
   const size = (aspect === "wide" ? 76 : aspect === "square" ? 66 : 70) * u;
   return (
     <AbsoluteFill>

@@ -33,7 +33,7 @@ const scene = (id: SceneId, dur: number): React.ReactNode => {
     case "booking": return <Booking dur={dur} />;
     case "membership": return <Membership dur={dur} />;
     case "reports": return <Reports dur={dur} />;
-    case "endCard": return <EndCard dur={dur} sub="Free trial · No contract" fan={84} />;
+    case "endCard": return <EndCard dur={dur} sub="Free trial · No contract" fan={60} />;
     case "redial": return <Customer dur={dur} variant="30" />;
     case "clicksRenewal": return <OldSoftware dur={dur} short />;
     case "approval30": return <Approval30 dur={dur} />;

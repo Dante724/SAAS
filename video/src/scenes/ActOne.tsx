@@ -134,7 +134,7 @@ const ColdOpenShop: React.FC<P> = ({ dur }) => {
 export const Customer: React.FC<P & { variant?: "90" | "30" | "15" }> = ({ dur, variant = "90" }) => {
   const { aspect } = useLayout();
   const script = variant === "90"
-    ? [{ at: 0, status: "Calling…" }, { at: 3, status: "No answer", tone: "red" as const }, { at: 4.2, status: "Calling…" }, { at: 5.5, status: "Voicemail", tone: "red" as const }]
+    ? [{ at: 0, status: "Calling…" }, { at: 2.2, status: "No answer", tone: "red" as const }, { at: 3.2, status: "Calling…" }, { at: 4.6, status: "Voicemail", tone: "red" as const }]
     : variant === "30"
       ? [{ at: 0, status: "Calling… (3rd time)" }, { at: 3.2, status: "No answer", tone: "red" as const }]
       : [{ at: 0, status: "Calling… (3rd time)" }, { at: 1.6, status: "No answer", tone: "red" as const }];
@@ -229,7 +229,7 @@ export const OldSoftware: React.FC<P & { short?: boolean }> = ({ dur, short = fa
   const clickF = oldSoftwareClicks(short);
   const titles = ["Job record", "Edit job record", "Customer lookup", "Select device", "Confirm", "Are you sure?", "Record locked", "Save changes?", "Refresh", "Confirm", "Reopen job record"];
   const clicks = clickF.map((cf, i) => ({ f: cf, x: 0.34 + (i % 6) * 0.04, y: 0.42 + (i % 6) * 0.055, click: true }));
-  const loaderF = short ? 999 : Math.round(fps * 5.0);
+  const loaderF = short ? 999 : Math.round(fps * 3.0);
   const lockF = short ? 999 : Math.round(fps * OLD_LOCK_SEC);
   const spin = (f * 12) % 360;
   const count = clickF.filter((c) => f >= c).length;
@@ -280,8 +280,8 @@ export const Drawer: React.FC<P> = ({ dur }) => {
   const f = useCurrentFrame();
   const { u, fps, aspect } = useLayout();
   const open = interpolate(f, [6, 30], [0, 1], { ...clamp, easing: ease });
-  const tabIn = spring({ frame: f - Math.round(fps * 2.6), fps, config: { damping: 16 } });
-  const flag = f > fps * 5.4;
+  const tabIn = spring({ frame: f - Math.round(fps * 1.6), fps, config: { damping: 16 } });
+  const flag = f > fps * 3.4;
   const wide = aspect === "wide";
   const cellW = wide ? 760 * u : 860 * u;
   return (
@@ -351,9 +351,9 @@ export const Support: React.FC<P> = ({ dur }) => {
   const f = useCurrentFrame();
   const { u, fps, aspect } = useLayout();
   const bars = Array.from({ length: 5 }).map((_, i) => 0.35 + 0.65 * Math.abs(Math.sin(f / 5 + i)));
-  const chatIn = spring({ frame: f - Math.round(fps * 1.2), fps, config: { damping: 16 } });
-  const holdOut = interpolate(f, [fps * 2.6, fps * 3], [1, 0], clamp);
-  const push = interpolate(f, [fps * 2.6, dur], [1, 1.22], clamp);
+  const chatIn = spring({ frame: f - Math.round(fps * 0.7), fps, config: { damping: 16 } });
+  const holdOut = interpolate(f, [fps * 1.8, fps * 2.2], [1, 0], clamp);
+  const push = interpolate(f, [fps * 1.8, dur], [1, 1.22], clamp);
   return (
     <AbsoluteFill style={{ background: "radial-gradient(80% 70% at 50% 55%, #2c3038, #16181c)", transform: `scale(${push})` }}>
       <AbsoluteFill style={{ opacity: holdOut }}>
@@ -370,7 +370,7 @@ export const Support: React.FC<P> = ({ dur }) => {
             fontFamily: FONT_TEXT, fontSize: 28 * u, maxWidth: 560 * u }}>I'm an AI assistant… How can I help you today?</div>
         </div>
       </AbsoluteFill>
-      <RenewalEmail showF={Math.round(fps * 2.7)} dur={dur} />
+      <RenewalEmail showF={Math.round(fps * 1.9)} dur={dur} />
     </AbsoluteFill>
   );
 };
