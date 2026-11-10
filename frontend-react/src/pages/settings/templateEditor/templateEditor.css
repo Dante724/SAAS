@@ -1,0 +1,122 @@
+/* Template editor views (Design / Text). Loaded with those views only, so the main bundle is
+   unchanged. The sheet is paper: white with dark ink in both themes, like the printed page. */
+
+.tk-paper { color: #111; font-size: 13px; line-height: 1.5; }
+.tk-paper table { border-collapse: collapse; }
+.tk-paper img { max-width: 100%; }
+.tk-paper td, .tk-paper th { vertical-align: top; }
+.tk-paper ul { list-style: disc; padding-left: 1.4em; }
+.tk-paper ol { list-style: decimal; padding-left: 1.4em; }
+.tk-paper h1 { font-size: 2em; font-weight: 700; margin: .67em 0; }
+.tk-paper h2 { font-size: 1.5em; font-weight: 700; margin: .83em 0; }
+.tk-paper h3 { font-size: 1.17em; font-weight: 700; margin: 1em 0; }
+.tk-paper p { margin: 1em 0; }
+.tk-paper hr { border: 0; border-top: 1px solid #ccc; margin: .5em 0; }
+.tk-paper a { color: #0059ba; text-decoration: underline; }
+
+/* Text view (Tiptap) */
+.tk-text-page { min-height: 100%; }
+.tk-text-page:focus { outline: none; }
+.tk-text-page table td, .tk-text-page table th { outline: 1px dashed #d5dbe6; outline-offset: -1px; min-width: 2em; }
+.tk-text-page .selectedCell { background: rgba(0, 89, 186, .08); }
+.tk-text-page p.is-editor-empty:first-child::before { content: attr(data-placeholder); color: #9aa3b5; float: left; height: 0; pointer-events: none; }
+.tk-text-page .ProseMirror-selectednode .tok-pill, .tk-text-page .tok-pill.ProseMirror-selectednode { outline: 2px solid #0059ba; outline-offset: 1px; }
+.tk-text-page img.ProseMirror-selectednode { outline: 2px solid #0059ba; }
+.tk-text-page .tok-block { margin: 2px 0; }
+
+/* Page marks on the Text sheet (editor only, never printed) */
+.tk-margin-guide { position: absolute; outline: 1px dashed #cbd5e1; pointer-events: none; }
+.tk-page-end { position: absolute; left: 0; right: 0; border-top: 2px dashed #94a3b8; font-size: 11px; line-height: 1.6; color: #64748b; text-align: right; padding-right: 6px; pointer-events: none; }
+
+/* Fields filled with the shop's real data (display only) */
+.tk-text-page .tok-real { background: rgba(0, 89, 186, .06); box-shadow: inset 0 -1px 0 rgba(0, 89, 186, .45); border-radius: 2px; }
+.tk-text-page div.tok-real { display: block; }
+.tk-text-page .tok-sample { color: #64748b; font-style: italic; }
+.tk-text-page .ProseMirror-selectednode.tok-real, .tk-text-page .ProseMirror-selectednode .tok-real { outline: 2px solid #0059ba; outline-offset: 1px; }
+
+/* Chips for placeholders (the base .tok-pill lives in index.css) */
+.tok-pill.tok-logic { background: #fff7ed; color: #9a3412; border-color: #fed7aa; }
+.tk-var-chip { display: inline-flex; align-items: center; height: 24px; padding: 0 8px; border-radius: 8px; font-size: 11px; font-weight: 600;
+  background: rgb(var(--c-primary-fill) / .08); color: rgb(var(--c-primary-text)); border: 1px solid rgb(var(--c-line-200)); }
+.tk-var-chip:hover { border-color: rgb(var(--c-primary-text)); }
+
+/* ── Design view (GrapesJS), restyled to Tekly ─────────────────────────────────────────────── */
+.tk-design {
+  --gjs-main-font: "Geist Variable", Geist, Inter, system-ui, sans-serif;
+  --gjs-font-size: 12px;
+  --gjs-primary-color: rgb(var(--c-card));
+  --gjs-secondary-color: rgb(var(--c-ink-secondary));
+  --gjs-tertiary-color: rgb(var(--c-primary-fill));
+  --gjs-quaternary-color: rgb(var(--c-primary-text));
+  --gjs-font-color: rgb(var(--c-ink-secondary));
+  --gjs-font-color-active: rgb(var(--c-ink-primary));
+  --gjs-main-dark-color: rgb(var(--c-slate-100));
+  --gjs-secondary-dark-color: rgb(var(--c-slate-50));
+  --gjs-main-light-color: rgb(var(--c-slate-50));
+  --gjs-secondary-light-color: rgb(var(--c-ink-tertiary));
+  --gjs-soft-light-color: rgb(var(--c-slate-50));
+  --gjs-light-border: rgb(var(--c-line-200));
+  --gjs-arrow-color: rgb(var(--c-ink-tertiary));
+  --gjs-dark-text-shadow: transparent;
+  --gjs-color-blue: rgb(var(--c-primary-fill));
+  --gjs-color-highlight: rgb(var(--c-primary-container));
+  --gjs-placeholder-background-color: rgb(var(--c-primary-fill));
+  --gjs-canvas-top: 0px;
+  font-family: var(--gjs-main-font);
+}
+.tk-design .gjs-one-bg { background-color: rgb(var(--c-card)); }
+.tk-design .gjs-two-color { color: rgb(var(--c-ink-secondary)); }
+.tk-design .gjs-three-bg { background-color: rgb(var(--c-primary-fill)); color: #fff; }
+.tk-design .gjs-four-color, .tk-design .gjs-four-color-h:hover { color: rgb(var(--c-primary-text)); }
+
+/* The canvas: a white sheet on the app's grey desk */
+.tk-design-canvas .gjs-editor, .tk-design-canvas .gjs-editor-cont { background: transparent; }
+.tk-design-canvas .gjs-cv-canvas { width: 100%; height: 100%; top: 0; background: rgb(var(--c-slate-200)); }
+.tk-design-canvas .gjs-frame-wrapper { right: 0; margin: 0 auto; padding: 24px 0; max-width: 100%; }
+.tk-design-canvas .gjs-frame { box-shadow: 0 10px 30px rgba(20, 33, 63, .14), 0 1px 3px rgba(20, 33, 63, .08); border-radius: 2px; background: #fff; }
+.tk-design-canvas .gjs-badge { background: rgb(var(--c-primary-fill)); color: #fff; border-radius: 6px; font-family: var(--gjs-main-font); font-size: 11px; padding: 2px 6px; }
+.tk-design-canvas .gjs-badge__icon { display: none; }
+.tk-design-canvas .gjs-toolbar { background: rgb(var(--c-primary-fill)); border-radius: 8px; overflow: hidden; }
+.tk-design-canvas .gjs-toolbar-item { padding: 4px 5px; }
+.tk-design-canvas .gjs-toolbar-item:hover { background: rgba(255, 255, 255, .15); }
+.tk-design-canvas .gjs-resizer-h { border-color: rgb(var(--c-primary-fill)); }
+.tk-design-canvas .gjs-placeholder { border-color: rgb(var(--c-primary-fill)) transparent; }
+.tk-design-canvas .gjs-placeholder-int { background: rgb(var(--c-primary-fill)); }
+.tk-design-canvas .gjs-highlighter, .tk-design-canvas .gjs-highlighter-sel { outline-color: rgb(var(--c-primary-fill)) !important; }
+.tk-design-canvas .gjs-offset-v, .tk-design-canvas .gjs-offset-fixed-v { display: none; }
+
+/* Text editing toolbar inside the canvas */
+.tk-design-canvas .gjs-rte-toolbar { background: rgb(var(--c-raised)); border: 1px solid rgb(var(--c-line-200)); border-radius: 10px; box-shadow: var(--sh-menu); padding: 2px; }
+.tk-design-canvas .gjs-rte-actionbar { gap: 2px; }
+.tk-design-canvas .gjs-rte-action { color: rgb(var(--c-ink-secondary)); border: 0; border-radius: 6px; width: 28px; height: 28px; font-size: 13px; }
+.tk-design-canvas .gjs-rte-action:hover { background: rgb(var(--c-slate-100)); color: rgb(var(--c-ink-primary)); }
+.tk-design-canvas .gjs-rte-active { background: rgb(var(--c-primary-fill) / .12); color: rgb(var(--c-primary-text)); }
+
+/* Style and settings panels */
+.tk-gjs-styles .gjs-sm-sector { border-bottom: 1px solid rgb(var(--c-line-100)); }
+.tk-gjs-styles .gjs-sm-sector-title { background: transparent; border: 0; padding: 10px 12px; font-weight: 600; font-size: 12px; color: rgb(var(--c-ink-primary)); letter-spacing: 0; }
+.tk-gjs-styles .gjs-sm-sector-caret { color: rgb(var(--c-ink-tertiary)); }
+.tk-gjs-styles .gjs-sm-properties { padding: 4px 10px 12px; border: 0; }
+.tk-gjs-styles .gjs-sm-label, .tk-gjs-traits .gjs-label { color: rgb(var(--c-ink-secondary)); font-size: 11px; font-weight: 500; }
+.tk-gjs-styles .gjs-sm-clear { color: rgb(var(--c-primary-text)); }
+.tk-design .gjs-field, .tk-design .gjs-input-holder input, .tk-design .gjs-field select {
+  background: rgb(var(--c-card)); color: rgb(var(--c-ink-primary)); border: 1px solid rgb(var(--c-line-200)); border-radius: 8px; box-shadow: none; }
+.tk-design .gjs-field:focus-within { border-color: rgb(var(--c-primary-text)); }
+.tk-design .gjs-field-arrow-u { border-bottom-color: rgb(var(--c-ink-tertiary)); }
+.tk-design .gjs-field-arrow-d { border-top-color: rgb(var(--c-ink-tertiary)); }
+.tk-design .gjs-radio-item { border-color: rgb(var(--c-line-200)); }
+.tk-design .gjs-radio-item input:checked + .gjs-radio-item-label { background: rgb(var(--c-primary-fill) / .12); color: rgb(var(--c-primary-text)); }
+.tk-design .gjs-sm-composite, .tk-design .gjs-sm-stack { background: transparent; border-color: rgb(var(--c-line-200)); }
+.tk-gjs-traits .gjs-trt-trait { padding: 6px 12px; }
+.tk-gjs-traits .gjs-trt-traits { font-size: 12px; }
+
+/* Image picker window */
+.gjs-mdl-container { background: rgb(var(--scrim, 20 33 63) / .45); font-family: "Geist Variable", Geist, Inter, system-ui, sans-serif; }
+.gjs-mdl-dialog { background: rgb(var(--c-raised)); color: rgb(var(--c-ink-primary)); border-radius: 16px; border: 1px solid rgb(var(--c-line-200)); box-shadow: var(--sh-drawer); max-width: 760px; }
+.gjs-mdl-header { border-bottom: 1px solid rgb(var(--c-line-200)); padding: 14px 18px; }
+.gjs-mdl-title { font-size: 14px; font-weight: 600; }
+.gjs-mdl-btn-close { color: rgb(var(--c-ink-tertiary)); }
+.gjs-mdl-content { background: rgb(var(--c-raised)); border: 0; }
+.gjs-am-assets-cont, .gjs-am-file-uploader > form { background: rgb(var(--c-slate-50)); border-radius: 12px; border: 1px dashed rgb(var(--c-line-300)); color: rgb(var(--c-ink-secondary)); }
+.gjs-am-add-asset .gjs-am-add-field { background: rgb(var(--c-card)); border: 1px solid rgb(var(--c-line-200)); border-radius: 8px; }
+.gjs-am-add-asset button, .gjs-btn-prim { background: rgb(var(--c-primary-fill)); color: #fff; border-radius: 8px; border: 0; padding: 6px 12px; font-weight: 600; }

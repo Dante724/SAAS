@@ -1,4 +1,5 @@
 import DirectorySelect from "./DirectorySelect";
+import TeklySelect from "./TeklySelect";
 import { useState } from "react";
 import { M } from "./Shell";
 import { api } from "../api/client";
@@ -40,7 +41,7 @@ export default function NewClientDrawer({ prefillName, onClose, onCreated }: { p
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 70 }}>
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className="relative h-full w-full max-w-[480px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
@@ -62,22 +63,22 @@ export default function NewClientDrawer({ prefillName, onClose, onCreated }: { p
             address: { el: <AddressFields value={f} onChange={(a) => setF((s: any) => ({ ...s, ...a }))} idPrefix="nc-addr" required={!!star("address")} /> },
             source: { half: true, el: <div><label className={lbl}>Lead source{star("source")}</label><DirectorySelect dirKey="lead_source" value={f.source || ""} onChange={(v) => set("source", v)} className={field} /></div> },
             loyalty_tier: { half: true, el: <div><label className={lbl}>Loyalty tier</label>
-              <select value={f.loyalty_tier} onChange={(e) => set("loyalty_tier", e.target.value)} className={`${field} appearance-none`}><option value="standard">Standard</option><option value="silver">Silver</option><option value="gold">Gold</option><option value="vip">VIP</option></select></div> },
+              <TeklySelect value={f.loyalty_tier} onChange={(e) => set("loyalty_tier", e.target.value)} className={`${field} appearance-none`}><option value="standard">Standard</option><option value="silver">Silver</option><option value="gold">Gold</option><option value="vip">VIP</option></TeklySelect></div> },
             discount_card: { half: true, el: <div><label className={lbl}>Discount card / Member ID{star("discount_card")}</label><input value={f.discount_card || ""} onChange={(e) => set("discount_card", e.target.value)} className={`${field} tabular-nums`} /></div> },
             notes: { el: <div><label className={lbl}>Notes{star("notes")}</label><textarea value={f.notes || ""} onChange={(e) => set("notes", e.target.value)} className={`${field} h-16 resize-none`} placeholder="Optional internal notes…" /></div> },
           }} custom={(ids) => <CustomFields entity="client" only={ids} bare={!!ids} value={f.custom_data || {}} onChange={(cd) => set("custom_data", cd)} creating />} />
           {multiCurrency && (
             <div className="w-1/2 pr-1.5"><label className={lbl}>Billing currency</label>
-              <select value={f.currency_code || ""} onChange={(e) => set("currency_code", e.target.value)} className={`${field} appearance-none`}>
+              <TeklySelect value={f.currency_code || ""} onChange={(e) => set("currency_code", e.target.value)} className={`${field} appearance-none`}>
                 <option value="">Base currency</option>{curOpts.map(([c, l]) => <option key={c} value={c}>{l}</option>)}
-              </select></div>
+              </TeklySelect></div>
           )}
           {err && <div className="text-status-overdue-ink font-semibold">{err}</div>}
         </div>
 
-        <div className="p-4 border-t border-slate-100 flex items-center justify-between bg-slate-50/70">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Cancel</button>
+        <div className="p-4 border-t border-slate-100 flex items-center justify-start gap-2 bg-slate-50/70">
           <button onClick={save} disabled={busy} className="px-5 py-2 rounded-lg bg-primary text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-50">{busy ? "Creating…" : "Create client"}</button>
+          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Cancel</button>
         </div>
       </div>
     </div>
