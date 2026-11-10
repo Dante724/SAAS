@@ -45,7 +45,7 @@ describe("CustomView columns-vs-groupby", { timeout: 15000 }, () => {
     // pick a source → flat mode: Columns picker appears with the field chips.
     // The select renders before /custom-reports/sources resolves, so wait for the option itself.
     await screen.findByRole("option", { name: "Invoices" }, { timeout: 5000 });
-    const sourceSelect = screen.getByRole("combobox", { name: "Source" });   // the page toolbar also has a (greyed) location select
+    const sourceSelect = screen.getByRole("combobox");
     await user.selectOptions(sourceSelect, "invoices");
     expect(screen.getByText("Columns")).toBeInTheDocument();
     expect(screen.getByRole("button", { name: "Invoice #" })).toBeInTheDocument();

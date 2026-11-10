@@ -86,7 +86,7 @@ export default function CashDrawer({ sym, currencyCode }: { sym?: string; curren
       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4 flex items-center justify-between">
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-slate-100 text-ink-tertiary flex items-center justify-center border border-slate-200"><M n="point_of_sale" c="text-xl" /></div>
-          <div><h4 className="text-sm font-semibold text-ink-primary">Cash drawer closed</h4>
+          <div><h4 className="text-sm font-bold text-ink-primary">Cash drawer closed</h4>
             <p className="text-xs text-ink-tertiary">Open the drawer to start taking cash and tracking the till.</p></div>
         </div>
         <div className="flex items-center gap-2">
@@ -106,8 +106,8 @@ export default function CashDrawer({ sym, currencyCode }: { sym?: string; curren
         <div className="flex items-center gap-3">
           <div className="w-10 h-10 rounded-xl bg-emerald-50 text-emerald-600 flex items-center justify-center border border-emerald-100"><M n="point_of_sale" c="text-xl" /></div>
           <div>
-            <h4 className="text-sm font-semibold text-ink-primary flex items-center gap-2">Drawer open
-              <span className="text-2xs px-1.5 py-0.5 rounded-full bg-emerald-100 text-emerald-800 font-semibold">Live</span></h4>
+            <h4 className="text-sm font-bold text-ink-primary flex items-center gap-2">Drawer open
+              <span className="text-[11px] px-1.5 py-0.5 rounded bg-emerald-100 text-emerald-800 font-bold ">Live</span></h4>
             <p className="text-xs text-ink-tertiary">Opened with {money(shift.opening_float, sym)}{shift.opened_by ? ` · ${shift.opened_by}` : ""}</p>
           </div>
         </div>
@@ -126,7 +126,7 @@ export default function CashDrawer({ sym, currencyCode }: { sym?: string; curren
               <span className={`tabular-nums font-semibold ${m.direction === "in" ? "text-emerald-600" : "text-rose-600"}`}>{m.direction === "in" ? "+" : "−"}{money(m.amount, sym)}</span>
             </div>
           ))}
-          <div className="flex items-center justify-between text-2xs font-semibold text-ink-tertiary pt-1"><span>Net pay-in/out</span><span className="tabular-nums">{net >= 0 ? "+" : "−"}{money(Math.abs(net), sym)}</span></div>
+          <div className="flex items-center justify-between text-[11px] font-bold text-ink-tertiary pt-1"><span>Net pay-in/out</span><span className="tabular-nums">{net >= 0 ? "+" : "−"}{money(Math.abs(net), sym)}</span></div>
         </div>
       )}
       {count === "close" && <DenomCountModal title="Close drawer — count the till" currencyCode={currencyCode} sym={sym} confirmLabel="Close drawer" busy={busy} onConfirm={doClose} onCancel={() => setCount(null)} />}
