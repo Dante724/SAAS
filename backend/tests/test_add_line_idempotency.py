@@ -114,3 +114,31 @@ async def test_a_double_tap_sent_at_once_adds_once(client, tenant, db):
     sl = (await db.execute(select(StockLevel).where(StockLevel.part_id == pid, StockLevel.location_id == loc))).scalars().first()
     await db.refresh(sl)
     assert sl.qty_available == 4, f"on hand {sl.qty_available} (was 5)"
+
+
+async def test_the_same_key_with_a_different_line_is_refused(client, tenant, db):
+    """#99 binds a key to what was asked. A key reused for a DIFFERENT line (a client bug, or a key
+    kept across two actions) must be refused (422), not answered with the first line while the
+    second is silently never added."""
+    pid, _loc_id = await _part_in_stock(client, tenant)
+    oid = await _order(client, tenant)
+    key = {"Idempotency-Key": f"line-{uuid.uuid4()}"}
+    first = {"description": "Screen", "kind": "product", "line_type": "part", "ref_id": pid, "qty": 1, "unit_price": 10}
+    other = {**first, "qty": 2}
+    a = await client.post(f"/api/orders/{oid}/lines", json=first, headers={**tenant, **key})
+    b = await client.post(f"/api/orders/{oid}/lines", json=other, headers={**tenant, **key})
+    assert a.status_code == 201, a.text
+    assert b.status_code == 422, f"{b.status_code} {b.text[:200]}"
+    lines = (await db.execute(select(OrderLine).where(OrderLine.order_id == oid))).scalars().all()
+    assert [float(ln.qty) for ln in lines] == [1.0]
+
+
+async def test_the_same_key_on_another_job_is_refused(client, tenant):
+    """The path is part of what was asked: the same key and body on a second job is a different request."""
+    pid, _loc_id = await _part_in_stock(client, tenant)
+    o1, o2 = await _order(client, tenant), await _order(client, tenant)
+    key = {"Idempotency-Key": f"line-{uuid.uuid4()}"}
+    body = {"description": "Screen", "kind": "product", "line_type": "part", "ref_id": pid, "qty": 1, "unit_price": 10}
+    assert (await client.post(f"/api/orders/{o1}/lines", json=body, headers={**tenant, **key})).status_code == 201
+    r = await client.post(f"/api/orders/{o2}/lines", json=body, headers={**tenant, **key})
+    assert r.status_code == 422, f"{r.status_code} {r.text[:200]}"

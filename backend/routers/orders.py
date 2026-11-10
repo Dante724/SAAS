@@ -4429,19 +4429,14 @@ async def add_line(
     Council M13: a retried add (double tap, a phone timeout that did reach the server, Tekly Go's
     queue replay) with the same Idempotency-Key gets the first answer back instead of adding the
     line again and taking stock twice, the same way orders.create and orders.finish work."""
-    from backend.services.idempotency import idem_begin
+    from backend.services.idempotency import run_once
     if request is None:
         return await _add_line(order_id, data, db, current)
-    claim = await idem_begin(db, current.org_id, request, "orders.add_line")
-    if claim.replay is not None:
-        return claim.replay
-    try:
-        result = await _add_line(order_id, data, db, current)
-    except BaseException:
-        await claim.release(db)
-        raise
-    await claim.finish(db, result)
-    return result
+    # Bound to what was asked (#99): the same key for another line or another job is a 422, and the
+    # key is never released once the line (and its stock draw) committed.
+    return await run_once(db, current.org_id, request, "orders.add_line",
+                          {"order_id": order_id, "line": data.model_dump(mode="json")},
+                          lambda: _add_line(order_id, data, db, current))
 
 
 async def _add_line(order_id: str, data: LineIn, db: AsyncSession, current: Employee):
