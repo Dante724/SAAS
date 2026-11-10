@@ -4,13 +4,13 @@ One row per (shop, shop-local day); the send path bumps `sent` with a conditiona
 cap holds across workers and restarts. Downgrade drops the table (the counts are only for today).
 
 Revision ID: ot01
-Revises: trg01
+Revises: idg02
 """
 import sqlalchemy as sa
 from alembic import op
 
 revision = "ot01"
-down_revision = "trg01"
+down_revision = "idg02"
 branch_labels = None
 depends_on = None
 
