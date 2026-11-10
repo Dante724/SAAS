@@ -3,14 +3,15 @@
 // switched on its own. Shown-to-customer items appear on the customer's tracking page.
 // Backend: GET/POST /feed/order/{id}, PATCH /feed/item/{id}.
 import { useEffect, useRef, useState } from "react";
-import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import { api } from "../../api/client";
 import { sectionCard } from "../../components/Section";
 import { useMe } from "../../context/Me";
 import { readAsDataUrl } from "../../lib/files";
 import AuthedImage from "../../components/AuthedImage";
 import { fmtServerTime } from "../../lib/serverTime";
+import { buttonClass } from "../../components/Button";
 
 type Vis = "private" | "client";
 export type FeedItem = {
@@ -30,7 +31,7 @@ export function VisibilityToggle({ value, onChange, disabled, compact }: { value
       aria-label={pub ? "Shown to customer. Make private" : "Private. Show to customer"}
       title={pub ? "The customer sees this on their tracking page" : "Only your team sees this"}
       className={`inline-flex items-center gap-1 rounded-lg border font-semibold transition-colors disabled:opacity-50 ${compact ? "px-1.5 py-0.5 text-2xs" : "px-2.5 py-1.5 text-xs"} ${pub ? "bg-emerald-50 border-emerald-200 text-emerald-700 hover:bg-emerald-100" : "bg-white border-slate-200 text-ink-secondary hover:bg-slate-50"}`}>
-      <M n={pub ? "visibility" : "lock"} c={compact ? "text-xs" : "text-[14px]"} />{pub ? "Customer sees" : "Private"}
+      <M n={pub ? "visibility" : "lock"} c={compact ? "text-xs" : "text-xs"} />{pub ? "Customer sees" : "Private"}
     </button>
   );
 }
@@ -99,17 +100,17 @@ export default function NotesPanel({ orderId, onFlash }: { orderId: string; onFl
       </div>
       <div className="max-h-72 overflow-y-auto divide-y divide-slate-100">
         {!items && <div className="text-xs text-ink-tertiary py-5 text-center">Loading…</div>}
-        {items?.length === 0 && <div className="text-xs text-ink-tertiary py-5 px-4 text-center">No comments or files yet.</div>}
+        {items?.length === 0 && <EmptyState size="inline" className="px-4 text-center" title="No comments or files yet." />}
         {(items || []).map((it) => (
           <div key={it.id} className="px-4 py-2.5 flex items-start gap-3">
             <div className="min-w-0 flex-1">
-              <div className="text-2xs text-ink-tertiary">{it.author_name || "Staff"} · <span className="tabular-nums">{when(it.created_at)}</span></div>
+              <div className="text-[11px] text-ink-tertiary">{it.author_name || "Staff"} · <span className="tabular-nums">{when(it.created_at)}</span></div>
               {it.body && <div className="text-xs text-ink-primary whitespace-pre-wrap break-words mt-0.5">{it.body}</div>}
               {(it.media_url || it.media_data) && (isImage(it)
                 ? (it.media_url
                   ? <AuthedImage src={it.media_url} alt={it.media_name || "photo"} className="mt-1.5 w-20 h-20 rounded-lg object-cover border border-slate-200" />
                   : <img src={it.media_data!} alt={it.media_name || "photo"} className="mt-1.5 w-20 h-20 rounded-lg object-cover border border-slate-200" />)
-                : <a href={it.media_data || undefined} download={it.media_name || "file"} className="mt-1 inline-flex items-center gap-1 text-xs text-primary font-semibold hover:underline break-all"><M n="attach_file" c="text-sm" />{it.media_name || "File"}</a>)}
+                : <a href={it.media_data || undefined} download={it.media_name || "file"} className="mt-1 inline-flex items-center gap-1 text-xs text-primary font-semibold hover:underline break-all"><M n="attach_file" c="text-[14px]" />{it.media_name || "File"}</a>)}
             </div>
             <VisibilityToggle compact value={it.visibility} disabled={!mayEdit(it)} onChange={(v) => flip(it, v)} />
           </div>
@@ -124,7 +125,7 @@ export default function NotesPanel({ orderId, onFlash }: { orderId: string; onFl
           <input ref={fileRef} type="file" multiple className="hidden" onChange={(e) => { attach(e.target.files); e.currentTarget.value = ""; }} />
           <button type="button" disabled={busy} onClick={() => fileRef.current?.click()}
             title={defaults.file === "client" ? "Files start shown to the customer" : "Files start private"}
-            className={buttonClass("secondary", "sm")}><M n="attach_file" c="text-sm" />Attach</button>
+            className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 flex items-center gap-1 disabled:opacity-50"><M n="attach_file" c="text-[14px]" />Attach</button>
           <button type="button" onClick={post} disabled={busy || !text.trim()}
             className={buttonClass("primary", "sm", "ml-auto")}>Post</button>
         </div>

@@ -7,6 +7,8 @@ vi.mock("../../context/Me", async (orig) => {
   const real: any = await orig();
   return { ...real, useMe: () => ({ can: () => true }) };
 });
+// Card readers are switched off by default (CARD_READERS_ENABLED); these test the feature itself.
+vi.mock("../../lib/cardReaders", () => ({ useCardReaders: () => true }));
 import CardReadersCard from "./CardReadersCard";
 
 const reply = (body: unknown) => ({ ok: true, status: 200, statusText: "", headers: new Headers({ "content-type": "application/json" }), json: async () => body, text: async () => JSON.stringify(body) }) as Response;
