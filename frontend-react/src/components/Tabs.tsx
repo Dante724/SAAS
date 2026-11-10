@@ -6,7 +6,7 @@ import type { ReactNode } from "react";
 //   chips:     filters with counts (All 5 · New 1 · Done 2)
 // The selected tab changes colour only, never weight or size, and tabs never shrink below their
 // label (a long row scrolls sideways with no visible scrollbar), so switching never moves anything.
-export type TabItem<T extends string> = { id: T; label: ReactNode; count?: number | null; icon?: ReactNode; disabled?: boolean };
+export type TabItem<T extends string> = { id: T; label: ReactNode; count?: number | null; icon?: ReactNode; disabled?: boolean; title?: string };
 
 export default function Tabs<T extends string>({ tabs, value, onChange, look = "underline", label, className = "" }: {
   tabs: TabItem<T>[];
@@ -25,14 +25,14 @@ export default function Tabs<T extends string>({ tabs, value, onChange, look = "
       {tabs.map((t) => {
         const on = t.id === value;
         const cls = look === "underline"
-          ? `-mb-px py-3 border-b-2 ${on ? "text-primary border-primary" : "text-ink-secondary border-transparent hover:text-ink-primary"}`
+          ? `-mb-px py-3 border-b-2 text-sm ${on ? "text-primary border-primary" : "text-ink-secondary border-transparent hover:text-ink-primary"}`
           : look === "segmented"
-          ? `h-7 px-3 rounded-lg ${on ? "bg-white text-ink-primary shadow-2xs" : "text-ink-secondary hover:text-ink-primary"}`
-          : `h-8 px-3 rounded-full ring-1 ring-inset ${on ? "bg-primary/10 text-primary ring-primary/20" : "bg-white text-ink-secondary ring-slate-200 hover:text-ink-primary hover:bg-slate-50"}`;
+          ? `h-7 px-3 rounded-lg text-xs ${on ? "bg-white text-ink-primary shadow-2xs" : "text-ink-secondary hover:text-ink-primary"}`
+          : `h-8 px-3 rounded-full ring-1 ring-inset text-xs ${on ? "bg-primary/10 text-primary ring-primary/20" : "bg-white text-ink-secondary ring-slate-200 hover:text-ink-primary hover:bg-slate-50"}`;
         return (
-          <button key={t.id} type="button" disabled={t.disabled} onClick={() => onChange(t.id)}
+          <button key={t.id} type="button" disabled={t.disabled} title={t.title} onClick={() => onChange(t.id)}
             {...(isTabs ? { role: "tab", "aria-selected": on } : { "aria-pressed": on })}
-            className={`shrink-0 inline-flex items-center gap-1.5 whitespace-nowrap text-xs font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${cls}`}>
+            className={`shrink-0 inline-flex items-center gap-1.5 whitespace-nowrap font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${cls}`}>
             {t.icon}{t.label}
             {t.count != null && <span className={`tabular-nums font-medium ${on ? "text-primary" : "text-ink-tertiary"}`}>{t.count}</span>}
           </button>

@@ -1,7 +1,8 @@
 import { useEffect, useRef, useState } from "react";
+import TeklySelect from "./TeklySelect";
 import { createPortal } from "react-dom";
 import { M } from "./Shell";
-import { api } from "../api/client";
+import { api, idempotencyKey } from "../api/client";
 import { money } from "../pages/orders/types";
 import { inputCls } from "../pages/invoices/billing";
 
@@ -71,18 +72,21 @@ export default function ReaderCharge({ orderId, saleId, amount, accountId, title
 
   const reader = readers?.find((r) => r.id === readerId) || null;
 
+  const sendKey = useRef(idempotencyKey());
   async function send() {
     if (busyRef.current || !readerId) return;
     busyRef.current = true; setBusy(true); setErr(null); setBusyReader(false);
     try {
       const body: Record<string, unknown> = { terminal_id: readerId, account_id: accountId || null };
       if (orderId) { body.order_id = orderId; body.amount = amount; } else body.sale_id = saleId;
-      const c = await api.post<Charge>("/payments/terminal/charge", body);
+      // A retried Send (failed or timed out) reuses the key, so the reader gets one charge.
+      const c = await api.postOnce<Charge>("/payments/terminal/charge", body, sendKey.current);
+      sendKey.current = idempotencyKey();
       try { localStorage.setItem(LAST_READER, readerId); } catch { /* ignore */ }
       setCharge(c);
     } catch (e: any) {
       setErr(errText(e));
-      setBusyReader(e?.status === 409 && /waiting/i.test(errText(e)));
+      setBusyReader(e?.status === 409 && /waiting|in progress on this reader/i.test(errText(e)));
     } finally { busyRef.current = false; setBusy(false); }
   }
   async function act(path: string, body?: unknown) {
@@ -129,9 +133,9 @@ export default function ReaderCharge({ orderId, saleId, amount, accountId, title
           <>
             <div>
               <label htmlFor="reader-pick" className="block text-xs font-semibold text-ink-tertiary mb-1">Card reader</label>
-              <select id="reader-pick" value={readerId} onChange={(e) => setReaderId(e.target.value)} className={inputCls}>
+              <TeklySelect id="reader-pick" value={readerId} onChange={(e) => setReaderId(e.target.value)} className={inputCls}>
                 {readers.map((r) => <option key={r.id} value={r.id}>{r.label} · {PROVIDER[r.provider] || r.provider}</option>)}
-              </select>
+              </TeklySelect>
             </div>
             <button onClick={send} disabled={busy || !readerId || amount <= 0} className="w-full h-11 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary-container disabled:opacity-50 flex items-center justify-center gap-2 tabular-nums">
               <M n="contactless" c="text-base" />{busy ? "Sending…" : `Send ${money(amount)} to reader`}
@@ -149,6 +153,8 @@ export default function ReaderCharge({ orderId, saleId, amount, accountId, title
             <div className="text-xs text-ink-secondary mt-0.5">
               {waiting ? `Ask the customer to tap, insert or swipe on ${reader?.label || "the reader"}.` : charge.error || (st === "succeeded" ? "Payment recorded." : "")}
             </div>
+            {/* The reader didn't confirm it got this charge: say so, and keep following it. */}
+            {waiting && charge.error && <div className="text-xs text-amber-700 mt-1">{charge.error}</div>}
             </div>
           </div>
         )}

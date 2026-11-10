@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
@@ -9,6 +10,7 @@ import { currencySymbol, money } from "./types";
 import { flashDelivery, type Flash } from "../../lib/delivery";
 import { serverDate } from "../../lib/serverTime";
 import { sectionCard } from "../../components/Section";
+import { Badge, type BadgeTone } from "../../components/Card";
 
 /* Recommendations on a job: the extra work the technician thinks the customer should do.
    Staff add them here (title, price, why, urgency, photo), send them to the customer's
@@ -25,11 +27,11 @@ export type RecRow = {
 type Item = { id: string; name: string };
 
 const URGENCY_LABEL: Record<string, string> = { now: "Needs it now", soon: "Soon" };
-const STATUS: Record<string, { label: string; cls: string }> = {
-  draft: { label: "Draft", cls: "bg-slate-100 text-ink-secondary" },
-  sent: { label: "Waiting for the customer", cls: "bg-blue-50 text-blue-700" },
-  approved: { label: "Added to the job", cls: "bg-emerald-50 text-emerald-700" },
-  declined: { label: "Saved for later", cls: "bg-amber-50 text-amber-800" },
+const STATUS: Record<string, { label: string; tone: BadgeTone }> = {
+  draft: { label: "Draft", tone: "neutral" },
+  sent: { label: "Waiting for the customer", tone: "info" },
+  approved: { label: "Added to the job", tone: "success" },
+  declined: { label: "Saved for later", tone: "warning" },
 };
 const fmtDay = (iso?: string | null) => serverDate(iso)?.toLocaleDateString([], { month: "short", day: "numeric" }) || "";
 
@@ -179,10 +181,10 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
                 options={[{ v: "", t: "Not urgent" }, { v: "soon", t: "Soon", dot: "bg-amber-400" }, { v: "now", t: "Needs it now", dot: "bg-rose-500" }]} /></div>
               {items.length > 1 && (
                 <label className="flex basis-full items-center gap-2 text-[11px] font-medium text-ink-tertiary">For
-                  <select value={form.item} onChange={(e) => setForm({ ...form, item: e.target.value })} aria-label="Which item"
+                  <TeklySelect value={form.item} onChange={(e) => setForm({ ...form, item: e.target.value })} aria-label="Which item"
                     className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs font-medium text-ink-primary outline-none focus:border-primary/50">
                     <option value="">The whole job</option>{items.map((it) => <option key={it.id} value={it.id}>{it.name}</option>)}
-                  </select>
+                  </TeklySelect>
                 </label>
               )}
             </div>
@@ -216,9 +218,9 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-1.5">
                     <span className="text-sm font-semibold text-ink-primary">{r.title}</span>
-                    <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${st.cls}`}>{st.label}</span>
-                    {r.urgency && <span className={`rounded-full px-2 py-0.5 text-[11px] font-medium ${r.urgency === "now" ? "bg-amber-50 text-amber-800" : "bg-slate-100 text-ink-secondary"}`}>{URGENCY_LABEL[r.urgency]}</span>}
-                    {r.source === "checklist" && <span className="rounded-full bg-slate-100 px-2 py-0.5 text-[11px] text-ink-tertiary">From checklist</span>}
+                    <Badge tone={st.tone} size="sm">{st.label}</Badge>
+                    {r.urgency && <Badge tone={r.urgency === "now" ? "warning" : "neutral"} size="sm">{URGENCY_LABEL[r.urgency]}</Badge>}
+                    {r.source === "checklist" && <Badge size="sm">From checklist</Badge>}
                   </div>
                   {r.note && <p className="mt-0.5 text-xs text-ink-secondary">{r.note}</p>}
                   <p className="mt-0.5 text-[11px] text-ink-tertiary">
@@ -228,10 +230,10 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
                   </p>
                   <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                     {(r.status === "draft" || r.status === "sent") && can("can_recommend") && (
-                      <select value={r.urgency || ""} disabled={busy} onChange={(e) => call(() => api.patch(`/orders/${orderId}/recommendations/${r.id}`, { urgency: e.target.value || null }))}
+                      <TeklySelect value={r.urgency || ""} disabled={busy} onChange={(e) => call(() => api.patch(`/orders/${orderId}/recommendations/${r.id}`, { urgency: e.target.value || null }))}
                         aria-label={`How urgent ${r.title} is`} className="rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-ink-secondary">
                         <option value="">Not urgent</option><option value="soon">Soon</option><option value="now">Needs it now</option>
-                      </select>
+                      </TeklySelect>
                     )}
                     {r.status === "draft" && can("can_publish_recommend") && (
                       <button disabled={busy} onClick={() => call(() => api.post(`/orders/${orderId}/recommendations/${r.id}/publish`, {}), (res) => flashDelivery(onFlash, res?.delivery, "Shown on the customer's tracking page"))}

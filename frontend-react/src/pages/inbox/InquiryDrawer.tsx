@@ -6,6 +6,7 @@ import { api } from "../../api/client";
 import { autoPrintForJob } from "../../lib/autoPrint";
 import InquiryFields from "./InquiryFields";
 import { callsLabel, changes, channelLabel, fmt, sla, SRC_ICON, type FeedItem, type Lead, type LeadType } from "./inquiries";
+import { buttonClass } from "../../components/Button";
 
 export function Timeline({ leadId }: { leadId: string }) {
   const [items, setItems] = useState<FeedItem[] | null>(null);
@@ -25,7 +26,7 @@ export function Timeline({ leadId }: { leadId: string }) {
         <label htmlFor="inq-comment" className="sr-only">Add a note</label>
         <input id="inq-comment" value={text} onChange={(e) => setText(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }}
           placeholder="Add a note, e.g. called back, no answer" className="glass-input flex-1 px-3 py-2 rounded-lg text-xs" />
-        <button onClick={add} disabled={!text.trim()} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-bold disabled:opacity-40">Add</button>
+        <button onClick={add} disabled={!text.trim()} className={buttonClass("primary", "md")}>Add</button>
       </div>
       {err && <p role="alert" className="text-[11px] text-rose-600">{err}</p>}
       {!items && <p className="text-[11px] text-ink-tertiary">Loading…</p>}
@@ -78,7 +79,7 @@ export default function InquiryDrawer({ lead, types, onClose, onChanged, onOpenO
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={onClose} />
       <div role="dialog" aria-label={`Inquiry from ${lead.name || "a customer"}`} className="relative h-full w-full max-w-[520px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90">
         <header className="px-6 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
           <div className="flex items-center gap-2.5 min-w-0">
@@ -103,7 +104,7 @@ export default function InquiryDrawer({ lead, types, onClose, onChanged, onOpenO
           {dirty && !closed && (
             <div className="flex items-center justify-end gap-2">
               <button onClick={() => setForm(lead)} className="px-3 py-1.5 rounded-lg border border-slate-200 text-ink-secondary font-semibold">Undo changes</button>
-              <button onClick={save} disabled={busy} className="px-4 py-1.5 rounded-lg bg-primary text-white font-bold disabled:opacity-50">Save changes</button>
+              <button onClick={save} disabled={busy} className={buttonClass("primary", "sm")}>Save changes</button>
             </div>
           )}
           {err && <p role="alert" className="p-2.5 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-[11px] font-semibold">{err}</p>}
@@ -115,18 +116,18 @@ export default function InquiryDrawer({ lead, types, onClose, onChanged, onOpenO
               <button onClick={() => move("new", "Reopened")} disabled={busy} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs flex items-center gap-1.5"><M n="undo" c="text-sm" />Reopen</button>
             ) : (
               <>
-                {lead.status === "new" && <button onClick={() => move("in_progress", "Moved to In progress")} disabled={busy} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs flex items-center gap-1.5"><M n="play_arrow" c="text-sm" />Start</button>}
-                <button onClick={() => move("lost", "Marked lost")} disabled={busy} className="px-4 py-2 rounded-lg text-rose-600 hover:bg-rose-50 font-semibold text-xs">Mark lost</button>
-                <div className="ml-auto relative flex">
+                <div className="relative flex">
                   <button onClick={() => convert(false)} disabled={busy} className="px-4 py-2 rounded-l-lg bg-primary text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-50 flex items-center gap-1.5"><M n="check" c="text-sm" />Create work order</button>
                   <button aria-label="More ways to create" onClick={() => setMenu((v) => !v)} disabled={busy} className="px-2 py-2 rounded-r-lg bg-primary-container text-white border-l border-white/25 hover:brightness-110 disabled:opacity-50"><M n="expand_more" c="text-sm" /></button>
                   {menu && (
-                    <div className="absolute bottom-full right-0 mb-1.5 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5 w-48">
+                    <div className="absolute bottom-full left-0 mb-1.5 bg-white border border-slate-200 rounded-xl shadow-clay-drawer p-1.5 w-48">
                       <button onClick={() => convert(false)} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-xs font-semibold text-ink-primary"><M n="handyman" c="text-sm text-primary" />Create work order</button>
                       <button onClick={() => convert(true)} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-xs font-semibold text-ink-primary"><M n="request_quote" c="text-sm text-primary" />Create estimate</button>
                     </div>
                   )}
                 </div>
+                {lead.status === "new" && <button onClick={() => move("in_progress", "Moved to In progress")} disabled={busy} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs flex items-center gap-1.5"><M n="play_arrow" c="text-sm" />Start</button>}
+                <button onClick={() => move("lost", "Marked lost")} disabled={busy} className="ml-auto px-4 py-2 rounded-lg text-rose-600 hover:bg-rose-50 font-semibold text-xs">Mark lost</button>
               </>
             )}
           </footer>

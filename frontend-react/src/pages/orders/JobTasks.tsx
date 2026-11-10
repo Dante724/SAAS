@@ -1,7 +1,10 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { api } from "../../api/client";
 import { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import { Avatar } from "./look";
+import { buttonClass } from "../../components/Button";
 
 // J4 — the job's tasks, on the job: add one, assign it, tick it off.
 type Task = { id: string; title: string; status?: string; assigned_to_id?: string | null; assignee_name?: string | null; due_at?: string | null; completed_at?: string | null; overdue?: boolean };
@@ -50,16 +53,16 @@ export default function JobTasks({ orderId, emps, onFlash }: { orderId: string; 
         <div className="flex flex-wrap items-center gap-2">
           <input autoFocus value={title} onChange={(e) => setTitle(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") add(); }}
             aria-label="Task" placeholder="What needs doing? e.g. Order the screen" className="glass-input flex-1 min-w-[200px] py-2 px-3 text-xs rounded-xl" />
-          <select value={who} onChange={(e) => setWho(e.target.value)} aria-label="Assign to" className="glass-input py-2 px-2 text-xs rounded-xl">
+          <TeklySelect value={who} onChange={(e) => setWho(e.target.value)} aria-label="Assign to" className="glass-input py-2 px-2 text-xs rounded-xl">
             <option value="">Nobody yet</option>
             {emps.filter((e) => e.in_assignees !== false).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
-          </select>
-          <button type="button" onClick={add} disabled={busy || !title.trim()} className="px-3 py-2 rounded-xl text-xs font-bold text-white bg-primary disabled:opacity-50">{busy ? "Adding…" : "Add"}</button>
+          </TeklySelect>
+          <button type="button" onClick={add} disabled={busy || !title.trim()} className={buttonClass("primary", "md")}>{busy ? "Adding…" : "Add"}</button>
           <button type="button" onClick={() => { setAdding(false); setTitle(""); }} className="px-3 py-2 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-50">Cancel</button>
         </div>
       )}
       {items === null ? <p className="text-xs text-ink-tertiary">Loading…</p>
-        : items.length === 0 ? (!adding && <p className="text-xs text-ink-tertiary">No tasks on this job yet.</p>)
+        : items.length === 0 ? (!adding && <EmptyState size="inline" title="No tasks on this job yet." />)
         : (
           <ul className="divide-y divide-slate-100">
             {items.map((t) => (
@@ -69,11 +72,11 @@ export default function JobTasks({ orderId, emps, onFlash }: { orderId: string; 
                 {t.overdue && !t.completed_at && <span className="text-[11px] font-semibold text-rose-600">Overdue</span>}
                 <span className="flex items-center gap-1.5">
                   {t.assigned_to_id && <Avatar name={t.assignee_name || ""} size={20} />}
-                  <select value={t.assigned_to_id || ""} onChange={(e) => assign(t, e.target.value)} aria-label={`Assignee for ${t.title}`}
+                  <TeklySelect value={t.assigned_to_id || ""} onChange={(e) => assign(t, e.target.value)} aria-label={`Assignee for ${t.title}`}
                     className="bg-transparent text-[11px] text-ink-secondary max-w-[130px] truncate">
                     <option value="">Unassigned</option>
                     {emps.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
-                  </select>
+                  </TeklySelect>
                 </span>
               </li>
             ))}

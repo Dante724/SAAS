@@ -1,5 +1,5 @@
 """Turn design-audit/records.jsonl into tables the council and the report use."""
-import json, os, sys, collections, re
+import json, os, sys, collections
 
 W = sys.argv[1]
 recs = [json.loads(l) for l in open(os.path.join(W, "records.jsonl"))]

@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { Link } from "react-router-dom";
 import { M } from "../../components/Shell";
 import SkeletonRows from "../../components/SkeletonRows";
@@ -10,6 +11,8 @@ import EarningsBreakdown, { type BreakdownRule } from "./EarningsBreakdown";
 import { Avatar } from "../orders/look";
 import { btnGhost } from "../invoices/billing";
 import { clickableRow } from "../../lib/clickable";
+import { Badge, type BadgeTone } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 /* Finance › Payroll calculation: the month's live pay per person, narrowed by location, role
    and employee. A row opens to the commissions behind it (rule → job → line item) plus the
@@ -39,9 +42,9 @@ export function amountTone(v: number | null | undefined, tone: "gain" | "loss"):
   return tone === "gain" ? "text-emerald-700" : "text-rose-600";
 }
 
-const ACCRUAL: Record<string, [string, string]> = {
-  accrued: ["Accrued", "bg-blue-50 text-primary"], paid: ["Paid", "bg-emerald-50 text-emerald-700"],
-  draft: ["Draft", "bg-amber-50 text-amber-700"], void: ["Voided", "bg-slate-100 text-ink-tertiary"],
+const ACCRUAL: Record<string, [string, BadgeTone]> = {
+  accrued: ["Accrued", "info"], paid: ["Paid", "success"],
+  draft: ["Draft", "warning"], void: ["Voided", "neutral"],
 };
 
 export default function PayrollCalcPanel({ month, onMonth, headerAction }: { month: string; onMonth: (m: string) => void; headerAction?: React.ReactNode }) {
@@ -114,26 +117,26 @@ export default function PayrollCalcPanel({ month, onMonth, headerAction }: { mon
       <div className="flex items-center gap-2 flex-wrap" role="group" aria-label="Payroll filters">
         <M n="filter_list" c="text-sm text-ink-tertiary" />
         {locations.length > 1 && (
-          <select value={filters.location_id} onChange={set("location_id")} aria-label="Location" className={sel}>
+          <TeklySelect value={filters.location_id} onChange={set("location_id")} aria-label="Location" className={sel}>
             <option value="">All locations</option>
             {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-          </select>
+          </TeklySelect>
         )}
-        <select value={filters.role_id} onChange={set("role_id")} aria-label="Role" className={sel}>
+        <TeklySelect value={filters.role_id} onChange={set("role_id")} aria-label="Role" className={sel}>
           <option value="">All roles</option>
           {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-        </select>
-        <select value={filters.employee_id} onChange={set("employee_id")} aria-label="Employee" className={sel}>
+        </TeklySelect>
+        <TeklySelect value={filters.employee_id} onChange={set("employee_id")} aria-label="Employee" className={sel}>
           <option value="">Everyone</option>
           {people.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
+        </TeklySelect>
         {active > 0 && <button onClick={() => setFilters({ location_id: "", role_id: "", employee_id: "" })} className="text-xs font-semibold text-primary hover:underline">Clear filters</button>}
         {rows && rows.length > 0 && <span className="ml-auto text-xs text-ink-tertiary">{rows.length} {rows.length === 1 ? "person" : "people"} · <span className="font-semibold text-ink-primary tabular-nums">{money(total)}</span></span>}
       </div>
 
       <div className="bg-white rounded-2xl border border-slate-200/90 overflow-x-auto">
         <table className="w-full min-w-[840px] text-left border-collapse text-xs">
-          <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-xs font-semibold">
+          <thead><tr className={theadRowClass}>
             <th className="py-3 pl-3 pr-1 w-8"></th><th className="py-3 px-3">Employee</th><th className="py-3 px-3">Position</th><th className="py-3 px-3">Wage type</th>
             <th className="py-3 px-3 text-right">Base</th><th className="py-3 px-3 text-right">Hourly</th><th className="py-3 px-3 text-right">Commission</th>
             <th className="py-3 px-3 text-right">Bonus</th><th className="py-3 px-3 text-right">Penalty</th><th className="py-3 px-3 text-right">Total</th><th className="py-3 px-3"></th>
@@ -150,7 +153,7 @@ export default function PayrollCalcPanel({ month, onMonth, headerAction }: { mon
                 <Fragment key={p.employee_id}>
                   <tr className={`hover:bg-blue-50/30 cursor-pointer ${isOpen ? "bg-blue-50/40" : ""}`} {...clickableRow(() => toggle(p.employee_id))}>
                     <td className="py-2 pl-3 pr-1"><button type="button" aria-expanded={isOpen} aria-label={`${isOpen ? "Hide" : "Show"} breakdown for ${p.name || "employee"}`} onClick={(e) => { e.stopPropagation(); toggle(p.employee_id); }} className="w-7 h-7 rounded-md grid place-items-center text-ink-tertiary hover:bg-slate-100"><M n={isOpen ? "expand_more" : "chevron_right"} c="text-sm" /></button></td>
-                    <td className="py-2 px-3"><span className="flex items-center gap-2.5 min-w-0"><Avatar name={p.name} size={26} /><span className="font-semibold text-ink-primary truncate">{p.name || "—"}</span>{acc && <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap ${acc[1]}`}>{acc[0]}</span>}</span></td>
+                    <td className="py-2 px-3"><span className="flex items-center gap-2.5 min-w-0"><Avatar name={p.name} size={26} /><span className="font-semibold text-ink-primary truncate">{p.name || "—"}</span>{acc && <Badge tone={acc[1]} size="sm">{acc[0]}</Badge>}</span></td>
                     <td className="py-2.5 px-3">{p.position || "—"}</td>
                     <td className="py-2.5 px-3">{WAGE[p.wage_type || ""] || "—"}</td>
                     <td className={`py-2.5 px-3 text-right tabular-nums ${Number(p.base_salary) ? "" : "text-ink-tertiary"}`}>{money(p.base_salary)}</td>

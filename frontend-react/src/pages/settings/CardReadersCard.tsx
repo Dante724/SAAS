@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { createPortal } from "react-dom";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
@@ -7,6 +8,7 @@ import { confirmDialog } from "../../lib/dialog";
 import { Drawer, MoreMenu, btnGhost, btnPrimary, inputCls, labelCls } from "../invoices/billing";
 import ModePill from "./ModePill";
 import { loadFailed } from "../../lib/notice";
+import { useCardReaders } from "../../lib/cardReaders";
 
 // F2/F3/F4 — Settings › Integrations › Card readers. Register Stripe Terminal or Square Terminal
 // readers (or a simulated one while testing locally), rename / move them, remove them, and see
@@ -40,7 +42,8 @@ export default function CardReadersCard() {
       .then(([c, r]) => { setCfg(c); setReaders(r.items || []); })
       .catch((e) => setErr(e.message || "Couldn't load card readers"));
   };
-  const allowed = can("can_take_card_payments") || canManage;
+  // Card readers switched off on the server: the card isn't shown at all.
+  const allowed = useCardReaders() && (can("can_take_card_payments") || canManage);
   useEffect(() => {
     if (!allowed) return;
     load(); api.get<{ items: Loc[] }>("/staff/locations").then((r) => setLocs(r.items || [])).catch(loadFailed("locations"));
@@ -169,22 +172,22 @@ function ReaderDrawer({ cfg, reader, locs, hasStripeReader, onClose, onSaved }: 
   return createPortal(
     <Drawer z={90} width={448} label={title} title={title} sub={reader ? PROVIDER[reader.provider] || reader.provider : undefined} onClose={onClose}
       footer={<>
-        <button onClick={onClose} className={btnGhost}>Cancel</button>
         <button onClick={save} disabled={busy || (!reader && !provider)} className={btnPrimary}>{busy ? "Saving…" : reader ? "Save" : "Add reader"}</button>
+        <button onClick={onClose} className={btnGhost}>Cancel</button>
       </>}>
       {!reader && (
         <div><label htmlFor="rd-prov" className={lab}>Provider</label>
-          <select id="rd-prov" value={provider} onChange={(e) => setProvider(e.target.value)} className={field}>
+          <TeklySelect id="rd-prov" value={provider} onChange={(e) => setProvider(e.target.value)} className={field}>
             {options.map((o) => <option key={o} value={o}>{PROVIDER[o]}</option>)}
-          </select></div>
+          </TeklySelect></div>
       )}
       <div><label htmlFor="rd-label" className={lab}>Name</label>
         <input id="rd-label" value={label} onChange={(e) => setLabel(e.target.value)} placeholder="Front desk" className={field} /></div>
       <div><label htmlFor="rd-loc" className={lab}>Location</label>
-        <select id="rd-loc" value={locationId} onChange={(e) => setLocationId(e.target.value)} className={field}>
+        <TeklySelect id="rd-loc" value={locationId} onChange={(e) => setLocationId(e.target.value)} className={field}>
           <option value="">Any location</option>
           {locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-        </select></div>
+        </TeklySelect></div>
       {!reader && provider === "stripe" && <>
         <div><label htmlFor="rd-code" className={lab}>Registration code</label>
           <input id="rd-code" value={code} onChange={(e) => setCode(e.target.value)} className={field} />
@@ -205,9 +208,9 @@ function ReaderDrawer({ cfg, reader, locs, hasStripeReader, onClose, onSaved }: 
       {!reader && provider === "square" && (
         <div><label htmlFor="rd-dev" className={lab}>Device</label>
           {test
-            ? <select id="rd-dev" value={device} onChange={(e) => setDevice(e.target.value)} className={field}>
+            ? <TeklySelect id="rd-dev" value={device} onChange={(e) => setDevice(e.target.value)} className={field}>
                 {cfg.square_sandbox_devices.map((d) => <option key={d.id} value={d.id}>Sandbox: {d.label}</option>)}
-              </select>
+              </TeklySelect>
             : <input id="rd-dev" value={device} onChange={(e) => setDevice(e.target.value)} placeholder="Device id from Square Dashboard › Devices" className={field} />}
           {test && <p className="text-xs text-ink-tertiary mt-1">Square's sandbox decides the outcome by device. Sandbox charges must be 25.00 USD or less.</p>}
         </div>

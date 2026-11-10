@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { loadFailed } from "../../lib/notice";
 import { M } from "../../components/Shell";
 import SkeletonRows from "../../components/SkeletonRows";
@@ -8,6 +9,9 @@ import MoveStockDialog from "../../components/MoveStockDialog";
 import { api } from "../../api/client";
 import { barcodeTypeLabel } from "../../lib/barcodes";
 import { confirmDialog } from "../../lib/dialog";
+import { buttonClass } from "../../components/Button";
+import { Badge } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 type Bin = { id: string; name: string; location_id: string; warehouse_id?: string | null; zone?: string | null; shelf?: string | null;
   bin_number?: string | null; barcode?: string | null; barcode_type?: string; is_default?: boolean; qty_on_hand?: number };
@@ -69,12 +73,12 @@ export default function BinsPanel() {
       {err && <div role="alert" className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
 
       <div className="bg-white rounded-2xl border border-slate-200/90 p-3 flex items-end gap-2 flex-wrap">
-        <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Location</label><select value={nf.location_id} onChange={(e) => setNf({ ...nf, location_id: e.target.value })} aria-label="Location" className={fld}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+        <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Location</label><TeklySelect value={nf.location_id} onChange={(e) => setNf({ ...nf, location_id: e.target.value })} aria-label="Location" className={fld}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</TeklySelect></div>
         <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Bin name</label><input value={nf.name} onChange={(e) => setNf({ ...nf, name: e.target.value })} placeholder="Blank = its code" aria-label="Bin name" className={`${fld} w-36`} /></div>
         <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Zone</label><input value={nf.zone} onChange={(e) => setNf({ ...nf, zone: e.target.value })} aria-label="Zone" className={`${fld} w-24`} /></div>
         <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Shelf</label><input value={nf.shelf} onChange={(e) => setNf({ ...nf, shelf: e.target.value })} aria-label="Shelf" className={`${fld} w-24`} /></div>
         <label className="flex items-center gap-1.5 text-xs text-ink-secondary pb-2.5"><input type="checkbox" checked={nf.is_default} onChange={(e) => setNf({ ...nf, is_default: e.target.checked })} />Default bin</label>
-        <button onClick={add} disabled={busy} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60 flex items-center gap-1"><M n="add" c="text-sm" />Add bin</button>
+        <button onClick={add} disabled={busy} className={buttonClass("primary", "md")}><M n="add" c="text-sm" />Add bin</button>
       </div>
 
       <div className="flex items-center gap-2 flex-wrap">
@@ -86,7 +90,7 @@ export default function BinsPanel() {
 
       <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
         <table className="w-full text-xs">
-          <thead className="bg-slate-50/70 text-ink-tertiary text-[11px] font-bold"><tr>
+          <thead><tr className={theadRowClass}>
             <th className="py-2.5 pl-4 w-8"><input type="checkbox" aria-label="Select all bins" checked={allSel} onChange={() => setSel(allSel ? new Set() : new Set(shown.map((b) => b.id)))} /></th>
             <th className="text-left py-2.5 px-3">Bin</th><th className="text-left py-2.5 px-3">Label code</th><th className="text-left py-2.5 px-3">Location</th>
             <th className="text-left py-2.5 px-3">Zone / shelf</th><th className="text-right py-2.5 px-3">Holds</th><th className="py-2.5 px-3"></th></tr></thead>
@@ -99,7 +103,7 @@ export default function BinsPanel() {
                   <td className="py-2.5 pl-4"><input type="checkbox" aria-label={`Select bin ${b.name}`} checked={sel.has(b.id)} onChange={() => { const n = new Set(sel); n.has(b.id) ? n.delete(b.id) : n.add(b.id); setSel(n); }} /></td>
                   <td className="py-2.5 px-3 font-bold text-ink-primary">
                     <button onClick={() => toggleOpen(b.id)} className="inline-flex items-center gap-1 hover:text-primary"><M n={open === b.id ? "expand_less" : "expand_more"} c="text-sm text-ink-tertiary" />{b.name}</button>
-                    {b.is_default && <span className="ml-2 px-1.5 py-0.5 rounded-full bg-emerald-50 text-emerald-700 border border-emerald-200/70 text-2xs font-bold">Default</span>}
+                    {b.is_default && <Badge tone="success" size="sm" className="ml-2">Default</Badge>}
                   </td>
                   <td className="py-2.5 px-3 tabular-nums text-ink-secondary">{b.barcode || "—"}<span className="ml-1.5 text-2xs text-ink-tertiary font-sans">{barcodeTypeLabel(b.barcode_type)}</span></td>
                   <td className="py-2.5 px-3 text-ink-secondary">{locName(b.location_id)}</td>
@@ -144,7 +148,7 @@ export default function BinsPanel() {
               <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Number</label><input value={edit.bin_number || ""} onChange={(e) => setEdit({ ...edit, bin_number: e.target.value })} aria-label="Bin number" className={`${fld} w-full`} /></div>
             </div>
             <div className="flex gap-2 pt-1">
-              <button onClick={saveEdit} disabled={busy || !edit.name.trim()} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs disabled:opacity-60">{busy ? "Saving…" : "Save"}</button>
+              <button onClick={saveEdit} disabled={busy || !edit.name.trim()} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save"}</button>
               <button onClick={() => setEdit(null)} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Cancel</button>
             </div>
           </div>

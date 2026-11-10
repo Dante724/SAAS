@@ -1,9 +1,12 @@
 import SkeletonRows from "../../components/SkeletonRows";
+import TeklySelect from "../../components/TeklySelect";
 import PageSummary, { type SummaryStat } from "../../components/PageSummary";
 import { downloadSheet } from "../../lib/downloadSheet";
 import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
+import Tabs from "../../components/Tabs";
+import EmptyState, { TableEmpty } from "../../components/EmptyState";
 import DateField from "../../components/DateField";
 import { api } from "../../api/client";
 import { money } from "../orders/types";
@@ -19,6 +22,8 @@ import { DEFAULT_FILTERS, REPORTS_PREF, REPORT_FILTERS, filterParams, readReport
 import { cachedPref, loadPref, savePref } from "../../lib/userPref";
 import GoPilotReport from "./GoPilotReport";
 import { loadFailed } from "../../lib/notice";
+import { buttonClass } from "../../components/Button";
+import { theadRowClass } from "../../components/Table";
 
 const REPORT_PAGE = 50;
 
@@ -172,15 +177,15 @@ export function CustomView() {
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 space-y-3">
             <div className="flex items-center gap-2 flex-wrap">
               <span className="text-[11px] font-bold text-ink-tertiary">Source</span>
-              <select value={src} onChange={(e) => pickSource(e.target.value)} className="glass-input px-2.5 py-1.5 rounded-lg text-xs">
+              <TeklySelect value={src} onChange={(e) => pickSource(e.target.value)} className="glass-input px-2.5 py-1.5 rounded-lg text-xs">
                 <option value="">Choose data…</option>
                 {sources && Object.entries(sources).map(([k, s]) => <option key={k} value={k}>{s.label}</option>)}
-              </select>
+              </TeklySelect>
               {meta?.has_location && locs.length > 1 && (
-                <select value={locId} onChange={(e) => setLocId(e.target.value)} className="glass-input px-2.5 py-1.5 rounded-lg text-xs">
+                <TeklySelect value={locId} onChange={(e) => setLocId(e.target.value)} className="glass-input px-2.5 py-1.5 rounded-lg text-xs">
                   <option value="">All locations</option>
                   {locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-                </select>
+                </TeklySelect>
               )}
               {meta?.date_field && (<>
                 <DateField mode="date" value={from} onChange={setFrom} className="w-32" />
@@ -215,12 +220,12 @@ export function CustomView() {
                   <button onClick={() => setFilters((f) => [...f, { field: fieldsOf[0]?.key || "", op: "eq", value: "" }])} className="text-[11px] font-semibold text-primary hover:underline">+ Add</button></div>
                 {filters.map((flt, i) => (
                   <div key={i} className="flex items-center gap-1.5 mt-1.5">
-                    <select value={flt.field} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, field: e.target.value, op: OPS_FOR(fType(e.target.value))[0][0] } : x))} className="glass-input px-2.5 py-1.5 rounded-lg text-xs min-w-[130px]">
+                    <TeklySelect value={flt.field} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, field: e.target.value, op: OPS_FOR(fType(e.target.value))[0][0] } : x))} className="glass-input px-2.5 py-1.5 rounded-lg text-xs min-w-[130px]">
                       {fieldsOf.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
-                    </select>
-                    <select value={flt.op} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, op: e.target.value } : x))} className="glass-input px-2.5 py-1.5 rounded-lg text-xs min-w-[110px]">
+                    </TeklySelect>
+                    <TeklySelect value={flt.op} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, op: e.target.value } : x))} className="glass-input px-2.5 py-1.5 rounded-lg text-xs min-w-[110px]">
                       {OPS_FOR(fType(flt.field)).map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                    </select>
+                    </TeklySelect>
                     {fType(flt.field) === "date"
                       ? <DateField className="w-40" value={flt.value} onChange={(d) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, value: d } : x))} label="Filter date" />
                       : <input value={flt.value} onChange={(e) => setFilters((fs) => fs.map((x, j) => j === i ? { ...x, value: e.target.value } : x))} placeholder="value" className="glass-input px-2.5 py-1.5 rounded-lg text-xs w-32" />}
@@ -233,10 +238,10 @@ export function CustomView() {
               <div className="rounded-xl bg-slate-50/70 border border-slate-200/70 p-3 flex flex-wrap items-start gap-x-6 gap-y-3">
                 <div className="min-w-[160px]">
                   <span className="block text-[11px] font-bold text-ink-tertiary mb-1.5">Group by</span>
-                  <select value={groupBy} onChange={(e) => setGroupBy(e.target.value)} className="glass-input px-2.5 py-1.5 rounded-lg text-xs w-full">
+                  <TeklySelect value={groupBy} onChange={(e) => setGroupBy(e.target.value)} className="glass-input px-2.5 py-1.5 rounded-lg text-xs w-full">
                     <option value="">— none (list rows) —</option>
                     {fieldsOf.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
-                  </select>
+                  </TeklySelect>
                 </div>
                 {groupBy && (
                   <div className="min-w-[200px]">
@@ -247,14 +252,14 @@ export function CustomView() {
                     <div className="space-y-1.5">
                       {aggs.map((a, i) => (
                         <div key={i} className="flex items-center gap-1.5">
-                          <select value={a.fn} onChange={(e) => setAggs((as) => as.map((x, j) => j === i ? { ...x, fn: e.target.value } : x))} className="glass-input px-2.5 py-1.5 rounded-lg text-xs min-w-[110px]">
+                          <TeklySelect value={a.fn} onChange={(e) => setAggs((as) => as.map((x, j) => j === i ? { ...x, fn: e.target.value } : x))} className="glass-input px-2.5 py-1.5 rounded-lg text-xs min-w-[110px]">
                             <option value="count">Count</option><option value="sum">Sum</option><option value="avg">Average</option>
-                          </select>
+                          </TeklySelect>
                           {a.fn !== "count" && (
-                            <select value={a.field} onChange={(e) => setAggs((as) => as.map((x, j) => j === i ? { ...x, field: e.target.value } : x))} className="glass-input px-2.5 py-1.5 rounded-lg text-xs min-w-[130px]">
+                            <TeklySelect value={a.field} onChange={(e) => setAggs((as) => as.map((x, j) => j === i ? { ...x, field: e.target.value } : x))} className="glass-input px-2.5 py-1.5 rounded-lg text-xs min-w-[130px]">
                               <option value="">field…</option>
                               {numFields.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
-                            </select>
+                            </TeklySelect>
                           )}
                           <button aria-label="Remove aggregate" onClick={() => setAggs((as) => as.filter((_, j) => j !== i))} className="p-1 rounded-md text-ink-tertiary hover:text-rose-500 hover:bg-rose-50 shrink-0"><M n="close" c="text-sm" /></button>
                         </div>
@@ -266,7 +271,7 @@ export function CustomView() {
 
               {/* actions */}
               <div className="flex items-center gap-2 flex-wrap pt-1 border-t border-slate-100">
-                <button disabled={busy} onClick={run} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-50">Run</button>
+                <button disabled={busy} onClick={run} className={buttonClass("primary", "sm")}>Run</button>
                 <input value={name} onChange={(e) => setName(e.target.value)} placeholder="Report name" className="glass-input px-2.5 py-1.5 rounded-lg text-xs w-44" />
                 <button disabled={busy} onClick={save} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-primary bg-blue-50 hover:bg-blue-100 disabled:opacity-50">{curId ? "Update" : "Save"}</button>
                 {curId && <button disabled={busy} onClick={del} className="px-2.5 py-1.5 rounded-lg text-xs font-semibold text-rose-600 bg-rose-50 hover:bg-rose-100">Delete</button>}
@@ -295,14 +300,14 @@ export function CustomView() {
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
               <div className="overflow-auto max-h-[62vh]">
                 <table className="w-full text-left border-collapse text-xs">
-                  <thead className="sticky top-0 z-10"><tr className="bg-slate-50 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold shadow-[0_1px_0_rgba(0,0,0,0.04)]">
+                  <thead className="sticky top-0 z-10"><tr className={`${theadRowClass} shadow-[0_1px_0_rgba(0,0,0,0.04)]`}>
                     {res.columns.map((c) => <th key={c.key} className={`py-3 px-4 bg-slate-50 ${c.align === "right" ? "text-right" : ""}`}>{c.label}</th>)}
                   </tr></thead>
                   <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
                     {res.rows.length === 0 && <tr><td colSpan={res.columns.length} className="py-6 px-4 text-ink-tertiary">No data for this query.</td></tr>}
                     {cShown.map((row, ri) => (
                       <tr key={(cSafe - 1) * REPORT_PAGE + ri} className="odd:bg-slate-50/40 hover:bg-blue-50/50 transition-colors">
-                        {res.columns.map((c, ci) => <td key={ci} className={`py-2.5 px-4 text-ink-primary ${c.align === "right" ? "text-right font-mono" : ""}`}>{typeof row[ci] === "number" ? row[ci].toLocaleString(getLocale()) : String(row[ci] ?? "—")}</td>)}
+                        {res.columns.map((c, ci) => <td key={ci} className={`py-2.5 px-4 text-ink-primary ${c.align === "right" ? "text-right tabular-nums" : ""}`}>{typeof row[ci] === "number" ? row[ci].toLocaleString(getLocale()) : String(row[ci] ?? "—")}</td>)}
                       </tr>
                     ))}
                   </tbody>
@@ -386,7 +391,7 @@ export default function ReportsHub() {
     ["This month", () => { const n = new Date(); return [new Date(n.getFullYear(), n.getMonth(), 1), n]; }],
     ["Last month", () => { const n = new Date(); return [new Date(n.getFullYear(), n.getMonth() - 1, 1), new Date(n.getFullYear(), n.getMonth(), 0)]; }],
     ["This quarter", () => { const n = new Date(); const q0 = Math.floor(n.getMonth() / 3) * 3; return [new Date(n.getFullYear(), q0, 1), n]; }],
-    ["YTD", () => { const n = new Date(); return [new Date(n.getFullYear(), 0, 1), n]; }],
+    ["Year to date", () => { const n = new Date(); return [new Date(n.getFullYear(), 0, 1), n]; }],
   ];
   function applyPreset(fn: () => [Date, Date]) {
     const [s, e] = fn(); const f = iso(s), t = iso(e);
@@ -456,7 +461,7 @@ export default function ReportsHub() {
   const colLabel = (c: any) => typeof c === "string" ? c : (c.label || c.key);
   const colKey = (c: any, i: number) => typeof c === "string" ? c : (c.key ?? i);
   // Raw keys from the server ("technician", "in_repair") read as words; names and emails are left alone.
-  const cell = (v: any) => (typeof v === "number" ? <span className={`font-mono tabular-nums ${v < 0 ? "text-rose-600 font-semibold" : ""}`}>{v.toLocaleString(getLocale())}</span>
+  const cell = (v: any) => (typeof v === "number" ? <span className={`tabular-nums ${v < 0 ? "text-rose-600 font-semibold" : ""}`}>{v.toLocaleString(getLocale())}</span>
     : typeof v === "string" && /^[a-z]+(_[a-z]+)*$/.test(v) ? humanize(v) : String(v ?? "—"));
   const cellVal = (row: any, c: any, ci: number) => Array.isArray(row) ? row[ci] : row[colKey(c, ci)];
 
@@ -505,13 +510,8 @@ export default function ReportsHub() {
 
   return (
     <Shell title="Reports">
-      <div className="px-6 pt-3 border-b border-slate-200/60 bg-white/40 flex-shrink-0">
-        <nav className="flex space-x-1 -mb-px text-xs font-semibold overflow-x-auto">
-          {([["reports", "Reports", "summarize"], ...(can("can_see_profit") ? [["total_profit", "Total profit", "savings"]] : []), ["custom", "Custom report", "tune"], ["fleet", "Business & analytics", "insights"], ["profitability", "Job profitability", "payments"], ["insights", "Insights", "lightbulb"], ["feedback", "Feedback", "reviews"], ...(can("can_manage_settings") ? [["gopilot", "Go pilot", "qr_code_scanner"]] : [])] as [typeof view, string, string][]).map(([id, label, icon]) => (
-            <button key={id} onClick={() => setView(id)} className={`flex items-center gap-1.5 px-3 pb-3 pt-1 border-b-2 whitespace-nowrap transition-colors ${view === id ? "text-primary border-primary" : "text-ink-secondary hover:text-ink-primary hover:bg-slate-100/60 rounded-t-lg border-transparent"}`}><M n={icon} c="text-sm" />{label}</button>
-          ))}
-        </nav>
-      </div>
+      <Tabs label="Reports sections" className="px-6 pt-3 bg-white/40 flex-shrink-0" value={view} onChange={setView}
+        tabs={([["reports", "Reports", "summarize"], ...(can("can_see_profit") ? [["total_profit", "Total profit", "savings"]] : []), ["custom", "Custom report", "tune"], ["fleet", "Business & analytics", "insights"], ["profitability", "Job profitability", "payments"], ["insights", "Insights", "lightbulb"], ["feedback", "Feedback", "reviews"], ...(can("can_manage_settings") ? [["gopilot", "Go pilot", "qr_code_scanner"]] : [])] as [typeof view, string, string][]).map(([id, label, icon]) => ({ id, label, icon: <M n={icon} c="text-sm" /> }))} />
 
       {view === "custom" && <CustomView />}
       {view === "total_profit" && <div className="flex-1 overflow-y-auto px-6 py-5"><TotalProfit locs={locs} /></div>}
@@ -524,7 +524,7 @@ export default function ReportsHub() {
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
               <div className="p-3.5 border-b border-slate-100 text-xs font-bold text-ink-primary ">Job profitability</div>
               <table className="w-full text-left border-collapse text-xs">
-                <thead><tr className="bg-slate-50/60 border-b border-slate-100 text-ink-tertiary text-[11px] font-bold ">
+                <thead><tr className={theadRowClass}>
                   <th className="py-3 px-4">Order</th><th className="py-3 px-4">Client</th><th className="py-3 px-4 text-right">Sales</th><th className="py-3 px-4 text-right">Costs</th><th className="py-3 px-4 text-right">Profit</th><th className="py-3 px-4 text-right">Margin</th>
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
@@ -598,11 +598,11 @@ export default function ReportsHub() {
                 <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
                   <div className="p-3.5 border-b border-slate-100 text-xs font-bold text-ink-primary ">Comments</div>
                   <table className="w-full text-left border-collapse text-xs">
-                    <thead><tr className="bg-slate-50/60 border-b border-slate-100 text-ink-tertiary text-[11px] font-bold ">
+                    <thead><tr className={theadRowClass}>
                       <th className="py-3 px-4">Date</th><th className="py-3 px-4">Order</th><th className="py-3 px-4">Rating</th><th className="py-3 px-4">Comment</th>
                     </tr></thead>
                     <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
-                      {submitted.length === 0 && <tr><td colSpan={4} className="py-6 px-4 text-ink-tertiary">No feedback submitted yet.</td></tr>}
+                      {submitted.length === 0 && <TableEmpty cols={4} icon={<M n="reviews" c="text-lg" />} title="No feedback submitted yet." />}
                       {submitted.map((f: any, i: number) => (
                         <tr key={f?.id || i} className="odd:bg-slate-50/40 hover:bg-blue-50/50 transition-colors">
                           <td className="py-2.5 px-4">{f?.submitted_at ? new Date(f.submitted_at).toLocaleDateString() : "—"}</td>
@@ -630,7 +630,7 @@ export default function ReportsHub() {
             {!cat && <div className="p-3 text-xs text-ink-tertiary">Loading…</div>}
             {cat?.tabs.map((t) => (
               <div key={t.name} className="mb-2">
-                <div className="text-[11px] font-bold text-ink-tertiary px-2 py-1.5">{t.name}</div>
+                <div className="text-[11px] font-bold text-ink-tertiary px-2 py-1.5">{t.name === "Work Orders" ? "Work orders" : t.name}</div>
                 {t.reports.map((r) => (
                   <button key={r.key} onClick={() => run(r.key)} className={`w-full text-left px-2.5 py-1.5 rounded-lg text-xs font-medium flex items-center gap-2 border-l-2 transition-colors ${active === r.key ? "bg-blue-50/80 text-primary font-semibold border-primary" : "text-ink-secondary hover:bg-slate-100 border-transparent"}`}><M n="bar_chart" c={`text-sm ${active === r.key ? "text-primary" : "text-ink-tertiary"}`} /><span className="truncate">{r.title}</span></button>
                 ))}
@@ -645,10 +645,10 @@ export default function ReportsHub() {
                 <h3 className="text-sm font-bold text-ink-primary">{result?.title || "Select a report"}</h3>
                 <div className="ml-auto flex items-center gap-2 flex-wrap text-xs">
                   {locs.length > 1 && (
-                    <select value={locId} onChange={(e) => { setLocId(e.target.value); remember(active, filters, e.target.value); }} className="glass-input px-2.5 py-1.5 rounded-lg">
+                    <TeklySelect value={locId} onChange={(e) => { setLocId(e.target.value); remember(active, filters, e.target.value); }} className="glass-input px-2.5 py-1.5 rounded-lg">
                       <option value="">All locations</option>
                       {locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-                    </select>
+                    </TeklySelect>
                   )}
                   <DateField mode="date" value={from} onChange={setFrom} className="w-36" />
                   <span className="text-ink-tertiary">→</span>
@@ -659,11 +659,11 @@ export default function ReportsHub() {
               {active && (REPORT_FILTERS[active] || []).length > 0 && (
                 <div className="flex items-center gap-2 flex-wrap text-xs" aria-label="Report filters">
                   {REPORT_FILTERS[active].includes("movement") && (
-                    <select aria-label="Stock movement" value={filters.movement} onChange={(e) => changeFilter({ movement: e.target.value as ReportFilters["movement"] })} className="glass-input px-2.5 py-1.5 rounded-lg">
+                    <TeklySelect aria-label="Stock movement" value={filters.movement} onChange={(e) => changeFilter({ movement: e.target.value as ReportFilters["movement"] })} className="glass-input px-2.5 py-1.5 rounded-lg">
                       <option value="with">Products that moved</option>
                       <option value="without">Products that didn't move</option>
                       <option value="all">All products</option>
-                    </select>
+                    </TeklySelect>
                   )}
                   {REPORT_FILTERS[active].includes("hideZero") && (
                     <label className="inline-flex items-center gap-1.5 text-ink-secondary cursor-pointer">
@@ -672,16 +672,16 @@ export default function ReportsHub() {
                     </label>
                   )}
                   {REPORT_FILTERS[active].includes("status") && dropStatuses.length > 1 && (
-                    <select aria-label="Status" value={filters.status} onChange={(e) => changeFilter({ status: e.target.value })} className="glass-input px-2.5 py-1.5 rounded-lg">
+                    <TeklySelect aria-label="Status" value={filters.status} onChange={(e) => changeFilter({ status: e.target.value })} className="glass-input px-2.5 py-1.5 rounded-lg">
                       <option value="">Any dropped status</option>
                       {dropStatuses.map((st) => <option key={st.key} value={st.key}>{st.name}</option>)}
-                    </select>
+                    </TeklySelect>
                   )}
                   {REPORT_FILTERS[active].includes("typeId") && woTypes.length > 0 && (
-                    <select aria-label="Job type" value={filters.typeId} onChange={(e) => changeFilter({ typeId: e.target.value })} className="glass-input px-2.5 py-1.5 rounded-lg">
+                    <TeklySelect aria-label="Job type" value={filters.typeId} onChange={(e) => changeFilter({ typeId: e.target.value })} className="glass-input px-2.5 py-1.5 rounded-lg">
                       <option value="">Any job type</option>
                       {woTypes.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-                    </select>
+                    </TeklySelect>
                   )}
                   {JSON.stringify(filterParams(active, filters)) !== "{}" && (
                     <button type="button" onClick={() => changeFilter(DEFAULT_FILTERS)} className="text-[11px] font-semibold text-ink-secondary hover:text-primary">Clear filters</button>
@@ -709,9 +709,9 @@ export default function ReportsHub() {
                   <M n="bar_chart" c="text-sm text-primary" />
                   <h4 className="text-xs font-bold text-ink-primary ">Chart</h4>
                   {numericIdxs.length > 1 && (
-                    <select value={activeChartCol} onChange={(e) => setChartCol(Number(e.target.value))} className="glass-input px-2 py-1 rounded-lg text-xs">
+                    <TeklySelect value={activeChartCol} onChange={(e) => setChartCol(Number(e.target.value))} className="glass-input px-2 py-1 rounded-lg text-xs">
                       {numericIdxs.map((i) => <option key={i} value={i}>{colLabel(cols[i])}</option>)}
-                    </select>
+                    </TeklySelect>
                   )}
                   <button onClick={() => setShowChart((v) => !v)} className="ml-auto px-2 py-1 -my-1 text-[11px] font-semibold text-ink-secondary hover:text-primary">{showChart ? "Hide" : "Show"}</button>
                 </div>
@@ -729,7 +729,7 @@ export default function ReportsHub() {
               {!loading && result && (
                 <div className="overflow-auto max-h-[62vh]">
                   <table className="w-full text-left border-collapse text-xs">
-                    <thead className="sticky top-0 z-10"><tr className="bg-slate-50 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold shadow-[0_1px_0_rgba(0,0,0,0.04)]">
+                    <thead className="sticky top-0 z-10"><tr className={`${theadRowClass} shadow-[0_1px_0_rgba(0,0,0,0.04)]`}>
                       {cols.map((c, i) => (
                         <th key={colKey(c, i)} scope="col" role="button" tabIndex={0}
                             aria-sort={sort?.i === i ? (sort.dir === 1 ? "ascending" : "descending") : "none"}
@@ -756,14 +756,17 @@ export default function ReportsHub() {
                           const prev = prevTotals?.[ci];
                           const d = prev != null ? deltaPct(totals[ci]!, prev) : null;
                           const up = (totals[ci]! - (prev ?? 0)) >= 0;
+                          const flat = prev != null && totals[ci]! === prev;   // includes 0 vs 0: no arrow, no colour
                           return (
                             <td key={ci} className="py-2.5 px-4">
                               <span className="tabular-nums block">{totals[ci]!.toLocaleString(getLocale(), { maximumFractionDigits: 2 })}</span>
-                              {prev != null && (
+                              {prev != null && (flat ? (
+                                <span className="text-[11px] font-semibold text-ink-tertiary" title={`Previous: ${prev.toLocaleString(getLocale())}`}>—</span>
+                              ) : (
                                 <span className={`text-[11px] font-semibold ${up ? "text-emerald-600" : "text-rose-600"}`} title={`Previous: ${prev.toLocaleString(getLocale())}`}>
                                   {up ? "▲" : "▼"} {d == null ? "—" : `${Math.abs(d).toFixed(1)}%`}
                                 </span>
-                              )}
+                              ))}
                             </td>
                           );
                         })}
@@ -804,12 +807,12 @@ function FleetAnalytics() {
     api.get<any>(`/analytics/technician-productivity?days=${days}`).then((r) => setTechs(r.technicians || [])).catch(() => setTechs([]));
     api.get<any>(`/analytics/location-comparison?days=${days}`).then((r) => setLocs(r.locations || [])).catch(() => setLocs([]));
   }, [days]);
-  const kpis: { l: string; v: string; icon: string; tint: string; accent: string }[] = ins ? [
-    { l: "Revenue", v: m(ins.revenue), icon: "trending_up", tint: "bg-emerald-50 text-emerald-600", accent: "from-emerald-300 to-emerald-500" },
-    { l: "Orders closed", v: String(ins.orders_closed ?? 0), icon: "task_alt", tint: "bg-blue-50 text-primary", accent: "from-blue-400 to-primary" },
-    { l: "Close rate", v: `${ins.close_rate_pct ?? 0}%`, icon: "percent", tint: "bg-indigo-50 text-indigo-600", accent: "from-indigo-300 to-indigo-500" },
-    { l: "Avg ticket", v: m(ins.avg_ticket_value), icon: "receipt_long", tint: "bg-violet-50 text-violet-600", accent: "from-violet-300 to-violet-500" },
-    { l: "Avg turnaround", v: `${ins.avg_turnaround_hours ?? 0}h`, icon: "schedule", tint: "bg-amber-50 text-amber-600", accent: "from-amber-300 to-amber-500" },
+  const kpis: { l: string; v: string }[] = ins ? [
+    { l: "Revenue", v: m(ins.revenue) },
+    { l: "Orders closed", v: String(ins.orders_closed ?? 0) },
+    { l: "Close rate", v: `${ins.close_rate_pct ?? 0}%` },
+    { l: "Avg ticket", v: m(ins.avg_ticket_value) },
+    { l: "Avg turnaround", v: `${ins.avg_turnaround_hours ?? 0}h` },
   ] : [];
   const box = "bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden";
   const th = "px-4 py-2.5 border-b border-slate-100 text-[11px] font-bold   text-ink-tertiary";
@@ -824,15 +827,13 @@ function FleetAnalytics() {
 
       <div className="grid grid-cols-2 sm:grid-cols-3 lg:grid-cols-5 gap-3">
         {kpis.map((k) => (
-          <div key={k.l} className="group relative overflow-hidden bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-4">
+          <div key={k.l} className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-4">
             <div className="flex items-start justify-between gap-2">
               <div className="min-w-0">
-                <div className="text-[11px] font-bold text-ink-tertiary">{k.l}</div>
-                <div className="mt-1 text-2xl font-bold text-ink-primary leading-tight truncate">{k.v}</div>
+                <div className="text-[11px] font-semibold text-ink-tertiary">{k.l}</div>
+                <div className="mt-1 text-2xl font-semibold text-ink-primary leading-tight truncate tabular-nums">{k.v}</div>
               </div>
-              <div className={`w-9 h-9 rounded-xl flex items-center justify-center shrink-0 ${k.tint}`}><M n={k.icon} c="text-base" /></div>
             </div>
-            <div className={`absolute inset-x-0 bottom-0 h-1 bg-gradient-to-r ${k.accent} opacity-70`} />
           </div>
         ))}
         {!ins && Array.from({ length: 5 }).map((_, i) => (
@@ -846,7 +847,7 @@ function FleetAnalytics() {
         <div className={box}>
           <div className={th}>Business accounts ({fleet.length})</div>
           <div className="divide-y divide-slate-100 max-h-80 overflow-y-auto">
-            {fleet.length === 0 && <p className="px-4 py-3 text-xs text-ink-tertiary">No business accounts yet.</p>}
+            {fleet.length === 0 && <EmptyState size="section" icon={<M n="business" c="text-lg" />} title="No business accounts yet." />}
             {fleet.map((c) => (
               <div key={c.client_id} className="px-4 py-2.5 flex items-center justify-between text-xs">
                 <span className="font-bold text-ink-primary truncate">{c.name}</span>

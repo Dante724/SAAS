@@ -1,6 +1,8 @@
 import { useEffect, useMemo, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import Switch from "../../components/Switch";
 import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
@@ -111,7 +113,7 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
                     <span className="block text-sm text-ink-primary truncate">{i.name || i.email}</span>
                     <span className="block text-xs text-ink-tertiary truncate">{i.name ? `${i.email} · ` : ""}{roleName(i.role_id) || "No role yet"}</span>
                   </span>
-                  <span className={`ml-auto text-[11px] font-semibold px-2 py-0.5 rounded-md ${i.expired ? "bg-rose-50 text-rose-600" : "bg-amber-50 text-amber-700"}`}>{i.expired ? "Invite expired" : "Invited"}</span>
+                  <span className={`ml-auto text-[11px] font-semibold px-2 py-0.5 rounded-full ${i.expired ? "bg-rose-50 text-rose-600" : "bg-amber-50 text-amber-700"}`}>{i.expired ? "Invite expired" : "Invited"}</span>
                   <button onClick={() => cancelInvite(i)} aria-label={`Cancel invite for ${i.email}`} className="w-7 h-7 rounded-lg grid place-items-center text-ink-tertiary hover:bg-rose-50 hover:text-rose-600 opacity-0 group-hover:opacity-100 focus:opacity-100"><M n="close" c="text-base" /></button>
                 </div>
               ))}
@@ -130,9 +132,9 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
               </span>
               <span className="ml-auto flex items-center gap-2 flex-shrink-0">
                 {roleName(p.role_id)
-                  ? <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-slate-100 text-ink-secondary">{roleName(p.role_id)}</span>
-                  : <span className="text-[11px] px-2 py-0.5 rounded-md border border-dashed border-slate-300 text-ink-tertiary">No role</span>}
-                {p.active === false && <span className="text-[11px] font-semibold px-2 py-0.5 rounded-md bg-rose-50 text-rose-600">Blocked</span>}
+                  ? <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-slate-100 text-ink-secondary inline-block first-letter:uppercase">{roleName(p.role_id)}</span>
+                  : <span className="text-[11px] px-2 py-0.5 rounded-full border border-dashed border-slate-300 text-ink-tertiary">No role</span>}
+                {p.active === false && <span className="text-[11px] font-semibold px-2 py-0.5 rounded-full bg-rose-50 text-rose-600">Blocked</span>}
                 <M n="chevron_right" c="text-base text-ink-tertiary" />
               </span>
             </div>
@@ -180,11 +182,9 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
       {tab === "pay" && (
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-2">
           {(rules || []).length === 0 && (
-            <div className="p-6 text-center">
-              <div className="text-sm text-ink-primary">No commission rules yet</div>
-              <div className="text-xs text-ink-tertiary mt-0.5 mb-3">Pay a percent or a flat amount when work is done or a part is sold.</div>
-              <button onClick={onNewRule} className="px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-ink-primary hover:bg-slate-50">Create a rule</button>
-            </div>
+            <EmptyState size="section" icon={<M n="percent" c="text-lg" />} title="No commission rules yet"
+              body="Pay a percent or a flat amount when work is done or a part is sold."
+              action={<button onClick={onNewRule} className={buttonClass("secondary", "md")}>Create a rule</button>} />
           )}
           {(rules || []).map((r) => {
             const who = people.find((p) => p.id === r.employee_id);
@@ -413,7 +413,7 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
                 <Choice value={payrollScope} set={setPayrollScope} options={[["all", "Everyone"], ["own", "Only themselves"], ["selected", "Only some people"]]} />
                 {payrollScope === "selected" && (
                   <div className="flex flex-wrap gap-1.5 mt-2" role="group" aria-label="People whose pay they can see">
-                    {people.length === 0 && <span className="text-xs text-ink-tertiary">No team members yet.</span>}
+                    {people.length === 0 && <EmptyState size="inline" title="No team members yet." />}
                     {people.map((p) => { const on = payrollIds.includes(p.id); return (
                       <button key={p.id} type="button" onClick={() => setPayrollIds((s) => (on ? s.filter((x) => x !== p.id) : [...s, p.id]))} aria-pressed={on}
                         className={`inline-flex items-center gap-1.5 pl-1 pr-2.5 py-1 rounded-full text-xs border ${on ? "bg-white border-primary/40 text-ink-primary shadow-sm" : "border-dashed border-slate-300 text-ink-tertiary"}`}>
@@ -431,7 +431,7 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
                 </div>
               </Row>
               <Row icon="visibility_off" title="Hidden statuses" hint="Jobs in these statuses don't appear for this role.">
-                {statuses.length === 0 ? <div className="text-xs text-ink-tertiary">No statuses yet.</div> : (
+                {statuses.length === 0 ? <EmptyState size="inline" title="No statuses yet." /> : (
                   <div className="flex flex-wrap gap-1.5">
                     {statuses.map((s) => { const on = hiddenStatuses.includes(s.key); return (
                       <button key={s.key} type="button" onClick={() => setHiddenStatuses((h) => (on ? h.filter((k) => k !== s.key) : [...h, s.key]))} aria-pressed={on}
@@ -448,10 +448,10 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
           {tab === "home" && (
             <div>
               <Row icon="dashboard" title="Opens on" hint="Where someone with this role lands when they open the app.">
-                <select value={homeRoute} onChange={(e) => setHomeRoute(e.target.value)} aria-label="Landing page"
+                <TeklySelect value={homeRoute} onChange={(e) => setHomeRoute(e.target.value)} aria-label="Landing page"
                   className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-primary">
                   {LANDING_PAGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                </select>
+                </TeklySelect>
               </Row>
               <Row icon="notifications" title="Alerts on Home" hint="Pick what shows up. Pick none to show everything.">
                 <div className="flex flex-wrap gap-1.5">
@@ -468,11 +468,11 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
         </div>
 
         <div className="px-5 py-4 border-t border-slate-100 flex items-center gap-2">
+          <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : isNew ? "Create role" : "Save"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
           {!isNew && (members > 0
-            ? <span className="text-xs text-ink-tertiary">{members} {members === 1 ? "person has" : "people have"} this role</span>
-            : <button onClick={remove} disabled={busy} className="px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50">Delete role</button>)}
-          <button onClick={onClose} className="ml-auto px-4 py-2 rounded-xl border border-slate-200 text-ink-secondary hover:bg-slate-50 font-semibold text-xs">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-xl bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : isNew ? "Create role" : "Save"}</button>
+            ? <span className="ml-auto text-xs text-ink-tertiary">{members} {members === 1 ? "person has" : "people have"} this role</span>
+            : <button onClick={remove} disabled={busy} className="ml-auto px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50">Delete role</button>)}
         </div>
       </div>
     </div>
@@ -507,10 +507,10 @@ export function DeviceLimitCard({ onFlash }: { onFlash: (m: string) => void }) {
           <p className="mt-1 text-xs text-ink-tertiary">How many devices one login can use at the same time. When someone hits the limit,
             they pick a device to sign out before they can sign in somewhere new. The phone app counts as a device.</p>
         </div>
-        <select id="device-limit" value={value ?? ""} disabled={value === null || busy} onChange={(e) => save(e.target.value)}
+        <TeklySelect id="device-limit" value={value ?? ""} disabled={value === null || busy} onChange={(e) => save(e.target.value)}
           className="glass-input rounded-xl px-3 py-2 text-sm font-semibold text-ink-primary">
           {LIMITS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-        </select>
+        </TeklySelect>
       </div>
       <p className="mt-3 text-xs text-ink-tertiary">People already over a new limit stay signed in until they sign out.
         Each person can see and sign out their devices under Security &amp; sign-in.</p>

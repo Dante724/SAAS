@@ -4,12 +4,14 @@
 // Backend: GET/POST /feed/order/{id}, PATCH /feed/item/{id}.
 import { useEffect, useRef, useState } from "react";
 import { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import { api } from "../../api/client";
 import { sectionCard } from "../../components/Section";
 import { useMe } from "../../context/Me";
 import { readAsDataUrl } from "../../lib/files";
 import AuthedImage from "../../components/AuthedImage";
 import { fmtServerTime } from "../../lib/serverTime";
+import { buttonClass } from "../../components/Button";
 
 type Vis = "private" | "client";
 export type FeedItem = {
@@ -98,7 +100,7 @@ export default function NotesPanel({ orderId, onFlash }: { orderId: string; onFl
       </div>
       <div className="max-h-72 overflow-y-auto divide-y divide-slate-100">
         {!items && <div className="text-xs text-ink-tertiary py-5 text-center">Loading…</div>}
-        {items?.length === 0 && <div className="text-xs text-ink-tertiary py-5 px-4 text-center">No comments or files yet.</div>}
+        {items?.length === 0 && <EmptyState size="inline" className="px-4 text-center" title="No comments or files yet." />}
         {(items || []).map((it) => (
           <div key={it.id} className="px-4 py-2.5 flex items-start gap-3">
             <div className="min-w-0 flex-1">
@@ -125,7 +127,7 @@ export default function NotesPanel({ orderId, onFlash }: { orderId: string; onFl
             title={defaults.file === "client" ? "Files start shown to the customer" : "Files start private"}
             className="px-2.5 py-1.5 rounded-lg border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 flex items-center gap-1 disabled:opacity-50"><M n="attach_file" c="text-[14px]" />Attach</button>
           <button type="button" onClick={post} disabled={busy || !text.trim()}
-            className="ml-auto px-3.5 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-40">Post</button>
+            className={buttonClass("primary", "sm", "ml-auto")}>Post</button>
         </div>
       </div>
     </div>

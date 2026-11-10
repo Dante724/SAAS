@@ -5,6 +5,7 @@ import { api } from "../../api/client";
 import { money } from "../orders/types";
 import { isoDate } from "../../lib/localDate";
 import EarningsBreakdown, { type BreakdownRule } from "./EarningsBreakdown";
+import { Badge, type BadgeTone } from "../../components/Card";
 
 /* My earnings — what the signed-in person earned in a period, and where every amount came
    from. Reached from the account menu and from Finance. Only ever their own figures
@@ -29,11 +30,11 @@ function monthRange(offset: number): [string, string] {
   return [isoDate(first), isoDate(last)];
 }
 
-const STATUS: Record<Earnings["accrual_status"], { label: string; hint: string; cls: string }> = {
-  not_accrued: { label: "Not accrued yet", hint: "These are live figures. They're final once your manager accrues the period.", cls: "bg-slate-100 text-ink-secondary" },
-  draft: { label: "Draft", hint: "Your manager has drafted this period but not accrued it yet.", cls: "bg-amber-50 text-amber-800" },
-  accrued: { label: "Accrued", hint: "This period is accrued and waiting to be paid.", cls: "bg-blue-50 text-primary" },
-  paid: { label: "Paid", hint: "This period has been paid out.", cls: "bg-emerald-50 text-emerald-700" },
+const STATUS: Record<Earnings["accrual_status"], { label: string; hint: string; tone: BadgeTone }> = {
+  not_accrued: { label: "Not accrued yet", hint: "These are live figures. They're final once your manager accrues the period.", tone: "neutral" },
+  draft: { label: "Draft", hint: "Your manager has drafted this period but not accrued it yet.", tone: "warning" },
+  accrued: { label: "Accrued", hint: "This period is accrued and waiting to be paid.", tone: "info" },
+  paid: { label: "Paid", hint: "This period has been paid out.", tone: "success" },
 };
 
 const longDate = (iso: string) => new Date(`${iso}T00:00:00`).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
@@ -92,7 +93,7 @@ export function EarningsView({ data }: { data: Earnings }) {
             <p className="mt-1 text-[32px] leading-none font-semibold tracking-tight tabular-nums text-ink-primary" data-testid="earnings-total">{signed(data.total)}</p>
           </div>
           <div className="sm:ml-auto sm:text-right max-w-xs">
-            <span className={`inline-flex px-2.5 py-0.5 rounded-full text-xs font-semibold ${st.cls}`}>{st.label}</span>
+            <Badge tone={st.tone} size="sm">{st.label}</Badge>
             <p className="text-xs text-ink-tertiary mt-1.5">{st.hint}</p>
           </div>
         </div>

@@ -28,7 +28,7 @@ async def _org(db, client, h):
 @pytest.mark.asyncio
 async def test_key_rejected_once_org_is_suspended(client, tenant, db):
     key = await _key(client, tenant)
-    assert key and key.startswith("rok_")
+    assert key and key.startswith("tk_")
     auth = {"Authorization": f"Bearer {key}"}
     assert (await client.get("/api/v1/contacts", headers=auth)).status_code == 200
 

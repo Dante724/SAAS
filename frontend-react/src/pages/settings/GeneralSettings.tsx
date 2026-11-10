@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import TeklySelect from "../../components/TeklySelect";
+import HexTile from "../../components/HexTile";
 import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import CurrencyManager from "../../components/CurrencyManager";
@@ -38,7 +40,7 @@ function Section({ icon, title, hint, children }: { icon: string; title: string;
   return (
     <section className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card">
       <div className="flex items-start gap-3 px-5 pt-4 pb-3">
-        <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n={icon} c="text-lg" /></span>
+        <span className="w-9 h-9 grid place-items-center flex-shrink-0"><HexTile icon={icon} /></span>
         <div className="min-w-0">
           <h3 className="text-sm font-semibold text-ink-primary">{title}</h3>
           {hint && <p className="text-xs text-ink-tertiary">{hint}</p>}
@@ -62,7 +64,7 @@ function AccountId({ value }: { value: string }) {
         <div className="text-[11px] font-semibold text-ink-tertiary">Tekly account ID</div>
         <div className="font-mono text-sm text-ink-primary select-all">{value}</div>
       </div>
-      <button type="button" onClick={copy} className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">
+      <button type="button" onClick={copy} className={buttonClass("secondary", "sm", "ml-auto")}>
         <M n={copied ? "check" : "content_copy"} c="text-sm" />{copied ? "Copied" : "Copy"}</button>
       <div className="w-full text-[11px] text-ink-tertiary">Give this to Tekly support so they can find your shop.</div>
     </div>
@@ -192,30 +194,30 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
           <Section icon="language" title="Region, money and language" hint="Picking a country fills in the time zone and currency. You can still change them.">
             <div className="grid sm:grid-cols-2 gap-4">
               <Field label="Country">
-                <select value={co.country || ""} onChange={(e) => pickCountry(e.target.value)} className={inp}>
+                <TeklySelect value={co.country || ""} onChange={(e) => pickCountry(e.target.value)} className={inp}>
                   <option value="">Choose a country</option>{opts.countries.map((c) => <option key={c[0]} value={c[0]}>{c[1]}</option>)}
-                </select>
+                </TeklySelect>
               </Field>
               <Field label="Time zone">
-                <select value={co.timezone || ""} onChange={(e) => set("timezone", e.target.value)} className={inp}>
+                <TeklySelect value={co.timezone || ""} onChange={(e) => set("timezone", e.target.value)} className={inp}>
                   <option value="">Choose a time zone</option>{opts.timezones.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}
-                </select>
+                </TeklySelect>
               </Field>
               <Field label="Currency">
-                <select value={co.currency_code || ""} onChange={(e) => pickCurrency(e.target.value)} className={inp}>
+                <TeklySelect value={co.currency_code || ""} onChange={(e) => pickCurrency(e.target.value)} className={inp}>
                   <option value="">Choose a currency</option>{opts.currencies.map(([c, s]) => <option key={c} value={c}>{c} ({s})</option>)}
-                </select>
+                </TeklySelect>
               </Field>
               <Field label="Currency symbol"><input value={co.currency || ""} onChange={(e) => set("currency", e.target.value)} className={inp} /></Field>
               <Field label="Language on printed documents">
-                <select value={co.document_language || "en"} onChange={(e) => set("document_language", e.target.value)} className={inp}>
+                <TeklySelect value={co.document_language || "en"} onChange={(e) => set("document_language", e.target.value)} className={inp}>
                   {opts.docLangs.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                </select>
+                </TeklySelect>
               </Field>
               <Field label="My language in the app" hint="Just for you, on this device. Saved right away.">
-                <select value={getLang()} onChange={(e) => setLang(e.target.value as any)} className={inp}>
+                <TeklySelect value={getLang()} onChange={(e) => setLang(e.target.value as any)} className={inp}>
                   {LANGS.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
-                </select>
+                </TeklySelect>
               </Field>
             </div>
           </Section>

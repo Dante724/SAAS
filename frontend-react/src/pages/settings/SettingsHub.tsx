@@ -1,9 +1,11 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import DeviceList from "../../components/DeviceList";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import DateField from "../../components/DateField";
 import { api } from "../../api/client";
 import type { FormKey } from "../../components/FormCustomizer";
@@ -23,6 +25,8 @@ import { SettingRow, SettingGroup, NumField } from "../../components/SettingRow"
 import { money } from "../orders/types";
 import { loadFailed } from "../../lib/notice";
 import { clickable, clickableRow } from "../../lib/clickable";
+import { Badge, type BadgeTone } from "../../components/Card";
+import { useCardReaders } from "../../lib/cardReaders";
 
 // Each settings page is its own chunk, fetched when its section opens (the hub was one ~470 kB file).
 const TemplateEditorDrawer = lazy(() => import("./TemplateEditorDrawer"));
@@ -183,6 +187,7 @@ export default function SettingsHub() {
   const [lists, setLists] = useState<Record<string, any[] | null>>({});
   const [roles, setRoles] = useState<any[] | null>(null);
   const { me: hubMe } = useMe();
+  const cardReaders = useCardReaders();   // off: no Card readers card in Integrations
   const [toast, setToast] = useState<string | null>(null);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2200); };
   useEffect(() => { if (movedFrom) flash(MOVED_SECTIONS[movedFrom].note); }, [movedFrom]);  // eslint-disable-line react-hooks/exhaustive-deps
@@ -523,7 +528,7 @@ export default function SettingsHub() {
           {sec === "integrations" && (
             <div className="max-w-4xl space-y-5">
               <IntegrationsHub data={integrations} goSection={setSec} reload={() => setIntegrations(null)} pro={{ accounting: proOk("accounting_sync"), api: proOk("api_keys") }} />
-              <CardReadersCard />
+              {cardReaders && <CardReadersCard />}
               <TelephonySettings />
               {proOk("api_keys") && <ApiKeysCard />}
               <WebhooksCard />
@@ -712,14 +717,8 @@ function NotificationsSettings({ fixedView, rules, templates, automations, reloa
 
           {/* Workflows splits into Jobs vs Estimates (Orderry parity) */}
           {module === "order" && (
-            <div className="flex gap-4 text-xs font-semibold border-b border-slate-200">
-              {([["work_order", "Jobs"], ["estimate", "Estimates"]] as const).map(([k, l]) => (
-                <button key={k} onClick={() => setRecType(k)}
-                  className={"py-2 border-b-2 transition-colors " + (recType === k ? "text-primary border-primary" : "text-ink-tertiary border-transparent hover:text-ink-secondary")}>
-                  {l}
-                </button>
-              ))}
-            </div>
+            <Tabs label="Workflow type" value={recType} onChange={setRecType}
+              tabs={[{ id: "work_order", label: "Jobs" }, { id: "estimate", label: "Estimates" }]} />
           )}
 
           <SectionCard
@@ -832,7 +831,7 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[440px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <div>
@@ -845,9 +844,9 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
           {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
           {!isReminder && (
             <div><label className={lbl}>Event</label>
-              <select value={f.event} onChange={(e) => set("event", e.target.value)} className={field}>
+              <TeklySelect value={f.event} onChange={(e) => set("event", e.target.value)} className={field}>
                 {events.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-              </select></div>
+              </TeklySelect></div>
           )}
           {!isReminder && f.event === "status_changed" && statusRT && (
             <div><label className={lbl}>Status changed to</label>
@@ -862,15 +861,15 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
               <input value={f.trigger_status_key} onChange={(e) => set("trigger_status_key", e.target.value)} placeholder="blank = any" className={field} /></div>
           )}
           <div><label className={lbl}>Send via</label>
-            <select value={f.channel} onChange={(e) => set("channel", e.target.value)} className={field}>
+            <TeklySelect value={f.channel} onChange={(e) => set("channel", e.target.value)} className={field}>
               {channels.map((c) => <option key={c} value={c}>{c === "push" ? "In-app / push" : c.toUpperCase()}</option>)}
-            </select></div>
+            </TeklySelect></div>
           {!internal && (
             <div><label className={lbl}>Template</label>
-              <select value={f.template_id} onChange={(e) => set("template_id", e.target.value)} className={field}>
+              <TeklySelect value={f.template_id} onChange={(e) => set("template_id", e.target.value)} className={field}>
                 <option value="">Default message</option>
                 {tplOpts.map((t) => <option key={t.id} value={t.id}>{t.name || optLabel(t.trigger_event)}</option>)}
-              </select>
+              </TeklySelect>
               <div className="mt-1 text-[11px] text-ink-tertiary">No template → a sensible default message is sent.</div>
             </div>
           )}
@@ -892,18 +891,18 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
           )}
           {locations.length > 1 && (
             <div><label className={lbl}>Location</label>
-              <select value={f.location_id} onChange={(e) => set("location_id", e.target.value)} className={field}>
+              <TeklySelect value={f.location_id} onChange={(e) => set("location_id", e.target.value)} className={field}>
                 <option value="">All locations</option>
                 {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-              </select></div>
+              </TeklySelect></div>
           )}
           <ToggleRow label="Only send during working hours" on={f.working_hours_only} onToggle={() => set("working_hours_only", !f.working_hours_only)} />
           {!internal && <ToggleRow label="Try the client's latest chat first" on={f.chat_first} onToggle={() => set("chat_first", !f.chat_first)} />}
           <ToggleRow label="Active" on={f.active} onToggle={() => set("active", !f.active)} />
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs ml-auto">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : "Save"}</button>
+          <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
         </div>
       </div>
     </div>
@@ -970,7 +969,7 @@ function RichTextEditor({ value, onChange, registerInsert }: {
     <div className="border border-slate-200 rounded-lg overflow-hidden bg-white">
       <div className="flex flex-wrap items-center gap-0.5 border-b border-slate-200 bg-slate-50 px-2 py-1">
         <select title="Font" onMouseDown={saveSel} onChange={(e) => applyFont(e.target.value)} defaultValue="" className="h-8 border border-slate-200 rounded-md text-xs px-1.5 bg-white text-ink-secondary"><option value="" disabled>Font</option>{fonts.map((ff) => <option key={ff} value={ff} style={{ fontFamily: ff }}>{ff}</option>)}</select>
-        <select title="Size" onMouseDown={saveSel} onChange={(e) => applySize(Number(e.target.value))} defaultValue="" className="h-8 border border-slate-200 rounded-md text-xs px-1.5 bg-white text-ink-secondary w-16"><option value="" disabled>Size</option>{sizes.map((s) => <option key={s} value={s}>{s}px</option>)}</select>
+        <select title="Size" onMouseDown={saveSel} onChange={(e) => applySize(Number(e.target.value))} defaultValue="" className="h-8 border border-slate-200 rounded-md text-xs px-1.5 bg-white text-ink-secondary w-16 bg-none"><option value="" disabled>Size</option>{sizes.map((s) => <option key={s} value={s}>{s}px</option>)}</select>
         <label className={btn + " relative cursor-pointer"} title="Text colour"><M n="format_color_text" c="text-lg" /><input type="color" onMouseDown={saveSel} onChange={(e) => applyColor(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" /></label>
         <label className={btn + " relative cursor-pointer"} title="Highlight"><M n="format_ink_highlighter" c="text-lg" /><input type="color" onMouseDown={saveSel} onChange={(e) => applyHilite(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" /></label>
         <span className="w-px h-5 bg-slate-200 mx-1" />
@@ -1053,7 +1052,7 @@ function NotifTemplateDrawer({ tpl, module, onClose, onSaved }: {
   }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[720px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h2 className="font-bold text-ink-primary">{tpl?.id ? "Edit template" : "New template"}</h2>
@@ -1094,10 +1093,10 @@ function NotifTemplateDrawer({ tpl, module, onClose, onSaved }: {
           <ToggleRow label="Active" on={f.active} onToggle={() => set("active", !f.active)} />
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
-          <button onClick={sendTest} className="px-3 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Send test</button>
+          <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
+          <button onClick={sendTest} className={buttonClass("secondary", "md", "ml-auto")}>Send test</button>
           {testMsg && <span className="text-[11px] text-emerald-600 font-medium">{testMsg}</span>}
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs ml-auto">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : "Save"}</button>
         </div>
       </div>
     </div>
@@ -1142,7 +1141,7 @@ function FeedbackSettingsEditor() {
               <Switch on={!!c.active} onChange={(v) => set("active", v)} label="Ask customers for feedback after a work order closes" />
             </SettingRow>
             <SettingRow label="Rating system" htmlFor="fb-system" dim={!c.active}>
-              <select id="fb-system" value={c.system || "five_point"} onChange={(e) => set("system", e.target.value)} className={inp}>{[["five_point", "5-point stars"], ["like", "Like / dislike"], ["nps", "NPS (0–10)"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+              <TeklySelect id="fb-system" value={c.system || "five_point"} onChange={(e) => set("system", e.target.value)} className={inp}>{[["five_point", "5-point stars"], ["like", "Like / dislike"], ["nps", "NPS (0–10)"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</TeklySelect>
             </SettingRow>
           </SettingGroup>
           <div className="border-t border-slate-100">
@@ -1191,13 +1190,13 @@ function IntegrationsHub({ data, goSection, reload, pro = { accounting: true, ap
     try { navigator.clipboard.writeText(snip); alertDialog("Website status-widget embed snippet copied to clipboard."); }
     catch { await promptDialog("Copy the embed snippet:", { defaultValue: snip }); }
   };
-  type Badge = { text: string; tone: "on" | "off" | "neutral" };
+  type CardBadge = { text: string; tone: "on" | "off" | "neutral" };
   // A Pro connector on Starter: say so and point at Billing instead of offering setup.
-  const proCard = { badge: { text: "Pro plan", tone: "neutral" } as Badge, hint: "Upgrade to Pro to use this",
+  const proCard = { badge: { text: "Pro plan", tone: "neutral" } as CardBadge, hint: "Upgrade to Pro to use this",
     action: { label: "See plans", onClick: () => goSection("billing") } };
-  const B = { on: "bg-emerald-100 text-emerald-700", off: "bg-slate-100 text-ink-secondary", neutral: "bg-indigo-50 text-indigo-700" } as const;
+  const B = { on: "success", off: "neutral", neutral: "info" } as const;
   type Webhook = { url: string; help: string };
-  const allGroups: { group: string; cards: { name: string; desc: string; badge: Badge; hint?: string; action?: { label: string; onClick: () => void }; webhook?: Webhook }[] }[] = [
+  const allGroups: { group: string; cards: { name: string; desc: string; badge: CardBadge; hint?: string; action?: { label: string; onClick: () => void }; webhook?: Webhook }[] }[] = [
     { group: "Payments", cards: [
       { name: "Online payments (Stripe)", desc: "Hosted checkout & payment links; reconciles into your cashboxes.",
         badge: payLive ? { text: `Live: ${payGw}`, tone: "on" } : keyBadge("stripe"),
@@ -1260,7 +1259,7 @@ function IntegrationsHub({ data, goSection, reload, pro = { accounting: true, ap
                 <div key={c.name} className="border border-slate-200/90 rounded-xl p-3.5 flex flex-col gap-1.5 bg-white hover:border-slate-300 transition-colors">
                   <div className="flex items-start justify-between gap-2">
                     <span className="text-sm font-semibold text-ink-primary leading-tight">{c.name}</span>
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${B[c.badge.tone]}`}>{c.badge.text}</span>
+                    <Badge tone={B[c.badge.tone]} size="sm">{c.badge.text}</Badge>
                   </div>
                   <p className="text-xs text-ink-secondary leading-snug">{c.desc}</p>
                   {c.hint && <p className="text-xs text-ink-tertiary mt-0.5">{c.hint}</p>}
@@ -1353,13 +1352,13 @@ function CredDrawer({ provider, status, onClose, onSaved }: {
           {err && <div className="text-xs text-rose-600">{err}</div>}
         </div>
         <div className="px-5 py-3 border-t border-slate-100 flex items-center justify-between">
+          <div className="flex gap-2">
+            <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save keys"}</button>
+            <button onClick={onClose} className="px-3 py-2 rounded-lg text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>
+          </div>
           {status?.source === "org" || status?.source === "unreadable"
             ? <button onClick={clearKeys} disabled={busy} className="text-[12px] font-semibold text-rose-600 hover:underline">Remove keys</button>
             : <span />}
-          <div className="flex gap-2">
-            <button onClick={onClose} className="px-3 py-2 rounded-lg text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>
-            <button onClick={save} disabled={busy} className="px-3.5 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Saving…" : "Save keys"}</button>
-          </div>
         </div>
       </div>
     </div>, document.body);
@@ -1374,7 +1373,7 @@ function SectionCard({ title, count, onAdd, children }: { title: string; count?:
   return (
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
       <div className="p-3.5 border-b border-slate-100">
-        <h3 className="text-sm font-semibold text-ink-primary flex items-center">{title}{count != null && <span className="ml-2 text-xs font-medium bg-slate-100 text-ink-secondary px-2 py-0.5 rounded-full">{count}</span>}</h3>
+        <h3 className="text-sm font-semibold text-ink-primary flex items-center">{title}{count != null && <Badge size="sm" className="ml-2">{count}</Badge>}</h3>
         {onAdd && <button type="button" onClick={onAdd} className={`mt-2.5 ${btnPrimary}`}><M n="add" c="text-sm" />Add</button>}
       </div>
       {children}
@@ -1440,7 +1439,7 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
   const fld = "w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-ink-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/10";
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[540px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="px-5 pt-5 pb-3">
@@ -1482,9 +1481,9 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div><label className={lblc}>Role</label>
-                <select value={f.role_id || ""} onChange={(e) => set("role_id", e.target.value)} className={`${fld} appearance-none`}><option value="">{me?.is_owner ? "— No role (full access) —" : "Choose a role…"}</option>{roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
+                <TeklySelect value={f.role_id || ""} onChange={(e) => set("role_id", e.target.value)} className={`${fld} appearance-none`}><option value="">{me?.is_owner ? "— No role (full access) —" : "Choose a role…"}</option>{roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</TeklySelect></div>
               <div><label className={lblc}>Home location</label>
-                <select value={f.location_id || ""} onChange={(e) => set("location_id", e.target.value)} className={`${fld} appearance-none`}><option value="">All locations</option>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+                <TeklySelect value={f.location_id || ""} onChange={(e) => set("location_id", e.target.value)} className={`${fld} appearance-none`}><option value="">All locations</option>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</TeklySelect></div>
             </div>
             {!isNew && (
               <label className="flex items-center justify-between py-1 cursor-pointer">
@@ -1499,10 +1498,10 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
           <div className="space-y-4">
             <div className="grid grid-cols-3 gap-3">
               <div><label className={lblc}>Wage type</label>
-                <select value={f.wage_type || "fixed"} onChange={(e) => set("wage_type", e.target.value)} className={`${fld} appearance-none`}><option value="fixed">Fixed salary</option><option value="hourly">Hourly</option></select></div>
+                <TeklySelect value={f.wage_type || "fixed"} onChange={(e) => set("wage_type", e.target.value)} className={`${fld} appearance-none`}><option value="fixed">Fixed salary</option><option value="hourly">Hourly</option></TeklySelect></div>
               <div><label className={lblc}>Wage value</label><input type="number" value={f.wage_value ?? ""} onChange={(e) => set("wage_value", e.target.value)} className={`${fld} font-mono`} /></div>
               <div><label className={lblc}>Pay hours from</label>
-                <select value={f.hourly_basis === "attendance" ? "attendance" : "labour"} onChange={(e) => set("hourly_basis", e.target.value)} className={`${fld} appearance-none`}><option value="labour">Approved job timesheets</option><option value="attendance">Shop clock-in / out</option></select></div>
+                <TeklySelect value={f.hourly_basis === "attendance" ? "attendance" : "labour"} onChange={(e) => set("hourly_basis", e.target.value)} className={`${fld} appearance-none`}><option value="labour">Approved job timesheets</option><option value="attendance">Shop clock-in / out</option></TeklySelect></div>
             </div>
             <div className="divide-y divide-slate-100">
               <label className="flex items-center justify-between py-2 cursor-pointer"><span className="text-xs font-semibold text-ink-primary">Work-order / job timer</span>
@@ -1518,11 +1517,11 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
             <div className="space-y-4">
                 <div className="flex items-end gap-2">
                 <div className="flex-1"><label className={lblc}>Set new password</label><input value={pw} onChange={(e) => setPw(e.target.value)} type="text" placeholder="Min 8 chars" className={fld} /></div>
-                <button onClick={resetPassword} disabled={!pw.trim()} className="px-3 py-2 rounded-lg border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50 disabled:opacity-50">Set</button>
+                <button onClick={resetPassword} disabled={!pw.trim()} className={buttonClass("secondary", "md")}>Set</button>
               </div>
               <div className="flex gap-2">
-                <button onClick={sendReset} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">Email reset link</button>
-                <button onClick={resetMfa} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">Reset 2FA</button>
+                <button onClick={sendReset} className={buttonClass("secondary", "sm")}>Email reset link</button>
+                <button onClick={resetMfa} className={buttonClass("secondary", "sm")}>Reset 2FA</button>
               </div>
               {!isSelf && (
                 <div className="border-t border-slate-100 pt-4">
@@ -1534,8 +1533,8 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
           )}
         </div>
         <div className="px-5 py-4 border-t border-slate-100 flex items-center gap-2">
-          <button onClick={onClose} className="ml-auto px-4 py-2 rounded-xl border border-slate-200 text-ink-secondary hover:bg-slate-50 font-semibold text-xs">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-xl bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : isNew ? "Add teammate" : "Save"}</button>
+          <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : isNew ? "Add teammate" : "Save"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
         </div>
       </div>
     </div>
@@ -1578,7 +1577,7 @@ function PayrollRuleDrawer({ rule, employees, statuses, onClose, onSaved }: { ru
   const isPct = f.calc_type === "percent";
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[520px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
@@ -1592,25 +1591,25 @@ function PayrollRuleDrawer({ rule, employees, statuses, onClose, onSaved }: { ru
             <h3 className="text-xs font-bold text-ink-primary">Trigger</h3>
             <div><label className={lblc}>Rule name</label><input value={f.name || ""} onChange={(e) => set("name", e.target.value)} className={fld} /></div>
             <div><label className={lblc}>Pays when this happens (event)</label>
-              <select value={f.event} onChange={(e) => set("event", e.target.value)} className={fld}>
+              <TeklySelect value={f.event} onChange={(e) => set("event", e.target.value)} className={fld}>
                 {PAYROLL_EVENTS.map((ev) => <option key={ev} value={ev}>{PAYROLL_EVENT_LABELS[ev]}</option>)}
-              </select></div>
+              </TeklySelect></div>
             <div><label className={lblc}>Applies to</label>
-              <select value={f.employee_id || ""} onChange={(e) => set("employee_id", e.target.value)} className={fld}>
+              <TeklySelect value={f.employee_id || ""} onChange={(e) => set("employee_id", e.target.value)} className={fld}>
                 <option value="">All employees (or by role default)</option>
                 {employees.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
-              </select></div>
+              </TeklySelect></div>
           </div>
 
           <div className="bg-white rounded-xl border border-slate-200/90 shadow-clay-card p-4 space-y-3">
             <h3 className="text-xs font-bold text-ink-primary">Amount</h3>
             <div className="grid grid-cols-2 gap-3">
               <div><label className={lblc}>Type</label>
-                <select value={f.calc_type} onChange={(e) => set("calc_type", e.target.value)} className={fld}><option value="percent">Percentage</option><option value="flat">Flat amount</option></select></div>
+                <TeklySelect value={f.calc_type} onChange={(e) => set("calc_type", e.target.value)} className={fld}><option value="percent">Percentage</option><option value="flat">Flat amount</option></TeklySelect></div>
               <div><label className={lblc}>{isPct ? "Percent (%)" : "Amount"}</label><input type="number" value={f.amount ?? ""} onChange={(e) => set("amount", e.target.value)} className={`${fld} font-mono`} /></div>
               {isPct && (
                 <div><label className={lblc}>Percentage of</label>
-                  <select value={f.percent_basis} onChange={(e) => set("percent_basis", e.target.value)} className={fld}><option value="total">Line / order total</option><option value="margin">Gross profit (margin)</option></select></div>
+                  <TeklySelect value={f.percent_basis} onChange={(e) => set("percent_basis", e.target.value)} className={fld}><option value="total">Line / order total</option><option value="margin">Gross profit (margin)</option></TeklySelect></div>
               )}
               <div><label className={lblc}>Coefficient (×)</label><input type="number" step="0.1" value={f.coefficient ?? ""} onChange={(e) => set("coefficient", e.target.value)} className={`${fld} font-mono`} /></div>
             </div>
@@ -1620,15 +1619,15 @@ function PayrollRuleDrawer({ rule, employees, statuses, onClose, onSaved }: { ru
             <h3 className="text-xs font-bold text-ink-primary">Conditions</h3>
             <div className="grid grid-cols-2 gap-3">
               <div><label className={lblc}>Accrue</label>
-                <select value={f.calc_timing} onChange={(e) => set("calc_timing", e.target.value)} className={fld}>{PAYROLL_TIMINGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
+                <TeklySelect value={f.calc_timing} onChange={(e) => set("calc_timing", e.target.value)} className={fld}>{PAYROLL_TIMINGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</TeklySelect></div>
               {f.calc_timing === "on_status" && (
                 <div><label className={lblc}>At status</label>
-                  <select value={f.trigger_status_key || ""} onChange={(e) => set("trigger_status_key", e.target.value)} className={fld}><option value="">— pick —</option>{statuses.map((s) => <option key={s.key} value={s.key}>{s.name}</option>)}</select></div>
+                  <TeklySelect value={f.trigger_status_key || ""} onChange={(e) => set("trigger_status_key", e.target.value)} className={fld}><option value="">— pick —</option>{statuses.map((s) => <option key={s.key} value={s.key}>{s.name}</option>)}</TeklySelect></div>
               )}
               <div><label className={lblc}>Only for orders</label>
-                <select value={f.term_condition} onChange={(e) => set("term_condition", e.target.value)} className={fld}>{PAYROLL_TERMS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
+                <TeklySelect value={f.term_condition} onChange={(e) => set("term_condition", e.target.value)} className={fld}>{PAYROLL_TERMS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</TeklySelect></div>
               <div><label className={lblc}>Level</label>
-                <select value={f.rule_level} onChange={(e) => set("rule_level", e.target.value)} className={fld}>{PAYROLL_LEVELS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
+                <TeklySelect value={f.rule_level} onChange={(e) => set("rule_level", e.target.value)} className={fld}>{PAYROLL_LEVELS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</TeklySelect></div>
               {f.rule_level === "category" && (
                 <div className="col-span-2"><label className={lblc}>Category name</label><input value={f.category || ""} onChange={(e) => set("category", e.target.value)} className={fld} placeholder="e.g. Screens" /></div>
               )}
@@ -1643,11 +1642,11 @@ function PayrollRuleDrawer({ rule, employees, statuses, onClose, onSaved }: { ru
           </div>
         </div>
         <div className="px-5 py-4 border-t border-slate-100 flex items-center justify-between gap-2 bg-slate-50/60">
-          {!isNew ? <button onClick={del} className="px-3 py-2 rounded-lg text-xs font-bold text-rose-600 hover:bg-rose-50">Delete</button> : <span />}
           <div className="flex gap-2">
-            <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button>
-            <button onClick={save} disabled={busy} className="px-5 py-2 rounded-lg bg-primary text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Saving…" : isNew ? "Add rule" : "Save"}</button>
+            <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : isNew ? "Add rule" : "Save"}</button>
+            <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
           </div>
+          {!isNew ? <button onClick={del} className="px-3 py-2 rounded-lg text-xs font-bold text-rose-600 hover:bg-rose-50">Delete</button> : <span />}
         </div>
       </div>
     </div>
@@ -1678,7 +1677,7 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
   async function del(id: string) { try { await api.del(`/forms/fields/${id}`); load(); onChanged(); } catch { /* ignore */ } }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[480px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <div><h2 className="font-bold text-ink-primary">Custom fields</h2><p className="text-[11px] text-ink-tertiary">{type.name || type.label}</p></div>
@@ -1687,7 +1686,7 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
           <div className="rounded-xl border border-slate-200 divide-y divide-slate-100">
             {!fields && <div className="p-4 text-xs text-ink-tertiary">Loading…</div>}
-            {fields?.length === 0 && <div className="p-4 text-xs text-ink-tertiary">No custom fields yet.</div>}
+            {fields?.length === 0 && <EmptyState size="section" icon={<M n="tune" c="text-lg" />} title="No custom fields yet." />}
             {fields?.map((f) => (
               <div key={f.id} className="flex items-center justify-between px-4 py-2.5 text-xs">
                 <div><span className="font-bold text-ink-primary">{f.field_label}</span><span className="ml-2 text-[11px] bg-slate-100 text-ink-tertiary px-1.5 py-0.5 rounded">{f.field_type}</span>{f.required && <span className="ml-1 text-[11px] text-rose-600 font-semibold">required</span>}{f.show_when_field_key && <span className="ml-1 text-[11px] text-primary font-semibold">conditional</span>}{f.upsell_comparator && <span className="ml-1 text-[11px] text-amber-700 font-semibold">upsell</span>}{f.gate_status_key && <span className="ml-1 text-[11px] text-rose-600 font-semibold">gate</span>}</div>
@@ -1699,24 +1698,24 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
             <div className="text-[11px] font-bold text-ink-tertiary">Add a field</div>
             <input value={nf.field_label} onChange={(e) => setNf({ ...nf, field_label: e.target.value })} placeholder="Field label" className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary" />
             <div className="flex items-center gap-3">
-              <select value={nf.field_type} onChange={(e) => setNf({ ...nf, field_type: e.target.value })} className="bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 capitalize">
+              <TeklySelect value={nf.field_type} onChange={(e) => setNf({ ...nf, field_type: e.target.value })} className="bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 capitalize">
                 {/* "bool" is the server's yes/no type — the old "checkbox" option was rejected with a 400 */}
                 {[["text", "Short text"], ["textarea", "Long text"], ["number", "Number"], ["select", "Pick one"], ["multiselect", "Pick several"], ["bool", "Yes / no"], ["date", "Date"], ["link", "Link"]].map(([t, l]) => <option key={t} value={t}>{l}</option>)}
-              </select>
+              </TeklySelect>
               <label className="flex items-center gap-1.5 text-xs text-ink-secondary"><input type="checkbox" checked={nf.required} onChange={(e) => setNf({ ...nf, required: e.target.checked })} className="w-4 h-4 rounded border-slate-300 text-primary" />Required</label>
-              <button onClick={add} disabled={busy} className="ml-auto px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-60">Add</button>
+              <button onClick={add} disabled={busy} className={buttonClass("primary", "sm", "ml-auto")}>Add</button>
             </div>
             {/* When to show */}
             <div className="flex flex-wrap items-center gap-2 text-xs text-ink-secondary pt-1 border-t border-slate-100">
               <span className="font-semibold"><M n="visibility" c="text-xs align-middle" /> Show only when</span>
-              <select value={nf.show_when_field_key} onChange={(e) => setNf({ ...nf, show_when_field_key: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
+              <TeklySelect value={nf.show_when_field_key} onChange={(e) => setNf({ ...nf, show_when_field_key: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
                 <option value="">always</option>
                 {(fields || []).map((f) => <option key={f.id} value={f.field_key}>{f.field_label}</option>)}
-              </select>
+              </TeklySelect>
               {nf.show_when_field_key && <>
-                <select value={nf.show_when_op} onChange={(e) => setNf({ ...nf, show_when_op: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
+                <TeklySelect value={nf.show_when_op} onChange={(e) => setNf({ ...nf, show_when_op: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
                   <option value="is">is</option><option value="is_not">is not</option><option value="gt">&gt;</option><option value="lt">&lt;</option><option value="filled">is filled</option>
-                </select>
+                </TeklySelect>
                 {nf.show_when_op !== "filled" && <input value={nf.show_when_value} onChange={(e) => setNf({ ...nf, show_when_value: e.target.value })} placeholder="value" className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 w-24" />}
               </>}
             </div>
@@ -1724,9 +1723,9 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
             <div className="flex flex-wrap items-center gap-2 text-xs text-ink-secondary pt-1 border-t border-slate-100">
               <label className="font-semibold flex items-center gap-1"><input type="checkbox" checked={nf.upsell_on} onChange={(e) => setNf({ ...nf, upsell_on: e.target.checked })} className="w-4 h-4 rounded border-slate-300 text-primary" /><M n="sell" c="text-xs align-middle" /> Draft upsell when value</label>
               {nf.upsell_on && <>
-                <select value={nf.upsell_comparator} onChange={(e) => setNf({ ...nf, upsell_comparator: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
+                <TeklySelect value={nf.upsell_comparator} onChange={(e) => setNf({ ...nf, upsell_comparator: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
                   <option value="lt">&lt;</option><option value="gt">&gt;</option><option value="is">is</option><option value="is_not">is not</option>
-                </select>
+                </TeklySelect>
                 {(nf.upsell_comparator === "lt" || nf.upsell_comparator === "gt")
                   ? <input value={nf.upsell_threshold} onChange={(e) => setNf({ ...nf, upsell_threshold: e.target.value })} placeholder="80" className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 w-16" />
                   : <input value={nf.upsell_value} onChange={(e) => setNf({ ...nf, upsell_value: e.target.value })} placeholder="value" className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 w-24" />}
@@ -1738,13 +1737,13 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
             <div className="flex flex-wrap items-center gap-2 text-xs text-ink-secondary pt-1 border-t border-slate-100">
               <label className="font-semibold flex items-center gap-1"><input type="checkbox" checked={nf.gate_on} onChange={(e) => setNf({ ...nf, gate_on: e.target.checked })} className="w-4 h-4 rounded border-slate-300 text-primary" /><M n="block" c="text-xs align-middle" /> Block status</label>
               {nf.gate_on && <>
-                <select value={nf.gate_status_key} onChange={(e) => setNf({ ...nf, gate_status_key: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
+                <TeklySelect value={nf.gate_status_key} onChange={(e) => setNf({ ...nf, gate_status_key: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
                   <option value="">choose…</option>{statuses.map((s) => <option key={s.id} value={s.key}>{s.name}</option>)}
-                </select>
+                </TeklySelect>
                 <span>when value</span>
-                <select value={nf.gate_comparator} onChange={(e) => setNf({ ...nf, gate_comparator: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
+                <TeklySelect value={nf.gate_comparator} onChange={(e) => setNf({ ...nf, gate_comparator: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
                   <option value="is">is</option><option value="is_not">is not</option><option value="lt">&lt;</option><option value="gt">&gt;</option>
-                </select>
+                </TeklySelect>
                 {(nf.gate_comparator === "lt" || nf.gate_comparator === "gt")
                   ? <input value={nf.gate_threshold} onChange={(e) => setNf({ ...nf, gate_threshold: e.target.value })} placeholder="0" className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 w-16" />
                   : <input value={nf.gate_value} onChange={(e) => setNf({ ...nf, gate_value: e.target.value })} placeholder="value" className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 w-24" />}
@@ -1890,7 +1889,7 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
   }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className={`relative ${hasVars ? "w-[720px]" : "w-[440px]"} max-w-full bg-white h-full shadow-drawer flex flex-col`}>
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h2 className="font-bold text-ink-primary">{title}</h2>
@@ -1908,11 +1907,11 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
             <div key={f.k}>
               <label htmlFor={`ed-${f.k}`} className="block text-sm font-medium text-ink-primary mb-1.5">{f.label}{f.req ? " *" : ""}</label>
               {f.type === "select" && f.choices ? (
-                <select id={`ed-${f.k}`} value={v[f.k]} onChange={set(f.k)} className={edInp}><option value="">Choose…</option>{f.choices.map((o: { value: string; label: string }) => <option key={o.value} value={o.value}>{o.label}</option>)}</select>
+                <TeklySelect id={`ed-${f.k}`} value={v[f.k]} onChange={set(f.k)} className={edInp}><option value="">Choose…</option>{f.choices.map((o: { value: string; label: string }) => <option key={o.value} value={o.value}>{o.label}</option>)}</TeklySelect>
               ) : f.type === "select" ? (
                 f.options
-                  ? <select id={`ed-${f.k}`} value={v[f.k] ?? ""} onChange={set(f.k)} className={edInp}>{f.options.map((o: { value: string; label: string }) => <option key={o.value} value={o.value}>{o.label}</option>)}</select>
-                  : <select id={`ed-${f.k}`} value={v[f.k]} onChange={set(f.k)} className={edInp}>{f.opts.map((o: string) => <option key={o} value={o}>{f.labels?.[o] || optLabel(o)}</option>)}</select>
+                  ? <TeklySelect id={`ed-${f.k}`} value={v[f.k] ?? ""} onChange={set(f.k)} className={edInp}>{f.options.map((o: { value: string; label: string }) => <option key={o.value} value={o.value}>{o.label}</option>)}</TeklySelect>
+                  : <TeklySelect id={`ed-${f.k}`} value={v[f.k]} onChange={set(f.k)} className={edInp}>{f.opts.map((o: string) => <option key={o} value={o}>{f.labels?.[o] || optLabel(o)}</option>)}</TeklySelect>
               ) : f.type === "color" ? (
                 <input id={`ed-${f.k}`} type="color" value={v[f.k]} onChange={set(f.k)} className="h-9 w-16 rounded-xl border border-slate-200" />
               ) : f.type === "textarea" ? (
@@ -1946,9 +1945,9 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
           ))}
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
-          {onDelete && initial?.id && <button onClick={async () => { if (await confirmDialog("Delete this item?", { danger: true, confirmLabel: "Delete" })) { await onDelete(); } }} className="h-9 px-3.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 mr-auto">Delete</button>}
-          <button onClick={onClose} className="h-9 px-3.5 rounded-xl border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs ml-auto">Cancel</button>
           <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
+          {onDelete && initial?.id && <button onClick={async () => { if (await confirmDialog("Delete this item?", { danger: true, confirmLabel: "Delete" })) { await onDelete(); } }} className="ml-auto h-9 px-3.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 mr-auto">Delete</button>}
         </div>
       </div>
     </div>
@@ -2109,7 +2108,7 @@ function EcommerceSettings() {
         {open && (
           <div className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-[180px_1fr] gap-3">
-              <div><label htmlFor="ecom-platform" className={lbl}>Platform</label><select id="ecom-platform" value={f.platform} onChange={(e) => setF({ ...f, platform: e.target.value })} className={field}><option value="shopify">Shopify</option><option value="woocommerce">WooCommerce</option></select></div>
+              <div><label htmlFor="ecom-platform" className={lbl}>Platform</label><TeklySelect id="ecom-platform" value={f.platform} onChange={(e) => setF({ ...f, platform: e.target.value })} className={field}><option value="shopify">Shopify</option><option value="woocommerce">WooCommerce</option></TeklySelect></div>
               <div><label htmlFor="ecom-url" className={lbl}>Store address</label><input id="ecom-url" value={f.store_url} onChange={(e) => setF({ ...f, store_url: e.target.value })} placeholder="my-shop.myshopify.com" className={field} /></div>
             </div>
             <div className="divide-y divide-slate-100">
@@ -2135,7 +2134,7 @@ function EcommerceSettings() {
             <span className="text-xs text-ink-tertiary">{[i.sync_products && "Products", i.sync_orders && "Orders"].filter(Boolean).join(" + ")}</span>
             <div className="flex-1" />
             <span className="text-xs text-ink-tertiary">{i.last_synced_at ? `Synced ${new Date(i.last_synced_at).toLocaleDateString()}` : "Never synced"}</span>
-            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${i.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-ink-secondary"}`}>{i.active ? "Active" : "Off"}</span>
+            <Badge tone={i.active ? "success" : "neutral"} size="sm">{i.active ? "Active" : "Off"}</Badge>
           </div>
         ))}
         {items && items.length === 0 && <div className="px-5 py-3 text-xs text-ink-tertiary">No stores connected.</div>}
@@ -2169,7 +2168,7 @@ function SsoSettings() {
         {open && (
           <div className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div><label htmlFor="sso-protocol" className={lbl}>Protocol</label><select id="sso-protocol" value={f.protocol} onChange={(e) => setF({ ...f, protocol: e.target.value })} className={field}><option value="oidc">OIDC</option><option value="saml">SAML</option></select></div>
+              <div><label htmlFor="sso-protocol" className={lbl}>Protocol</label><TeklySelect id="sso-protocol" value={f.protocol} onChange={(e) => setF({ ...f, protocol: e.target.value })} className={field}><option value="oidc">OIDC</option><option value="saml">SAML</option></TeklySelect></div>
               {inp("display_name", "Display name", { placeholder: "Google Workspace" })}
               {inp("metadata_url", "Issuer or metadata address", { placeholder: "https://…/.well-known/openid-configuration" })}
               {inp("email_domain", "Email domain", { placeholder: "company.com" })}
@@ -2193,7 +2192,7 @@ function SsoSettings() {
             <span className="font-medium text-ink-primary">{s.display_name}</span>
             {s.email_domain && <span className="text-xs text-ink-tertiary">@{s.email_domain}</span>}
             <div className="flex-1" />
-            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${s.enabled ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-ink-secondary"}`}>{s.enabled ? "Enabled" : "Disabled"}</span>
+            <Badge tone={s.enabled ? "success" : "neutral"} size="sm">{s.enabled ? "Enabled" : "Disabled"}</Badge>
             <button type="button" aria-label="Delete" onClick={() => del(s.id)} className="w-8 h-8 grid place-items-center rounded-lg text-ink-tertiary hover:text-rose-600 hover:bg-rose-50"><M n="delete" c="text-sm" /></button>
           </div>
         ))}
@@ -2215,7 +2214,7 @@ function ApprovalsSettings() {
     try { await api.post(`/approvals/${id}/decide`, { decision }); reload(); }
     catch (e: any) { alertDialog(e.message || "Failed"); } finally { setBusy(false); }
   }
-  const pill = (s: string) => s === "approved" ? "bg-emerald-100 text-emerald-700" : s === "rejected" ? "bg-rose-100 text-rose-700" : "bg-amber-100 text-amber-700";
+  const pill = (s: string): BadgeTone => s === "approved" ? "success" : s === "rejected" ? "danger" : "warning";
   return (
     <div className="max-w-3xl"><SectionCard title="Approval requests" count={items?.length}>
       <div className="px-5 py-2.5 border-b border-slate-100">
@@ -2235,7 +2234,7 @@ function ApprovalsSettings() {
             <div className="flex-1" />
             {r.status === "pending"
               ? <><button type="button" onClick={() => decide(r.id, "approve")} disabled={busy} className={btnPrimary}>Approve</button><button type="button" onClick={() => decide(r.id, "reject")} disabled={busy} className="h-9 px-3.5 rounded-xl border border-rose-200 bg-white text-rose-600 text-xs font-semibold hover:bg-rose-50 disabled:opacity-50">Reject</button></>
-              : <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${pill(r.status)}`}>{humanize(r.status || "")}</span>}
+              : <Badge tone={pill(r.status)} size="sm">{humanize(r.status || "")}</Badge>}
           </div>
         ))}
       </div>
@@ -2379,7 +2378,7 @@ function IndustryNote({ onChange }: { onChange: () => void }) {
         <div className="text-sm text-ink-primary">{cur ? <>Your shop repairs: <span className="font-semibold">{cur.label}</span></> : "What your shop repairs"}</div>
         <div className="text-[11px] text-ink-tertiary">The brands, models and groups below follow this. Change it in General.</div>
       </div>
-      <button onClick={onChange} className="ml-auto px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50 flex-shrink-0">Change</button>
+      <button onClick={onChange} className={buttonClass("secondary", "md", "ml-auto flex-shrink-0")}>Change</button>
     </div>
   );
 }
@@ -2406,10 +2405,7 @@ function MultiAssetSwitch() {
           <div className="text-xs text-ink-tertiary leading-relaxed">For customers who drop off a batch, like six tools at once. One job holds every item, each with its own problem and result, and each service or part can be marked for one item.</div>
           {err && <div className="mt-1 text-xs text-rose-600">{err}</div>}
         </div>
-        <button type="button" role="switch" aria-checked={st.on} aria-label="Several items per job" disabled={busy} onClick={flip}
-          className={`ml-auto w-10 h-6 rounded-full relative transition-colors flex-shrink-0 disabled:opacity-60 ${st.on ? "bg-primary" : "bg-slate-300"}`}>
-          <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${st.on ? "left-[18px]" : "left-0.5"}`} />
-        </button>
+        <span className="ml-auto"><Switch on={st.on} onChange={() => flip()} label="Several items per job" disabled={busy} /></span>
       </div>
     </div>
   );
@@ -2442,8 +2438,8 @@ function TierManager({ types }: { types: any[] }) {
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-5 space-y-3">
       <div><h4 className="text-sm font-semibold text-ink-primary">Quantity break tiers</h4>
         <p className="text-xs text-ink-tertiary mt-0.5">Lower the markup automatically once a line reaches a quantity. The highest matching tier wins.</p></div>
-      <select value={ptId} onChange={(e) => setPtId(e.target.value)} aria-label="Price type" className="glass-input rounded-xl px-3 py-2 text-sm max-w-xs">
-        <option value="">Choose a price type…</option>{types.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
+      <TeklySelect value={ptId} onChange={(e) => setPtId(e.target.value)} aria-label="Price type" className="glass-input rounded-xl px-3 py-2 text-sm max-w-xs">
+        <option value="">Choose a price type…</option>{types.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</TeklySelect>
       {ptId && <div className="space-y-2">
         {tiers.length === 0 && <p className="text-xs text-ink-tertiary">No tiers yet. The type's base markup applies at every quantity.</p>}
         {tiers.map((t) => (
@@ -2505,10 +2501,7 @@ function CloseRules({ type, onChanged, inline }: { type: any; onChanged?: () => 
     <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
       {rows.map(([k, label]) => (
         <label key={k} className="flex items-center gap-2.5 text-xs text-ink-secondary cursor-pointer">
-          <button type="button" role="switch" aria-checked={v[k]} aria-label={label} disabled={busy} onClick={() => flip(k)}
-            className={`w-9 h-5 rounded-full transition-colors relative shrink-0 disabled:opacity-60 ${v[k] ? "bg-primary" : "bg-slate-300"}`}>
-            <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${v[k] ? "left-[18px]" : "left-0.5"}`} />
-          </button>
+          <Switch size="sm" on={v[k]} onChange={() => flip(k)} label={label} disabled={busy} />
           <span title={label}>{short[k]}</span>
         </label>
       ))}
@@ -2520,10 +2513,7 @@ function CloseRules({ type, onChanged, inline }: { type: any; onChanged?: () => 
       <div className="text-xs font-semibold text-ink-primary">Before a {type.name} job can be closed</div>
       {rows.map(([k, label]) => (
         <label key={k} className="flex items-center gap-2.5 text-xs text-ink-secondary cursor-pointer">
-          <button type="button" role="switch" aria-checked={v[k]} aria-label={label} disabled={busy} onClick={() => flip(k)}
-            className={`w-9 h-5 rounded-full transition-colors relative shrink-0 disabled:opacity-60 ${v[k] ? "bg-primary" : "bg-slate-300"}`}>
-            <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${v[k] ? "left-[18px]" : "left-0.5"}`} />
-          </button>
+          <Switch size="sm" on={v[k]} onChange={() => flip(k)} label={label} disabled={busy} />
           <span>{label}</span>
         </label>
       ))}
@@ -2571,7 +2561,7 @@ function FormsDesigner({ types, onAddType, onEditType, onDeleteType, onAdvanced,
         {open && <div className="fixed inset-0 z-30" aria-hidden="true" onClick={() => setOpen("")} />}
         {isOrder && type ? (<div className="space-y-3">
           <div className="flex flex-wrap items-center gap-3">
-            <span className="text-2xs font-semibold uppercase tracking-wider text-ink-tertiary">Job type</span>
+            <span className="text-xs font-semibold text-ink-tertiary">Job type</span>
             <div className="relative">
               <button type="button" onClick={() => setOpen(open === "types" ? "" : "types")} aria-haspopup="menu" aria-expanded={open === "types"}
                 className="h-9 pl-3 pr-2.5 rounded-xl border border-slate-200 bg-white hover:border-slate-300 inline-flex items-center gap-2 text-xs font-semibold text-ink-primary transition-colors">

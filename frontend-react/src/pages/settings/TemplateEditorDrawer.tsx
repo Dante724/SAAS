@@ -1,17 +1,34 @@
-import { useEffect, useMemo, useRef, useState } from "react";
+import { lazy, Suspense, useCallback, useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+import { ArrowLeft, Code, Copy, CheckCircle2, Info, MoreHorizontal, Plus, Printer, SlidersHorizontal, Trash2, Undo2, Wand2 } from "lucide-react";
+import TeklySelect from "../../components/TeklySelect";
+import Tabs from "../../components/Tabs";
 import { buttonClass } from "../../components/Button";
 import LabelBarcodePicker, { LABEL_DOC_TYPES } from "./LabelBarcodePicker";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
 import Switch from "../../components/Switch";
-import { escapeHtml, printHtmlInFrame, sanitizeHtml } from "../../lib/safeHtml";
+import { printHtmlInFrame, sanitizeHtml } from "../../lib/safeHtml";
+import { allReasons, modeReason } from "./templateEditor/modeSupport";
+import { cleanTemplate, placeholders, type ModeId } from "./templateEditor/templateHtml";
+import FieldsPanel, { type VarGroup } from "./templateEditor/FieldsPanel";
+import LayoutGallery from "./templateEditor/LayoutGallery";
+import { proposeFix, type Fix } from "./templateEditor/autoFix";
+import { fetchFieldValues, fieldDisplay, type FieldValues } from "./templateEditor/fieldValues";
+import type { PageBox } from "./templateEditor/types";
 
-/* 144hr — Full-screen visual document editor: Edit⇄Preview, rich text (font family /
-   size / colour), a left Blocks panel (add / reorder / remove sections), and a right
-   variables slide-over. Pills + blocks serialize to plain HTML + {Tokens} on save. */
+/* Full-screen document template editor. One stored HTML template, edited in
+     Design — drag-and-drop page builder (GrapesJS, loaded on demand)
+     Text   — word-processor editing (Tiptap, loaded on demand)
+     Code   — the HTML itself (from the More menu)
+   plus Preview. Fields show the shop's real data unless "Show fields" is on (display only).
+   A view that would change a template's markup is greyed out with the reason, and offers a safe
+   rewrite when one exists. Changes save by themselves; an untouched template saves exactly as
+   it was loaded. */
 
-type Grp = { group: string; items: string[] };
+const DesignMode = lazy(() => import("./templateEditor/DesignMode"));
+const TextMode = lazy(() => import("./templateEditor/TextMode"));
+
 const MOST_USED = ["{Company Name}", "{Company Logo}", "{Company Phone}", "{Client Name}", "{Client Phone}", "{Order Number}",
   "{Order Created Date}", "{Asset Brand}", "{Asset Model}", "{Asset Serial Number}", "{Order Complaint}", "{Items Table}",
   "{All Items Table}", "{Order Total}", "{Order Balance Due}", "{Barcode}"];
@@ -32,254 +49,257 @@ export function toggleEvent(current: string | null | undefined, ev: string): str
   if (on.has(ev)) on.delete(ev); else on.add(ev);
   return AUTO_EVENTS.map(([e]) => e).filter((e) => on.has(e)).join(",");
 }
-// small identifying icon per variable group (Material Symbols names)
-const GROUP_ICON: Record<string, string> = {
-  "Most used": "auto_awesome", Company: "storefront", "Legal entity": "gavel", Interactive: "bolt", Client: "person",
-  Payer: "account_balance_wallet", Ticket: "receipt_long", Device: "devices", Tables: "table_rows",
-  Employees: "badge", Finance: "payments", Invoice: "description", Date: "calendar_today",
-  Links: "link", Other: "more_horiz", "Custom fields": "tune",
-};
 const FONTS = ["Inter", "Arial", "Helvetica", "Georgia", "Times New Roman", "Courier New", "Verdana", "Tahoma", "Roboto", "Trebuchet MS"];
-const SIZES = [10, 11, 12, 14, 16, 18, 20, 24, 28, 32, 40, 48];
+const PAPER: [string, string][] = [["a4", "A4"], ["letter", "Letter"], ["receipt80", "80 mm receipt"], ["receipt58", "58 mm receipt"], ["label", "Label"]];
+export const AUTOSAVE_MS = 2000;
 
-function pillHTML(tok: string) {
-  const label = tok.replace(/^\{|\}$/g, "");
-  return `<span class="tok-pill" contenteditable="false" data-tok="${escapeHtml(tok)}">${escapeHtml(label)}</span>`;
-}
-function hydrate(html: string) {
-  // Saved templates go into the live editor DOM: strip anything that could run script first.
-  return sanitizeHtml(html || "").replace(/\{[A-Z][^{}]*\}/g, (m) => pillHTML(m));
-}
-function serialize(root: HTMLElement) {
-  const clone = root.cloneNode(true) as HTMLElement;
-  clone.querySelectorAll(".tok-pill").forEach((el) => el.replaceWith(document.createTextNode((el as HTMLElement).dataset.tok || "")));
-  clone.querySelectorAll("[contenteditable]").forEach((el) => el.removeAttribute("contenteditable"));
-  clone.querySelectorAll("[data-bid]").forEach((el) => el.removeAttribute("data-bid"));
-  return clone.innerHTML;
-}
-function itemsTableHTML() {
-  const c = (s: string) => `<td style="border:1px solid #ddd;padding:6px">${s}</td>`;
-  return `<table style="width:100%;border-collapse:collapse;margin:8px 0"><thead><tr>${["#", "Item", "Qty", "Price", "Amount"].map((h) => `<th style="border:1px solid #ddd;padding:6px;text-align:left;background:#f5f5f5">${h}</th>`).join("")}</tr></thead><tbody><tr>${c(pillHTML("{Row Number}"))}${c(pillHTML("{Product Name}"))}${c(pillHTML("{Product Qty}"))}${c(pillHTML("{Product Price}"))}${c(pillHTML("{Product Amount}"))}</tr></tbody></table>`;
-}
+type View = ModeId | "preview";
+const MODE_NAME: Record<ModeId, string> = { design: "Design", text: "Text", html: "Code" };
+type Reasons = Record<ModeId, string | null> | null;
+type Meta = {
+  name: string; doc_type: string; page_size: string; font_family: string; is_default: boolean; auto_print_on: string;
+  page_w_mm: number | null; page_h_mm: number | null; margin_mm: number | null; barcode_field: string | null; barcode_types: Record<string, string>;
+};
+const metaOf = (t: any): Meta => ({
+  name: t?.name || "", doc_type: t?.doc_type || "estimate", page_size: t?.page_size || "a4", font_family: t?.font_family || "Inter",
+  is_default: !!t?.is_default, auto_print_on: t?.auto_print_on || "", page_w_mm: t?.page_w_mm ?? null, page_h_mm: t?.page_h_mm ?? null,
+  margin_mm: t?.margin_mm ?? null, barcode_field: t?.barcode_field ?? null, barcode_types: t?.barcode_types || {},
+});
 
-// Prebuilt document sections for the Blocks panel.
-const BLOCKS: { key: string; label: string; icon: string; html: () => string }[] = [
-  { key: "header", label: "Header", icon: "view_headline", html: () => `<div style="display:flex;justify-content:space-between;align-items:flex-start">${pillHTML("{Company Logo}")}<div style="text-align:right"><h1 style="margin:0">${pillHTML("{Company Name}")}</h1><div>${pillHTML("{Company Address}")}</div></div></div>` },
-  { key: "client", label: "Client", icon: "person", html: () => `<p><strong>For:</strong> ${pillHTML("{Client Name}")}<br/>${pillHTML("{Client Phone}")} · ${pillHTML("{Client Email}")}<br/>${pillHTML("{Client Address}")}</p>` },
-  { key: "device", label: "Device / asset", icon: "devices", html: () => `<p><strong>Device:</strong> ${pillHTML("{Asset Brand}")} ${pillHTML("{Asset Model}")} · SN ${pillHTML("{Asset Serial Number}")}</p>` },
-  { key: "custom_fields", label: "Form details", icon: "list_alt", html: () => `<div>${pillHTML("{Custom Fields}")}</div>` },
-  { key: "items", label: "Line items", icon: "table", html: () => `<h3>Work</h3>${itemsTableHTML()}` },
-  { key: "totals", label: "Totals", icon: "functions", html: () => `<p style="text-align:right">Subtotal ${pillHTML("{Subtotal}")}<br/>Tax ${pillHTML("{Tax Value}")}<br/><strong>Total ${pillHTML("{Order Total}")}</strong><br/>Balance due ${pillHTML("{Order Balance Due}")}</p>` },
-  { key: "summary", label: "Work summary", icon: "notes", html: () => `<p style="font-size:12px;color:#555">${pillHTML("{Work Summary}")}</p>` },
-  { key: "signature", label: "Signature", icon: "draw", html: () => `<div style="margin-top:24px"><div style="border-bottom:1px solid #333;width:260px;height:28px"></div><div style="font-size:11px;color:#555;margin-top:3px">Signature / Date</div></div>` },
-  { key: "terms", label: "Terms & notes", icon: "gavel", html: () => `<hr/><p style="font-size:11px;color:#666">Terms: all repairs carry a 90-day warranty on parts and labour unless stated otherwise.</p>` },
-  { key: "custom", label: "Blank block", icon: "crop_square", html: () => `<p>New section — type here.</p>` },
-];
+/** Who is signed in (the token's subject), so the last view used is remembered per person. */
+function userKey(): string {
+  try {
+    const tok = localStorage.getItem("ros_tok") || "";
+    const sub = JSON.parse(atob((tok.split(".")[1] || "").replace(/-/g, "+").replace(/_/g, "/")) || "{}").sub;
+    return `tk_template_view:${sub || "me"}`;
+  } catch { return "tk_template_view:me"; }
+}
+function readPref(): string | null { try { return localStorage.getItem(userKey()); } catch { return null; } }
+function writePref(v: string) { try { localStorage.setItem(userKey(), v); } catch { /* private window */ } }
+
+/** The view to open a template in: the last visual view used if it can hold this template,
+ *  else Design, then Text, then the code. */
+export function pickView(reasons: Record<ModeId, string | null>, preferred: string | null): ModeId {
+  const order: ModeId[] = ["design", "text", "html"];
+  if ((preferred === "design" || preferred === "text") && !reasons[preferred]) return preferred;
+  return order.find((m) => !reasons[m]) || "html";
+}
 
 export default function TemplateEditorDrawer({ initial, onClose, reload }: {
   initial: any; onClose: () => void; reload?: () => void;
 }) {
-  const edRef = useRef<HTMLDivElement | null>(null);
-  const savedRange = useRef<Range | null>(null);
-  const [meta, setMeta] = useState({
-    name: initial?.name || "", doc_type: initial?.doc_type || "estimate",
-    page_size: initial?.page_size || "a4", font_family: initial?.font_family || "Inter",
-    is_default: !!initial?.is_default,
-    auto_print_on: (initial?.auto_print_on || "") as string,
-    page_w_mm: initial?.page_w_mm ?? null as number | null,
-    page_h_mm: initial?.page_h_mm ?? null as number | null,
-    margin_mm: initial?.margin_mm ?? null as number | null,
-    barcode_field: (initial?.barcode_field ?? null) as string | null,
-    barcode_types: (initial?.barcode_types || {}) as Record<string, string>,
-  });
+  const [meta, setMeta] = useState<Meta>(() => metaOf(initial));
+  // The template body, exactly as stored. Every view reads and writes this one string.
+  const [html, setHtml] = useState<string>(initial?.body_html || "");
+  const [epoch, setEpoch] = useState(0);             // bump to reload the visual views from `html`
+  const [view, setView] = useState<View | null>(null);
+  const [reasons, setReasons] = useState<Reasons>(null);
+  const [fixes, setFixes] = useState<Partial<Record<ModeId, Fix>>>({});
+  const [fixing, setFixing] = useState<{ mode: ModeId; fix: Fix } | null>(null);
   const [templates, setTemplates] = useState<any[]>([]);
   const [currentId, setCurrentId] = useState<string | null>(initial?.id || null);
-  const [actionsOpen, setActionsOpen] = useState(false);
-  const [flash, setFlash] = useState<string | null>(null);
-  const say = (m: string) => { setFlash(m); setTimeout(() => setFlash(null), 1800); };
-  const [mode, setMode] = useState<"edit" | "preview">("edit");
-  const [code, setCode] = useState<string | null>(null);   // raw-HTML source view (null = off)
-  const [rail, setRail] = useState<"blocks" | "vars" | null>("vars");   // docked variables by default, like a clean editor
-  const [showSmart, setShowSmart] = useState(false);                    // Smart builder tucked away by default
+  const [menu, setMenu] = useState(false);
   const [settings, setSettings] = useState(false);
-  const [addOpen, setAddOpen] = useState(false);
-  const [blocks, setBlocks] = useState<{ id: string; label: string }[]>([]);
-  const [groups, setGroups] = useState<Grp[]>([]);
-  const [q, setQ] = useState("");
-  const [open, setOpen] = useState<Record<string, boolean>>({});
+  const [groups, setGroups] = useState<VarGroup[]>([]);
+  const [showFields, setShowFields] = useState(false);
+  const [fieldData, setFieldData] = useState<FieldValues | null>(null);
+  const [fieldsReady, setFieldsReady] = useState(false);
+  const [gallery, setGallery] = useState(!initial?.id && !initial?.body_html);
   const [preview, setPreview] = useState("");
   const [sample, setSample] = useState<string | null>(null);
-  const [size, setSize] = useState(14);
-  const [aiPrompt, setAiPrompt] = useState("");
-  const [aiBusy, setAiBusy] = useState(false);
-  const [presets, setPresets] = useState<{ key: string; label: string; doc_type: string }[]>([]);
-  const [empty, setEmpty] = useState(false);          // blank page → offer a starting layout
-  const [blankOk, setBlankOk] = useState(false);      // "Start blank" dismisses that offer
-  const [busy, setBusy] = useState(false);
+  const [saveState, setSaveState] = useState<"idle" | "saving" | "saved" | "error">("idle");
   const [err, setErr] = useState<string | null>(null);
+  const [leaving, setLeaving] = useState<null | (() => void)>(null);   // unsaved-changes prompt
+  // What was last saved (or loaded) and what was opened (for "Undo all changes").
+  const saved = useRef({ html: initial?.body_html || "", meta: JSON.stringify(metaOf(initial)) });
+  const opened = useRef({ html: initial?.body_html || "", meta: metaOf(initial) });
+  const insertRef = useRef<((tok: string) => void) | null>(null);
+  const bindInsert = useCallback((fn: ((tok: string) => void) | null) => { insertRef.current = fn; }, []);
+  const flushRef = useRef<(() => Promise<string | null>) | null>(null);
+  const bindFlush = useCallback((fn: (() => Promise<string | null>) | null) => { flushRef.current = fn; }, []);
+  const codeRef = useRef<HTMLTextAreaElement | null>(null);
+  const busy = saveState === "saving";
+  const metaKey = JSON.stringify(meta);
+  const dirty = html !== saved.current.html || metaKey !== saved.current.meta;
 
-  useEffect(() => { api.get<any>("/documents/smart-presets").then((d) => setPresets(d?.items || [])).catch(() => setPresets([])); }, []);
-
-  async function buildDoc(preset?: string) {
-    if (!edRef.current) return;
-    if (!preset && !aiPrompt.trim()) return;
-    if ((edRef.current.textContent || "").trim() && !(await confirmDialog("Replace the current document?"))) return;
-    setAiBusy(true); setErr(null);
-    try {
-      const r = await api.post<any>("/documents/ai-generate", { prompt: aiPrompt, doc_type: meta.doc_type, preset: preset || "" });
-      if (r?.body_html && edRef.current) { edRef.current.innerHTML = hydrate(r.body_html); refreshBlocks(); focusEditor(); }
-    } catch (e: any) { setErr(e?.message || "Could not build the document"); }
-    finally { setAiBusy(false); }
-  }
-
-  useEffect(() => { api.get<any>("/documents/templates").then((d) => setGroups(d?.variable_groups || [])).catch(() => setGroups([])); }, []);
   useEffect(() => {
-    if (!edRef.current) return;
-    const seeded = hydrate(initial?.body_html || "");
-    edRef.current.innerHTML = seeded && !/^\s*<section/i.test(seeded)
-      ? `<section data-block="body" data-label="Body">${seeded}</section>` : (seeded || "");
-    refreshBlocks();
-    /* eslint-disable-next-line */
+    api.get<any>("/documents/templates").then((d) => { setGroups(d?.variable_groups || []); setTemplates(d?.items || []); }).catch(() => setGroups([]));
   }, []);
 
-  // ── selection helpers (so font/size/colour apply to the last selection) ──
-  function saveSel() {
-    const s = window.getSelection();
-    if (s && s.rangeCount && edRef.current?.contains(s.anchorNode)) savedRange.current = s.getRangeAt(0).cloneRange();
-  }
-  function restoreSel() {
-    const s = window.getSelection();
-    if (savedRange.current && s) { s.removeAllRanges(); s.addRange(savedRange.current); }
-  }
-  function focusEditor() { edRef.current?.focus(); }
-  function exec(cmd: string, val?: string) { restoreSel(); document.execCommand(cmd, false, val); focusEditor(); }
-  function applyFont(f: string) { restoreSel(); document.execCommand("styleWithCSS", false, "true"); document.execCommand("fontName", false, f); focusEditor(); }
-  function applyColor(c: string) { restoreSel(); document.execCommand("styleWithCSS", false, "true"); document.execCommand("foreColor", false, c); focusEditor(); }
-  function applyHilite(c: string) { restoreSel(); document.execCommand("styleWithCSS", false, "true"); (document.execCommand("hiliteColor", false, c) || document.execCommand("backColor", false, c)); focusEditor(); }
-  function applySize(px: number) {
-    restoreSel(); document.execCommand("styleWithCSS", false, "false"); document.execCommand("fontSize", false, "7");
-    edRef.current?.querySelectorAll('font[size="7"]').forEach((f) => {
-      const s = document.createElement("span"); s.style.fontSize = px + "px";
-      while (f.firstChild) s.appendChild(f.firstChild); f.replaceWith(s);
-    });
-    focusEditor();
-  }
+  // Real values for every field, from the shop's latest record of this kind (display only).
+  useEffect(() => {
+    if (!groups.length) return;
+    let on = true;
+    const tokens = [...groups.flatMap((g) => g.items), ...placeholders(html)];
+    fetchFieldValues((p, b) => api.post<any>(p, b), tokens, meta.doc_type)
+      .then((d) => { if (on) { setFieldData(d); setFieldsReady(true); } })
+      .catch(() => { if (on) { setFieldData({ values: {}, sample: null }); setFieldsReady(true); } });
+    return () => { on = false; };
+  }, [groups, meta.doc_type]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => { const t = setTimeout(() => setFieldsReady(true), 4000); return () => clearTimeout(t); }, []);
 
-  // ── preview ──
+  // Which views can hold this template, and a safe rewrite for the ones that can't.
+  useEffect(() => {
+    let live = true;
+    const t = setTimeout(async () => {
+      const clean = cleanTemplate(html, sanitizeHtml);
+      let r: Record<ModeId, string | null>;
+      try { r = await allReasons(clean); } catch { r = { design: null, text: null, html: null }; }
+      const offer: Partial<Record<ModeId, Fix>> = {};
+      const fix = (r.design || r.text) ? proposeFix(clean) : null;
+      if (fix) for (const m of ["design", "text"] as const) if (r[m] && !(await modeReason(m, fix.html).catch(() => "x"))) offer[m] = fix;
+      if (!live) return;
+      setReasons(r); setFixes(offer);
+      setView((v) => v ?? pickView(r, readPref()));
+    }, view ? 500 : 0);
+    return () => { live = false; clearTimeout(t); };
+  }, [html, epoch]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  /** The template right now, including text still being typed in the Design canvas. */
+  async function latestHtml(): Promise<string> {
+    const out = await flushRef.current?.();
+    if (out != null && out !== html) { setHtml(out); return out; }
+    return html;
+  }
+  async function choose(v: View) {
+    await latestHtml();
+    if (v === "design" || v === "text") writePref(v);
+    if (v === "preview") fetchPreview();
+    setView(v);
+  }
+  /** Replace the whole body from outside the views (open a template, undo all). */
+  function loadBody(next: string) { setHtml(next); setReasons(null); setView(null); setEpoch((e) => e + 1); }
+
   async function fetchPreview() {
-    if (!edRef.current) return;
-    try { const r = await api.post<any>("/documents/preview", { body_html: serialize(edRef.current), doc_type: meta.doc_type, barcode_field: meta.barcode_field, barcode_types: meta.barcode_types }); setPreview(r?.html || ""); setSample(r?.sample || null); }
+    try { const r = await api.post<any>("/documents/preview", { body_html: cleanTemplate(await latestHtml(), sanitizeHtml), doc_type: meta.doc_type, barcode_field: meta.barcode_field, barcode_types: meta.barcode_types }); setPreview(r?.html || ""); setSample(r?.sample || null); }
     catch { setPreview("<p style='color:#999'>Preview unavailable.</p>"); }
   }
-  function toPreview() { if (code !== null) toggleCode(); fetchPreview(); setMode("preview"); }
-  function toEdit() { setMode("edit"); }
-  function toggleCode() {
-    if (code === null) { if (edRef.current) setCode(serialize(edRef.current)); }
-    else { if (edRef.current) { edRef.current.innerHTML = hydrate(code); refreshBlocks(); } setCode(null); }
+
+  function insertVar(tok: string) {
+    if (view === "html" && codeRef.current) {
+      const ta = codeRef.current; const a = ta.selectionStart ?? html.length, b = ta.selectionEnd ?? a;
+      setHtml(html.slice(0, a) + tok + html.slice(b));
+      requestAnimationFrame(() => { ta.focus(); ta.setSelectionRange(a + tok.length, a + tok.length); });
+      return;
+    }
+    insertRef.current?.(tok);
   }
 
-  // ── insert helpers ──
-  function insertNode(node: Node) {
-    const ed = edRef.current; if (!ed) return;
-    const sel = window.getSelection(); let range: Range;
-    if (sel && sel.rangeCount && ed.contains(sel.anchorNode)) { range = sel.getRangeAt(0); range.deleteContents(); }
-    else { range = document.createRange(); range.selectNodeContents(ed); range.collapse(false); }
-    range.insertNode(node);
-    const sp = document.createTextNode(" "); range.setStartAfter(node); range.insertNode(sp); range.setStartAfter(sp); range.collapse(true);
-    sel?.removeAllRanges(); sel?.addRange(range);
-  }
-  function insertVar(tok: string) { if (mode !== "edit") setMode("edit"); const t = document.createElement("div"); t.innerHTML = pillHTML(tok); insertNode(t.firstChild as Node); focusEditor(); }
-  function insertHTML(html: string) { const t = document.createElement("div"); t.innerHTML = html; const frag = document.createDocumentFragment(); while (t.firstChild) frag.appendChild(t.firstChild); insertNode(frag); focusEditor(); }
-
-  // ── blocks ──
-  function refreshBlocks() {
-    const ed = edRef.current; if (!ed) return;
-    setEmpty(!(ed.textContent || "").trim() && !ed.querySelector("img,table,hr,[data-var]"));
-    const secs = Array.from(ed.querySelectorAll(":scope > section")) as HTMLElement[];
-    secs.forEach((s) => { if (!s.dataset.bid) s.dataset.bid = Math.random().toString(36).slice(2, 9); });
-    setBlocks(secs.map((s) => ({ id: s.dataset.bid!, label: s.dataset.label || "Section" })));
-  }
-  function addBlock(key: string) {
-    const def = BLOCKS.find((b) => b.key === key); if (!def || !edRef.current) return;
-    const sec = document.createElement("section");
-    sec.dataset.block = key; sec.dataset.label = def.label; sec.dataset.bid = Math.random().toString(36).slice(2, 9);
-    sec.innerHTML = def.html();
-    edRef.current.appendChild(sec); setAddOpen(false); refreshBlocks();
-    sec.scrollIntoView({ behavior: "smooth", block: "center" });
-  }
-  function jumpBlock(id: string) { edRef.current?.querySelector<HTMLElement>(`section[data-bid="${id}"]`)?.scrollIntoView({ behavior: "smooth", block: "center" }); }
-  function removeBlock(id: string) { edRef.current?.querySelector(`section[data-bid="${id}"]`)?.remove(); refreshBlocks(); }
-  function moveBlock(dragId: string, overId: string) {
-    const ed = edRef.current; if (!ed || dragId === overId) return;
-    const a = ed.querySelector<HTMLElement>(`section[data-bid="${dragId}"]`);
-    const b = ed.querySelector<HTMLElement>(`section[data-bid="${overId}"]`);
-    if (!a || !b) return;
-    const rectAfter = b.compareDocumentPosition(a) & Node.DOCUMENT_POSITION_FOLLOWING;
-    b.parentNode!.insertBefore(a, rectAfter ? b : b.nextSibling); refreshBlocks();
-  }
-
-  // ── template list + in-place switching (Orderry-style flow) ──
-  async function loadList() {
-    try { const d = await api.get<any>("/documents/templates"); setTemplates(d?.items || []); } catch { /* keep prior */ }
-  }
-  useEffect(() => { loadList(); /* eslint-disable-next-line */ }, []);
-  function openTpl(t: any) {
-    setActionsOpen(false); setCode(null); setMode("edit");
-    setMeta({ name: t.name || "", doc_type: t.doc_type || "estimate", page_size: t.page_size || "a4", font_family: t.font_family || "Inter", is_default: !!t.is_default, auto_print_on: t.auto_print_on || "", page_w_mm: t.page_w_mm ?? null, page_h_mm: t.page_h_mm ?? null, margin_mm: t.margin_mm ?? null, barcode_field: t.barcode_field ?? null, barcode_types: t.barcode_types || {} });
-    setCurrentId(t.id || null);
-    requestAnimationFrame(() => { if (edRef.current) { edRef.current.innerHTML = hydrate(t.body_html || ""); refreshBlocks(); } });
-  }
-  function newDoc() {
-    setActionsOpen(false); setCode(null); setMode("edit");
-    setMeta({ name: "", doc_type: "estimate", page_size: "a4", font_family: "Inter", is_default: false, auto_print_on: "", page_w_mm: null, page_h_mm: null, margin_mm: null, barcode_field: null, barcode_types: {} });
-    setCurrentId(null);
-    requestAnimationFrame(() => { if (edRef.current) { edRef.current.innerHTML = ""; refreshBlocks(); } });
-  }
-  function bodyNow(): string { if (code !== null && edRef.current) { edRef.current.innerHTML = hydrate(code); setCode(null); } return edRef.current ? serialize(edRef.current) : ""; }
-
-  async function save() {
-    if (!meta.name.trim()) { setErr("Template name is required"); return; }
-    if (!edRef.current) return;
-    setBusy(true); setErr(null);
-    const payload = { ...meta, body_html: bodyNow() };
+  // ── saving ──
+  async function save(quiet = false): Promise<boolean> {
+    if (!meta.name.trim()) { if (!quiet) setErr("Give the template a name to save it"); return false; }
+    setSaveState("saving"); setErr(null);
+    const raw = await latestHtml();
+    const metaNow = JSON.stringify(meta);
+    const payload = { ...meta, body_html: cleanTemplate(raw, sanitizeHtml) };
     try {
       if (currentId) await api.put(`/documents/templates/${currentId}`, payload);
       else { const r = await api.post<any>("/documents/templates", payload); setCurrentId(r?.id || null); }
-      say("Saved"); await loadList(); reload?.();
-    } catch (e: any) { setErr(e?.message || "Could not save"); }
-    finally { setBusy(false); }
+      saved.current = { html: raw, meta: metaNow };
+      setSaveState("saved");
+      if (!quiet) { loadList(); reload?.(); }
+      return true;
+    } catch (e: any) { setSaveState("error"); setErr(e?.message || "Could not save"); return false; }
+  }
+  const saveRef = useRef(save); saveRef.current = save;
+  // Autosave: about two seconds after the last change, and only when something changed.
+  useEffect(() => {
+    if (!dirty || !currentId || !meta.name.trim() || busy) return;
+    const t = setTimeout(() => { saveRef.current(true).then((ok) => { if (ok) reload?.(); }); }, AUTOSAVE_MS);
+    return () => clearTimeout(t);
+  }, [html, metaKey, currentId, busy]); // eslint-disable-line react-hooks/exhaustive-deps
+  // Ctrl/Cmd+S saves now; leaving the page with unsaved changes asks first.
+  useEffect(() => {
+    const key = (e: KeyboardEvent) => { if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); saveRef.current(false); } };
+    window.addEventListener("keydown", key, true);
+    return () => window.removeEventListener("keydown", key, true);
+  }, []);
+  useEffect(() => {
+    if (!dirty) return;
+    const warn = (e: BeforeUnloadEvent) => { e.preventDefault(); e.returnValue = ""; };
+    window.addEventListener("beforeunload", warn);
+    return () => window.removeEventListener("beforeunload", warn);
+  }, [dirty]);
+
+  /** Run `next` once the current changes are safe: saved if they can be, else ask. */
+  async function guard(next: () => void) {
+    const latest = await latestHtml();
+    const isDirty = latest !== saved.current.html || JSON.stringify(meta) !== saved.current.meta;
+    if (!isDirty) { next(); return; }
+    setLeaving(() => next);
+  }
+  const close = () => guard(onClose);
+
+  async function loadList() {
+    try { const d = await api.get<any>("/documents/templates"); setTemplates(d?.items || []); } catch { /* keep prior */ }
+  }
+  function openTpl(t: any) {
+    setMenu(false);
+    const m = metaOf(t);
+    setMeta(m); setCurrentId(t.id || null); setSaveState("idle"); setErr(null);
+    saved.current = { html: t.body_html || "", meta: JSON.stringify(m) };
+    opened.current = { html: t.body_html || "", meta: m };
+    loadBody(t.body_html || "");
+  }
+  function blankDoc() {
+    setGallery(false);
+    openTpl({ doc_type: meta.doc_type || "estimate", name: "", body_html: "" });
+  }
+  function undoAll() {
+    setMenu(false);
+    confirmDialog("Put this template back the way it was when you opened it? Your changes since then are dropped.", { title: "Undo all changes", confirmLabel: "Undo all changes" })
+      .then((ok) => { if (ok) { setMeta(opened.current.meta); loadBody(opened.current.html); } });
   }
   async function duplicate() {
-    if (!edRef.current) return; setActionsOpen(false); setErr(null);
+    setMenu(false); setErr(null);
     try {
-      const r = await api.post<any>("/documents/templates", { ...meta, name: (meta.name || "Template") + " (copy)", is_default: false, auto_print_on: "", body_html: bodyNow() });   // a copy never double-prints
-      say("Duplicated"); await loadList(); reload?.();
-      if (r?.id) { setCurrentId(r.id); setMeta((m) => ({ ...m, name: (m.name || "Template") + " (copy)", is_default: false, auto_print_on: "" })); }
+      const body = cleanTemplate(await latestHtml(), sanitizeHtml);
+      const r = await api.post<any>("/documents/templates", { ...meta, name: (meta.name || "Template") + " (copy)", is_default: false, auto_print_on: "", body_html: body });   // a copy never double-prints
+      await loadList(); reload?.();
+      if (r?.id) openTpl({ ...meta, id: r.id, name: (meta.name || "Template") + " (copy)", is_default: false, auto_print_on: "", body_html: body });
     } catch (e: any) { setErr(e?.message || "Could not duplicate"); }
   }
   async function setDefault() {
-    setActionsOpen(false); if (!currentId) { setErr("Save the template first"); return; }
-    try { await api.put(`/documents/templates/${currentId}`, { ...meta, is_default: true, body_html: bodyNow() }); setMeta((m) => ({ ...m, is_default: true })); say("Set as default"); await loadList(); reload?.(); }
-    catch (e: any) { setErr(e?.message || "Failed"); }
+    setMenu(false); if (!currentId) { setErr("Save the template first"); return; }
+    setMeta((m) => ({ ...m, is_default: true }));   // autosave stores it
   }
   async function del() {
-    setActionsOpen(false); if (!currentId) { newDoc(); return; }
+    setMenu(false); if (!currentId) { blankDoc(); return; }
     if (!(await confirmDialog("Delete this template?", { danger: true, confirmLabel: "Delete" }))) return;
     try {
-      await api.del(`/documents/templates/${currentId}`); say("Deleted"); reload?.();
+      await api.del(`/documents/templates/${currentId}`); reload?.();
       const d = await api.get<any>("/documents/templates"); const items = d?.items || []; setTemplates(items);
-      if (items[0]) openTpl(items[0]); else newDoc();
+      saved.current = { html, meta: metaKey };
+      if (items[0]) openTpl(items[0]); else blankDoc();
     } catch (e: any) { setErr(e?.message || "Could not delete"); }
   }
+  async function printDoc() {
+    try {
+      const r = await api.post<any>("/documents/print-view", {
+        body_html: cleanTemplate(await latestHtml(), sanitizeHtml), doc_type: meta.doc_type, page_size: meta.page_size,
+        page_w_mm: meta.page_w_mm || null, page_h_mm: meta.page_h_mm || null,
+        margin_mm: meta.margin_mm ?? null, font_family: meta.font_family || "Inter",
+      });
+      const out = r?.html; if (!out) return;
+      printHtmlInFrame(out);
+    } catch (e: any) { setErr(e?.message || "Print failed"); }
+  }
+  async function applyFix() {
+    if (!fixing) return;
+    const { mode, fix } = fixing;
+    setFixing(null);
+    setHtml(fix.html);
+    const r = await allReasons(cleanTemplate(fix.html, sanitizeHtml)).catch(() => null);
+    if (r) { setReasons(r); setFixes({}); if (!r[mode]) setView(mode); }
+  }
 
-  const ql = q.trim().toLowerCase();
-  // "Most used" sits on top, open, so the everyday fields are one click away.
-  const shown = useMemo(() => {
+  // "Most used" first, so the everyday fields are one click away.
+  const varGroups = useMemo(() => {
     const all = new Set(groups.flatMap((g) => g.items));
     const most = { group: "Most used", items: MOST_USED.filter((t) => all.has(t)) };
-    const list = (most.items.length && !ql ? [most, ...groups] : groups);
-    return list.map((g) => ({ ...g, items: ql ? g.items.filter((i) => i.toLowerCase().includes(ql)) : g.items })).filter((g) => g.items.length);
-  }, [groups, ql]);
+    return most.items.length ? [most, ...groups] : groups;
+  }, [groups]);
+
   // paper-true canvas: real physical size → px at 96dpi (1mm = 3.7795px)
   const MM = 3.7795;
   const PRESET_MM: Record<string, [number, number | null]> = { a4: [210, 297], letter: [215.9, 279.4], receipt80: [80, null], receipt58: [58, null] };
@@ -288,72 +308,77 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
     if (PRESET_MM[meta.page_size]) { const [w, h] = PRESET_MM[meta.page_size]; return { w, h }; }
     return { w: 210, h: 297 };
   }
-  const _pm = pageMM();
-  const pageW = Math.round(_pm.w * MM);
-  const pageMinH = _pm.h ? Math.round(_pm.h * MM) : 420;
-  const padPx = Math.round(((meta.margin_mm ?? (meta.page_size === "a4" || meta.page_size === "letter" ? 10 : 4)) as number) * MM);
-  const dragId = useRef<string | null>(null);
+  const pm = pageMM();
+  const pageH = pm.h ? Math.round(pm.h * MM) : null;
+  const page: PageBox = {
+    w: Math.round(pm.w * MM), h: pageH, minH: pageH ?? 420,
+    pad: Math.round(((meta.margin_mm ?? (meta.page_size === "a4" || meta.page_size === "letter" ? 10 : 4)) as number) * MM),
+    font: meta.font_family || "Inter",
+  };
+  const display = useCallback((tok: string) => fieldDisplay(tok, fieldData, showFields, sanitizeHtml), [fieldData, showFields]);
+  // The visual views lay out the sheet and fields when they open; a change reopens them.
+  const viewKey = `${epoch}:${page.w}:${page.minH}:${page.pad}:${page.font}:${showFields}:${!!fieldData}`;
+  // What a visual view opens with (read when it mounts, so only worked out then).
+  const viewHtml = useMemo(() => cleanTemplate(html, sanitizeHtml), [view, viewKey]); // eslint-disable-line react-hooks/exhaustive-deps
 
-  async function printDoc() {
-    setActionsOpen(false);
-    try {
-      const r = await api.post<any>("/documents/print-view", {
-        body_html: bodyNow(), doc_type: meta.doc_type, page_size: meta.page_size,
-        page_w_mm: meta.page_w_mm || null, page_h_mm: meta.page_h_mm || null,
-        margin_mm: meta.margin_mm ?? null, font_family: meta.font_family || "Inter",
-      });
-      const html = r?.html; if (!html) return;
-      printHtmlInFrame(html);
-    } catch (e: any) { setErr(e?.message || "Print failed"); }
-  }
-
-  const TB = ({ cmd, val, icon, title }: { cmd: string; val?: string; icon: string; title: string }) => (
-    <button type="button" aria-label={title} title={title} onMouseDown={(e) => { e.preventDefault(); exec(cmd, val); }} className="w-8 h-8 rounded-md hover:bg-slate-200/70 flex items-center justify-center text-ink-secondary"><M n={icon} c="text-[18px]" /></button>
-  );
+  const greyed = (["design", "text"] as ModeId[]).filter((m) => reasons?.[m]);
+  const status = saveState === "saving" ? "Saving…" : saveState === "error" ? "Not saved" : dirty ? (currentId ? "Unsaved changes" : "Not saved yet") : currentId ? "All changes saved" : "";
+  const ready = view !== null && fieldsReady;
+  const paperOptions = PAPER.filter(([k]) => ["a4", "letter", "receipt80"].includes(k) || k === meta.page_size);
 
   return (
     <div className="fixed inset-0 z-50 flex flex-col bg-slate-100">
       {/* top bar */}
-      <div className="flex items-center gap-3 px-4 h-14 bg-white border-b border-slate-200 shrink-0">
-        <button aria-label="Close" onClick={onClose} title="Close" className="w-9 h-9 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="arrow_back" c="text-lg" /></button>
-        <button onClick={newDoc} className="h-9 px-3 rounded-lg border border-slate-200 text-ink-secondary font-semibold text-xs hover:bg-slate-100 hover:border-slate-300 flex items-center gap-1 shrink-0"><M n="add" c="text-[16px]" /> New</button>
+      <div className="flex items-center gap-2 px-3 h-14 bg-white border-b border-slate-200 shrink-0">
+        <button onClick={close} className={buttonClass("ghost", "md")}><ArrowLeft size={16} aria-hidden="true" /> Close</button>
+        <button onClick={() => guard(() => setGallery(true))} className={buttonClass("secondary", "md", "shrink-0")}><Plus size={16} aria-hidden="true" /> New</button>
         {templates.length > 0 && (
-          <select value={currentId || ""} onChange={(e) => { const t = templates.find((x) => x.id === e.target.value); if (t) openTpl(t); }}
-            className="glass-input h-9 max-w-[180px] rounded-xl px-3 text-sm">
-            <option value="" disabled>Switch template…</option>
+          <TeklySelect value={currentId || ""} aria-label="Open another template" onChange={(e) => { const t = templates.find((x) => x.id === e.target.value); if (t) guard(() => openTpl(t)); }}
+            className="glass-input h-9 max-w-[170px] rounded-xl px-3 text-sm">
+            <option value="" disabled>Open template…</option>
             {templates.map((t) => <option key={t.id} value={t.id}>{t.name}{t.is_default ? " (default)" : ""}</option>)}
-          </select>
+          </TeklySelect>
         )}
-        <input value={meta.name} onChange={(e) => setMeta({ ...meta, name: e.target.value })} placeholder="Untitled template" className="text-[15px] font-semibold text-ink-primary bg-transparent border-0 focus:outline-none focus:bg-slate-100 rounded px-2 py-1 w-44" />
-        {/* Actions menu — replaces separate rename/delete icons */}
+        <input value={meta.name} onChange={(e) => setMeta({ ...meta, name: e.target.value })} placeholder="Untitled template" aria-label="Template name" className="text-md font-semibold text-ink-primary bg-transparent border-0 focus:outline-none focus:bg-slate-100 rounded px-2 py-1 w-40" />
         <div className="relative">
-          <button aria-label="Actions" onClick={() => setActionsOpen((o) => !o)} title="Actions" className="w-9 h-9 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="more_vert" c="text-lg" /></button>
-          {actionsOpen && (
-            <div className="absolute left-0 top-11 z-20 w-48 bg-white border border-slate-200 rounded-xl shadow-drawer p-1">
-              <button onClick={duplicate} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-100 text-left text-sm text-ink-secondary"><M n="content_copy" c="text-ink-tertiary" /> Duplicate</button>
-              <button onClick={setDefault} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-100 text-left text-sm text-ink-secondary"><M n="check_circle" c="text-ink-tertiary" /> Set as default</button>
-              <button onClick={del} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-rose-50 text-left text-sm text-rose-600"><M n="delete" c="" /> Delete</button>
+          <button onClick={() => setMenu((o) => !o)} aria-haspopup="menu" aria-expanded={menu} className={buttonClass("ghost", "md")}><MoreHorizontal size={16} aria-hidden="true" /> More</button>
+          {menu && (
+            <div role="menu" className="absolute left-0 top-11 z-40 w-52 bg-white border border-slate-200 rounded-xl shadow-drawer p-1">
+              <MenuItem icon={<Code size={15} />} label="Edit code" onClick={() => { setMenu(false); choose("html"); }} />
+              <MenuItem icon={<Undo2 size={15} />} label="Undo all changes" disabled={html === opened.current.html && metaKey === JSON.stringify(opened.current.meta)} onClick={undoAll} />
+              <div className="h-px bg-slate-100 my-1" />
+              <MenuItem icon={<Copy size={15} />} label="Duplicate" onClick={duplicate} />
+              <MenuItem icon={<CheckCircle2 size={15} />} label="Use by default" onClick={setDefault} />
+              <MenuItem icon={<Trash2 size={15} />} label="Delete" danger onClick={del} />
             </div>
           )}
         </div>
-        <div className="mx-auto inline-flex rounded-full border border-slate-300 overflow-hidden text-xs font-semibold">
-          <button onClick={toEdit} className={`px-4 py-1.5 flex items-center gap-1 ${mode === "edit" ? "bg-primary text-white" : "text-ink-secondary hover:bg-slate-100"}`}><M n="edit" c="text-[15px]" /> Edit</button>
-          <button onClick={toPreview} className={`px-4 py-1.5 flex items-center gap-1 ${mode === "preview" ? "bg-primary text-white" : "text-ink-secondary hover:bg-slate-100"}`}><M n="visibility" c="text-[15px]" /> Preview</button>
-        </div>
+        <Tabs look="segmented" label="Editor view" className="mx-auto" value={(view || "design") as View}
+          onChange={(v) => choose(v)}
+          tabs={[
+            { id: "design", label: "Design", icon: <M n="dashboard" c="text-sm" />, disabled: !reasons || !!reasons.design, title: reasons?.design || "Drag and drop blocks onto the page" },
+            { id: "text", label: "Text", icon: <M n="format_color_text" c="text-sm" />, disabled: !reasons || !!reasons.text, title: reasons?.text || "Edit it like a document" },
+            { id: "preview", label: "Preview", icon: <M n="visibility" c="text-sm" />, title: "See it exactly as it prints" },
+          ]} />
+        <label className="flex items-center gap-1.5 text-xs font-semibold text-ink-secondary">Paper
+          <TeklySelect value={meta.page_size} aria-label="Paper size" onChange={(e) => setMeta({ ...meta, page_size: e.target.value })} className="glass-input h-9 rounded-xl px-2.5 text-sm">
+            {paperOptions.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
+          </TeklySelect>
+        </label>
         <div className="relative">
-          <button aria-label="Document settings" onClick={() => setSettings((s) => !s)} title="Document settings" className="w-9 h-9 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="tune" c="text-lg" /></button>
+          <button onClick={() => setSettings((s) => !s)} aria-expanded={settings} className={buttonClass("ghost", "md")}><SlidersHorizontal size={16} aria-hidden="true" /> Page &amp; print</button>
           {settings && (
-            <div className="absolute right-0 top-11 z-20 w-64 bg-white border border-slate-200 rounded-xl shadow-drawer p-3 space-y-3">
+            <div className="absolute right-0 top-11 z-40 w-64 bg-white border border-slate-200 rounded-xl shadow-drawer p-3 space-y-3">
               <div><label className="block text-sm font-medium text-ink-primary mb-1">Type</label>
-                <select value={meta.doc_type} onChange={(e) => setMeta({ ...meta, doc_type: e.target.value, auto_print_on: keepAllowed(meta.auto_print_on, e.target.value) })} className="glass-input w-full rounded-xl px-3 py-2 text-sm capitalize">{DOC_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}</select></div>
-              <div><label className="block text-sm font-medium text-ink-primary mb-1">Paper / label size</label>
-                <select value={meta.page_size} onChange={(e) => setMeta({ ...meta, page_size: e.target.value })} className="glass-input w-full rounded-xl px-3 py-2 text-sm">
+                <TeklySelect value={meta.doc_type} onChange={(e) => setMeta({ ...meta, doc_type: e.target.value, auto_print_on: keepAllowed(meta.auto_print_on, e.target.value) })} className="glass-input w-full rounded-xl px-3 py-2 text-sm capitalize">{DOC_TYPES.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}</TeklySelect></div>
+              <div><label className="block text-sm font-medium text-ink-primary mb-1">Paper</label>
+                <TeklySelect value={meta.page_size} onChange={(e) => setMeta({ ...meta, page_size: e.target.value })} className="glass-input w-full rounded-xl px-3 py-2 text-sm">
                   <option value="a4">A4 (210×297mm)</option>
                   <option value="letter">Letter (8.5×11in)</option>
                   <option value="receipt80">Receipt 80mm</option>
                   <option value="receipt58">Receipt 58mm</option>
                   <option value="label">Custom label (mm)…</option>
-                </select></div>
+                </TeklySelect></div>
               {meta.page_size === "label" && (
                 <div className="grid grid-cols-2 gap-2">
                   <div><label className="block text-sm font-medium text-ink-primary mb-1">Width mm</label>
@@ -365,7 +390,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
               <div><label className="block text-sm font-medium text-ink-primary mb-1">Margin mm (blank = auto)</label>
                 <input type="number" value={meta.margin_mm ?? ""} onChange={(e) => setMeta({ ...meta, margin_mm: e.target.value ? +e.target.value : null })} placeholder={(meta.page_size === "a4" || meta.page_size === "letter") ? "10" : "0"} className="glass-input w-full rounded-xl px-3 py-2 text-sm" /></div>
               <div><label className="block text-sm font-medium text-ink-primary mb-1">Default font</label>
-                <select value={meta.font_family} onChange={(e) => setMeta({ ...meta, font_family: e.target.value })} className="glass-input w-full rounded-xl px-3 py-2 text-sm">{FONTS.map((f) => <option key={f} value={f}>{f}</option>)}</select></div>
+                <TeklySelect value={meta.font_family} onChange={(e) => setMeta({ ...meta, font_family: e.target.value })} className="glass-input w-full rounded-xl px-3 py-2 text-sm">{FONTS.map((f) => <option key={f} value={f}>{f}</option>)}</TeklySelect></div>
               <div className="flex items-center gap-2 text-sm text-ink-secondary"><Switch size="sm" label="Default for this type" on={!!meta.is_default} onChange={(v) => setMeta({ ...meta, is_default: v })} /> Default for this type</div>
               {autoPrintChoices(meta.doc_type).length > 0 && (
                 <fieldset><legend className="block text-sm font-medium text-ink-primary mb-1">Print automatically when</legend>
@@ -376,7 +401,7 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
                         <input type="checkbox" checked={on} onChange={() => setMeta({ ...meta, auto_print_on: toggleEvent(meta.auto_print_on, ev) })} /> {label}</label>
                     );
                   })}
-                  <span className="block text-[11px] text-ink-tertiary mt-1">{meta.doc_type === "label"
+                  <span className="block text-2xs text-ink-tertiary mt-1">{meta.doc_type === "label"
                     ? "One label per item on the job. Only labels that use {Asset …} variables can print by themselves."
                     : "Nothing ticked: it only prints when someone presses Print."}</span>
                 </fieldset>
@@ -385,153 +410,119 @@ export default function TemplateEditorDrawer({ initial, onClose, reload }: {
             </div>
           )}
         </div>
-        <button onClick={() => setRail((r) => r === "blocks" ? null : "blocks")} className={`h-9 px-3 rounded-lg border text-xs font-semibold flex items-center gap-1 ${rail === "blocks" ? "border-primary text-primary bg-primary/5" : "border-slate-200 text-ink-secondary hover:bg-slate-100"}`}><M n="dashboard" c="text-[16px]" /> Blocks</button>
-        <button onClick={() => setRail((r) => r === "vars" ? null : "vars")} className={`h-9 px-3 rounded-lg border text-xs font-semibold flex items-center gap-1 ${rail === "vars" ? "border-primary text-primary bg-primary/5" : "border-slate-200 text-ink-secondary hover:bg-slate-100"}`}><M n="data_object" c="text-[16px]" /> Variables</button>
-        {flash && <span className="text-xs text-emerald-600 font-semibold">{flash}</span>}
-        <button aria-label="Print at exact size" onClick={printDoc} title="Print at exact size" className="w-9 h-9 rounded-lg border border-slate-200 hover:bg-slate-100 flex items-center justify-center text-ink-secondary"><M n="print" c="text-lg" /></button>
-        <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save"}</button>
+        <label className="flex items-center gap-2 text-xs font-semibold text-ink-secondary pl-1" title="Show field names instead of your shop's data">
+          <Switch size="sm" label="Show fields" on={showFields} onChange={setShowFields} /> Show fields
+        </label>
       </div>
 
-      {/* formatting toolbar (edit only) */}
-      {mode === "edit" && (
-        <div className="px-4 py-1.5 bg-white border-b border-slate-200 flex items-center gap-1 flex-wrap shrink-0">
-          <select title="Font" onMouseDown={saveSel} onChange={(e) => applyFont(e.target.value)} defaultValue="" className="h-8 border border-slate-200 rounded-md text-xs px-1.5 text-ink-secondary bg-white">
-            <option value="" disabled>Font</option>{FONTS.map((f) => <option key={f} value={f} style={{ fontFamily: f }}>{f}</option>)}
-          </select>
-          <select title="Size" value={size} onMouseDown={saveSel} onChange={(e) => { const px = Number(e.target.value); setSize(px); applySize(px); }} className="h-8 border border-slate-200 rounded-md text-xs px-1.5 text-ink-secondary bg-white w-16">
-            {SIZES.map((s) => <option key={s} value={s}>{s}px</option>)}
-          </select>
-          <label title="Text colour" className="w-8 h-8 rounded-md hover:bg-slate-200/70 flex items-center justify-center text-ink-secondary cursor-pointer relative"><M n="format_color_text" c="text-lg" /><input type="color" onMouseDown={saveSel} onChange={(e) => applyColor(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" /></label>
-          <label title="Highlight" className="w-8 h-8 rounded-md hover:bg-slate-200/70 flex items-center justify-center text-ink-secondary cursor-pointer relative"><M n="format_ink_highlighter" c="text-lg" /><input type="color" onMouseDown={saveSel} onChange={(e) => applyHilite(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" /></label>
-          <span className="w-px h-5 bg-slate-200 mx-1" />
-          <TB cmd="bold" icon="format_bold" title="Bold" />
-          <TB cmd="italic" icon="format_italic" title="Italic" />
-          <TB cmd="underline" icon="format_underlined" title="Underline" />
-          <TB cmd="strikeThrough" icon="strikethrough_s" title="Strikethrough" />
-          <TB cmd="formatBlock" val="h1" icon="title" title="Heading 1" />
-          <TB cmd="formatBlock" val="h2" icon="text_fields" title="Heading 2" />
-          <TB cmd="insertUnorderedList" icon="format_list_bulleted" title="Bullet list" />
-          <TB cmd="justifyLeft" icon="format_align_left" title="Align left" />
-          <TB cmd="justifyCenter" icon="format_align_center" title="Align center" />
-          <TB cmd="justifyRight" icon="format_align_right" title="Align right" />
-          <TB cmd="insertHorizontalRule" icon="horizontal_rule" title="Divider" />
-          <span className="w-px h-5 bg-slate-200 mx-1" />
-          <button type="button" onMouseDown={(e) => { e.preventDefault(); insertVar("{Company Logo}"); }} className="h-8 px-2 rounded-md hover:bg-slate-200/70 flex items-center gap-1 text-xs text-ink-secondary"><M n="image" c="text-[16px]" /> Logo</button>
-          <button type="button" onMouseDown={(e) => { e.preventDefault(); insertHTML(itemsTableHTML()); }} className="h-8 px-2 rounded-md hover:bg-slate-200/70 flex items-center gap-1 text-xs text-ink-secondary"><M n="table" c="text-[16px]" /> Items table</button>
-          <button aria-label="Edit HTML source" type="button" title="Edit HTML source" onClick={toggleCode} className={`w-8 h-8 rounded-md flex items-center justify-center ${code !== null ? "bg-primary/10 text-primary" : "hover:bg-slate-200/70 text-ink-secondary"}`}><M n="code" c="text-[18px]" /></button>
-          <button type="button" onClick={() => setShowSmart((s) => !s)} className={`h-8 px-2 rounded-md flex items-center gap-1 text-xs ml-auto ${showSmart ? "bg-primary/10 text-primary" : "hover:bg-slate-200/70 text-ink-secondary"}`}><M n="bolt" c="text-[16px]" /> Smart builder</button>
-        </div>
-      )}
-
-      {/* Smart builder — Tekly's own document intelligence (offline presets + describe) */}
-      {mode === "edit" && showSmart && (
-        <div className="px-4 py-2 bg-primary/5 border-b border-slate-200 flex items-center gap-2 flex-wrap shrink-0">
-          <span className="inline-flex items-center gap-1 text-2xs font-semibold text-primary"><M n="bolt" c="" /> Smart builder</span>
-          {presets.map((p) => (
-            <button key={p.key} onClick={() => buildDoc(p.key)} disabled={aiBusy} className="text-[11px] px-2 py-1 rounded-full border border-slate-200 bg-white hover:border-primary hover:text-primary disabled:opacity-60">{p.label}</button>
+      {/* why a view is greyed out, one line each, with a safe fix when there is one */}
+      {greyed.length > 0 && view !== "preview" && (
+        <div className="px-4 py-1.5 bg-white border-b border-slate-200 flex flex-col gap-1 shrink-0" role="note" aria-label="Unavailable views">
+          {greyed.map((m) => (
+            <span key={m} className="text-2xs text-ink-tertiary flex items-center gap-1.5 flex-wrap" data-testid={`reason-${m}`}>
+              <Info size={13} aria-hidden="true" /><strong className="font-semibold text-ink-secondary">{MODE_NAME[m]} is unavailable for this template.</strong> {reasons?.[m]}
+              {fixes[m] && greyed.find((g) => fixes[g]) === m && <button type="button" onClick={() => setFixing({ mode: m, fix: fixes[m]! })} className={buttonClass("secondary", "sm", "ml-1")}><Wand2 size={13} aria-hidden="true" /> Make this editable visually</button>}
+            </span>
           ))}
-          <span className="w-px h-5 bg-slate-200 mx-0.5" />
-          <input value={aiPrompt} onChange={(e) => setAiPrompt(e.target.value)} onKeyDown={(e) => { if (e.key === "Enter") buildDoc(); }}
-            placeholder="…or describe one — e.g. “estimate with logo, parts table, deposit line and signature”"
-            className="glass-input flex-1 min-w-[220px] rounded-xl px-3 py-2 text-sm" />
-          <button onClick={() => buildDoc()} disabled={aiBusy || !aiPrompt.trim()} className="h-8 px-3 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60 flex items-center gap-1 whitespace-nowrap">{aiBusy ? "Building…" : "Build"}</button>
         </div>
       )}
 
-      {/* body: blocks rail | desk | vars rail */}
-      <div className="flex-1 min-h-0 flex">
-        {/* Blocks rail (edit only) */}
-        {mode === "edit" && rail === "blocks" && (
-          <aside className="w-56 bg-white border-r border-slate-200 flex flex-col shrink-0">
-            <div className="px-3 py-2.5 border-b border-slate-200 flex items-center justify-between">
-              <span className="text-[11px] font-bold text-ink-secondary ">Blocks</span>
-              <div className="relative">
-                <button onClick={() => setAddOpen((a) => !a)} className="text-xs font-semibold text-primary flex items-center gap-0.5 hover:underline"><M n="add" c="text-[15px]" /> Add</button>
-                {addOpen && (
-                  <div className="absolute right-0 top-7 z-20 w-48 bg-white border border-slate-200 rounded-xl shadow-drawer p-1">
-                    {BLOCKS.map((b) => (
-                      <button key={b.key} onClick={() => addBlock(b.key)} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-100 text-left text-sm text-ink-secondary"><M n={b.icon} c="text-ink-tertiary" /> {b.label}</button>
-                    ))}
-                  </div>
-                )}
-              </div>
-            </div>
-            <div className="flex-1 overflow-y-auto p-2 space-y-1">
-              {blocks.length === 0 && <p className="text-[11px] text-ink-tertiary px-1 py-2">Add blocks to build your document, or just type on the page.</p>}
-              {blocks.map((b) => (
-                <div key={b.id} draggable onDragStart={() => { dragId.current = b.id; }} onDragOver={(e) => e.preventDefault()} onDrop={() => { if (dragId.current) moveBlock(dragId.current, b.id); dragId.current = null; }}
-                  className="group flex items-center gap-1.5 px-2 py-1.5 rounded-lg border border-slate-200 bg-white hover:border-slate-300 cursor-grab active:cursor-grabbing">
-                  <M n="drag_indicator" c="text-ink-tertiary" />
-                  <button onClick={() => jumpBlock(b.id)} className="flex-1 text-left text-xs font-medium text-ink-primary truncate">{b.label}</button>
-                  <button aria-label="Remove" onClick={() => removeBlock(b.id)} title="Remove" className="w-6 h-6 rounded grid place-items-center text-ink-tertiary opacity-0 group-hover:opacity-100 hover:bg-rose-50 hover:text-rose-500"><M n="close" c="text-[13px]" /></button>
+      {/* body */}
+      <div className="flex-1 min-h-0 flex relative">
+        <div className="relative flex-1 min-w-0 flex flex-col">
+          {!ready && <div className="flex-1 grid place-items-center text-xs text-ink-tertiary">Opening the editor…</div>}
+          <Suspense fallback={<div className="flex-1 grid place-items-center text-xs text-ink-tertiary">Loading the editor…</div>}>
+            {ready && view === "design" && <DesignMode key={viewKey} html={viewHtml} onChange={setHtml} groups={varGroups} page={page} display={display} bindInsert={bindInsert} bindFlush={bindFlush} onSaveShortcut={() => saveRef.current(false)} />}
+            {ready && view === "text" && <TextMode key={viewKey} html={viewHtml} onChange={setHtml} groups={varGroups} page={page} display={display} bindInsert={bindInsert} />}
+          </Suspense>
+          {ready && view === "html" && (
+            <div className="flex-1 min-h-0 flex">
+              <aside className="w-64 shrink-0 bg-white border-r border-slate-200 overflow-y-auto" aria-label="Fields list"><FieldsPanel groups={varGroups} onPick={insertVar} /></aside>
+              <div className="flex-1 min-w-0 flex flex-col bg-slate-900">
+                <div className="px-4 py-1.5 text-2xs font-semibold text-slate-300 border-b border-slate-700 flex items-center gap-2">
+                  <Code size={13} aria-hidden="true" /> Code. Changes show in Design and Text when you go back.
+                  <button type="button" onClick={() => choose(pickView(reasons || { design: null, text: null, html: null }, readPref()))} className="ml-auto h-7 px-2.5 rounded-lg text-2xs font-semibold text-slate-100 hover:bg-white/10">Back to the page</button>
                 </div>
-              ))}
-            </div>
-          </aside>
-        )}
-
-        {/* desk */}
-        <div className="relative flex-1 min-w-0 overflow-auto">
-          {code !== null && mode === "edit" && (
-            <div className="absolute inset-0 z-10 flex flex-col bg-slate-900">
-              <div className="px-4 py-1.5 text-2xs font-semibold text-slate-300 border-b border-slate-700 flex items-center gap-1"><M n="code" c="text-xs" /> HTML source — click the &lt;/&gt; button again to apply</div>
-              <textarea value={code} onChange={(e) => setCode(e.target.value)} spellCheck={false}
-                className="flex-1 w-full bg-slate-900 text-slate-100 tabular-nums text-xs p-4 outline-none resize-none" />
+                <textarea ref={codeRef} value={html} onChange={(e) => setHtml(e.target.value)} spellCheck={false} aria-label="HTML source"
+                  className="flex-1 w-full bg-slate-900 text-slate-100 font-mono text-xs leading-5 p-4 outline-none resize-none" />
+              </div>
             </div>
           )}
-          <div className="relative min-h-full flex justify-center py-8 px-6">
-            {mode === "edit" && empty && !blankOk && code === null && presets.length > 0 && (
-              <div className="absolute top-20 left-1/2 -translate-x-1/2 z-[5] w-[420px] max-w-[90%] bg-white rounded-2xl border border-slate-200 shadow-clay-drawer p-5">
-                <div className="text-sm font-semibold text-ink-primary">Start from a layout</div>
-                <div className="text-[11px] text-ink-tertiary mb-3">Pick one and change anything you like. Your logo and details fill in automatically.</div>
-                <div className="space-y-1.5">
-                  {[...presets].sort((a, b) => Number(b.doc_type === meta.doc_type) - Number(a.doc_type === meta.doc_type)).map((p) => (
-                    <button key={p.key} onClick={() => { setBlankOk(true); buildDoc(p.key); }} disabled={aiBusy}
-                      className={`w-full flex items-center gap-3 px-3 py-2.5 rounded-xl border text-left transition-colors disabled:opacity-60 ${p.doc_type === meta.doc_type ? "border-primary/40 bg-primary/5" : "border-slate-200 hover:border-slate-300"}`}>
-                      <M n="description" c="text-base text-primary" />
-                      <span className="text-sm text-ink-primary flex-1">{p.label}</span>
-                      {p.doc_type === meta.doc_type && <span className="text-[11px] font-semibold text-primary">Suggested</span>}
-                    </button>
-                  ))}
-                </div>
-                <button onClick={() => { setBlankOk(true); focusEditor(); }} className="mt-3 w-full text-center text-xs font-semibold text-ink-secondary hover:text-ink-primary py-1.5">Start with a blank page</button>
+          {view === "preview" && (
+            <div className="relative flex-1 min-h-0 overflow-auto">
+              {sample && <div className="absolute top-3 left-1/2 -translate-x-1/2 text-2xs text-ink-tertiary bg-white/80 border border-slate-200 rounded-full px-3 py-1">Preview using {sample}</div>}
+              <div className="min-h-full flex justify-center py-10 px-6">
+                <div className="doc-canvas bg-paper shadow-lg text-sm text-paper-ink" style={{ width: page.w, maxWidth: "100%", minHeight: page.minH, padding: page.pad, fontFamily: `${page.font}, Arial, sans-serif`, lineHeight: 1.5 }}
+                  dangerouslySetInnerHTML={{ __html: preview ? sanitizeHtml(preview) : "<p style='color:#999'>Loading preview…</p>" }} />
               </div>
-            )}
-            <div ref={edRef} contentEditable={mode === "edit"} suppressContentEditableWarning onInput={refreshBlocks} onKeyUp={saveSel} onMouseUp={saveSel}
-              className={`doc-canvas bg-paper shadow-lg outline-none text-sm text-paper-ink ${mode === "edit" ? "editing" : ""}`}
-              style={{ width: pageW, maxWidth: "100%", minHeight: pageMinH, padding: padPx, fontFamily: meta.font_family || "Inter", lineHeight: 1.5, display: mode === "edit" ? "block" : "none" }} />
-            {mode === "preview" && (
-              <div className="doc-canvas bg-paper shadow-lg text-sm text-paper-ink" style={{ width: pageW, maxWidth: "100%", minHeight: pageMinH, padding: padPx, fontFamily: meta.font_family || "Inter", lineHeight: 1.5 }} dangerouslySetInnerHTML={{ __html: preview ? sanitizeHtml(preview) : "<p style='color:#999'>Loading preview…</p>" }} />
-            )}
-          </div>
-          {mode === "preview" && sample && <div className="absolute top-3 left-1/2 -translate-x-1/2 text-[11px] text-ink-tertiary bg-white/80 border border-slate-200 rounded-full px-3 py-1">Preview using {sample}</div>}
+            </div>
+          )}
         </div>
-
-        {/* variables rail */}
-        {rail === "vars" && (
-          <aside className="w-[300px] bg-white border-l border-slate-200 flex flex-col shrink-0">
-            <div className="p-2.5 border-b border-slate-200 flex items-center gap-2">
-              <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search variables…" className="flex-1 bg-white border border-slate-200 rounded-md text-xs px-2 py-1.5 focus:outline-none focus:ring-1 focus:ring-primary" />
-              <button aria-label="Close" onClick={() => setRail("blocks")} className="w-7 h-7 rounded-md hover:bg-slate-100 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
-            </div>
-            <div className="flex-1 overflow-y-auto p-1.5 space-y-1">
-              <p className="text-[11px] text-ink-tertiary px-2 pt-1 pb-2">Click a variable to drop it into the page at your cursor.</p>
-              {shown.length === 0 && <div className="text-xs text-ink-tertiary px-2 py-3">No matches.</div>}
-              {shown.map((g) => {
-                const isOpen = ql ? true : (open[g.group] ?? g.group === "Most used");
-                return (
-                  <div key={g.group}>
-                    <button type="button" onClick={() => setOpen((o) => ({ ...o, [g.group]: !isOpen }))} className="w-full flex items-center gap-2 px-2 py-1.5 rounded-md hover:bg-slate-200/60 text-left"><M n={GROUP_ICON[g.group] || "label"} c="text-ink-tertiary shrink-0" /><span className="text-2xs font-semibold text-ink-secondary flex-1">{g.group}</span><M n={isOpen ? "expand_less" : "expand_more"} c="text-sm text-ink-tertiary" /></button>
-                    {isOpen && <div className="pb-1">{g.items.map((tok) => (<button key={tok} type="button" title={`Insert ${tok}`} onMouseDown={(e) => { e.preventDefault(); insertVar(tok); }} className="group/var w-full flex items-center gap-1.5 pl-3 pr-2 py-1 text-xs text-primary text-left rounded hover:bg-primary/5"><span className="truncate">{tok.replace(/^\{|\}$/g, "")}</span><M n="add" c="text-xs text-ink-tertiary opacity-0 group-hover/var:opacity-100 ml-auto shrink-0" /></button>))}</div>}
-                  </div>
-                );
-              })}
-            </div>
-          </aside>
-        )}
       </div>
 
-      {err && <div className="px-4 py-2 bg-rose-50 border-t border-rose-200 text-rose-700 text-xs shrink-0">{err}</div>}
+      {/* footer: main action first, on the left (owner rule) */}
+      <div className="flex items-center gap-2 px-4 h-14 bg-white border-t border-slate-200 shrink-0">
+        <button onClick={() => save(false)} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save"}</button>
+        <button onClick={printDoc} className={buttonClass("secondary", "md")}><Printer size={15} aria-hidden="true" /> Print at exact size</button>
+        <span className="text-xs text-ink-tertiary" role="status" data-testid="save-status">{status}{status && currentId ? " · saves by itself" : ""}</span>
+        {fieldData && !showFields && view !== "html" && view !== "preview" && (
+          <span className="ml-auto text-2xs text-ink-tertiary">{fieldData.sample ? `Fields show ${fieldData.sample}. ` : "No records yet: fields show sample values. "}Turn on Show fields to see their names.</span>
+        )}
+        {err && <span className={`${fieldData ? "" : "ml-auto"} text-xs text-rose-700`} role="alert">{err}</span>}
+      </div>
+
+      {gallery && (
+        <LayoutGallery api={{ get: (p) => api.get<any>(p), post: (p, b) => api.post<any>(p, b) }} templates={templates}
+          onClose={() => setGallery(false)} onBlank={blankDoc}
+          onCreated={(t) => { setGallery(false); setTemplates((l) => [...l, t]); reload?.(); openTpl(t); }} />
+      )}
+
+      {fixing && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-6" role="dialog" aria-modal="true" aria-label="Make this editable visually">
+          <div className="absolute inset-0 bg-ink-primary/40" onClick={() => setFixing(null)} aria-hidden="true" />
+          <div className="relative w-full max-w-2xl max-h-full overflow-y-auto bg-white rounded-2xl border border-slate-200 shadow-clay-drawer p-5 space-y-3">
+            <h2 className="text-sm font-semibold text-ink-primary">Make this template editable in {MODE_NAME[fixing.mode]}</h2>
+            <p className="text-xs text-ink-secondary">These changes rewrite the template so the visual views can hold it. It prints the same. Nothing is saved until you confirm.</p>
+            <ol className="space-y-2.5">
+              {fixing.fix.changes.map((c, i) => (
+                <li key={i} className="text-xs">
+                  <div className="font-semibold text-ink-primary mb-1">{i + 1}. {c.what}</div>
+                  {c.before && c.before !== c.after && <pre className="whitespace-pre-wrap break-all font-mono text-2xs rounded-lg p-2 bg-rose-50 text-rose-800 border border-rose-100" aria-label="Before">{c.before.slice(0, 400)}</pre>}
+                  <pre className="whitespace-pre-wrap break-all font-mono text-2xs rounded-lg p-2 bg-emerald-50 text-emerald-800 border border-emerald-100" aria-label="After">{c.after.slice(0, 400)}</pre>
+                </li>
+              ))}
+            </ol>
+            <div className="flex gap-2 pt-1">
+              <button type="button" onClick={applyFix} className={buttonClass("primary", "md")}>Make editable</button>
+              <button type="button" onClick={() => setFixing(null)} className={buttonClass("secondary", "md")}>Cancel</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {leaving && (
+        <div className="fixed inset-0 z-[70] flex items-center justify-center p-6" role="dialog" aria-modal="true" aria-label="Unsaved changes">
+          <div className="absolute inset-0 bg-ink-primary/40" onClick={() => setLeaving(null)} aria-hidden="true" />
+          <div className="relative w-full max-w-sm bg-white rounded-2xl border border-slate-200 shadow-clay-drawer p-5 space-y-3">
+            <h2 className="text-sm font-semibold text-ink-primary">Unsaved changes</h2>
+            <p className="text-xs text-ink-secondary">{currentId ? "Your last changes haven't been saved yet." : "This template hasn't been saved yet."}</p>
+            <div className="flex flex-wrap gap-2">
+              <button type="button" onClick={async () => { const next = leaving; if (await save(false)) { setLeaving(null); next(); } }} className={buttonClass("primary", "md")}>Save and continue</button>
+              <button type="button" onClick={() => { const next = leaving; setLeaving(null); next(); }} className={buttonClass("secondary", "md")}>Don't save</button>
+              <button type="button" onClick={() => setLeaving(null)} className={buttonClass("ghost", "md")}>Keep editing</button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
+  );
+}
+
+function MenuItem({ icon, label, onClick, danger, disabled }: { icon: ReactNode; label: string; onClick: () => void; danger?: boolean; disabled?: boolean }) {
+  return (
+    <button role="menuitem" type="button" onClick={onClick} disabled={disabled}
+      className={`w-full flex items-center gap-2 px-2 py-1.5 rounded-md text-left text-sm disabled:opacity-40 ${danger ? "text-rose-600 hover:bg-rose-50" : "text-ink-secondary hover:bg-slate-100"}`}>
+      <span className={danger ? "" : "text-ink-tertiary"}>{icon}</span>{label}
+    </button>
   );
 }
