@@ -1,25 +1,17 @@
-import { useEffect, useState, type FormEvent } from "react";
+import { useState, type FormEvent } from "react";
 import { Loader2, Search } from "lucide-react";
+import Button from "../components/Button";
+import PublicLayout, { Field, PublicTitle, inputCls, publicCard } from "./PublicLayout";
 
 // #6 — Re-findability. A customer who lost their tracking link can look their
 // repair up with the order number + phone on file. Reuses the existing rate-limited
 // POST /api/public/lookup, then hands off to /track/{token}.
-
-const GRAD = "linear-gradient(135deg,#2c72d9,#6848be)";
 
 export default function TrackLookup() {
   const [num, setNum] = useState("");
   const [phone, setPhone] = useState("");
   const [busy, setBusy] = useState(false);
   const [err, setErr] = useState<string | null>(null);
-
-  useEffect(() => {
-    try {
-      const mq = window.matchMedia("(prefers-color-scheme: dark)");
-      const set = () => document.documentElement.classList.toggle("dark", mq.matches);
-      set(); mq.addEventListener("change", set);
-    } catch { /* ignore */ }
-  }, []);
 
   async function submit(e: FormEvent) {
     e.preventDefault();
@@ -37,37 +29,21 @@ export default function TrackLookup() {
   }
 
   return (
-    <div className="min-h-screen bg-canvas font-sans text-ink-primary">
-      <div className="mx-auto grid min-h-screen max-w-md place-items-center px-5">
-        <div className="w-full">
-          <div className="mb-6 flex items-center gap-3">
-            <div className="grid h-12 w-12 place-items-center rounded-2xl text-lg font-bold text-white" style={{ background: GRAD }}>R</div>
-            <div>
-              <div className="text-xl font-bold tracking-[-.3px]">Track your repair</div>
-              <div className="text-xs font-semibold text-ink-tertiary">Look it up with your details</div>
-            </div>
-          </div>
-          <form onSubmit={submit} className="rounded-2xl border border-slate-200 bg-white p-6 sm:p-7">
-            <h1 className="text-lg font-bold text-ink-primary">Find my repair</h1>
-            <p className="mt-1 text-[13px] text-ink-tertiary">Enter the order number and the phone number on file.</p>
-
-            <label className="mt-5 block text-[13px] font-bold text-ink-secondary">Order number</label>
-            <input value={num} onChange={(e) => setNum(e.target.value)} placeholder="WO-00010" autoFocus
-              className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-ink-primary outline-none focus:border-primary" />
-
-            <label className="mt-4 block text-[13px] font-bold text-ink-secondary">Phone number</label>
-            <input value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" placeholder="Your phone"
-              className="mt-1.5 w-full rounded-lg border border-slate-300 bg-white px-3 py-2.5 text-sm text-ink-primary outline-none focus:border-primary" />
-
-            {err && <div className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-[13px] font-semibold text-rose-600">{err}</div>}
-
-            <button type="submit" disabled={busy} className="mt-5 flex w-full items-center justify-center gap-2 rounded-lg py-2.5 text-sm font-bold text-white disabled:opacity-60" style={{ background: GRAD }}>
-              {busy ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}{busy ? "Searching…" : "Find my repair"}
-            </button>
-          </form>
-          <div className="mt-6 text-center text-[11.5px] text-ink-tertiary">Tekly</div>
-        </div>
-      </div>
-    </div>
+    <PublicLayout title="Track your repair">
+      <PublicTitle title="Find my repair" sub="Enter the order number and the phone number on file." />
+      <form onSubmit={submit} className={`${publicCard} mt-6 space-y-4 p-5 sm:p-6`} noValidate>
+        <Field id="tl-number" label="Order number">
+          <input id="tl-number" value={num} onChange={(e) => setNum(e.target.value)} placeholder="WO-00010" autoFocus className={inputCls} />
+        </Field>
+        <Field id="tl-phone" label="Phone number">
+          <input id="tl-phone" value={phone} onChange={(e) => setPhone(e.target.value)} inputMode="tel" autoComplete="tel" placeholder="Your phone" className={inputCls} />
+        </Field>
+        {err && <p role="alert" className="rounded-xl bg-rose-50 px-3.5 py-2.5 text-sm text-rose-700">{err}</p>}
+        <Button type="submit" variant="primary" size="lg" busy={busy} className="w-full"
+          icon={busy ? <Loader2 size={16} className="animate-spin" /> : <Search size={16} />}>
+          {busy ? "Searching…" : "Find my repair"}
+        </Button>
+      </form>
+    </PublicLayout>
   );
 }
