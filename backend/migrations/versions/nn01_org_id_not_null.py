@@ -15,13 +15,13 @@ SAFETY
   * Downgrade drops NOT NULL on the same columns.
 
 Revision ID: nn01
-Revises: trg01
+Revises: idg02
 """
 import sqlalchemy as sa
 from alembic import op
 
 revision = "nn01"
-down_revision = "trg01"
+down_revision = "idg02"
 branch_labels = None
 depends_on = None
 
