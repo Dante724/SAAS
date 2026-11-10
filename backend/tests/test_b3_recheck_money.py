@@ -174,3 +174,52 @@ async def test_sale_line_tax_follows_the_category_exception(client, tenant, db):
     db.expire_all()
     ln = (await db.execute(select(SaleLine).where(SaleLine.sale_id == s.json()["id"]))).scalar_one()
     assert ln.tax == 0 and ln.tax_rate == 0
+
+
+# ── review follow-ups on the credit hold ─────────────────────────────────────
+@pytest.mark.asyncio
+async def test_archived_job_paid_from_balance_gives_the_credit_back(client, tenant):
+    cid = await _client(client, tenant)
+    await _advance(client, tenant, cid, 100)
+    a, b = await _job(client, tenant, cid, 80), await _job(client, tenant, cid, 80)
+    r = await client.post(f"/api/cash/orders/{a}/pay", json={"method": "balance", "amount": 80}, headers=tenant)
+    assert r.status_code == 200, r.text
+    r = await client.post(f"/api/orders/{a}/archive", json={"reason": "Customer cancelled", "refund": True},
+                          headers=tenant)
+    assert r.status_code == 200, r.text
+    # the deleted job charged nothing, so the whole 100 is credit again
+    r = await client.post(f"/api/cash/orders/{b}/pay", json={"method": "balance", "amount": 80}, headers=tenant)
+    assert r.status_code == 200, r.text
+
+
+@pytest.mark.asyncio
+async def test_credit_note_on_an_open_job_is_not_spendable_elsewhere(client, tenant):
+    cid = await _client(client, tenant)
+    a, b = await _job(client, tenant, cid, 100), await _job(client, tenant, cid, 80)
+    iid = (await client.post("/api/finance/invoices", headers=tenant,
+                             json={"order_id": a, "client_id": cid})).json()["id"]
+    r = await client.post("/api/finance/credit-notes", headers=tenant, json={
+        "invoice_id": iid, "client_id": cid, "reason": "Goodwill",
+        "lines": [{"description": "Goodwill", "qty": 1, "unit_price": 20}]})
+    assert r.status_code == 201, r.text
+    r = await client.post(f"/api/finance/credit-notes/{r.json()['id']}/issue", headers=tenant)
+    assert r.status_code == 200, r.text
+    # the 20 only lowers what job a owes; it isn't money to pay job b with
+    r = await client.post(f"/api/cash/orders/{b}/pay", json={"method": "balance", "amount": 20}, headers=tenant)
+    assert r.status_code == 400, r.text
+
+
+@pytest.mark.asyncio
+async def test_deposit_on_an_unpriced_open_job_is_not_credit(client, tenant):
+    """A deposit taken at intake, before the job is priced (total 0), belongs to that job: it must
+    not pay another job from balance, or the same money is spent twice once the first is priced."""
+    cash = await _till(client, tenant)
+    cid = await _client(client, tenant)
+    oid = (await client.post("/api/orders", json={"client_id": cid, "location_id": await _loc(client, tenant)},
+                             headers=tenant)).json()["id"]
+    r = await client.post(f"/api/cash/orders/{oid}/prepay", json={"amount": 100, "account_id": cash},
+                          headers=tenant)
+    assert r.status_code == 201, r.text
+    b = await _job(client, tenant, cid, 80)
+    r = await client.post(f"/api/cash/orders/{b}/pay", json={"method": "balance", "amount": 80}, headers=tenant)
+    assert r.status_code == 400, r.text

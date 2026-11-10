@@ -160,16 +160,34 @@ async def available_credit(db: AsyncSession, org_id: str, client_id: Optional[st
             (Payment.kind == "refund", -func.abs(Payment.amount)), else_=Payment.amount)), 0)).where(
             Payment.order_id == order_id, Payment.method == "balance"))).scalar() or 0), 0.0)
     held = 0.0
+    from backend.models import Invoice, InvoiceOrder
+    from backend.services.order_money import credited
     paid_jobs = select(Payment.order_id).where(Payment.order_id.isnot(None))
-    others = (await db.execute(select(Order.id, Order.total, Order.written_off).where(
-        Order.org_id == org_id, Order.client_id == client_id, Order.id.in_(paid_jobs),
+    # A credit note on an open job's invoice is on the ledger as credit too, but the job's charge
+    # takes it back when the job closes, so it is held with the job's money.
+    noted = select(Invoice.order_id).where(Invoice.credited > 0, Invoice.order_id.isnot(None))
+    noted_links = select(InvoiceOrder.order_id).join(Invoice, Invoice.id == InvoiceOrder.invoice_id).where(
+        Invoice.credited > 0)
+    # An archived (deleted) job is charged nothing and its money went back, but a balance payment
+    # on it stays as a row: it must not hold the client's credit forever.
+    others = (await db.execute(select(Order.id, Order.total, Order.written_off, Order.closed_at).where(
+        Order.org_id == org_id, Order.client_id == client_id, Order.archived.isnot(True),
+        Order.id.in_(paid_jobs) | Order.id.in_(noted) | Order.id.in_(noted_links),
         Order.id != (order_id or "")))).all()
-    for oid, total, written_off in others:
+    for oid, total, written_off, closed_at in others:
         billable = float(total or 0) - float(written_off or 0)
         charged = await order_charge_net(db, client_id, oid)
+        if closed_at is None:
+            # An open job's total can still grow (a deposit taken at intake, before it is priced, has
+            # total 0), so everything paid for it stays with it until it is billed. Capping at today's
+            # total let the same deposit pay another job and then this one (B3 recheck review).
+            covered = await net_paid(db, oid) + await credited(db, oid)
+            held += max(covered - charged, 0.0)
+            continue
         if charged >= billable - 0.005:
             continue                     # billed in full: its payments are already netted against it
-        held += max(min(await net_paid(db, oid), billable) - charged, 0.0)
+        covered = await net_paid(db, oid) + await credited(db, oid)
+        held += max(min(covered, billable) - charged, 0.0)
     return q2(max(0.0, -(float(bal) - float(job)) - spent_here - held))
 
 
