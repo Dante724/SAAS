@@ -1,3 +1,4 @@
+import TeklySelect from "./TeklySelect";
 // WS-C #12 — a contact's address as separate fields (street, city, region, postcode, country).
 // The server rebuilds the single address line from these, so documents and exports that print
 // one line keep working. A contact saved before the split shows its old line until the fields
@@ -47,10 +48,10 @@ export default function AddressFields({ value, onChange, legacy, idPrefix = "add
         <div><label htmlFor={id("region")} className="sr-only">State or region</label><input id={id("region")} value={value.addr_region || ""} onChange={(e) => set("addr_region", e.target.value)} placeholder="State or region" className={field} /></div>
         <div><label htmlFor={id("postcode")} className="sr-only">Postcode</label><input id={id("postcode")} value={value.addr_postcode || ""} onChange={(e) => set("addr_postcode", e.target.value)} placeholder="Postcode / ZIP" className={field} /></div>
         <div><label htmlFor={id("country")} className="sr-only">Country</label>
-          <select id={id("country")} value={current} onChange={(e) => set("addr_country", e.target.value)} className={`${field} appearance-none`}>
+          <TeklySelect id={id("country")} value={current} onChange={(e) => set("addr_country", e.target.value)} className={`${field} appearance-none`}>
             <option value="">Country</option>
             {options.map((c) => <option key={c} value={c}>{countryName(c)}</option>)}
-          </select></div>
+          </TeklySelect></div>
       </div>
     </fieldset>
   );

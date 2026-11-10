@@ -27,10 +27,11 @@ const TONE: Record<BadgeTone, [string, string]> = {
 };
 
 // A soft-tint pill (fill ~10%, darker text, optional dot) for a status or a count.
-export function Badge({ children, tone = "neutral", dot = false, className = "" }: { children: ReactNode; tone?: BadgeTone; dot?: boolean; className?: string }) {
+// Sizes: md 24px (default), sm 20px for pills inside table rows and dense lists.
+export function Badge({ children, tone = "neutral", dot = false, size = "md", className = "" }: { children: ReactNode; tone?: BadgeTone; dot?: boolean; size?: "sm" | "md"; className?: string }) {
   const [fill, dotColor] = TONE[tone];
   return (
-    <span className={`inline-flex items-center gap-1.5 h-6 px-2 rounded-full text-2xs font-semibold whitespace-nowrap ${fill} ${className}`}>
+    <span className={`inline-flex items-center gap-1.5 ${size === "sm" ? "h-5 px-1.5" : "h-6 px-2"} rounded-full text-2xs font-semibold whitespace-nowrap ${fill} ${className}`}>
       {dot && <span className={`h-1.5 w-1.5 rounded-full ${dotColor}`} aria-hidden="true" />}{children}
     </span>
   );
