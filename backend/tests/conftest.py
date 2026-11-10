@@ -10,21 +10,38 @@ os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.setdefault("SEED_DEMO", "false")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
 
-# Under pytest-xdist each worker is its own process. Both the test engine (get_db override) AND
-# the app engine (AsyncSessionLocal, used directly by some auth/platform tests) read their URL
-# from the environment at import, so BOTH must get a per-worker SQLite file — otherwise workers
-# deadlock on one shared file, or the app engine lands on an un-tabled DB. Must run BEFORE
-# `from main import app` below (which builds the app engine from DATABASE_URL). No-op serially.
+# Every test process gets its OWN database, so runs started at the same time (several sessions on
+# one machine, or a quick run beside a full run) and the xdist workers inside one run can never see,
+# drop or delete each other's tables. The configured URL is only the base:
+#   SQLite   ./test.db            -> ./test_<run>[_gwN].db, deleted at the end of the run
+#   Postgres .../repairos_test    -> database repairos_test_<run>[_gwN] on that server, created at
+#                                    session start and dropped at the end (set TEST_KEEP_DB=1 to keep it)
+# <run> is shared by the workers of one xdist run and unique per run. Both the test engine (get_db
+# override) AND the app engine (AsyncSessionLocal, used directly by some auth/platform tests) read
+# their URL from the environment at import, so BOTH are rewritten here, BEFORE `from main import app`.
+import sys  # noqa: E402
+import time  # noqa: E402
+import uuid  # noqa: E402
+
+from backend.tests import db_isolation  # noqa: E402 — pure helpers; imports nothing from the app
+
+assert "backend.config" not in sys.modules, "conftest must isolate DATABASE_URL before the app reads it"
 _xw = os.environ.get("PYTEST_XDIST_WORKER")
-if _xw:
-    for _var in ("DATABASE_URL", "TEST_DATABASE_URL"):
-        _u = os.environ.get(_var)
-        if _u and _u.startswith("sqlite") and _u.endswith(".db"):
-            os.environ[_var] = _u[:-3] + f"_{_xw}.db"
+_RUN_ID = (os.environ.get("PYTEST_XDIST_TESTRUNUID") or uuid.uuid4().hex)[:8] + (f"_{_xw}" if _xw else "")
+_OWN_DBS: dict[str, str] = {}  # this process's database URL -> the configured URL it was made from
+for _var in ("DATABASE_URL", "TEST_DATABASE_URL"):
+    # xdist workers inherit the controller's environment, already rewritten: the configured URL is
+    # kept aside so every process derives its name from the same base (not base_<ctrl>_<run>_gwN).
+    _base = os.environ.get(f"TEKLY_BASE_{_var}") or os.environ.get(_var)
+    if _base:
+        os.environ[f"TEKLY_BASE_{_var}"] = _base
+        os.environ[_var] = db_isolation.isolated_url(_base, _RUN_ID)
+        _OWN_DBS[os.environ[_var]] = _base
 
 import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
+from sqlalchemy.engine import make_url
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from backend.db.database import Base, get_db
@@ -56,6 +73,9 @@ else:
     from sqlalchemy.pool import NullPool
     test_engine = create_async_engine(TEST_DB_URL, poolclass=NullPool, json_serializer=json_dumps)
 TestSession = async_sessionmaker(test_engine, expire_on_commit=False)
+# Postgres databases this process must create at the start and drop at the end, each with the
+# configured database name it was made from (CREATE/DROP DATABASE connects there).
+_PG_DBS = {u: make_url(base).database for u, base in _OWN_DBS.items() if make_url(u).get_backend_name() == "postgresql"}
 
 
 async def _override_get_db():
@@ -64,6 +84,118 @@ async def _override_get_db():
 
 
 app.dependency_overrides[get_db] = _override_get_db
+
+
+def _is_xdist_controller(config) -> bool:
+    # When tests are distributed, the controller process collects but runs none: it needs no database.
+    return config.pluginmanager.has_plugin("dsession")
+
+
+def _is_xdist_worker(config) -> bool:
+    return hasattr(config, "workerinput")
+
+
+def _needs_db(config) -> bool:
+    return not (_is_xdist_controller(config) or config.option.collectonly)
+
+
+def pytest_configure(config):
+    # Several tests use the `caplog` fixture, which the logging plugin provides. Without it they error
+    # with "fixture 'caplog' not found" — noise that looks like real failures.
+    if not config.pluginmanager.has_plugin("logging"):
+        raise pytest.UsageError("Don't disable pytest's logging plugin (-p no:logging): tests use caplog.")
+
+
+# --- the database server failing is an INFRASTRUCTURE error, not a test result --------------------
+# Only this file's own code that OPENS a connection (session start, the start of `_schema` below, and
+# a last check at session end) is classified, never a statement or a test body, so a real failure is
+# never written off. On such an error the WHOLE run stops with exit code 75 and one clear message,
+# instead of hundreds of misleading 500s and errors. A setup problem a rerun won't fix (no CREATEDB
+# right, wrong password) stops it with exit code 4.
+_pg_incarnation = None  # db_isolation.INCARNATION_SQL at session start; a change means a restart mid-run
+_run_error: tuple[str, int] | None = None  # (message, exit code) once this process's database is unusable
+
+
+def _stop_run(session, msg: str, code: int = db_isolation.INFRA_EXIT) -> None:
+    global _run_error
+    _run_error = (msg, code)
+    session.shouldstop = msg  # under xdist this reaches the controller, which stops every worker
+    if _is_xdist_worker(session.config):
+        session.config.workeroutput["run_error"] = [msg, code]
+    pytest.exit(msg, returncode=code)
+
+
+def pytest_sessionstart(session):
+    global _pg_incarnation, _run_error
+    if session.config.option.collectonly:
+        return
+    controller = _is_xdist_controller(session.config)
+    for url, base_db in _PG_DBS.items():
+        try:
+            if controller:  # check the server before starting any worker
+                db_isolation.run(db_isolation.preflight_postgres(url, base_db))
+                continue
+            started = db_isolation.run(db_isolation.create_postgres(url, base_db))
+        except Exception as e:  # noqa: BLE001 — any failure to reach the server is reported, never swallowed
+            if db_isolation.is_infra_error(e):
+                err = db_isolation.infra_message("the database server is unreachable or in recovery", url, e)
+                code = db_isolation.INFRA_EXIT
+            else:
+                err = db_isolation.setup_message("could not create this run's test database", url, e)
+                code = db_isolation.SETUP_EXIT
+            if _is_xdist_worker(session.config):
+                # pytest.exit this early makes xdist restart the worker over and over; the worker's
+                # first test stops the run instead (see `_schema`), or its session end does.
+                _run_error = (err, code)
+                return
+            pytest.exit(err, returncode=code)
+        if url == TEST_DB_URL:
+            _pg_incarnation = started
+
+
+@pytest.hookimpl(optionalhook=True)
+def pytest_testnodedown(node, error):
+    # xdist controller: a worker stopped the run on a database error — carry it to the exit code.
+    global _run_error
+    reported = getattr(node, "workeroutput", {}).get("run_error")
+    if reported and not _run_error:
+        _run_error = tuple(reported)
+
+
+def pytest_sessionfinish(session, exitstatus):
+    global _run_error
+    if _needs_db(session.config) and _pg_incarnation is not None and not _run_error:
+        # A crash during this process's LAST test would otherwise go unnoticed.
+        try:
+            if db_isolation.run(db_isolation.incarnation(TEST_DB_URL)) != _pg_incarnation:
+                _run_error = (db_isolation.infra_message(
+                    "the database server crashed or restarted during the run", TEST_DB_URL), db_isolation.INFRA_EXIT)
+        except Exception as e:  # noqa: BLE001
+            if db_isolation.is_infra_error(e):
+                _run_error = (db_isolation.infra_message(
+                    "the database became unreachable during the run", TEST_DB_URL, e), db_isolation.INFRA_EXIT)
+    if _run_error:
+        if _is_xdist_worker(session.config):
+            session.config.workeroutput["run_error"] = list(_run_error)
+        else:
+            sys.stderr.write("\n" + _run_error[0] + "\n")
+        session.exitstatus = _run_error[1]
+    if not _needs_db(session.config) or os.environ.get("TEST_KEEP_DB") == "1":
+        return
+    for url, base_db in _PG_DBS.items():
+        for attempt in range(4):  # after a crash the server takes a few seconds to accept connections
+            try:
+                db_isolation.run(db_isolation.drop_postgres(url, base_db))
+                break
+            except Exception as e:  # noqa: BLE001 — a leftover database is harmless; say so and move on
+                if attempt < 3 and db_isolation.is_infra_error(e):
+                    time.sleep(2)
+                    continue
+                print(f"\nnote: could not drop test database {db_isolation.describe(url)}: {e}")
+                break
+    for url in _OWN_DBS:
+        for f in db_isolation.sqlite_files(url):
+            f.unlink(missing_ok=True)
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -84,10 +216,12 @@ _pg_schema_built = False
 
 
 @pytest_asyncio.fixture(autouse=True)
-async def _schema():
+async def _schema(request):
     # Dispose first so a connection leaked by a prior test (e.g. an endpoint that errored mid-
     # transaction) can't hold a write lock that makes this drop/create only partially apply —
     # which previously left a table present but stripped of its indexes for the next test.
+    if _run_error:
+        _stop_run(request.session, *_run_error)
     await test_engine.dispose()
     if test_engine.dialect.name == "postgresql":
         # On Postgres, drop_all + create_all of ~150 tables (twice per test, with the teardown drop)
@@ -99,16 +233,34 @@ async def _schema():
         # DELETE children-first in one round trip (~10ms) rather than TRUNCATE, which costs ~0.2s
         # for this many tables even when they are empty. The FK graph is acyclic apart from
         # self-references, which a single DELETE per table handles.
+        # The database is this process's own (see the top of this file), so nothing else can drop or
+        # empty its tables mid-run. A crash restart of the server is checked for on every test: the
+        # tests before it may have failed for that reason alone, so the run stops as an infra error.
         global _pg_schema_built
-        async with test_engine.begin() as conn:
-            if not _pg_schema_built:
-                await conn.run_sync(Base.metadata.drop_all)
-                await conn.run_sync(Base.metadata.create_all)
-                _pg_schema_built = True
-            else:
-                deletes = "".join(f'DELETE FROM "{t.name}";' for t in reversed(Base.metadata.sorted_tables))
-                await conn.exec_driver_sql("SET LOCAL session_replication_role = replica")
-                await conn.exec_driver_sql(f"DO $$BEGIN {deletes} END$$")
+        try:
+            conn = await test_engine.connect()
+            incarnation = tuple((await conn.exec_driver_sql(db_isolation.INCARNATION_SQL)).one())
+            await conn.commit()
+        except Exception as e:  # noqa: BLE001 — re-raised unless the server itself is unreachable
+            if db_isolation.is_infra_error(e):
+                _stop_run(request.session, db_isolation.infra_message(
+                    "the database became unreachable during the run", TEST_DB_URL, e))
+            raise
+        try:
+            if _pg_incarnation is not None and incarnation != _pg_incarnation:
+                _stop_run(request.session, db_isolation.infra_message(
+                    "the database server crashed or restarted during the run", TEST_DB_URL))
+            async with conn.begin():
+                if not _pg_schema_built:
+                    await conn.run_sync(Base.metadata.drop_all)
+                    await conn.run_sync(Base.metadata.create_all)
+                    _pg_schema_built = True
+                else:
+                    deletes = "".join(f'DELETE FROM "{t.name}";' for t in reversed(Base.metadata.sorted_tables))
+                    await conn.exec_driver_sql("SET LOCAL session_replication_role = replica")
+                    await conn.exec_driver_sql(f"DO $$BEGIN {deletes} END$$")
+        finally:
+            await conn.close()
         yield
         return
     async with test_engine.begin() as conn:

@@ -254,22 +254,10 @@ app.include_router(devices.router)
 @app.get("/health", include_in_schema=False)
 @app.get("/api/health", tags=["meta"])
 async def health():
-    """Liveness/readiness probe — checks DB connectivity."""
-    from sqlalchemy import text
-
-    from backend.db.database import AsyncSessionLocal
-    db_ok = True
-    try:
-        async with AsyncSessionLocal() as s:
-            await s.execute(text("SELECT 1"))
-    except Exception:  # noqa: BLE001
-        db_ok = False
-        log.exception("health check: database unreachable")
-    status = "ok" if db_ok else "degraded"
-    return JSONResponse(
-        {"status": status, "database": "up" if db_ok else "down"},   # no environment name: it helps an attacker
-        status_code=200 if db_ok else 503,
-    )
+    """Liveness: the process is up and serving. Never touches the database, so a DB blip doesn't
+    make the container HEALTHCHECK restart every replica at once. Readiness (database reachable)
+    is /api/readyz: point load balancers that should stop routing on DB loss there."""
+    return {"status": "ok"}   # no environment name: it helps an attacker
 
 
 # ── Frontend (SPA) ──

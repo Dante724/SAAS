@@ -6,9 +6,11 @@ import pytest
 async def test_health_ok(client):
     r = await client.get("/api/health")
     assert r.status_code == 200
-    body = r.json()
-    assert body["status"] == "ok"
-    assert body["database"] == "up"
+    assert r.json()["status"] == "ok"
+    # The database check moved from liveness to readiness (test_health_liveness.py).
+    ready = await client.get("/api/readyz")
+    assert ready.status_code == 200
+    assert ready.json()["database"] == "up"
 
 
 @pytest.mark.asyncio

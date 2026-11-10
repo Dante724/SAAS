@@ -2,14 +2,19 @@
 and tax, and a job line charges that tax.
 
     python tests-e2e/api_gate/countries.py            (TEKLY_URL=... for another server)
+    python tests-e2e/api_gate/countries.py CA-AB CA-ZZ   (just these rows)
 
-Seven sign-ups (AU, US, GB, CA, CA with province ON, DE, NZ). Sign-up is rate-limited per IP,
-so the script waits out a 429 (Retry-After) instead of failing.
+Nine sign-ups (AU, US, GB, CA with no province, CA-ON, CA-AB, CA with an unknown province, DE,
+NZ). Sign-up is rate-limited per IP, so the script waits out a 429 (Retry-After) instead of failing.
 The expected values below are the real-world rules, not copied from the code.
+
+Canada: a shop's province decides its tax (HST 13% in Ontario, GST 5% in Alberta, ...). With no
+province, or one sign-up doesn't know, the province comes from the time zone, and the Canadian
+default time zone America/Toronto means Ontario: HST 13%. Sign-up never fails on a bad province.
 """
 import sys
 
-from gate import FAIL, PASS, SKIP, Api, items, log, money, must, register_org
+from gate import FAIL, PASS, SKIP, Api, items, log, money, must, parse_only, register_org
 
 # country, province, currency code, time zone, tax name, rate %, mode
 # mode: "included" = shelf prices include the tax (AU/GB/DE/NZ), "imposed" = added on top (US/CA).
@@ -17,8 +22,11 @@ EXPECTED = [
     ("AU", None, "AUD", "Australia/Sydney", "GST", 10.0, "included"),
     ("US", None, "USD", "America/New_York", "Sales tax", 0.0, "imposed"),   # state rate: owner sets it
     ("GB", None, "GBP", "Europe/London", "VAT", 20.0, "included"),
-    ("CA", None, "CAD", "America/Toronto", "GST", 5.0, "imposed"),
-    ("CA", "ON", "CAD", "America/Toronto", "HST", 13.0, "imposed"),
+    ("CA", None, "CAD", "America/Toronto", "HST", 13.0, "imposed"),   # no province: Toronto time = Ontario
+    ("CA", "ON", "CAD", "America/Toronto", "HST", 13.0, "imposed"),   # Ontario, explicitly
+    ("CA", "AB", "CAD", "America/Toronto", "GST", 5.0, "imposed"),    # Alberta: GST only, no PST
+    ("CA", "ZZ", "CAD", "America/Toronto", "HST", 13.0, "imposed"),   # unknown province: sign-up still works,
+                                                                      # tax falls back to the time zone (ON)
     ("DE", None, "EUR", "Europe/Berlin", "VAT", 19.0, "included"),
     ("NZ", None, "NZD", "Pacific/Auckland", "GST", 15.0, "included"),
 ]
@@ -65,8 +73,10 @@ def check_country(country, province, cur, tz, tax_name, rate, mode):
 
 def main():
     log("Country onboarding gate")
+    only = parse_only(sys.argv)
+    rows = [r for r in EXPECTED if not only or (r[0] + (f"-{r[1]}" if r[1] else "")) in only]
     counts = {PASS: 0, FAIL: 0, SKIP: 0}
-    for country, province, cur, tz, tax_name, rate, mode in EXPECTED:
+    for country, province, cur, tz, tax_name, rate, mode in rows:
         label = country + (f"-{province}" if province else "")
         try:
             problems, summary = check_country(country, province, cur, tz, tax_name, rate, mode)
@@ -79,7 +89,7 @@ def main():
         counts[status] += 1
         log(f"{status:4}  {label:6} {'; '.join(problems) if problems else summary}")
     log("")
-    log(f"SUMMARY {len(EXPECTED)} countries: {counts[PASS]} PASS, {counts[FAIL]} FAIL, {counts[SKIP]} SKIP")
+    log(f"SUMMARY {len(rows)} countries: {counts[PASS]} PASS, {counts[FAIL]} FAIL, {counts[SKIP]} SKIP")
     return 1 if counts[FAIL] else 0
 
 
