@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import EmptyState from "../../components/EmptyState";
@@ -74,7 +75,7 @@ export default function PlansTab() {
             </button>
             {starter && (
               <div role="menu" className="absolute left-0 top-full mt-1.5 z-40 w-80 bg-raised rounded-2xl border border-slate-200/80 shadow-clay-card p-1.5">
-                <div className="px-3 pt-2 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-tertiary">Start from your trade</div>
+                <div className="px-3 pt-2 pb-1.5 text-[11px] font-semibold text-ink-tertiary">Start from your trade</div>
                 {STARTER_TEMPLATES.map((t) => (
                   <button key={t.k} role="menuitem" onClick={() => fromStarter(t.k)}
                     className="w-full flex items-start gap-3 rounded-xl px-3 py-2.5 text-left hover:bg-slate-50 focus-visible:outline-none focus-visible:bg-slate-50">
@@ -162,7 +163,7 @@ function PlanEditor({ plan, onClose, onSaved }: { plan: Omit<Plan, "id" | "membe
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={onClose} />
       <div className="relative h-full w-full max-w-[560px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90">
         <header className="px-6 py-4 border-b border-slate-200/90 flex items-center gap-2">
           <div className="text-base font-semibold text-ink-primary">{p.id ? "Edit plan" : "New plan"}</div>
@@ -194,18 +195,18 @@ function PlanEditor({ plan, onClose, onSaved }: { plan: Omit<Plan, "id" | "membe
                 <div key={i} className="rounded-xl border border-slate-200 p-3">
                   <div className="flex items-center gap-2">
                     {it.kind === "service" ? (<>
-                      <select aria-label="Included service" value={it.service_id || ""} onChange={(e) => setItem(i, { service_id: e.target.value, label: svcs.find((s) => s.id === e.target.value)?.name || "" })} className={`${box} min-w-0 flex-1`}>
+                      <TeklySelect aria-label="Included service" value={it.service_id || ""} onChange={(e) => setItem(i, { service_id: e.target.value, label: svcs.find((s) => s.id === e.target.value)?.name || "" })} className={`${box} min-w-0 flex-1`}>
                         <option value="">Choose a service…</option>
                         {svcs.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                      </select>
+                      </TeklySelect>
                       <span className="text-xs text-ink-tertiary">×</span>
                       <input aria-label="Times per year" inputMode="numeric" value={it.qty} onChange={(e) => setItem(i, { qty: Math.max(0, Number(e.target.value) || 0) })} className={`${box} w-16 shrink-0 text-center`} />
                     </>) : it.kind === "discount" ? (<>
                       <input aria-label="Discount percent" inputMode="decimal" value={it.pct} onChange={(e) => setItem(i, { pct: Number(e.target.value) || 0 })} className={`${box} w-20 shrink-0 text-center`} />
                       <span className="text-xs text-ink-tertiary">% off</span>
-                      <select aria-label="Discount applies to" value={it.applies_to} onChange={(e) => setItem(i, { applies_to: e.target.value as PlanItem["applies_to"] })} className={`${box} min-w-0 flex-1`}>
+                      <TeklySelect aria-label="Discount applies to" value={it.applies_to} onChange={(e) => setItem(i, { applies_to: e.target.value as PlanItem["applies_to"] })} className={`${box} min-w-0 flex-1`}>
                         <option value="labour">{laborText("labour")}</option><option value="parts">parts</option><option value="both">{laborText("labour and parts")}</option>
-                      </select>
+                      </TeklySelect>
                     </>) : (
                       <input aria-label="Perk" value={it.label} onChange={(e) => setItem(i, { label: e.target.value })} placeholder="Priority slot when the yard is busy" className={`${box} min-w-0 flex-1`} />
                     )}
@@ -252,9 +253,9 @@ function PlanEditor({ plan, onClose, onSaved }: { plan: Omit<Plan, "id" | "membe
                   <div><label htmlFor="plan-presale" className={lbl}>On sale before the season starts</label>
                     <NumField id="plan-presale" value={p.presale_days} onChange={(v) => set({ presale_days: v })} unit="days" /></div>
                   <div><label htmlFor="plan-late" className={lbl}>Late joiners pay</label>
-                    <select id="plan-late" value={p.late_join} onChange={(e) => set({ late_join: e.target.value as Plan["late_join"] })} className={inp}>
+                    <TeklySelect id="plan-late" value={p.late_join} onChange={(e) => set({ late_join: e.target.value as Plan["late_join"] })} className={inp}>
                       <option value="prorated">For the months left</option><option value="full">The full price</option>
-                    </select></div>
+                    </TeklySelect></div>
                 </div>
               </>)}
             </section>

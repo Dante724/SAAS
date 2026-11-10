@@ -137,6 +137,12 @@ class Settings(BaseSettings):
     SQUARE_ENV: str = "sandbox"                # sandbox | production
     SQUARE_WEBHOOK_SIGNATURE_KEY: str = ""
 
+    # -- Card readers (Stripe Terminal / Square Terminal) --
+    # Off until a shop can actually connect a reader: every /api/payments/terminal/* route answers
+    # 404 and the app hides every reader entry point (/auth/me card_readers). The tables, past
+    # charges and the provider webhooks stay, so switching it on brings the feature back as it was.
+    CARD_READERS_ENABLED: bool = False
+
     # -- Live-money guardrail (F4) --
     # Live keys (Stripe sk_live_/rk_live_, Square production) are refused unless this is true AND
     # ENVIRONMENT=production. Everywhere else only test/sandbox credentials can move money.

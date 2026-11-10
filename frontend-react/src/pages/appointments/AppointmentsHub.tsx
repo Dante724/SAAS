@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import Shell, { M } from "../../components/Shell";
 import EmptyState from "../../components/EmptyState";
@@ -243,7 +244,7 @@ export default function AppointmentsHub() {
 
       {drawer && (
         <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={() => setDrawer(false)} />
+          <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={() => setDrawer(false)} />
           <div className="relative h-full w-full max-w-[460px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
             <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
             <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70"><h3 className="text-base font-bold text-ink-primary">New appointment</h3><button aria-label="Close" onClick={() => setDrawer(false)} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
@@ -277,8 +278,8 @@ export default function AppointmentsHub() {
                   </>
                 )}
               </div>
-              <div><label className="block font-semibold text-ink-secondary mb-1">Service</label><select value={f.service_id} onChange={(e) => { const s = services.find((x) => x.id === e.target.value); setF({ ...f, service_id: e.target.value, duration_min: s?.duration_min || f.duration_min }); }} className={`${inp} appearance-none`}><option value="">— Select —</option>{services.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
-              <div><label className="block font-semibold text-ink-secondary mb-1">Specialist</label><select value={f.employee_id} onChange={(e) => setF({ ...f, employee_id: e.target.value })} className={`${inp} appearance-none`}><option value="">— Unassigned —</option>{emps.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select></div>
+              <div><label className="block font-semibold text-ink-secondary mb-1">Service</label><TeklySelect value={f.service_id} onChange={(e) => { const s = services.find((x) => x.id === e.target.value); setF({ ...f, service_id: e.target.value, duration_min: s?.duration_min || f.duration_min }); }} className={`${inp} appearance-none`}><option value="">— Select —</option>{services.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</TeklySelect></div>
+              <div><label className="block font-semibold text-ink-secondary mb-1">Specialist</label><TeklySelect value={f.employee_id} onChange={(e) => setF({ ...f, employee_id: e.target.value })} className={`${inp} appearance-none`}><option value="">— Unassigned —</option>{emps.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</TeklySelect></div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="block font-semibold text-ink-secondary mb-1">Date</label><DateField mode="date" value={bkDate} onChange={pickDate} label="Date" /></div>
                 <div><label className="block font-semibold text-ink-secondary mb-1">Duration (min)</label><input type="number" value={f.duration_min} onChange={(e) => setF({ ...f, duration_min: e.target.value })} className={`${inp} font-mono`} /></div>
@@ -310,13 +311,13 @@ export default function AppointmentsHub() {
               {!bkDate && <p className="text-ink-tertiary">Pick a date to see open times.</p>}
               <div><label className="block font-semibold text-ink-secondary mb-1">Note</label><textarea value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} className={`${inp} h-20 resize-none`} placeholder="Optional…" /></div>
             </div>
-            <div className="p-4 border-t border-slate-100 bg-slate-50/70 flex items-center justify-end gap-2"><button onClick={() => setDrawer(false)} className="h-9 px-3.5 rounded-xl border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button><button onClick={create} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Creating…" : "Create appointment"}</button></div>
+            <div className="p-4 border-t border-slate-100 bg-slate-50/70 flex items-center justify-start gap-2"><button onClick={create} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Creating…" : "Create appointment"}</button><button onClick={() => setDrawer(false)} className="h-9 px-3.5 rounded-xl border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button></div>
           </div>
         </div>
       )}
       {sel && (
         <div className="fixed inset-0 flex justify-end" style={{ zIndex: 55 }}>
-          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={() => setSel(null)} />
+          <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={() => setSel(null)} />
           <div className="relative h-full w-full max-w-[460px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
             <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
               <div><h3 className="text-base font-bold text-ink-primary">{sel.service_name || "Appointment"}</h3><div className="text-[11px] text-ink-tertiary">{dayKey(sel.scheduled_for)} · {time(sel.scheduled_for)}</div></div>

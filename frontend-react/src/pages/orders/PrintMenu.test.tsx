@@ -46,7 +46,7 @@ describe("pickDefault", () => {
 describe("PrintMenu", () => {
   const open = async () => {
     render(<PrintMenu orderId="o1" status="diagnosed" onSticker={() => { printed.push("sticker"); }} onError={() => {}} />);
-    await screen.findByRole("button", { name: /Print Estimate/ });
+    await screen.findByRole("button", { name: /Print estimate/ });
     await userEvent.click(screen.getByRole("button", { name: "Choose what to print" }));
   };
 
@@ -66,7 +66,7 @@ describe("PrintMenu", () => {
     await userEvent.click(screen.getByText("Work order"));
     await waitFor(() => expect(printed.length).toBe(1));
     expect(urls.some((u) => u.includes("/documents/render/o1/t-wo"))).toBe(true);
-    expect(screen.getByRole("button", { name: /Print Work order/ })).toBeTruthy();
+    expect(screen.getByRole("button", { name: /Print work order/ })).toBeTruthy();
   });
 
   it("prints invoice templates against the job's latest invoice", async () => {
@@ -90,7 +90,7 @@ describe("PrintMenu", () => {
 
   it("never asks for invoices when the person can't view them", async () => {
     render(<PrintMenu orderId="o1" status="diagnosed" canInvoices={false} onSticker={() => {}} onError={() => {}} />);
-    await screen.findByRole("button", { name: /Print Estimate/ });
+    await screen.findByRole("button", { name: /Print estimate/ });
     await userEvent.click(screen.getByRole("button", { name: "Choose what to print" }));
     expect(screen.queryByText("Invoice A4")).toBeNull();
     expect(urls.some((u) => u.includes("/cash/orders/"))).toBe(false);
@@ -119,7 +119,7 @@ describe("PrintMenu", () => {
   it("prints the itemised copy by flipping 'List every kit item' under the work order, and remembers it", async () => {
     const itemised = vi.fn();
     render(<PrintMenu orderId="o2" status="diagnosed" onSticker={() => {}} onItemised={itemised} onError={() => {}} />);
-    await screen.findByRole("button", { name: /Print Estimate/ });
+    await screen.findByRole("button", { name: /Print estimate/ });
     await userEvent.click(screen.getByRole("button", { name: "Choose what to print" }));
     expect(screen.queryByText(/\(itemised\)/)).toBeNull();                 // not a second document any more
     await userEvent.click(screen.getByRole("switch", { name: "List every kit item" }));
@@ -127,7 +127,7 @@ describe("PrintMenu", () => {
     await userEvent.click(screen.getByText("Work order"));
     expect(itemised).toHaveBeenCalledTimes(1);
     expect(printed.length).toBe(0);
-    expect(await screen.findByRole("button", { name: "Print Work order (itemised)" })).toBeTruthy();
+    expect(await screen.findByRole("button", { name: "Print work order (itemised)" })).toBeTruthy();
     expect(pickDefault([wo], ITEMISED, [wo], false)).toBe("t-wo");   // no kit any more: falls back
   });
 

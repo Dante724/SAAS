@@ -10,8 +10,9 @@ export function Avatar({ name, size = 28 }: { name?: string | null; size?: numbe
   const n = (name || "").trim();
   if (!n) return <span className="rounded-full bg-slate-100 grid place-items-center text-ink-tertiary flex-shrink-0" style={{ width: size, height: size }}><M n="person" c="text-xs" /></span>;
   const hue = AVATAR_HUES[[...n].reduce((a, ch) => a + ch.charCodeAt(0), 0) % AVATAR_HUES.length];
-  const ini = n.split(/\s+/).map((w) => w[0]).slice(0, 2).join("").toUpperCase();
-  return <span className="rounded-full grid place-items-center font-semibold flex-shrink-0" style={{ width: size, height: size, background: tint(hue), color: hueText(hue), fontSize: size * 0.38 }}>{ini}</span>;
+  // Initials never go below 11px (the app's smallest text); a small avatar shows one letter so it fits.
+  const ini = n.split(/\s+/).map((w) => w[0]).slice(0, size < 24 ? 1 : 2).join("").toUpperCase();
+  return <span className="rounded-full grid place-items-center font-semibold flex-shrink-0 leading-none" style={{ width: size, height: size, background: tint(hue), color: hueText(hue), fontSize: Math.max(11, Math.round(size * 0.4)) }}>{ini}</span>;
 }
 
 const DEVICE_ICON: [RegExp, string][] = [[/phone|iphone|galaxy|pixel|oneplus/i, "smartphone"], [/ipad|tab/i, "devices"], [/mac|laptop|book/i, "laptop"],

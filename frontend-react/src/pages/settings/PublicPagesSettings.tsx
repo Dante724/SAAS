@@ -1,4 +1,5 @@
 import { useEffect, useState, type ReactNode } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import Switch from "../../components/Switch";
@@ -79,10 +80,10 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
     return (
       <label className="block">
         <span className="block text-sm font-medium text-ink-primary mb-1.5">{label}</span>
-        <select value={v} onChange={(e) => save({ [k]: Number(e.target.value) })} className={inp}>
+        <TeklySelect value={v} onChange={(e) => save({ [k]: Number(e.target.value) })} className={inp}>
           {!known && <option value={v}>{v}</option>}
           {opts.map(([x, l]) => <option key={x} value={x}>{l}</option>)}
-        </select>
+        </TeklySelect>
         {hint && <span className="block text-xs text-ink-tertiary mt-1">{hint}</span>}
       </label>
     );
@@ -91,10 +92,10 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
   const statusSelect = (k: string, list: Status[], label: string) => (
     <label className="block">
       <span className="block text-sm font-medium text-ink-primary mb-1.5">{label}</span>
-      <select value={cfg[k] || ""} onChange={(e) => save({ [k]: e.target.value })} className={inp}>
+      <TeklySelect value={cfg[k] || ""} onChange={(e) => save({ [k]: e.target.value })} className={inp}>
         <option value="">Keep the status</option>
         {list.map((s) => <option key={s.key} value={s.key}>{s.name}</option>)}
-      </select>
+      </TeklySelect>
     </label>
   );
   const approval = (prefix: "oe" | "oe_wo", list: Status[], noun: string) => {
@@ -178,13 +179,13 @@ export default function PublicPagesSettings({ shopName, logo, StatusPicker }: { 
               {sw("book_show_employee_step", "Let customers choose a technician", "Off: you assign someone later.", "booking")}
               <label className="flex flex-wrap items-center gap-3 py-3 border-t border-slate-100" onMouseEnter={() => setPage("booking")}>
                 <span className="min-w-0"><span className="block text-sm text-ink-primary">How your team's names appear</span><span className="block text-xs text-ink-tertiary">On the booking page and in customer messages. Custom uses each person's “Name on documents” in Team.</span></span>
-                <select value={cfg.public_employee_name || "full"} onChange={(e) => save({ public_employee_name: e.target.value })} aria-label="How your team's names appear"
+                <TeklySelect value={cfg.public_employee_name || "full"} onChange={(e) => save({ public_employee_name: e.target.value })} aria-label="How your team's names appear"
                   className="ml-auto glass-input rounded-xl px-3 py-2 text-sm">
                   <option value="full">Full name</option>
                   <option value="first_initial">First name and initial</option>
                   <option value="first">First name only</option>
                   <option value="custom">Custom name</option>
-                </select>
+                </TeklySelect>
               </label>
               {sw("appointment_allow_multiple", "Allow more than one booking at the same time", undefined, "booking")}
               {sw("appointment_consider_orders", "Keep times free when jobs are scheduled", "Scheduled work orders block booking slots too.", "booking")}

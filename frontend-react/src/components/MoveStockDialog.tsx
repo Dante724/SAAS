@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "./TeklySelect";
 import { M } from "./Shell";
 import BinScanField from "./BinScanField";
 import { api } from "../api/client";
@@ -43,7 +44,7 @@ export default function MoveStockDialog({ partId, partName, locationId, fromBinI
         <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">To bin</label>
           {bins.length === 0
             ? <p className="text-xs text-ink-tertiary">No other bins at this location — add one in Inventory › Bins.</p>
-            : <select value={to} onChange={(e) => setTo(e.target.value)} aria-label="Destination bin" className={fld}>{bins.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select>}
+            : <TeklySelect value={to} onChange={(e) => setTo(e.target.value)} aria-label="Destination bin" className={fld}>{bins.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</TeklySelect>}
         </div>
         <BinScanField locationId={locationId} onBin={(b) => { if (b.id === fromBinId) setErr("That's the bin it's in now."); else setTo(b.id); }} />
         <div><label className="block text-[11px] font-semibold text-ink-tertiary mb-1">Quantity</label>
