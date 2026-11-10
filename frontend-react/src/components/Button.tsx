@@ -4,7 +4,7 @@ import { forwardRef, type ButtonHTMLAttributes, type ReactNode } from "react";
 // like one), so size, corners, colour, hover and disabled look the same on every screen.
 // Sizes: sm 32px, md 36px (default), lg 44px. On touch screens every button also gets a 44px tap
 // area (the `.hit44` rule in index.css) without growing visually.
-export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "dangerSolid" | "link";
+export type ButtonVariant = "primary" | "secondary" | "ghost" | "danger" | "dangerSolid" | "success" | "link";
 export type ButtonSize = "sm" | "md" | "lg";
 
 const BASE = "hit44 inline-flex items-center justify-center gap-1.5 rounded-xl font-semibold whitespace-nowrap transition-colors select-none disabled:opacity-50 disabled:cursor-not-allowed";
@@ -14,6 +14,8 @@ const VARIANT: Record<ButtonVariant, string> = {
   ghost: "text-ink-secondary hover:bg-slate-100 hover:text-ink-primary disabled:hover:bg-transparent",
   danger: "bg-white border border-rose-200 text-rose-700 hover:bg-rose-50 disabled:hover:bg-white",
   dangerSolid: "bg-rose-600 text-white hover:bg-rose-700 disabled:hover:bg-rose-600",
+  // A running timer's Stop (green = the clock is on, as everywhere else for "on the clock").
+  success: "bg-emerald-600 text-white hover:bg-emerald-700 disabled:hover:bg-emerald-600",
   link: "text-primary hover:underline",
 };
 const SIZE: Record<ButtonSize, string> = { sm: "h-8 px-3 text-xs", md: "h-9 px-3.5 text-xs", lg: "h-11 px-4 text-sm" };
