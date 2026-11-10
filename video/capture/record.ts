@@ -11,6 +11,8 @@ import path from "path";
 import { startServer, ensureFrontendBuilt, REPO } from "./lib/server";
 import { Clip, type ClipMeta, countFrames } from "./lib/clip";
 import { makePhotos } from "./lib/photos";
+import { seedBooking, bookingMobile, bookingDesktop, seedMemberships, membershipsClip, seedHistory, reportsClip } from "./extras";
+import { frontDoor, checkinMobile, checkinArrives, qrAssets, TRADES, seedTrade, tradeClip } from "./checkin";
 import { seedBase, prepareApproval, setStatus, payOrder, type Seed } from "./seed";
 
 const OUT = path.resolve(__dirname, "../public/clips");
@@ -373,6 +375,32 @@ async function eod(c: Ctx): Promise<ClipMeta> {
       await setStatus(seed.api, o.id, o.eod);
     }
     if (want("eod")) save(await eod(c));
+
+    // Self check-in at the door (after the day's story, so it doesn't change the clips above;
+    // Maya is already a customer here, so staff see "Seen before")
+    const co = { browser, base: srv.base, out: OUT, work };
+    if (want("checkin") || want("checkin-qr")) {
+      const point = await frontDoor(seed.api);
+      if (want("checkin-qr")) await qrAssets(co, seed.api, point);
+      if (want("checkin")) { save(await checkinMobile(co, point)); save(await checkinArrives(co, seed.token)); }
+    }
+    if (want("booking")) {
+      const bookPath = await seedBooking(seed.api);
+      save(await bookingMobile(co, bookPath));
+      save(await bookingDesktop(co, seed.token));
+    }
+    if (want("memberships")) {
+      const { memberJob } = await seedMemberships(seed.api, c.hero!, seed.others);
+      save(await membershipsClip(co, seed.token, memberJob));
+    }
+    if (want("reports")) {
+      await seedHistory(seed.api, path.join(srv.dir, "capture.db"), path.join(work, "history"));
+      save(await reportsClip(co, seed.token));
+    }
+    if (want("trades")) for (const t of TRADES) {
+      const { point } = await seedTrade(srv.base, t);
+      save(await tradeClip(co, t, point));
+    }
 
     // verify
     console.log("\n[verify]");

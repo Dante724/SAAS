@@ -1,10 +1,22 @@
 import React from "react";
-import { AbsoluteFill, spring, useCurrentFrame } from "remotion";
+import { AbsoluteFill, Sequence, spring, useCurrentFrame } from "remotion";
+import { TradeFan } from "./Montage";
 import { C, FONT_DISPLAY, FONT_TEXT } from "../brand";
 import { Stage, TradeIcon, Wordmark, useLayout } from "../ui";
 
 // Logo, four trade icons (phone, car, chainsaw, outboard), tekly.app. No swell, no fireworks.
-export const EndCard: React.FC<{ dur: number; line?: string; sub?: string; showTrades?: boolean }> = ({ line, sub, showTrades = true }) => {
+// `fan`: frames of the opening where four kinds of shop show their own check-in page, then the logo.
+export const EndCard: React.FC<{ dur: number; line?: string; sub?: string; showTrades?: boolean; fan?: number }> = ({ dur, line, sub, showTrades = true, fan = 0 }) => {
+  if (fan > 0) return (
+    <AbsoluteFill>
+      <Sequence durationInFrames={fan}><TradeFan dur={fan} /></Sequence>
+      <Sequence from={fan - 6}><EndCard dur={dur - fan + 6} line={line} sub={sub} showTrades={showTrades} /></Sequence>
+    </AbsoluteFill>
+  );
+  return <Logo line={line} sub={sub} showTrades={showTrades} />;
+};
+
+const Logo: React.FC<{ line?: string; sub?: string; showTrades?: boolean }> = ({ line, sub, showTrades = true }) => {
   const f = useCurrentFrame();
   const { u, fps } = useLayout();
   const a = spring({ frame: f, fps, config: { damping: 20, stiffness: 110 } });

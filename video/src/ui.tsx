@@ -41,7 +41,7 @@ export const Photo: React.FC<{
 export const Shutter: React.FC<{ startF: number; durF: number; dir?: "up" | "down" }> = ({ startF, durF, dir = "up" }) => {
   const f = useCurrentFrame();
   const p = interpolate(f, [startF, startF + durF], [0, 1], { ...clamp, easing: Easing.inOut(Easing.cubic) });
-  const y = dir === "up" ? -p * 100 : (1 - p) * -100;
+  const y = dir === "up" ? -p * 104 : (1 - p) * -104;   // 104: the shadow clears the frame too
   return (
     <AbsoluteFill style={{
       transform: `translateY(${y}%)`,
@@ -202,9 +202,18 @@ export const PhoneFrame: React.FC<{ h: number; children: React.ReactNode }> = ({
 };
 
 // ---------- bright act-two stage ----------
-export const Stage: React.FC<{ children: React.ReactNode }> = ({ children }) => (
-  <AbsoluteFill style={{ background: `radial-gradient(120% 90% at 50% 0%, #ffffff 0%, ${C.surface} 60%, #e9eef8 100%)` }}>{children}</AbsoluteFill>
-);
+// Act two's stage: the shop itself, blurred and brightened behind the devices.
+export const Stage: React.FC<{ children: React.ReactNode; photo?: string }> = ({ children, photo = "photos/workshop-garage-960.webp" }) => {
+  const f = useCurrentFrame();
+  return (
+    <AbsoluteFill style={{ overflow: "hidden", background: "#eef2f9" }}>
+      <Img src={staticFile(photo)} style={{ width: "100%", height: "100%", objectFit: "cover", filter: "blur(30px) saturate(1.15)", transform: `scale(${1.14 + f * 0.0002})` }} />
+      <AbsoluteFill style={{ background: "linear-gradient(180deg, rgba(247,249,253,.84) 0%, rgba(238,242,250,.78) 60%, rgba(228,235,247,.86) 100%)" }} />
+      <AbsoluteFill style={{ background: "radial-gradient(70% 55% at 50% 45%, rgba(255,255,255,.6), rgba(255,255,255,0) 70%)" }} />
+      {children}
+    </AbsoluteFill>
+  );
+};
 
 export const Centered: React.FC<{ children: React.ReactNode; style?: React.CSSProperties }> = ({ children, style }) => (
   <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", ...style }}>{children}</AbsoluteFill>

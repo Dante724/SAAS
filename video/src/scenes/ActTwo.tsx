@@ -4,49 +4,56 @@ import React from "react";
 import { AbsoluteFill, Sequence, interpolate, spring, useCurrentFrame } from "remotion";
 import manifest from "../../public/clips/manifest.json";
 import { SHOTS, type Shot } from "../shots";
+import { Float3D } from "../cinema";
 import { BrowserFrame, ClipView, PhoneFrame, Photo, Stage, clamp, useLayout } from "../ui";
+import { FONT_DISPLAY } from "../brand";
 
 type P = { dur: number };
 type ClipInfo = { file: string; width: number; height: number; durationSec: number };
-const info = (name: string): ClipInfo => {
+export const hasClip = (name: string) => !!(manifest as unknown as { clips: Record<string, ClipInfo> }).clips[name];
+export const info = (name: string): ClipInfo => {
   const c = (manifest as unknown as { clips: Record<string, ClipInfo> }).clips[name];
   if (!c) throw new Error(`clip ${name} missing from public/clips/manifest.json — run npm run capture`);
   return c;
 };
 
 // The desktop app in a browser window. On square/vertical the box is narrower, so the zoom works harder.
-const DesktopShot: React.FC<{ shot: Shot; dur: number; enter?: boolean }> = ({ shot, dur, enter = true }) => {
+export const DesktopShot: React.FC<{ shot: Shot; dur: number; enter?: boolean; scale?: number; dx?: number; dy?: number }> = ({ shot, dur, enter = true, scale = 1, dx = 0, dy = 0 }) => {
   const f = useCurrentFrame();
   const { u, aspect, fps } = useLayout();
   const c = info(shot.clip);
-  const box = aspect === "wide" ? { w: 1400 * u, h: 875 * u } : aspect === "square" ? { w: 960 * u, h: 780 * u } : { w: 1000 * u, h: 1240 * u };
+  const box = aspect === "wide" ? { w: 1260 * u, h: 788 * u } : aspect === "square" ? { w: 900 * u, h: 720 * u } : { w: 980 * u, h: 1180 * u };   // inside a 6% safe margin, clear of captions
   const extra = 1;   // on square/vertical the cover-fit crop already brings the camera closer
   const zoom = (shot.zoom ?? [{ t: 0, s: 1, x: 0.5, y: 0.5 }]).map((z) => ({ ...z, s: z.s * extra }));
   const s = enter ? spring({ frame: f, fps, config: { damping: 20, stiffness: 120 } }) : 1;
   const out = interpolate(f, [dur - 6, dur], [1, 0.0], clamp);
   return (
-    <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", paddingTop: aspect === "tall" ? 0 : 30 * u }}>
-      <div style={{ transform: `translateY(${(1 - s) * 40 * u}px) scale(${0.97 + 0.03 * s})`, opacity: Math.min(s, shot.fadeOut ? out : 1) }}>
-        <BrowserFrame w={box.w} h={box.h}>
-          <ClipView src={`clips/${c.file}`} clipW={c.width} clipH={c.height} boxW={box.w} boxH={box.h} startFrom={shot.from} rate={shot.rate} clipDur={c.durationSec} zoom={zoom} />
-        </BrowserFrame>
+    <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", paddingBottom: (aspect === "tall" ? 120 : 90) * u }}>
+      <div style={{ transform: `translate(${dx * u}px, ${dy * u + (1 - s) * 40 * u}px) scale(${(0.97 + 0.03 * s) * scale})`, opacity: Math.min(s, shot.fadeOut ? out : 1) }}>
+        <Float3D dur={dur} from={-7} to={-1.5} tiltX={4}>
+          <BrowserFrame w={box.w} h={box.h}>
+            <ClipView src={`clips/${c.file}`} clipW={c.width} clipH={c.height} boxW={box.w} boxH={box.h} startFrom={shot.from} rate={shot.rate} clipDur={c.durationSec} zoom={zoom} />
+          </BrowserFrame>
+        </Float3D>
       </div>
     </AbsoluteFill>
   );
 };
 
-const MobileShot: React.FC<{ shot: Shot; dur: number; x?: string }> = ({ shot, x = "50%" }) => {
+export const MobileShot: React.FC<{ shot: Shot; dur: number; x?: string; y?: string; height?: number; delay?: number }> = ({ shot, dur, x = "50%", y = "50%", height, delay = 0 }) => {
   const f = useCurrentFrame();
   const { u, aspect, fps } = useLayout();
   const c = info(shot.clip);
-  const h = (aspect === "tall" ? 1240 : 880) * u;
+  const h = (height ?? (aspect === "tall" ? 1180 : 800)) * u;
   const w = h * (390 / 844);
-  const s = spring({ frame: f, fps, config: { damping: 20, stiffness: 120 } });
+  const s = spring({ frame: f - delay, fps, config: { damping: 20, stiffness: 120 } });
   return (
-    <div style={{ position: "absolute", left: x, top: "50%", transform: `translate(-50%, -50%) translateY(${(1 - s) * 60 * u}px)`, opacity: s }}>
-      <PhoneFrame h={h}>
-        <ClipView src={`clips/${c.file}`} clipW={c.width} clipH={c.height} boxW={w} boxH={h} startFrom={shot.from} rate={shot.rate} clipDur={c.durationSec} zoom={shot.zoom} />
-      </PhoneFrame>
+    <div style={{ position: "absolute", left: x, top: y, transform: `translate(-50%, -50%) translateY(${(1 - s) * 60 * u - (aspect === "tall" ? 70 : 45) * u}px)`, opacity: s }}>
+      <Float3D dur={dur} from={12} to={4} tiltX={5} seed={6}>
+        <PhoneFrame h={h}>
+          <ClipView src={`clips/${c.file}`} clipW={c.width} clipH={c.height} boxW={w} boxH={h} startFrom={shot.from} rate={shot.rate} clipDur={c.durationSec} zoom={shot.zoom} />
+        </PhoneFrame>
+      </Float3D>
     </div>
   );
 };
@@ -98,16 +105,36 @@ const BoardBeside: React.FC<{ dur: number }> = ({ dur }) => {
 export const Part: React.FC<P> = ({ dur }) => <Stage><DesktopShot shot={SHOTS.stock} dur={dur} /></Stage>;
 
 // 1:12 close of job: done, invoice, pay link
-export const Close: React.FC<P> = ({ dur }) => <Stage><DesktopShot shot={SHOTS.invoice} dur={dur} /></Stage>;
-
-// 1:20 Dani's line: the end-of-day board, mostly green, then the shop, warm
-export const DanisLine: React.FC<P> = ({ dur }) => {
+// 1:30 close of job: done, invoice and pay link, then the board: her job Done and paid
+export const Close: React.FC<P> = ({ dur }) => {
   const { fps } = useLayout();
-  const half = seconds(fps, 3.2);
+  const a = seconds(fps, 4.2);
+  return (
+    <Stage>
+      <Sequence durationInFrames={a}><Stage><DesktopShot shot={SHOTS.invoice} dur={a} /></Stage></Sequence>
+      <Sequence from={a}><Stage><DesktopShot shot={SHOTS.eodPaid} dur={dur - a} /></Stage></Sequence>
+    </Stage>
+  );
+};
+
+// 1:38 Dani's line, set as the film's title card over the shop at the end of the day
+export const DanisLine: React.FC<P> = ({ dur }) => {
+  const f = useCurrentFrame();
+  const { u, fps, aspect } = useLayout();
+  const l1 = spring({ frame: f - 6, fps, config: { damping: 22, stiffness: 90 } });
+  const l2 = spring({ frame: f - Math.round(fps * 2.7), fps, config: { damping: 22, stiffness: 90 } });
+  const size = (aspect === "wide" ? 76 : aspect === "square" ? 66 : 70) * u;
   return (
     <AbsoluteFill>
-      <Sequence durationInFrames={half}><Stage><DesktopShot shot={SHOTS.eod} dur={half} /></Stage></Sequence>
-      <Sequence from={half}><Photo src="photos/repair-lab-2-960.webp" dur={dur - half} warm from={1.02} to={1.1} ox={30} oy={45} /></Sequence>
+      <AbsoluteFill style={{ filter: "blur(5px)" }}><Photo src="photos/repair-lab-2-960.webp" dur={dur} warm from={1.06} to={1.14} ox={30} oy={45} /></AbsoluteFill>
+      <AbsoluteFill style={{ background: "linear-gradient(180deg, rgba(10,12,20,.35), rgba(10,12,20,.62))" }} />
+      <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", flexDirection: "column", gap: 22 * u, padding: `0 ${80 * u}px`, textAlign: "center",
+        opacity: interpolate(f, [dur - 8, dur], [1, 0], clamp) }}>
+        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 600, fontSize: size, letterSpacing: -size * 0.03, lineHeight: 1.1, color: "rgba(255,255,255,.82)",
+          opacity: l1, transform: `translateY(${(1 - l1) * 24 * u}px)` }}>I didn't need more software.</div>
+        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: size * 1.08, letterSpacing: -size * 0.03, lineHeight: 1.1, color: "#fff",
+          opacity: l2, transform: `translateY(${(1 - l2) * 24 * u}px)` }}>I needed the day back.</div>
+      </AbsoluteFill>
     </AbsoluteFill>
   );
 };

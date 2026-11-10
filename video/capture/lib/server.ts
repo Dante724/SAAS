@@ -50,6 +50,8 @@ export async function startServer(preferredPort = 8131): Promise<Server> {
     RATE_LIMIT_IP_PER_MIN: "100000",
     RATE_LIMIT_USER_PER_MIN: "100000",
     SEED_DEMO: "false",
+    // absolute links (check-in QR, poster): the public app address, not localhost
+    PUBLIC_BASE_URL: process.env.TEKLY_PUBLIC_BASE || "https://tekly.app",
   };
   const child: ChildProcess = spawn(PY, ["-m", "uvicorn", "main:app", "--port", String(port)], {
     cwd: REPO, env, stdio: ["ignore", log, log],

@@ -17,17 +17,30 @@ export const SHOTS = {
   // Approved pill 1.22
   boardApproved: { clip: "board-approved-desktop", from: 0.6, rate: 1, zoom: [WIDE, Z(0.9, 1.7, 0.47, 0.4)] } as Shot,
   // list: 1 in stock, 1 reserved 1.43 · stock by location 7.78 · timer started 15.73 (→ t 3.5 / 7.5)
-  stock: { clip: "stock-desktop", from: 0.8, rate: 2, zoom: [Z(0, 1.55, 0.72, 0.6), Z(2.6, 1.55, 0.72, 0.6), Z(3.6, 1.6, 0.76, 0.3), Z(5.6, 1.6, 0.76, 0.3), Z(6.4, 1, 0.5, 0.5)] } as Shot,
+  stock: { clip: "stock-desktop", from: 0.8, rate: 2, zoom: [Z(0, 1.5, 0.64, 0.6), Z(2.6, 1.5, 0.64, 0.6), Z(3.6, 1.6, 0.76, 0.3), Z(5.6, 1.6, 0.76, 0.3), Z(6.4, 1, 0.5, 0.5)] } as Shot,
   // Ready 6.33 · invoice created 8.54 · pay link 11.9 (→ t 4.4)
   invoice: { clip: "invoice-desktop", from: 5.8, rate: 1.4, zoom: [WIDE, Z(3.6, 1, 0.5, 0.5), Z(4.6, 1.55, 0.66, 0.38)] } as Shot,
+  // end of day, her job: WO-00012 Maya Chen · Done (paid) 1.59
+  eodPaid: { clip: "eod-board-desktop", from: 0.6, rate: 1, zoom: [WIDE, Z(0.8, 1, 0.5, 0.5), Z(1.8, 1.9, 0.42, 0.41)] } as Shot,
   // end of day: mostly Done 1.0 · WO-00012 Done 1.59
   eod: { clip: "eod-board-desktop", from: 0.8, rate: 1, zoom: [Z(0, 1.2, 0.5, 0.42), Z(3.2, 1, 0.5, 0.5)] } as Shot,
+  // the rest of the day (beats: see manifest)
+  // details typed 14.2 · signed 19.9 · "You're checked in, Maya · #1" 21.3 (→ t 2.9)
+  checkin: { clip: "checkin-mobile", from: 13, rate: 2.9 } as Shot,
+  // service 2.4 · tomorrow 3.9 · 10:00 5.9 · confirm 11.8 · "You're booked!" 14.0 (→ t 3.3)
+  booking: { clip: "booking-mobile", from: 2.0, rate: 3.6 } as Shot,
+  // Scheduler: her 10:00 card 5.8
+  bookingDesk: { clip: "booking-desktop", from: 6.0, rate: 1, zoom: [Z(0, 1.5, 0.33, 0.3)] } as Shot,
+  // "Apply plan to 2 lines" 15.9 · Diagnostic $35 → $0 covered by plan 19.1
+  memberships: { clip: "memberships-desktop", from: 15.0, rate: 1.2, zoom: [Z(0, 1.5, 0.8, 0.36), Z(1.4, 1.5, 0.8, 0.36), Z(2.6, 1.6, 0.68, 0.72)] } as Shot,
+  // Provided services chart, last 30 days: every trade's jobs in one list 6.3
+  reports: { clip: "reports-desktop", from: 6.0, rate: 1, zoom: [WIDE, Z(1.0, 1, 0.5, 0.5), Z(2.6, 1.45, 0.66, 0.56)] } as Shot,
   // 30 s cut
   approve30: { clip: "approve-mobile", from: 3.7, rate: 4.2 } as Shot,
-  stock30: { clip: "stock-desktop", from: 0.9, rate: 1, zoom: [Z(0, 1.6, 0.72, 0.6)] } as Shot,
+  stock30: { clip: "stock-desktop", from: 0.9, rate: 1, zoom: [Z(0, 1.5, 0.64, 0.6)] } as Shot,
   invoice30: { clip: "invoice-desktop", from: 10.5, rate: 1.4, zoom: [WIDE, Z(0.8, 1.55, 0.66, 0.38)] } as Shot,
   // 15 s cut
   approve15: { clip: "approve-mobile", from: 3.7, rate: 5.4 } as Shot,
   boardApproved15: { clip: "board-approved-desktop", from: 0.9, rate: 1, zoom: [Z(0, 1.6, 0.47, 0.4)] } as Shot,
-  stock15: { clip: "stock-desktop", from: 0.9, rate: 1, zoom: [Z(0, 1.6, 0.72, 0.6)] } as Shot,
+  stock15: { clip: "stock-desktop", from: 0.9, rate: 1, zoom: [Z(0, 1.5, 0.64, 0.6)] } as Shot,
 };

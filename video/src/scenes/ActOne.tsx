@@ -1,9 +1,11 @@
 // Act one: the old way. Stock photos graded cold, and abstract, unbranded "old software" UI
 // (grey menus, nested modals, a loader, a renewal email). No real product is shown or named.
 import React from "react";
-import { AbsoluteFill, interpolate, spring, useCurrentFrame } from "remotion";
+import { AbsoluteFill, Img, Sequence, interpolate, spring, staticFile, useCurrentFrame } from "remotion";
+import { HOOK_FRAMES, OLD_LOCK_SEC, oldSoftwareClicks } from "../timing";
+import { Flash, Float3D, Handheld, RewindFX, ShopBackdrop } from "../cinema";
 import { C, FONT_DISPLAY, FONT_TEXT } from "../brand";
-import { Photo, Shutter, clamp, fadeIO, useLayout, Wordmark, ease } from "../ui";
+import { Photo, PhoneFrame, Shutter, clamp, fadeIO, useLayout, Wordmark, ease } from "../ui";
 
 type P = { dur: number };
 
@@ -51,28 +53,79 @@ const CallCard: React.FC<{ dur: number; script: { at: number; status: string; to
 };
 
 // ---------- 0:00 cold open ----------
-export const ColdOpen: React.FC<P> = ({ dur }) => {
+// The hook: a flash-forward to the ending (Maya's phone: Approved, with the chime), then the tape
+// rewinds to 7:52 a.m. and the shutter goes up on the day as it really starts.
+export const Hook: React.FC<P> = () => {
+  const f = useCurrentFrame();
+  return (
+    <AbsoluteFill style={{ background: "#000" }}>
+      <RewindFX start={HOOK_FRAMES - 22} len={22}><FlashForward /></RewindFX>
+      {f < 4 && <AbsoluteFill style={{ background: "#000", opacity: 1 - f / 4 }} />}
+    </AbsoluteFill>
+  );
+};
+
+export const ColdOpen: React.FC<P> = ({ dur }) => (
+  <AbsoluteFill style={{ background: "#000" }}>
+    <ColdOpenShop dur={dur} />
+    <Flash at={0} len={6} peak={0.35} />
+  </AbsoluteFill>
+);
+
+const FlashForward: React.FC = () => {
+  const f = useCurrentFrame();
+  const { u, aspect, fps } = useLayout();
+  const ring = spring({ frame: f - 10, fps, config: { damping: 14, stiffness: 120 } });
+  const pill = spring({ frame: f - 6, fps, config: { damping: 16, stiffness: 140 } });
+  const h = (aspect === "tall" ? 1300 : aspect === "square" ? 820 : 900) * u;
+  const dolly = 1 + 0.08 * Math.min(1, f / HOOK_FRAMES);
+  return (
+    <AbsoluteFill>
+      <ShopBackdrop dur={HOOK_FRAMES} />
+      <AbsoluteFill style={{ alignItems: "center", justifyContent: "center", transform: `scale(${dolly}) translateY(${(aspect === "tall" ? 70 : 60) * u}px)` }}>
+        <Float3D dur={HOOK_FRAMES} from={-12} to={-5}>
+          <PhoneFrame h={h}><Img src={staticFile("clips/approve-mobile-last.jpg")} style={{ width: "100%", height: "100%", objectFit: "cover", objectPosition: "top" }} /></PhoneFrame>
+        </Float3D>
+        <div style={{ position: "absolute", left: "50%", top: "40%", width: 300 * u, height: 300 * u, marginLeft: -150 * u, marginTop: -150 * u,
+          borderRadius: 999, border: `${6 * u}px solid ${C.green}`, opacity: (1 - ring) * 0.9, transform: `scale(${0.6 + ring * 1.8})` }} />
+      </AbsoluteFill>
+      <div style={{ position: "absolute", left: "50%", top: aspect === "tall" ? "5%" : "4%", transform: `translateX(-50%) translateY(${(1 - pill) * -20 * u}px) scale(${0.9 + 0.1 * pill})`, opacity: pill,
+        fontFamily: FONT_DISPLAY, fontWeight: 700, fontSize: 56 * u, letterSpacing: -1 * u, color: C.ink, background: "rgba(255,255,255,.95)", padding: `${14 * u}px ${34 * u}px`, borderRadius: 999,
+        display: "flex", alignItems: "center", gap: 18 * u, boxShadow: "0 18px 50px rgba(16,24,64,.2)", whiteSpace: "nowrap" }}>
+        <span style={{ width: 22 * u, height: 22 * u, borderRadius: 99, background: C.green, boxShadow: `0 0 0 ${7 * u}px ${C.green}33` }} />Approved · 9:14 a.m.
+      </div>
+    </AbsoluteFill>
+  );
+};
+
+const ColdOpenShop: React.FC<P> = ({ dur }) => {
   const f = useCurrentFrame();
   const { u, aspect, fps } = useLayout();
   const blink = Math.floor(f / 12) % 2 === 0;
+  const sec = Math.floor(f / fps);
   return (
     <AbsoluteFill>
-      <Photo src="photos/bench-hero-1600.webp" dur={dur} cold from={1.12} to={1.02} ox={45} oy={55} />
-      <div style={{ position: "absolute", left: "6%", top: aspect === "tall" ? "8%" : "9%", opacity: interpolate(f, [40, 54], [0, 1], clamp),
-        fontFamily: FONT_DISPLAY, color: "#fff", fontWeight: 300, fontSize: 120 * u, letterSpacing: -4 * u, textShadow: "0 6px 30px rgba(0,0,0,.5)" }}>
-        7:52 <span style={{ fontSize: 56 * u, fontWeight: 400, letterSpacing: 0 }}>a.m.</span>
+      <Handheld seed={3}><Photo src="photos/bench-hero-1600.webp" dur={dur} cold from={1.12} to={1.02} ox={45} oy={55} /></Handheld>
+      <div style={{ position: "absolute", left: "6%", top: aspect === "tall" ? "8%" : "17%", opacity: interpolate(f, [26, 36], [0, 1], clamp), color: "#fff", textShadow: "0 6px 30px rgba(0,0,0,.5)" }}>
+        <div style={{ fontFamily: FONT_TEXT, fontWeight: 600, fontSize: 24 * u, letterSpacing: 6 * u, opacity: 0.8 }}>TUESDAY</div>
+        <div style={{ fontFamily: FONT_DISPLAY, fontWeight: 300, fontSize: 120 * u, letterSpacing: -4 * u, lineHeight: 1 }}>
+          7:52 <span style={{ fontSize: 56 * u, fontWeight: 400, letterSpacing: 0 }}>a.m.</span>
+        </div>
+        <div style={{ marginTop: 10 * u, display: "flex", gap: 6 * u }}>
+          {Array.from({ length: 12 }).map((_, i) => <span key={i} style={{ width: 22 * u, height: 4 * u, borderRadius: 2, background: i <= sec * 3 % 12 ? "rgba(255,255,255,.85)" : "rgba(255,255,255,.2)" }} />)}
+        </div>
       </div>
-      <Sticky text="iPad – charge port" x={aspect === "wide" ? "62%" : "50%"} y={aspect === "tall" ? "56%" : "50%"} rot={-6} delayF={50} size={0.8} />
-      <Sticky text="Galaxy – back glass – call?" x={aspect === "wide" ? "75%" : "66%"} y={aspect === "tall" ? "62%" : "58%"} rot={5} delayF={60} size={0.8} />
-      <Sticky text="11 jobs?!" x={aspect === "wide" ? "68%" : "22%"} y={aspect === "tall" ? "68%" : "68%"} rot={-2} delayF={70} size={0.8} />
+      <Sticky text="iPad – charge port" x={aspect === "wide" ? "62%" : "50%"} y={aspect === "tall" ? "56%" : "46%"} rot={-6} delayF={34} size={0.8} />
+      <Sticky text="Galaxy – back glass – call?" x={aspect === "wide" ? "75%" : "66%"} y={aspect === "tall" ? "62%" : "54%"} rot={5} delayF={42} size={0.8} />
+      <Sticky text="11 jobs?!" x={aspect === "wide" ? "68%" : "22%"} y={aspect === "tall" ? "68%" : "64%"} rot={-2} delayF={50} size={0.8} />
       {/* the landline's message light */}
-      <div style={{ position: "absolute", left: "6%", bottom: aspect === "tall" ? "28%" : "12%", opacity: interpolate(f, [60, 70], [0, 1], clamp),
+      <div style={{ position: "absolute", left: "6%", bottom: aspect === "tall" ? "28%" : "16%", opacity: interpolate(f, [44, 54], [0, 1], clamp),
         display: "flex", alignItems: "center", gap: 14 * u, padding: `${12 * u}px ${20 * u}px`, borderRadius: 14 * u, background: "rgba(10,12,16,.75)",
         color: "#e6e7ea", fontFamily: FONT_TEXT, fontSize: 24 * u }}>
         <span style={{ width: 16 * u, height: 16 * u, borderRadius: 99, background: blink ? "#ff3b30" : "#5a1d1a", boxShadow: blink ? "0 0 18px #ff3b30" : "none" }} />
-        Landline · messages waiting
+        Landline · 3 messages waiting
       </div>
-      <Shutter startF={4} durF={Math.round(fps * 1.2)} />
+      <Shutter startF={2} durF={Math.round(fps * 1.0)} />
     </AbsoluteFill>
   );
 };
@@ -87,7 +140,7 @@ export const Customer: React.FC<P & { variant?: "90" | "30" | "15" }> = ({ dur, 
       : [{ at: 0, status: "Calling… (3rd time)" }, { at: 1.6, status: "No answer", tone: "red" as const }];
   return (
     <AbsoluteFill>
-      <Photo src="photos/repair-lab-1-960.webp" dur={dur} cold from={1.05} to={1.16} ox={60} oy={30} />
+      <Handheld seed={5}><Photo src="photos/repair-lab-1-960.webp" dur={dur} cold from={1.05} to={1.16} ox={60} oy={30} /></Handheld>
       <Sticky text="Maya – screen – $140?" x={aspect === "wide" ? "8%" : "8%"} y={aspect === "tall" ? "60%" : "56%"} rot={-4} size={1.15} />
       <CallCard dur={dur} script={script} />
     </AbsoluteFill>
@@ -169,33 +222,46 @@ const Cursor: React.FC<{ path: { f: number; x: number; y: number; click?: boolea
   );
 };
 
-export const OldSoftware: React.FC<P & { short?: boolean }> = ({ dur, short }) => {
+
+export const OldSoftware: React.FC<P & { short?: boolean }> = ({ dur, short = false }) => {
   const f = useCurrentFrame();
-  const { u, fps } = useLayout();
-  const step = short ? 8 : 16;                     // frames between modals
-  const n = short ? 6 : 5;
-  const titles = ["Job record", "Edit job record", "Customer lookup", "Confirm", "Are you sure?", "Record locked"];
-  const clicks = Array.from({ length: n }).map((_, i) => ({ f: 10 + i * step, x: 0.36 + i * 0.045, y: 0.44 + i * 0.06, click: true }));
-  const loaderF = short ? 999 : Math.round(fps * 4.6);
-  const lockF = short ? 999 : Math.round(fps * 6.6);
+  const { u, fps, aspect } = useLayout();
+  const clickF = oldSoftwareClicks(short);
+  const titles = ["Job record", "Edit job record", "Customer lookup", "Select device", "Confirm", "Are you sure?", "Record locked", "Save changes?", "Refresh", "Confirm", "Reopen job record"];
+  const clicks = clickF.map((cf, i) => ({ f: cf, x: 0.34 + (i % 6) * 0.04, y: 0.42 + (i % 6) * 0.055, click: true }));
+  const loaderF = short ? 999 : Math.round(fps * 5.0);
+  const lockF = short ? 999 : Math.round(fps * OLD_LOCK_SEC);
   const spin = (f * 12) % 360;
+  const count = clickF.filter((c) => f >= c).length;
+  const last = [...clickF].reverse().find((c) => f >= c) ?? -99;
+  const shake = f - last < 4 ? (1 - (f - last) / 4) * 5 * u : 0;
+  const push = interpolate(f, [0, dur], [1, 1.07], clamp);
   return (
     <AbsoluteFill style={{ background: "#2b2e34" }}>
-      <OldWindow>
-        {titles.slice(0, n).map((t, i) => <Modal key={i} i={i} title={t} showF={10 + i * step + 3} />)}
-        {f >= loaderF && f < lockF && (
-          <AbsoluteFill style={{ background: "rgba(0,0,0,.25)", alignItems: "center", justifyContent: "center" }}>
-            <div style={{ background: "#f0f0f0", border: "2px solid #999", padding: `${24 * u}px ${36 * u}px`, display: "flex", alignItems: "center", gap: 18 * u, fontFamily: "Arial", fontSize: 24 * u, color: "#333" }}>
-              <div style={{ width: 34 * u, height: 34 * u, borderRadius: 99, border: `${5 * u}px solid #ccc`, borderTopColor: "#666", transform: `rotate(${spin}deg)` }} />
-              Loading… please wait
-            </div>
-          </AbsoluteFill>
-        )}
-        {f >= lockF && <Modal i={1} title="Text messages" lockLine="Texting is available on a higher plan." showF={lockF} />}
-      </OldWindow>
-      <Cursor path={[{ f: 0, x: 0.3, y: 0.3 }, ...clicks, { f: dur, x: 0.6, y: 0.62 }]} />
+      <AbsoluteFill style={{ transform: `scale(${push}) translate(${shake * ((last * 7) % 3 - 1)}px, ${shake * ((last * 5) % 3 - 1)}px)` }}>
+        <OldWindow>
+          {titles.map((t, i) => <Modal key={i} i={i % 6} title={t} showF={clickF[i] + 3} />)}
+          {f >= loaderF && f < lockF && (
+            <AbsoluteFill style={{ background: "rgba(0,0,0,.25)", alignItems: "center", justifyContent: "center" }}>
+              <div style={{ background: "#f0f0f0", border: "2px solid #999", padding: `${24 * u}px ${36 * u}px`, display: "flex", alignItems: "center", gap: 18 * u, fontFamily: "Arial", fontSize: 24 * u, color: "#333" }}>
+                <div style={{ width: 34 * u, height: 34 * u, borderRadius: 99, border: `${5 * u}px solid #ccc`, borderTopColor: "#666", transform: `rotate(${spin}deg)` }} />
+                Loading… please wait
+              </div>
+            </AbsoluteFill>
+          )}
+          {f >= lockF && <Modal i={1} title="Text messages" lockLine="Texting is available on a higher plan." showF={lockF} />}
+        </OldWindow>
+        <Cursor path={[{ f: 0, x: 0.3, y: 0.3 }, ...clicks, { f: dur, x: 0.6, y: 0.62 }]} />
+      </AbsoluteFill>
+      {/* the click counter */}
+      <div style={{ position: "absolute", right: aspect === "tall" ? "8%" : "6%", bottom: aspect === "tall" ? "26%" : "24%", opacity: count ? 1 : 0,
+        fontFamily: FONT_DISPLAY, color: "#fff", textAlign: "right", textShadow: "0 6px 24px rgba(0,0,0,.6)" }}>
+        <div style={{ fontSize: 120 * u, fontWeight: 700, lineHeight: 1, letterSpacing: -4 * u, color: count >= 11 ? "#ff6b5e" : "#fff",
+          transform: `scale(${f - last < 5 ? 1.12 - (f - last) * 0.024 : 1})`, transformOrigin: "100% 100%" }}>{count}</div>
+        <div style={{ fontFamily: FONT_TEXT, fontSize: 22 * u, letterSpacing: 4 * u, opacity: 0.75 }}>CLICKS</div>
+      </div>
       <AbsoluteFill style={{ background: "rgba(10,14,22,.18)", pointerEvents: "none" }} />
-      {short && <RenewalEmail showF={Math.round(fps * 1.6)} dur={dur} />}
+      {short && <RenewalEmail showF={Math.round(fps * 1.9)} dur={dur} />}
     </AbsoluteFill>
   );
 };
@@ -220,7 +286,7 @@ export const Drawer: React.FC<P> = ({ dur }) => {
   const cellW = wide ? 760 * u : 860 * u;
   return (
     <AbsoluteFill>
-      <Photo src="photos/tools-wall-960.webp" dur={dur} cold dim={0.35} from={1.06} to={1.12} />
+      <Handheld seed={7}><Photo src="photos/tools-wall-960.webp" dur={dur} cold dim={0.35} from={1.06} to={1.12} /></Handheld>
       {/* the parts drawer: the iPhone 13 screen bin is empty */}
       <div style={{ position: "absolute", left: wide ? "6%" : "50%", top: wide ? "50%" : "28%", transform: `translate(${wide ? 0 : -50}%, -50%)`,
         width: cellW, background: "#4a4e55", borderRadius: 10 * u, padding: 18 * u, boxShadow: "0 30px 60px rgba(0,0,0,.55)" }}>
@@ -287,8 +353,9 @@ export const Support: React.FC<P> = ({ dur }) => {
   const bars = Array.from({ length: 5 }).map((_, i) => 0.35 + 0.65 * Math.abs(Math.sin(f / 5 + i)));
   const chatIn = spring({ frame: f - Math.round(fps * 1.2), fps, config: { damping: 16 } });
   const holdOut = interpolate(f, [fps * 2.6, fps * 3], [1, 0], clamp);
+  const push = interpolate(f, [fps * 2.6, dur], [1, 1.22], clamp);
   return (
-    <AbsoluteFill style={{ background: "#202328" }}>
+    <AbsoluteFill style={{ background: "radial-gradient(80% 70% at 50% 55%, #2c3038, #16181c)", transform: `scale(${push})` }}>
       <AbsoluteFill style={{ opacity: holdOut }}>
         <div style={{ position: "absolute", left: "50%", top: aspect === "tall" ? "30%" : "34%", transform: "translate(-50%,-50%)", textAlign: "center", color: "#c7cad1", fontFamily: FONT_TEXT }}>
           <div style={{ display: "flex", gap: 10 * u, justifyContent: "center", alignItems: "flex-end", height: 70 * u }}>

@@ -9,7 +9,7 @@ export const Captions: React.FC<{ cut: Cut }> = ({ cut }) => {
   const { fps } = useLayout();
   return (
     <AbsoluteFill style={{ pointerEvents: "none" }}>
-      {captionCues(cut).map((c, i) => {
+      {captionCues(cut).filter((c) => !c.titleCard).map((c, i) => {
         const from = Math.round(c.from * fps);
         const len = Math.round(c.to * fps) - from;
         return (

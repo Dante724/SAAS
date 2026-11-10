@@ -2,7 +2,7 @@
 //  1. every captured clip plays (valid duration, decodes without errors)
 //  2. captions match the script's timecodes within 0.2 s (on the 30 fps frame grid),
 //     and each voice-over line actually starts within 0.2 s of its caption
-//  3. rendered durations are 1:32, 0:30 and 0:15
+//  3. rendered durations match the timeline (1:48, 0:30, 0:15)
 // Usage: npx tsx scripts/verify.ts
 import fs from "fs";
 import path from "path";
@@ -74,7 +74,7 @@ for (const cut of ["90", "30", "15"] as Cut[]) {
 }
 
 console.log("3. rendered durations");
-const want: Record<Cut, number> = { "90": 92, "30": 30, "15": 15 };
+const want: Record<Cut, number> = { "90": TIMELINE["90"].duration, "30": TIMELINE["30"].duration, "15": TIMELINE["15"].duration };
 for (const cut of ["90", "30", "15"] as Cut[]) for (const aspect of ["16:9", "1:1", "9:16"] as Aspect[]) {
   const f = path.join(root, "out", outName(cut, aspect));
   if (!fs.existsSync(f)) { ok(false, `${outName(cut, aspect)} missing`); continue; }

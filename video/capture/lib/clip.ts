@@ -35,7 +35,7 @@ const STAGE_SCRIPT = (mode: "cursor" | "touch") => `
     html{scroll-behavior:auto}
   \`;
   // [text pattern, how many levels up to hide]
-  const HIDE = [[/^Trial$/, 0], [/^Draft from the complaint$/, 0], [/^Learning your shop —/, 0], [/^Tekly Sense/, 1], [/^Morning Brief/, 1]];
+  const HIDE = [[/^Trial$/, 0], [/^Draft from the complaint$/, 0], [/^Learning your shop —/, 0], [/^Usually added$/, 1], [/^Tekly Sense/, 1], [/^Morning Brief/, 1]];
   function hideBits(root){
     for (const el of root.querySelectorAll('span,div,a,button,p,h2,h3,h4')) {
       if (el.hasAttribute('data-cap-hide')) continue;

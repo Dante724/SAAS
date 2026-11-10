@@ -1,5 +1,5 @@
 {
-  "generated": "2026-11-10T20:24:24.791Z",
+  "generated": "2026-11-10T21:14:25.067Z",
   "note": "beats t = seconds from clip start",
   "clips": {
     "intake-desktop": {
@@ -220,6 +220,248 @@
         }
       ],
       "poster": "eod-board-desktop.png"
+    },
+    "checkin-mobile": {
+      "file": "checkin-mobile.webm",
+      "width": 780,
+      "height": 1688,
+      "durationSec": 24.36,
+      "fps": 25,
+      "beats": [
+        {
+          "t": 1.3,
+          "label": "Dani's Repair check-in page (scanned the QR at the door)"
+        },
+        {
+          "t": 4.72,
+          "label": "What's wrong: Dropped it, screen cracked"
+        },
+        {
+          "t": 9.38,
+          "label": "Device: Apple iPhone 13"
+        },
+        {
+          "t": 14.18,
+          "label": "Name and mobile"
+        },
+        {
+          "t": 19.91,
+          "label": "Signed (agrees to the shop's terms)"
+        },
+        {
+          "t": 20.26,
+          "label": "Check in tapped"
+        },
+        {
+          "t": 21.25,
+          "label": "Confirmation: You're checked in, place in the queue"
+        }
+      ],
+      "poster": "checkin-mobile.png"
+    },
+    "checkin-arrives-desktop": {
+      "file": "checkin-arrives-desktop.webm",
+      "width": 1440,
+      "height": 900,
+      "durationSec": 11.68,
+      "fps": 25,
+      "beats": [
+        {
+          "t": 1.46,
+          "label": "Walk-ins queue: Maya Chen #1 waiting · iPhone 13 · Dropped it, screen cracked"
+        },
+        {
+          "t": 5.59,
+          "label": "Call next (moves her to Being served)"
+        },
+        {
+          "t": 7.19,
+          "label": "Create work order clicked"
+        },
+        {
+          "t": 7.89,
+          "label": "Work order opens with her details filled in"
+        }
+      ],
+      "poster": "checkin-arrives-desktop.png"
+    },
+    "booking-mobile": {
+      "file": "booking-mobile.webm",
+      "width": 780,
+      "height": 1688,
+      "durationSec": 17,
+      "fps": 25,
+      "beats": [
+        {
+          "t": 1.3,
+          "label": "Book an appointment: the shop's services and prices"
+        },
+        {
+          "t": 2.37,
+          "label": "Picked: Charging port replacement · $89"
+        },
+        {
+          "t": 3.92,
+          "label": "No preference (first available)"
+        },
+        {
+          "t": 5.88,
+          "label": "Tomorrow (Wed, Nov 11)"
+        },
+        {
+          "t": 7.45,
+          "label": "Time slot 10:00"
+        },
+        {
+          "t": 11.83,
+          "label": "Name and phone"
+        },
+        {
+          "t": 14.02,
+          "label": "You're booked! (with Add to calendar)"
+        }
+      ],
+      "poster": "booking-mobile.png"
+    },
+    "booking-desktop": {
+      "file": "booking-desktop.webm",
+      "width": 1440,
+      "height": 900,
+      "durationSec": 11.56,
+      "fps": 25,
+      "beats": [
+        {
+          "t": 1.59,
+          "label": "Agenda: Olivia Park's online booking is in"
+        },
+        {
+          "t": 5.83,
+          "label": "Scheduler view"
+        },
+        {
+          "t": 8.57,
+          "label": "Tomorrow on the calendar: Olivia Park · Charging port replacement"
+        }
+      ],
+      "poster": "booking-desktop.png"
+    },
+    "memberships-desktop": {
+      "file": "memberships-desktop.webm",
+      "width": 1440,
+      "height": 900,
+      "durationSec": 22.04,
+      "fps": 25,
+      "beats": [
+        {
+          "t": 1.48,
+          "label": "Plans: Care Plan $12/mo · Annual Service Plan $99/yr"
+        },
+        {
+          "t": 5.03,
+          "label": "Members: active members, monthly recurring, renewing soon"
+        },
+        {
+          "t": 7.72,
+          "label": "Jordan Ellis's plan: what's included and what's used"
+        },
+        {
+          "t": 15.93,
+          "label": "Work order: plan banner offers to apply the benefits"
+        },
+        {
+          "t": 19.11,
+          "label": "Plan applied: diagnostic covered, 10% off the part"
+        }
+      ],
+      "poster": "memberships-desktop.png"
+    },
+    "reports-desktop": {
+      "file": "reports-desktop.webm",
+      "width": 1440,
+      "height": 900,
+      "durationSec": 39.72,
+      "fps": 25,
+      "beats": [
+        {
+          "t": 1,
+          "label": "Reports: jobs, customers, sales, still owed (top cards)"
+        },
+        {
+          "t": 6.32,
+          "label": "Provided services: best-selling services, last 30 days"
+        },
+        {
+          "t": 18.69,
+          "label": "Sold products: parts sold, last 30 days"
+        },
+        {
+          "t": 25.7,
+          "label": "Technicians performance"
+        },
+        {
+          "t": 31.08,
+          "label": "Total profit: sales, profit, by location and technician"
+        },
+        {
+          "t": 36.72,
+          "label": "Business & analytics (30 days): revenue, orders closed, avg ticket, turnaround"
+        }
+      ],
+      "poster": "reports-desktop.png"
+    },
+    "checkin-auto-mobile": {
+      "file": "checkin-auto-mobile.webm",
+      "width": 780,
+      "height": 1688,
+      "durationSec": 5.2,
+      "fps": 25,
+      "beats": [
+        {
+          "t": 1.1,
+          "label": "Northside Auto check-in page"
+        },
+        {
+          "t": 2.58,
+          "label": "VIN, make/model/year, then trim, plate and mileage"
+        }
+      ],
+      "poster": "checkin-auto-mobile.png"
+    },
+    "checkin-engine-mobile": {
+      "file": "checkin-engine-mobile.webm",
+      "width": 780,
+      "height": 1688,
+      "durationSec": 5.84,
+      "fps": 25,
+      "beats": [
+        {
+          "t": 1.1,
+          "label": "Ridge Small Engine check-in page"
+        },
+        {
+          "t": 3.24,
+          "label": "Chainsaw: serial, brand/model, engine model and hours"
+        }
+      ],
+      "poster": "checkin-engine-mobile.png"
+    },
+    "checkin-marine-mobile": {
+      "file": "checkin-marine-mobile.webm",
+      "width": 780,
+      "height": 1688,
+      "durationSec": 5.84,
+      "fps": 25,
+      "beats": [
+        {
+          "t": 1.1,
+          "label": "Harbor Marine check-in page"
+        },
+        {
+          "t": 3.23,
+          "label": "Outboard motor: engine serial, make/model/year, length, registration"
+        }
+      ],
+      "poster": "checkin-marine-mobile.png"
     }
   }
 }
