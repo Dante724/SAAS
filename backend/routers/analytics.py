@@ -91,27 +91,30 @@ async def location_comparison(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_reports")),
 ):
-    start, _ = _window(days)
-    terminal = await _terminal_keys(db, current.org_id)
+    """Per location: jobs created and closed in the window, and revenue. Closed and revenue follow
+    the one rule every report uses (services/revenue: a job counts when it is earned, revenue is
+    net sales), so the rows add up to Business & analytics' own Revenue tile."""
+    from backend.services import revenue as money_rules
+    start, end = _window(days)
     locs = {loc.id: loc.name for loc in (await db.execute(select(Location).where(
         Location.org_id == current.org_id))).scalars().all()}
-    orders = (await db.execute(select(Order).where(
-        Order.org_id == current.org_id, Order.is_estimate == False,  # noqa: E712
-        Order.created_at >= start))).scalars().all()
-
-    agg: dict = {}
-    for o in orders:
-        a = agg.setdefault(o.location_id, {"created": 0, "closed": 0, "revenue": 0.0})
-        a["created"] += 1
-        if o.status in terminal:
-            a["closed"] += 1
-            a["revenue"] += float(o.total or 0)
-    rows = [{
-        "location_id": lid, "location": locs.get(lid, "—"),
-        "orders_created": a["created"], "orders_closed": a["closed"],
-        "close_rate": round(a["closed"] / a["created"] * 100, 1) if a["created"] else 0,
-        "revenue": q2(a["revenue"]),
-    } for lid, a in agg.items()]
+    created = dict((await db.execute(select(Order.location_id, func.count()).where(
+        Order.org_id == current.org_id, Order.is_estimate == False, Order.archived == False,  # noqa: E712
+        Order.created_at >= start).group_by(Order.location_id))).all())
+    earned = await money_rules.earned_jobs_query(db, current.org_id, start, end, cols=(Order.location_id,))
+    closed: dict = {}
+    for (lid,) in (await db.execute(earned)).all():
+        closed[lid] = closed.get(lid, 0) + 1
+    rows = []
+    for lid in set(created) | set(closed):
+        c, k = created.get(lid, 0), closed.get(lid, 0)
+        rev = (await money_rules.net_sales(db, current.org_id, start, end, location_id=lid))["revenue"] if lid else 0.0
+        rows.append({
+            "location_id": lid, "location": locs.get(lid, "—"),
+            "orders_created": c, "orders_closed": k,
+            "close_rate": min(100.0, round(k / c * 100, 1)) if c else 0,
+            "revenue": q2(rev),
+        })
     rows.sort(key=lambda r: r["revenue"], reverse=True)
     return {"period_days": days, "locations": rows}
 
@@ -123,23 +126,27 @@ async def trends(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_reports")),
 ):
-    start, _ = _window(days)
-    terminal = await _terminal_keys(db, current.org_id)
-    orders = (await db.execute(select(Order).where(
-        Order.org_id == current.org_id, Order.is_estimate == False,  # noqa: E712
-        Order.created_at >= start))).scalars().all()
+    """Daily created / closed / revenue. Created is by the day a job was opened; closed and revenue
+    by the day it was earned, ex tax, the same rule as every other report (services/revenue)."""
+    from backend.services import revenue as money_rules
+    start, end = _window(days)
     series: dict = {}
-    for o in orders:
-        d = o.created_at.date().isoformat() if o.created_at else None
-        if not d:
+    created = (await db.execute(select(Order.created_at).where(
+        Order.org_id == current.org_id, Order.is_estimate == False, Order.archived == False,  # noqa: E712
+        Order.created_at >= start))).scalars().all()
+    for at in created:
+        if at:
+            series.setdefault(at.date().isoformat(), {"created": 0, "closed": 0, "revenue": 0.0})["created"] += 1
+    rows = (await db.execute(await money_rules.earned_jobs_query(db, current.org_id, start, end, with_date=True))).all()
+    figs = await money_rules.job_figures(db, [o for o, _ in rows]) if rows else {}
+    for o, at in rows:
+        if not at:
             continue
-        s = series.setdefault(d, {"created": 0, "closed": 0, "revenue": 0.0})
-        s["created"] += 1
-        if o.status in terminal:
-            s["closed"] += 1
-            s["revenue"] += float(o.total or 0)
+        s = series.setdefault(at.date().isoformat(), {"created": 0, "closed": 0, "revenue": 0.0})
+        s["closed"] += 1
+        s["revenue"] += float((figs.get(o.id) or {}).get("revenue") or 0)
     return {"period_days": days,
-            "series": [{"date": d, **v} for d, v in sorted(series.items())]}
+            "series": [{"date": d, **{**v, "revenue": q2(v["revenue"])}} for d, v in sorted(series.items())]}
 
 
 # ── A8 Fleet / B2B accounts ──────────────────────────────────────────────────

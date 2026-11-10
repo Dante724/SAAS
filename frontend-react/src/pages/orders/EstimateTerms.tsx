@@ -69,7 +69,7 @@ export default function EstimateTerms({ orderId, d, onChanged, onFlash }: {
         <label className="flex items-center gap-2">
           <span className="font-medium text-ink-secondary">Valid until</span>
           <span className="w-[150px]"><DateField mode="date" value={d.estimate_valid_until || ""} onChange={(v) => setValid(v)} /></span>
-          {expired && <span className="text-2xs font-semibold text-rose-600">Expired</span>}
+          {expired && <span className="text-[11px] font-semibold text-rose-600">Expired</span>}
         </label>
         <label className="flex items-center gap-2">
           <span className="font-medium text-ink-secondary">Deposit at approval</span>
@@ -90,7 +90,7 @@ export default function EstimateTerms({ orderId, d, onChanged, onFlash }: {
               <div className="flex flex-wrap items-center gap-x-3 gap-y-0.5">
                 <span className="font-semibold text-ink-primary">Revision {r.revision}</span>
                 {r.total != null && <span className="tabular-nums text-ink-primary">{money(r.total)}</span>}
-                {r.decision && <span className={`text-2xs font-semibold ${r.decision === "approved" ? "text-emerald-700" : "text-rose-600"}`}>{DECISION[r.decision] || r.decision}</span>}
+                {r.decision && <span className={`text-[11px] font-semibold ${r.decision === "approved" ? "text-emerald-700" : "text-rose-600"}`}>{DECISION[r.decision] || r.decision}</span>}
                 <span className="text-ink-tertiary">{fmtDay(r.created_at)}{r.created_by_name ? ` · ${r.created_by_name}` : ""}</span>
               </div>
               {r.note && <div className="mt-0.5 text-ink-secondary">Why it was revised: {r.note}</div>}
