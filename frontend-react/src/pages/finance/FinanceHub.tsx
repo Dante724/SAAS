@@ -3,8 +3,9 @@ import PageSummary, { type SummaryStat } from "../../components/PageSummary";
 import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
+import Tabs from "../../components/Tabs";
 import DateField from "../../components/DateField";
-import { api, openAuthedDoc } from "../../api/client";
+import { api, idempotencyKey, openAuthedDoc } from "../../api/client";
 import Pager from "../../components/Pager";
 import { money } from "../orders/types";
 import { btnGhost, btnPrimary } from "../invoices/billing";
@@ -40,6 +41,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
   const [exFrom, setExFrom] = useState("");   // accountant export range (blank = current month)
   const [exTo, setExTo] = useState("");
   const INV_PAGE_SIZE = 50;
+  const payoutKey = useRef(idempotencyKey());
   async function recordPayout() {
     const gross = await promptDialog("Payout gross amount (total card/online sales in this deposit)");
     if (gross == null) return;
@@ -48,7 +50,10 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
     if (fee == null) return;
     const ref = await promptDialog("Reference (optional — payout ID from your statement)");
     try {
-      await api.post("/finance/payouts", { gross_amount: g, fee_amount: parseFloat(fee || "0") || 0, reference: ref || undefined });
+      // One key per payout, kept until it goes through: a retry after a failure or a timeout is
+      // recorded once by the server; the next payout gets a new key.
+      await api.postOnce("/finance/payouts", { gross_amount: g, fee_amount: parseFloat(fee || "0") || 0, reference: ref || undefined }, payoutKey.current);
+      payoutKey.current = idempotencyKey();
       const r = await api.get<{ items: any[]; count: number }>("/finance/reconciliation"); setRecon(r);
     } catch { await alertDialog("Could not record payout."); }
   }
@@ -91,6 +96,7 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
     } catch (e: any) { await alertDialog(`Could not run payroll: ${e.message}`); } finally { runBusyRef.current = false; setRunBusy(false); }
   }
   const [payingId, setPayingId] = useState<string | null>(null); const payingRef = useRef(false);
+  const payKeys = useRef<Record<string, string>>({});   // Idempotency-Key per payroll run being paid
   async function markPaid(id: string) {
     if (payingRef.current) return;
     payingRef.current = true;
@@ -104,7 +110,10 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
       const acct = tills[labels.indexOf(picked)];
       if (!(await confirmDialog(`Mark this payroll run as paid from ${picked}? This posts the payout and takes the money out of that account.`, { title: "Mark paid", confirmLabel: "Mark paid" }))) return;
       setPayingId(id);
-      await api.post(`/payroll/runs/${id}/pay`, { account_id: acct.id });
+      // One key per run until it is paid: retrying a failed or timed-out pay posts it once.
+      const key = (payKeys.current[id] ||= idempotencyKey());
+      await api.postOnce(`/payroll/runs/${id}/pay`, { account_id: acct.id }, key);
+      delete payKeys.current[id];
       loadRuns();
       api.get<any>("/cash/summary").then(setCash).catch(loadFailed("the cash summary"));
     } catch (e: any) { await alertDialog(`Could not mark paid: ${e.message}`); } finally { payingRef.current = false; setPayingId(null); }
@@ -147,13 +156,8 @@ export default function FinanceHub({ initialTab }: { initialTab?: Tab } = {}) {
 
   return (
     <Shell title="Finance">
-      <div className="px-6 pt-3 border-b border-slate-200/60 bg-white/40 flex-shrink-0">
-        <nav className="flex space-x-6 -mb-px text-xs font-semibold overflow-x-auto whitespace-nowrap">
-          {([...(can("can_view_cashbox") ? [["cashboxes", "Cashboxes"]] as [Tab, string][] : []), ["overview", "Overview"], ["pnl", "Profit & loss"], ["reconcile", "Reconcile"], ["balances", "Client balances"], ["refunds", "Refunds"], ...(hasFeature(me, "payroll") ? [["payroll", "Payroll"]] as [Tab, string][] : [])] as [Tab, string][]).map(([id, label]) => (
-            <button key={id} onClick={() => setTab(id)} className={`pb-3 shrink-0 border-b-2 transition-colors ${tab === id ? "text-primary border-primary" : "text-ink-secondary hover:text-ink-primary border-transparent"}`}>{label}</button>
-          ))}
-        </nav>
-      </div>
+      <Tabs label="Finance sections" className="px-6 pt-3 bg-white/40 flex-shrink-0" value={tab} onChange={setTab}
+        tabs={([...(can("can_view_cashbox") ? [["cashboxes", "Cashboxes"]] as [Tab, string][] : []), ["overview", "Overview"], ["pnl", "Profit & loss"], ["reconcile", "Reconcile"], ["balances", "Client balances"], ["refunds", "Refunds"], ...(hasFeature(me, "payroll") ? [["payroll", "Payroll"]] as [Tab, string][] : [])] as [Tab, string][]).map(([id, label]) => ({ id, label }))} />
 
       {tab === "cashboxes" ? <CashPanel /> : (
       <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">

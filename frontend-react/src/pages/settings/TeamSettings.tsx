@@ -1,4 +1,5 @@
 import { useEffect, useMemo, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import EmptyState from "../../components/EmptyState";
@@ -447,10 +448,10 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
           {tab === "home" && (
             <div>
               <Row icon="dashboard" title="Opens on" hint="Where someone with this role lands when they open the app.">
-                <select value={homeRoute} onChange={(e) => setHomeRoute(e.target.value)} aria-label="Landing page"
+                <TeklySelect value={homeRoute} onChange={(e) => setHomeRoute(e.target.value)} aria-label="Landing page"
                   className="w-full bg-white border border-slate-200 rounded-xl px-3 py-2 text-sm outline-none focus:border-primary">
                   {LANDING_PAGES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                </select>
+                </TeklySelect>
               </Row>
               <Row icon="notifications" title="Alerts on Home" hint="Pick what shows up. Pick none to show everything.">
                 <div className="flex flex-wrap gap-1.5">
@@ -467,11 +468,11 @@ export function RoleEditor({ role, catalog, statuses, members = 0, onClose, onSa
         </div>
 
         <div className="px-5 py-4 border-t border-slate-100 flex items-center gap-2">
-          {!isNew && (members > 0
-            ? <span className="text-xs text-ink-tertiary">{members} {members === 1 ? "person has" : "people have"} this role</span>
-            : <button onClick={remove} disabled={busy} className="px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50">Delete role</button>)}
-          <button onClick={onClose} className={buttonClass("secondary", "md", "ml-auto")}>Cancel</button>
           <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : isNew ? "Create role" : "Save"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
+          {!isNew && (members > 0
+            ? <span className="ml-auto text-xs text-ink-tertiary">{members} {members === 1 ? "person has" : "people have"} this role</span>
+            : <button onClick={remove} disabled={busy} className="ml-auto px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50">Delete role</button>)}
         </div>
       </div>
     </div>
@@ -506,10 +507,10 @@ export function DeviceLimitCard({ onFlash }: { onFlash: (m: string) => void }) {
           <p className="mt-1 text-xs text-ink-tertiary">How many devices one login can use at the same time. When someone hits the limit,
             they pick a device to sign out before they can sign in somewhere new. The phone app counts as a device.</p>
         </div>
-        <select id="device-limit" value={value ?? ""} disabled={value === null || busy} onChange={(e) => save(e.target.value)}
+        <TeklySelect id="device-limit" value={value ?? ""} disabled={value === null || busy} onChange={(e) => save(e.target.value)}
           className="glass-input rounded-xl px-3 py-2 text-sm font-semibold text-ink-primary">
           {LIMITS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-        </select>
+        </TeklySelect>
       </div>
       <p className="mt-3 text-xs text-ink-tertiary">People already over a new limit stay signed in until they sign out.
         Each person can see and sign out their devices under Security &amp; sign-in.</p>

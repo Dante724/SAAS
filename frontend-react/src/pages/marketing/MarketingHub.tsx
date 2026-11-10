@@ -1,8 +1,10 @@
 import SkeletonRows from "../../components/SkeletonRows";
+import TeklySelect from "../../components/TeklySelect";
 import { humanize } from "../../lib/humanize";
 import { safeHttpsUrl } from "../../lib/safeHtml";
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
+import Tabs from "../../components/Tabs";
 import { api } from "../../api/client";
 import Pager from "../../components/Pager";
 import { confirmDialog, alertDialog } from "../../lib/dialog";
@@ -56,13 +58,8 @@ export default function MarketingHub() {
 
   return (
     <Shell title="Marketing">
-      <div className="px-4 md:px-6 pt-3 border-b border-slate-200/60 flex-shrink-0">
-        <nav className="flex space-x-6 -mb-px text-xs font-semibold overflow-x-auto whitespace-nowrap">
-          {([["campaigns", "Campaigns"], ["calls", "Call log"]] as [typeof tab, string][]).map(([id, l]) => (
-            <button key={id} onClick={() => setTab(id)} className={`pb-3 border-b-2 transition-colors ${tab === id ? "text-primary border-primary" : "text-ink-secondary hover:text-ink-primary border-transparent"}`}>{l}</button>
-          ))}
-        </nav>
-      </div>
+      <Tabs label="Marketing sections" className="px-4 md:px-6 pt-3 flex-shrink-0" value={tab} onChange={setTab}
+        tabs={([["campaigns", "Campaigns"], ["calls", "Call log"]] as [typeof tab, string][]).map(([id, label]) => ({ id, label }))} />
 
       <div className="flex-1 overflow-y-auto px-4 md:px-6 py-5">
         {tab === "campaigns" && (
@@ -149,12 +146,12 @@ export default function MarketingHub() {
             <div className="p-5 space-y-3">
               <input value={draft.name || ""} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Campaign name" className={inp} />
               <div className="grid grid-cols-2 gap-2">
-                <select value={draft.channel} onChange={(e) => setDraft({ ...draft, channel: e.target.value })} className={inp}><option value="sms">SMS</option><option value="email">Email</option></select>
-                <select value={draft.segment} onChange={(e) => setDraft({ ...draft, segment: e.target.value })} className={inp}><option value="all">All clients</option><option value="loyalty">Loyalty members</option><option value="lapsed">Lapsed clients</option></select>
+                <TeklySelect value={draft.channel} onChange={(e) => setDraft({ ...draft, channel: e.target.value })} className={inp}><option value="sms">SMS</option><option value="email">Email</option></TeklySelect>
+                <TeklySelect value={draft.segment} onChange={(e) => setDraft({ ...draft, segment: e.target.value })} className={inp}><option value="all">All clients</option><option value="loyalty">Loyalty members</option><option value="lapsed">Lapsed clients</option></TeklySelect>
               </div>
               {draft.channel === "email" && <input value={draft.subject || ""} onChange={(e) => setDraft({ ...draft, subject: e.target.value })} placeholder="Email subject" className={inp} />}
               <textarea value={draft.body || ""} onChange={(e) => setDraft({ ...draft, body: e.target.value })} placeholder="Message…" className={`${inp} h-24 resize-none`} />
-              <div className="flex justify-end gap-2"><button onClick={() => setDraft(null)} className="px-4 py-2 rounded-lg border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50">Cancel</button><button onClick={saveCampaign} disabled={busy || !draft.name?.trim()} className={buttonClass("primary", "md")}>Save draft</button></div>
+              <div className="flex justify-start gap-2"><button onClick={saveCampaign} disabled={busy || !draft.name?.trim()} className={buttonClass("primary", "md")}>Save draft</button><button onClick={() => setDraft(null)} className="px-4 py-2 rounded-lg border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50">Cancel</button></div>
             </div>
           </div>
         </div>

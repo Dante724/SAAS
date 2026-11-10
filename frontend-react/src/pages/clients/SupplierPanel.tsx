@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { Supplier, money } from "../inventory/types";
@@ -135,9 +136,9 @@ export default function SupplierPanel({ supplierId, onSaved }: { supplierId: str
               <div className="flex items-end gap-2 mb-3 rounded-xl border border-slate-200/80 bg-white/70 p-2.5">
                 <div><label className={lbl}>Amount</label><input type="number" min={0} value={payAmt || ""} onChange={(e) => setPayAmt(Math.max(0, Number(e.target.value)))} className="glass-input rounded-lg px-2 py-1 text-xs w-24 text-right font-mono" /></div>
                 <div className="flex-1"><label className={lbl}>From account</label>
-                  <select value={payAcct} onChange={(e) => setPayAcct(e.target.value)} className="glass-input rounded-lg px-2 py-1 text-xs w-full">
+                  <TeklySelect value={payAcct} onChange={(e) => setPayAcct(e.target.value)} className="glass-input rounded-lg px-2 py-1 text-xs w-full">
                     {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-                  </select></div>
+                  </TeklySelect></div>
                 <button onClick={paySupplier} disabled={busy} className={buttonClass("primary", "sm")}>{busy ? "…" : "Pay"}</button>
               </div>
             )}
@@ -224,9 +225,9 @@ function PriceListTab({ supplierId, onDone }: { supplierId: string; onDone: (m: 
               <div key={i} className="flex items-center gap-2 text-xs">
                 <span className="tabular-nums text-ink-secondary flex-1 truncate">{h || `col ${i + 1}`}</span>
                 <span className="text-ink-tertiary">→</span>
-                <select value={map[i] || ""} onChange={(e) => setMap({ ...map, [i]: e.target.value as Field })} className="glass-input rounded-lg px-2 py-1 text-xs">
+                <TeklySelect value={map[i] || ""} onChange={(e) => setMap({ ...map, [i]: e.target.value as Field })} className="glass-input rounded-lg px-2 py-1 text-xs">
                   {opts.map((o) => <option key={o} value={o}>{o === "" ? "— ignore —" : o}</option>)}
-                </select>
+                </TeklySelect>
               </div>
             ))}
           </div>

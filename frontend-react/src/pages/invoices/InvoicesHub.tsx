@@ -1,5 +1,7 @@
 import { useEffect, useRef, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import Shell, { M } from "../../components/Shell";
+import Tabs from "../../components/Tabs";
 import EmptyState from "../../components/EmptyState";
 import SkeletonRows from "../../components/SkeletonRows";
 import DateField from "../../components/DateField";
@@ -88,12 +90,8 @@ export default function InvoicesHub() {
     <Shell title="Invoices">
       <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-4">
           {can("can_view_credit_notes") && (
-            <div className="flex gap-5 border-b border-slate-200 text-sm font-semibold" role="tablist" aria-label="Billing documents">
-              {([["invoices", "Invoices"], ["credit_notes", "Credit notes"]] as const).map(([k, l]) => (
-                <button key={k} role="tab" aria-selected={view === k} onClick={() => setView(k)}
-                  className={`py-2 -mb-px border-b-2 ${view === k ? "text-primary border-primary" : "text-ink-tertiary border-transparent hover:text-ink-primary"}`}>{l}</button>
-              ))}
-            </div>
+            <Tabs label="Billing documents" value={view} onChange={setView}
+              tabs={[{ id: "invoices", label: "Invoices" }, { id: "credit_notes", label: "Credit notes" }]} />
           )}
           {view === "credit_notes" ? <CreditNotesList /> : <>
           <div className="flex items-center gap-2">
@@ -230,11 +228,11 @@ function NewInvoiceDrawer({ onClose, onCreated }: { onClose: () => void; onCreat
   }
   return (
     <Drawer label="New invoice" title="New invoice" width={520} onClose={onClose}
-      footer={<><button onClick={onClose} className={btnGhost}>Cancel</button><button onClick={save} disabled={busy} className={btnPrimary}>{busy ? "Saving…" : "Create invoice"}</button></>}>
+      footer={<><button onClick={save} disabled={busy} className={btnPrimary}>{busy ? "Saving…" : "Create invoice"}</button><button onClick={onClose} className={btnGhost}>Cancel</button></>}>
       <ErrorNote msg={err} />
       <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
         <div><label htmlFor="ni-client" className={labelCls}>Client</label>
-          <select id="ni-client" value={clientId} onChange={(e) => setClientId(e.target.value)} className={inputCls}><option value="">Walk-in / none</option>{clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+          <TeklySelect id="ni-client" value={clientId} onChange={(e) => setClientId(e.target.value)} className={inputCls}><option value="">Walk-in / none</option>{clients.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</TeklySelect></div>
         <div><span className={labelCls}>Due date</span>
           <DateField mode="date" value={due} onChange={setDue} /></div>
       </div>
@@ -244,7 +242,7 @@ function NewInvoiceDrawer({ onClose, onCreated }: { onClose: () => void; onCreat
         <div className="space-y-2">
           {lines.map((l, i) => (
             <div key={i} className="grid grid-cols-[auto_4rem_1fr_auto] sm:flex items-center gap-2 pb-2 border-b border-slate-100 last:border-0 sm:pb-0 sm:border-0">
-              <select value={l.kind} onChange={(e) => setLine(i, "kind", e.target.value)} title="Line type" aria-label={`Line ${i + 1} type`} className={`${inputCls} !w-auto !px-2`}><option value="custom">Custom</option><option value="service">Service</option><option value="product">Product</option><option value="labor">{laborText("Labor")}</option></select>
+              <TeklySelect value={l.kind} onChange={(e) => setLine(i, "kind", e.target.value)} title="Line type" aria-label={`Line ${i + 1} type`} className={`${inputCls} !w-auto !px-2`}><option value="custom">Custom</option><option value="service">Service</option><option value="product">Product</option><option value="labor">{laborText("Labor")}</option></TeklySelect>
               <input value={l.description} onChange={(e) => setLine(i, "description", e.target.value)} placeholder="Description" aria-label={`Line ${i + 1} description`} className={`${inputCls} col-span-4 order-first sm:order-none sm:!w-auto sm:flex-1 sm:min-w-[140px]`} />
               <input type="number" min={0} value={l.qty} onChange={(e) => setLine(i, "qty", Number(e.target.value))} title="Qty" aria-label={`Line ${i + 1} quantity`} className={`${inputCls} sm:!w-16 text-right tabular-nums`} />
               <input type="number" min={0} value={l.unit_price} onChange={(e) => setLine(i, "unit_price", Number(e.target.value))} placeholder="Price" aria-label={`Line ${i + 1} price`} className={`${inputCls} sm:!w-24 text-right tabular-nums`} />

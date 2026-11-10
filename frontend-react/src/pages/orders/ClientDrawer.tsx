@@ -1,4 +1,6 @@
 import DirectorySelect from "../../components/DirectorySelect";
+import Tabs from "../../components/Tabs";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import { humanize } from "../../lib/humanize";
 import { balanceView } from "../../lib/balance";
@@ -156,12 +158,11 @@ export default function ClientDrawer({ woNum, clientId, onClose, onOpenAsset }: 
             <div><div className="text-base font-bold text-ink-primary">{c.name || "Customer"}</div><div className="text-xs text-ink-tertiary">{c.order_count ?? 0} work orders · {c.loyalty_tier?.toLowerCase() === "vip" ? "VIP" : humanize(c.loyalty_tier) || "Standard"}</div></div>
           </div>
           <div className="pb-3"><TagChips entityType="contact" entityId={clientId} /></div>
-          <div className="flex gap-6 overflow-x-auto text-xs font-semibold">
-            {(isSupplier ? [...BASE_TABS, "Supplier"] : BASE_TABS).map((t, i) => {
-              const label = i === 1 && c.devices ? `Devices & assets (${c.devices.length})` : i === 2 && c.order_count != null ? `Work orders (${c.order_count})` : t;
-              return <button key={t} onClick={() => setTab(i)} className={`py-3 border-b-2 whitespace-nowrap transition-colors ${tab === i ? "text-primary border-primary" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{label}</button>;
-            })}
-          </div>
+          <Tabs look="underline" label="Customer sections" className="border-b-0" value={String(tab)} onChange={(id) => setTab(Number(id))}
+            tabs={(isSupplier ? [...BASE_TABS, "Supplier"] : BASE_TABS).map((t, i) => ({
+              id: String(i), label: t,
+              count: i === 1 && c.devices ? c.devices.length : i === 2 && c.order_count != null ? c.order_count : null,
+            }))} />
         </header>
         <div className="flex-1 overflow-y-auto p-6 bg-canvas space-y-4">
           {tab === 0 ? (
@@ -470,8 +471,8 @@ function CommsTab({ clientId }: { clientId: string }) {
     <div className="space-y-3">
       <div className={`${sectionCard} p-3 space-y-2`}>
         <div className="flex items-center gap-2">
-          <select aria-label="Channel" value={channel} onChange={(e) => setChannel(e.target.value)} className={sel}>{CHANNELS.map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
-          <select aria-label="Insert template" value="" onChange={(e) => { const t = templates.find((x) => x.id === e.target.value); if (t) setBody(t.body); }} className={`${sel} flex-1`}><option value="">Insert template…</option>{templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
+          <TeklySelect aria-label="Channel" value={channel} onChange={(e) => setChannel(e.target.value)} className={sel}>{CHANNELS.map(([k, v]) => <option key={k} value={k}>{v}</option>)}</TeklySelect>
+          <TeklySelect aria-label="Insert template" value="" onChange={(e) => { const t = templates.find((x) => x.id === e.target.value); if (t) setBody(t.body); }} className={`${sel} flex-1`}><option value="">Insert template…</option>{templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</TeklySelect>
           <button onClick={suggest} disabled={busy} className={GHOST}><M n="auto_awesome" c="text-sm" />Suggest</button>
         </div>
         <textarea aria-label="Message" value={body} onChange={(e) => setBody(e.target.value)} placeholder="Write a message…" className="glass-input rounded-xl px-3 py-2 text-sm w-full text-ink-primary h-20 resize-none" />
@@ -574,16 +575,16 @@ function DiscountMatrix({ disc, onChange }: { disc: any; onChange: (d: any) => v
       <div className="space-y-1">
         <div className="grid grid-cols-12 gap-2 items-center">
           <div className="col-span-4 text-xs font-semibold text-ink-secondary">{label}</div>
-          <select aria-label={`${label} discount`} value={mode} onChange={(e) => set(`${mk}_mode`, e.target.value)} className={`col-span-4 ${INPUT}`}>
+          <TeklySelect aria-label={`${label} discount`} value={mode} onChange={(e) => set(`${mk}_mode`, e.target.value)} className={`col-span-4 ${INPUT}`}>
             <option value="none">No discount</option><option value="percent">Fixed %</option><option value="price_type">By price type</option>
-          </select>
+          </TeklySelect>
           {mode === "percent" && (
             <div className="col-span-4 flex items-center gap-1"><input type="number" min={0} max={100} aria-label={`${label} discount percent`} value={disc[`${mk}_value`] ?? 0} onChange={(e) => set(`${mk}_value`, Number(e.target.value))} className={`${INPUT} w-full`} /><span className="text-xs text-ink-tertiary">%</span></div>
           )}
           {mode === "price_type" && (
-            <select aria-label={`${label} price type`} value={disc[`${mk}_price_type_id`] || ""} onChange={(e) => set(`${mk}_price_type_id`, e.target.value)} className={`col-span-4 ${INPUT}`}>
+            <TeklySelect aria-label={`${label} price type`} value={disc[`${mk}_price_type_id`] || ""} onChange={(e) => set(`${mk}_price_type_id`, e.target.value)} className={`col-span-4 ${INPUT}`}>
               <option value="">Select price…</option>{types.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
+            </TeklySelect>
           )}
           {mode === "none" && <div className="col-span-4" />}
         </div>

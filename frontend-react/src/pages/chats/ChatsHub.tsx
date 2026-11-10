@@ -1,4 +1,5 @@
 import SkeletonRows from "../../components/SkeletonRows";
+import TeklySelect from "../../components/TeklySelect";
 import { humanize } from "../../lib/humanize";
 import { fmtServerTime } from "../../lib/serverTime";
 import { useEffect, useRef, useState } from "react";
@@ -157,7 +158,7 @@ export default function ChatsHub() {
           <button onClick={() => setLayout("split")} className={`h-full px-2.5 rounded-lg font-semibold flex items-center gap-1.5 ${layout === "split" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="chat_bubble" c="text-xs" />Conversation</button>
           <button onClick={() => setLayout("list")} className={`h-full px-2.5 rounded-lg font-semibold flex items-center gap-1.5 ${layout === "list" ? "bg-white text-ink-primary shadow-xs" : "text-ink-tertiary hover:text-ink-primary"}`}><M n="table_rows" c="text-xs" />List</button>
         </div>
-        <select aria-label="Channel" value={channel} onChange={(e) => setChannel(e.target.value)} className={`${fieldCls} h-9 pr-8`}><option value="">All channels</option>{Object.entries(CH).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</select>
+        <TeklySelect aria-label="Channel" value={channel} onChange={(e) => setChannel(e.target.value)} className={`${fieldCls} h-9 pr-8`}><option value="">All channels</option>{Object.entries(CH).map(([k, v]) => <option key={k} value={k}>{v}</option>)}</TeklySelect>
       </div>
       <div role="tablist" aria-label="Chat status" className="px-4 md:px-6 py-2 border-b border-slate-200/60 flex items-center gap-1 overflow-x-auto flex-shrink-0">
         {TABS.map(([k, label]) => {
@@ -289,11 +290,11 @@ export default function ChatsHub() {
                         <div className="absolute top-full right-0 mt-1.5 bg-white border border-slate-200 rounded-xl shadow-menu p-1 w-56 z-20">
                           <label className="block px-2.5 pt-2 pb-1 text-xs font-medium text-ink-tertiary" htmlFor="chat-status">Status</label>
                           <div className="px-2.5 pb-2">
-                            <select id="chat-status" aria-label="Chat status" value={sel.status || "new"} disabled={busy}
+                            <TeklySelect id="chat-status" aria-label="Chat status" value={sel.status || "new"} disabled={busy}
                               onChange={(e) => update({ status: e.target.value as ChatStatus }, `Marked as ${STATUS[e.target.value as ChatStatus].label.toLowerCase()}`)}
                               className={`${fieldCls} w-full`}>
                               {(Object.keys(STATUS) as ChatStatus[]).map((k) => <option key={k} value={k}>{STATUS[k].label}</option>)}
-                            </select>
+                            </TeklySelect>
                           </div>
                           <div className="border-t border-slate-100 my-1" />
                           <button onClick={() => update({ is_spam: true }, "Moved to spam")} disabled={busy} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-rose-50 text-xs font-medium text-rose-600"><M n="report" c="text-sm" />Mark as spam</button>

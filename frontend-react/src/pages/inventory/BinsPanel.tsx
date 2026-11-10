@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { loadFailed } from "../../lib/notice";
 import { M } from "../../components/Shell";
 import SkeletonRows from "../../components/SkeletonRows";
@@ -72,7 +73,7 @@ export default function BinsPanel() {
       {err && <div role="alert" className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
 
       <div className="bg-white rounded-2xl border border-slate-200/90 p-3 flex items-end gap-2 flex-wrap">
-        <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Location</label><select value={nf.location_id} onChange={(e) => setNf({ ...nf, location_id: e.target.value })} aria-label="Location" className={fld}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+        <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Location</label><TeklySelect value={nf.location_id} onChange={(e) => setNf({ ...nf, location_id: e.target.value })} aria-label="Location" className={fld}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</TeklySelect></div>
         <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Bin name</label><input value={nf.name} onChange={(e) => setNf({ ...nf, name: e.target.value })} placeholder="Blank = its code" aria-label="Bin name" className={`${fld} w-36`} /></div>
         <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Zone</label><input value={nf.zone} onChange={(e) => setNf({ ...nf, zone: e.target.value })} aria-label="Zone" className={`${fld} w-24`} /></div>
         <div><label className="block text-[11px] font-bold text-ink-tertiary mb-1">Shelf</label><input value={nf.shelf} onChange={(e) => setNf({ ...nf, shelf: e.target.value })} aria-label="Shelf" className={`${fld} w-24`} /></div>

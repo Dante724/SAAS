@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
@@ -180,10 +181,10 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
                 options={[{ v: "", t: "Not urgent" }, { v: "soon", t: "Soon", dot: "bg-amber-400" }, { v: "now", t: "Needs it now", dot: "bg-rose-500" }]} /></div>
               {items.length > 1 && (
                 <label className="flex basis-full items-center gap-2 text-[11px] font-medium text-ink-tertiary">For
-                  <select value={form.item} onChange={(e) => setForm({ ...form, item: e.target.value })} aria-label="Which item"
+                  <TeklySelect value={form.item} onChange={(e) => setForm({ ...form, item: e.target.value })} aria-label="Which item"
                     className="h-8 rounded-lg border border-slate-200 bg-white px-2 text-xs font-medium text-ink-primary outline-none focus:border-primary/50">
                     <option value="">The whole job</option>{items.map((it) => <option key={it.id} value={it.id}>{it.name}</option>)}
-                  </select>
+                  </TeklySelect>
                 </label>
               )}
             </div>
@@ -229,10 +230,10 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
                   </p>
                   <div className="mt-1.5 flex flex-wrap items-center gap-1.5">
                     {(r.status === "draft" || r.status === "sent") && can("can_recommend") && (
-                      <select value={r.urgency || ""} disabled={busy} onChange={(e) => call(() => api.patch(`/orders/${orderId}/recommendations/${r.id}`, { urgency: e.target.value || null }))}
+                      <TeklySelect value={r.urgency || ""} disabled={busy} onChange={(e) => call(() => api.patch(`/orders/${orderId}/recommendations/${r.id}`, { urgency: e.target.value || null }))}
                         aria-label={`How urgent ${r.title} is`} className="rounded-md border border-slate-200 bg-white px-1.5 py-0.5 text-[11px] text-ink-secondary">
                         <option value="">Not urgent</option><option value="soon">Soon</option><option value="now">Needs it now</option>
-                      </select>
+                      </TeklySelect>
                     )}
                     {r.status === "draft" && can("can_publish_recommend") && (
                       <button disabled={busy} onClick={() => call(() => api.post(`/orders/${orderId}/recommendations/${r.id}/publish`, {}), (res) => flashDelivery(onFlash, res?.delivery, "Shown on the customer's tracking page"))}

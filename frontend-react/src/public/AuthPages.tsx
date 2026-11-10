@@ -1,4 +1,5 @@
 import { useEffect, useState, type FormEvent } from "react";
+import TeklySelect from "../components/TeklySelect";
 import { ArrowLeft, CheckCircle2, ChevronDown, Eye, EyeOff, Loader2, MailCheck, XCircle } from "lucide-react";
 import { AuthShell, Field, FootLink, Notice, Submit, inputCls, selectCls } from "./authUi";
 import Button, { buttonClass } from "../components/Button";
@@ -43,9 +44,9 @@ function Select({ id, label, value, onChange, options }: {
 }) {
   return (
     <Field id={id} label={label} select right={<ChevronDown size={17} className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-ink-tertiary" />}>
-      <select id={id} className={selectCls} value={value} onChange={(e) => onChange(e.target.value)}>
+      <TeklySelect id={id} className={selectCls} value={value} onChange={(e) => onChange(e.target.value)}>
         {options.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
+      </TeklySelect>
     </Field>
   );
 }

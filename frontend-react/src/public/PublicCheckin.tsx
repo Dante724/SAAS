@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import TeklySelect from "../components/TeklySelect";
 import { Check, ChevronDown, Clock, Loader2, X } from "lucide-react";
 import ScanButton from "../components/ScanButton";
 import Button, { buttonClass } from "../components/Button";
@@ -97,10 +98,10 @@ function FieldInput({ f, value, onChange }: { f: Field; value: unknown; onChange
   if (f.type === "select") {
     return (
       <Float id={id} label={label} select right={<ChevronDown size={18} className="pointer-events-none absolute right-4 top-1/2 -translate-y-1/2 text-ink-tertiary" />}>
-        <select id={id} value={v} onChange={(e) => onChange(e.target.value)} className={selectCls}>
+        <TeklySelect id={id} value={v} onChange={(e) => onChange(e.target.value)} className={selectCls}>
           <option value="">Choose…</option>
           {(f.options || []).map((o) => <option key={o} value={o}>{o}</option>)}
-        </select>
+        </TeklySelect>
       </Float>
     );
   }

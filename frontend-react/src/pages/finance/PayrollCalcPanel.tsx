@@ -1,4 +1,5 @@
 import { Fragment, useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { Link } from "react-router-dom";
 import { M } from "../../components/Shell";
 import SkeletonRows from "../../components/SkeletonRows";
@@ -116,19 +117,19 @@ export default function PayrollCalcPanel({ month, onMonth, headerAction }: { mon
       <div className="flex items-center gap-2 flex-wrap" role="group" aria-label="Payroll filters">
         <M n="filter_list" c="text-sm text-ink-tertiary" />
         {locations.length > 1 && (
-          <select value={filters.location_id} onChange={set("location_id")} aria-label="Location" className={sel}>
+          <TeklySelect value={filters.location_id} onChange={set("location_id")} aria-label="Location" className={sel}>
             <option value="">All locations</option>
             {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-          </select>
+          </TeklySelect>
         )}
-        <select value={filters.role_id} onChange={set("role_id")} aria-label="Role" className={sel}>
+        <TeklySelect value={filters.role_id} onChange={set("role_id")} aria-label="Role" className={sel}>
           <option value="">All roles</option>
           {roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}
-        </select>
-        <select value={filters.employee_id} onChange={set("employee_id")} aria-label="Employee" className={sel}>
+        </TeklySelect>
+        <TeklySelect value={filters.employee_id} onChange={set("employee_id")} aria-label="Employee" className={sel}>
           <option value="">Everyone</option>
           {people.map((p) => <option key={p.id} value={p.id}>{p.name}</option>)}
-        </select>
+        </TeklySelect>
         {active > 0 && <button onClick={() => setFilters({ location_id: "", role_id: "", employee_id: "" })} className="text-xs font-semibold text-primary hover:underline">Clear filters</button>}
         {rows && rows.length > 0 && <span className="ml-auto text-xs text-ink-tertiary">{rows.length} {rows.length === 1 ? "person" : "people"} · <span className="font-semibold text-ink-primary tabular-nums">{money(total)}</span></span>}
       </div>

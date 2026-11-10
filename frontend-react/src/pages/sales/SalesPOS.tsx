@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import Shell, { M } from "../../components/Shell";
 import EmptyState from "../../components/EmptyState";
@@ -15,6 +16,7 @@ import ScanButton from "../../components/ScanButton";
 import UnitSerials, { unnamedUnits } from "../../components/UnitSerials";
 import ReaderCharge from "../../components/ReaderCharge";
 import CardPaymentsList from "../../components/CardPaymentsList";
+import { useCardReaders } from "../../lib/cardReaders";
 import { scanBeep, useWedgeScanner } from "../../lib/scanner";
 import { inputCls } from "../invoices/billing";
 import { Avatar, deviceIcon } from "../orders/look";
@@ -102,6 +104,8 @@ export default function SalesPOS() {
   const [toast, setToast] = useState<string | null>(null);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2600); };
   const { can } = useMe();
+  // Card readers switched off on the server: no "Charge on reader", no reader payments list.
+  const readerOk = useCardReaders() && can("can_take_card_payments");
   const [recent, setRecent] = useState(false);
   const [recentKey, setRecentKey] = useState(0);   // bumped after a charge so the list re-reads
   const saleRows = useRef<Record<string, SaleRow>>({});
@@ -271,11 +275,14 @@ export default function SalesPOS() {
   const [payCash, setPayCash] = useState("");
   const payAccount = accounts.find((a) => a.id === (payAcct || accountId)) || accounts.find((a) => a.payment_option === "cash") || accounts[0];
   const payTendered = payAccount?.payment_option === "cash" && payCash.trim() !== "" ? Number(payCash) : null;
+  const payKey = useRef<{ sale: string; key: string } | null>(null);   // one Idempotency-Key per sale being paid
   async function payPending() {
     if (!pending || !payAccount) return;
     setBusy(true);
     try {
-      const r = await api.post<{ due: number; change_due: number | null }>(`/sales/${pending.id}/pay`, { account_id: payAccount.id, cash_tendered: payTendered });
+      if (payKey.current?.sale !== pending.id) payKey.current = { sale: pending.id, key: idempotencyKey() };
+      const r = await api.postOnce<{ due: number; change_due: number | null }>(`/sales/${pending.id}/pay`, { account_id: payAccount.id, cash_tendered: payTendered }, payKey.current.key);
+      payKey.current = null;
       setPayCash("");
       paid(pending, `Sale ${pending.number} paid · ${cash(r.due)}`, r.change_due);
     } catch (e: any) { flash(e.message || "Couldn't take the payment"); } finally { setBusy(false); }
@@ -328,7 +335,7 @@ export default function SalesPOS() {
                   return can("can_create_returns") ? <button onClick={() => setReturnFor(s.id)} aria-label={`Return items from sale ${s.sale_number}`}
                     className="h-8 px-3 rounded-xl border border-slate-200 text-[11px] font-semibold text-ink-secondary hover:bg-slate-50">Return items</button> : null;
                 }} />
-              {can("can_take_card_payments") && <div className="border-t border-slate-100 p-2"><CardPaymentsList sales reloadKey={recentKey} /></div>}
+              {readerOk && <div className="border-t border-slate-100 p-2"><CardPaymentsList sales reloadKey={recentKey} /></div>}
             </div>
           )}
           <div className="flex-1 overflow-y-auto px-6 pb-6">
@@ -432,16 +439,16 @@ export default function SalesPOS() {
                 </div>
                 <div className="flex items-baseline justify-between"><span className="text-sm font-semibold text-ink-primary">To pay</span><span className="text-2xl font-semibold tabular-nums text-ink-primary">{cash(pending.due)}</span></div>
                 <div><label htmlFor="pos-pay-account" className="block text-xs font-semibold text-ink-tertiary mb-1">Take payment into</label>
-                  <select id="pos-pay-account" value={payAccount?.id || ""} onChange={(e) => setPayAcct(e.target.value)} className={inputCls}>
+                  <TeklySelect id="pos-pay-account" value={payAccount?.id || ""} onChange={(e) => setPayAcct(e.target.value)} className={inputCls}>
                     {accounts.length === 0 && <option value="">No cashbox set up</option>}
                     {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-                  </select>
+                  </TeklySelect>
                 </div>
                 {payAccount?.payment_option === "cash" && <div className="flex items-center justify-between gap-3 text-xs"><label htmlFor="pos-pay-cash" className="text-ink-secondary">Cash received</label><div className="w-28"><input id="pos-pay-cash" type="number" min={0} inputMode="decimal" value={payCash} onChange={(e) => setPayCash(e.target.value)} className={`${inputCls} text-right tabular-nums`} /></div></div>}
                 {payTendered != null && payTendered >= pending.due && row("Change due", cash(payTendered - pending.due), true)}
                 <button onClick={payPending} disabled={busy || !payAccount || (payTendered != null && payTendered + 0.005 < pending.due)} className={buttonClass("primary", "lg", "w-full tabular-nums")}>Take payment {cash(pending.due)}</button>
                 <div className="flex gap-2">
-                  {can("can_take_card_payments") && pending.due > 0 && <button onClick={() => setReaderFor(pending)} disabled={busy} className="flex-1 h-9 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50 flex items-center justify-center gap-1.5"><M n="contactless" c="text-sm text-ink-tertiary" />Try the card again</button>}
+                  {readerOk && pending.due > 0 && <button onClick={() => setReaderFor(pending)} disabled={busy} className="flex-1 h-9 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50 flex items-center justify-center gap-1.5"><M n="contactless" c="text-sm text-ink-tertiary" />Try the card again</button>}
                   {can("can_delete_sales") && <button onClick={deletePending} disabled={busy} className={buttonClass("secondary", "md", "text-rose-700")}>Delete sale</button>}
                   {!pending.fromCart && <button onClick={() => setPending(null)} className="h-9 px-3 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Not now</button>}
                 </div>
@@ -470,10 +477,10 @@ export default function SalesPOS() {
             <div className="flex items-baseline justify-between pt-3 border-t border-slate-200"><span className="text-sm font-semibold text-ink-primary">Total</span><span className="text-2xl font-semibold tabular-nums text-ink-primary">{cash(quote?.total ?? Math.max(subtotal - discount, 0))}</span></div>
             {!!quote?.gift_card && <>{row("Paid by gift card", `−${cash(quote.gift_card)}`)}{row("To pay", cash(quote.due), true)}</>}
             <div><label htmlFor="pos-account" className="block text-xs font-semibold text-ink-tertiary mb-1">Take payment into</label>
-              <select id="pos-account" value={accountId} onChange={(e) => setAccountId(e.target.value)} className={inputCls}>
+              <TeklySelect id="pos-account" value={accountId} onChange={(e) => setAccountId(e.target.value)} className={inputCls}>
                 <option value="">Pay later (save the sale)</option>
                 {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-              </select>
+              </TeklySelect>
             </div>
             {/* B5: cash — what the customer handed over, and the change to give back */}
             {isCash && <div className="flex items-center justify-between gap-3 text-xs"><label htmlFor="pos-cash" className="text-ink-secondary">Cash received</label><div className="w-28"><input id="pos-cash" type="number" min={0} inputMode="decimal" value={cashGiven} onChange={(e) => setCashGiven(e.target.value)} placeholder={cash(due)} className={`${inputCls} text-right tabular-nums`} /></div></div>}
@@ -481,7 +488,7 @@ export default function SalesPOS() {
             {short && <p role="alert" className="text-[11px] text-rose-700">Cash received is less than the total.</p>}
             {quoteErr && <p role="alert" className="text-[11px] text-rose-700">{quoteErr}</p>}
             <button onClick={() => charge()} disabled={busy || !quote || blocked || short} className="w-full h-11 rounded-xl bg-primary text-white text-sm font-semibold hover:bg-primary-container disabled:opacity-50 flex items-center justify-center gap-2 tabular-nums">{busy ? "Processing…" : cart.length === 0 ? "Charge" : quote ? `Charge ${cash(quote.due)}` : quoteErr ? "Can't price this sale" : "Pricing…"}</button>
-            {can("can_take_card_payments") && <button onClick={() => charge(true)} disabled={busy || !quote || blocked || quote.due <= 0} className="w-full h-9 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50 flex items-center justify-center gap-2"><M n="contactless" c="text-base text-ink-tertiary" />Charge on reader</button>}
+            {readerOk && <button onClick={() => charge(true)} disabled={busy || !quote || blocked || quote.due <= 0} className="w-full h-9 rounded-xl border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50 flex items-center justify-center gap-2"><M n="contactless" c="text-base text-ink-tertiary" />Charge on reader</button>}
             <div className="flex justify-center"><AutoPrintPicker event="sale" /></div>
             </>)}
           </div>
@@ -489,7 +496,7 @@ export default function SalesPOS() {
       </div>
       {toast && <div role="status" className="fixed bottom-6 left-1/2 -translate-x-1/2 max-w-[calc(100vw-32px)] bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-clay-drawer z-[60]">{toast}</div>}
       {matches && <MatchPicker code={matches.code} items={matches.items} onPick={(m) => { addMatch(m); flash(`Added ${m.name}`); setMatches(null); setQ(""); }} onClose={() => setMatches(null)} />}
-      {readerFor && <ReaderCharge saleId={readerFor.id} amount={readerFor.due} accountId={cardAccount} title={`Sale ${readerFor.number}`}
+      {readerOk && readerFor && <ReaderCharge saleId={readerFor.id} amount={readerFor.due} accountId={cardAccount} title={`Sale ${readerFor.number}`}
         onApproved={() => setRecentKey((k) => k + 1)}
         onClose={(c) => {
           const p = readerFor;
@@ -694,9 +701,9 @@ function ReturnSheet({ saleId, accounts, onClose, onDone }: { saleId: string; ac
           </div>
           <div className="mt-3 space-y-2">
             <div><label htmlFor="pos-return-account" className="block text-xs font-semibold text-ink-tertiary mb-1">Refund from</label>
-              <select id="pos-return-account" value={acct} onChange={(e) => setAcct(e.target.value)} className={inputCls}>
+              <TeklySelect id="pos-return-account" value={acct} onChange={(e) => setAcct(e.target.value)} className={inputCls}>
                 {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-              </select></div>
+              </TeklySelect></div>
             <input value={reason} onChange={(e) => setReason(e.target.value)} maxLength={300} placeholder="Reason (optional)" aria-label="Reason" className={inputCls} />
             {gift > 0.005 && <p className="text-[11px] text-ink-tertiary tabular-nums">{cash(gift)} goes back onto the gift card.</p>}
             {err && <p role="alert" className="text-[11px] text-rose-700">{err}</p>}

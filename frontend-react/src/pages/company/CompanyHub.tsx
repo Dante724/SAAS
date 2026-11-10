@@ -1,4 +1,5 @@
 import SkeletonRows from "../../components/SkeletonRows";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import PageSummary, { type SummaryStat } from "../../components/PageSummary";
 import { useEffect, useState } from "react";
@@ -374,10 +375,10 @@ export function Services({ onOpen, refresh }: { onOpen: (s?: Service) => void; r
         <button onClick={() => onOpen()} className={`${primaryBtn} min-w-[8.5rem] justify-center`}><M n="add" c="text-sm" />New service</button>
         {can("can_edit_labors") && <button onClick={() => setImporting(true)} className={ghostBtn}><M n="upload" c="text-sm" />Import</button>}
         <button onClick={() => setCat(true)} className={ghostBtn}><M n="inventory" c="text-sm" />Categories</button>
-        <select aria-label="Category" value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className={filterCls(!!catFilter)}>
+        <TeklySelect aria-label="Category" value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className={filterCls(!!catFilter)}>
           <option value="">Category: All</option>
           {cats.map((c) => <option key={c.id} value={c.id}>{`${"  ".repeat(c.depth)}${c.name}`}</option>)}
-        </select>
+        </TeklySelect>
         <div className="relative flex-1 min-w-[240px] max-w-md">
           <M n="search" c="absolute left-3 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search services…" aria-label="Search services" className={`${inputCls} pl-9`} />
@@ -454,10 +455,10 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
         <button onClick={() => onOpen()} className={`${primaryBtn} min-w-[8.5rem] justify-center`}><M n="add" c="text-sm" />New product</button>
         {(can("can_create_products") || can("can_edit_products") || can("can_manage_inventory")) && <button onClick={() => setImporting(true)} className={ghostBtn}><M n="upload" c="text-sm" />Import</button>}
         <button onClick={() => setCat(true)} className={ghostBtn}><M n="inventory" c="text-sm" />Categories</button>
-        <select aria-label="Category" value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className={filterCls(!!catFilter)}>
+        <TeklySelect aria-label="Category" value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className={filterCls(!!catFilter)}>
           <option value="">Category: All</option>
           {cats.map((c) => <option key={c.id} value={c.id}>{`${"  ".repeat(c.depth)}${c.name}`}</option>)}
-        </select>
+        </TeklySelect>
         <div className="relative flex-1 min-w-[240px] max-w-md">
           <M n="search" c="absolute left-3 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search products, SKU, MPN…" aria-label="Search products" className={`${inputCls} pl-9`} />

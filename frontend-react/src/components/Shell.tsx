@@ -1,4 +1,5 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
+import TeklySelect from "./TeklySelect";
 import DeviceList from "./DeviceList";
 import { useVisibleInterval } from "../hooks/useVisibleInterval";
 import { toAppPath } from "../lib/deepLink";
@@ -819,10 +820,10 @@ function LocationSwitcher({ block = false }: { block?: boolean }) {
   }, []);
   if (locs.length < 2) return null; // single branch: no switcher needed
   return (
-    <select value={sel} onChange={(e) => { setSel(e.target.value); setLocationScope(e.target.value); window.location.reload(); }}
+    <TeklySelect value={sel} onChange={(e) => { setSel(e.target.value); setLocationScope(e.target.value); window.location.reload(); }}
       title="Location" aria-label={t("Location")} className={`rounded-full border border-slate-200 bg-white text-xs font-semibold text-ink-secondary px-2 shadow-xs ${block ? "h-10 w-full" : "h-8 max-w-[140px]"}`}>
       <option value="">All locations</option>
       {locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-    </select>
+    </TeklySelect>
   );
 }

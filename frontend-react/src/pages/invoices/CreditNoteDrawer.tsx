@@ -1,8 +1,9 @@
 import { useEffect, useRef, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { M } from "../../components/Shell";
 import EmptyState from "../../components/EmptyState";
 import BulkPrintDialog from "../../components/BulkPrintDialog";
-import { api, openAuthedDoc } from "../../api/client";
+import { api, idempotencyKey, openAuthedDoc } from "../../api/client";
 import { alertDialog, confirmDialog } from "../../lib/dialog";
 import { humanize } from "../../lib/humanize";
 import { useMe } from "../../context/Me";
@@ -104,10 +105,13 @@ export default function CreditNoteDrawer({ id, invoice, clientId, onClose, onCha
     catch (e: any) { setErr(e.message || "Something went wrong"); }
     finally { busyRef.current = false; setBusy(false); }
   }
+  const createKey = useRef(idempotencyKey());
   async function saveDraft(): Promise<CreditNote | undefined> {
     const problem = check(); if (problem) { setErr(problem); return; }
     const body = payload();
-    const r = cn ? await api.put<CreditNote>(`/finance/credit-notes/${cn.id}`, body) : await api.post<CreditNote>("/finance/credit-notes", body);
+    // Creating carries a key: a retried Save makes one draft, not two.
+    const r = cn ? await api.put<CreditNote>(`/finance/credit-notes/${cn.id}`, body)
+      : await api.postOnce<CreditNote>("/finance/credit-notes", body, createKey.current);
     adopt(r); onChanged?.();
     return r;
   }
@@ -147,15 +151,15 @@ export default function CreditNoteDrawer({ id, invoice, clientId, onClose, onCha
       title={<span className="flex items-center gap-2">{title}<StatusPill status={status} label={humanize(status)} /></span>}
       sub={invoiceId ? <>Credits invoice {cn?.invoice_number || invoice?.invoice_number}</> : "Standalone: adds credit to the client's balance"}
       footer={<>
-        <MoreMenu className="mr-auto" align="start" items={[
+        {editable && can("can_issue_credit_notes") && <button onClick={issue} disabled={busy || total <= 0} className={btnPrimary}>Issue {cash(total)}</button>}
+        {editable && <button onClick={() => run(saveDraft)} disabled={busy} className={btnGhost}>{busy ? "Saving…" : "Save draft"}</button>}
+        <MoreMenu className="ml-auto" align="end" items={[
           { label: "Download PDF", icon: "download", hidden: !cn, onClick: () => { if (cn) openAuthedDoc(`/print/credit-notes/${cn.id}`).catch(() => alertDialog("Could not open the PDF")); } },
           { label: "Print", icon: "print", hidden: !cn, onClick: () => setPrintOpen(true) },
           { label: "Delete draft", icon: "delete", danger: true, disabled: busy, hidden: !(cn?.status === "draft" && can("can_create_credit_notes")), onClick: remove },
           { label: cn?.status === "issued" ? "Cancel credit note" : "Cancel draft", icon: "block", danger: true, disabled: busy,
             hidden: !(cn && cn.status !== "canceled" && can("can_issue_credit_notes")), onClick: cancel },
         ]} />
-        {editable && <button onClick={() => run(saveDraft)} disabled={busy} className={btnGhost}>{busy ? "Saving…" : "Save draft"}</button>}
-        {editable && can("can_issue_credit_notes") && <button onClick={issue} disabled={busy || total <= 0} className={btnPrimary}>Issue {cash(total)}</button>}
       </>}>
       <ErrorNote msg={err} />
       {cn?.status === "issued" && <div role="note" className="rounded-lg bg-slate-50 border border-slate-200 text-ink-secondary text-xs px-3 py-2">Issued {fmtDate(cn.issued_at)}. Issued credit notes are locked. Cancel it to reverse the credit.</div>}
@@ -164,11 +168,11 @@ export default function CreditNoteDrawer({ id, invoice, clientId, onClose, onCha
         <div>
           <label htmlFor="cn-client" className={labelCls}>Client</label>
           {editable ? (
-            <select id="cn-client" value={client} onChange={(e) => setClient(e.target.value)} className={inputCls}>
+            <TeklySelect id="cn-client" value={client} onChange={(e) => setClient(e.target.value)} className={inputCls}>
               <option value="">{clients === null ? "Loading clients…" : "Pick a client"}</option>
               {(clients || []).map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}
               {cn?.client_id && !(clients || []).some((c) => c.id === cn.client_id) && <option value={cn.client_id}>{cn.client_name}</option>}
-            </select>
+            </TeklySelect>
           ) : <div className="text-sm font-semibold text-ink-primary">{cn?.client_name || "—"}</div>}
         </div>
       )}

@@ -59,7 +59,7 @@ export function ShopTile({ shop }: { shop: ShopInfo }) {
 // One look for the cards and the fields on these pages (44px fields, labels always above).
 export const publicCard = "rounded-2xl border border-slate-200 bg-white shadow-clay-card";
 export const inputCls = "h-11 w-full rounded-xl border border-slate-300 bg-white px-3.5 text-base text-ink-primary outline-none transition placeholder:text-ink-placeholder focus:border-primary focus:ring-[3px] focus:ring-primary/20 disabled:opacity-60";
-export const selectCls = `${inputCls} appearance-none pr-10`;
+export const selectCls = `${inputCls} bg-none appearance-none pr-10`;
 export const textareaCls = "w-full rounded-xl border border-slate-300 bg-white px-3.5 py-2.5 text-base text-ink-primary outline-none transition placeholder:text-ink-placeholder focus:border-primary focus:ring-[3px] focus:ring-primary/20";
 export const fieldLabelCls = "mb-1.5 block text-sm font-medium text-ink-secondary";
 

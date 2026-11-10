@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { loadFailed } from "../../lib/notice";
@@ -259,11 +260,11 @@ export default function PartsPOPanel({ orderId, lines, canBuy, isEstimate, onClo
               <div className="p-4 space-y-2.5">
                 <div className="flex items-center gap-2 text-xs font-semibold text-ink-primary"><M n="add_shopping_cart" c="text-sm text-primary" />Order parts from a supplier</div>
                 <div className="flex items-center gap-2">
-                  <select value={supplier} onChange={(e) => { setSupplier(e.target.value); setMsg(null); }} aria-label="Supplier"
+                  <TeklySelect value={supplier} onChange={(e) => { setSupplier(e.target.value); setMsg(null); }} aria-label="Supplier"
                     className="glass-input rounded-lg px-2.5 py-2 text-xs text-ink-primary flex-1 min-w-0">
                     <option value="">Choose a supplier</option>
                     {suppliers.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}
-                  </select>
+                  </TeklySelect>
                   <button type="button" onClick={raisePO} disabled={busy !== null} className={buttonClass("primary", "md")}>{busy === "po" ? "Raising…" : "Raise PO"}</button>
                 </div>
                 <div className="flex flex-wrap gap-x-4 gap-y-1">

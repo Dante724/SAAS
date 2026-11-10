@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import { createPortal } from "react-dom";
 import { M } from "../../components/Shell";
@@ -235,10 +236,10 @@ export function SellPlanDialog({ clientId, deviceId, devices, orderId, presetPla
           {!deviceId && (
             <div className="mt-4">
               <label htmlFor="sell-asset" className="block text-[11px] font-bold text-ink-tertiary mb-1">Covers</label>
-              <select id="sell-asset" value={device} onChange={(e) => setDevice(e.target.value)} className="glass-input w-full h-10 rounded-xl px-3 text-sm">
+              <TeklySelect id="sell-asset" value={device} onChange={(e) => setDevice(e.target.value)} className="glass-input w-full h-10 rounded-xl px-3 text-sm">
                 <option value="">Choose the boat, vehicle or device…</option>
                 {assets.map((d) => <option key={d.id} value={d.id}>{[d.brand, d.model].filter(Boolean).join(" ") || "Asset"}</option>)}
-              </select>
+              </TeklySelect>
             </div>
           )}
           {err && <p role="alert" className="mt-3 rounded-lg bg-rose-50 px-3 py-2 text-xs text-rose-700">{err}</p>}
