@@ -17,11 +17,26 @@ import Italic from "@tiptap/extension-italic";
 import Underline from "@tiptap/extension-underline";
 import Strike from "@tiptap/extension-strike";
 import { chipLabel, chipsToTokens, escapeAttr, hasBlockChild, isLogicToken, splitLeadingStyles, tokensToChips } from "./templateHtml";
+import { paintField, type FieldDisplay } from "./fieldValues";
+
+// How a field shows on the page (a chip, or the shop's real value). Set by the Text view before it
+// creates its editor; saving never uses it (renderHTML always writes the placeholder).
+let display: ((tok: string) => FieldDisplay) | null = null;
+export function setTextDisplay(fn: ((tok: string) => FieldDisplay) | null) { display = fn; }
+const fieldView = (tag: "span" | "div") => ({ node }: { node: { attrs: Record<string, any> } }) => {
+  const dom = document.createElement(tag);
+  const tok = String(node.attrs.tok || "");
+  dom.setAttribute("data-tok", tok); dom.contentEditable = "false";
+  const inner = tag === "div" ? dom.appendChild(document.createElement("span")) : dom;
+  if (tag === "div") dom.className = "tok-block";
+  paintField(inner, tok, display ? display(tok) : { kind: "chip", html: chipLabel(tok).replace(/</g, "&lt;"), label: chipLabel(tok) });
+  return { dom };
+};
 
 // Attributes kept as written on every node and mark that can carry them. ProseMirror writes
 // style through the browser's CSS parser (#666 comes back as rgb(102, 102, 102)), so the exact
 // text also rides along in data-tk-style and fromTextView puts it back.
-const KEEP = ["style", "class", "id", "align", "valign", "width", "height", "border", "cellpadding", "cellspacing", "bgcolor", "dir", "lang", "data-block", "data-label"];
+const KEEP = ["style", "class", "id", "align", "valign", "width", "height", "border", "cellpadding", "cellspacing", "bgcolor", "dir", "lang", "data-block", "data-label", "data-tk-show"];
 const keepAttrs = (skip: string[] = []) => Object.fromEntries(KEEP.filter((k) => !skip.includes(k)).map((k) => [k, {
   default: null,
   parseHTML: (el: HTMLElement) => el.getAttribute(k),
@@ -131,6 +146,7 @@ export const VariableBlock = Node.create({
     return ["div", mergeAttributes(HTMLAttributes, { class: "tok-block", contenteditable: "false" }),
       ["span", { class: isLogicToken(node.attrs.tok) ? "tok-pill tok-logic" : "tok-pill" }, chipLabel(node.attrs.tok)]];
   },
+  addNodeView() { return fieldView("div") as any; },
   renderText({ node }) { return node.attrs.tok; },
 });
 
@@ -146,6 +162,7 @@ export const Variable = Node.create({
   renderHTML({ node, HTMLAttributes }) {
     return ["span", mergeAttributes(HTMLAttributes, { class: isLogicToken(node.attrs.tok) ? "tok-pill tok-logic" : "tok-pill", contenteditable: "false" }), chipLabel(node.attrs.tok)];
   },
+  addNodeView() { return fieldView("span") as any; },
   renderText({ node }) { return node.attrs.tok; },
 });
 

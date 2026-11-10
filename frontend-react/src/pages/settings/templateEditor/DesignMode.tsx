@@ -1,16 +1,18 @@
 // "Design" view: drag-and-drop page builder (GrapesJS core, BSD-3) on a page-sized sheet.
-// Tekly draws the blocks panel itself; the style and settings panels are GrapesJS's own, restyled
-// in templateEditor.css. Nothing from the library's own branding or toolbar is shown.
-import { useEffect, useMemo, useRef, useState, type ReactNode } from "react";
+// Tekly draws the blocks, fields and simple style panels itself; GrapesJS's full style panel is
+// only shown under "More", restyled in templateEditor.css. No library branding or toolbar shows.
+import { useEffect, useRef, useState, type ReactNode } from "react";
 import grapesjs, { type BlockProperties, type Component, type Editor } from "grapesjs";
 import "grapesjs/dist/css/grapes.min.css";
 import {
-  ChevronDown, ChevronRight, Columns2, Heading, ImageIcon, LayoutTemplate, Minus, Redo2, Search, Signature, Sigma,
-  SquareDashedBottom, Store, Table2, Trash2, Type, Undo2, Braces,
+  AlignCenter, AlignLeft, AlignRight, Bold, ChevronDown, ChevronRight, Columns2, Heading, ImageIcon, LayoutTemplate, Minus, Redo2,
+  Signature, Sigma, SquareDashedBottom, Store, Table2, Trash2, Type, Undo2,
 } from "lucide-react";
-import { addTeklyTypes, baseConfig, designChip, exportDesign, snapshotStyles, toDesignView } from "./grapesSetup";
-import { chipLabel, styleText } from "./templateHtml";
-import type { VarGroup } from "./VariableMenu";
+import { addTeklyTypes, baseConfig, designChip, exportDesign, setDesignDisplay, snapshotStyles, toDesignView } from "./grapesSetup";
+import { styleText } from "./templateHtml";
+import FieldsPanel, { type VarGroup } from "./FieldsPanel";
+import { ALIGN, COLOURS, FONTS, SIZES, SPACING, applySimple, readSimple, type Simple, type Style } from "./simpleStyle";
+import type { FieldDisplay } from "./fieldValues";
 import type { PageBox } from "./types";
 import "./templateEditor.css";
 
@@ -31,10 +33,11 @@ const LAYOUT: Def[] = [
   { id: "signature", label: "Signature line", icon: <Signature size={18} />, content: '<div style="margin-top:24px"><div style="border-bottom:1px solid #333;width:260px;height:28px"></div><div style="font-size:11px;color:#555;margin-top:3px">Signature / Date</div></div>' },
 ];
 
+// The full GrapesJS style panel, shown only under "More".
 const SECTORS = [
-  { name: "Text", open: true, properties: ["font-family", "font-size", "font-weight", "color", "text-align", "line-height"] },
   { name: "Spacing", open: false, properties: ["margin", "padding"] },
   { name: "Size", open: false, properties: ["width", "height", "max-width"] },
+  { name: "Text", open: false, properties: ["line-height", "letter-spacing", "text-decoration", "font-style"] },
   { name: "Border", open: false, properties: ["border", "border-radius"] },
   { name: "Background", open: false, properties: ["background-color"] },
 ];
@@ -45,27 +48,40 @@ table{border-collapse:collapse}img{max-width:100%}
 .tok-pill{display:inline-block;background:#eef2ff;color:#3730a3;border:1px solid #c7d2fe;border-radius:6px;padding:0 6px;margin:0 1px;font-size:.85em;font-weight:600;line-height:1.5;white-space:nowrap;font-family:system-ui,sans-serif}
 .tok-pill.tok-logic{background:#fff7ed;color:#9a3412;border-color:#fed7aa}
 div.tok-pill{display:block;width:max-content;margin:2px 0}
+.tok-real{background:rgba(0,89,186,.06);box-shadow:inset 0 -1px 0 rgba(0,89,186,.45);border-radius:2px}
+div.tok-real{display:block}
+.tok-sample{color:#64748b;font-style:italic}
 ${templateCss}`;
 }
+/** Editor-only marks on the sheet: the printable area (inside the margins) and where page 1 ends. */
+function guideCss(page: PageBox) {
+  const end = page.h ? `html::after{content:"End of page 1";position:absolute;left:0;right:0;top:${page.h}px;border-top:2px dashed #94a3b8;font:11px/1.6 system-ui,sans-serif;color:#64748b;text-align:right;padding-right:6px;pointer-events:none}` : "";
+  return `html{position:relative}body::before{content:"";position:absolute;left:${page.pad}px;right:${page.pad}px;top:${page.pad}px;${page.h ? `height:${page.h - 2 * page.pad}px` : "bottom:" + page.pad + "px"};outline:1px dashed #cbd5e1;pointer-events:none}${end}
+.gjs-selected{outline:2px solid #0059ba !important;outline-offset:-2px}.gjs-hovered{outline:1px solid #2c72d9 !important}`;
+}
 
-export default function DesignMode({ html, onChange, groups, page, bindInsert, bindFlush }: {
+export default function DesignMode({ html, onChange, groups, page, display, bindInsert, bindFlush, onSaveShortcut }: {
   html: string; onChange: (html: string) => void; groups: VarGroup[]; page: PageBox;
+  display: (tok: string) => FieldDisplay;
   bindInsert?: (fn: ((tok: string) => void) | null) => void;
   /** Gets a function that finishes any text being typed and returns the latest HTML (null = unchanged). */
   bindFlush?: (fn: (() => Promise<string | null>) | null) => void;
+  onSaveShortcut?: () => void;
 }) {
   const canvasEl = useRef<HTMLDivElement | null>(null);
   const styleEl = useRef<HTMLDivElement | null>(null);
   const traitEl = useRef<HTMLDivElement | null>(null);
   const edRef = useRef<Editor | null>(null);
   const change = useRef(onChange); change.current = onChange;
+  const saveKey = useRef(onSaveShortcut); saveKey.current = onSaveShortcut;
   const [ready, setReady] = useState(false);
-  const [selected, setSelected] = useState<string | null>(null);
+  const [sel, setSel] = useState<{ name: string; style: Style; text: boolean; traits: boolean } | null>(null);
   const [outlines, setOutlines] = useState(true);
-  const [q, setQ] = useState("");
-  const [openGroups, setOpenGroups] = useState<Record<string, boolean>>({ Layout: true });
+  const [more, setMore] = useState(false);
+  const [layoutOpen, setLayoutOpen] = useState(true);
 
   useEffect(() => {
+    setDesignDisplay(display);
     const load = toDesignView(html);
     const editor = grapesjs.init({
       ...baseConfig(),
@@ -79,123 +95,99 @@ export default function DesignMode({ html, onChange, groups, page, bindInsert, b
       layerManager: { appendTo: document.createElement("div") },
       deviceManager: { devices: [{ id: "page", name: "Page", width: `${page.w}px` }] },
       protectedCss: frameCss(page, styleText(load.styles)),
-      canvasCss: ".gjs-selected{outline:2px solid #0059ba !important;outline-offset:-2px}.gjs-hovered{outline:1px solid #2c72d9 !important}",
+      canvasCss: guideCss(page),
       assetManager: { embedAsBase64: true, upload: false },
       richTextEditor: { actions: ["bold", "italic", "underline", "link"] },
     });
     edRef.current = editor;
-    let snap = new Map<string, string>();
+    let snap = new Map<string, Record<string, string>>();
     let initial: string | null = null;
-    editor.on("load", () => {
-      snap = snapshotStyles(editor);
-      initial = exportDesign(editor, load, snap);
-      editor.runCommand("core:component-outline");
-      setReady(true);
-    });
     const latest = () => {
       if (initial === null) return null;
       const out = exportDesign(editor, load, snap);
       return out !== initial ? out : null;
     };
+    const readSel = () => {
+      const c = editor.getSelected();
+      if (!c) { setSel(null); return; }
+      setSel({ name: c.getName() || String(c.get("type") || "Element"), style: { ...(c.getStyle() as Style) }, text: c.get("type") !== "image", traits: c.getTraits().length > 0 });
+    };
+    editor.on("load", () => {
+      snap = snapshotStyles(editor);
+      initial = exportDesign(editor, load, snap);
+      editor.runCommand("core:component-outline");
+      // Ctrl/Cmd+S inside the page saves too (the frame has its own keyboard events).
+      editor.Canvas.getDocument()?.addEventListener("keydown", (e: KeyboardEvent) => {
+        if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === "s") { e.preventDefault(); saveKey.current?.(); }
+      });
+      setReady(true);
+    });
     editor.on("update", () => { const out = latest(); if (out !== null) change.current(out); });
-    // Text being typed lives in the canvas until editing ends; end it before anyone reads the HTML.
+    editor.on("component:styleUpdate", readSel);
     bindFlush?.(async () => {
-      const sel = editor.getSelected() as any;
-      if (editor.getEditing() && sel?.view?.disableEditing) await sel.view.disableEditing();
+      const s = editor.getSelected() as any;
+      if (editor.getEditing() && s?.view?.disableEditing) await s.view.disableEditing();
       return latest();
     });
     editor.on("component:selected component:deselected", () => {
       const c = editor.getSelected();
-      // The made-up element id isn't something to edit; title, alt text and link address are.
-      if (c && c.getTrait("id")) c.removeTrait("id");
-      setSelected(c ? (c.getName() || c.get("type") || "Element") : null);
+      // A made-up id and a tooltip title aren't things to edit here; image alt text and link
+      // addresses are, so those settings stay.
+      if (c) { if (c.getTrait("id")) c.removeTrait("id"); if (c.getTrait("title")) c.removeTrait("title"); }
+      readSel();
     });
-    return () => { bindFlush?.(null); edRef.current = null; editor.destroy(); };
+    return () => { bindFlush?.(null); setDesignDisplay(null); edRef.current = null; editor.destroy(); };
   }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
-  // Insert a placeholder: into the text being edited, after the selected element, or at the end.
+  // Insert a field: into the text being edited, after the selected element, or at the end.
   useEffect(() => {
-    bindInsert?.((tok: string) => {
-      const ed = edRef.current; if (!ed) return;
-      const rte = ed.RichTextEditor;
-      const sel = ed.getSelected();
-      if (sel && ed.getEditing() && rte?.globalRte) { rte.globalRte.insertHTML(designChip(tok)); return; }
-      const parent = sel?.parent();
-      if (sel && parent) parent.append(designChip(tok, true), { at: sel.index() + 1 });
-      else ed.getWrapper()?.append(designChip(tok, true));
-    });
+    bindInsert?.((tok: string) => bindInsertCall(edRef, tok));
     return () => bindInsert?.(null);
   }, [bindInsert]);
 
   function addBlock(content: BlockProperties["content"], activate?: boolean) {
     const ed = edRef.current; if (!ed) return;
-    const sel = ed.getSelected();
-    const parent = sel?.parent();
-    const added = (sel && parent ? parent.append(content as any, { at: sel.index() + 1 }) : ed.getWrapper()!.append(content as any)) as Component[];
+    const s = ed.getSelected();
+    const parent = s?.parent();
+    const added = (s && parent ? parent.append(content as any, { at: s.index() + 1 }) : ed.getWrapper()!.append(content as any)) as Component[];
     if (added?.[0]) { ed.select(added[0]); if (activate) ed.runCommand("open-assets", { target: added[0], types: ["image"], accept: "image/*" }); }
   }
-  // GrapesJS drag from our own panel: register blocks once, then hand it the native drag event.
-  function blockFor(id: string, content: BlockProperties["content"], label: string, activate?: boolean) {
-    const bm = edRef.current?.Blocks; if (!bm) return null;
-    return bm.get(id) || bm.add(id, { label, content, activate, select: true });
+  // Drag from our own panels: register the block once, then hand GrapesJS the native drag event.
+  function dragStart(id: string, content: BlockProperties["content"], label: string, ev: DragEvent, activate?: boolean) {
+    const ed = edRef.current; const bm = ed?.Blocks; if (!ed || !bm) return;
+    const b = bm.get(id) || bm.add(id, { label, content, activate, select: true });
+    bm.startDrag(b, ev);
   }
-  const dragStart = (id: string, content: BlockProperties["content"], label: string, ev: DragEvent, activate?: boolean) => {
-    const ed = edRef.current; const b = blockFor(id, content, label, activate);
-    if (ed && b) ed.Blocks.startDrag(b, ev);
-  };
   const dragEnd = () => edRef.current?.Blocks.endDrag();
 
-  const ql = q.trim().toLowerCase();
-  const varGroups = useMemo(() => groups.map((g) => ({ ...g, items: g.items.filter((t) => !ql || t.toLowerCase().includes(ql)) })).filter((g) => g.items.length), [groups, ql]);
-  const layout = LAYOUT.filter((b) => !ql || b.label.toLowerCase().includes(ql));
-  const isOpen = (g: string) => !!ql || !!openGroups[g];
-  const toggle = (g: string) => setOpenGroups((o) => ({ ...o, [g]: !isOpen(g) }));
-
-  const Tile = ({ d }: { d: Def }) => (
-    <button type="button" draggable onDragStart={(e) => dragStart(`tk-${d.id}`, d.content, d.label, e.nativeEvent, d.activate)} onDragEnd={dragEnd}
-      onClick={() => addBlock(d.content, d.activate)} title={`Drag onto the page, or click to add`}
-      className="flex flex-col items-center justify-center gap-1 h-[68px] rounded-xl border border-slate-200 bg-white text-ink-secondary hover:border-primary hover:text-primary cursor-grab active:cursor-grabbing">
-      {d.icon}<span className="text-2xs font-semibold text-center leading-tight px-1">{d.label}</span>
-    </button>
-  );
+  function setSimple(key: keyof Simple, value: string | boolean | null) {
+    const c = edRef.current?.getSelected(); if (!c) return;
+    c.setStyle(applySimple({ ...(c.getStyle() as Style) }, key, value));
+    setSel((s) => (s ? { ...s, style: { ...(c.getStyle() as Style) } } : s));
+  }
+  const simple = sel ? readSimple(sel.style) : null;
 
   return (
     <div className="tk-design flex-1 min-h-0 flex">
-      <aside className="w-64 shrink-0 bg-white border-r border-slate-200 flex flex-col" aria-label="Blocks">
-        <div className="p-2.5 border-b border-slate-200">
-          <label className="flex items-center gap-1.5 px-2 h-8 rounded-lg border border-slate-200 bg-white focus-within:border-primary">
-            <Search size={14} className="text-ink-tertiary" aria-hidden />
-            <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search blocks and variables" aria-label="Search blocks and variables" className="flex-1 bg-transparent text-xs text-ink-primary outline-none" />
-          </label>
-        </div>
-        <div className="flex-1 overflow-y-auto p-2.5 space-y-3">
-          {layout.length > 0 && (
-            <section>
-              <button type="button" onClick={() => toggle("Layout")} className="w-full flex items-center gap-1.5 text-2xs font-semibold text-ink-secondary mb-1.5">
-                {isOpen("Layout") ? <ChevronDown size={13} /> : <ChevronRight size={13} />}<LayoutTemplate size={13} /> Layout
-              </button>
-              {isOpen("Layout") && <div className="grid grid-cols-3 gap-1.5">{layout.map((d) => <Tile key={d.id} d={d} />)}</div>}
-            </section>
+      <aside className="w-64 shrink-0 bg-white border-r border-slate-200 overflow-y-auto" aria-label="Blocks and fields">
+        <section className="p-2.5 border-b border-slate-200" aria-label="Blocks">
+          <button type="button" aria-expanded={layoutOpen} onClick={() => setLayoutOpen((o) => !o)} className="w-full flex items-center gap-1.5 text-2xs font-semibold text-ink-secondary mb-1.5">
+            {layoutOpen ? <ChevronDown size={13} /> : <ChevronRight size={13} />}<LayoutTemplate size={13} /> Blocks
+          </button>
+          {layoutOpen && (
+            <div className="grid grid-cols-3 gap-1.5">
+              {LAYOUT.map((d) => (
+                <button key={d.id} type="button" draggable onDragStart={(e) => dragStart(`tk-${d.id}`, d.content, d.label, e.nativeEvent, d.activate)} onDragEnd={dragEnd}
+                  onClick={() => addBlock(d.content, d.activate)} title="Drag onto the page, or click to add"
+                  className="flex flex-col items-center justify-center gap-1 h-16 rounded-xl border border-slate-200 bg-white text-ink-secondary hover:border-primary hover:text-primary cursor-grab active:cursor-grabbing">
+                  {d.icon}<span className="text-2xs font-semibold text-center leading-tight px-1">{d.label}</span>
+                </button>
+              ))}
+            </div>
           )}
-          <div className="text-2xs text-ink-tertiary">Variables: drag one into the page or into a line of text.</div>
-          {varGroups.map((g) => (
-            <section key={g.group}>
-              <button type="button" onClick={() => toggle(g.group)} className="w-full flex items-center gap-1.5 text-2xs font-semibold text-ink-secondary mb-1">
-                {isOpen(g.group) ? <ChevronDown size={13} /> : <ChevronRight size={13} />}<Braces size={13} /> {g.group}
-                <span className="ml-auto font-normal text-ink-tertiary">{g.items.length}</span>
-              </button>
-              {isOpen(g.group) && (
-                <div className="flex flex-wrap gap-1">
-                  {g.items.map((tok) => (
-                    <button key={tok} type="button" draggable onDragStart={(e) => dragStart(`tk-var-${tok}`, designChip(tok), chipLabel(tok), e.nativeEvent)} onDragEnd={dragEnd}
-                      onClick={() => addBlock(designChip(tok, true))} title="Drag into the page"
-                      className="tk-var-chip cursor-grab active:cursor-grabbing">{chipLabel(tok)}</button>
-                  ))}
-                </div>
-              )}
-            </section>
-          ))}
-        </div>
+        </section>
+        <FieldsPanel groups={groups} onPick={(tok) => (bindInsertCall(edRef, tok))}
+          onDragField={(tok, e) => dragStart(`tk-var-${tok}`, designChip(tok), tok, e.nativeEvent)} />
       </aside>
 
       <div className="flex-1 min-w-0 flex flex-col">
@@ -203,13 +195,13 @@ export default function DesignMode({ html, onChange, groups, page, bindInsert, b
           <IconBtn label="Undo" onClick={() => edRef.current?.UndoManager.undo()}><Undo2 size={16} /></IconBtn>
           <IconBtn label="Redo" onClick={() => edRef.current?.UndoManager.redo()}><Redo2 size={16} /></IconBtn>
           <span className="w-px h-5 bg-slate-200 mx-1" aria-hidden />
-          <IconBtn label="Show outlines" on={outlines} onClick={() => {
+          <TextBtn label="Outlines" on={outlines} onClick={() => {
             const ed = edRef.current; if (!ed) return;
             if (outlines) ed.stopCommand("core:component-outline"); else ed.runCommand("core:component-outline");
             setOutlines(!outlines);
-          }}><SquareDashedBottom size={16} /></IconBtn>
-          <IconBtn label="Delete selected" disabled={!selected} onClick={() => { const ed = edRef.current; const s = ed?.getSelected(); if (s) s.remove(); }}><Trash2 size={16} /></IconBtn>
-          <span className="ml-2 text-2xs text-ink-tertiary">{selected ? `Selected: ${selected}` : "Click an element on the page to select it. Double-click text to edit it."}</span>
+          }}><SquareDashedBottom size={15} /></TextBtn>
+          <TextBtn label="Delete" disabled={!sel} onClick={() => { const s = edRef.current?.getSelected(); if (s) s.remove(); }}><Trash2 size={15} /></TextBtn>
+          <span className="ml-2 text-2xs text-ink-tertiary truncate">{sel ? `Selected: ${sel.name}` : "Click an element to select it. Double-click text to type."}</span>
         </div>
         <div className="relative flex-1 min-h-0 bg-slate-100">
           {!ready && <div className="absolute inset-0 grid place-items-center text-xs text-ink-tertiary">Opening the designer…</div>}
@@ -217,23 +209,88 @@ export default function DesignMode({ html, onChange, groups, page, bindInsert, b
         </div>
       </div>
 
-      <aside className="w-72 shrink-0 bg-white border-l border-slate-200 flex flex-col overflow-y-auto" aria-label="Element settings">
-        <div className="px-3 py-2.5 border-b border-slate-200 text-xs font-semibold text-ink-primary">{selected || "Nothing selected"}</div>
-        {!selected && <p className="px-3 py-3 text-2xs text-ink-tertiary">Select an element to change its text, spacing, size, border and background.</p>}
-        <div className={selected ? "" : "hidden"}>
-          <div className="px-3 pt-3 text-2xs font-semibold text-ink-tertiary">Settings</div>
-          <div ref={traitEl} className="tk-gjs-traits" />
-          <div className="px-3 pt-3 text-2xs font-semibold text-ink-tertiary">Style</div>
-          <div ref={styleEl} className="tk-gjs-styles" />
+      <aside className="w-72 shrink-0 bg-white border-l border-slate-200 flex flex-col overflow-y-auto" aria-label="Style">
+        <div className="px-3 py-2.5 border-b border-slate-200 text-xs font-semibold text-ink-primary">{sel ? `Style: ${sel.name}` : "Style"}</div>
+        {!sel && <p className="px-3 py-3 text-2xs text-ink-tertiary">Select something on the page to change its font, size, colour, alignment and spacing.</p>}
+        {sel && simple && (
+          <div className="p-3 space-y-3.5" data-testid="simple-style">
+            <Row label="Font">
+              <select aria-label="Font" value={simple.font || ""} onChange={(e) => setSimple("font", e.target.value || null)} className="glass-input w-full rounded-lg px-2 py-1.5 text-xs">
+                <option value="">Same as the page</option>
+                {FONTS.map((f) => <option key={f} value={f}>{f}</option>)}
+              </select>
+            </Row>
+            <Row label="Size">
+              <Seg value={simple.size} onPick={(v) => setSimple("size", v)} options={SIZES.map(([k, l]) => [k, l])} />
+            </Row>
+            <Row label="Bold">
+              <button type="button" aria-pressed={simple.bold} onClick={() => setSimple("bold", !simple.bold)}
+                className={`h-8 px-3 rounded-lg border text-xs font-semibold inline-flex items-center gap-1 ${simple.bold ? "border-primary bg-primary/10 text-primary" : "border-slate-200 text-ink-secondary hover:bg-slate-50"}`}><Bold size={14} /> Bold</button>
+            </Row>
+            <Row label="Colour">
+              <div className="flex items-center gap-1.5">
+                {COLOURS.map((c) => (
+                  <button key={c} type="button" aria-label={`Colour ${c}`} aria-pressed={simple.colour === c} onClick={() => setSimple("colour", c)}
+                    className={`w-6 h-6 rounded-full border ${simple.colour === c ? "ring-2 ring-primary ring-offset-1" : "border-slate-300"}`} style={{ background: c }} />
+                ))}
+                <label className="w-6 h-6 rounded-full border border-dashed border-slate-300 relative cursor-pointer" title="Other colour">
+                  <input type="color" aria-label="Other colour" value={/^#[0-9a-f]{6}$/i.test(simple.colour || "") ? simple.colour! : "#111111"} onChange={(e) => setSimple("colour", e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" />
+                </label>
+              </div>
+            </Row>
+            <Row label="Alignment">
+              <Seg value={simple.align} onPick={(v) => setSimple("align", v)} options={ALIGN.map((a) => [a, a === "left" ? <AlignLeft key={a} size={14} aria-label="Left" /> : a === "center" ? <AlignCenter key={a} size={14} aria-label="Center" /> : <AlignRight key={a} size={14} aria-label="Right" />])} />
+            </Row>
+            <Row label="Spacing">
+              <Seg value={simple.spacing} onPick={(v) => setSimple("spacing", v)} options={SPACING.map(([k, l]) => [k, l])} />
+            </Row>
+          </div>
+        )}
+        <div className={sel ? "border-t border-slate-200" : "hidden"}>
+          <button type="button" aria-expanded={more} onClick={() => setMore((m) => !m)} className="w-full flex items-center gap-1.5 px-3 py-2.5 text-xs font-semibold text-ink-secondary hover:text-ink-primary">
+            {more ? <ChevronDown size={14} /> : <ChevronRight size={14} />} More styles
+          </button>
+          <div className={more ? "" : "hidden"}>
+            <div ref={traitEl} className={`tk-gjs-traits ${sel?.traits ? "" : "hidden"}`} />
+            <div ref={styleEl} className="tk-gjs-styles" />
+          </div>
         </div>
       </aside>
     </div>
   );
 }
 
+function bindInsertCall(ed: { current: Editor | null }, tok: string) {
+  const e = ed.current; if (!e) return;
+  const rte = e.RichTextEditor; const s = e.getSelected();
+  if (s && e.getEditing() && rte?.globalRte) { rte.globalRte.insertHTML(designChip(tok)); return; }
+  const parent = s?.parent();
+  const added = (s && parent ? parent.append(designChip(tok, true), { at: s.index() + 1 }) : e.getWrapper()?.append(designChip(tok, true))) as Component[] | undefined;
+  if (added?.[0]) e.select(added[0]);
+}
+
+function Row({ label, children }: { label: string; children: ReactNode }) {
+  return <div><div className="text-2xs font-semibold text-ink-tertiary mb-1">{label}</div>{children}</div>;
+}
+function Seg({ value, onPick, options }: { value: string | null; onPick: (v: string | null) => void; options: [string, ReactNode][] }) {
+  return (
+    <div className="inline-flex rounded-lg bg-slate-100 p-0.5 gap-0.5" role="group">
+      {options.map(([k, l]) => (
+        <button key={k} type="button" aria-pressed={value === k} onClick={() => onPick(value === k ? null : k)}
+          className={`h-7 px-2.5 rounded-md text-xs font-semibold inline-flex items-center ${value === k ? "bg-white text-primary shadow-2xs" : "text-ink-secondary hover:text-ink-primary"}`}>{l}</button>
+      ))}
+    </div>
+  );
+}
 function IconBtn({ label, onClick, children, on, disabled }: { label: string; onClick: () => void; children: ReactNode; on?: boolean; disabled?: boolean }) {
   return (
     <button type="button" aria-label={label} title={label} aria-pressed={on} disabled={disabled} onClick={onClick}
       className={`w-8 h-8 rounded-lg grid place-items-center disabled:opacity-40 ${on ? "bg-primary/10 text-primary" : "text-ink-secondary hover:bg-slate-100 hover:text-ink-primary"}`}>{children}</button>
+  );
+}
+function TextBtn({ label, onClick, children, on, disabled }: { label: string; onClick: () => void; children: ReactNode; on?: boolean; disabled?: boolean }) {
+  return (
+    <button type="button" aria-pressed={on} disabled={disabled} onClick={onClick}
+      className={`h-8 px-2.5 rounded-lg inline-flex items-center gap-1.5 text-xs font-semibold disabled:opacity-40 ${on ? "bg-primary/10 text-primary" : "text-ink-secondary hover:bg-slate-100 hover:text-ink-primary"}`}>{children}{label}</button>
   );
 }

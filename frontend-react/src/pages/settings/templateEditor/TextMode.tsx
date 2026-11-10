@@ -5,9 +5,10 @@ import {
   AlignCenter, AlignLeft, AlignRight, BetweenHorizontalEnd, BetweenVerticalEnd, Bold, Heading1, Heading2, Heading3, ImageIcon, Italic, Link2, List, ListOrdered,
   Pilcrow, Redo2, Table, Trash2, Underline, Undo2, Unlink,
 } from "lucide-react";
-import { fromTextView, textExtensions, toTextView } from "./tiptapSchema";
+import { fromTextView, setTextDisplay, textExtensions, toTextView } from "./tiptapSchema";
 import { scopeCss, styleText } from "./templateHtml";
-import VariableMenu, { type VarGroup } from "./VariableMenu";
+import FieldsPanel, { type VarGroup } from "./FieldsPanel";
+import type { FieldDisplay } from "./fieldValues";
 import { buttonClass } from "../../../components/Button";
 import type { PageBox } from "./types";
 import "./templateEditor.css";
@@ -64,13 +65,15 @@ function UrlPop({ label, icon, placeholder, onApply, extra }: { label: string; i
   );
 }
 
-export default function TextMode({ html, onChange, groups, page, bindInsert }: {
+export default function TextMode({ html, onChange, groups, page, display, bindInsert }: {
   html: string; onChange: (html: string) => void; groups: VarGroup[]; page: PageBox;
+  display: (tok: string) => FieldDisplay;
   bindInsert?: (fn: ((tok: string) => void) | null) => void;
 }) {
   // Load once per mount; the parent remounts this view when the template changes elsewhere.
   const start = useMemo(() => toTextView(html), []); // eslint-disable-line react-hooks/exhaustive-deps
   const styles = useRef(start.styles);
+  setTextDisplay(display);   // fields show real data or chips; read when the page draws them
   const editor = useEditor({
     extensions: textExtensions("Type your document, or insert a variable…"),
     content: start.body,
@@ -94,7 +97,11 @@ export default function TextMode({ html, onChange, groups, page, bindInsert }: {
   const c = () => editor.chain().focus();
 
   return (
-    <div className="flex-1 min-h-0 flex flex-col">
+    <div className="flex-1 min-h-0 flex">
+    <aside className="w-64 shrink-0 bg-white border-r border-slate-200 overflow-y-auto" aria-label="Fields list">
+      <FieldsPanel groups={groups} onPick={insertTok} />
+    </aside>
+    <div className="flex-1 min-w-0 flex flex-col">
       <div role="toolbar" aria-label="Text formatting" className="px-3 py-1.5 bg-white border-b border-slate-200 flex items-center gap-0.5 flex-wrap shrink-0">
         <Btn label="Undo" disabled={!st.undo} onClick={() => c().undo().run()}><Undo2 size={16} /></Btn>
         <Btn label="Redo" disabled={!st.redo} onClick={() => c().redo().run()}><Redo2 size={16} /></Btn>
@@ -130,18 +137,20 @@ export default function TextMode({ html, onChange, groups, page, bindInsert }: {
         {st.link
           ? <Btn label="Remove link" on onClick={() => c().unsetLink().run()}><Unlink size={16} /></Btn>
           : <UrlPop label="Add link" icon={<Link2 size={16} />} placeholder="Link address (https://…)" onApply={(href) => c().setLink({ href }).run()} />}
-        <Sep />
-        <VariableMenu groups={groups} onPick={insertTok} />
       </div>
       <div className="flex-1 min-h-0 overflow-auto bg-slate-100">
         <div className="min-h-full flex justify-center py-8 px-6">
           {css && <style>{css}</style>}
-          <div className="tk-text-sheet tk-paper bg-paper shadow-lg"
+          <div className="tk-text-sheet tk-paper bg-paper shadow-lg relative"
             style={{ width: page.w, maxWidth: "100%", minHeight: page.minH, padding: page.pad, fontFamily: `${page.font}, Arial, sans-serif` }}>
+            {/* editor-only marks: the printable area inside the margins, and where page 1 ends */}
+            <div aria-hidden className="tk-margin-guide" style={{ left: page.pad, right: page.pad, top: page.pad, ...(page.h ? { height: page.h - 2 * page.pad } : { bottom: page.pad }) }} />
+            {page.h && <div aria-hidden className="tk-page-end" style={{ top: page.h }}>End of page 1</div>}
             <EditorContent editor={editor} />
           </div>
         </div>
       </div>
+    </div>
     </div>
   );
 }
