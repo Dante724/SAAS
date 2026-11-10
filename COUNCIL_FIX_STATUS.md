@@ -75,3 +75,13 @@ Four open PRs each add a migration that revises `trg01`: #95 `nob01`, #99 `idg01
 
 ## Known flake
 SQLite `test (shard 1)` once failed with 90 "database is locked" setup errors in `test_inventory_bins_passport_stocktake`, `test_ws_a_stock_intake` and `test_wsc_inquiries` (#162, run 42187908770). It passed on the next CI run of the same code and twice locally. Suspected but not confirmed cause: on SQLite the app engine (`AsyncSessionLocal`, used by background work such as webhook retries) shares the test file but is not disposed between tests. If it recurs, capture the full log; the first locked statement and the test before it on the same worker identify the leak.
+
+## Re-check on 10 Nov (base 4160a5a6, after #99, #140, #174 and the UI merges)
+Every open council/hardening PR was dry-run merged against the current base, then fixed where needed.
+
+- **Two alembic heads:** #99 merged `idg01` → `idg02`, so with the base merged in, #107 (`ot01`) and #137 (`nn01`) each had two heads. Both are re-chained onto `idg02` and pushed. Checked on Postgres: `alembic upgrade head` from an empty database runs, and the drift test passes on Postgres and SQLite. **#95 (`nob01`, not a council PR) needs the same re-chain.** Whichever of #107 and #137 merges second must re-chain onto the other.
+- **#149 merge conflict:** import lines in `Sense.tsx` and `CreateOrderDrawer.tsx` (TeklySelect). Resolved; `tsc`, both content lints and `test:coverage` (879 tests) pass.
+- **#148 follow-up to #99:** `add_line` now uses `run_once` with the job id and line bound to the key. A reused key with a different line or job is a 422 (RED: 201 before); a key is never released after commit. 136 related tests pass on Postgres.
+- **#157 is now redundant:** the base fixed both lint errors with identical changes. Close it as superseded (PM's call).
+- **All other branches** (37) had the current base merged in and pushed, so CI re-checks them against today's code. Every merge was clean, with one alembic head and both lint commands passing.
+- **Stale local worktrees** sharing those branches were removed. The "files changed on disk" notices came from them; no work was lost.
