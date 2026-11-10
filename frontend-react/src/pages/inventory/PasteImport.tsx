@@ -1,10 +1,11 @@
 import { useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { M } from "../../components/Shell";
-import { buttonClass } from "../../components/Button";
 import { api } from "../../api/client";
 import { money } from "./types";
 import { analyzePaste, gridToRows, loadRememberedMap, saveRememberedMap, FIELD_LABELS, FIELD_ORDER } from "./pasteMap";
 import type { PasteField, PostRow } from "./pasteMap";
+import { buttonClass } from "../../components/Button";
 
 /** 13b — paste a supplier's sheet into a purchase order. Same pipeline as stock postings:
  * columns are detected (and fixable), each row is matched to the catalog by SKU / barcode /
@@ -87,23 +88,23 @@ export default function PasteImport({ onAdd, onClose, canCreate }: { onAdd: (lin
   return (
     <div className="rounded-2xl border border-slate-200 bg-slate-50/60 p-3 space-y-3">
       <div className="flex items-center justify-between">
-        <span className="text-xs font-semibold text-ink-primary flex items-center gap-1.5"><M n="content_paste" c="text-sm text-primary" />Paste from Excel</span>
+        <span className="text-xs font-bold text-ink-primary flex items-center gap-1.5"><M n="content_paste" c="text-sm text-primary" />Paste from Excel</span>
         <button type="button" aria-label="Close paste" onClick={onClose} className="text-ink-tertiary hover:text-ink-primary"><M n="close" c="text-sm" /></button>
       </div>
       {!review && (<>
-        <p className="text-2xs text-ink-tertiary">Paste rows from the supplier's sheet — SKU or barcode, name, quantity, cost. A header row is optional.</p>
+        <p className="text-[11px] text-ink-tertiary">Paste rows from the supplier's sheet — SKU or barcode, name, quantity, cost. A header row is optional.</p>
         <textarea value={text} onChange={(e) => setText(e.target.value)} rows={4} aria-label="Pasted rows"
-          placeholder={"SKU\tName\tQty\tCost\nSCR-IP13\tiPhone 13 screen\t10\t60"} className={`${fld} w-full tabular-nums`} />
+          placeholder={"SKU\tName\tQty\tCost\nSCR-IP13\tiPhone 13 screen\t10\t60"} className={`${fld} w-full font-mono`} />
         <div className="flex justify-end"><button type="button" onClick={readPaste} disabled={busy || !text.trim()} className={buttonClass("primary", "sm")}>{busy ? "Matching…" : "Match to catalog"}</button></div>
       </>)}
       {map && grid && review && (
         <div className="flex gap-2 overflow-x-auto pb-1" aria-label="Column mapping">
           {map.map((f, c) => (
             <div key={c} className="shrink-0">
-              <select value={f} onChange={(e) => remap(c, e.target.value as PasteField)} aria-label={`Column ${c + 1}`} className={`${fld} w-28`}>
+              <TeklySelect value={f} onChange={(e) => remap(c, e.target.value as PasteField)} aria-label={`Column ${c + 1}`} className={`${fld} w-28`}>
                 {FIELD_ORDER.map((o) => <option key={o} value={o}>{FIELD_LABELS[o]}</option>)}
-              </select>
-              <div className="text-2xs text-ink-tertiary mt-0.5 px-1 truncate w-28" title={grid[0]?.[c] || ""}>{grid[0]?.[c] || "—"}</div>
+              </TeklySelect>
+              <div className="text-[11px] text-ink-tertiary mt-0.5 px-1 truncate w-28" title={grid[0]?.[c] || ""}>{grid[0]?.[c] || "—"}</div>
             </div>
           ))}
         </div>
@@ -115,30 +116,30 @@ export default function PasteImport({ onAdd, onClose, canCreate }: { onAdd: (lin
               <input type="checkbox" checked={r.include} aria-label={`Include ${r.name || r.code}`} onChange={(e) => setReview(review.map((x, j) => j === i ? { ...x, include: e.target.checked } : x))} />
               {(() => {
                 const unsure = r.match_status === "unsure" && !isNew(r);
-                return <span className={`text-2xs font-semibold px-1.5 py-0.5 rounded border ${unsure ? "bg-amber-50 text-amber-800 border-amber-200" : "bg-slate-50 text-ink-secondary border-slate-200"}`}>{isNew(r) ? "new" : unsure ? "check" : "match"}</span>;
+                return <span className={`text-[11px] font-bold px-1.5 py-0.5 rounded border ${unsure ? "bg-amber-50 text-amber-800 border-amber-200" : "bg-slate-50 text-ink-secondary border-slate-200"}`}>{isNew(r) ? "new" : unsure ? "check" : "match"}</span>;
               })()}
               <div className="flex-1 min-w-0">
                 <div className="text-xs font-semibold text-ink-primary truncate">{r.name || r.code || r.mpn}</div>
                 {r.candidates && r.candidates.length > 0 ? (
-                  <select value={r.chosen} aria-label={`Product for ${r.name || r.code}`} onChange={(e) => setReview(review.map((x, j) => j === i ? { ...x, chosen: e.target.value } : x))} className={`${fld} mt-1 w-full py-1`}>
+                  <TeklySelect value={r.chosen} aria-label={`Product for ${r.name || r.code}`} onChange={(e) => setReview(review.map((x, j) => j === i ? { ...x, chosen: e.target.value } : x))} className={`${fld} mt-1 w-full py-1`}>
                     {r.candidates.map((c) => <option key={c.id} value={c.id}>{c.name}{c.sku ? ` (${c.sku})` : ""}</option>)}
                     <option value="__new__">+ Create new: {r.name || r.code}</option>
-                  </select>
+                  </TeklySelect>
                 ) : r.match_status === "matched" && r.part_id ? (
-                  <select value={r.chosen} aria-label={`Product for ${r.name || r.code}`} onChange={(e) => setReview(review.map((x, j) => j === i ? { ...x, chosen: e.target.value } : x))} className={`${fld} mt-1 w-full py-1`}>
+                  <TeklySelect value={r.chosen} aria-label={`Product for ${r.name || r.code}`} onChange={(e) => setReview(review.map((x, j) => j === i ? { ...x, chosen: e.target.value } : x))} className={`${fld} mt-1 w-full py-1`}>
                     <option value={r.part_id}>{`${r.part_name || "Existing product"}${r.sku ? ` · our SKU ${r.sku}` : ""} — matched by ${matchedBy(r)}`}</option>
                     <option value="__new__">+ Create new: {r.name || r.code}</option>
-                  </select>
-                ) : <div className="text-2xs text-ink-tertiary truncate">{`Will be created${r.code ? ` · supplier code ${r.code}` : ""}`}</div>}
+                  </TeklySelect>
+                ) : <div className="text-[11px] text-ink-tertiary truncate">{`Will be created${r.code ? ` · supplier code ${r.code}` : ""}`}</div>}
               </div>
-              <span className="text-2xs text-ink-tertiary tabular-nums">×{r.qty}</span>
-              <span className="text-2xs text-ink-secondary tabular-nums w-14 text-right">{money(r.purchase_price || 0)}</span>
+              <span className="text-[11px] text-ink-tertiary tabular-nums">×{r.qty}</span>
+              <span className="text-[11px] text-ink-secondary tabular-nums w-14 text-right">{money(r.purchase_price || 0)}</span>
             </div>
           ))}
           <div className="flex items-center justify-between pt-1">
-            <span className="text-2xs text-ink-secondary">{newCount > 0 ? `${newCount} new product${newCount === 1 ? "" : "s"} will be added to the catalog.` : "Every row matches the catalog."}</span>
+            <span className="text-[11px] text-ink-secondary">{newCount > 0 ? `${newCount} new product${newCount === 1 ? "" : "s"} will be added to the catalog.` : "Every row matches the catalog."}</span>
             <div className="flex gap-2">
-              <button type="button" onClick={() => { setReview(null); setGrid(null); setMap(null); }} className={buttonClass("secondary", "sm")}>Back</button>
+              <button type="button" onClick={() => { setReview(null); setGrid(null); setMap(null); }} className="px-3 py-1.5 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold bg-white">Back</button>
               <button type="button" onClick={add} disabled={busy || !picked.length} className={buttonClass("primary", "sm")}>{busy ? "Adding…" : `Add ${picked.length} line${picked.length === 1 ? "" : "s"}`}</button>
             </div>
           </div>

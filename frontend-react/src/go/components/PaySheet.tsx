@@ -18,7 +18,7 @@ import { useLock } from "./Lock";
 import AccountPicker, { type PayAccount, type PaymentOption, accountsFor, pickDefaultAccount } from "../../components/AccountPicker";
 
 type Ctx = { remaining: number; order_total: number; already_paid: number; location_id?: string | null; accounts_by_method: Record<string, PayAccount[]> };
-// Card covers card readers and cashless (bank / UPI) accounts on the phone.
+// Card covers card and cashless (bank / UPI) accounts on the phone; it is recorded, not taken on a reader.
 const OPTIONS: Record<"cash" | "card", PaymentOption[]> = { cash: ["cash"], card: ["card", "cashless"] };
 const allAccounts = (c: Ctx | null): PayAccount[] =>
   c ? Object.entries(c.accounts_by_method || {}).flatMap(([k, list]) => (list || []).map((a) => ({ ...a, payment_option: a.payment_option || k }))) : [];
