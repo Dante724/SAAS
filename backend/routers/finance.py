@@ -713,8 +713,8 @@ async def _record_payment(invoice_id: str, data: "PaymentIn", db: AsyncSession, 
         if data.overpay == "refund":
             await assert_perm(db, current, "can_create_returns")    # paying money back out
     if data.method == "balance":
-        # Paid out of credit the client already holds: no money moves and the ledger already shows
-        # that credit, so nothing is posted to it below. Without credit it used to erase debt (B3).
+        # Paid out of credit the client already holds: no money moves (without credit it used to
+        # erase debt, B3). The credit is spent below (spend_credit) so it can't pay twice.
         from backend.services.ledger import available_credit
         credit = await available_credit(db, current.org_id, inv.client_id, inv.order_id)
         if float(applied) > credit + 0.005:
@@ -782,6 +782,11 @@ async def _record_payment(invoice_id: str, data: "PaymentIn", db: AsyncSession, 
         await post_contact_ledger(db, current.org_id, inv.client_id, "income", -float(received),
                                   note=f"Payment for invoice {label}", ref_type="payment",
                                   ref_id=payment.id, created_by_id=current.id)
+    else:
+        from backend.services.ledger import spend_credit
+        await spend_credit(db, current.org_id, inv.client_id, float(applied), order_id=inv.order_id,
+                           parts=[(p.order_id, p.amount) for p in parts], invoice_id=inv.id, label=label,
+                           created_by_id=current.id)
     kept = refunded = Decimal(0)
     if excess > 0 and data.overpay == "keep_balance":
         kept = excess
