@@ -159,7 +159,7 @@ export default function MyWorkHub() {
                 );
               })}
               {jobs > w!.orders.length && (
-                <p className="p-3.5 text-[11px] text-ink-tertiary">Showing your {w!.orders.length} most urgent jobs. The other {jobs - w!.orders.length} are in Work orders.</p>
+                <p className="p-3.5 text-2xs text-ink-tertiary">Showing your {w!.orders.length} most urgent jobs. The other {jobs - w!.orders.length} are in Work orders.</p>
               )}
             </div>
           )}

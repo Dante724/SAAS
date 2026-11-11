@@ -6,7 +6,10 @@
 
 name: tekly
 
+# Shared by every service that runs the Tekly image (app and migrate): both load the
+# settings, and the settings refuse to start without proxy trust. Only the tunnel may set X-Forwarded-For.
 x-db-url: &db-url
+  FORWARDED_ALLOW_IPS: 172.30.0.10
   DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-tekly}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-tekly}
 
 services:
@@ -56,8 +59,6 @@ services:
       <<: *db-url
       REDIS_URL: redis://redis:6379/0
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
-      # Only the tunnel may set X-Forwarded-For, so rate limits see each visitor's real address.
-      FORWARDED_ALLOW_IPS: 172.30.0.10
     depends_on:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_started }
