@@ -161,7 +161,7 @@ async def send_to_customer(db: AsyncSession, *, org_id: str, client: Optional[Cl
                 result = await send_via_connection(conn, recipient=recipient, subject=subject, body=body,
                                                    attachment=attachment)
         if result is None:
-            adapter = _adapter_for(ch, await notif_creds(db, org_id, ch))
+            adapter = _adapter_for(ch, await notif_creds(db, org_id, ch, transactional=True))   # about their job
             simulated = isinstance(adapter, SimulatedAdapter)
             if attachment and ch == "email" and not simulated:
                 result = await adapter.send(recipient=recipient, subject=subject, body=body, attachment=attachment)
