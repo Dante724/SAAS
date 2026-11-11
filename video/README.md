@@ -25,8 +25,10 @@ npm run verify                          # clips play, caption timing, durations
 npm run studio                          # preview / tweak
 ```
 
-Scratch VO: Kokoro (open-source, runs locally), voice `af_heart` for Dani and `am_michael` for the
-closing narrator; `npx tsx scripts/vo-lines.ts` prints the lines. For the final voice-over, record one
+Voice-over: Chatterbox (Resemble AI, MIT licence, runs locally; its audio carries an inaudible
+Perth watermark). `scripts/chatterbox-vo.py` makes one WAV per line from `npx tsx scripts/vo-lines.ts`;
+Dani (male, dry and tired) and the narrator each take a short reference clip (`--dani-ref`,
+`--narrator-ref`). Setup: `uv venv --python 3.11 && uv pip install chatterbox-tts "setuptools<81"`. For the final voice-over, record one
 WAV per cut, aligned to the script timecodes, and pass it as `voiceoverPath`.
 
 Music notes (from the script): single low tone in act one; a light acoustic rhythm enters exactly on
