@@ -1957,8 +1957,8 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     try:
         from backend.services import automation as _auto
         await _auto.run(db, current.org_id, "status_changed", order=order)
-    except Exception:
-        pass
+    except Exception:  # noqa: BLE001 — never fails the status change, but never silent either
+        logging.getLogger("tekly.automation").exception("status_changed automations failed (order %s)", order.id)
     # Build 90: the asset follows the job — check-in → "Pending repair", assignment →
     # the technician's warehouse, ready → "Ready for pickup", close → back to the client.
     try:
@@ -2026,7 +2026,7 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
                                      event=_ev, status_key=data.status, actor_id=current.id)
     except Exception:  # noqa: BLE001
-        pass
+        logging.getLogger("tekly.notifications").exception("status notifications failed (order %s)", order.id)
     # No legacy fallback: the old "templates when no rule matched and the status has
     # triggers_notification" path is gone so one setting (Settings › Notifications) decides
     # what the customer gets. Flagged statuses were converted to equivalent per-status rules.

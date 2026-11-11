@@ -6,32 +6,43 @@ links to a work order, a client, a lead, a location and a parent task, and has a
 event feed for comments and files. Completion records whether it landed **on time**,
 which is what makes tasks payable (build 70's `term_condition` machinery).
 """
-from datetime import datetime
-from typing import Optional
+import logging
+from typing import Optional, Union
 
-from fastapi import APIRouter, Depends, HTTPException, Request
-from pydantic import BaseModel, Field
-from sqlalchemy import select
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from pydantic import BaseModel, Field, field_validator
+from sqlalchemy import String, and_, case, cast, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import aliased
 
+from backend.core.paging import LIMIT_CEIL, clamp
 from backend.db.database import get_db
-from backend.services.dates import parse_dt
-from backend.models import Client, Employee, Order, Task
+from backend.models import (
+    TASK_CLOSED,
+    TASK_STATUSES,
+    Client,
+    Employee,
+    Order,
+    Task,
+    normalise_task_priority,
+)
 from backend.services.auth import get_current_employee, has_perm
-from backend.services.dates import now_utc
+from backend.services.dates import now_utc, parse_dt
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
+log = logging.getLogger("tekly.tasks")
 
-STATUSES = ["todo", "in_progress", "done"]
+STATUSES = list(TASK_STATUSES)   # todo|in_progress|done|cancelled
 
 
 def _ser(t: Task, names: dict | None = None) -> dict:
     names = names or {}
-    overdue = bool(t.due_at and not t.completed_at and t.due_at < now_utc())
+    overdue = bool(t.due_at and not t.completed_at and t.status not in TASK_CLOSED
+                   and t.due_at < now_utc())
     return {
         "id": t.id, "title": t.title, "description": t.description,
         "status": t.status,
-        "priority": int(t.priority) if str(t.priority or "").lstrip("-").isdigit() else t.priority,
+        "priority": normalise_task_priority(t.priority),
         "assigned_to_id": t.assigned_to_id, "assignee_name": names.get(t.assigned_to_id),
         "assignee_ids": list(t.assignee_ids or []),
         "assignee_names": [names.get(i) for i in (t.assignee_ids or []) if names.get(i)],
@@ -43,12 +54,27 @@ def _ser(t: Task, names: dict | None = None) -> dict:
         "completed_on_time": t.completed_on_time,
         "overdue": overdue,
         "created_at": t.created_at.isoformat() if t.created_at else None,
+        "updated_at": t.updated_at.isoformat() if t.updated_at else None,
+        "archived_at": t.archived_at.isoformat() if t.archived_at else None,
+        "source": t.source or "manual", "source_ref": t.source_ref,
     }
 
 
 async def _names(db: AsyncSession, org_id: str) -> dict:
     return {e.id: e.name for e in (await db.execute(select(Employee).where(
         Employee.org_id == org_id))).scalars().all()}
+
+
+def _involves_sql(emp_id: str):
+    """SQL twin of _involves: primary owner, author, or one of the extra assignees. assignee_ids
+    is a JSON list of ids; matching the quoted id in its text form works on SQLite and Postgres."""
+    return or_(Task.assigned_to_id == emp_id, Task.created_by_id == emp_id,
+               cast(Task.assignee_ids, String).contains(f'"{emp_id}"', autoescape=True))
+
+
+def _assigned_sql(emp_id: str):
+    return or_(Task.assigned_to_id == emp_id,
+               cast(Task.assignee_ids, String).contains(f'"{emp_id}"', autoescape=True))
 
 
 @router.get("")
@@ -59,32 +85,89 @@ async def list_tasks(
     client_id: Optional[str] = None,
     mine: bool = False,
     overdue: bool = False,
+    q: Optional[str] = Query(None, max_length=200),
+    assignee: Optional[str] = None,
+    priority: Optional[str] = None,
+    archived: bool = False,
+    limit: Optional[int] = Query(None, ge=1, le=LIMIT_CEIL),
+    offset: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
-    """Tasks sorted by due date — overdue first, then today, then upcoming (the order
-    an assignee actually wants). `mine=true` gives the "My tasks" view."""
-    q = select(Task).where(Task.org_id == current.org_id)
-    if status:
-        q = q.where(Task.status == status)
-    if assigned_to_id:
-        q = q.where(Task.assigned_to_id == assigned_to_id)
-    if order_id:
-        q = q.where(Task.order_id == order_id)
-    if client_id:
-        q = q.where(Task.client_id == client_id)
-    if overdue:
-        q = q.where(Task.completed_at.is_(None), Task.due_at < now_utc())
-    rows = (await db.execute(q)).scalars().all()
-    if mine:   # assigned to me (primary or one of several), or created by me
-        rows = [t for t in rows if _involves(t, current.id)]
+    """Tasks sorted the way an assignee works: open before closed, then by due date (no date last).
 
-    far = datetime.max
-    rows.sort(key=lambda t: (t.completed_at is not None, t.due_at or far))
+    Filters (all optional, combinable; unknown parameters are ignored):
+      status    one status or a comma list (todo,in_progress)
+      q         title, description, linked job number or client name
+      assignee  "me" (assigned to me or made by me, like `mine=true`) or an employee id
+      priority  0-3 or normal/high/urgent; a comma list is fine
+      overdue   due date passed and still open
+      archived  true lists deleted (archived) tasks instead, for restore
+      limit/offset  a page; `total` is always the full match count
+    With no parameters the response keeps its old shape: every live task, plus `statuses`."""
+    oc = aliased(Client)
+    cond = [Task.org_id == current.org_id,
+            Task.archived_at.is_not(None) if archived else Task.archived_at.is_(None)]
+    if status:
+        cond.append(Task.status.in_([x.strip() for x in status.split(",") if x.strip()]))
+    if assigned_to_id:
+        cond.append(Task.assigned_to_id == assigned_to_id)
+    if order_id:
+        cond.append(Task.order_id == order_id)
+    if client_id:
+        cond.append(Task.client_id == client_id)
+    if overdue:
+        cond += [Task.completed_at.is_(None), Task.status.notin_(TASK_CLOSED), Task.due_at < now_utc()]
+    if mine or (assignee or "").strip().lower() == "me":
+        cond.append(_involves_sql(current.id))
+    elif assignee and assignee.strip():
+        cond.append(_assigned_sql(assignee.strip()))
+    if priority not in (None, ""):
+        try:
+            levels = sorted({normalise_task_priority(x.strip()) for x in priority.split(",") if x.strip()})
+        except ValueError:
+            raise HTTPException(422, "priority must be 0-3 or normal/high/urgent")
+        cond.append(Task.priority.in_(levels))
+    base = (select(Task)
+            .outerjoin(Order, and_(Order.id == Task.order_id, Order.org_id == current.org_id))
+            .outerjoin(Client, and_(Client.id == Task.client_id, Client.org_id == current.org_id))
+            .outerjoin(oc, and_(oc.id == Order.client_id, oc.org_id == current.org_id))
+            .where(*cond))
+    term = (q or "").strip()
+    if term:
+        base = base.where(or_(*[col.icontains(term, autoescape=True) for col in (
+            Task.title, Task.description, Order.order_number, Client.name, oc.name)]))
+    total = (await db.execute(select(func.count()).select_from(
+        base.with_only_columns(Task.id).subquery()))).scalar_one()
+    ordered = base.order_by(
+        case((Task.status.in_(TASK_CLOSED), 1), else_=0),
+        case((Task.due_at.is_(None), 1), else_=0), Task.due_at, Task.created_at.desc(), Task.id)
+    if limit is not None:
+        ordered = ordered.limit(clamp(limit))
+    if offset:
+        ordered = ordered.offset(offset)
+    rows = (await db.execute(ordered)).scalars().all()
+
     names = await _names(db, current.org_id)
     numbers = await _order_numbers(db, current.org_id, [t.order_id for t in rows])
-    return {"items": [{**_ser(t, names), "order_number": numbers.get(t.order_id)} for t in rows],
-            "statuses": STATUSES}
+    clients = await _client_names(db, current.org_id, rows)
+    out = {"items": [{**_ser(t, names), "order_number": numbers.get(t.order_id),
+                      "client_name": clients.get(t.id)} for t in rows],
+           "statuses": STATUSES, "total": total}
+    if limit is not None:
+        out.update(limit=clamp(limit), offset=offset)
+    return out
+
+
+async def _client_names(db: AsyncSession, org_id: str, rows) -> dict:
+    """task id → client name: the task's own client, else the linked job's client."""
+    oids = {t.order_id for t in rows if t.order_id and not t.client_id}
+    order_client = dict((await db.execute(select(Order.id, Order.client_id).where(
+        Order.id.in_(oids), Order.org_id == org_id))).all()) if oids else {}
+    cids = {t.client_id for t in rows if t.client_id} | {c for c in order_client.values() if c}
+    names = dict((await db.execute(select(Client.id, Client.name).where(
+        Client.id.in_(cids), Client.org_id == org_id))).all()) if cids else {}
+    return {t.id: names.get(t.client_id or order_client.get(t.order_id)) for t in rows}
 
 
 async def _order_numbers(db: AsyncSession, org_id: str, order_ids) -> dict:
@@ -102,13 +185,18 @@ class TaskIn(BaseModel):
     description: Optional[str] = None
     assigned_to_id: Optional[str] = None
     assignee_ids: Optional[list[str]] = None   # 144ex: multiple technicians
-    priority: int = 0
+    priority: Union[int, str] = 0              # 0-3, or the legacy normal/high/urgent
     due_at: Optional[str] = None
     order_id: Optional[str] = None
     client_id: Optional[str] = None
     lead_id: Optional[str] = None
     location_id: Optional[str] = None
     parent_task_id: Optional[str] = None
+
+    @field_validator("priority", mode="before")
+    @classmethod
+    def _priority(cls, v):
+        return normalise_task_priority(v)
 
 
 @router.post("", status_code=201)
@@ -170,7 +258,7 @@ async def request_part(
         task = TaskIn(
             title=f"Order part: {data.description.strip()}{'' if qty == '1' else f' ×{qty}'} for {order.order_number}",
             description=(data.note or "").strip() or None, priority=1, order_id=order.id, client_id=order.client_id)
-        result = await _create_task(task, [who] if who else [], who, db, current)
+        result = await _create_task(task, [who] if who else [], who, db, current, source="go_part_request")
     except BaseException:
         await claim.release(db)
         raise
@@ -178,7 +266,8 @@ async def request_part(
     return result
 
 
-async def _create_task(data: TaskIn, ids: list, primary, db: AsyncSession, current: Employee):
+async def _create_task(data: TaskIn, ids: list, primary, db: AsyncSession, current: Employee,
+                       source: str = "manual"):
     t = Task(
         org_id=current.org_id, title=data.title, description=data.description,
         assigned_to_id=primary, assignee_ids=ids, created_by_id=current.id,
@@ -186,11 +275,11 @@ async def _create_task(data: TaskIn, ids: list, primary, db: AsyncSession, curre
         location_id=data.location_id or current.location_id,
         parent_task_id=data.parent_task_id, priority=data.priority,
         due_at=parse_dt(data.due_at, "due_at") if data.due_at else None,
-        status="todo")
+        status="todo", source=source)
     db.add(t)
     await db.flush()
     await _feed(db, current, t, f"Task created: {t.title}")
-    await _notify(db, current, t, "assigned")
+    await _notify(db, current, t, "assigned", recipients=ids)
     await db.commit()
     await db.refresh(t)
     return {**_ser(t, await _names(db, current.org_id)),
@@ -216,7 +305,8 @@ async def get_task(
             Client.id == t.client_id, Client.org_id == current.org_id))).scalar_one_or_none()
         d["client_name"] = c.name if c else None
     d["subtasks"] = [_ser(x) for x in (await db.execute(select(Task).where(
-        Task.parent_task_id == t.id, Task.org_id == current.org_id))).scalars().all()]
+        Task.parent_task_id == t.id, Task.org_id == current.org_id,
+        Task.archived_at.is_(None)))).scalars().all()]
     return d
 
 
@@ -224,12 +314,17 @@ class TaskPatch(BaseModel):
     title: Optional[str] = None
     description: Optional[str] = None
     status: Optional[str] = None
-    priority: Optional[int] = None
+    priority: Optional[Union[int, str]] = None   # 0-3, or the legacy normal/high/urgent
     assigned_to_id: Optional[str] = None
     assignee_ids: Optional[list[str]] = None   # 144ex: full technician set (replaces existing)
     due_at: Optional[str] = None
     client_id: Optional[str] = None
     order_id: Optional[str] = None
+
+    @field_validator("priority", mode="before")
+    @classmethod
+    def _priority(cls, v):
+        return None if v is None else normalise_task_priority(v)
 
 
 @router.patch("/{task_id}")
@@ -240,10 +335,16 @@ async def update_task(
 ):
     t = await _load(db, current, task_id)
     await _check_may_change(db, current, t)
+    if t.archived_at is not None:
+        raise HTTPException(409, "This task was deleted. Restore it before changing it.")
+    if data.status is not None and data.status not in STATUSES:
+        raise HTTPException(422, f"status must be one of {STATUSES}")
     new_people = list(data.assignee_ids or []) + ([data.assigned_to_id] if data.assigned_to_id else [])
     if new_people:
         await _check_assign(db, current, [p for p in new_people if p not in (t.assignee_ids or []) and p != t.assigned_to_id])
     prev_assignee, prev_status = t.assigned_to_id, t.status
+    from backend.services.notification_rules import task_people
+    prev_people = task_people(t)
 
     for f in ("title", "description", "priority", "assigned_to_id", "client_id", "order_id"):
         v = getattr(data, f)
@@ -265,10 +366,8 @@ async def update_task(
     if data.due_at is not None:
         t.due_at = parse_dt(data.due_at, "due_at") if data.due_at else None
     if data.status is not None:
-        if data.status not in STATUSES:
-            raise HTTPException(422, f"status must be one of {STATUSES}")
         t.status = data.status
-        if data.status == "done" and not t.completed_at:
+        if data.status == "done" and (prev_status != "done" or not t.completed_at):
             t.completed_at = now_utc()
             # on-time analysis: no due date means it can't be late
             t.completed_on_time = (t.due_at is None) or (t.completed_at <= t.due_at)
@@ -276,13 +375,20 @@ async def update_task(
                         + ("" if t.completed_on_time else " (late)"))
             await _notify(db, current, t, "completed")
             await _pay(db, current, t)
-        elif data.status != "done":
+        elif data.status == "cancelled" and prev_status != "cancelled":
+            t.completed_at, t.completed_on_time = now_utc(), None
+            await _feed(db, current, t, "Task cancelled")
+        elif data.status not in TASK_CLOSED:
             t.completed_at = None
             t.completed_on_time = None
 
     if data.assigned_to_id is not None and data.assigned_to_id != prev_assignee:
         await _feed(db, current, t, "Assignee changed")
-        await _notify(db, current, t, "assigned")
+    # Alerts: people who were just added hear "assigned" (once, never again on later edits);
+    # other edits are a "changed", which the bell collapses while one is still unread.
+    added = task_people(t) - prev_people
+    if added:
+        await _notify(db, current, t, "assigned", recipients=added)
     elif data.status is None or data.status == prev_status:
         await _notify(db, current, t, "changed")
 
@@ -298,11 +404,36 @@ async def delete_task(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
+    """Soft delete: the task leaves every list but keeps its feed, timer time and payroll
+    links; POST /{id}/restore brings it back."""
     t = await _load(db, current, task_id)
     await _check_may_change(db, current, t)
-    await db.delete(t)
-    await db.commit()
+    if t.archived_at is None:
+        t.archived_at = now_utc()
+        await _feed(db, current, t, "Task deleted")
+        await db.commit()
     return {"ok": True}
+
+
+@router.post("/{task_id}/restore")
+async def restore_task(
+    task_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    t = await _load(db, current, task_id)
+    await _check_may_change(db, current, t)
+    if t.archived_at is not None:
+        if t.source_ref and t.status not in TASK_CLOSED:
+            from backend.services.auto_tasks import open_task_for
+            if await open_task_for(db, t.org_id, t.source_ref) is not None:
+                raise HTTPException(409, "An open copy of this automatic task already exists.")
+        t.archived_at = None
+        await _feed(db, current, t, "Task restored")
+        await db.commit()
+        await db.refresh(t)
+    return {**_ser(t, await _names(db, current.org_id)),
+            "order_number": (await _order_numbers(db, current.org_id, [t.order_id])).get(t.order_id)}
 
 
 # ── event feed ───────────────────────────────────────────────────────────────
@@ -375,15 +506,17 @@ async def _feed(db: AsyncSession, current: Employee, t: Task, body: str,
                          author_id=current.id, author_name=current.name))
 
 
-async def _notify(db: AsyncSession, current: Employee, t: Task, event: str) -> None:
-    """Internal notifications for tasks. Orderry's rule: you are never notified about
-    something you did yourself."""
+async def _notify(db: AsyncSession, current: Employee, t: Task, event: str,
+                  recipients=None) -> None:
+    """Internal notifications for tasks: staff bell + push, plus any email/SMS task rules.
+    Orderry's rule: you are never notified about something you did yourself. A failure is
+    logged and never fails the request."""
     try:
         from backend.services import notification_rules as nr
         await nr.notify_task(db, org_id=current.org_id, task=t, event=event,
-                             actor_id=current.id)
-    except Exception:
-        pass
+                             actor_id=current.id, recipients=recipients)
+    except Exception:  # noqa: BLE001
+        log.warning("task notification failed (task=%s event=%s)", t.id, event, exc_info=True)
 
 
 async def _pay(db: AsyncSession, current: Employee, t: Task) -> None:
@@ -392,5 +525,5 @@ async def _pay(db: AsyncSession, current: Employee, t: Task) -> None:
     try:
         from backend.services.payroll import CommissionEngine
         await CommissionEngine(db, current.org_id).accrue_for_task(t)
-    except Exception:
-        pass
+    except Exception:  # noqa: BLE001 — logged; completing the task still succeeds
+        log.exception("task commission accrual failed (task=%s)", t.id)

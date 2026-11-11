@@ -225,7 +225,7 @@ async def test_missed_call_creates_followup_task_when_on(client, tenant, db):
     task = (await db.execute(select(Task).where(
         Task.id == r.json()["follow_up_task_id"]))).scalar_one()
     assert "+15550101" in task.title or "Call back" in task.title
-    assert task.priority == "urgent"
+    assert task.priority == 2          # "urgent" in the config → 2 (tk01: integer priority)
 
     # a completed (answered) call makes no task
     r2 = await client.post(f"/api/comms/calls/webhook?org_id={me['org_id']}", json={

@@ -92,7 +92,7 @@ async def _dashboard(db, oid: str) -> dict:
 
     pending_tasks = (await db.execute(
         select(func.count()).select_from(Task)
-        .where(Task.org_id == oid, Task.status != "done")
+        .where(Task.org_id == oid, Task.status.notin_(("done", "cancelled")), Task.archived_at.is_(None))
     )).scalar() or 0
 
     # Recent orders
@@ -1587,7 +1587,7 @@ async def home_feed(
     # the same rule as the dashboard tile and the low-stock report (services/revenue)
     low = (await db.execute(low_stock_count_query(oid))).scalar() or 0
 
-    task_conds = [Task.org_id == oid, Task.status != "done"]
+    task_conds = [Task.org_id == oid, Task.status.notin_(("done", "cancelled")), Task.archived_at.is_(None)]
     if own:
         task_conds.append(Task.assigned_to_id == current.id)
     open_tasks = (await db.execute(select(func.count()).select_from(Task).where(*task_conds))).scalar() or 0

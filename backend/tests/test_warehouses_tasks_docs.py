@@ -468,8 +468,11 @@ async def test_task_delete_and_mine_filter(client, tenant, db):
 
     d = await client.delete(f"/api/tasks/{mine['id']}", headers=tenant)
     assert d.status_code == 200
-    assert (await db.execute(select(Task).where(
-        Task.id == mine["id"]))).scalar_one_or_none() is None
+    # tasks phase 0: delete archives (soft delete) and the task leaves the list
+    row = (await db.execute(select(Task).where(Task.id == mine["id"]))).scalar_one()
+    assert row.archived_at is not None
+    lst = (await client.get("/api/tasks?mine=true", headers=tenant)).json()
+    assert all(t["id"] != mine["id"] for t in lst["items"])
 
 
 # ══ Build 90: asset warehouses + status automation ═══════════════════════════

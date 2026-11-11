@@ -349,6 +349,14 @@ async def _own_employee(db, org_id, emp_id):
         Employee.id == emp_id, Employee.org_id == org_id))).scalar_one_or_none()
 
 
+def _priority_or_normal(value) -> int:
+    from backend.models import normalise_task_priority
+    try:
+        return normalise_task_priority(value)
+    except ValueError:
+        return 0
+
+
 async def _task_for_missed_call(db, org_id, call, client_id):
     from backend.models import AutomationSetting, Client, Task
     setting = (await db.execute(select(AutomationSetting).where(
@@ -373,8 +381,8 @@ async def _task_for_missed_call(db, org_id, call, client_id):
                     f"{call.created_at:%Y-%m-%d %H:%M} — return the call.",
         assigned_to_id=who or await _own_employee(db, org_id, cfg.get("assign_to")),
         client_id=client_id,
-        priority=cfg.get("priority", "normal"),   # whatever the config specifies
-        status="todo")
+        priority=_priority_or_normal(cfg.get("priority")),   # legacy words → 0-3
+        status="todo", source="missed_call")
     db.add(task)
     await db.commit()
     await db.refresh(task)

@@ -26,6 +26,7 @@ VALID_KINDS = {
     "job.assigned", "schedule.changed", "chat.message",
     "estimate.approved", "appointment.cancelled", "payment.received",
     "inventory.reorder", "membership.alert",
+    "task.assigned", "task.changed", "task.completed",   # tasks phase 0: tasks reach the bell
 }
 
 
