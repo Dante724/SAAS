@@ -14,7 +14,7 @@ from datetime import datetime
 import pytest
 from sqlalchemy import select
 
-from backend.services.dates import now_utc
+from backend.tests.shop_day import shop_today_for
 
 
 async def _register(client):
@@ -249,7 +249,7 @@ async def test_mark_paid_takes_the_money_out_of_the_chosen_account(client, db):
     r = await client.post(f"/api/payroll/runs/{run['id']}/pay", json={"account_id": till}, headers=H)
     assert r.status_code == 200, r.text
     assert await _account_balance(client, H, till) == -1000          # was 0: no cash left the till
-    today = now_utc().date().isoformat()
+    today = (await shop_today_for(client, H)).isoformat()
     pnl = (await client.get(f"/api/finance/pnl?date_from={today}&date_to={today}", headers=H)).json()
     assert pnl["opex"] == 1000                                        # was 0: missing from the P&L
     txn = r.json()["cash_txn_id"]
@@ -270,7 +270,7 @@ async def test_void_reverses_ledger_and_cash_and_frees_the_period(client, db):
     r = await client.post(f"/api/payroll/runs/{run['id']}/void", json={"reason": "wrong salary"}, headers=H)
     assert r.status_code == 200, r.text
     assert await _account_balance(client, H, till) == 0
-    today = now_utc().date().isoformat()
+    today = (await shop_today_for(client, H)).isoformat()
     assert (await client.get(f"/api/finance/pnl?date_from={today}&date_to={today}", headers=H)).json()["opex"] == 0
     assert await _balance(client, H, emp) == 0
     assert (await client.post(f"/api/payroll/runs/{run['id']}/void", json={"reason": "again"}, headers=H)).status_code == 409

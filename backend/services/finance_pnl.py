@@ -15,7 +15,7 @@ the same revenue as the dashboards and every report.
   customer). This is cash-basis while revenue is accrual — a pragmatic owner view; labelled as
   such in the UI.
 """
-from datetime import datetime, timedelta
+from datetime import datetime, timedelta, timezone
 from typing import Optional
 
 from sqlalchemy import func, select
@@ -23,21 +23,23 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import Invoice, Transaction
 from backend.services.money import q2
-from backend.services.dates import now_utc
+from backend.services.dates import now_utc, range_edge, shop_tzname, zone
 
 _EXCLUDED_INVOICE = ("draft", "void", "cancelled", "canceled")
 
 
-def _end_of_day(dt: datetime) -> datetime:
-    if dt.time() == datetime.min.time():
-        return dt + timedelta(days=1) - timedelta(seconds=1)
-    return dt
+def _shop_date(instant: datetime, tz: str) -> str:
+    """The shop's calendar date of a naive-UTC instant (the period the owner asked for)."""
+    return instant.replace(tzinfo=timezone.utc).astimezone(zone(tz)).strftime("%Y-%m-%d")
 
 
 async def compute_pnl(db: AsyncSession, org_id: str, date_from: Optional[str],
                       date_to: Optional[str], location_id: Optional[str] = None) -> dict:
-    df = datetime.fromisoformat(date_from) if date_from else now_utc() - timedelta(days=30)
-    dt = _end_of_day(datetime.fromisoformat(date_to)) if date_to else now_utc() + timedelta(days=1)
+    # A date-only range is the shop's day, as on Total profit and every other report: read as UTC
+    # days the P&L for "today" missed the shop's evening and counted the next morning.
+    tz = await shop_tzname(db, org_id, location_id)
+    df = range_edge(date_from, tz, end=False) if date_from else now_utc() - timedelta(days=30)
+    dt = range_edge(date_to, tz, end=True) if date_to else now_utc() + timedelta(days=1)
 
     inv_date = func.coalesce(Invoice.issued_at, Invoice.created_at)
     inv_count = int((await db.execute(select(func.count()).where(
@@ -47,7 +49,7 @@ async def compute_pnl(db: AsyncSession, org_id: str, date_from: Optional[str],
     from backend.services.revenue import net_sales, operating_expenses
     ns = await net_sales(db, org_id, df, dt, location_id)
     revenue, tax_collected, gross_sales, cogs = ns["revenue"], ns["tax"], ns["gross"], ns["cogs"]
-    opex = await operating_expenses(db, org_id, df, dt)
+    opex = await operating_expenses(db, org_id, df, dt, tz)
 
     txn_date = func.coalesce(Transaction.actual_date, Transaction.created_at)
     # 144ba — payment-processing fees are real money the shop loses, posted as their own `fee`
@@ -76,6 +78,6 @@ async def compute_pnl(db: AsyncSession, org_id: str, date_from: Optional[str],
         "net_profit": q2(net_profit),
         "net_margin_pct": pct(net_profit),
         "invoice_count": inv_count,
-        "date_from": df.strftime("%Y-%m-%d"),
-        "date_to": dt.strftime("%Y-%m-%d"),
+        "date_from": _shop_date(df, tz),
+        "date_to": _shop_date(dt, tz),
     }
