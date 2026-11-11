@@ -20,7 +20,8 @@ type BayOrder = {
   client?: string | null; device?: string | null; lines: MyLine[];
 };
 type Active = { id: string; order_number?: string; order_line_id?: string | null; duration_sec?: number } | null;
-type Work = { today_seconds: number; week_seconds: number; active: Active; lines: MyLine[]; orders: BayOrder[] };
+// `orders` holds the first jobs only (most urgent first); `orders_total` counts them all.
+type Work = { today_seconds: number; week_seconds: number; active: Active; lines: MyLine[]; orders: BayOrder[]; orders_total?: number };
 type Entry = { id: string; order_number?: string; line_description?: string; category?: string; duration_min?: number; started_at?: string; state?: string; disputed?: boolean; dispute_note?: string };
 
 const hm = (s: number) => { const m = Math.floor((s || 0) / 60); return `${Math.floor(m / 60)}h ${m % 60}m`; };
@@ -74,6 +75,7 @@ export default function MyWorkHub() {
   }
 
   const card = "bg-white rounded-2xl border border-slate-200/90 shadow-sm";
+  const jobs = w?.orders_total ?? (w?.orders || []).length;
   return (
     <Shell title="My work">
       <div className="flex-1 overflow-y-auto p-6">
@@ -97,7 +99,7 @@ export default function MyWorkHub() {
 
         {/* my bay — one card per job: status + one-tap advance + checklist + clock-in */}
         <div className={card}>
-          <div className="px-4 py-2.5 border-b border-slate-200 flex items-center gap-2"><M n="engineering" c="text-primary text-sm" /><h3 className="text-xs font-bold text-ink-primary">My bay</h3><span className="ml-auto text-[11px] text-ink-tertiary font-semibold">{(w?.orders || []).length} job{(w?.orders || []).length === 1 ? "" : "s"}</span></div>
+          <div className="px-4 py-2.5 border-b border-slate-200 flex items-center gap-2"><M n="engineering" c="text-primary text-sm" /><h3 className="text-xs font-bold text-ink-primary">My bay</h3><span className="ml-auto text-[11px] text-ink-tertiary font-semibold">{jobs} job{jobs === 1 ? "" : "s"}</span></div>
           {(w?.orders || []).length === 0 ? (
             <p className="p-4 text-xs text-ink-tertiary">Nothing assigned to you on open work orders.</p>
           ) : (
@@ -154,6 +156,9 @@ export default function MyWorkHub() {
                   </div>
                 );
               })}
+              {jobs > w!.orders.length && (
+                <p className="p-3.5 text-[11px] text-ink-tertiary">Showing your {w!.orders.length} most urgent jobs. The other {jobs - w!.orders.length} are in Work orders.</p>
+              )}
             </div>
           )}
         </div>

@@ -43,8 +43,9 @@ async def test_my_work_when_tech_owns_every_open_job(client, tenant, db):
     assert r.status_code == 200, r.text
     assert s["max_params"] <= MAX_PARAMS, f"My Work bound {s['max_params']} parameters"
     assert s["statements"] < 60, f"My Work ran {s['statements']} statements (one per job?)"
+    from backend.routers.timeclock import MY_WORK_CAP
     orders = r.json()["orders"]
-    assert len(orders) == N
+    assert len(orders) == min(N, MY_WORK_CAP) and r.json()["orders_total"] == N   # capped since recheck 2
     assert all(o["device"].startswith("Apple iPhone") for o in orders)
     assert all(len(o["lines"]) == 1 for o in orders)
 

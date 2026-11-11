@@ -1986,8 +1986,14 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         _target = q2(float(order.total or 0) - float(order.written_off or 0)) if is_closing else 0.0
         _delta = q2(_target - _net)
         if _delta:
-            _note = (f"Order {order.order_number} ready" if is_closing
-                     else f"Order {order.order_number} reopened")
+            # a drop's adjustment says so: two "ready" rows on a statement hid the write-off
+            if is_dropping:
+                _note = (f"Order {order.order_number} dropped: balance written off"
+                         if float(order.written_off or 0) else f"Order {order.order_number} dropped")
+            elif is_closing:
+                _note = f"Order {order.order_number} ready"
+            else:
+                _note = f"Order {order.order_number} reopened"
             await post_contact_ledger(
                 db, current.org_id, order.client_id, "charge", _delta,
                 note=_note, ref_type="order", ref_id=order.id, created_by_id=current.id)
