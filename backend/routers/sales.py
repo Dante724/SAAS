@@ -895,10 +895,14 @@ async def _return_sale_items(sale_id: str, data: SaleReturnIn, db: AsyncSession,
                         reason=ret.reason, created_by_id=current.id)
         db.add(refund)
         await db.flush()
-        from backend.routers.cash import post_transaction
-        await post_transaction(db, current.org_id, acc.id, "refund", -money_back,
-                               comment=f"Refund for sale {sale.sale_number}", ref_type="refund",
-                               ref_id=refund.id, employee_id=current.id)
+        from backend.routers.cash import open_drawer_shift, post_transaction
+        txn = await post_transaction(db, current.org_id, acc.id, "refund", -money_back,
+                                     comment=f"Refund for sale {sale.sale_number}", ref_type="refund",
+                                     ref_id=refund.id, employee_id=current.id)
+        # M9: cash handed back out of a till leaves that drawer, the same way the sale's cash leg
+        # entered it (post_transaction links income/expense only); otherwise every close after a
+        # cash return read short by the refund.
+        txn.shift_id = await open_drawer_shift(db, current.org_id, acc)
     if gift_back > 0:
         leg = (await db.execute(select(GiftCardLedger).where(
             GiftCardLedger.ref_type == "sale", GiftCardLedger.ref_id == sale.id))).scalars().first()
