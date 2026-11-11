@@ -1108,7 +1108,6 @@ async def move_balance(
                               entry_type=data.kind, amount=signed, note=data.note,
                               created_by_id=current.id)
     db.add(entry)
-    c.balance = float(c.balance or 0) + signed
     # 144av: an advance (client pays cash in) and a payout (we return cash) physically move the
     # drawer, so mirror them into the cashbox. An adjustment is a book correction → no cash moves.
     if data.account_id and data.kind in ("advance", "payout"):
@@ -1118,6 +1117,11 @@ async def move_balance(
                                "income" if data.kind == "advance" else "expense", delta,
                                comment=f"Client {data.kind}", ref_type="client", ref_id=client_id,
                                employee_id=current.id)
+    # Atomic UPDATE like post_contact_ledger (and after the cashbox, keeping the Account → Client
+    # lock order): `c.balance = c.balance + signed` lost concurrent movements and left the
+    # balance disagreeing with its own ledger.
+    from backend.services.money import add_to_column
+    await add_to_column(db, c, "balance", signed)
     await db.commit()
     return {"id": entry.id, "balance": float(c.balance)}
 
