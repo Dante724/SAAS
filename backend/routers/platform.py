@@ -11,6 +11,7 @@ from backend.config import settings
 from backend.core.observability import render_metrics
 from backend.db.database import get_db
 from backend.models import AuditLog, Client, Employee, Organisation
+from backend.services import ratelimit
 from backend.services.auth import get_current_employee, require_perm
 
 router = APIRouter(tags=["platform"])
@@ -35,10 +36,13 @@ async def metrics(authorization: str | None = Header(None)):
 
 @router.get("/api/readyz", tags=["meta"])
 async def readyz(db: AsyncSession = Depends(get_db)):
-    """Readiness: verifies the DB is reachable (for k8s/LB probes)."""
+    """Readiness: verifies the DB is reachable (for k8s/LB probes). Also reports which store
+    the rate limiter is counting in ("redis" | "local" | "local (redis unreachable)") — the
+    unreachable case is a warning for operators, not a reason to pull the instance (M19)."""
     try:
         await db.execute(text("SELECT 1"))
-        return {"status": "ready", "db": "ok", "database": "up"}
+        return {"status": "ready", "db": "ok", "database": "up",
+                "rate_limit_store": await ratelimit.store_status()}
     except Exception:  # noqa: BLE001
         # The driver error names hosts, users and database names — log it, don't publish it.
         log.exception("readiness check: database unreachable")
@@ -61,6 +65,7 @@ async def get_branding(
     return {
         "name": org.name,
         "primary_color": org.brand_primary_color,
+        "doc_color_on": bool(getattr(org, "doc_brand_color_on", False)),   # the colour on printed documents (opt-in)
         "custom_domain": org.brand_custom_domain,
         "email_from": org.brand_email_from,
         "hide_powered_by": org.brand_hide_powered_by,
@@ -83,6 +88,8 @@ async def set_branding(
             setattr(org, col, payload[field])
     if "hide_powered_by" in payload:
         org.brand_hide_powered_by = bool(payload["hide_powered_by"])
+    if "doc_color_on" in payload:
+        org.doc_brand_color_on = bool(payload["doc_color_on"])
     await db.commit()
     return {"ok": True}
 

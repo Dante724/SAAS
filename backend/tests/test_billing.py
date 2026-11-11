@@ -813,7 +813,8 @@ def _deployed(env, **kw):
     base = dict(ENVIRONMENT=env, SECRET_KEY="s" * 48, CORS_ORIGINS="https://app.example.com",
                 TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode(),
                 DATABASE_URL="postgresql+asyncpg://u@db/tekly", PUBLIC_BASE_URL="https://app.example.com",
-                SMTP_HOST="smtp.example.com", SMTP_FROM="no-reply@example.com")
+                SMTP_HOST="smtp.example.com", SMTP_FROM="no-reply@example.com",
+                NO_REVERSE_PROXY=True, SINGLE_WORKER=True)  # M18/M20: deployed needs proxy trust and REDIS_URL, or these explicit opt-outs
     return Settings(_env_file=None, **{**base, **kw})
 
 

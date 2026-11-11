@@ -382,6 +382,7 @@ def _strong(**kw):
     return dict(ENVIRONMENT="production", SECRET_KEY="x" * 48, CORS_ORIGINS="https://app.tekly.test",
                 DATABASE_URL="postgresql+asyncpg://u:p@db/tekly", PUBLIC_BASE_URL="https://app.tekly.test",
                 SMTP_HOST="smtp.test", SMTP_FROM="no-reply@tekly.test",
+                NO_REVERSE_PROXY=True, SINGLE_WORKER=True,  # M18/M20: deployed needs proxy trust and REDIS_URL, or these explicit opt-outs
                 TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode(),
                 STRIPE_BILLING_SECRET_KEY="sk_test_x", STRIPE_BILLING_WEBHOOK_SECRET="whsec_x",
                 **{f"STRIPE_BILLING_PRICE_{p}_{t}": f"price_{p}_{t}".lower()

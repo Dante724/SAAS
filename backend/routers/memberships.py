@@ -25,7 +25,7 @@ from backend.models import (
 )
 from backend.services import memberships as svc
 from backend.services.auth import get_current_employee, has_perm, require_perm
-from backend.services.dates import shop_today
+from backend.services.dates import org_today, shop_today
 
 router = APIRouter(prefix="/api/memberships", tags=["memberships"])
 
@@ -161,7 +161,7 @@ async def _membership_out(db: AsyncSession, m: Membership, *, detail: bool = Fal
     client = (await db.execute(select(Client).where(Client.id == m.client_id))).scalar_one_or_none()
     device = (await db.execute(select(Device).where(Device.id == m.device_id))).scalar_one_or_none() \
         if m.device_id else None
-    today = await shop_today(db, m.org_id)     # the shop's day, not the server's
+    today = await shop_today(db, m.org_id)
     unpaid = (await db.execute(select(func.coalesce(func.sum(MembershipPeriod.amount), 0)).where(
         MembershipPeriod.membership_id == m.id, MembershipPeriod.paid_at.is_(None),
         MembershipPeriod.due_on <= today))).scalar_one() or 0
@@ -449,7 +449,7 @@ async def snooze_offer(order_id: str, db: AsyncSession = Depends(get_db),
         raise HTTPException(404, "Order not found")
     org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one()
     client = (await db.execute(select(Client).where(Client.id == order.client_id))).scalar_one()
-    client.membership_offer_snoozed_until = await shop_today(db, current.org_id) + timedelta(days=org.membership_prompt_snooze_days or 0)
+    client.membership_offer_snoozed_until = org_today(org) + timedelta(days=org.membership_prompt_snooze_days or 0)
     await db.commit()
     return {"ok": True}
 

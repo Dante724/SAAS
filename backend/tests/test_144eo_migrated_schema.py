@@ -13,17 +13,27 @@ import os
 import sqlite3
 import subprocess
 import sys
+import uuid
 from pathlib import Path
 
 import pytest
 from alembic.autogenerate import compare_metadata
 from alembic.migration import MigrationContext
-from sqlalchemy import create_engine
+from sqlalchemy.engine import make_url
+from sqlalchemy.ext.asyncio import create_async_engine
+from sqlalchemy.pool import NullPool
 
 from backend.db.database import Base
 from backend.models import all_models  # noqa: F401 — registers every table
+from backend.tests import db_isolation
 
 REPO = Path(__file__).resolve().parents[2]
+# The migrated database follows the suite's backend: Postgres when TEST_DATABASE_URL points at one
+# (10+ migrations branch on the dialect, so the SQLite gate alone misses Postgres-only drift),
+# SQLite otherwise. conftest already made this URL unique to the process; the migrated database is
+# derived from it with its own suffix, so it never collides with the suite's create_all database.
+_SUITE_URL = os.environ.get("TEST_DATABASE_URL") or os.environ.get("DATABASE_URL", "")
+MIGRATED_ON_PG = _SUITE_URL.startswith("postgresql")
 
 # ── Known, reviewed differences (tracked debt). The gate fails on anything NOT listed here, and
 # also fails if a listed item is no longer a difference — so this list can only shrink. ──
@@ -34,26 +44,47 @@ KNOWN_MISSING_FKS: set[tuple[str, str]] = set()
 KNOWN_TYPE_DIFFS = {("clients", "billing_address")}
 
 
-@pytest.fixture(scope="module")
-def migrated_db(tmp_path_factory):
-    """A fresh SQLite database built ONLY by `alembic upgrade head`."""
-    path = tmp_path_factory.mktemp("migrated") / "migrated.db"
-    env = dict(os.environ, ENVIRONMENT="test", SEED_DEMO="false",
-               DATABASE_URL=f"sqlite+aiosqlite:///{path}")
+def _upgrade_head(url: str) -> None:
+    env = dict(os.environ, ENVIRONMENT="test", SEED_DEMO="false", DATABASE_URL=url)
     env.pop("TEST_DATABASE_URL", None)
     r = subprocess.run([sys.executable, "-m", "alembic", "-c", "backend/alembic.ini", "upgrade", "head"],
                        cwd=REPO, env=env, capture_output=True, text=True, timeout=300)
     assert r.returncode == 0, f"migrations failed:\n{r.stderr[-3000:]}"
-    return path
 
 
-def _drift(db_path):
-    eng = create_engine(f"sqlite:///{db_path}")
+@pytest.fixture(scope="module")
+def migrated_db(tmp_path_factory):
+    """URL of a fresh database built ONLY by `alembic upgrade head`: a new Postgres database on the
+    suite's server when the suite runs on Postgres, else a SQLite file."""
+    if not MIGRATED_ON_PG:
+        path = tmp_path_factory.mktemp("migrated") / "migrated.db"
+        _upgrade_head(f"sqlite+aiosqlite:///{path}")
+        yield path
+        return
+    suite = make_url(_SUITE_URL)
+    # render_as_string(hide_password=False): str() of a URL masks the password as "***", which only
+    # works on a server that doesn't check it (CI's Postgres does: login failed for "repairos").
+    url = suite.set(database=f"{suite.database}_mig{uuid.uuid4().hex[:6]}").render_as_string(hide_password=False)
+    db_isolation.run(db_isolation.create_postgres(url, suite.database))
     try:
-        with eng.connect() as conn:
-            diff = compare_metadata(MigrationContext.configure(conn), Base.metadata)
+        _upgrade_head(url)
+        yield url
     finally:
-        eng.dispose()
+        db_isolation.run(db_isolation.drop_postgres(url, suite.database))
+
+
+def _drift(migrated):
+    url = migrated if MIGRATED_ON_PG else f"sqlite+aiosqlite:///{migrated}"
+
+    async def compare():
+        eng = create_async_engine(url, poolclass=NullPool)
+        try:
+            async with eng.connect() as conn:
+                return await conn.run_sync(
+                    lambda sync_conn: compare_metadata(MigrationContext.configure(sync_conn), Base.metadata))
+        finally:
+            await eng.dispose()
+    diff = db_isolation.run(compare())
     flat = []
     for d in diff:
         flat.extend(d if isinstance(d, list) else [d])
@@ -91,7 +122,18 @@ def test_migrated_schema_matches_models(migrated_db):
     assert not stale, f"Fixed — remove from the allowlist in this file: {stale}"
 
 
+def test_every_org_id_column_is_not_null_in_the_migrated_db(migrated_db):
+    """Stricter than the gate above for the one column tenancy hangs on. The gate tolerates a DB
+    column looser than its model in general, but a nullable org_id is a row no shop can see
+    (backend/db/tenancy.py): on Postgres the migrations left it nullable on 14 tenant tables."""
+    loose = sorted(f"{op[2]}.{op[3]}" for op in _drift(migrated_db)
+                   if op[0] == "modify_nullable" and op[3] == "org_id" and op[5] is True and op[6] is False)
+    assert not loose, "org_id is NOT NULL in the model but nullable in the migrated DB:\n  " + "\n  ".join(loose)
+
+
 def test_fired_rule_delete_keeps_logs_on_migrated_schema(migrated_db):
+    if MIGRATED_ON_PG:
+        pytest.skip("SQLite-only probe (PRAGMA-driven inserts); the SQLite job runs it")
     c = sqlite3.connect(migrated_db)
     try:
         c.execute("PRAGMA foreign_keys=ON")  # the app enforces FKs

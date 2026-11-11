@@ -1,0 +1,12 @@
+# CI only: a stand-in S3 store (rclone serve s3) for the off-site backup tests. No tunnel in CI.
+services:
+  s3:
+    image: tekly-backup:local
+    entrypoint: [ "sh", "-c", "mkdir -p /data/tekly-backups && exec rclone serve s3 --auth-key ci-key,ci-secret --addr :9000 /data" ]
+    networks: [ internal ]
+  backup:
+    environment:
+      BACKUP_S3_PROVIDER: Other
+      BACKUP_S3_ENDPOINT: http://s3:9000
+      BACKUP_S3_REGION: us-east-1
+    depends_on: [ s3 ]

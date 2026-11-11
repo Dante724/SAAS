@@ -134,6 +134,7 @@ async def unit_passport(
         "supplier": {"id": sup.id, "name": sup.name} if sup else None,
         "po_id": u.po_id,
         "supplier_warranty_until": until.isoformat() if until else None,
+        # Covered through its last day on the shop's clock (where the unit is kept).
         "in_supplier_warranty": (until >= await shop_today(db, current.org_id, u.location_id)) if until else None,
         "received_at": u.created_at.isoformat() if u.created_at else None,
         "where": {"location_id": u.location_id, "location": locs.get(u.location_id),

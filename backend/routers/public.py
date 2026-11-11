@@ -143,10 +143,8 @@ async def _expired(db: AsyncSession, order: "Order") -> bool:
     vu = getattr(order, "estimate_valid_until", None)
     if not (order.is_estimate and vu):
         return False
-    from backend.services.dates import shop_tzname, today_in
-    # today_in falls back to the UTC day for a zone name that doesn't resolve
-    today = today_in(await shop_tzname(db, order.org_id, order.location_id))
-    return vu < today
+    from backend.services.dates import shop_today   # an unknown zone name falls back to UTC
+    return vu < await shop_today(db, order.org_id, order.location_id)
 
 
 async def _already_decided(db: AsyncSession, order: "Order") -> bool:

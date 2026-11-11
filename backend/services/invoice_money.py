@@ -29,7 +29,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import Invoice, InvoiceLine, InvoiceOrder, Order, OrderLine, Payment
 from backend.services.invoicing import VOID_STATUSES, balance_due, invoice_orders, settle_status
-from backend.services.money import q2
+from backend.services.money import add_to_column, q2
 
 MONEY_IN = ("payment", "prepayment")
 _COPY = ("client_id", "method", "kind", "order_id", "account_id", "received_by_id", "shift_id",
@@ -56,14 +56,17 @@ def pct_amounts(subtotal: float, discount_pct: float, tax_pct: float) -> tuple[f
 async def lock_order(db: AsyncSession, order_id: str) -> None:
     """Serialize changes to one job's money and lines, so two requests can't both apply the same
     held deposit, both create the job's first invoice, or edit its lines over each other. Postgres:
-    a row lock. SQLite ignores FOR UPDATE and only serializes writes, so there a no-op UPDATE
+    a row lock (FOR NO KEY UPDATE). SQLite ignores FOR UPDATE and only serializes writes, so there a no-op UPDATE
     takes the write lock now (the second request waits, then reads what the first one saved)."""
     if db.get_bind().dialect.name == "sqlite":
         from sqlalchemy import update
         await db.execute(update(Order).where(Order.id == order_id)
                          .values(updated_at=Order.updated_at).execution_options(synchronize_session=False))
     else:
-        await db.execute(select(Order.id).where(Order.id == order_id).with_for_update())
+        # FOR NO KEY UPDATE: invoices, payments and lines reference the job by foreign key, so
+        # writing one takes FOR KEY SHARE on the job; a plain FOR UPDATE held for another job on
+        # the same invoice deadlocked. NO KEY UPDATE still serialises two writers of one job.
+        await db.execute(select(Order.id).where(Order.id == order_id).with_for_update(key_share=True))
 
 
 async def billed_on(db: AsyncSession, order_id: str, *, exclude_invoice_id: str | None = None):
@@ -92,6 +95,18 @@ async def invoices_for_order(db: AsyncSession, order_id: str) -> list[Invoice]:
     )).scalars().all())
 
 
+async def lock_invoices_of(db: AsyncSession, order_id: str) -> None:
+    """Lock the job's live invoices (ids sorted) right after the job's own lock and BEFORE the
+    cashbox and client ledger postings: Order -> Invoice -> Client, the order every money-in
+    path follows (M22). A prepayment or a settling pay link that took the till and the client's
+    row first and then wrote the shared invoice deadlocked against Invoices › Record payment,
+    which holds that invoice while it posts to the same till and client. No-op without
+    invoices; FOR UPDATE is a no-op on SQLite."""
+    ids = sorted(i.id for i in await invoices_for_order(db, order_id))
+    if ids:
+        await db.execute(select(Invoice.id).where(Invoice.id.in_(ids)).order_by(Invoice.id).with_for_update())
+
+
 async def _billed_rows(db: AsyncSession, inv: Invoice) -> list[InvoiceLine]:
     return list((await db.execute(select(InvoiceLine).where(
         InvoiceLine.invoice_id == inv.id, InvoiceLine.order_line_id.isnot(None)))).scalars().all())
@@ -114,6 +129,15 @@ async def source_subtotal(db: AsyncSession, inv: Invoice) -> float:
 def _jobs_tax(orders) -> float:
     """The tax the jobs already carry (VAT inside their prices, or sales tax added on top)."""
     return q2(sum(float(getattr(o, "tax", 0) or 0) for o in orders))
+
+
+def _lines_tax(lines) -> float:
+    """The tax a subset of job lines carries (M11): a per-line or "bill the rest" invoice used
+    to take none of it, so a taxed job billed in parts exported as zero-rated."""
+    from backend.services.tax import line_tax
+    return q2(sum(line_tax(qty=l.qty, unit_price=l.unit_price, discount=l.discount,
+                           discount_type=l.discount_type, tax_rate=l.tax_rate, tax_mode=l.tax_mode)
+                  for l in lines))
 
 
 async def _has_free_lines(db: AsyncSession, inv: Invoice) -> bool:
@@ -157,10 +181,10 @@ async def new_invoice(db: AsyncSession, *, org_id: str, orders: list[Order] = ()
     inv.subtotal = q2(subtotal) if subtotal else await source_subtotal(db, inv)
     if discount_pct is not None or tax_pct is not None:
         discount, tax = pct_amounts(inv.subtotal, discount_pct or 0, tax_pct or 0)
-    elif orders and not lines and not free_lines and not subtotal and not tax:
-        # Whole jobs: their totals already include their tax, so it's shown as the invoice's
-        # tax and the subtotal is what's left. The total doesn't change.
-        tax = _jobs_tax(orders)
+    elif orders and not free_lines and not subtotal and not tax:
+        # Whole jobs (or a subset of their lines): the totals already include their tax, so it's
+        # shown as the invoice's tax and the subtotal is what's left. The total doesn't change.
+        tax = _lines_tax(lines) if lines else _jobs_tax(orders)
         inv.subtotal = q2(inv.subtotal - tax)
     inv.discount, inv.tax = q2(discount or 0), q2(tax or 0)
     retotal(inv)
@@ -194,7 +218,10 @@ def _new_payment(**kw) -> Payment:
 
 
 async def _credit(db: AsyncSession, inv: Invoice, amount: float) -> None:
-    inv.amount_paid = q2(float(inv.amount_paid or 0) + amount)
+    # Atomic: apply_order_payment locks the job, not the invoice, so two jobs of one invoice
+    # paid together both read the same amount_paid and one payment was lost (100 instead of 160).
+    # The status is settled from the value the UPDATE left behind.
+    await add_to_column(db, inv, "amount_paid", amount)
     settle_status(inv)
     if inv.status == "paid":
         await freeze_lines(db, inv)
@@ -341,7 +368,7 @@ async def release_payments(db: AsyncSession, inv: Invoice, amount: float, *, pre
             r.invoice_id = None
         left = q2(left - take)
     moved = q2(amount - left)
-    inv.amount_paid = q2(max(float(inv.amount_paid or 0) - moved, 0))
+    await add_to_column(db, inv, "amount_paid", -min(moved, float(inv.amount_paid or 0)))
     settle_status(inv)
     await db.flush()
     return moved
@@ -498,7 +525,7 @@ async def reverse_charge(db: AsyncSession, order: Order, charge_ref: str | None,
         if iid:
             inv = (await db.execute(select(Invoice).where(Invoice.id == iid))).scalar_one_or_none()
             if inv:
-                inv.amount_paid = q2(max(float(inv.amount_paid or 0) - amt, 0))
+                await add_to_column(db, inv, "amount_paid", -min(amt, float(inv.amount_paid or 0)))
                 settle_status(inv)
     await db.flush()
     return out
@@ -531,7 +558,7 @@ async def refund_payments(db: AsyncSession, order: Order, amount: float, **field
         if take <= 0:
             continue
         parts[inv.id], left = take, q2(left - take)
-        inv.amount_paid = q2(max(float(inv.amount_paid or 0) - take, 0))
+        await add_to_column(db, inv, "amount_paid", -take)       # take <= amount_paid above
         settle_status(inv)
     if left > 0:
         parts[None] = q2(parts.get(None, 0) + left)
@@ -556,7 +583,7 @@ async def unrefund_payment(db: AsyncSession, pay: Payment) -> None:
     if pay.invoice_id:
         inv = (await db.execute(select(Invoice).where(Invoice.id == pay.invoice_id))).scalar_one_or_none()
         if inv is not None and (inv.status or "") not in VOID_STATUSES:
-            inv.amount_paid = q2(float(inv.amount_paid or 0) + float(pay.amount or 0))
+            await add_to_column(db, inv, "amount_paid", float(pay.amount or 0))
             settle_status(inv)
     await db.delete(pay)
 
