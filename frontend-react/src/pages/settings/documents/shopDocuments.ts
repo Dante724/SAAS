@@ -69,5 +69,12 @@ export function withStyle(m: Meta, id: string): Meta {
   return { ...m, font_family: s.font, margin_mm: margin };
 }
 
-/** The payload a template saves with: the same shape the editor sends. */
-export const payloadOf = (m: Meta, body_html: string) => ({ ...m, body_html });
+/** What a save sends: the server's latest copy of the template, with only the fields this page
+ *  changed (compared with what it last had from us) and the body. Auto-print is never sent, so a
+ *  change made elsewhere is kept (the server keeps its value when the field is left out). */
+export function payloadFor(row: any | null, meta: Meta, loaded: Meta, body_html: string): Record<string, unknown> {
+  const base: Record<string, unknown> = row ? { ...metaOf(row, meta.doc_type as DocKind) } : { ...meta };
+  for (const k of Object.keys(meta) as (keyof Meta)[]) if (JSON.stringify(meta[k]) !== JSON.stringify(loaded[k])) base[k] = meta[k];
+  delete base.auto_print_on;
+  return { ...base, body_html };
+}

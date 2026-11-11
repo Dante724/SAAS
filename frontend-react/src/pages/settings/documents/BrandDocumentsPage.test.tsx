@@ -45,7 +45,8 @@ describe("Brand & details", () => {
     page();
     await waitFor(() => expect(previews.length).toBeGreaterThan(0));
     fireEvent.click(screen.getByRole("button", { name: `Brand colour ${BRAND_SWATCHES[1]}` }));
-    await waitFor(() => expect(put).toHaveBeenCalledWith("/branding", { primary_color: BRAND_SWATCHES[1] }));
+    // picking a colour here also turns it on for documents (opt-in, review M3)
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/branding", { primary_color: BRAND_SWATCHES[1], doc_color_on: true }));
     for (const name of ["Invoice", "Receipt", "Quote", "Work order", "Label"]) {
       const before = previews.length;
       fireEvent.click(chip(name));
@@ -92,7 +93,8 @@ describe("Brand & details", () => {
     expect(p).toBe("/documents/templates/i1");
     expect(body.page_size).toBe("letter");
     expect(body.body_html).toBe(TEMPLATES[0].body_html);               // the page itself untouched, byte for byte
-    expect(Object.keys(body).sort()).toEqual(["auto_print_on", "barcode_field", "barcode_types", "body_html", "doc_type", "font_family",
+    // the same fields as the editor sends, except auto-print, which this page never changes (review L5)
+    expect(Object.keys(body).sort()).toEqual(["barcode_field", "barcode_types", "body_html", "doc_type", "font_family",
       "is_default", "margin_mm", "name", "page_h_mm", "page_size", "page_w_mm"]);
     fireEvent.click(chip("Receipt"));
     expect(within(screen.getByRole("group", { name: "Paper" })).getByRole("button", { name: "80 mm" })).toHaveAttribute("aria-pressed", "true");
@@ -142,5 +144,100 @@ describe("shopDocuments", () => {
     expect(withStyle(withStyle(a4, "compact"), "modern").margin_mm).toBeNull();
     expect(withStyle(metaOf({ page_size: "a4", margin_mm: 15 }, "invoice"), "classic").margin_mm).toBe(15);
     expect(withStyle(metaOf({ page_size: "receipt80", margin_mm: 2 }, "receipt"), "compact").margin_mm).toBe(2);
+  });
+});
+
+
+// ── review fixes ───────────────────────────────────────────────────────────────────────────────
+describe("review: saving", () => {
+  const noInvoice = TEMPLATES.filter((t) => t.doc_type !== "invoice");
+  const posts = () => post.mock.calls.filter(([p]) => p === "/documents/templates");
+
+  it("M2: a document being created is created once, even if it changes again while the first save is on its way", async () => {
+    let release!: () => void;
+    post.mockImplementation(async (p: string, b: any) => {
+      if (p === "/documents/preview") return { html: b.body_html, sample: null };
+      if (p === "/documents/templates") { await new Promise<void>((r) => { release = r; }); return { id: "new-inv" }; }
+      return { body_html: SEEDED_TEMPLATES["Preset: Detailed invoice"] };
+    });
+    render(<BrandDocumentsPage templates={noInvoice} reload={() => {}} onOpenEditor={vi.fn()} onAllTemplates={vi.fn()} />);
+    const paper = await screen.findByRole("group", { name: "Paper" });
+    fireEvent.click(within(paper).getByRole("button", { name: "Letter" }));
+    await waitFor(() => expect(posts().length).toBe(1), { timeout: AUTOSAVE_MS + 2000 });   // first save in flight
+    fireEvent.click(within(paper).getByRole("button", { name: "58 mm" }));
+    await wait(AUTOSAVE_MS + 300);
+    expect(posts().length).toBe(1);                                    // waits for the id, no second create
+    await act(async () => { release(); });
+    await waitFor(() => expect(templatePuts().some(([u, b]) => u === "/documents/templates/new-inv" && b.page_size === "receipt58")).toBe(true), { timeout: 3000 });
+    expect(posts().length).toBe(1);
+  }, 20000);
+
+  it("M2: Customise layout waits for a pending save instead of creating a second copy", async () => {
+    post.mockImplementation(async (p: string, b: any) => {
+      if (p === "/documents/preview") return { html: b.body_html, sample: null };
+      if (p === "/documents/templates") { await new Promise((r) => setTimeout(r, 400)); return { id: "new-inv" }; }
+      return { body_html: SEEDED_TEMPLATES["Preset: Detailed invoice"] };
+    });
+    const onOpenEditor = vi.fn();
+    render(<BrandDocumentsPage templates={noInvoice} reload={() => {}} onOpenEditor={onOpenEditor} onAllTemplates={vi.fn()} />);
+    const paper = await screen.findByRole("group", { name: "Paper" });
+    fireEvent.click(within(paper).getByRole("button", { name: "Letter" }));
+    fireEvent.click(screen.getByRole("button", { name: /Customise layout/ }));
+    await waitFor(() => expect(onOpenEditor).toHaveBeenCalledWith(expect.objectContaining({ id: "new-inv", page_size: "letter" })), { timeout: 4000 });
+    await wait(AUTOSAVE_MS + 300);
+    expect(posts().length).toBe(1);
+  }, 20000);
+
+  it("L2: a change made just before leaving the page is still saved", async () => {
+    const { unmount } = page();
+    const paper = await screen.findByRole("group", { name: "Paper" });
+    fireEvent.click(within(paper).getByRole("button", { name: "Letter" }));
+    unmount();
+    await waitFor(() => expect(templatePuts().some(([u, b]) => u === "/documents/templates/i1" && b.page_size === "letter")).toBe(true));
+  }, 15000);
+
+  it("L3: a reload of the template list never throws away an edit in progress", async () => {
+    const { rerender } = page();
+    const paper = await screen.findByRole("group", { name: "Paper" });
+    fireEvent.click(within(paper).getByRole("button", { name: "Letter" }));
+    rerender(<BrandDocumentsPage templates={TEMPLATES.map((t) => ({ ...t }))} reload={() => {}} onOpenEditor={vi.fn()} onAllTemplates={vi.fn()} />);
+    await wait(300);
+    expect(within(screen.getByRole("group", { name: "Paper" })).getByRole("button", { name: "Letter" })).toHaveAttribute("aria-pressed", "true");
+    await waitFor(() => expect(templatePuts().some(([, b]) => b.page_size === "letter")).toBe(true), { timeout: AUTOSAVE_MS + 2000 });
+  }, 15000);
+
+  it("L5: saving sends only what this page changed, so settings changed elsewhere aren't reverted", async () => {
+    // someone switched the invoice's auto-print on and made another invoice the default meanwhile
+    const later = TEMPLATES.map((t) => (t.id === "i1" ? { ...t, auto_print_on: "close", is_default: false } : t));
+    page();
+    const paper = await screen.findByRole("group", { name: "Paper" });
+    get.mockImplementation(async (p: string) => (p === "/branding" ? { primary_color: null } : p === "/staff/company" ? { logo_data: "", company_note: "" } : { items: later, variable_groups: [] }));
+    fireEvent.click(within(paper).getByRole("button", { name: "Letter" }));
+    await waitFor(() => expect(templatePuts().length).toBe(1), { timeout: AUTOSAVE_MS + 2000 });
+    const body = templatePuts()[0][1];
+    expect(body).not.toHaveProperty("auto_print_on");
+    expect(body.is_default).toBe(false);
+    expect(body.page_size).toBe("letter");
+  }, 15000);
+});
+
+describe("review M3: the brand colour on documents is opt-in", () => {
+  it("a colour set only for the portal shows as no colour here; No colour turns documents off and keeps the portal colour", async () => {
+    get.mockImplementation(async (p: string) => (p === "/branding" ? { primary_color: "#123456", doc_color_on: false } : p === "/staff/company" ? { logo_data: "", company_note: "" } : { items: TEMPLATES, variable_groups: [] }));
+    page();
+    await screen.findByRole("group", { name: "Brand colour" });
+    expect(screen.queryByRole("button", { name: "No colour" })).toBeNull();          // nothing on for documents yet
+    fireEvent.click(screen.getByRole("button", { name: `Brand colour ${BRAND_SWATCHES[0]}` }));
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/branding", { primary_color: BRAND_SWATCHES[0], doc_color_on: true }));
+    fireEvent.click(await screen.findByRole("button", { name: "No colour" }));
+    await waitFor(() => expect(put).toHaveBeenCalledWith("/branding", { doc_color_on: false }));
+  });
+});
+
+describe("review ALSO: fields with no value show as grey samples, never as {raw text}", () => {
+  it("samplesForLeftovers", async () => {
+    const { samplesForLeftovers } = await import("./DocPreview");
+    const out = samplesForLeftovers("<p>Subtotal {Subtotal}</p><style>a{}</style>");
+    expect(out).toBe('<p>Subtotal <span class="tk-sample">Sample subtotal</span></p><style>a{}</style>');
   });
 });

@@ -1236,7 +1236,11 @@ _HEX = re.compile(r"#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?(?:[0-9a-fA-F]{2})?")
 
 
 def _brand_color(org) -> Optional[str]:
-    c = ((getattr(org, "brand_primary_color", None) if org else None) or "").strip()
+    # Opt-in: only when the shop switched its colour on for documents (Settings › Documents), so a
+    # colour set for the white-label portal alone leaves every printed page exactly as before.
+    if not (org and getattr(org, "doc_brand_color_on", False)):
+        return None
+    c = (getattr(org, "brand_primary_color", None) or "").strip()
     return c if _HEX.fullmatch(c) else None
 
 
@@ -1679,6 +1683,12 @@ async def _resolve_invoice(db, org_id, inv: Invoice, *, itemised: bool = False, 
         if f.entity_type == "order":
             doc.setdefault(_cf_varname(f), _fmt_cf((getattr(jo, "custom_data", None) or {}).get(f.field_key)
                                                    if jo else None))
+    # The job-style totals the standard layouts use ({Subtotal}, {Order Total}, …) mean the same on an
+    # invoice: fill them from the invoice instead of leaving the placeholder on the page.
+    for alias, src in (("{Subtotal}", "{Invoice Subtotal}"), ("{Tax Value}", "{Invoice Tax}"), ("{Order Total}", "{Invoice Total}"),
+                       ("{Total Amount}", "{Invoice Total}"), ("{Order Paid}", "{Invoice Paid}"),
+                       ("{Order Balance Due}", "{Invoice Balance Due}"), ("{Balance Due}", "{Invoice Balance Due}")):
+        doc.setdefault(alias, doc[src])
     doc[_BRAND_KEY] = _brand_color(org)
     return doc, rows
 
@@ -2092,7 +2102,8 @@ async def auto_print(
         if tpl.doc_type in ASSET_LABEL_TYPES:
             tiles = []
             for a in assets or [None]:
-                varmap = {**doc, **(await _resolve_asset(db, org, a) if a is not None else {})}
+                varmap = {**{k: v for k, v in doc.items() if k != _BRAND_KEY},   # labels stay unbranded
+                          **(await _resolve_asset(db, org, a) if a is not None else {})}
                 tiles.append(f"<div class='lbl'>{_render(body, varmap, rows)}</div>")
             html = _labels_html(tpl, tiles)
         else:
@@ -2176,6 +2187,10 @@ async def _resolve_sale(db, org_id: str, sale, current=None) -> tuple[dict, list
         "{Order Total}": _money(sale.total or 0), "{Gift Card}": _money(gift),
         "{Payment Status}": "Paid" if sale.paid else "Not paid yet",
         "{Company Note}": (getattr(org, "company_note", None) if org else None) or "",
+        # fields the standard receipt layout shares with job documents
+        "{Company Logo}": _Html(f'<img src="{_esc(org.logo_data)}" alt="{_esc(org.name)}" style="max-height:64px;max-width:220px;object-fit:contain;" />') if org and getattr(org, "logo_data", None) else "",
+        "{Client Address}": (getattr(client, "address", None) if client else None) or "",
+        "{Order Balance Due}": _money(0 if sale.paid else (sale.total or 0)),
         "{Currency}": sym, "{Currency Code}": (org.currency_code if org else "") or "",
         "{Current User}": (current.name if current else "") or "",
         "{Barcode}": _Html(code128_svg(code)), "{QR Code}": _Html(qr_svg(code)),

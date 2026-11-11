@@ -46,15 +46,24 @@ function edit(html: string, fn: (p: Parsed) => boolean | void): string {
 }
 
 // ── style helpers ──
-function getDecl(el: Element, prop: string): string | null {
-  for (const d of (el.getAttribute("style") || "").split(";")) {
-    const i = d.indexOf(":");
-    if (i > 0 && d.slice(0, i).trim().toLowerCase() === prop) return d.slice(i + 1).trim();
+/** Declarations of a style attribute, split on ";" only outside parentheses and quotes, so a
+ *  url(data:image/png;base64,…) stays whole. */
+function decls(style: string): [string, string][] {
+  const out: string[] = []; let depth = 0, quote = "", cur = "";
+  for (const ch of style) {
+    if (quote) { if (ch === quote) quote = ""; cur += ch; continue; }
+    if (ch === '"' || ch === "'") { quote = ch; cur += ch; continue; }
+    if (ch === "(") depth++; else if (ch === ")") depth = Math.max(0, depth - 1);
+    if (ch === ";" && depth === 0) { out.push(cur); cur = ""; } else cur += ch;
   }
-  return null;
+  out.push(cur);
+  return out.map((d) => d.trim()).filter(Boolean).map((d) => { const i = d.indexOf(":"); return [d.slice(0, i).trim().toLowerCase(), d.slice(i + 1).trim()] as [string, string]; }).filter(([k]) => k);
+}
+function getDecl(el: Element, prop: string): string | null {
+  return decls(el.getAttribute("style") || "").find(([k]) => k === prop)?.[1] ?? null;
 }
 function setDecl(el: Element, prop: string, value: string | null) {
-  const rest = (el.getAttribute("style") || "").split(";").map((d) => d.trim()).filter((d) => d && d.slice(0, d.indexOf(":")).trim().toLowerCase() !== prop);
+  const rest = decls(el.getAttribute("style") || "").filter(([k]) => k !== prop).map(([k, v]) => `${k}: ${v}`);
   if (value != null) rest.push(`${prop}: ${value}`);
   if (rest.length) el.setAttribute("style", rest.join("; ")); else el.removeAttribute("style");
 }
@@ -69,13 +78,83 @@ export function setHidden(html: string, i: number, hidden: boolean): string {
     else { el.removeAttribute("data-tk-hidden"); setDecl(el, "display", null); }
   });
 }
-export function moveSection(html: string, i: number, dir: -1 | 1): string {
-  return edit(html, (p) => {
-    const list = sections(p); const el = list[i]; const other = list[i + dir];
-    if (!el || !other) return false;
-    if (dir < 0) other.before(el); else other.after(el);
-  });
+// ── moving: a condition and everything under it move as one ──
+// At the page's top level a condition is a pair of markers ({#if X} … {/if}) around sections.
+// Moving a section into or out of one would change when it prints, so the page is split into
+// units: a section on its own, or a whole condition with its markers and sections. Moves swap
+// whole units. A condition that doesn't close at the same level makes everything after it fixed.
+const OPEN = /^\{#(if|unless)\b/, CLOSE = /^\{\/(if|unless)\b/;
+type Unit = { nodes: ChildNode[]; secs: Element[] };
+function markerOf(p: Parsed, n: ChildNode): string | null {
+  if (n.nodeType !== 8) return null;
+  const m = /^tkp(\d+)$/.exec((n as Comment).data);
+  return m ? p.saved[Number(m[1])] ?? null : null;
 }
+/** The units, and the index of the first section that can't move (after an unclosed condition). */
+function units(p: Parsed): { list: Unit[]; lockedFrom: number } {
+  const root = contentRoot(p.body);
+  const list: Unit[] = []; let group: Unit | null = null; let depth = 0; let count = 0; let lockedFrom = Infinity;
+  for (const n of Array.from(root.childNodes)) {
+    const tok = markerOf(p, n);
+    const isSec = n.nodeType === 1 && (n as Element).tagName !== "STYLE";
+    if (tok && OPEN.test(tok)) { if (!group) group = { nodes: [], secs: [] }; depth++; group.nodes.push(n); continue; }
+    if (tok && CLOSE.test(tok)) {
+      if (group) { group.nodes.push(n); depth--; if (depth === 0) { list.push(group); group = null; } }
+      else lockedFrom = Math.min(lockedFrom, count);       // a close with no open here: stop moving after it
+      continue;
+    }
+    if (group) { group.nodes.push(n); if (isSec) { group.secs.push(n as Element); count++; } continue; }
+    if (isSec) { list.push({ nodes: [n], secs: [n as Element] }); count++; }
+  }
+  if (group) lockedFrom = Math.min(lockedFrom, count - group.secs.length);   // never closed at this level
+  return { list: list.filter((u) => u.secs.length), lockedFrom };
+}
+/** Why a section can't move here (null = it can). */
+export function moveBlocked(html: string, i: number): string | null {
+  const { lockedFrom } = units(parse(html));
+  return i >= lockedFrom ? "This part sits inside a condition that isn't closed here: move it in Customise layout." : null;
+}
+/** Move a section (with its whole condition, if it is under one) past the next unit. Returns the
+ *  new template and the section's new index. */
+export function moveSectionAt(html: string, i: number, dir: -1 | 1): { html: string; i: number } {
+  const p = parse(html);
+  const { list, lockedFrom } = units(p);
+  const target = sections(p)[i];
+  const at = list.findIndex((u) => target && u.secs.includes(target));
+  const other = list[at + dir];
+  if (at < 0 || !other || i >= lockedFrom || sections(p).indexOf(other.secs[0]) >= lockedFrom) return { html, i };
+  const me = list[at];
+  if (dir < 0) { const first = other.nodes[0]; me.nodes.forEach((n) => first.before(n)); }
+  else { let last: ChildNode = other.nodes[other.nodes.length - 1]; me.nodes.forEach((n) => { last.after(n); last = n; }); }
+  return { html: serialize(p), i: sections(p).indexOf(target) };
+}
+export function moveSection(html: string, i: number, dir: -1 | 1): string { return moveSectionAt(html, i, dir).html; }
+
+// ── the one text the preview numbers and the edits apply to ──
+export type EditOp =
+  | { type: "hide"; i: number; hidden: boolean }
+  | { type: "move"; i: number; dir: -1 | 1 }
+  | { type: "size"; i: number; step: -1 | 1 }
+  | { type: "text"; e: number; text: string };
+let cleaner: ((h: string) => string) | null = null;
+/** Set once by the app: the cleaner every save goes through (sanitizeHtml via cleanTemplate). */
+export function setEditCleaner(fn: (h: string) => string) { cleaner = fn; }
+/** The template as the preview numbers it and as edits apply to it: cleaned the way it is saved,
+ *  so a tag the cleaner drops (link, meta, form…) can't shift the numbers. */
+export function editBase(html: string): string { return cleaner ? cleaner(html) : html; }
+/** Apply a click on the preview. `source` is the text the preview was numbered from; when the page
+ *  changed since (another edit, a switch, another document), the click is ignored (null). */
+export function applyEdit(html: string, op: EditOp, source: string): string | null {
+  const base = editBase(html);
+  if (base !== source) return null;
+  switch (op.type) {
+    case "hide": return setHidden(base, op.i, op.hidden);
+    case "move": return moveSection(base, op.i, op.dir);
+    case "size": return resizeSection(base, op.i, op.step);
+    case "text": return setText(base, op.e, op.text);
+  }
+}
+
 const BASE_PX = 13;
 function toPx(v: string | null): number | null {
   if (!v) return null;

@@ -65,6 +65,9 @@ class Organisation(Base):
     brand_custom_domain: Mapped[Optional[str]] = mapped_column(String(120))   # portal.acme.com
     brand_email_from: Mapped[Optional[str]] = mapped_column(String(160))      # "Acme <no-reply@acme.com>"
     brand_hide_powered_by: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Settings › Documents: print the brand colour on documents. Off until the owner picks a colour
+    # there, so a colour set for the portal alone never changes a printed page.
+    doc_brand_color_on: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     subdomain: Mapped[Optional[str]] = mapped_column(String(100), unique=True)
     # The employee who created the shop. Only they can change their own account (password,
     # 2-step, email, role, access) — a teammate with equal permissions cannot. Not a foreign

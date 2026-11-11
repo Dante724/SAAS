@@ -10,16 +10,22 @@ import { sanitizeHtml } from "../../../lib/safeHtml";
 import Switch from "../../../components/Switch";
 import { buttonClass } from "../../../components/Button";
 import { cleanTemplate, sameTemplate } from "../templateEditor/templateHtml";
-import { moveSection, resizeSection, setHidden, setText } from "../templateEditor/simpleDoc";
+import { applyEdit, editBase, moveSectionAt, setEditCleaner } from "../templateEditor/simpleDoc";
 import { FEATURES, SUGGESTED, detailFor, detailState, featureLocked, featureOn, setFeature, toggleDetail, type DocKind } from "../templateEditor/docFeatures";
 import DocPreview, { type EditOp } from "./DocPreview";
-import { KINDS, PAPERS, STANDARD, STYLES, metaOf, pageBox, payloadOf, pickTemplate, styleOf, withStyle, type Meta } from "./shopDocuments";
+import { KINDS, PAPERS, STANDARD, STYLES, metaOf, pageBox, payloadFor, pickTemplate, styleOf, withStyle, type Meta } from "./shopDocuments";
+
+// Edits and the preview both work on the template as it will be saved (cleaned), so the numbers
+// a click carries always point at the same section.
+setEditCleaner((h) => cleanTemplate(h, sanitizeHtml));
 
 export const AUTOSAVE_MS = 2000;
 export const BRAND_SWATCHES = ["#0059ba", "#0f766e", "#b91c1c", "#7c3aed", "#1f2937"];
 const LOGO_MAX = 1_000_000;
 
-type Doc = { kind: DocKind; id: string | null; meta: Meta; html: string; saved: { html: string; meta: string } };
+/** `loaded` is the meta as the server last had it from us: a save sends only fields that differ
+ *  from it, so settings changed elsewhere in the meantime aren't sent back over. */
+type Doc = { kind: DocKind; id: string | null; meta: Meta; loaded: Meta; html: string; saved: { html: string; meta: string } };
 /** An edit that ends up where the page started (on then off again) goes back to the saved text
  *  exactly, so an untouched template is never re-saved in a different spelling. */
 function settle(d: Doc): Doc {
@@ -35,7 +41,8 @@ export default function BrandDocumentsPage({ templates, reload, onOpenEditor, on
 }) {
   const [docs, setDocs] = useState<Record<string, Doc>>({});
   const [kind, setKind] = useState<DocKind>("invoice");
-  const [brand, setBrand] = useState<{ color: string | null; logo: string; note: string } | null>(null);
+  // `color` shows on documents only when `docOn` (opt-in; a portal colour alone changes nothing)
+  const [brand, setBrand] = useState<{ color: string | null; docOn: boolean; logo: string; note: string } | null>(null);
   const [refresh, setRefresh] = useState(0);
   const [status, setStatus] = useState<"" | "saving" | "saved" | "error">("");
   const [err, setErr] = useState<string | null>(null);
@@ -43,62 +50,98 @@ export default function BrandDocumentsPage({ templates, reload, onOpenEditor, on
   const [addOpen, setAddOpen] = useState(false);
   const fileRef = useRef<HTMLInputElement | null>(null);
   const docsRef = useRef(docs); docsRef.current = docs;
+  const isDirty = (d: Doc) => d.html !== d.saved.html || JSON.stringify(d.meta) !== d.saved.meta;
 
   // ── load: the shop's brand, and its template (or the standard layout) per document ──
   useEffect(() => {
     Promise.all([api.get<any>("/branding").catch(() => ({})), api.get<any>("/staff/company").catch(() => ({}))])
-      .then(([b, c]) => setBrand({ color: b?.primary_color || null, logo: c?.logo_data || "", note: c?.company_note || "" }));
+      .then(([b, c]) => setBrand({ color: b?.primary_color || null, docOn: !!b?.doc_color_on, logo: c?.logo_data || "", note: c?.company_note || "" }));
   }, []);
   useEffect(() => {
     if (!templates) return;
     let on = true;
     (async () => {
-      const next: Record<string, Doc> = {};
+      const fresh: Record<string, Doc> = {};
       for (const { kind: k } of KINDS) {
-        const cur = docsRef.current[k];
         const t = pickTemplate(templates, k);
-        // keep unsaved work; otherwise take the server's copy
-        if (cur && (cur.html !== cur.saved.html || JSON.stringify(cur.meta) !== cur.saved.meta) && cur.id === (t?.id ?? null)) { next[k] = cur; continue; }
+        const cur = docsRef.current[k];
+        if (cur && isDirty(cur) && cur.id === (t?.id ?? null)) continue;    // decided again below, on the latest state
         let html = t?.body_html ?? "";
-        if (!t && STANDARD[k].preset) html = (await api.post<any>("/documents/ai-generate", { prompt: "", doc_type: k, preset: STANDARD[k].preset }).catch(() => null))?.body_html || "";
+        if (!t && STANDARD[k].preset) html = cur && !cur.id ? cur.saved.html : (await api.post<any>("/documents/ai-generate", { prompt: "", doc_type: k, preset: STANDARD[k].preset }).catch(() => null))?.body_html || "";
         const meta = metaOf(t, k);
-        next[k] = { kind: k, id: t?.id ?? null, meta, html, saved: { html, meta: JSON.stringify(meta) } };
+        fresh[k] = { kind: k, id: t?.id ?? null, meta, loaded: meta, html, saved: { html, meta: JSON.stringify(meta) } };
       }
-      if (on) setDocs(next);
+      // merge into the latest state: work in progress on the same template is never replaced
+      if (on) setDocs((all) => {
+        const next = { ...all };
+        for (const [k, f] of Object.entries(fresh)) { const cur = all[k]; if (!(cur && isDirty(cur) && cur.id === f.id)) next[k] = f; }
+        return next;
+      });
     })();
     return () => { on = false; };
-  }, [templates]);
+  }, [templates]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const doc = docs[kind];
-  const isDirty = (d: Doc) => d.html !== d.saved.html || JSON.stringify(d.meta) !== d.saved.meta;
   const change = (k: DocKind, fn: (d: Doc) => Doc) => setDocs((all) => (all[k] ? { ...all, [k]: settle(fn(all[k])) } : all));
 
-  // ── autosave: about two seconds after the last change, only documents that changed ──
+  // ── saving: one save at a time, in order, so a document is created once and later saves use
+  // its id; about two seconds after the last change; anything left is saved when leaving ──
+  const queue = useRef<Promise<unknown>>(Promise.resolve());
+  function enqueue<T>(job: () => Promise<T>): Promise<T> {
+    const run = queue.current.then(job, job);
+    queue.current = run.catch(() => undefined);
+    return run;
+  }
+  async function saveDirty(onlyKind?: DocKind, create = false): Promise<void> {
+    const todo = Object.values(docsRef.current).filter((d) => (onlyKind ? d.kind === onlyKind : true) && (isDirty(d) || (create && !d.id)));
+    if (!todo.length) return;
+    if (mounted.current) { setStatus("saving"); setErr(null); }
+    try {
+      const rows: any[] = (await api.get<any>("/documents/templates").catch(() => null))?.items || [];
+      let created = false;
+      for (const snap of todo) {
+        const d = docsRef.current[snap.kind] || snap;                 // the latest copy (it may have an id by now)
+        const row = d.id ? rows.find((r) => r.id === d.id) || null : null;
+        const changedBody = d.html !== d.saved.html || !row;
+        const payload = payloadFor(row, d.meta, d.loaded, changedBody ? cleanTemplate(d.html, sanitizeHtml) : row.body_html);
+        let id = d.id;
+        if (id) await api.put(`/documents/templates/${id}`, payload);
+        else { id = (await api.post<any>("/documents/templates", payload))?.id || null; created = true; }  // first change makes the shop's own copy
+        const savedNow = { html: d.html, meta: JSON.stringify(d.meta) };
+        docsRef.current = { ...docsRef.current, [d.kind]: { ...d, id, loaded: d.meta, saved: savedNow } };
+        if (mounted.current) setDocs((all) => (all[d.kind] ? { ...all, [d.kind]: { ...all[d.kind], id, loaded: d.meta, saved: savedNow } } : all));
+      }
+      if (mounted.current) setStatus("saved");
+      if (created) reload();
+    } catch (e: any) { if (mounted.current) { setStatus("error"); setErr(e?.message || "Couldn't save"); } }
+  }
+  const mounted = useRef(true);
   useEffect(() => {
-    const dirty = Object.values(docs).filter(isDirty);
-    if (!dirty.length) return;
-    const t = setTimeout(async () => {
-      setStatus("saving"); setErr(null);
-      try {
-        for (const d of dirty) {
-          const body = cleanTemplate(d.html, sanitizeHtml);
-          const payload = payloadOf(d.meta, body);
-          let id = d.id;
-          if (id) await api.put(`/documents/templates/${id}`, payload);
-          else id = (await api.post<any>("/documents/templates", payload))?.id || null;   // first change makes the shop's own copy
-          change(d.kind, (x) => ({ ...x, id, saved: { html: d.html, meta: JSON.stringify(d.meta) } }));
-        }
-        setStatus("saved");
-        if (dirty.some((d) => !d.id)) reload();
-      } catch (e: any) { setStatus("error"); setErr(e?.message || "Couldn't save"); }
-    }, AUTOSAVE_MS);
+    if (!Object.values(docs).some(isDirty)) return;
+    const t = setTimeout(() => { enqueue(() => saveDirty()); }, AUTOSAVE_MS);
     return () => clearTimeout(t);
   }, [docs]); // eslint-disable-line react-hooks/exhaustive-deps
+  useEffect(() => {
+    mounted.current = true;
+    const warn = (e: BeforeUnloadEvent) => {
+      if (!Object.values(docsRef.current).some(isDirty)) return;
+      enqueue(() => saveDirty());
+      e.preventDefault(); e.returnValue = "";
+    };
+    window.addEventListener("beforeunload", warn);
+    return () => {
+      window.removeEventListener("beforeunload", warn);
+      mounted.current = false;
+      enqueue(() => saveDirty());                                   // leaving the page: save what's left
+    };
+  }, []); // eslint-disable-line react-hooks/exhaustive-deps
 
   // ── brand (shop-wide; every preview refreshes) ──
+  /** Picking a colour here turns it on for documents; "No colour" turns documents off and leaves
+   *  the colour itself (the white-label portal may use it). */
   async function saveColor(color: string | null) {
-    setBrand((b) => (b ? { ...b, color } : b));
-    try { await api.put("/branding", { primary_color: color }); setRefresh((n) => n + 1); }
+    setBrand((b) => (b ? (color ? { ...b, color, docOn: true } : { ...b, docOn: false }) : b));
+    try { await api.put("/branding", color ? { primary_color: color, doc_color_on: true } : { doc_color_on: false }); setRefresh((n) => n + 1); }
     catch (e: any) { setErr(e?.message || "Couldn't save the colour"); }
   }
   async function saveCompany(patch: { logo_data?: string; company_note?: string }) {
@@ -125,7 +168,7 @@ export default function BrandDocumentsPage({ templates, reload, onOpenEditor, on
     // for it); the shop's own templates save it.
     setDocs((all) => Object.fromEntries(Object.entries(all).map(([k, d]) => {
       const meta = withStyle(d.meta, id);
-      return [k, d.id ? { ...d, meta } : { ...d, meta, saved: { ...d.saved, meta: JSON.stringify(meta) } }];
+      return [k, d.id ? { ...d, meta } : { ...d, meta, loaded: meta, saved: { ...d.saved, meta: JSON.stringify(meta) } }];
     })));
   }
   /** A "Show on documents" switch applies to every document that can show it. */
@@ -137,20 +180,27 @@ export default function BrandDocumentsPage({ templates, reload, onOpenEditor, on
       (d.id || d.kind === kind) && f.snippet(d.kind) && !featureLocked(d.html, f) ? settle({ ...d, html: setFeature(d.html, f, d.kind, on) }) : d])));
   }
 
-  function onEdit(op: EditOp) {
-    change(kind, (d) => {
-      const html = op.type === "hide" ? setHidden(d.html, op.i, op.hidden) : op.type === "move" ? moveSection(d.html, op.i, op.dir)
-        : op.type === "size" ? resizeSection(d.html, op.i, op.step) : setText(d.html, op.e, op.text);
-      return { ...d, html };
-    });
+  /** A click on the preview. `source` is the text the preview numbered; a click made against an
+   *  older page is ignored. A move answers where the section went. */
+  function onEdit(op: EditOp, source: string): number | void {
+    const d = docsRef.current[kind]; if (!d) return;
+    let out = applyEdit(d.html, op, source); if (out == null) return;
+    let moved: number | undefined;
+    if (op.type === "move") { const r = moveSectionAt(editBase(d.html), op.i, op.dir); out = r.html; moved = r.i; }
+    const next = out;
+    docsRef.current = { ...docsRef.current, [kind]: settle({ ...d, html: next }) };
+    change(kind, (x) => (x.html === d.html ? { ...x, html: next } : x));
+    return moved;
   }
   async function openEditor() {
-    if (!doc) return;
-    let id = doc.id;
-    if (!id) id = (await api.post<any>("/documents/templates", payloadOf(doc.meta, cleanTemplate(doc.html, sanitizeHtml))).catch(() => null))?.id || null;
-    if (!id) { setErr("Couldn't open the editor"); return; }
-    onOpenEditor({ ...doc.meta, id, body_html: doc.html });
+    if (!docsRef.current[kind]) return;
+    // the pending save goes first (and makes the shop's copy if there isn't one yet), never twice
+    await enqueue(() => saveDirty(kind, true));
+    const d = docsRef.current[kind];
+    if (!d?.id) { setErr("Couldn't open the editor"); return; }
+    onOpenEditor({ ...d.meta, id: d.id, body_html: d.html });
   }
+  const source = useMemo(() => (doc ? editBase(doc.html) : ""), [doc?.html]); // eslint-disable-line react-hooks/exhaustive-deps
 
   // what each switch shows for the document on screen (worked out once per change of the page)
   const featureStates = useMemo(() => FEATURES.map((f) => {
@@ -191,16 +241,16 @@ export default function BrandDocumentsPage({ templates, reload, onOpenEditor, on
         <Card title="Brand colour">
           <div className="flex items-center gap-2" role="group" aria-label="Brand colour">
             {BRAND_SWATCHES.map((c) => (
-              <button key={c} type="button" aria-label={`Brand colour ${c}`} aria-pressed={brand?.color?.toLowerCase() === c}
-                onClick={() => saveColor(c)} className={`w-8 h-8 rounded-full grid place-items-center ${brand?.color?.toLowerCase() === c ? "ring-2 ring-offset-2 ring-primary" : "ring-1 ring-slate-300"}`} style={{ background: c }}>
-                {brand?.color?.toLowerCase() === c && <Check size={14} className="text-white" aria-hidden />}
+              <button key={c} type="button" aria-label={`Brand colour ${c}`} aria-pressed={(brand?.docOn && brand?.color?.toLowerCase() === c)}
+                onClick={() => saveColor(c)} className={`w-8 h-8 rounded-full grid place-items-center ${(brand?.docOn && brand?.color?.toLowerCase() === c) ? "ring-2 ring-offset-2 ring-primary" : "ring-1 ring-slate-300"}`} style={{ background: c }}>
+                {(brand?.docOn && brand?.color?.toLowerCase() === c) && <Check size={14} className="text-white" aria-hidden />}
               </button>
             ))}
             <label className="w-8 h-8 rounded-full border border-dashed border-slate-300 relative cursor-pointer grid place-items-center text-ink-tertiary" title="Your own colour">
               <Plus size={14} aria-hidden />
               <input type="color" aria-label="Your own colour" value={/^#[0-9a-f]{6}$/i.test(brand?.color || "") ? brand!.color! : "#0059ba"} onChange={(e) => saveColor(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" />
             </label>
-            {brand?.color && <button type="button" onClick={() => saveColor(null)} className="text-2xs font-semibold text-ink-tertiary hover:text-ink-primary ml-1">No colour</button>}
+            {brand?.docOn && <button type="button" onClick={() => saveColor(null)} className="text-2xs font-semibold text-ink-tertiary hover:text-ink-primary ml-1">No colour</button>}
           </div>
           <p className="text-2xs text-ink-tertiary mt-2">Colours headings, table headers and dividers on every document.</p>
         </Card>
@@ -280,7 +330,7 @@ export default function BrandDocumentsPage({ templates, reload, onOpenEditor, on
         )}
         <div className="flex-1 py-6">
           {doc ? (
-            <DocPreview post={(p, b) => api.post<any>(p, b)} html={doc.html} kind={doc.kind} page={box} font={doc.meta.font_family} refresh={refresh} onEdit={onEdit} onSample={setSample} />
+            <DocPreview key={doc.kind} post={(p, b) => api.post<any>(p, b)} source={source} kind={doc.kind} page={box} font={doc.meta.font_family} refresh={refresh} onEdit={onEdit} onSample={setSample} />
           ) : <div className="py-20 text-center text-xs text-ink-tertiary">Loading your documents…</div>}
         </div>
         <div className="px-4 py-3 border-t border-slate-200 bg-white rounded-b-2xl flex flex-wrap items-center gap-3">
