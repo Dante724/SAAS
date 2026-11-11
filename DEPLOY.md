@@ -111,6 +111,9 @@ and the same sweep can run twice. Migrations also need a direct (or session-pool
 
 ## 4. Backups and restore
 
+**One-server setup:** `deploy/one-server/` has nightly off-site backups, a restore drill and a
+one-command live restore built in; see its README. The notes below apply to any other setup.
+
 Use a managed Postgres with **point-in-time recovery** (AWS RDS, GCP Cloud SQL, Neon,
 Supabase…) and a retention of at least 7 days. In addition, take a nightly logical dump kept
 off-site:
