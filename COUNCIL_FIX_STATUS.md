@@ -92,5 +92,5 @@ Merged into `roadmap/orderry-parity` in the PM's order, each only when all 18 CI
 Before merging, the 13 were merged together on today's base and the full suite run: **Postgres 3818 passed, SQLite 3791 passed, 0 failed.**
 
 - **#112 stays closed:** the owner closed it on 6 Nov because card readers are turned off (`CARD_READERS_ENABLED=false`, #171).
-- **Two alembic heads after the merges:** #183 (`sds01`), merged earlier the same day, and #107 (`ot01`) both revise `idg02`. **#185** adds the merge revision `mh01` and a single-head guard test. It needs to merge next.
+- **Two alembic heads after the merges:** #183 (`sds01`), merged earlier the same day, and #107 (`ot01`) both revise `idg02`. **#185** (merge revision `mh01` plus a single-head guard test) went green and is **merged**: the base is back to one head (`mh01`).
 - **Still open, for later:** the Medium fixes (#124, #125, #126, #129, #130, #131, #132, #134, #136, #138, #143, #145–#152), the QA PRs (#123, #133, #137) and the infra PRs (#161, #162, #164, #165). #137 must re-chain `nn01` onto the current head before it merges. #157 is redundant and can be closed.
