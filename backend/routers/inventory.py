@@ -633,12 +633,12 @@ async def _check_posting_serials(db, current, rows: list, parts: dict, generate:
     if not generate:
         return
     from backend.models import Organisation
-    from backend.services import importer
+    from backend.services import importer, serial_intake
     org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one()
     ctx = importer.Ctx(db=db, current=current, org=org, options={}, perms={})
     ctx.data["serials_in_stock"] = set((await db.execute(select(SerializedItem.serial_number).where(
         SerializedItem.org_id == current.org_id,
-        SerializedItem.status.in_(("in_stock", "allocated_to_order"))))).scalars())
+        SerializedItem.status.in_(serial_intake.IN_STOCK)))).scalars())
     ctx.data["serial_n"] = (await db.execute(select(func.count()).select_from(SerializedItem).where(
         SerializedItem.org_id == current.org_id))).scalar() or 0
     seen: set = set()
@@ -1188,6 +1188,8 @@ async def reserve_stock(
 ):
     """Reserve stock for an order. Reserved qty is excluded from available."""
     from backend.models import Location
+    # council M7: holds past their date used to block until someone opened the reservations list
+    await _release_expired(db, current.org_id)
     part = (await db.execute(select(Part.id).where(
         Part.id == data.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
     loc = (await db.execute(select(Location.id).where(
@@ -1618,8 +1620,9 @@ async def edit_po(
 
     # ── line edits ──
     if data.lines is not None:
+        # locked: a receipt landing between this read and the write below must not be rewritten
         existing = {l.id: l for l in (await db.execute(
-            select(POLine).where(POLine.po_id == po.id))).scalars().all()}
+            select(POLine).where(POLine.po_id == po.id).with_for_update())).scalars().all()}
         # validate every referenced part belongs to this org
         req_parts = {ln.part_id for ln in data.lines}
         owned = set((await db.execute(select(Part.id).where(
@@ -1630,6 +1633,18 @@ async def edit_po(
         for ln in data.lines:
             row = existing.get(ln.id) if ln.id else None
             if row:
+                got = float(row.qty_received or 0)
+                if got > 0:
+                    # council M4: a received line IS the receiving record (movements, cost layers,
+                    # qty_received). Its product and price stay; its quantity can't drop below
+                    # what has arrived. Add a new line for a different product or price.
+                    if ln.part_id != row.part_id:
+                        raise HTTPException(409, "Can't change the product on a line that has already been received")
+                    if float(ln.qty_ordered or 0) < got - 1e-9:
+                        raise HTTPException(409, f"{got:g} of this line has already been received — "
+                                                 "the quantity can't go below that")
+                    if abs(float(ln.unit_cost or 0) - float(row.unit_cost or 0)) > 1e-9:
+                        raise HTTPException(409, "Can't change the price on a line that has already been received")
                 row.part_id = ln.part_id
                 row.qty_ordered = ln.qty_ordered
                 row.unit_cost = ln.unit_cost

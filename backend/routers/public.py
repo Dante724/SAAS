@@ -13,7 +13,6 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, desc
 from pydantic import BaseModel, Field
 from typing import Annotated, Optional
-from datetime import date as _date
 from datetime import datetime as _dt
 from backend.db.database import get_db
 from backend.db.tenancy import set_tenant
@@ -144,13 +143,8 @@ async def _expired(db: AsyncSession, order: "Order") -> bool:
     vu = getattr(order, "estimate_valid_until", None)
     if not (order.is_estimate and vu):
         return False
-    from backend.services.dates import shop_tzname
-    try:
-        from zoneinfo import ZoneInfo
-        today = _dt.now(ZoneInfo(await shop_tzname(db, order.org_id, order.location_id))).date()
-    except Exception:  # noqa: BLE001 — an unknown zone name falls back to UTC
-        today = _date.today()
-    return vu < today
+    from backend.services.dates import shop_today   # an unknown zone name falls back to UTC
+    return vu < await shop_today(db, order.org_id, order.location_id)
 
 
 async def _already_decided(db: AsyncSession, order: "Order") -> bool:

@@ -30,11 +30,15 @@ uv pip compile requirements-dev.txt --universal --python-version 3.11 --generate
 | `TOKEN_ENCRYPTION_KEY` | yes | Fernet key(s), comma-separated, newest first. Encrypts OAuth tokens and shop credentials. Keep the old key in the list while rotating. |
 | `CORS_ORIGINS` | yes | Your real domains, comma-separated. |
 | `PUBLIC_BASE_URL` | yes | Public URL (links in e-mails, webhook signatures). |
-| `FORWARDED_ALLOW_IPS` | yes behind a proxy | Your load balancer's IP/CIDR. Uvicorn then takes the client IP from `X-Forwarded-For` only from it. Leave `TRUSTED_PROXY_HOPS` at 0. |
+| `FORWARDED_ALLOW_IPS` | yes behind a proxy | Your load balancer's IP/CIDR. Uvicorn then takes the client IP from `X-Forwarded-For` only from it. Leave `TRUSTED_PROXY_HOPS` at 0. A deployed instance **refuses to start** while proxy trust is unconfigured (`FORWARDED_ALLOW_IPS` unset or loopback only, e.g. the image default `127.0.0.1`, and `TRUSTED_PROXY_HOPS=0`): behind a balancer every anonymous user would share one rate limit. |
+| `TRUSTED_PROXY_HOPS` | alternative | Instead of `FORWARDED_ALLOW_IPS`: the number of proxies in front (load balancer = 1); the app reads the client IP that many entries from the right of `X-Forwarded-For`. `0` (the default, and the value in `.env.example`) does **not** count as configured. |
+| `NO_REVERSE_PROXY` | only without a proxy | `true` says clients connect straight to this server (nothing in front), so the peer address is the client. This is the only way to start deployed without `FORWARDED_ALLOW_IPS` or `TRUSTED_PROXY_HOPS`. Never set it behind a load balancer. |
 | `WEB_CONCURRENCY` | no | Worker processes (default 1). More than 1 needs `REDIS_URL`, so rate limits are shared across workers; the app refuses to start otherwise. Background sweeps run once across all workers (Postgres advisory locks). |
-| `REDIS_URL` | multi-instance | Shared rate-limit store. |
+| `REDIS_URL` | yes, or `SINGLE_WORKER` | Shared rate-limit store, and the reports dashboard cache (`dash:{org_id}`, 30 s TTL) so every worker serves the same cached tiles. A deployed instance **refuses to start** without it, because `--workers N` and extra replicas can't be detected and would each enforce their own copy of every limit. If Redis becomes unreachable at runtime both fall back to per-worker memory (retried every 30 s); requests never fail because of it. |
+| `SINGLE_WORKER` | only without Redis | `true` promises exactly **one web worker on one instance** (the beta setup until `REDIS_URL` is set), and lets a deployed instance start without `REDIS_URL`. `WEB_CONCURRENCY` > 1 is still refused. Don't add `--workers`, a second replica, or a second container behind the balancer while it is set. |
 | `DB_POOL_SIZE` / `DB_MAX_OVERFLOW` | no | Postgres connections per worker (default 10 + 10). Keep `WEB_CONCURRENCY` × their sum under the server's `max_connections`. `DB_POOL_TIMEOUT_S` (default 10) is how long a request waits for a free connection before failing. |
 | `DB_STATEMENT_TIMEOUT_MS` | no | Postgres cancels any single statement that runs longer (default 15000). `DB_IDLE_IN_TX_TIMEOUT_MS` (default 60000) ends sessions left idle inside a transaction. Set to 0 behind a PgBouncer that rejects startup parameters, and set them on the database role instead. |
+| `SLOW_QUERY_MS` | no | Any SQL statement slower than this (default 500) logs one WARNING on `tekly.db.slow`: duration, the first 200 characters of the statement and the request id (bound values are never logged), and counts in `repairos_slow_queries_total` at `/metrics`. 0 turns it off. For the full picture per query shape, enable Postgres's `pg_stat_statements` extension (`shared_preload_libraries = 'pg_stat_statements'`, then `CREATE EXTENSION pg_stat_statements;`) and review it by `total_exec_time`. |
 | `MIGRATION_LOCK_TIMEOUT` | no | How long a migration waits for a table lock before failing (default `5s`). Migrations run with no statement timeout. See "Migrations and live traffic" below. |
 | `MEDIA_BACKEND` | recommended | `s3` in production (see §5). |
 | `SENTRY_DSN` | recommended | Sends unhandled errors to Sentry/GlitchTip (headers, cookies, bodies and query strings are scrubbed). Optional `SENTRY_TRACES_SAMPLE_RATE` (default 0) and `RELEASE` (git SHA). |
@@ -107,6 +111,9 @@ and the same sweep can run twice. Migrations also need a direct (or session-pool
 
 ## 4. Backups and restore
 
+**One-server setup:** `deploy/one-server/` has nightly off-site backups, a restore drill and a
+one-command live restore built in; see its README. The notes below apply to any other setup.
+
 Use a managed Postgres with **point-in-time recovery** (AWS RDS, GCP Cloud SQL, Neon,
 Supabase…) and a retention of at least 7 days. In addition, take a nightly logical dump kept
 off-site:
@@ -127,6 +134,15 @@ DATABASE_URL=postgresql+asyncpg://…/repairos_restore_test alembic -c backend/a
 
 Then start a container against the restored DB and sign in. Write down how long it took — that
 is your real recovery time.
+
+`scripts/restore_drill.py` automates the restore and the checks (migration version, every table's
+row count, the integrity sweep) and times each step; CI runs it on every push. Full procedure,
+troubleshooting and the per-shop restore: [docs/runbooks/restore-drill-and-integrity.md](docs/runbooks/restore-drill-and-integrity.md).
+
+**Integrity sweep (nightly, automatic).** The `integrity-sweep` job checks that every till balance,
+client balance, invoice `amount_paid` and on-hand count equals the ledger it summarises. A mismatch
+is logged at ERROR on `tekly.reconcile` and shown as `repairos_integrity_mismatches` in `/metrics`;
+alert on either. It reads only. What to do when it fires: the runbook above.
 
 ## 5. Media (photos, signatures, attachments)
 

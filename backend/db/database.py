@@ -74,6 +74,11 @@ if settings.is_sqlite:
 
 AsyncSessionLocal = async_sessionmaker(engine, expire_on_commit=False)
 
+# Slow statements (> SLOW_QUERY_MS) log a WARNING with the request id and count in /metrics.
+from backend.core.observability import install_slow_query_log  # noqa: E402
+
+install_slow_query_log()
+
 from backend.db import (
     actors,  # noqa: E402,F401 — records who discounted, refunded, closed a drawer
     tenancy,  # noqa: E402,F401 — registers the cross-tenant reference guard

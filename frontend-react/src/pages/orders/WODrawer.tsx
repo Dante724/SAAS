@@ -1267,13 +1267,14 @@ function CustomLineForm({ orderId, forItem, kitId, onFlash, onClose, onAdded }: 
   const [price, setPrice] = useState(""); const [cost, setCost] = useState("");
   const [save, setSave] = useState(false); const [sku, setSku] = useState(""); const [barcode, setBarcode] = useState("");
   const [busy, setBusy] = useState(false);
+  const lineKey = useRef(idempotencyKey());   // council M13: a retried add lands once
   const canSave = type === "product" ? can("can_create_products") : can("can_edit_labors");
   const canCost = can("can_set_cost_price");
   async function submit() {
     if (!name.trim()) { onFlash("Give the item a name"); return; }
     setBusy(true);
     try {
-      const r = await api.post<any>(`/orders/${orderId}/lines`, {
+      const r = await api.postOnce<any>(`/orders/${orderId}/lines`, {
         description: name.trim(), kind: "custom", line_type: type === "product" ? "part" : "labour",
         qty, unit_price: Number(price) || 0, ...(canCost ? { cost_price: Number(cost) || 0 } : {}),
         ...(forItem ? { order_item_id: forItem } : {}),
@@ -1281,7 +1282,8 @@ function CustomLineForm({ orderId, forItem, kitId, onFlash, onClose, onAdded }: 
         ...(kitId && save && canSave ? { bundle_group_id: kitId } : {}),
         ...(save && canSave ? { save_to_catalog: true, catalog_kind: type,
           ...(type === "product" ? { catalog_sku: sku.trim() || null, catalog_barcode: barcode.trim() || null } : {}) } : {}),
-      });
+      }, lineKey.current);
+      lineKey.current = idempotencyKey();
       onFlash(save && canSave ? `Added and saved to the catalog${r?.margin_warning ? `. ${r.margin_warning}` : ""}` : (r?.margin_warning ? `Added. ${r.margin_warning}` : "Line added"));
       onAdded();
     } catch (e: any) { onFlash(e.message || "Could not add line"); setBusy(false); }
@@ -1382,6 +1384,9 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, tax, 
   const tagging = itemsOn && jobItems.length > 1;
   const [filter, setFilter] = useState("All");
   const [adding, setAdding] = useState(false);
+  // Council M13: one key per item until its add has gone through, so a double click or a retry
+  // after a timeout can't add it twice (and take stock twice).
+  const addKeys = useRef<Record<string, string>>({});
   const [custom, setCustom] = useState(false);     // 3: a line that isn't in the catalog (yet)
   const [intoKit, setIntoKit] = useState<{ id: string; name: string } | null>(null);   // add the pick inside this kit
   const [stock, setStock] = useState<{ total_available: number; items: { location: string; location_id?: string; bin_id?: string | null; bin?: string | null; available: number }[] } | null>(null);
@@ -1404,14 +1409,16 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, tax, 
     if (adding) return;
     setAdding(true);
     try {
-      const r = await api.post<any>(`/orders/${orderId}/lines`, {
+      const key = (addKeys.current[pick.ref_id] ||= idempotencyKey());
+      const r = await api.postOnce<any>(`/orders/${orderId}/lines`, {
         description: pick.name, kind: pick.kind,
         line_type: pick.kind === "service" ? "labour" : "part",
         ref_id: pick.ref_id, qty: 1, unit_price: pick.price || 0,
         ...(tagging && forItem ? { order_item_id: forItem } : {}),
         ...(intoKit && pick.kind !== "bundle" ? { bundle_group_id: intoKit.id } : {}),
         ...(pick.kind === "product" && takeBin ? { bin_id: takeBin } : {}),
-      });
+      }, key);
+      delete addKeys.current[pick.ref_id];
       const out = pick.kind === "product" && pick.available != null && pick.available <= 0 ? ". It's out of stock: order or transfer it" : "";
       const inKitNow = intoKit && pick.kind !== "bundle";
       onFlash(r?.margin_warning ? `${pick.name} added. ${r.margin_warning}` : `${inKitNow ? `Added to ${intoKit!.name}` : `${pick.name} added`}${out}`);
