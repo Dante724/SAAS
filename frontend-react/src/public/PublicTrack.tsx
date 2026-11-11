@@ -8,6 +8,7 @@ import EmptyState from "../components/EmptyState";
 import PublicLayout, { accentFill, onColor, shopAccent, initials, publicCard, textareaCls, inputCls, fieldLabelCls } from "./PublicLayout";
 
 export { onColor, initials };
+import { fmtServerTime } from "../lib/serverTime";
 
 // ── Public customer page: order tracking + estimate + e-sign ──────────────
 // A real part of the React app — NOT the legacy vanilla-JS track.html. Served at /track/:token,
@@ -100,10 +101,8 @@ export function PaidNote({ paid, balance, paidInFull, sym, className = "" }: {
   return null;
 }
 
-// The server sends UTC without a zone marker; read it as UTC so times show in the customer's own clock.
-const asUtc = (s: string) => (/[zZ]|[+-]\d\d:?\d\d$/.test(s) ? s : s + "Z");
-export const fmtDate = (s?: string) =>
-  s ? new Date(asUtc(s)).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "";
+// Server instants are UTC; show them in the customer's own clock.
+export const fmtDate = (s?: string) => fmtServerTime(s);
 // Scheduled visit for the Details list: one line for a single day ("Tue, Oct 21, 2:00 – 4:00 PM"),
 // Start and End lines when the job spans several days. Empty when the shop doesn't share it.
 // Scheduled times are the shop's wall-clock time (no zone), so they are shown exactly as the shop

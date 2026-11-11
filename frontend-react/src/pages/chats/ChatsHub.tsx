@@ -66,7 +66,13 @@ export default function ChatsHub() {
   const openSeq = useRef(0);
   const selId = useRef<string | null>(null);
   selId.current = sel?.id ?? null;
-  const [text, setText] = useState("");
+  // The composer keeps a draft per conversation: one shared box let a reply typed for one
+  // customer go to the next chat you opened.
+  const [drafts, setDrafts] = useState<Record<string, string>>({});
+  const text = (sel && drafts[sel.id]) || "";
+  const setDraft = (id: string, v: string | ((t: string) => string)) =>
+    setDrafts((d) => ({ ...d, [id]: typeof v === "function" ? v(d[id] || "") : v }));
+  const setText = (v: string | ((t: string) => string)) => { if (sel) setDraft(sel.id, v); };
   const [convMenu, setConvMenu] = useState(false);
   const [more, setMore] = useState(false);
   // Escape closes whichever thread menu is open (keyboard users can't reach the backdrop).
@@ -120,7 +126,7 @@ export default function ChatsHub() {
     const b = (body ?? text).trim(); if (!b || !sel) return;
     try {
       const r = await api.post<{ thread_status?: ChatStatus }>(`/chats/threads/${sel.id}/send`, { body: b });
-      setText("");
+      setDraft(sel.id, (cur) => (cur.trim() === b ? "" : cur));   // clears the chat it went to
       // The reply may move the chat out of a filtered tab; keep its header status true anyway.
       const now = { ...sel, status: r?.thread_status || sel.status };
       if (selId.current !== sel.id) { load(tab, selId.current); return; }   // moved on to another chat meanwhile

@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { fmtServerTime, serverDate, signupTimezone, wallDate } from "./serverTime";
+import { dayDate, fmtServerTime, serverDate, signupTimezone, wallDate } from "./serverTime";
 
 describe("serverTime (launch B6)", () => {
   it("reads an instant without a zone as UTC, not as local time", () => {
@@ -14,6 +14,16 @@ describe("serverTime (launch B6)", () => {
     const d = wallDate("2026-11-04T11:01:00")!;
     expect([d.getHours(), d.getMinutes()]).toEqual([11, 1]);
     expect(wallDate("2026-11-04T11:01:00Z")!.getHours()).toBe(11);
+  });
+
+  it("puts an instant on the viewer's day and a bare date or wall time on its own day", () => {
+    const inst = dayDate("2026-11-11T02:00:00Z")!;      // 21:00 on the 10th in New York
+    expect(inst.getTime()).toBe(Date.UTC(2026, 10, 11, 2));
+    const day = dayDate("2026-11-11")!;
+    expect([day.getFullYear(), day.getMonth(), day.getDate(), day.getHours()]).toEqual([2026, 10, 11, 0]);
+    const wall = dayDate("2026-11-11T17:00:00")!;       // a due time: the shop's clock as stored
+    expect([wall.getDate(), wall.getHours()]).toEqual([11, 17]);
+    expect(dayDate(null)).toBeNull();
   });
 
   it("handles empty and bad input", () => {

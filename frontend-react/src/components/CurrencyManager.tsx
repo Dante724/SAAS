@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import TeklySelect from "./TeklySelect";
 import { api } from "../api/client";
 import { M } from "./Shell";
+import { fmtServerTime, serverDate } from "../lib/serverTime";
 
 /** Additional (non-base) currencies — Orderry-style.
  *  Backed by /api/finance/currencies: real Currency table with an append-only
@@ -107,7 +108,7 @@ export default function CurrencyManager() {
                 </TeklySelect></div>
               <div className="col-span-3">
                 <input type="number" step="0.000001" defaultValue={c.rate} onBlur={(e) => { const v = parseFloat(e.target.value); if (v && v !== c.rate) saveRate(c, v); }} className={`${field} font-mono`} />
-                {c.updated_at && <div className="text-2xs text-ink-tertiary mt-0.5">as of {new Date(c.updated_at).toLocaleDateString()}</div>}
+                {c.updated_at && <div className="text-2xs text-ink-tertiary mt-0.5">as of {serverDate(c.updated_at)?.toLocaleDateString()}</div>}
               </div>
               <div className="col-span-3 flex items-center justify-end gap-1">
                 <button aria-label="Rate history" onClick={() => setHistFor(c)} title="Rate history" className="w-7 h-7 rounded-lg grid place-items-center text-ink-tertiary hover:bg-slate-100"><M n="history" c="text-base" /></button>
@@ -140,7 +141,7 @@ function RateHistory({ currency, onClose }: { currency: Cur; onClose: () => void
             {rows.map((r, i) => (
               <div key={i} className="flex items-center justify-between py-2 text-xs">
                 <span className="tabular-nums font-bold text-ink-primary">1 = {r.rate}</span>
-                <span className="text-ink-tertiary">{r.changed_at ? new Date(r.changed_at).toLocaleString() : ""}</span>
+                <span className="text-ink-tertiary">{fmtServerTime(r.changed_at, {})}</span>
               </div>
             ))}
           </div>

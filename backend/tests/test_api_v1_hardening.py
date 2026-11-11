@@ -165,7 +165,7 @@ async def test_a3_write_implies_read_and_legacy_scopes(client, db):
 async def test_a4_default_expiry_and_expired_key_rejected(client, db):
     H, _, _ = await _register(client)
     made = await _key(client, H)
-    exp = datetime.fromisoformat(made["expires_at"])
+    exp = datetime.fromisoformat(made["expires_at"].removesuffix("Z"))   # instants are sent as UTC "…Z"
     assert timedelta(days=364) < exp - datetime.utcnow() <= timedelta(days=365)
     never = await _key(client, H, expires_in_days=None)
     assert never["expires_at"] is None

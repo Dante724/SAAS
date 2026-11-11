@@ -10,7 +10,7 @@ import { useEffect, useRef, useState } from "react";
 import { createPortal } from "react-dom";
 import { Link, useNavigate } from "react-router-dom";
 import Section, { sectionCard } from "../../components/Section";
-import { fmtServerTime } from "../../lib/serverTime";
+import { fmtServerTime, wallDate } from "../../lib/serverTime";
 import { ChannelPicker, DeliveryNote, useThread, type SendChannel, type ThreadSent } from "./ConversationPanel";
 import SignaturePad from "../../components/SignaturePad";
 import SendMenu, { type SendWay } from "../../components/SendMenu";
@@ -84,7 +84,8 @@ const btnGhost = "h-9 px-3.5 rounded-xl text-xs font-semibold text-ink-secondary
 const houseInput = "glass-input rounded-xl px-3 py-2 text-sm";
 const menuRow = "w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-slate-50";
 const or = (real: any, sample: string) => (real != null && real !== "" ? String(real) : sample);
-const fmtDT = (iso?: string | null) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "");
+// Due times are the shop's wall clock; the estimated ready time is an instant (fmtServerTime).
+const fmtDT = (iso?: string | null) => wallDate(iso)?.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) ?? "";
 const fmtDur = (min?: number | null) => {
   if (min == null) return "";
   if (min < 60) return `${Math.round(min)} min`;
@@ -544,7 +545,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                 {timing.predicted_ready_at && (
                   <span className="ml-auto flex items-center gap-1.5 text-ink-secondary">
                     <M n="event_available" c="text-sm text-emerald-600" />
-                    Est. ready <span className="font-semibold text-ink-primary">{fmtDT(timing.predicted_ready_at)}</span>
+                    Est. ready <span className="font-semibold text-ink-primary">{fmtServerTime(timing.predicted_ready_at)}</span>
                     {timing.confidence === "low" && <span className="text-ink-tertiary" title={`Based on ${timing.sample_n} past job(s)`}>· rough</span>}
                     <ReadyWhy sampleN={timing.sample_n} typicalMin={timing.typical_min} fmt={fmtDur} />
                   </span>

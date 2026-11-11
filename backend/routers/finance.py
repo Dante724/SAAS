@@ -731,6 +731,11 @@ async def _record_payment(invoice_id: str, data: "PaymentIn", db: AsyncSession, 
             raise HTTPException(422, "The payment date can't be in the future")
         if day.date() < today:
             await assert_perm(db, current, "can_retroactive_cash")
+            if len(data.paid_at.strip()) == 10:
+                # A picked day, not a time: keep it as noon of that day on the shop's clock (an instant,
+                # sent with a "Z"), so it reads as that day in the shop and falls in that shop day's
+                # cash totals, instead of UTC midnight, which shows as the day before in the Americas.
+                day = day_start_utc(day.date(), await shop_tzname(db, current.org_id)) + timedelta(hours=12)
             paid_at, retro = day, True
     acc = None
     if data.account_id:
@@ -1160,6 +1165,9 @@ async def close_shift(
         from backend.services.permissions import role_allows
         role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
         show_expected = role_allows(role, "can_view_finance")
+    else:
+        from backend.services.auth import is_shop_owner
+        show_expected = await is_shop_owner(db, current)   # no role isn't the owner (launch B10)
     resp = {"ok": True, "counted": counted}
     if show_expected:
         resp["expected_cash"] = shift.expected_cash

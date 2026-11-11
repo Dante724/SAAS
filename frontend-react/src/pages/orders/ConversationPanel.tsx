@@ -8,11 +8,11 @@ import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { deliveryText, deliveryTone, type Delivery, type Flash } from "../../lib/delivery";
 import { sectionCard } from "../../components/Section";
+import { fmtServerTime } from "../../lib/serverTime";
 
 export type ThreadMsg = { id: string; from: "staff" | "customer"; who?: string; body: string; at?: string };
 export type SendChannel = "auto" | "email" | "sms";
 export type ThreadSent = ThreadMsg & { delivery?: Delivery };
-const fmt = (iso?: string) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "");
 
 export const CHANNELS: [SendChannel, string][] = [["auto", "Auto"], ["email", "Email"], ["sms", "Text"]];
 
@@ -96,7 +96,7 @@ export default function ConversationPanel({ orderId, onFlash, reloadKey, onSent 
             <div key={m.id} className={`flex ${staff ? "justify-end" : "justify-start"}`}>
               <div className={`max-w-[78%] rounded-2xl px-3 py-2 ${staff ? "bg-primary text-white rounded-br-sm" : "bg-white border border-slate-200 text-ink-primary rounded-bl-sm"}`}>
                 <div className="text-[13px] leading-snug whitespace-pre-wrap break-words">{m.body}</div>
-                <div className={`text-[11px] mt-1 ${staff ? "text-white/70" : "text-ink-tertiary"}`}>{m.who || (staff ? "Staff" : "Customer")} · {fmt(m.at)}</div>
+                <div className={`text-[11px] mt-1 ${staff ? "text-white/70" : "text-ink-tertiary"}`}>{m.who || (staff ? "Staff" : "Customer")} · {fmtServerTime(m.at)}</div>
               </div>
             </div>
           );

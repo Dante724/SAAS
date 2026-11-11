@@ -7,6 +7,7 @@ import Switch from "../../components/Switch";
 import { friendlyDate } from "../orders/look";
 import { tint, hueText } from "../../lib/tint";
 import { Drawer, ErrorNote, MoreMenu, btnDanger, btnGhost, btnPrimary, inputCls, labelCls } from "../invoices/billing";
+import { serverDate } from "../../lib/serverTime";
 
 // B15 — Settings › Integrations › Webhooks. Add, edit and remove endpoints, pick events, see each
 // endpoint's deliveries (and send one again), send a test event, and rotate the signing secret.
@@ -48,8 +49,8 @@ function endpointState(e: Endpoint): { label: string; hue: string } {
   return { label: "On", hue: HUE.ok };
 }
 
-// API times are UTC without a zone marker.
-const utc = (iso: string) => new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : iso + "Z");
+// API times are UTC instants.
+const utc = (iso: string) => serverDate(iso) ?? new Date(NaN);
 
 const eventsText = (events: string) => {
   if (!events || events.trim() === "*") return "All events";

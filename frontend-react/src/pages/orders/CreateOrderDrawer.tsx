@@ -484,9 +484,9 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                   if (!issueText()) { await alertDialog("Fill in what the customer reported first."); return; }
                   try {
                     const r = await api.post<any>("/ai/estimate/draft", { complaint: issueText(), device: [brand, model].filter(Boolean).join(" ") });
-                    const add = (r.lines || []).map((l: any) => ({ id: Math.random().toString(36).slice(2), description: l.description, kind: "service", price: l.unit_price || 0 }));
+                    const add = (r.lines || []).map((l: any) => ({ id: Math.random().toString(36).slice(2), description: l.description, kind: l.kind === "product" ? "product" : "service", price: l.unit_price || 0, ref_id: l.ref_id || undefined }));
                     if (add.length) setLines((ls) => [...ls, ...add]);
-                    if (r.note) await alertDialog(r.note);   // no AI set up: the lines come unpriced
+                    if (r.note) await alertDialog(r.note);   // lines not in the shop's catalog come unpriced
                   } catch (e: any) { await alertDialog(e.message || "Couldn't draft lines from the complaint. Add them from the search instead."); }
                 }} className="h-8 rounded-lg px-2.5 text-xs font-semibold text-primary hover:bg-primary/5 flex items-center gap-1"><M n="auto_awesome" c="text-sm" />Draft from the complaint</button>}
               </div>

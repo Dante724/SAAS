@@ -9,6 +9,7 @@ import { confirmDialog } from "../../lib/dialog";
 import Switch from "../../components/Switch";
 import { Drawer, ErrorNote, MoreMenu, btnGhost, btnPrimary, inputCls, labelCls } from "../invoices/billing";
 import { Badge } from "../../components/Card";
+import { serverDate } from "../../lib/serverTime";
 
 // Settings › Integrations › API keys. Create a key with the access it needs (read only by
 // default) — everything, or only some things (WS-C resource scopes, API v2) — an expiry, its own
@@ -46,7 +47,7 @@ export function scopesFrom(access: Access, pick: ScopePick, costs = false): stri
 type Fresh = { name: string; key: string; rotated: boolean };
 
 // The API sends UTC without an offset.
-const utc = (iso: string) => new Date(/[zZ]|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`);
+const utc = (iso: string) => serverDate(iso) ?? new Date(NaN);
 const day = (iso?: string | null) => (iso ? utc(iso).toLocaleDateString([], { day: "numeric", month: "short", year: "numeric" }) : "");
 
 export function accessText(k: { scopes?: string | null; scope_list?: string[] }): string {

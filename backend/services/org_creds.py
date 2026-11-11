@@ -241,9 +241,14 @@ def _has_essential(provider: str, creds: dict) -> bool:
     return any(creds.get(k) for k in keys)
 
 
+# Card payments only ever use the shop's own keys (effective(own_only=True)): an operator
+# default for these is never used, so it must not make the provider look set up.
+_OWN_KEYS_ONLY = {"stripe", "square", "sumup"}
+
+
 async def source(db: AsyncSession, org_id: str, provider: str) -> str:
     """'org' if the shop has its own keys, 'env' if only an operator default
-    exists, else 'none'."""
+    exists (never for card payments), else 'none'."""
     row = await _row(db, org_id, provider)
     if row and row.active:
         try:
@@ -251,6 +256,8 @@ async def source(db: AsyncSession, org_id: str, provider: str) -> str:
                 return "org"
         except CredentialsUnreadable:
             return "unreadable"
+    if provider in _OWN_KEYS_ONLY:
+        return "none"
     return "env" if _has_essential(provider, _env_creds(provider)) else "none"
 
 

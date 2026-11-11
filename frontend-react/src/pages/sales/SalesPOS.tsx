@@ -22,6 +22,7 @@ import { inputCls } from "../invoices/billing";
 import { Avatar, deviceIcon } from "../orders/look";
 import { loadFailed } from "../../lib/notice";
 import { SetUpCashbox, type PayAccount } from "../../components/AccountPicker";
+import { fmtServerTime } from "../../lib/serverTime";
 
 type Product = { id: string; name?: string; sku?: string; sell_price?: number; qty_available?: number; image_data?: string | null; low_stock?: boolean; serialized?: boolean };
 type Service = { id: string; name?: string; price?: number; duration_min?: number };
@@ -581,7 +582,7 @@ function ReceiptSheet({ saleId, change, paid = true, onClose, onFlash }: { saleI
     const included = (rc.tax_lines || []).filter((t) => t.included).map((t) => `<tr><td><small>Includes ${escapeHtml(t.name)} ${t.rate}%</small></td><td class="r"><small>${escapeHtml(money(t.amount))}</small></td></tr>`).join("");
     printHtmlInFrame(`<html><head><title>${escapeHtml(rc.sale_number)}</title><style>${css}</style></head><body><h1>${escapeHtml(rc.shop_name)}</h1>`
       + (rc.shop_tax_id ? `<p style="margin:2px 0">${escapeHtml(rc.shop_tax_id.label)} ${escapeHtml(rc.shop_tax_id.value)}</p>` : "")
-      + `<p>Receipt ${escapeHtml(rc.sale_number)}${rc.created_at ? " · " + escapeHtml(new Date(rc.created_at + (rc.created_at.endsWith("Z") ? "" : "Z")).toLocaleString()) : ""}</p>`
+      + `<p>Receipt ${escapeHtml(rc.sale_number)}${rc.created_at ? " · " + escapeHtml(fmtServerTime(rc.created_at, {})) : ""}</p>`
       + `<table>${rows}${rc.discount ? `<tr><td>Discount</td><td class="r">−${escapeHtml(money(rc.discount))}</td></tr>` : ""}${rc.tax ? `<tr><td>Tax</td><td class="r">${escapeHtml(money(rc.tax))}</td></tr>` : ""}<tr class="t"><td>Total</td><td class="r">${escapeHtml(money(rc.total))}</td></tr>${included}${rc.gift_card ? `<tr><td>Gift card</td><td class="r">−${escapeHtml(money(rc.gift_card))}</td></tr>` : ""}</table>`
       + `<p style="margin-top:12px">${rc.paid ? "Paid" : "Not paid yet"} · Thank you!</p></body></html>`);
   }

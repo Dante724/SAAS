@@ -155,8 +155,8 @@ async def call_webhook(
 
 
 def _JSON(body, status):
-    from fastapi.responses import JSONResponse
-    return JSONResponse(body, status_code=status)
+    from backend.core.utc_instants import ApiJSONResponse   # instants with a "Z", like the default (B6)
+    return ApiJSONResponse(body, status_code=status)
 
 
 async def _update_call(db, org_id: str, call: Call, data: "CallEventIn") -> dict:

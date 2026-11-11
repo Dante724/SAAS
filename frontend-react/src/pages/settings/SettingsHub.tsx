@@ -27,6 +27,7 @@ import { loadFailed } from "../../lib/notice";
 import { clickable, clickableRow } from "../../lib/clickable";
 import { Badge, type BadgeTone } from "../../components/Card";
 import { useCardReaders } from "../../lib/cardReaders";
+import { serverDate } from "../../lib/serverTime";
 
 // Each settings page is its own chunk, fetched when its section opens (the hub was one ~470 kB file).
 const TemplateEditorDrawer = lazy(() => import("./TemplateEditorDrawer"));
@@ -2142,7 +2143,7 @@ function EcommerceSettings() {
             <span className="font-medium text-ink-primary">{i.store_url || "—"}</span>
             <span className="text-xs text-ink-tertiary">{[i.sync_products && "Products", i.sync_orders && "Orders"].filter(Boolean).join(" + ")}</span>
             <div className="flex-1" />
-            <span className="text-xs text-ink-tertiary">{i.last_synced_at ? `Synced ${new Date(i.last_synced_at).toLocaleDateString()}` : "Never synced"}</span>
+            <span className="text-xs text-ink-tertiary">{i.last_synced_at ? `Synced ${serverDate(i.last_synced_at)?.toLocaleDateString()}` : "Never synced"}</span>
             <Badge tone={i.active ? "success" : "neutral"} size="sm">{i.active ? "Active" : "Off"}</Badge>
           </div>
         ))}

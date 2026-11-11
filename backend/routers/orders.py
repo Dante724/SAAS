@@ -676,12 +676,9 @@ async def bulk_action(
     # and run each through the single-order helper so refunds, commission reversal and audit
     # all happen exactly as they do for a one-off archive. One bad order is skipped, not fatal.
     if data.action in ("archive", "restore"):
-        if current.role_id:
-            from backend.models import Role
-            _role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
-            from backend.services.permissions import role_allows as _ra
-            if _role is None or not _ra(_role, "can_delete_orders"):
-                raise HTTPException(403, "Your role does not allow deleting orders")
+        # No role isn't the owner (launch B10): has_perm gives a roleless invitee nothing.
+        if not await has_perm(db, current, "can_delete_orders"):
+            raise HTTPException(403, "Your role does not allow deleting orders")
         if data.action == "archive":
             await assert_perm(db, current, "can_delete_tickets")
         reason = (data.reason or "Bulk delete").strip()
@@ -980,7 +977,8 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
     stock_writeoffs = []  # (part_id, qty, line_obj) to apply after order flush
     from backend.routers.pricing import evaluate_line_margin
     _perms_create = await _order_perms(db, current)
-    _hide_cost = bool(current.role_id) and not _perms_create.get("can_view_purchase_price")
+    _unlimited = await _no_role_limits(db, current)
+    _hide_cost = not _unlimited and not _perms_create.get("can_view_purchase_price")
     _fixed_cost = not _hide_cost and not await has_perm(db, current, "can_set_cost_price")
     for li in data.lines:
         await _assert_line_rights(db, current, li)
@@ -989,7 +987,7 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
             li.cost_price = await _catalog_cost(db, current.org_id, li.kind, li.ref_id)
         await _apply_client_discount(db, current.org_id, data.client_id, li)
         await _auto_apply_tax(db, current.org_id, li, data.location_id)   # launch B4: lines on a new job were never taxed
-        await _guard_discount_approval(db, current.org_id, _perms_create, li.discount, li.discount_type, is_owner=not current.role_id,
+        await _guard_discount_approval(db, current.org_id, _perms_create, li.discount, li.discount_type, is_owner=_unlimited,
                                           base=(li.qty or 0) * (li.unit_price or 0))
         # 144ha — margin-floor guardrail on create (block a below-floor line)
         _mg = await evaluate_line_margin(
@@ -1167,12 +1165,7 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
     # write off stock for product lines; if insufficient, deduct what's available
     # Permission gate (Orderry): adding more than is in stock ("add without
     # deduction") requires the can_add_without_stock role permission.
-    perms = {}
-    if current.role_id:
-        from backend.models import Role
-        role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
-        from backend.services.permissions import effective_permissions as _eff
-        perms = _eff(role) if role else {c: False for c in _all_codes()}
+    perms = await _order_perms(db, current)   # a roleless invitee gets no "add without stock"
     # write off products from stock at order creation; if not enough on hand
     # record the shortfall as pending_stock (Orderry's "add without deduction"). Same deduction as
     # adding a line later: reservation-aware, row-locked, cost layers + serials drawn, and
@@ -1989,8 +1982,14 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
                    else await credit_spent_target(db, order))
         _delta = q2(_target - _net)
         if _delta:
-            _note = (f"Order {order.order_number} ready" if is_closing
-                     else f"Order {order.order_number} reopened")
+            # a drop's adjustment says so: two "ready" rows on a statement hid the write-off
+            if is_dropping:
+                _note = (f"Order {order.order_number} dropped: balance written off"
+                         if float(order.written_off or 0) else f"Order {order.order_number} dropped")
+            elif is_closing:
+                _note = f"Order {order.order_number} ready"
+            else:
+                _note = f"Order {order.order_number} reopened"
             await post_contact_ledger(
                 db, current.org_id, order.client_id, "charge", _delta,
                 note=_note, ref_type="order", ref_id=order.id, created_by_id=current.id)
@@ -4358,6 +4357,17 @@ async def _order_perms(db, current):
     return perms
 
 
+async def _no_role_limits(db, current) -> bool:
+    """No role limits apply: the shop owner without a role, or an API v2 key. A roleless
+    invitee is not that (launch B10), so `not current.role_id` alone must never stand for it."""
+    if getattr(current, "api_key_id", None):
+        return True
+    if current.role_id:
+        return False
+    from backend.services.auth import is_shop_owner
+    return await is_shop_owner(db, current)
+
+
 async def _guard_discount_approval(db, org_id, perms, discount, discount_type, is_owner=False,
                                    base: float | None = None):
     """144hd — a discount above the org threshold needs approval rights.
@@ -4534,7 +4544,7 @@ async def add_line(
     perms = await _order_perms(db, current)
     # Someone who can't see costs never saw the catalog cost, so whatever they sent is ignored
     # and the line takes the catalog's cost (0 for a custom line).
-    if current.role_id and not perms.get("can_view_purchase_price"):
+    if not await _no_role_limits(db, current) and not perms.get("can_view_purchase_price"):
         data.cost_price = await _catalog_cost(db, current.org_id, data.kind, data.ref_id)
     elif not await has_perm(db, current, "can_set_cost_price"):
         data.cost_price = await _catalog_cost(db, current.org_id, data.kind, data.ref_id)   # not theirs to set
@@ -4695,7 +4705,7 @@ async def add_line(
 
     await _apply_client_discount(db, current.org_id, order.client_id, data)
     await _auto_apply_tax(db, current.org_id, data, order.location_id)
-    await _guard_discount_approval(db, current.org_id, perms, data.discount, data.discount_type, is_owner=not current.role_id,
+    await _guard_discount_approval(db, current.org_id, perms, data.discount, data.discount_type, is_owner=await _no_role_limits(db, current),
                                    base=(data.qty or 0) * (data.unit_price or 0))
     # 144gy — margin-floor guardrail: block a line discounted below the org's minimum.
     from backend.routers.pricing import evaluate_line_margin
@@ -4843,7 +4853,10 @@ def _can_override_reservation(perms, current) -> bool:
     """Admin-override is opt-in (default-deny), unlike the rest of the default-allow catalog:
     only the owner (no role) or a role with can_override_reservation explicitly enabled may
     consume stock reserved for another job."""
-    return (not getattr(current, "role_id", None)) or (perms.get("can_override_reservation") is True)
+    if perms.get("can_override_reservation") is True:
+        return True
+    # {} is the owner (_order_perms); a roleless invitee's perms are all False (launch B10).
+    return not getattr(current, "role_id", None) and "can_override_reservation" not in perms
 
 
 async def _resolve_variant_part(db, org_id, configured, device):
@@ -5221,6 +5234,11 @@ async def update_line(
         # The plan's own price: removing it would make the plan free. Cancel the membership instead.
         raise HTTPException(409, "This is a membership plan. Cancel it from the customer's membership instead.")
     payload = data.model_dump(exclude_unset=True)
+    # A qty change can cut the bill as surely as deleting the line, so it needs the same right.
+    if "qty" in payload and float(payload["qty"] or 0) != float(line.qty or 0):
+        need = "can_add_products" if line.kind == "product" else "can_add_services"
+        if (await _order_perms(db, current)).get(need) is False:
+            raise HTTPException(403, "You don't have permission to change quantities on this job")
     if payload.keys() & {"qty", "unit_price", "discount", "discount_type", "tax_rate", "tax_mode"}:
         from backend.services.invoice_money import assert_line_editable
         await assert_line_editable(db, line.id)   # not under a sent or paid invoice
@@ -5228,7 +5246,7 @@ async def update_line(
     # that changed nothing — QA 31 Oct 2026). The editor only sends cost when it showed it.
     if "cost_price" in payload and float(payload["cost_price"] or 0) != float(line.cost_price or 0):
         await assert_perm(db, current, "can_set_cost_price")
-    if current.role_id and not (await _order_perms(db, current)).get("can_view_purchase_price"):
+    if not await _no_role_limits(db, current) and not (await _order_perms(db, current)).get("can_view_purchase_price"):
         payload.pop("cost_price", None)
     if "discount_type" in payload and (payload["discount_type"] or "pct") != (line.discount_type or "pct"):
         await assert_perm(db, current, "can_set_discount_type")
@@ -5264,13 +5282,7 @@ async def update_line(
             and "qty" in payload and (line.qty or 0) != old_qty):
         delta = (line.qty or 0) - old_qty
         if delta > 0:
-            perms = {}
-            if current.role_id:
-                from backend.models import Role
-                from backend.services.permissions import effective_permissions as _eff
-                role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
-                perms = _eff(role) if role else {c: False for c in _all_codes()}
-            await _maybe_deduct(db, order, line, delta, perms, current)
+            await _maybe_deduct(db, order, line, delta, await _order_perms(db, current), current)
         else:
             dec = -delta
             from_pending = min(dec, line.pending_stock or 0)
@@ -5280,7 +5292,7 @@ async def update_line(
                 await _reverse_fulfillment(db, order, line.ref_id, physical)
     # 144hd — discount-approval gate on edit
     await _guard_discount_approval(db, current.org_id, await _order_perms(db, current),
-                                   line.discount, line.discount_type, is_owner=not current.role_id,
+                                   line.discount, line.discount_type, is_owner=await _no_role_limits(db, current),
                                    base=(line.qty or 0) * (line.unit_price or 0))
     # 144ha — margin-floor guardrail also on edit (can't cheap-add then discount here)
     from backend.routers.pricing import evaluate_line_margin

@@ -1235,8 +1235,7 @@ async def company_dashboard(
                                       Order.status.in_([k for k, g in grp.items() if g == "closed"] or [""]))
     if location_id:
         closed_q = closed_q.where(Order.location_id == location_id)
-    closed_figs = await money_rules.job_figures(db, closed_q)
-    avg_wo = q2(sum(f["revenue"] for f in closed_figs.values()) / len(closed_figs)) if closed_figs else 0
+    avg_wo = q2(await money_rules.average_job_revenue(db, oid, closed_q))
     conversion = round(won_month / wo_month * 100, 0) if wo_month else 0
 
     # Money on Home follows the role: balances need "see balance", takings and amounts owed
@@ -1509,14 +1508,15 @@ async def home_feed(
     Each item is a group with a count and a deep link to the filtered list behind it.
     Deterministic (no AI); the order is roughly by urgency. Returns ok=True when the
     shop is all caught up."""
-    from backend.models import Lead, Role
+    from backend.models import Lead
     oid = current.org_id
     now = now_utc()
 
     # Role shapes the feed: order_scope="own" limits order/task signals to what's
     # assigned to this person; home_feed_sources (owner-set, in the roles section)
     # limits which signals show at all. Null/empty source list = show all.
-    role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none() if current.role_id else None
+    from backend.services.scoping import role_for
+    role = await role_for(db, current)   # a roleless invitee gets the narrowest scope (launch B10)
     own = bool(role and role.order_scope == "own")
     sources = set(role.home_feed_sources) if role and role.home_feed_sources else None
 

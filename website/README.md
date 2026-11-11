@@ -118,8 +118,9 @@ pricing strip has them written in, so update both). The FAQ's structured data li
   from open PRs #12–#28; move them to a shipped month as they merge.
 - **No invented proof:** there is no founder note and no customer-quotes section. Add quotes only
   from real customers who agreed to be quoted (name, shop, city).
-- **Honest claims:** Tekly AI drafts estimate lines; the shop checks and sets the prices. Don't say
-  "priced from your catalog" or "two-way sync" until the product does it.
+- **Honest claims:** Tekly AI drafts estimate lines. A line that matches one of the shop's own
+  services or products takes that item's price; anything else comes in unpriced for the shop to set.
+  Never say the AI prices every line, and don't say "two-way sync" until the product does it.
 - **Legal placeholders:** `tools/legal/` has `[[CAPITALISED]]` tokens the founder must fill in.
   `build_pages.py` lists them and **fails** while any remain, so use it as the host's build command.
   `--allow-placeholders` makes a draft build for previewing only.

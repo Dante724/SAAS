@@ -26,6 +26,7 @@ from sqlalchemy import delete, desc, func, select, update
 from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.core.utc_instants import ApiJSONResponse  # writes mark instants with "Z" like reads (B6)
 from backend.db.database import get_db
 from backend.models import (
     ApiIdempotencyKey,
@@ -381,7 +382,7 @@ async def _idempotent(db: AsyncSession, principal: ApiPrincipal, idem_key: Optio
     `stored`, when given, is what gets kept for replays (v2 webhooks: the signing secret is shown
     once and never written to the replay store)."""
     if idem_key is None:
-        return JSONResponse(status_code=status, content=jsonable_encoder(await run()))
+        return ApiJSONResponse(status_code=status, content=jsonable_encoder(await run()))
     body_hash = hashlib.sha256(json.dumps({"route": route, "body": payload.model_dump(mode="json")},
                                           sort_keys=True, separators=(",", ":")).encode()).hexdigest()
     now = datetime.utcnow()
@@ -410,7 +411,7 @@ async def _idempotent(db: AsyncSession, principal: ApiPrincipal, idem_key: Optio
             raise HTTPException(422, "This Idempotency-Key was already used with a different request")
         if prior.status_code is None or prior.response_body is None:
             raise HTTPException(409, "A request with this Idempotency-Key is still being processed")
-        return JSONResponse(status_code=prior.status_code, content=json.loads(prior.response_body),
+        return ApiJSONResponse(status_code=prior.status_code, content=json.loads(prior.response_body),
                             headers={"Idempotency-Key": idem_key, "Idempotent-Replayed": "true"})
     try:
         body = jsonable_encoder(await run())
@@ -422,7 +423,7 @@ async def _idempotent(db: AsyncSession, principal: ApiPrincipal, idem_key: Optio
     await db.execute(update(ApiIdempotencyKey).where(ApiIdempotencyKey.id == claim_id).values(
         status_code=status, response_body=json.dumps(stored(body) if stored else body)))
     await db.commit()
-    return JSONResponse(status_code=status, content=body, headers={"Idempotency-Key": idem_key})
+    return ApiJSONResponse(status_code=status, content=body, headers={"Idempotency-Key": idem_key})
 
 
 # ── input models (A6 / A7) ───────────────────────────────────────────────────

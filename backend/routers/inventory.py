@@ -1762,11 +1762,9 @@ async def send_po(
     # manager (a role NOT denied can_manage_settings). Deny-wins, consistent with the rest of RBAC.
     org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one_or_none()
     thr = (org.po_approval_threshold if org else None) or 0
-    if thr and float(po.total or 0) > thr and current.role_id:
-        from backend.models import Role
-        role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
-        from backend.services.permissions import role_allows as _ra
-        if role is None or not _ra(role, "can_manage_settings"):
+    if thr and float(po.total or 0) > thr:
+        from backend.services.auth import has_perm   # a roleless invitee is not a manager (launch B10)
+        if not await has_perm(db, current, "can_manage_settings"):
             raise HTTPException(403, f"PO total {float(po.total or 0):g} is over the approval limit "
                                      f"of {thr:g} — a manager must send it.")
     sup = (await db.execute(select(Supplier).where(Supplier.id == po.supplier_id))).scalar_one_or_none()
@@ -2491,7 +2489,7 @@ async def reorder_digest(
     """Push a weekly 'what to reorder' digest to inventory managers' notification feed.
     Intended to be called on a schedule (e.g. weekly), like /automations/sweep. No-op
     when nothing is forecast to run out."""
-    from backend.models import Role
+    from backend.models import Organisation, Role
     from backend.services import push
     items = await _forecast_suggestions(db, current.org_id)
     if not items:
@@ -2506,8 +2504,12 @@ async def reorder_digest(
         select(Role).where(Role.org_id == current.org_id))).scalars().all()}
     emps = (await db.execute(select(Employee).where(
         Employee.org_id == current.org_id, Employee.active == True))).scalars().all()  # noqa: E712
+    owner_id = (await db.execute(select(Organisation.owner_id).where(
+        Organisation.id == current.org_id))).scalar_one_or_none()
     sent = 0
     for e in emps:
+        if not e.role_id and e.id != owner_id:
+            continue          # no role isn't the owner (launch B10)
         if e.role_id and (e.role_id not in roles or not _ra(roles[e.role_id], "can_manage_inventory")):
             continue
         n = await push.notify(db, org_id=current.org_id, employee_id=e.id,

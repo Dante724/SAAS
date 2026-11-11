@@ -24,6 +24,7 @@ import GoPilotReport from "./GoPilotReport";
 import { loadFailed } from "../../lib/notice";
 import { buttonClass } from "../../components/Button";
 import { theadRowClass } from "../../components/Table";
+import { serverDate } from "../../lib/serverTime";
 
 const REPORT_PAGE = 50;
 
@@ -605,7 +606,7 @@ export default function ReportsHub() {
                       {submitted.length === 0 && <TableEmpty cols={4} icon={<M n="reviews" c="text-lg" />} title="No feedback submitted yet." />}
                       {submitted.map((f: any, i: number) => (
                         <tr key={f?.id || i} className="odd:bg-slate-50/40 hover:bg-blue-50/50 transition-colors">
-                          <td className="py-2.5 px-4">{f?.submitted_at ? new Date(f.submitted_at).toLocaleDateString() : "—"}</td>
+                          <td className="py-2.5 px-4">{serverDate(f?.submitted_at)?.toLocaleDateString() ?? "—"}</td>
                           <td className="py-2.5 px-4 font-bold text-primary font-mono">{f?.order_number ?? "—"}</td>
                           <td className="py-2.5 px-4 tabular-nums">{f?.rating ?? "—"}</td>
                           <td className="py-2.5 px-4 text-ink-tertiary truncate max-w-[360px]">{f?.comment || "—"}</td>

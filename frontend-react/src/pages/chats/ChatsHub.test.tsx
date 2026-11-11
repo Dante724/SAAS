@@ -195,4 +195,17 @@ describe("ChatsHub switching conversations", () => {
     await u.click((await screen.findAllByRole("button", { name: /Ben/ }))[0]);
     expect(screen.queryByText("Alice's private message")).toBeNull();
   });
+
+  it("keeps a typed reply with its own chat, never sending it to the next one", async () => {
+    const u = userEvent.setup();
+    render(<ChatsHub />);
+    const input = await screen.findByPlaceholderText("Message…");
+    await u.type(input, "Ana, your iPhone is 4500");
+    await u.click((await screen.findAllByRole("button", { name: /Ben/ }))[0]);
+    expect(screen.getByPlaceholderText("Message…")).toHaveValue("");
+    await u.type(screen.getByPlaceholderText("Message…"), "{Enter}");
+    expect(calls.some((c) => c.url.endsWith("/send"))).toBe(false);
+    await u.click((await screen.findAllByRole("button", { name: /Ana/ }))[0]);
+    expect(screen.getByPlaceholderText("Message…")).toHaveValue("Ana, your iPhone is 4500");
+  });
 });

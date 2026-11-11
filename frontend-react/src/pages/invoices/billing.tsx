@@ -5,6 +5,7 @@ import { money } from "../orders/types";
 import { api } from "../../api/client";
 import { deliveryText, deliveryTone, type Delivery, type Tone } from "../../lib/delivery";
 import { buttonClass } from "../../components/Button";
+import { fmtDay } from "../../lib/serverTime";
 
 /* Shared bits for the billing drawers (invoice view, record payment, credit notes). */
 
@@ -53,8 +54,7 @@ export const todayIso = () => {
   return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
 };
 
-export const fmtDate = (iso?: string | null) =>
-  iso ? new Date(iso).toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }) : "—";
+export const fmtDate = (iso?: string | null) => fmtDay(iso) || "—";
 
 export const inputCls = "w-full bg-white border border-slate-200 rounded-xl text-sm px-3 py-2 outline-none focus:border-primary focus:ring-2 focus:ring-primary/10";
 export const labelCls = "block text-xs font-medium text-ink-secondary mb-1";
