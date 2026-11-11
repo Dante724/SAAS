@@ -324,9 +324,10 @@ class Products(Kind):
             StorageBin.org_id == org.id, StorageBin.active == True,  # noqa: E712
             StorageBin.location_id == (loc.id if loc else None)))).scalars().all()
         ctx.data["bins"] = {b.name.strip().lower(): b for b in bins}
+        from backend.services.serial_intake import IN_STOCK as _LIVE_SERIAL
         ctx.data["serials_in_stock"] = set((await db.execute(select(SerializedItem.serial_number).where(
             SerializedItem.org_id == org.id,
-            SerializedItem.status.in_(("in_stock", "allocated_to_order"))))).scalars())
+            SerializedItem.status.in_(_LIVE_SERIAL)))).scalars())
         ctx.data["serial_n"] = (await db.execute(select(func.count()).select_from(SerializedItem).where(
             SerializedItem.org_id == org.id))).scalar() or 0
 

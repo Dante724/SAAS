@@ -633,12 +633,12 @@ async def _check_posting_serials(db, current, rows: list, parts: dict, generate:
     if not generate:
         return
     from backend.models import Organisation
-    from backend.services import importer
+    from backend.services import importer, serial_intake
     org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one()
     ctx = importer.Ctx(db=db, current=current, org=org, options={}, perms={})
     ctx.data["serials_in_stock"] = set((await db.execute(select(SerializedItem.serial_number).where(
         SerializedItem.org_id == current.org_id,
-        SerializedItem.status.in_(("in_stock", "allocated_to_order"))))).scalars())
+        SerializedItem.status.in_(serial_intake.IN_STOCK)))).scalars())
     ctx.data["serial_n"] = (await db.execute(select(func.count()).select_from(SerializedItem).where(
         SerializedItem.org_id == current.org_id))).scalar() or 0
     seen: set = set()
