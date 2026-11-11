@@ -73,7 +73,18 @@ export default function ClientsHub() {
   useEffect(() => { if (tab === "suppliers" && !suppliers) loadSuppliers(); }, [tab]);
 
   const cRows = rows ?? [];
-  const sRows = (suppliers ?? []).filter((s) => !q || [s.name, s.contact_name, s.phone, s.email].some((v) => (v || "").toLowerCase().includes(q.toLowerCase())));
+  // The server search also finds a phone typed in another format ("+1 646 555 0101" vs
+  // "(646) 555-0101") and name words in any order; its hits are kept alongside the local filter.
+  const [sHits, setSHits] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    if (tab !== "suppliers" || !dq) { setSHits(null); return; }
+    let live = true;
+    api.get<{ items: Supplier[] }>(`/suppliers?search=${encodeURIComponent(dq)}`)
+      .then((r) => { if (live) setSHits(new Set((r.items || []).map((s) => s.id))); })
+      .catch(() => { if (live) setSHits(null); });
+    return () => { live = false; };
+  }, [tab, dq]);
+  const sRows = (suppliers ?? []).filter((s) => !q || !!sHits?.has(s.id) || [s.name, s.contact_name, s.phone, s.email].some((v) => (v || "").toLowerCase().includes(q.toLowerCase())));
   // Numbered pagination — one shared page (Clients and Suppliers tabs never show at once).
   const PAGE_SIZE = 50;
   const [listPage, setListPage] = useState(1);

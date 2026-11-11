@@ -53,8 +53,12 @@ async def list_suppliers(
     current: Employee = Depends(get_current_employee),
 ):
     q = select(Supplier).where(Supplier.org_id == current.org_id)
+    search = " ".join((search or "").split())
     if search:
-        q = q.where(or_(Supplier.name.icontains(search), Supplier.email.icontains(search)))
+        # One box: name or contact person (every word, any order), phone however it's typed, email.
+        from backend.services import search_match as sm
+        q = q.where(sm.contact_match([Supplier.name, Supplier.contact_name], Supplier.phone,
+                                     Supplier.email, search))
     rows = (await db.execute(q.order_by(Supplier.name))).scalars().all()
     return {"items": [_ser(s) for s in rows]}
 

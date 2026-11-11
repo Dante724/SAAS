@@ -6,6 +6,8 @@ with or without their prefix. Portable SQL (SQLite in tests, Postgres in product
     phone_match(Client.phone, s)     a ready condition (None when `s` isn't phone-shaped)
     number_match(Order.order_number, s)  "WO-00012" ~ "wo00012", "WO12", "#12", "12"
     words_match(Client.name, s)      every word of `s` somewhere in the column, any order/case
+    words_in_any([brand, model], s)  every word of `s` in at least one of the columns
+    code_match(Part.sku, s)          a code with separators and case ignored ("SCR-IP12" ~ "scr ip12")
 """
 import re
 
@@ -74,3 +76,35 @@ def number_match(col, s: str):
 
 def words_match(col, s: str):
     return and_(*[col.icontains(w, autoescape=True) for w in (s or "").split()])
+
+
+def words_in_any(cols, s: str, extra=None):
+    """Every word of `s` appears in at least one of `cols` (any order, any case). `extra(word)`
+    can add one more condition per word, e.g. an org-scoped subquery on the owner's name."""
+    per_word = []
+    for w in (s or "").split():
+        alts = [c.icontains(w, autoescape=True) for c in cols]
+        if extra is not None:
+            alts.append(extra(w))
+        per_word.append(or_(*alts))
+    return and_(*per_word) if per_word else None
+
+
+def code_match(col, s: str):
+    """A code (SKU, serial, VIN…) compared with separators dropped and case folded."""
+    qn = (s or "").lower()
+    for ch in NUM_STRIP:
+        qn = qn.replace(ch, "")
+    if not qn:
+        return None
+    return stripped(func.lower(col), NUM_STRIP).contains(qn, autoescape=True)
+
+
+def contact_match(name_cols, phone_col, email_col, s: str):
+    """A person/company search box: name words (any order, across `name_cols`), the phone
+    however it's typed, or the email."""
+    conds = [words_in_any(name_cols, s), email_col.icontains(s, autoescape=True)]
+    phone = phone_match(phone_col, s)
+    if phone is not None:
+        conds.append(phone)
+    return or_(*[c for c in conds if c is not None])

@@ -99,6 +99,16 @@ def _ser_client(c: Client, supplier=None, order_count=None) -> dict:
         "order_count": len(c.orders) if order_count is None else order_count,
     }
 
+def _client_search_clause(search: str):
+    """One box: the name (every word, any order, any case), the phone however it's typed
+    (spaces, dashes, brackets, country code, trunk 0), the email or the discount card.
+    The caller's query is already pinned to the shop."""
+    from backend.services import search_match as sm
+    search = " ".join(search.split())
+    return or_(sm.contact_match([Client.name], Client.phone, Client.email, search),
+               Client.discount_card.icontains(search, autoescape=True))
+
+
 @router.get("")
 async def list_clients(
     search: Optional[str] = None,
@@ -134,8 +144,7 @@ async def list_clients(
     elif role == "client":
         q = q.where(Client.is_supplier == False)  # noqa: E712
     if search:
-        q = q.where(or_(Client.name.icontains(search), Client.phone.icontains(search),
-                         Client.email.icontains(search), Client.discount_card.icontains(search)))
+        q = q.where(_client_search_clause(search))
     if tagged is not None:
         q = q.where(Client.id.in_(tagged))
     result = await db.execute(q.offset(skip).limit(limit))
@@ -147,8 +156,7 @@ async def list_clients(
     elif role == "client":
         count_q = count_q.where(Client.is_supplier == False)  # noqa: E712
     if search:   # the total counts the searched rows, not the whole shop
-        count_q = count_q.where(or_(Client.name.icontains(search), Client.phone.icontains(search),
-                                    Client.email.icontains(search), Client.discount_card.icontains(search)))
+        count_q = count_q.where(_client_search_clause(search))
     if tagged is not None:
         count_q = count_q.where(Client.id.in_(tagged))
     total = (await db.execute(count_q)).scalar()
