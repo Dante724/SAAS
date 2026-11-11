@@ -19,6 +19,9 @@ ignore = [
 source = ["backend", "main"]
 omit = ["backend/tests/*", "backend/migrations/*"]
 branch = true
+# SQLAlchemy asyncio runs every ORM call inside a greenlet; without this the trace stops at the
+# first `await db...` and the ratchet under-counts every DB handler (council Q1: cash.py 32% -> 48% on the same tests).
+concurrency = ["greenlet", "thread"]
 
 [tool.coverage.report]
 # RATCHET: fail_under is set at the measured level. Raise it as coverage improves; never lower it.
