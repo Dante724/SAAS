@@ -12,7 +12,7 @@ from backend.core import paging as _paging
 from backend.services.money import d2, dec, msum, q2, q4  # noqa: F401 — money quantizers used module-wide
 from backend.core.spreadsheet import safe_row
 from backend.services.invoicing import DISPLAY_MODES, balance_due as _balance_due
-from backend.services.dates import day_end_utc, day_start_utc, now_utc, shop_today, shop_tzname, today_in
+from backend.services.dates import day_end_utc, day_start_utc, now_utc, range_edge, shop_today, shop_tzname, today_in
 
 router = APIRouter(prefix="/api/finance", tags=["finance"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -1250,16 +1250,16 @@ async def accountant_export(
     from backend.models import Transaction, Account, CashFlowItem
     tz = await shop_tzname(db, current.org_id)
     today = today_in(tz)
-    # Default period: this month on the shop's calendar, as naive-UTC instants for actual_date.
-    df = datetime.fromisoformat(date_from) if date_from else day_start_utc(today.replace(day=1), tz)
-    exp_from = df.date() if date_from else today.replace(day=1)       # expense_date is a shop day
-    if date_to:
-        _dt = datetime.fromisoformat(date_to)
-        dt = _dt.replace(hour=23, minute=59, second=59) if _dt.time() == datetime.min.time() else _dt
-        exp_to = dt.date()
-    else:
-        dt = day_end_utc(today, tz) - timedelta(microseconds=1)
-        exp_to = today
+    # The period is days on the shop's calendar (default: this month to today), as naive-UTC
+    # instants for actual_date — the same rule as the P&L and every report, so the CPA's file for a
+    # month holds exactly what those screens counted for it. expense_date is already a shop day.
+    try:
+        df = range_edge(date_from, tz, end=False) if date_from else day_start_utc(today.replace(day=1), tz)
+        dt = range_edge(date_to, tz, end=True) if date_to else day_end_utc(today, tz) - timedelta(microseconds=1)
+    except ValueError:
+        raise HTTPException(400, "Invalid date range: expected YYYY-MM-DD")
+    exp_from = date.fromisoformat(date_from[:10]) if date_from else today.replace(day=1)
+    exp_to = date.fromisoformat(date_to[:10]) if date_to else today
     rows = (await db.execute(
         select(Transaction, Account.name, CashFlowItem.name)
         .join(Account, Transaction.account_id == Account.id)
