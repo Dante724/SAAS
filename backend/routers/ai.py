@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import Employee, Order, EventFeedItem, ChatThread, ChatMessage, Part, Service
-from backend.services.auth import get_current_employee, record_scope
+from backend.services.auth import get_current_employee, has_perm, record_scope
 from backend.services import ai
 
 async def ai_quota(current: Employee = Depends(get_current_employee)) -> None:
@@ -76,7 +76,13 @@ async def estimate_draft(data: DraftIn, db: AsyncSession = Depends(get_db),
                 for i, s in enumerate(services, 1)]
                + [{"ref": f"P{i}", "kind": "product", "ref_id": p.id, "name": p.name,
                    "price": (p.repair_price or 0) or p.sell_price or 0} for i, p in enumerate(parts, 1)])
-    return await ai.draft_estimate_lines(complaint=data.complaint, device=data.device or "", catalog=catalog)
+    out = await ai.draft_estimate_lines(complaint=data.complaint, device=data.device or "", catalog=catalog)
+    # Someone who can't see item prices doesn't get them here either (the catalog search strips
+    # them too); a linked line is billed at its catalog price when the job is saved.
+    if not await has_perm(db, current, "can_view_item_prices"):
+        for line in out.get("lines", []):
+            line.pop("unit_price", None)
+    return out
 
 
 @router.post("/chat/{thread_id}/suggest")

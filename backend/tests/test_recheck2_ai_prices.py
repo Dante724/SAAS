@@ -118,3 +118,20 @@ async def test_coupon_minimum_is_checked_after_the_sale_discount(client, tenant)
     q = (await client.post("/api/sales/quote", json={"discount": 10, "coupon_code": "MIN50",
                                                      "lines": [_svc(60)]}, headers=tenant)).json()
     assert q["coupon"] == 5 and q["total"] == pytest.approx(45)
+
+
+@pytest.mark.asyncio
+async def test_ai_draft_hides_prices_from_staff_who_cannot_see_them(client, tenant, monkeypatch):
+    sid = await _service(client, tenant, "Screen replacement", 89)
+    rid = await client.post("/api/settings/rbac/roles", json={
+        "name": f"R-{uuid.uuid4().hex[:4]}", "permissions": {"can_view_item_prices": False}}, headers=tenant)
+    assert rid.status_code == 201, rid.text
+    email = f"tm-{uuid.uuid4().hex[:8]}@t.dev"
+    r = await client.post("/api/staff/employees", json={
+        "name": "Tm", "email": email, "password": "pw-test-12345", "role_id": rid.json()["id"]}, headers=tenant)
+    assert r.status_code == 201, r.text
+    tok = await client.post("/api/auth/token", data={"username": email, "password": "pw-test-12345"})
+    T = {"Authorization": f"Bearer {tok.json()['access_token']}"}
+    _model_says(monkeypatch, [{"description": "Screen replacement", "qty": 1, "catalog": "S1"}])
+    d = (await client.post("/api/ai/estimate/draft", json={"complaint": "cracked screen"}, headers=T)).json()
+    assert d["lines"][0]["ref_id"] == sid and "unit_price" not in d["lines"][0]
