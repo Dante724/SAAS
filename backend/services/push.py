@@ -9,6 +9,7 @@ Delivery is gated like every other provider in Tekly: without VAPID keys it
 is logged/simulated, never failing the caller. With keys + the `pywebpush`
 package installed it sends a real encrypted push.
 """
+import asyncio
 import json
 import logging
 from typing import Optional
@@ -36,11 +37,16 @@ def push_enabled() -> bool:
 
 async def notify(db: AsyncSession, *, org_id: str, employee_id: str, kind: str,
                  title: str, body: str = "", deep_link: Optional[str] = None,
-                 commit: bool = True, respect_prefs: bool = True) -> Optional[StaffNotification]:
+                 commit: bool = True, respect_prefs: bool = True,
+                 deferred: Optional[list] = None) -> Optional[StaffNotification]:
     """Create a staff notification and dispatch push. Safe to call inline.
 
     If the employee has muted this `kind` (NotificationPreference.enabled=False)
     and `respect_prefs` is True, nothing is created or sent and None is returned.
+
+    `deferred`: a list to collect the push into instead of sending it now; the caller sends it
+    with dispatch_deferred() after its own commit. Use it inside a transaction or savepoint:
+    sending commits (pruned or touched subscriptions), which would close the caller's transaction.
     """
     if respect_prefs and not await _kind_enabled(db, employee_id, kind):
         return None
@@ -50,11 +56,26 @@ async def notify(db: AsyncSession, *, org_id: str, employee_id: str, kind: str,
     if commit:
         await db.commit()
         await db.refresh(n)
-    await _dispatch_push(db, employee_id, {
+    elif deferred is not None:
+        await db.flush()                       # gives the notification its id, no commit
+    payload = {
         "title": title, "body": body, "kind": kind,
         "deep_link": deep_link or "/tech", "id": n.id,
-    })
+    }
+    if deferred is not None:
+        deferred.append((employee_id, payload))
+    else:
+        await _dispatch_push(db, employee_id, payload)
     return n
+
+
+async def dispatch_deferred(db: AsyncSession, items: list) -> None:
+    """Send pushes collected with notify(deferred=...), once the caller has committed."""
+    for employee_id, payload in items:
+        try:
+            await _dispatch_push(db, employee_id, payload)
+        except Exception:  # noqa: BLE001 — a push is best-effort, never the caller's failure
+            log.exception("deferred push failed (employee=%s)", employee_id)
 
 
 async def _kind_enabled(db: AsyncSession, employee_id: str, kind: str) -> bool:
@@ -84,7 +105,9 @@ async def _dispatch_push(db: AsyncSession, employee_id: str, payload: dict) -> N
     claims = {"sub": f"mailto:{settings.VAPID_CLAIMS_EMAIL}"}
     for s in subs:
         try:
-            webpush(
+            # pywebpush is blocking HTTP: run it off the event loop.
+            await asyncio.to_thread(
+                webpush,
                 subscription_info={"endpoint": s.endpoint,
                                    "keys": {"p256dh": s.p256dh, "auth": s.auth}},
                 data=json.dumps(payload),

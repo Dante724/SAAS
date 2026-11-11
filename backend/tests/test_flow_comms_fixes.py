@@ -194,8 +194,8 @@ async def test_customer_decides_an_estimate_only_once(client):
 
 
 # ── E3: approval and conversion run the normal new-job steps ──
-async def test_approval_runs_new_job_steps_and_type_starting_status(client, capsys):
-    H, _, loc, cid = await _shop(client)
+async def test_approval_runs_new_job_steps_and_type_starting_status(client, db, capsys):
+    H, me, loc, cid = await _shop(client)
     sts = (await client.get("/api/statuses", headers=H)).json()
     sitems = sts.get("items", sts) if isinstance(sts, dict) else sts
     wo_in_progress = next(s["key"] for s in sitems
@@ -209,7 +209,10 @@ async def test_approval_runs_new_job_steps_and_type_starting_status(client, caps
     o2 = (await client.get(f"/api/orders/{o['id']}", headers=H)).json()
     assert o2["is_estimate"] is False
     assert o2["status"] == wo_in_progress                    # the job type's starting status
-    # the shop's "order received" rule fires for the new job, as for any new job
+    # the shop's "order received" rule fires for the new job, as for any new job: queued by the
+    # approval, sent by the notification outbox sweep
+    from backend.services import notification_rules as nr
+    await nr.run_due(db, org_id=me["org_id"])
     assert _sent_lines(capsys.readouterr().out, "received")
 
 

@@ -77,6 +77,7 @@ async def test_rule_stats_and_texting_reach(client, tenant, db):
     db.add(rule)
     await db.commit()
     await nr.evaluate(db, org_id=org, order_id=oid, event="comment_added")
+    await nr.run_due(db, org_id=org)        # evaluate queues; the outbox sweep sends
     c = (await db.execute(select(Client).where(Client.id == cid))).scalar_one()
     c.consent_phone = False
     await db.commit()
