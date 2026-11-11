@@ -145,3 +145,23 @@ async def test_asset_serial_vin_or_hin_finds_the_job(client):
     other = await _shop(client)
     for typed in ("1FTBW2CM5HKA12345", "BWC12345H506", "F2LXK0ABCD12"):
         assert await _found(client, other, typed) == set(), typed
+
+
+@pytest.mark.asyncio
+async def test_short_job_number_is_not_buried_under_matching_vins(client):
+    """Typing "#3" or "12" finds that job, not every asset whose VIN/serial has those digits."""
+    h = await _shop(client)
+    loc = await _loc(client, h)
+    cid = await _client(client, h, name="Fleet Owner")
+    nums = []
+    for i in range(12):
+        r = await client.post("/api/orders", json={
+            "client_id": cid, "location_id": loc, "complaint": "x",
+            "asset_brand": "Ford", "asset_vin": f"1FTBW2CM5HKA1{i:04d}3"}, headers=h)
+        assert r.status_code == 201, r.text
+        nums.append(r.json()["order_number"])
+    assert await _found(client, h, "#3") == {"WO-00003"}
+    assert await _found(client, h, "3") == {"WO-00003"}
+    assert await _found(client, h, "12") == {"WO-00012"}
+    # a longer piece of a VIN still finds its asset
+    assert await _found(client, h, "HKA100053") == {"WO-00006"}

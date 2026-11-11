@@ -12,7 +12,7 @@ import ImportDrawer from "../../components/ImportDrawer";
 import { useMe } from "../../context/Me";
 import { theadRowClass } from "../../components/Table";
 
-type Asset = { id: string; asset_status?: string; asset_type?: string; asset_label?: string; template_key?: string; brand?: string; model?: string; serial?: string; imei?: string; owner_type?: string; owner_name?: string; condition?: string; order_count?: number };
+type Asset = { id: string; asset_status?: string; asset_type?: string; asset_label?: string; template_key?: string; brand?: string; model?: string; serial?: string; imei?: string; vin?: string; hin?: string; owner_type?: string; owner_name?: string; condition?: string; order_count?: number };
 
 export default function AssetsHub() {
   const term = useTerminology();
@@ -51,13 +51,13 @@ export default function AssetsHub() {
           </div>
           <div className="flex flex-wrap items-center gap-3">
             <AssetStateTabs value={state} onChange={setState} counts={sp_.extra?.counts} />
-            <div className="relative w-72"><M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" /><input value={q} onChange={(e) => setQ(e.target.value)} aria-label={`Search ${term.assets.toLowerCase()}`} className="glass-input w-full pl-8 pr-3 py-1.5 text-xs rounded-lg font-medium" placeholder="Search by name, serial, IMEI or plate…" /></div>
+            <div className="relative w-full sm:w-72"><M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" /><input value={q} onChange={(e) => setQ(e.target.value)} aria-label={`Search ${term.assets.toLowerCase()}`} className="glass-input w-full pl-8 pr-3 py-1.5 text-xs rounded-lg font-medium" placeholder="Name, serial, VIN, IMEI or owner…" /></div>
           </div>
         </div>
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
           <table className="w-full text-left border-collapse text-xs">
             <thead><tr className={theadRowClass}>
-              <th className="py-3 px-4">Type</th><th className="py-3 px-4">{term.asset}</th><th className="py-3 px-4">Serial / IMEI</th>
+              <th className="py-3 px-4">Type</th><th className="py-3 px-4">{term.asset}</th><th className="py-3 px-4">Serial / VIN / IMEI</th>
               <th className="py-3 px-4">Owner</th><th className="py-3 px-4">Condition</th><th className="py-3 px-4">Orders</th><th className="py-3 px-4 w-12 text-center">Action</th>
             </tr></thead>
             <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
@@ -68,7 +68,7 @@ export default function AssetsHub() {
                 <tr key={a.id} className="hover:bg-blue-50/40 cursor-pointer transition-colors group" {...clickableRow(() => setOpen(a.id))}>
                   <td className="py-3 px-4 text-ink-tertiary">{a.asset_type && a.asset_type !== "Device" ? a.asset_type : assetNoun(a, term)}</td>
                   <td className="py-3 px-4 font-bold text-ink-primary">{[a.brand, a.model].filter(Boolean).join(" ") || "—"}{a.asset_status === "written_off" && <span className="ml-2 px-1.5 py-0.5 rounded text-[11px] font-semibold bg-slate-100 text-ink-tertiary border border-slate-200">Written off</span>}</td>
-                  <td className="py-3 px-4 font-mono text-[11px]">{a.imei || a.serial || "—"}</td>
+                  <td className="py-3 px-4 font-mono text-[11px]">{a.imei || a.serial || a.vin || a.hin || "—"}</td>
                   <td className="py-3 px-4"><span className="px-2.5 py-1 rounded-full text-[11px] font-semibold bg-blue-100 text-blue-800 border border-blue-200">{a.owner_type === "company" ? "Company" : a.owner_name || "Client"}</span></td>
                   <td className="py-3 px-4">{a.condition || "—"}</td>
                   <td className="py-3 px-4 tabular-nums font-semibold text-ink-primary">{a.order_count ?? 0}</td>

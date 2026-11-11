@@ -644,7 +644,7 @@ export default function InventoryHub() {
             <TeklySelect value={aOwner} onChange={(e) => setAOwner(e.target.value as "" | "company" | "client")} aria-label="Ownership" className={`${inputCls} w-auto h-8 py-0 text-xs font-semibold`}>
               <option value="">Ownership: all</option><option value="company">Company-owned</option><option value="client">Client-owned</option>
             </TeklySelect>
-            {searchBar("Search serial, IMEI, plate, client…", aq, setAq)}
+            {searchBar("Search serial, VIN, IMEI, plate, client…", aq, setAq)}
           </div>
           {asel.size > 0 && (
             <div className="bg-primary/5 rounded-xl border border-primary/30 px-4 py-2.5 mb-4 flex flex-wrap items-center gap-2 text-xs font-semibold">
@@ -659,7 +659,7 @@ export default function InventoryHub() {
             <table className="w-full min-w-[720px] text-left border-collapse">
               <thead><tr className={theadRowClass}>
                 <th className="py-3.5 pl-5 pr-2 w-10"><input type="checkbox" aria-label="Select all" checked={!!assets?.length && assets.every((a) => asel.has(a.id))} onChange={(e) => setAsel((s) => { const n = new Set(s); (assets || []).forEach((a) => (e.target.checked ? n.add(a.id) : n.delete(a.id))); return n; })} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></th>
-                <th className="py-3.5 px-3">Device / Model</th><th className="py-3.5 px-3">Serial / IMEI</th><th className="py-3.5 px-3">Ownership</th><th className="py-3.5 pl-3 pr-5">Status</th>
+                <th className="py-3.5 px-3">Device / Model</th><th className="py-3.5 px-3">Serial / VIN / IMEI</th><th className="py-3.5 px-3">Ownership</th><th className="py-3.5 pl-3 pr-5">Status</th>
               </tr></thead>
               <tbody className="divide-y divide-slate-100 text-xs">
                 {!assets && <SkeletonRows cols={5} />}
@@ -668,7 +668,7 @@ export default function InventoryHub() {
                   <tr key={a.id} className="hover:bg-blue-50/30 transition-colors cursor-pointer" {...clickableRow(() => setAssetOpen(a.id))}>
                     <td className="py-3.5 pl-5 pr-2" onClick={(e) => e.stopPropagation()}><input type="checkbox" aria-label="Select row" checked={asel.has(a.id)} onChange={() => aToggle(a.id)} className="w-4 h-4 rounded border-slate-300 text-primary cursor-pointer accent-primary" /></td>
                     <td className="py-3.5 px-3"><div className="font-semibold text-ink-primary">{[a.brand, a.model].filter(Boolean).join(" ") || a.asset_type || assetNoun(a, term)}</div><span className="text-[11px] text-ink-tertiary font-normal block">{a.asset_type && a.asset_type !== "Device" ? a.asset_type : assetNoun(a, term)}</span></td>
-                    <td className="py-3.5 px-3 font-mono text-[11px] text-ink-secondary">{a.imei || a.serial || ""}</td>
+                    <td className="py-3.5 px-3 font-mono text-[11px] text-ink-secondary">{a.imei || a.serial || a.vin || a.hin || ""}</td>
                     <td className="py-3.5 px-3"><span className="px-2 py-0.5 rounded text-[11px] font-semibold border bg-slate-50 text-ink-secondary border-slate-200">{a.owner_type === "company" ? "Company" : "Client"}</span></td>
                     <td className="py-3.5 pl-3 pr-5">{(() => { const tone = assetStatusTone(a.asset_status); return <span className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-[11px] font-semibold border ${tone.cls}`}><span className={`w-1.5 h-1.5 rounded-full ${tone.dot}`} />{tone.label}</span>; })()}</td>
                   </tr>
