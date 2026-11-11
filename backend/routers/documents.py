@@ -1222,7 +1222,42 @@ async def _resolve(db, org_id, order: Order, current=None, *, itemised: bool = F
         doc["{Price}"] = _NO_PRICE          # the first line's unit price
         doc["{Asset Cost}"] = _NO_PRICE     # what the device cost, never shown to price-blind staff
 
+    doc[_BRAND_KEY] = _brand_color(org)
     return doc, rows
+
+
+# Simple document setup: the shop's brand colour styles every printed document — headings, the
+# table header rule and dividers. Injected at render time (preview and print both come through
+# _render), scoped to a wrapper so it never touches the page around a preview, and only when the
+# shop has set a colour, so a shop that hasn't prints exactly as before. Resolvers put the colour
+# under _BRAND_KEY (not a {placeholder}, so it is never substituted into the body).
+_BRAND_KEY = "__brand_color__"
+_HEX = re.compile(r"#[0-9a-fA-F]{3}(?:[0-9a-fA-F]{3})?(?:[0-9a-fA-F]{2})?")
+
+
+def _brand_color(org) -> Optional[str]:
+    # Opt-in: only when the shop switched its colour on for documents (Settings › Documents), so a
+    # colour set for the white-label portal alone leaves every printed page exactly as before.
+    if not (org and getattr(org, "doc_brand_color_on", False)):
+        return None
+    c = (getattr(org, "brand_primary_color", None) or "").strip()
+    return c if _HEX.fullmatch(c) else None
+
+
+def _brand_wrap(html: str, color: Optional[str]) -> str:
+    if not color or not _HEX.fullmatch(color):
+        return html
+    css = (f".tk-branded h1,.tk-branded h2,.tk-branded h3{{color:{color}}}"
+           f".tk-branded thead th{{border-bottom:2px solid {color}}}"
+           f".tk-branded hr{{border:0;border-top:1px solid {color}}}")
+    return f'<style>{css}</style><div class="tk-branded">{html}</div>'
+
+
+async def _no_record_doc(db, org_id: str) -> dict:
+    """The variable map for a shop with no record of this kind yet: nothing filled in, but the
+    brand still applies, so the preview looks like the shop's documents from day one."""
+    org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
+    return {_BRAND_KEY: _brand_color(org)}
 
 
 def _render(body: str, doc: dict, rows: list) -> str:
@@ -1252,9 +1287,10 @@ def _render(body: str, doc: dict, rows: list) -> str:
     body = _conditionals(body, doc)    # 144id — resolve {#if}/{#unless} before expansion
     body = _TBODY_RE.sub(repeat, body)
     for k, v in doc.items():
-        body = body.replace(k, _sub(v))
+        if k != _BRAND_KEY:
+            body = body.replace(k, _sub(v))
     body = _ROW_VAR_RE.sub("", body)   # strip any row vars used outside a table
-    return body
+    return _brand_wrap(body, doc.get(_BRAND_KEY))
 
 
 _COMPONENT_RE = re.compile(r"\{\{\s*component\s*:\s*([^}]+?)\s*\}\}", re.I)
@@ -1357,14 +1393,29 @@ async def preview_template(
         if inv:
             doc, rows = await _resolve_invoice(db, current.org_id, inv, hide_prices=await _hides_prices(db, current))
             return {"html": _render(body, doc, rows), "sample": inv.invoice_number}
-        return {"html": _render(body, {}, []), "sample": None}
+        return {"html": _render(body, await _no_record_doc(db, current.org_id), []), "sample": None}
     if (data.doc_type or "") == "credit_note":
         cn = await _sample_credit_note(db, current.org_id)
         body = await _expand_components(db, current.org_id, data.body_html)
         if cn:
             doc, rows = await _resolve_credit_note(db, current.org_id, cn)
             return {"html": _render(body, doc, rows), "sample": cn.number or "Draft"}
-        return {"html": _render(body, {}, []), "sample": None}
+        return {"html": _render(body, await _no_record_doc(db, current.org_id), []), "sample": None}
+    if (data.doc_type or "") == "receipt":
+        # Receipts print against a sale (render-sale), so they preview against the newest sale;
+        # a shop with no sales yet falls through to the newest job, as before.
+        # Only for someone who may see sales (the same right render-sale needs).
+        from backend.models import Sale
+        try:
+            await assert_perm(db, current, "can_create_sales")
+            sale = (await db.execute(select(Sale).where(Sale.org_id == current.org_id)
+                                     .order_by(Sale.created_at.desc()))).scalars().first()
+        except HTTPException:
+            sale = None
+        if sale:
+            body = await _expand_components(db, current.org_id, data.body_html)
+            doc, rows = await _resolve_sale(db, current.org_id, sale, current)
+            return {"html": _render(body, doc, rows), "sample": sale.sale_number or "Sale"}
 
     _check_barcode_options(data)
     if (data.doc_type or "") in (LABEL_DOC_TYPES - {"vehicle_label"}) and "{Asset " not in (data.body_html or ""):
@@ -1395,7 +1446,7 @@ async def preview_template(
         await _guard_order(db, current, order)
     body = await _expand_components(db, current.org_id, data.body_html)
     if not order:
-        return {"html": _render(body, {}, []), "sample": None}
+        return {"html": _render(body, await _no_record_doc(db, current.org_id), []), "sample": None}
     doc, rows = await _resolve(db, current.org_id, order, current, hide_prices=await _hides_prices(db, current))
     return {"html": _render(body, doc, rows), "sample": order.order_number}
 
@@ -1496,10 +1547,10 @@ async def print_view(
         await _guard_invoices(db, current)
         inv = (await db.execute(select(Invoice).where(Invoice.org_id == current.org_id)
             .order_by(Invoice.created_at.desc()))).scalars().first()
-        doc, rows = (await _resolve_invoice(db, current.org_id, inv, itemised=data.itemised, hide_prices=await _hides_prices(db, current))) if inv else ({}, [])
+        doc, rows = (await _resolve_invoice(db, current.org_id, inv, itemised=data.itemised, hide_prices=await _hides_prices(db, current))) if inv else (await _no_record_doc(db, current.org_id), [])
     elif (data.doc_type or "") == "credit_note":
         cn = await _sample_credit_note(db, current.org_id)
-        doc, rows = (await _resolve_credit_note(db, current.org_id, cn)) if cn else ({}, [])
+        doc, rows = (await _resolve_credit_note(db, current.org_id, cn)) if cn else (await _no_record_doc(db, current.org_id), [])
     else:
         q = select(Order).where(Order.id == data.order_id, Order.org_id == current.org_id) if data.order_id \
             else select(Order).where(Order.org_id == current.org_id).order_by(Order.created_at.desc())
@@ -1509,7 +1560,7 @@ async def print_view(
         if data.order_id:
             await _guard_order(db, current, order)
         doc, rows = (await _resolve(db, current.org_id, order, current, itemised=data.itemised,
-                                    hide_prices=await _hides_prices(db, current))) if order else ({}, [])
+                                    hide_prices=await _hides_prices(db, current))) if order else (await _no_record_doc(db, current.org_id), [])
     body = await _expand_components(db, current.org_id, data.body_html)
     html = _print_doc(body, doc, rows, font=data.font_family or "Inter",
                       page_size=data.page_size, w=data.page_w_mm, h=data.page_h_mm, margin=data.margin_mm)
@@ -1632,6 +1683,13 @@ async def _resolve_invoice(db, org_id, inv: Invoice, *, itemised: bool = False, 
         if f.entity_type == "order":
             doc.setdefault(_cf_varname(f), _fmt_cf((getattr(jo, "custom_data", None) or {}).get(f.field_key)
                                                    if jo else None))
+    # The job-style totals the standard layouts use ({Subtotal}, {Order Total}, …) mean the same on an
+    # invoice: fill them from the invoice instead of leaving the placeholder on the page.
+    for alias, src in (("{Subtotal}", "{Invoice Subtotal}"), ("{Tax Value}", "{Invoice Tax}"), ("{Order Total}", "{Invoice Total}"),
+                       ("{Total Amount}", "{Invoice Total}"), ("{Order Paid}", "{Invoice Paid}"),
+                       ("{Order Balance Due}", "{Invoice Balance Due}"), ("{Balance Due}", "{Invoice Balance Due}")):
+        doc.setdefault(alias, doc[src])
+    doc[_BRAND_KEY] = _brand_color(org)
     return doc, rows
 
 
@@ -2044,7 +2102,8 @@ async def auto_print(
         if tpl.doc_type in ASSET_LABEL_TYPES:
             tiles = []
             for a in assets or [None]:
-                varmap = {**doc, **(await _resolve_asset(db, org, a) if a is not None else {})}
+                varmap = {**{k: v for k, v in doc.items() if k != _BRAND_KEY},   # labels stay unbranded
+                          **(await _resolve_asset(db, org, a) if a is not None else {})}
                 tiles.append(f"<div class='lbl'>{_render(body, varmap, rows)}</div>")
             html = _labels_html(tpl, tiles)
         else:
@@ -2127,10 +2186,16 @@ async def _resolve_sale(db, org_id: str, sale, current=None) -> tuple[dict, list
         "{Total Discount}": _money(sale.discount or 0), "{Total Amount}": _money(sale.total or 0),
         "{Order Total}": _money(sale.total or 0), "{Gift Card}": _money(gift),
         "{Payment Status}": "Paid" if sale.paid else "Not paid yet",
+        "{Company Note}": (getattr(org, "company_note", None) if org else None) or "",
+        # fields the standard receipt layout shares with job documents
+        "{Company Logo}": _Html(f'<img src="{_esc(org.logo_data)}" alt="{_esc(org.name)}" style="max-height:64px;max-width:220px;object-fit:contain;" />') if org and getattr(org, "logo_data", None) else "",
+        "{Client Address}": (getattr(client, "address", None) if client else None) or "",
+        "{Order Balance Due}": _money(0 if sale.paid else (sale.total or 0)),
         "{Currency}": sym, "{Currency Code}": (org.currency_code if org else "") or "",
         "{Current User}": (current.name if current else "") or "",
         "{Barcode}": _Html(code128_svg(code)), "{QR Code}": _Html(qr_svg(code)),
     }
+    doc[_BRAND_KEY] = _brand_color(org)
     return doc, rows
 
 
@@ -2344,6 +2409,7 @@ async def _resolve_credit_note(db, org_id, cn):
         "{Today Date}": _fmt_date(now_utc()), "{Current Date}": _fmt_date(now_utc()),
         "{Currency}": (org.currency_code if org else "") or "",
     }
+    doc[_BRAND_KEY] = _brand_color(org)
     return doc, rows
 
 
