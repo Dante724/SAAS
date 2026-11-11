@@ -21,6 +21,8 @@ import TotalProfit from "./TotalProfit";
 import { DEFAULT_FILTERS, REPORTS_PREF, REPORT_FILTERS, filterParams, readReportsPref, type ReportFilters } from "./profitView";
 import { cachedPref, loadPref, savePref } from "../../lib/userPref";
 import GoPilotReport from "./GoPilotReport";
+import FollowupsReport from "./FollowupsReport";
+import { REPORT_PRESETS } from "./datePresets";
 import { loadFailed } from "../../lib/notice";
 import { buttonClass } from "../../components/Button";
 import { theadRowClass } from "../../components/Table";
@@ -341,7 +343,7 @@ export default function ReportsHub() {
   const [loading, setLoading] = useState(false);
   const [from, setFrom] = useState(iso(new Date(Date.now() - 30 * 864e5)));
   const [to, setTo] = useState(iso(new Date()));
-  const [view, setView] = useState<"reports" | "total_profit" | "profitability" | "insights" | "feedback" | "custom" | "fleet" | "gopilot">("reports");
+  const [view, setView] = useState<"reports" | "total_profit" | "profitability" | "insights" | "feedback" | "custom" | "fleet" | "gopilot" | "followups">("reports");
   const [profit, setProfit] = useState<any[] | null>(null);
   const [insights, setInsights] = useState<any[] | null>(null);
   const [feedback, setFeedback] = useState<any | null>(null);
@@ -385,14 +387,7 @@ export default function ReportsHub() {
   }
 
   // ── date presets (Orderry-style quick ranges) ──
-  const presets: [string, () => [Date, Date]][] = [
-    ["Today", () => { const d = new Date(); return [d, d]; }],
-    ["This week", () => { const n = new Date(); const s = new Date(n); s.setDate(n.getDate() - ((n.getDay() + 6) % 7)); return [s, n]; }],
-    ["This month", () => { const n = new Date(); return [new Date(n.getFullYear(), n.getMonth(), 1), n]; }],
-    ["Last month", () => { const n = new Date(); return [new Date(n.getFullYear(), n.getMonth() - 1, 1), new Date(n.getFullYear(), n.getMonth(), 0)]; }],
-    ["This quarter", () => { const n = new Date(); const q0 = Math.floor(n.getMonth() / 3) * 3; return [new Date(n.getFullYear(), q0, 1), n]; }],
-    ["Year to date", () => { const n = new Date(); return [new Date(n.getFullYear(), 0, 1), n]; }],
-  ];
+  const presets = REPORT_PRESETS;
   function applyPreset(fn: () => [Date, Date]) {
     const [s, e] = fn(); const f = iso(s), t = iso(e);
     setFrom(f); setTo(t);
@@ -511,14 +506,15 @@ export default function ReportsHub() {
   return (
     <Shell title="Reports">
       <Tabs label="Reports sections" className="px-6 pt-3 bg-white/40 flex-shrink-0" value={view} onChange={setView}
-        tabs={([["reports", "Reports", "summarize"], ...(can("can_see_profit") ? [["total_profit", "Total profit", "savings"]] : []), ["custom", "Custom report", "tune"], ["fleet", "Business & analytics", "insights"], ["profitability", "Job profitability", "payments"], ["insights", "Insights", "lightbulb"], ["feedback", "Feedback", "reviews"], ...(can("can_manage_settings") ? [["gopilot", "Go pilot", "qr_code_scanner"]] : [])] as [typeof view, string, string][]).map(([id, label, icon]) => ({ id, label, icon: <M n={icon} c="text-sm" /> }))} />
+        tabs={([["reports", "Reports", "summarize"], ...(can("can_see_profit") ? [["total_profit", "Total profit", "savings"]] : []), ["custom", "Custom report", "tune"], ["fleet", "Business & analytics", "insights"], ["profitability", "Job profitability", "payments"], ["followups", "Follow-ups", "autorenew"], ["insights", "Insights", "lightbulb"], ["feedback", "Feedback", "reviews"], ...(can("can_manage_settings") ? [["gopilot", "Go pilot", "qr_code_scanner"]] : [])] as [typeof view, string, string][]).map(([id, label, icon]) => ({ id, label, icon: <M n={icon} c="text-sm" /> }))} />
 
       {view === "custom" && <CustomView />}
       {view === "total_profit" && <div className="flex-1 overflow-y-auto px-6 py-5"><TotalProfit locs={locs} /></div>}
       {view === "fleet" && <div className="flex-1 overflow-y-auto px-6 py-5"><FleetAnalytics /></div>}
       {view === "gopilot" && <GoPilotReport />}
+      {view === "followups" && <FollowupsReport />}
 
-      {view !== "reports" && view !== "custom" && view !== "fleet" && view !== "total_profit" && view !== "gopilot" && (
+      {view !== "reports" && view !== "custom" && view !== "fleet" && view !== "total_profit" && view !== "gopilot" && view !== "followups" && (
         <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
           {view === "profitability" && (
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">

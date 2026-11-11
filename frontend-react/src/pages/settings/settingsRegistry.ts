@@ -9,7 +9,7 @@ export type SectionId =
   | "general" | "billing" | "team" | "locations" | "statuses" | "checklists" | "forms"
   | "industry" | "pricing" | "finance" | "warehouses" | "directories"
   | "templates" | "feedback" | "public" | "notifications" | "integrations"
-  | "ecommerce" | "sso" | "approvals" | "memberships";
+  | "ecommerce" | "sso" | "approvals" | "memberships" | "followups";
 
 const ALL_NAV: { id: SectionId; label: string; icon: string }[] = [
   { id: "general", label: "General", icon: "tune" },
@@ -29,6 +29,7 @@ const ALL_NAV: { id: SectionId; label: string; icon: string }[] = [
   { id: "feedback", label: "Customer feedback", icon: "reviews" },
   { id: "public", label: "Public pages", icon: "open_in_new" },
   { id: "notifications", label: "Notifications", icon: "notifications" },
+  { id: "followups", label: "Follow-ups", icon: "autorenew" },
   { id: "integrations", label: "Integrations", icon: "link" },
   { id: "ecommerce", label: "E-commerce", icon: "shopping_cart" },
   { id: "sso", label: "Single sign-on", icon: "lock" },
@@ -52,7 +53,7 @@ export const SEC_CAT: Record<SectionId, string> = {
   statuses: "workorders", checklists: "workorders", forms: "workorders", industry: "workorders", approvals: "workorders",
   pricing: "money", finance: "money", memberships: "money",
   warehouses: "inventory",
-  public: "comms", notifications: "comms", templates: "comms", feedback: "comms", directories: "comms",
+  public: "comms", notifications: "comms", followups: "comms", templates: "comms", feedback: "comms", directories: "comms",
   integrations: "connections", ecommerce: "connections",
 };
 
@@ -73,6 +74,7 @@ export const SEC_KW: Record<SectionId, string> = {
   warehouses: "inventory warehouse bin stock reorder moq supplier",
   public: "public online appointment booking page link branding slot window",
   notifications: "notification sms email reminder rule appointment status",
+  followups: "follow up followup chase reminder collect collection pickup uncollected quote approval nudge call task automatic recovered",
   templates: "template document estimate invoice receipt label print",
   feedback: "feedback review nps rating survey",
   memberships: "membership plan subscription member renewal recurring monthly yearly season grace lapse checkout offer",

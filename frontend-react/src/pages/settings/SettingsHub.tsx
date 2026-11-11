@@ -55,6 +55,7 @@ const BillingPage = lazy(() => import("./BillingPage"));
 const CheckinPointsSettings = lazy(() => import("./CheckinPointsSettings"));
 const MembershipSettings = lazy(() => import("./MembershipSettings"));
 const WebhooksSettings = lazy(() => import("./WebhooksSettings"));
+const FollowupsSettings = lazy(() => import("./FollowupsSettings"));
 const sectionLoading = <div className="text-xs text-ink-tertiary py-6">Loading…</div>;
 
 // Full section set = the registry sections + a few that have no nav entry of their own.
@@ -467,6 +468,8 @@ export default function SettingsHub() {
               onEdit={(r) => setEditing({ sec: "warehouses", row: r })} onDelete={(r) => delRow("warehouses", r)} />
           )}
 
+
+          {sec === "followups" && <FollowupsSettings onOpenBilling={() => setSec("billing")} />}
 
           {sec === "notifications" && proOk("notification_rules") && (
             <CustomerMessages rules={lists.notifications || []} templates={notifTemplates || []} shopName={co?.name || ""}

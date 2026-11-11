@@ -47,6 +47,7 @@ import AutoPrintPicker from "../../components/AutoPrintPicker";
 import KitGroupHeader from "./KitGroupHeader";
 import EstimateTerms, { startRevision } from "./EstimateTerms";
 import JobTasks from "./JobTasks";
+import NextStepCard from "./NextStepCard";
 import { sendInvoice } from "../invoices/billing";
 import { groupKitLines } from "../../lib/kitGroups";
 import { binChoices, byLocation, needsBinChoice } from "../../lib/stockBins";
@@ -597,6 +598,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
         <div className="flex-1 overflow-y-auto p-6 bg-slate-50/70 space-y-6">
           {tab === "general" && (
             <div className="space-y-5">
+              {/* Follow-ups: what Tekly does next on this job (renders nothing without a follow-up) */}
+              <NextStepCard orderId={order.id} onFlash={flash} />
               {(urgent || d.scheduled_for || d.due_at) && (
                 <div className={`${sectionCard} p-3.5 flex items-center justify-between`}>
                   <div className="flex items-center gap-3">
