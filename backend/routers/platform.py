@@ -61,6 +61,7 @@ async def get_branding(
     return {
         "name": org.name,
         "primary_color": org.brand_primary_color,
+        "doc_color_on": bool(getattr(org, "doc_brand_color_on", False)),   # the colour on printed documents (opt-in)
         "custom_domain": org.brand_custom_domain,
         "email_from": org.brand_email_from,
         "hide_powered_by": org.brand_hide_powered_by,
@@ -83,6 +84,8 @@ async def set_branding(
             setattr(org, col, payload[field])
     if "hide_powered_by" in payload:
         org.brand_hide_powered_by = bool(payload["hide_powered_by"])
+    if "doc_color_on" in payload:
+        org.doc_brand_color_on = bool(payload["doc_color_on"])
     await db.commit()
     return {"ok": True}
 

@@ -419,8 +419,10 @@ async def create_invoice(
             Order.id.in_(order_ids), Order.org_id == current.org_id))).scalars().all())
         order_ids = [o for o in order_ids if o in valid]
 
-    discount_pct = data.discount_pct if data.discount_pct is not None else data.discount
-    tax_pct = data.tax_pct if data.tax_pct is not None else data.tax
+    # None when the caller sent no percentage: new_invoice then keeps the tax the jobs already
+    # carry instead of treating "no percentage" as "0% tax" (which billed a taxed job with tax 0).
+    discount_pct = data.discount_pct if data.discount_pct is not None else (data.discount or None)
+    tax_pct = data.tax_pct if data.tax_pct is not None else (data.tax or None)
     if not (0 <= (discount_pct or 0) <= 100) or (tax_pct or 0) < 0:
         raise HTTPException(422, "Discount must be 0–100% and tax can't be negative")
 
@@ -444,6 +446,9 @@ async def create_invoice(
             raise HTTPException(404, "Client not found")
     by_id = {o.id: o for o in (await db.execute(select(Order).where(Order.id.in_(order_ids)))).scalars().all()} \
         if order_ids else {}
+    from backend.services.order_money import refuse_archived
+    for o in by_id.values():
+        refuse_archived(o)
     # A job is billed once. A second click on "Create invoice" gets the job's invoice back (200)
     # while that invoice still follows the job; once it has been sent or paid it froze the lines it
     # bills, and a new invoice bills only the lines added since.
@@ -473,7 +478,7 @@ async def create_invoice(
     inv = await new_invoice(
         db, org_id=current.org_id, orders=[by_id[o] for o in order_ids], lines=rest,
         client_id=data.client_id, free_lines=[l.model_dump() for l in (data.lines or [])],
-        subtotal=data.subtotal or None, discount_pct=discount_pct or 0, tax_pct=tax_pct or 0,
+        subtotal=data.subtotal or None, discount_pct=discount_pct, tax_pct=tax_pct,
         display_mode=mode if mode in DISPLAY_MODES else "detailed",
         issued_at=_pdate(data.issued_at), due_at=_pdate(data.due_at),
         payer_client_id=data.payer_client_id, comment=(data.comment or "")[:1000])
@@ -500,6 +505,8 @@ async def attach_order(
         Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    from backend.services.order_money import refuse_archived
+    refuse_archived(order)
     from backend.services import invoice_money
     if invoice_money.is_locked(inv):
         raise HTTPException(409, "This invoice has been sent or paid. Bill this job on a new invoice.")
@@ -673,6 +680,13 @@ async def _record_payment(invoice_id: str, data: "PaymentIn", db: AsyncSession, 
         raise HTTPException(404, "Invoice not found")
     if inv.status in ("cancelled", "canceled"):
         raise HTTPException(409, "This invoice was deleted and can't take payments")
+    # Archiving cancels a job's own invoice unless money sits on it; one left that bills only
+    # deleted jobs takes no more. (A shared invoice with a live job still does.)
+    from backend.services.invoicing import invoice_orders
+    from backend.services.order_money import refuse_archived
+    jobs = await invoice_orders(db, inv)
+    if jobs and all(getattr(j, "archived", False) for j in jobs):
+        refuse_archived(jobs[0])
     from backend.services.credit_notes import reader_busy
     if await reader_busy(db, inv):          # the card on the reader would collect it a second time
         raise HTTPException(409, "A card reader charge for this invoice is still in progress. "
@@ -699,8 +713,8 @@ async def _record_payment(invoice_id: str, data: "PaymentIn", db: AsyncSession, 
         if data.overpay == "refund":
             await assert_perm(db, current, "can_create_returns")    # paying money back out
     if data.method == "balance":
-        # Paid out of credit the client already holds: no money moves and the ledger already shows
-        # that credit, so nothing is posted to it below. Without credit it used to erase debt (B3).
+        # Paid out of credit the client already holds: no money moves (without credit it used to
+        # erase debt, B3). The credit is spent below (spend_credit) so it can't pay twice.
         from backend.services.ledger import available_credit
         credit = await available_credit(db, current.org_id, inv.client_id, inv.order_id)
         if float(applied) > credit + 0.005:
@@ -768,6 +782,11 @@ async def _record_payment(invoice_id: str, data: "PaymentIn", db: AsyncSession, 
         await post_contact_ledger(db, current.org_id, inv.client_id, "income", -float(received),
                                   note=f"Payment for invoice {label}", ref_type="payment",
                                   ref_id=payment.id, created_by_id=current.id)
+    else:
+        from backend.services.ledger import spend_credit
+        await spend_credit(db, current.org_id, inv.client_id, float(applied), order_id=inv.order_id,
+                           parts=[(p.order_id, p.amount) for p in parts], invoice_id=inv.id, label=label,
+                           created_by_id=current.id)
     kept = refunded = Decimal(0)
     if excess > 0 and data.overpay == "keep_balance":
         kept = excess
