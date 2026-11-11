@@ -69,7 +69,10 @@ async def test_line_discount_and_price_changes_need_rights(client):
     oid, lid = await _order_with_line(client, H)
     assert (await client.patch(f"/api/orders/{oid}/lines/{lid}", json={"discount": 100}, headers=T)).status_code == 403
     assert (await client.patch(f"/api/orders/{oid}/lines/{lid}", json={"unit_price": 0}, headers=T)).status_code == 403
-    assert (await client.patch(f"/api/orders/{oid}/lines/{lid}", json={"qty": 2}, headers=T)).status_code == 200
+    # qty needs the add right, like deleting the line (recheck 2): this allow-list role has neither
+    assert (await client.patch(f"/api/orders/{oid}/lines/{lid}", json={"qty": 2}, headers=T)).status_code == 403
+    T2 = await _as_role(client, H, permissions={"can_add_services": True})
+    assert (await client.patch(f"/api/orders/{oid}/lines/{lid}", json={"qty": 2}, headers=T2)).status_code == 200
 
 
 @pytest.mark.asyncio

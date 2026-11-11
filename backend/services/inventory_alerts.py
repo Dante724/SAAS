@@ -28,7 +28,7 @@ from collections import defaultdict
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
-from backend.models import Employee, Order, OrderLine, OrderStatus, Part, Role, StockLevel
+from backend.models import Employee, Order, OrderLine, OrderStatus, Organisation, Part, Role, StockLevel
 from backend.services import push
 from backend.services.permissions import role_allows
 
@@ -70,8 +70,12 @@ async def _alert_recipients(db: AsyncSession, org_id: str) -> list[Employee]:
     role_ids = {e.role_id for e in emps if e.role_id}
     roles = {r.id: r for r in (await db.execute(select(Role).where(
         Role.id.in_(role_ids)))).scalars().all()} if role_ids else {}
+    owner_id = (await db.execute(select(Organisation.owner_id).where(
+        Organisation.id == org_id))).scalar_one_or_none()
     out = []
     for e in emps:
+        if not e.role_id and e.id != owner_id:
+            continue          # no role isn't the owner (launch B10)
         role = roles.get(e.role_id)
         if role_allows(role, BASE_PERM) and role_allows(role, ALERT_PERM):
             out.append(e)
@@ -79,8 +83,11 @@ async def _alert_recipients(db: AsyncSession, org_id: str) -> list[Employee]:
 
 
 async def _role_allows_alert(db: AsyncSession, emp: Employee) -> bool:
-    if not emp or not emp.role_id:
-        return True  # no role => default-allow
+    if not emp:
+        return True
+    if not emp.role_id:
+        from backend.services.auth import is_shop_owner
+        return await is_shop_owner(db, emp)   # the owner, not a roleless invitee (launch B10)
     role = (await db.execute(select(Role).where(Role.id == emp.role_id))).scalar_one_or_none()
     return role_allows(role, ALERT_PERM)
 

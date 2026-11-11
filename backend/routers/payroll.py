@@ -451,7 +451,7 @@ async def create_payroll_runs_bulk(
             if in_scope(scope, e.id)]
     # Nobody accrues their own pay (the owner excepted): they're skipped, and the result says so.
     from backend.services.auth import is_shop_owner
-    skip_self = bool(current.role_id) and not await is_shop_owner(db, current)
+    skip_self = not await is_shop_owner(db, current)
 
     accrued, skipped, results = 0, 0, []
     for emp in emps:
