@@ -61,6 +61,21 @@ def day_end_utc(day: date, tzname: str | None) -> datetime:
     return day_start_utc(day + timedelta(days=1), tzname)
 
 
+def range_edge(value: str, tzname: str | None, *, end: bool) -> datetime:
+    """One end of a report window as naive UTC, the one rule every report uses. A date-only value
+    (YYYY-MM-DD, what the Reports, P&L and export screens send) is a whole day on the shop's clock,
+    the same day the dashboard calls "today"; a date-only "To" covers all of that day. A value with
+    a time is taken as given. Raises ValueError on a malformed value."""
+    parsed = datetime.fromisoformat(value)
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(timezone.utc).replace(tzinfo=None)
+    if parsed.time() != time.min:
+        return parsed
+    if end:
+        return day_end_utc(parsed.date(), tzname) - timedelta(seconds=1)
+    return day_start_utc(parsed.date(), tzname)
+
+
 def parse_dt(value, field: str = "date") -> datetime:
     try:
         return datetime.fromisoformat(value)
