@@ -11,6 +11,8 @@ export type Task = {
   due_at?: string | null; completed_at?: string | null; overdue?: boolean;
   order_id?: string | null; order_number?: string | null; client_id?: string | null; client_name?: string | null;
   parent_task_id?: string | null; subtasks?: Task[];
+  /** due_at on the shop's wall clock (screen only, see withShopTimes); never sent back. */
+  due_wall?: string | null;
 };
 
 export type Status = "todo" | "in_progress" | "done" | "cancelled";
@@ -127,6 +129,16 @@ export function replaceTask(day: MyDay, id: string, withTask: Task | null): MyDa
   return next;
 }
 
+/** The due time as the shop's wall clock: due_wall once withShopTimes ran, else due_at as sent. */
+export const dueOf = (t: Pick<Task, "due_at" | "due_wall">): string | null | undefined => (t.due_wall !== undefined ? t.due_wall : t.due_at);
+
+/** Put every task's due time on the shop's clock (the server sends UTC instants). */
+export function withShopTimes(day: MyDay, toWall: (iso: string | null | undefined) => string | null): MyDay {
+  const next = { ...day } as MyDay;
+  for (const b of DAY_BUCKETS) next[b] = day[b].map((t) => ({ ...t, due_wall: toWall(t.due_at) }));
+  return next;
+}
+
 /** "HH:MM" of a wall-clock due time, or null when the task is due "some time that day"
  *  (a date-only value, or the end-of-day time the server stores for one). */
 export function dueClock(due?: string | null): string | null {
@@ -150,9 +162,9 @@ export function groupByTime(items: Task[]): TaskGroup[] {
     { key: "morning", label: "Morning", items: [] }, { key: "afternoon", label: "Afternoon", items: [] },
     { key: "evening", label: "Evening", items: [] }, { key: "anytime", label: "Any time today", items: [] },
   ];
-  const sorted = [...items].sort((a, b) => (dueClock(a.due_at) || "99").localeCompare(dueClock(b.due_at) || "99") || normPriority(b.priority) - normPriority(a.priority));
+  const sorted = [...items].sort((a, b) => (dueClock(dueOf(a)) || "99").localeCompare(dueClock(dueOf(b)) || "99") || normPriority(b.priority) - normPriority(a.priority));
   for (const t of sorted) {
-    const c = dueClock(t.due_at);
+    const c = dueClock(dueOf(t));
     const h = c ? Number(c.slice(0, 2)) : -1;
     parts[h < 0 ? 3 : h < 12 ? 0 : h < 17 ? 1 : 2].items.push(t);
   }
@@ -178,8 +190,8 @@ export function dayLabel(ymd: string, today: string): string {
 /** Upcoming and Later: one group per day, soonest first; tasks with no date last. */
 export function groupByDay(items: Task[], today: string): TaskGroup[] {
   const map = new Map<string, Task[]>();
-  for (const t of [...items].sort((a, b) => (a.due_at || "9999").localeCompare(b.due_at || "9999"))) {
-    const k = dayOf(t.due_at);
+  for (const t of [...items].sort((a, b) => (dueOf(a) || "9999").localeCompare(dueOf(b) || "9999"))) {
+    const k = dayOf(dueOf(t));
     if (!map.has(k)) map.set(k, []);
     map.get(k)!.push(t);
   }

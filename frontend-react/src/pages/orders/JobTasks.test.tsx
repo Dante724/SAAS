@@ -6,6 +6,7 @@ import userEvent from "@testing-library/user-event";
 vi.mock("../../components/Shell", () => ({ M: ({ n }: { n: string }) => <i data-icon={n} />, default: ({ children }: any) => <div>{children}</div> }));
 
 import JobTasks from "./JobTasks";
+import { resetShopTz } from "../../lib/shopTime";
 
 const reply = (body: unknown) => ({ ok: true, status: 200, headers: new Headers(), json: async () => body, text: async () => JSON.stringify(body) }) as Response;
 let calls: { method: string; url: string; body: any }[] = [];
@@ -25,7 +26,7 @@ describe("JobTasks", () => {
     const u = userEvent.setup();
     render(<JobTasks orderId="o1" emps={[{ id: "e1", name: "Sam" }]} onFlash={vi.fn()} />);
     expect(await screen.findByText("Order the screen")).toBeInTheDocument();
-    expect(calls[0].url).toBe("/api/tasks?order_id=o1");
+    expect(calls.find((c) => c.url.startsWith("/api/tasks"))!.url).toBe("/api/tasks?order_id=o1");
     await u.click(screen.getByLabelText("Done: Order the screen"));
     const p = calls.find((c) => c.method === "PATCH")!;
     expect(p.url).toBe("/api/tasks/t1");
@@ -51,5 +52,15 @@ describe("JobTasks", () => {
     expect(row.textContent).toContain("Auto");
     expect(row.textContent).toContain("Urgent");
     expect(screen.getByText("Order the screen").closest("li")!.textContent).not.toContain("Auto");
+  });
+
+  it("shows a due time on the shop's clock (IST shop, UTC instant from the server)", async () => {
+    resetShopTz();
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => reply(String(url).startsWith("/api/staff/company")
+      ? { timezone: "Asia/Kolkata" }
+      : { items: [{ id: "t1", title: "Order the screen", status: "todo", completed_at: null, due_at: "2026-11-11T09:30:00" }] })));
+    render(<JobTasks orderId="o1" emps={[]} onFlash={vi.fn()} />);
+    expect(await screen.findByText(/Due Nov 11, 3:00\s?PM/)).toBeInTheDocument();
+    resetShopTz();
   });
 });

@@ -15,6 +15,7 @@ vi.mock("../../context/Me", () => ({
 }));
 
 import TasksHub from "./TasksHub";
+import { resetShopTz } from "../../lib/shopTime";
 
 const reply = (body: unknown, status = 200) => ({ ok: status < 400, status, statusText: "", headers: new Headers(), json: async () => body, text: async () => JSON.stringify(body) }) as Response;
 const DATE = "2026-11-11";
@@ -39,16 +40,20 @@ let dayBody: any;
 let dayStatus = 200;
 let failPost = false;
 let failMove = false;
+let shopTz: string | null = null;     // GET /staff/company timezone (none = UTC, like the server)
+let moveReply: any = { moved: 2 };
 
 beforeEach(() => {
   calls = []; manager = true; dayBody = DAY(); dayStatus = 200; failPost = false; failMove = false;
   try { localStorage.clear(); } catch { /* storage may be off */ }
+  shopTz = null; moveReply = { moved: 2 }; resetShopTz();
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method || "GET";
     calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : null });
     if (method === "GET" && url.startsWith("/api/tasks/my-day")) return dayStatus === 200 ? reply(dayBody) : reply({ detail: "x" }, dayStatus);
-    if (method === "GET" && url.startsWith("/api/tasks?")) return reply({ items: [{ id: "x1", title: "A task in the list", assignee_ids: ["me"] }] });
-    if (method === "POST" && url === "/api/tasks/move-to-today") return failMove ? reply({ detail: "no" }, 500) : reply({ moved: 2 });
+    if (method === "GET" && url.startsWith("/api/staff/company")) return reply({ name: "Fix Point", timezone: shopTz });
+    if (method === "GET" && url.startsWith("/api/tasks?")) return reply({ items: [{ id: "x1", title: "A task in the list", assignee_ids: ["me"], due_at: "2026-11-11T04:00:00" }] });
+    if (method === "POST" && url === "/api/tasks/move-to-today") return failMove ? reply({ detail: "no" }, 500) : reply(moveReply);
     if (method === "POST" && url === "/api/tasks") { if (failPost) return reply({ detail: "no" }, 500); const b = calls[calls.length - 1].body; const t = { id: `new${calls.length}`, title: b.title, due_at: b.due_at }; if (b.assigned_to_id === "me") (b.due_at === DATE ? dayBody.today : dayBody.upcoming).push(t); return reply(t); }
     if (method === "PATCH" && /^\/api\/tasks\/[^/?]+$/.test(url)) {     // like the server: done moves to Done today and back
       const id = url.split("/").pop(); const b = calls[calls.length - 1].body;
@@ -68,7 +73,7 @@ beforeEach(() => {
       const id = url.split("/").pop();
       if (id === "gone") return reply({ detail: "Not found" }, 404);
       if (id === "secret") return reply({ detail: "Forbidden" }, 403);
-      return reply({ id, title: id === "t2" ? "Call Jane about collection" : "Chase supplier RMA #A88", description: "" });
+      return reply({ id, title: id === "t2" ? "Call Jane about collection" : "Chase supplier RMA #A88", description: "", due_at: "2026-11-06T11:30:00" });
     }
     if (method === "GET" && url.endsWith("/feed")) return reply({ items: [] });
     if (method === "GET" && url.startsWith("/api/staff/employees")) return reply({ items: [{ id: "me", name: "Me" }, { id: "e2", name: "Jane Kim" }, { id: "e3", name: "Tom Reed" }] });
@@ -402,5 +407,62 @@ describe("My day: the rest of the acceptance list", () => {
     renderAt();
     await screen.findByText("Nothing due today");
     await waitFor(() => expect(screen.getByLabelText("Add a task")).toHaveFocus());
+  });
+});
+
+describe("the shop's clock (due times are UTC instants)", () => {
+  const SAME_DAY = () => ({
+    date: DATE,
+    catch_up: [], upcoming: [], later: [],
+    today: [
+      { id: "a", title: "Order iPhone 14 screen", due_at: "2026-11-11T04:00:00" },        // 09:30 IST · 04:00 UTC
+      { id: "b", title: "QC MacBook keyboard", due_at: "2026-11-11T09:30:00" },           // 15:00 IST · 09:30 UTC
+      { id: "c", title: "Call Jane about pickup", due_at: "2026-11-11T12:30:00" },        // 18:00 IST · 12:30 UTC
+      { id: "d", title: "Count iPhone screens", due_at: "2026-11-11T18:29:59" },          // date-only in IST: end of shop day
+    ],
+    done_today: [{ id: "z", title: "Open the till", status: "done", completed_at: "2026-11-11T08:55:00" }],   // 14:25 IST
+    counts: { catch_up: 0, today: 4, upcoming: 0, later: 0, done_today: 1 },
+  });
+  const heads = () => screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
+  const timeOf = (title: string) => screen.getByText(title).closest("li")!.textContent!;
+
+  it("IST shop: groups by the shop's time of day; a date-only task is 'Any time today', not Evening", async () => {
+    shopTz = "Asia/Kolkata"; dayBody = SAME_DAY();
+    renderAt();
+    await screen.findByText("Order iPhone 14 screen");
+    expect(heads()).toEqual(["Morning1", "Afternoon1", "Evening1", "Any time today1"]);
+    expect(timeOf("Order iPhone 14 screen")).toMatch(/9:30\s?AM/);
+    expect(timeOf("Call Jane about pickup")).toMatch(/6:00\s?PM/);
+    expect(timeOf("Count iPhone screens")).not.toMatch(/PM|AM/);
+    const u = userEvent.setup();
+    await u.click(screen.getByRole("button", { name: /Done today/ }));
+    expect(timeOf("Open the till")).toMatch(/2:25\s?PM/);
+  });
+
+  it("UTC shop: the same instants group differently", async () => {
+    shopTz = "UTC"; dayBody = SAME_DAY();
+    renderAt();
+    await screen.findByText("Order iPhone 14 screen");
+    expect(heads()).toEqual(["Morning2", "Afternoon1", "Evening1"]);
+    expect(timeOf("Order iPhone 14 screen")).toMatch(/4:00\s?AM/);
+  });
+
+  it("IST shop: the task panel and the list show the shop's time", async () => {
+    shopTz = "Asia/Kolkata";
+    const { unmount } = renderAt("/tasks?task=c1");
+    expect(await screen.findByText(/Due Nov 6, 5:00\s?PM/)).toBeInTheDocument();     // 11:30 UTC
+    unmount();
+    dayStatus = 404;
+    renderAt();
+    expect(await screen.findByText(/Nov 11, 9:30\s?AM/)).toBeInTheDocument();
+  });
+
+  it("Move all to today says how many couldn't be moved", async () => {
+    moveReply = { moved: 1, skipped: ["c2"] };
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    await u.click(screen.getByRole("button", { name: "Move all to today" }));
+    expect(await screen.findByText("Moved 1 task to today. 1 couldn't be moved")).toBeInTheDocument();
   });
 });

@@ -9,6 +9,8 @@ import { Empty, GoButton, IconButton, Page, Section, SkeletonRows } from "../com
 import { goQueue } from "../lib/offlineQueue";
 import { haptic } from "../lib/scanner";
 import { announceChange, useOnChange, useToast } from "../lib/useGo";
+import { serverDate } from "../../lib/serverTime";
+import { fmtShop, knownShopTz, loadShopTz, shopToday, toShopWall, useShopTz } from "../../lib/shopTime";
 
 export type Task = {
   id: string; title: string; status: "todo" | "in_progress" | "done"; due_at?: string | null;
@@ -17,25 +19,27 @@ export type Task = {
 };
 
 
-/** Which group a task belongs in. Due times are shop-local wall-clock, so they parse as local. Pure, tested. */
-export function bucket(t: Task, now = new Date()): "done" | "overdue" | "today" | "later" | "someday" {
+/** Which group a task belongs in. Due times come back as UTC instants: "late" compares instants,
+ *  "today" is the SHOP's date (not the phone's). Pure, tested. */
+export function bucket(t: Task, now = new Date(), tz: string = knownShopTz() || "UTC"): "done" | "overdue" | "today" | "later" | "someday" {
   if (t.status === "done") return "done";
   if (!t.due_at) return "someday";
-  const due = new Date(t.due_at);
+  const due = serverDate(t.due_at);
+  if (!due) return "someday";
   if (due < now) return "overdue";
-  const eod = new Date(now); eod.setHours(23, 59, 59, 999);
-  return due <= eod ? "today" : "later";
+  return (toShopWall(t.due_at, tz) || "").slice(0, 10) === shopToday(tz, now) ? "today" : "later";
 }
 
 /** Open tasks due today or overdue — the Tasks tab badge. */
-export function dueCount(items: Task[], now = new Date()): number {
-  return items.filter((t) => ["overdue", "today"].includes(bucket(t, now))).length;
+export function dueCount(items: Task[], now = new Date(), tz?: string): number {
+  return items.filter((t) => ["overdue", "today"].includes(bucket(t, now, tz))).length;
 }
 
 export function useTaskBadge() {
   const [n, setN] = useState(0);
   const load = useCallback(() => {
-    api.get<{ items: Task[] }>("/tasks?mine=true").then((r) => setN(dueCount(r.items || []))).catch(() => { /* silent: badge count only */ });
+    Promise.all([api.get<{ items: Task[] }>("/tasks?mine=true"), loadShopTz()])
+      .then(([r, tz]) => setN(dueCount(r.items || [], new Date(), tz))).catch(() => { /* silent: badge count only */ });
   }, []);
   useEffect(() => {
     load();
@@ -47,17 +51,17 @@ export function useTaskBadge() {
   return n;
 }
 
-const when = (iso?: string | null) => {
+// On the shop's clock: a time for today, else a short date.
+const when = (iso: string | null | undefined, tz: string) => {
   if (!iso) return "";
-  const d = new Date(iso);
-  const sameDay = d.toDateString() === new Date().toDateString();
-  return sameDay ? d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" })
-    : d.toLocaleDateString([], { weekday: "short", day: "numeric", month: "short" });
+  const sameDay = (toShopWall(iso, tz) || "").slice(0, 10) === shopToday(tz);
+  return sameDay ? fmtShop(iso, tz, { hour: "numeric", minute: "2-digit" })
+    : fmtShop(iso, tz, { weekday: "short", day: "numeric", month: "short" });
 };
 
-function TaskRow({ t, meId, onToggle }: { t: Task; meId?: string; onToggle: (t: Task) => void }) {
+function TaskRow({ t, meId, tz, onToggle }: { t: Task; meId?: string; tz: string; onToggle: (t: Task) => void }) {
   const done = t.status === "done";
-  const late = bucket(t) === "overdue";
+  const late = bucket(t, new Date(), tz) === "overdue";
   const from = t.created_by_id && t.created_by_id !== meId && t.author_name ? `From ${t.author_name}` : "";
   const forWho = t.assigned_to_id && t.assigned_to_id !== meId && t.assignee_name ? `For ${t.assignee_name}` : "";
   return (
@@ -69,7 +73,7 @@ function TaskRow({ t, meId, onToggle }: { t: Task; meId?: string; onToggle: (t: 
       <div className="min-w-0 flex-1 py-2.5">
         <p className={`text-go-body font-medium ${done ? "text-ink-tertiary line-through" : "text-ink-primary"}`}>{t.title}</p>
         <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-go-sub text-ink-secondary">
-          {t.due_at && <span className={late && !done ? "font-semibold text-rose-700" : ""}>{late && !done ? "Overdue · " : ""}{when(t.due_at)}</span>}
+          {t.due_at && <span className={late && !done ? "font-semibold text-rose-700" : ""}>{late && !done ? "Overdue · " : ""}{when(t.due_at, tz)}</span>}
           {(from || forWho) && <span>{from || forWho}</span>}
           {t.order_id && <Link to={`/job/${encodeURIComponent(t.order_id)}`} className="-my-3 -mx-2 inline-flex min-h-11 min-w-11 items-center gap-1 px-2 font-semibold text-primary"><Link2 size={14} />Open job</Link>}
         </p>
@@ -80,6 +84,8 @@ function TaskRow({ t, meId, onToggle }: { t: Task; meId?: string; onToggle: (t: 
 
 export default function Tasks() {
   const { me } = useMe();
+  const shopTz = useShopTz();   // group and show due times on the shop's clock
+  const tz = shopTz || "UTC";
   const toast = useToast();
   const [items, setItems] = useState<Task[] | null>(null);
   const [err, setErr] = useState<string | null>(null);
@@ -105,18 +111,18 @@ export default function Tasks() {
   }
 
   const groups = { overdue: [] as Task[], today: [] as Task[], later: [] as Task[], someday: [] as Task[], done: [] as Task[] };
-  (items || []).forEach((t) => groups[bucket(t)].push(t));
+  (shopTz ? items || [] : []).forEach((t) => groups[bucket(t, new Date(), tz)].push(t));
   const refresh = (
     <IconButton label="Refresh" onClick={load} className="-mr-2" icon={<RefreshCw size={20} />} />
   );
-  const list = (ts: Task[]) => <div className="space-y-2">{ts.map((t) => <TaskRow key={t.id} t={t} meId={me?.id} onToggle={toggle} />)}</div>;
+  const list = (ts: Task[]) => <div className="space-y-2">{ts.map((t) => <TaskRow key={t.id} t={t} meId={me?.id} tz={tz} onToggle={toggle} />)}</div>;
   const open = groups.overdue.length + groups.today.length + groups.later.length + groups.someday.length;
 
   return (
     <Page title="Tasks" right={refresh} subtitle={items ? (open ? `${open} to do` : "All done") : undefined}>
       {err && !items && <Empty icon={<AlertTriangle size={22} />} title="Couldn't load" body={err} action={<GoButton variant="link" onClick={load}>Try again</GoButton>} />}
-      {!items && !err && <SkeletonRows n={3} />}
-      {items && !open && !groups.done.length && <Empty icon={<ListTodo size={22} />} title="No tasks" body="Tasks assigned to you, and ones you make with +, show up here." />}
+      {(!items || !shopTz) && !err && <SkeletonRows n={3} />}
+      {items && shopTz && !open && !groups.done.length && <Empty icon={<ListTodo size={22} />} title="No tasks" body="Tasks assigned to you, and ones you make with +, show up here." />}
       {groups.overdue.length > 0 && <Section title="Overdue" count={groups.overdue.length}>{list(groups.overdue)}</Section>}
       {groups.today.length > 0 && <Section title="Today" count={groups.today.length}>{list(groups.today)}</Section>}
       {groups.later.length > 0 && <Section title="Coming up" count={groups.later.length}>{list(groups.later)}</Section>}

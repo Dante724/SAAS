@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
 import { Link } from "react-router-dom";
 import { M } from "../../components/Shell";
 import Button from "../../components/Button";
@@ -10,12 +10,11 @@ import EmptyState, { ErrorState } from "../../components/EmptyState";
 import { Badge } from "../../components/Card";
 import { Avatar } from "../orders/look";
 import { api, ApiError } from "../../api/client";
-import { isoDate } from "../../lib/localDate";
-import { serverDate } from "../../lib/serverTime";
+import { useShopTz, toShopWall, fromShopWall, shopToday, fmtShop } from "../../lib/shopTime";
 import {
   type Task, type MyDay as Day, type DayBucket, type QuickWhen, type TaskGroup,
   normDay, moveTasks, insertTask, replaceTask, groupByTime, groupByDay, dueClock, fmtClock, lateLabel,
-  quickDue, bucketForDue, dayLabel, matchesQuery, normPriority, normStatus, PRIORITY_LABEL, isAuto,
+  quickDue, bucketForDue, dayLabel, matchesQuery, normPriority, normStatus, PRIORITY_LABEL, isAuto, dueOf, withShopTimes,
 } from "./taskModel";
 import type { Emp } from "./TaskPanel";
 
@@ -40,7 +39,11 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
   onShowAll: () => void;                // a group has more than the server sent: open the List view
   reloadKey: number;                    // bumped by the page when the panel changed something
 }) {
-  const [day, setDay] = useState<Day | null>(null);
+  const [raw, setDay] = useState<Day | null>(null);
+  // Due times arrive as UTC instants: put them on the shop's clock before grouping (and wait for
+  // the zone, so nothing is grouped by the browser's clock first).
+  const tz = useShopTz();
+  const day = useMemo(() => (raw && tz ? withShopTimes(raw, (iso) => toShopWall(iso, tz)) : null), [raw, tz]);
   const [failed, setFailed] = useState(false);
   const [view, setView] = useState<View>("today");
   const [q, setQ] = useState("");
@@ -62,7 +65,7 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
     if (!quiet) { setDay(null); setFailed(false); }
     api.get<Partial<Day>>(`/tasks/my-day?assignee=${encodeURIComponent(person)}`).then((r) => {
       if (id !== req.current) return;
-      const d = normDay(r, isoDate());
+      const d = normDay(r, tz ? shopToday(tz) : "");
       setDay(d); setFailed(false);
       if (!quiet && !d.catch_up.length && !d.today.length) setFocusAdd((n) => n + 1);   // an empty day: ready to type
     }).catch((e) => {
@@ -76,14 +79,14 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
   const first = useRef(true);
   useEffect(() => { if (first.current) { first.current = false; return; } load(true); }, [reloadKey, load]);
 
-  const today = day?.date || isoDate();
+  const today = day?.date || (tz ? shopToday(tz) : "");
   const qx = q.trim();
   const pick = (ts: Task[]) => (qx ? ts.filter((t) => matchesQuery(t, qx)) : ts);
   const showWho = person !== "me";
 
   // ── done / undo ──
   async function setDone(t: Task, from: DayBucket, done: boolean, backTo?: DayBucket, prevStatus?: string | null) {
-    const back = backTo || (from === "done_today" ? (t.overdue ? "catch_up" : bucketForDue(t.due_at || null, today)) : from);
+    const back = backTo || (from === "done_today" ? (t.overdue ? "catch_up" : bucketForDue(dueOf(t) || null, today)) : from);
     // Undo puts back the status it had (In progress stays In progress); the due date never changed.
     const reopenAs = normStatus(prevStatus ?? t.status) === "in_progress" ? "in_progress" : "todo";
     if (done) {
@@ -117,10 +120,12 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
     setBusyMove(true);
     setDay(moveTasks(day, ids, "today", { overdue: false, due_at: today }));
     try {
-      const r = await api.post<{ moved?: number }>("/tasks/move-to-today", { ids });
-      const n = typeof r?.moved === "number" ? r.moved : ids.length;
-      flash(n >= ids.length ? (n === 1 ? "Moved 1 task to today" : `Moved ${n} tasks to today`)
-        : `Moved ${n} of ${ids.length} to today. The others changed in the meantime.`);
+      // {"moved": n, "skipped": [ids]}: skipped ones were finished, removed or changed meanwhile.
+      const r = await api.post<{ moved?: number; skipped?: string[] }>("/tasks/move-to-today", { ids });
+      const skipped = Array.isArray(r?.skipped) ? r.skipped.length : 0;
+      const n = typeof r?.moved === "number" ? r.moved : ids.length - skipped;
+      const moved = n === 1 ? "Moved 1 task to today" : `Moved ${n} tasks to today`;
+      flash(!skipped ? moved : `${n ? `${moved}. ` : ""}${skipped === 1 ? "1 couldn't be moved" : `${skipped} couldn't be moved`}`);
       setView("today");
       load(true);   // the server's answer wins (it skips tasks finished or removed meanwhile)
     } catch {
@@ -161,7 +166,7 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
   const nameOfPerson = person === "me" ? "you" : person === "all" ? "anyone" : (emps.find((e) => e.id === person)?.name || "this person");
 
   const row = (t: Task, from: DayBucket) => (
-    <TaskRow key={t.id} t={t} from={from} today={today} showWho={showWho} ticking={ticking.includes(t.id)}
+    <TaskRow key={t.id} t={t} from={from} today={today} tz={tz || "UTC"} showWho={showWho} ticking={ticking.includes(t.id)}
       onOpen={() => onOpen(t)} onToggle={(done) => setDone(t, from, done)}
       onUndo={from === "done_today" && justDone[t.id] ? () => setDone(t, "done_today", false, justDone[t.id].from, justDone[t.id].status) : undefined} />
   );
@@ -178,7 +183,7 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
       {/* Main action on the left, whose day and search on the right. */}
       {/* On phones the toolbar box steps aside (display: contents) so quick add can stick to the top on its own. */}
       <div className="max-sm:contents flex flex-col lg:flex-row lg:items-start gap-3">
-        <QuickAdd today={today} meId={meId} emps={people} mayAssign={isManager} onAdd={add} flash={flash} focusKey={focusAdd} />
+        <QuickAdd today={today} tz={tz} meId={meId} emps={people} mayAssign={isManager} onAdd={add} flash={flash} focusKey={focusAdd} />
         <div className="flex items-center gap-2 lg:ml-auto lg:pt-1.5 max-sm:mt-3">
           <span title={isManager ? undefined : "Only managers can see other people's day"} className="flex-shrink-0">
             <TeklySelect value={person} onChange={(e) => onPerson(e.target.value)} disabled={!isManager} aria-label="Whose day"
@@ -292,17 +297,17 @@ function DaySkeleton() {
 }
 
 // ── one row ──────────────────────────────────────────────────────────────────
-function TaskRow({ t, from, today, showWho, ticking, onOpen, onToggle, onUndo }: {
-  t: Task; from: DayBucket; today: string; showWho: boolean; ticking: boolean; onOpen: () => void; onToggle: (done: boolean) => void; onUndo?: () => void;
+function TaskRow({ t, from, today, tz, showWho, ticking, onOpen, onToggle, onUndo }: {
+  t: Task; from: DayBucket; today: string; tz: string; showWho: boolean; ticking: boolean; onOpen: () => void; onToggle: (done: boolean) => void; onUndo?: () => void;
 }) {
   const done = from === "done_today" || !!t.completed_at;
   const checked = done || ticking;
   const pending = t.id.startsWith("tmp-");
   const names = (t.assignee_names && t.assignee_names.length) ? t.assignee_names : t.assignee_name ? [t.assignee_name] : [];
   const prio = normPriority(t.priority);
-  const clock = dueClock(t.due_at);
-  const when = from === "catch_up" ? lateLabel(t.due_at, today)
-    : from === "done_today" ? (serverDate(t.completed_at)?.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" }) || "")
+  const clock = dueClock(dueOf(t));
+  const when = from === "catch_up" ? lateLabel(dueOf(t), today)
+    : from === "done_today" ? fmtShop(t.completed_at, tz, { hour: "numeric", minute: "2-digit" })
     : clock ? fmtClock(clock) : "";
   return (
     <li className={`group relative flex items-center gap-3 px-4 py-3 transition-colors hover:bg-slate-50/80 ${pending ? "opacity-60" : ""}`}>
@@ -344,8 +349,8 @@ function TaskRow({ t, from, today, showWho, ticking, onOpen, onToggle, onUndo }:
 }
 
 // ── quick add ────────────────────────────────────────────────────────────────
-function QuickAdd({ today, meId, emps, mayAssign, onAdd, flash, focusKey }: {
-  today: string; meId?: string; emps: Emp[]; mayAssign: boolean;
+function QuickAdd({ today, tz, meId, emps, mayAssign, onAdd, flash, focusKey }: {
+  today: string; tz: string | null; meId?: string; emps: Emp[]; mayAssign: boolean;
   onAdd: (body: Record<string, any>, preview: Task, forName: string | null, key: string) => Promise<boolean>;
   flash: (msg: string) => void;
   focusKey: number;                     // bumped when the day loads empty: put the cursor here
@@ -372,7 +377,10 @@ function QuickAdd({ today, meId, emps, mayAssign, onAdd, flash, focusKey }: {
     if (when === "pick" && !picked) { flash("Pick a date first"); return; }
     if (who === "others" && !other) { flash("Choose who it's for"); return; }
     const assignee = who === "others" ? other : meId || null;
-    const due = quickDue(when, picked && pickedTime ? `${picked}T${pickedTime}` : picked, today);
+    if (!tz || !today) return;                     // the shop's clock isn't known yet
+    // A picked time is on the shop's clock: send it with the shop's offset. A date alone means the
+    // end of that shop day (the server decides that).
+    const due = fromShopWall(quickDue(when, picked && pickedTime ? `${picked}T${pickedTime}` : picked, today), tz);
     const body = { title: text, due_at: due, assigned_to_id: assignee, assignee_ids: assignee ? [assignee] : [], order_id: job?.id || null };
     const forName = who === "others" ? emps.find((e) => e.id === other)?.name || null : null;
     const preview: Task = {

@@ -69,24 +69,35 @@ describe("photos", () => {
   });
 });
 
-describe("tasks", () => {
-  const now = new Date(2026, 9, 19, 10, 0);
+describe("tasks (due times are UTC instants; days are the shop's)", () => {
   const t = (over: Partial<Task>): Task => ({ id: "t", title: "x", status: "todo", ...over });
-  it("groups by when they're due", () => {
-    expect(bucket(t({ due_at: "2026-10-19T09:00" }), now)).toBe("overdue");
-    expect(bucket(t({ due_at: "2026-10-19T18:00" }), now)).toBe("today");
-    expect(bucket(t({ due_at: "2026-10-21T18:00" }), now)).toBe("later");
-    expect(bucket(t({}), now)).toBe("someday");
-    expect(bucket(t({ status: "done", due_at: "2026-10-01T09:00" }), now)).toBe("done");
+  it("UTC shop: groups by when they're due", () => {
+    const now = new Date("2026-10-19T10:00:00Z");
+    expect(bucket(t({ due_at: "2026-10-19T09:00:00" }), now, "UTC")).toBe("overdue");
+    expect(bucket(t({ due_at: "2026-10-19T18:00:00" }), now, "UTC")).toBe("today");
+    expect(bucket(t({ due_at: "2026-10-21T18:00:00" }), now, "UTC")).toBe("later");
+    expect(bucket(t({}), now, "UTC")).toBe("someday");
+    expect(bucket(t({ status: "done", due_at: "2026-10-01T09:00:00" }), now, "UTC")).toBe("done");
+  });
+  it("IST shop at 23:30: a task at 00:30 tomorrow (shop) is later, not today; end of today is today", () => {
+    const now = new Date("2026-11-12T18:00:00Z");                                           // 23:30 IST
+    expect(bucket(t({ due_at: "2026-11-12T18:29:59" }), now, "Asia/Kolkata")).toBe("today");     // 12 Nov end of shop day
+    expect(bucket(t({ due_at: "2026-11-12T19:00:00" }), now, "Asia/Kolkata")).toBe("later");     // 13 Nov 00:30 IST
+    expect(bucket(t({ due_at: "2026-11-12T19:00:00" }), now, "UTC")).toBe("today");              // the same instant in a UTC shop
+    expect(bucket(t({ due_at: "2026-11-12T17:00:00" }), now, "Asia/Kolkata")).toBe("overdue");
   });
   it("badges overdue and due-today tasks only", () => {
-    expect(dueCount([t({ due_at: "2026-10-19T09:00" }), t({ due_at: "2026-10-19T18:00" }), t({}), t({ status: "done", due_at: "2026-10-19T09:00" })], now)).toBe(2);
+    const now = new Date("2026-10-19T10:00:00Z");
+    expect(dueCount([t({ due_at: "2026-10-19T09:00:00" }), t({ due_at: "2026-10-19T18:00:00" }), t({}), t({ status: "done", due_at: "2026-10-19T09:00:00" })], now, "UTC")).toBe(2);
   });
-  it("quick due dates land at 18:00", () => {
-    expect(dueFor("today", "", now)).toBe("2026-10-19T18:00");
-    expect(dueFor("tomorrow", "", now)).toBe("2026-10-20T18:00");
-    expect(dueFor("none", "", now)).toBeNull();
-    expect(dueFor("pick", "2026-11-01T09:30", now)).toBe("2026-11-01T09:30");
+  it("quick due dates use the shop's date; a picked time carries the shop's offset", () => {
+    const now = new Date("2026-11-12T19:00:00Z");                                           // 00:30 on 13 Nov in India
+    expect(dueFor("today", "", now, "Asia/Kolkata")).toBe("2026-11-13");
+    expect(dueFor("tomorrow", "", now, "Asia/Kolkata")).toBe("2026-11-14");
+    expect(dueFor("today", "", now, "UTC")).toBe("2026-11-12");
+    expect(dueFor("none", "", now, "UTC")).toBeNull();
+    expect(dueFor("pick", "2026-11-20T09:30", now, "Asia/Kolkata")).toBe("2026-11-20T09:30:00+05:30");
+    expect(dueFor("pick", "2026-11-20T09:30", now, "UTC")).toBe("2026-11-20T09:30:00+00:00");
   });
 });
 

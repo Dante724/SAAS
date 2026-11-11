@@ -8,7 +8,7 @@ import { api, ApiError } from "../../api/client";
 import { useMe, hasFeature } from "../../context/Me";
 import { buttonClass } from "../../components/Button";
 import { Badge } from "../../components/Card";
-import { serverDate, wallDate } from "../../lib/serverTime";
+import { useShopTz, fmtShop, toShopWall, fromShopWall } from "../../lib/shopTime";
 import { type Task, STATUS_LABEL, normStatus, statusLabel, normPriority, isAuto } from "./taskModel";
 
 // The task panel (a right-hand drawer), shared by My day and the List view. It loads the task by
@@ -18,8 +18,9 @@ export type Emp = { id: string; name: string };
 type Feed = { id: string; body?: string; kind?: string; author_name?: string; created_at?: string };
 
 // Due dates are shop wall-clock times; feed/completion stamps are instants.
-const fmtWall = (iso?: string | null) => { const d = wallDate(iso); return d ? d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—"; };
-const fmtAt = (iso?: string | null) => { const d = serverDate(iso); return d ? d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—"; };
+// Due and completion times are UTC instants from the server; the panel shows and edits them on
+// the shop's clock (a picked time is sent with the shop's offset).
+const atShop = (iso: string | null | undefined, tz: string) => fmtShop(iso, tz) || "—";
 
 export default function TaskPanel({ taskId, seed, emps, onClose, onUnavailable, onOpen, onChanged, flash, softDelete }: {
   taskId: string;
@@ -35,6 +36,8 @@ export default function TaskPanel({ taskId, seed, emps, onClose, onUnavailable, 
 }) {
   const { me } = useMe();
   const clockOk = hasFeature(me, "time_clock");   // task timer: Shop plan
+  const shopTz = useShopTz();
+  const tz = shopTz || "UTC";
   const [sel, setSel] = useState<Task | null>(seed && seed.id === taskId ? seed : null);
 
   const [draft, setDraft] = useState({ title: seed?.title || "", description: seed?.description || "" });
@@ -127,7 +130,7 @@ export default function TaskPanel({ taskId, seed, emps, onClose, onUnavailable, 
       <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={onClose} />
       <div ref={box} tabIndex={-1} role="dialog" aria-modal="true" aria-label={`Task: ${sel?.title || ""}`} className="outline-none relative h-full w-full max-w-[480px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
-        {!sel ? (<>
+        {!sel || !shopTz ? (<>
           <header className="px-6 py-4 border-b border-slate-100 flex items-start justify-between gap-2 bg-slate-50/70">
             <span className="sk block h-5 w-48 rounded mt-1" aria-hidden="true" />
             <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary flex-shrink-0"><M n="close" c="text-base" /></button>
@@ -139,7 +142,7 @@ export default function TaskPanel({ taskId, seed, emps, onClose, onUnavailable, 
               <input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} onBlur={() => saveText("title")}
                 onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") { e.stopPropagation(); setDraft({ ...draft, title: sel.title || "" }); } }}
                 aria-label="Task title" className="w-full bg-transparent text-base font-bold text-ink-primary rounded-md px-1 -mx-1 hover:bg-white focus:bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40" />
-              <p className="text-2xs text-ink-tertiary mt-0.5 flex items-center gap-1.5">{sel.completed_at ? `Completed ${fmtAt(sel.completed_at)}` : `Due ${fmtWall(sel.due_at)}`}{isAuto(sel) && <Badge tone="neutral" size="sm" className="gap-0.5"><M n="bolt" c="text-2xs" />Auto</Badge>}</p>
+              <p className="text-2xs text-ink-tertiary mt-0.5 flex items-center gap-1.5">{sel.completed_at ? `Completed ${atShop(sel.completed_at, tz)}` : `Due ${atShop(sel.due_at, tz)}`}{isAuto(sel) && <Badge tone="neutral" size="sm" className="gap-0.5"><M n="bolt" c="text-2xs" />Auto</Badge>}</p>
             </div>
             <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary flex-shrink-0"><M n="close" c="text-base" /></button>
           </header>
@@ -156,7 +159,7 @@ export default function TaskPanel({ taskId, seed, emps, onClose, onUnavailable, 
                 placeholder="Add details…" className="glass-input w-full py-2 px-3 text-xs text-ink-primary rounded-lg leading-relaxed resize-y" /></div>
             <div className="grid grid-cols-2 gap-3">
               <div><label className="block font-semibold text-ink-tertiary mb-1">Due</label>
-                <DateField mode="datetime" value={sel.due_at ? sel.due_at.slice(0, 16) : ""} onChange={(v) => patch(sel.id, { due_at: v || "" }, v ? "Due date saved" : "Due date cleared")} /></div>
+                <DateField mode="datetime" value={(toShopWall(sel.due_at, tz) || "").slice(0, 16)} onChange={(v) => patch(sel.id, { due_at: v ? fromShopWall(v, tz) : "" }, v ? "Due date saved" : "Due date cleared")} /></div>
               <div><label htmlFor="task-prio" className="block font-semibold text-ink-tertiary mb-1">Priority</label>
                 <TeklySelect id="task-prio" aria-label="Priority" value={normPriority(sel.priority)} onChange={(e) => patch(sel.id, { priority: Number(e.target.value) }, "Priority saved")} className={inp}>
                   <option value={0}>Normal</option><option value={1}>High</option><option value={2}>Urgent</option>
@@ -211,7 +214,7 @@ export default function TaskPanel({ taskId, seed, emps, onClose, onUnavailable, 
                 {feed.map((f) => (
                   <div key={f.id} className="flex gap-2.5">
                     <div className={`w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-white text-2xs font-bold ${f.kind === "comment" ? "bg-primary" : "bg-slate-400"}`}>{f.kind === "comment" ? (f.author_name || "?").slice(0, 1).toUpperCase() : <M n="bolt" c="text-xs" />}</div>
-                    <div className="flex-1 min-w-0"><div className="text-xs text-ink-primary">{f.body}</div><div className="text-2xs text-ink-tertiary">{f.author_name || "System"}{f.kind !== "comment" ? " · system" : ""} · {fmtAt(f.created_at)}</div></div>
+                    <div className="flex-1 min-w-0"><div className="text-xs text-ink-primary">{f.body}</div><div className="text-2xs text-ink-tertiary">{f.author_name || "System"}{f.kind !== "comment" ? " · system" : ""} · {atShop(f.created_at, tz)}</div></div>
                   </div>
                 ))}
               </div>

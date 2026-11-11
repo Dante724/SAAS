@@ -211,8 +211,8 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
 }
 
 // How a task's commission is paid when several people share the task. Shop-wide, one choice.
-// TODO(backend tasks/myday): GET/PUT /api/payroll/settings `task_commission_mode`
-// (split | each_full | first_only, default split) is the agreed contract; the backend PR confirms it.
+// GET/PUT /api/payroll/settings: `task_commission_mode` (default split) and `task_commission_modes`,
+// the values the server accepts. Labels below; a value the server adds later shows as it is.
 export const TASK_COMMISSION_MODES: [string, string, string][] = [
   ["split", "Split the amount between them", "Two people on a task each get half."],
   ["each_full", "Pay each person the full amount", "Everyone on the task gets the whole amount."],
@@ -223,12 +223,13 @@ export function TaskCommissionCard({ onFlash }: { onFlash: (m: string) => void }
   const { can } = useMe();
   const mayEdit = can("can_manage_payroll");
   const [mode, setMode] = useState<string | null>(null);
+  const [allowed, setAllowed] = useState<string[] | null>(null);
   const [state, setState] = useState<"loading" | "ready" | "missing" | "error">("loading");
   const [saving, setSaving] = useState(false);
   function load() {
     setState("loading");
-    api.get<{ task_commission_mode?: string }>("/payroll/settings")
-      .then((r) => { setMode(r?.task_commission_mode || "split"); setState("ready"); })
+    api.get<{ task_commission_mode?: string; task_commission_modes?: string[] }>("/payroll/settings")
+      .then((r) => { setMode(r?.task_commission_mode || "split"); setAllowed(Array.isArray(r?.task_commission_modes) && r.task_commission_modes.length ? r.task_commission_modes : null); setState("ready"); })
       .catch((e: any) => setState(e?.status === 404 ? "missing" : "error"));
   }
   useEffect(() => { load(); }, []);
@@ -255,7 +256,7 @@ export function TaskCommissionCard({ onFlash }: { onFlash: (m: string) => void }
       <span title={reason} className="sm:w-64 flex-shrink-0">
         <TeklySelect value={mode || "split"} onChange={(e) => save(e.target.value)} disabled={off} aria-label="When a task has several people"
           className="glass-input w-full h-9 py-2 px-3 text-xs rounded-xl">
-          {TASK_COMMISSION_MODES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+          {(allowed || TASK_COMMISSION_MODES.map(([v]) => v)).map((v) => <option key={v} value={v}>{TASK_COMMISSION_MODES.find(([k]) => k === v)?.[1] || v.replace(/_/g, " ")}</option>)}
         </TeklySelect>
       </span>
     </section>

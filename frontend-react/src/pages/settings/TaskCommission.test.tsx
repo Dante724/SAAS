@@ -69,4 +69,12 @@ describe("When a task has several people", () => {
     expect(screen.getByText(/Changes apply to tasks closed from now on/)).toBeInTheDocument();
     expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Split the amount between them", "Pay each person the full amount", "Pay only the main person"]);
   });
+
+  it("offers the modes the server lists (task_commission_modes)", async () => {
+    stored = { task_commission_mode: "split", task_commission_modes: ["split", "first_only"] };
+    render(<TaskCommissionCard onFlash={vi.fn()} />);
+    const sel = screen.getByRole("combobox", { name: "When a task has several people" });
+    await waitFor(() => expect(sel).not.toBeDisabled());
+    expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Split the amount between them", "Pay only the main person"]);
+  });
 });

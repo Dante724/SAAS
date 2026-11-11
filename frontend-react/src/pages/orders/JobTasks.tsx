@@ -7,6 +7,7 @@ import { Avatar } from "./look";
 import { buttonClass } from "../../components/Button";
 import { Badge } from "../../components/Card";
 import { isAuto, normPriority, PRIORITY_LABEL } from "../tasks/taskModel";
+import { useShopTz, fmtShop } from "../../lib/shopTime";
 
 // J4 — the job's tasks, on the job: add one, assign it, tick it off.
 type Task = { id: string; title: string; status?: string; priority?: number | string | null; source?: string | null; created_by?: string | null; assigned_to_id?: string | null; assignee_name?: string | null; due_at?: string | null; completed_at?: string | null; overdue?: boolean };
@@ -18,6 +19,7 @@ export default function JobTasks({ orderId, emps, onFlash }: { orderId: string; 
   const [title, setTitle] = useState("");
   const [who, setWho] = useState("");
   const [busy, setBusy] = useState(false);
+  const tz = useShopTz();   // due times are UTC instants: show them on the shop's clock
   const load = () => api.get<{ items: Task[] }>(`/tasks?order_id=${orderId}`).then((r) => setItems(r.items || [])).catch(() => setItems([]));
   useEffect(() => { load(); /* eslint-disable-next-line */ }, [orderId]);
 
@@ -75,7 +77,8 @@ export default function JobTasks({ orderId, emps, onFlash }: { orderId: string; 
                   {isAuto(t) && <Badge tone="neutral" size="sm">Auto</Badge>}
                   {!t.completed_at && normPriority(t.priority) > 0 && <Badge tone={normPriority(t.priority) === 2 ? "danger" : "warning"} size="sm">{PRIORITY_LABEL[normPriority(t.priority)]}</Badge>}
                 </span>
-                {t.overdue && !t.completed_at && <span className="text-[11px] font-semibold text-rose-600">Overdue</span>}
+                {t.due_at && tz && !t.completed_at && <span className={`text-2xs whitespace-nowrap ${t.overdue ? "font-semibold text-rose-600" : "text-ink-tertiary"}`}>{t.overdue ? "Overdue · " : "Due "}{fmtShop(t.due_at, tz)}</span>}
+                {t.overdue && !t.completed_at && !(t.due_at && tz) && <span className="text-2xs font-semibold text-rose-600">Overdue</span>}
                 <span className="flex items-center gap-1.5">
                   {t.assigned_to_id && <Avatar name={t.assignee_name || ""} size={20} />}
                   <TeklySelect value={t.assigned_to_id || ""} onChange={(e) => assign(t, e.target.value)} aria-label={`Assignee for ${t.title}`}

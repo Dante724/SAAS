@@ -14,7 +14,7 @@ import { clickableRow } from "../../lib/clickable";
 import { buttonClass } from "../../components/Button";
 import { Badge } from "../../components/Card";
 import { theadRowClass } from "../../components/Table";
-import { wallDate } from "../../lib/serverTime";
+import { useShopTz, fmtShop, fromShopWall } from "../../lib/shopTime";
 import { type Task, type StatusFilter, normStatus, statusLabel, normPriority, PRIORITY_LABEL, isAuto, applyFilters } from "./taskModel";
 import TaskPanel, { type Emp } from "./TaskPanel";
 import MyDay from "./MyDay";
@@ -23,8 +23,8 @@ type ListReply = { items?: Task[]; statuses?: string[]; total?: number };
 type Toast = { msg: string; undo?: () => void; label?: string };
 type View = "day" | "list";
 
-// Due dates are shop wall-clock times.
-const fmtWall = (iso?: string | null) => { const d = wallDate(iso); return d ? d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—"; };
+// Due dates are UTC instants from the server, shown on the shop's clock.
+const fmtDue = (iso: string | null | undefined, tz: string | null) => (iso && tz ? fmtShop(iso, tz) : "—");
 const TASK_PAGE = 50;
 const STATUS_PILLS: [StatusFilter, string][] = [["all", "All"], ["todo", "To do"], ["in_progress", "In progress"], ["overdue", "Late"], ["done", "Done"]];
 const pill = (on: boolean) => `px-3 py-1.5 rounded-full text-2xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed ${on ? "bg-primary text-white shadow-xs" : "bg-slate-100 text-ink-secondary hover:bg-slate-200"}`;
@@ -40,6 +40,7 @@ function PriorityBadge({ p }: { p: Task["priority"] }) {
 export default function TasksHub() {
   const { me, can } = useMe();
   const isManager = can("can_assign_staff");      // seeing everyone's tasks is a manager view
+  const tz = useShopTz();
   const [view, setViewState] = useState<View>(savedView);
   const [dayMissing, setDayMissing] = useState(false);   // server has no /tasks/my-day yet
   const [tasks, setTasks] = useState<Task[] | null>(null);
@@ -126,7 +127,7 @@ export default function TasksHub() {
   async function toggleDone(t: Task) { patch(t.id, { status: t.completed_at ? "todo" : "done" }); }
   async function createTask() {
     if (!form.title.trim()) { flash("Title required"); return; }
-    try { await api.post("/tasks", { title: form.title.trim(), assignee_ids: form.assignee_ids, assigned_to_id: form.assignee_ids[0] || null, priority: Number(form.priority), due_at: form.due_at || null, order_id: form.order_id || null }); setCreate(false); setForm({ title: "", assignee_ids: [], priority: 0, due_at: "", order_id: "" }); changed(); flash("Task created"); }
+    try { await api.post("/tasks", { title: form.title.trim(), assignee_ids: form.assignee_ids, assigned_to_id: form.assignee_ids[0] || null, priority: Number(form.priority), due_at: form.due_at && tz ? fromShopWall(form.due_at, tz) : null, order_id: form.order_id || null }); setCreate(false); setForm({ title: "", assignee_ids: [], priority: 0, due_at: "", order_id: "" }); changed(); flash("Task created"); }
     catch (e: any) { flash(`Failed: ${e.message}`); }
   }
 
@@ -205,7 +206,7 @@ export default function TasksHub() {
                     {t.client_name && <span className="truncate text-ink-secondary" title={t.client_name}>{t.client_name}</span>}
                   </span> : "—"}</td>
                   <td className="py-3 px-3">{(t.assignee_names && t.assignee_names.length) ? (t.assignee_names.length > 2 ? `${t.assignee_names.slice(0, 2).join(", ")} +${t.assignee_names.length - 2}` : t.assignee_names.join(", ")) : (t.assignee_name || "—")}</td>
-                  <td className={`py-3 px-3 ${t.overdue && !t.completed_at ? "text-rose-600 font-bold" : ""}`}>{fmtWall(t.due_at)}</td>
+                  <td className={`py-3 px-3 ${t.overdue && !t.completed_at ? "text-rose-600 font-bold" : ""}`}>{fmtDue(t.due_at, tz)}</td>
                 </tr>
               ))}
             </tbody>
