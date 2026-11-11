@@ -1,0 +1,406 @@
+// Tasks › My day (the default view): groups and counts, Catch up's "Move all to today", quick add
+// (chips, Enter, optimistic insert and rollback), whose day, done + undo, empty / loading / error,
+// the 404 fallback to the list, and /tasks?task=<id> deep links.
+import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
+import { render, screen, within, waitFor, act } from "@testing-library/react";
+import userEvent from "@testing-library/user-event";
+import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
+
+vi.mock("../../components/Shell", () => ({ M: ({ n }: { n: string }) => <i data-icon={n} />, default: ({ children }: any) => <div>{children}</div> }));
+vi.mock("../../components/JobPicker", () => ({ default: ({ onChange }: any) => <button onClick={() => onChange({ id: "o9", order_number: "WO-1042" })}>pick job</button> }));
+let manager = true;
+vi.mock("../../context/Me", () => ({
+  useMe: () => ({ me: { id: "me" }, can: (c?: string) => c !== "can_assign_staff" || manager }),
+  hasFeature: () => false,
+}));
+
+import TasksHub from "./TasksHub";
+
+const reply = (body: unknown, status = 200) => ({ ok: status < 400, status, statusText: "", headers: new Headers(), json: async () => body, text: async () => JSON.stringify(body) }) as Response;
+const DATE = "2026-11-11";
+const DAY = () => ({
+  date: DATE,
+  catch_up: [
+    { id: "c1", title: "Chase supplier RMA #A88", due_at: "2026-11-06T17:00:00", overdue: true, order_id: "o1", order_number: "WO-0998", client_name: "MobileParts UK" },
+    { id: "c2", title: "Call back missed call", due_at: "2026-11-10T10:00:00", overdue: true },
+  ],
+  today: [
+    { id: "t1", title: "QC check MacBook Air keyboard", due_at: `${DATE}T15:00:00`, priority: 1, order_id: "o2", order_number: "WO-1031", client_name: "Tom Reed", assignee_names: ["Me"] },
+    { id: "t2", title: "Call Jane about collection", due_at: `${DATE}T11:00:00`, order_id: "o3", order_number: "WO-1019", client_name: "Jane Kim", source: "automation" },
+    { id: "t3", title: "Restock iPhone 13 screens", due_at: `${DATE}T23:59:59` },
+  ],
+  upcoming: [{ id: "u1", title: "Order iPad Air battery", due_at: "2026-11-12" }],
+  later: [{ id: "l1", title: "Tidy the parts shelf", due_at: null }],
+  done_today: [{ id: "d1", title: "Open the till", completed_at: `${DATE}T08:55:00Z`, status: "done" }],
+  counts: { catch_up: 2, today: 3, upcoming: 1, later: 1, done_today: 1 },
+});
+let calls: { method: string; url: string; body: any }[] = [];
+let dayBody: any;
+let dayStatus = 200;
+let failPost = false;
+let failMove = false;
+
+beforeEach(() => {
+  calls = []; manager = true; dayBody = DAY(); dayStatus = 200; failPost = false; failMove = false;
+  try { localStorage.clear(); } catch { /* storage may be off */ }
+  vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+    const method = init?.method || "GET";
+    calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : null });
+    if (method === "GET" && url.startsWith("/api/tasks/my-day")) return dayStatus === 200 ? reply(dayBody) : reply({ detail: "x" }, dayStatus);
+    if (method === "GET" && url.startsWith("/api/tasks?")) return reply({ items: [{ id: "x1", title: "A task in the list", assignee_ids: ["me"] }] });
+    if (method === "POST" && url === "/api/tasks/move-to-today") return failMove ? reply({ detail: "no" }, 500) : reply({ moved: 2 });
+    if (method === "POST" && url === "/api/tasks") { if (failPost) return reply({ detail: "no" }, 500); const b = calls[calls.length - 1].body; const t = { id: `new${calls.length}`, title: b.title, due_at: b.due_at }; if (b.assigned_to_id === "me") (b.due_at === DATE ? dayBody.today : dayBody.upcoming).push(t); return reply(t); }
+    if (method === "PATCH" && /^\/api\/tasks\/[^/?]+$/.test(url)) {     // like the server: done moves to Done today and back
+      const id = url.split("/").pop(); const b = calls[calls.length - 1].body;
+      if (b?.status) {
+        const all = ["catch_up", "today", "upcoming", "later", "done_today"].flatMap((k) => dayBody[k]);
+        const t = all.find((x: any) => x.id === id);
+        if (t) {
+          for (const k of ["catch_up", "today", "upcoming", "later", "done_today"]) dayBody[k] = dayBody[k].filter((x: any) => x.id !== id);
+          const n = { ...t, status: b.status, completed_at: b.status === "done" ? `${DATE}T12:00:00Z` : null };
+          (b.status === "done" ? dayBody.done_today : t.overdue ? dayBody.catch_up : dayBody.today).push(n);
+          dayBody.counts = Object.fromEntries(["catch_up", "today", "upcoming", "later", "done_today"].map((k) => [k, dayBody[k].length]));
+        }
+      }
+      return reply({ ok: true });
+    }
+    if (method === "GET" && /^\/api\/tasks\/[^/?]+$/.test(url)) {
+      const id = url.split("/").pop();
+      if (id === "gone") return reply({ detail: "Not found" }, 404);
+      if (id === "secret") return reply({ detail: "Forbidden" }, 403);
+      return reply({ id, title: id === "t2" ? "Call Jane about collection" : "Chase supplier RMA #A88", description: "" });
+    }
+    if (method === "GET" && url.endsWith("/feed")) return reply({ items: [] });
+    if (method === "GET" && url.startsWith("/api/staff/employees")) return reply({ items: [{ id: "me", name: "Me" }, { id: "e2", name: "Jane Kim" }, { id: "e3", name: "Tom Reed" }] });
+    return reply({ ok: true });
+  }));
+});
+afterEach(() => { vi.unstubAllGlobals(); vi.useRealTimers(); });
+
+let at = "";
+let go: (to: string) => void = () => {};
+function Spy() { const l = useLocation(); at = l.pathname + l.search; go = useNavigate(); return null; }
+const renderAt = (path = "/tasks") => render(<MemoryRouter initialEntries={[path]}><TasksHub /><Spy /></MemoryRouter>);
+const posts = (u: string) => calls.filter((c) => c.method === "POST" && c.url === u);
+
+describe("My day", () => {
+  it("is the default view: Catch up, Today grouped by time, counts on the tabs", async () => {
+    renderAt();
+    expect(await screen.findByText("QC check MacBook Air keyboard")).toBeInTheDocument();
+    expect(calls.find((c) => c.url.startsWith("/api/tasks/my-day"))!.url).toBe("/api/tasks/my-day?assignee=me");
+    const catchUp = screen.getByRole("region", { name: /^Catch up/ });
+    expect(within(catchUp).getByText("Chase supplier RMA #A88")).toBeInTheDocument();
+    expect(within(catchUp).getByText("2 tasks from earlier, oldest first", { exact: false })).toBeInTheDocument();
+    // tabs: Today counts today + catch up
+    expect(screen.getByRole("button", { name: /Today\s*5/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByRole("button", { name: /Upcoming\s*1/ })).toBeInTheDocument();
+    expect(screen.getByRole("button", { name: /Later\s*1/ })).toBeInTheDocument();
+    // time groups, earliest first, then "any time"
+    const heads = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
+    expect(heads).toEqual(["Morning1", "Afternoon1", "Any time today1"]);
+    // job + client chip opens the job; Auto badge; priority badge
+    expect(screen.getByRole("link", { name: /^Open job\s*WO-1019.*Jane Kim$/ })).toHaveAttribute("href", "/orders?open=o3");
+    const jane = screen.getByText("Call Jane about collection").closest("li")!;
+    expect(within(jane).getByText("Auto")).toBeInTheDocument();
+    expect(within(screen.getByText("QC check MacBook Air keyboard").closest("li")!).getByText("High")).toBeInTheDocument();
+  });
+
+  it("Upcoming and Later list by day", async () => {
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    await u.click(screen.getByRole("button", { name: /Upcoming/ }));
+    expect(screen.getByText("Order iPad Air battery")).toBeInTheDocument();
+    expect(screen.getByRole("heading", { name: /Tomorrow/ })).toBeInTheDocument();
+    await u.click(screen.getByRole("button", { name: /Later/ }));
+    expect(screen.getByRole("heading", { name: /No date/ })).toBeInTheDocument();
+  });
+
+  it("moves all catch-up tasks to today in one call, and puts them back if it fails", async () => {
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    await u.click(screen.getByRole("button", { name: "Move all to today" }));
+    expect(posts("/api/tasks/move-to-today")[0].body).toEqual({ ids: ["c1", "c2"] });
+    expect(await screen.findByText("Moved 2 tasks to today")).toBeInTheDocument();
+
+    failMove = true; dayBody = DAY();
+    const r2 = renderAt();
+    await waitFor(() => expect(screen.getAllByRole("button", { name: "Move all to today" }).length).toBeGreaterThan(0));
+    const btn = within(r2.container).getByRole("button", { name: "Move all to today" });
+    await u.click(btn);
+    expect(await within(r2.container).findByText("Couldn't move them to today.")).toBeInTheDocument();
+    expect(within(r2.container).getByRole("button", { name: "Try again" })).toBeInTheDocument();
+    expect(within(r2.container).getByRole("region", { name: /^Catch up/ })).toBeInTheDocument();
+  });
+
+  it("marks a task done, moves it to Done today, and Undo reopens it", async () => {
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    await u.click(screen.getByRole("button", { name: 'Mark "Call Jane about collection" done' }));
+    expect(calls.filter((c) => c.method === "PATCH").pop()).toMatchObject({ url: "/api/tasks/t2", body: { status: "done" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: /Done today\s*2/ })).toBeInTheDocument());
+    await u.click(await screen.findByRole("button", { name: "Undo" }));
+    expect(calls.filter((c) => c.method === "PATCH").pop()).toMatchObject({ url: "/api/tasks/t2", body: { status: "todo" } });
+    await waitFor(() => expect(screen.getByRole("button", { name: /Done today\s*1/ })).toBeInTheDocument());
+  });
+
+  it("shows Done today folded, and opens it", async () => {
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    const toggle = screen.getByRole("button", { name: /Done today/ });
+    expect(toggle).toHaveAttribute("aria-expanded", "false");
+    expect(screen.queryByText("Open the till")).not.toBeInTheDocument();
+    await u.click(toggle);
+    expect(screen.getByText("Open the till")).toBeInTheDocument();
+  });
+
+  it("quick add: Enter saves for today with a date-only due, shows it at once", async () => {
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    const box = screen.getByLabelText("Add a task");
+    await u.type(box, "Ring Tom Reed about the quote{Enter}");
+    expect(screen.getByText("Ring Tom Reed about the quote")).toBeInTheDocument();
+    expect(posts("/api/tasks")[0].body).toMatchObject({ title: "Ring Tom Reed about the quote", due_at: DATE, assigned_to_id: "me", assignee_ids: ["me"], order_id: null });
+    expect(box).toHaveValue("");
+    expect(await screen.findByText("Task added for today")).toBeInTheDocument();
+  });
+
+  it("quick add: Tomorrow, another person and a job go in the request", async () => {
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    const when = screen.getByRole("group", { name: "When" });
+    await u.click(within(when).getByRole("button", { name: "Tomorrow" }));
+    await u.click(within(screen.getByRole("group", { name: "Who" })).getByRole("button", { name: "Others" }));
+    await u.selectOptions(screen.getByLabelText("Who it's for"), "e2");
+    await u.click(screen.getByRole("button", { name: "Link a job" }));
+    await u.click(screen.getByRole("button", { name: "pick job" }));
+    await u.type(screen.getByLabelText("Add a task"), "Order MacBook keyboard{Enter}");
+    expect(posts("/api/tasks")[0].body).toMatchObject({ due_at: "2026-11-12", assigned_to_id: "e2", assignee_ids: ["e2"], order_id: "o9" });
+    expect(await screen.findByText("Task added for Jane Kim, due tomorrow")).toBeInTheDocument();
+  });
+
+  it("quick add: a failed save takes the row away and gives the words back", async () => {
+    failPost = true;
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    await u.type(screen.getByLabelText("Add a task"), "Test the charge port{Enter}");
+    expect(await screen.findByText("Couldn't add the task. Check your connection and try again.")).toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "Test the charge port" })).not.toBeInTheDocument();
+    expect(screen.getByLabelText("Add a task")).toHaveValue("Test the charge port");
+  });
+
+  it("whose day: managers pick a person or Everyone; others see it greyed with a reason", async () => {
+    const u = userEvent.setup();
+    const { unmount } = renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    await u.selectOptions(screen.getByLabelText("Whose day"), "all");
+    await waitFor(() => expect(calls.filter((c) => c.url.startsWith("/api/tasks/my-day")).pop()!.url).toBe("/api/tasks/my-day?assignee=all"));
+    await u.selectOptions(screen.getByLabelText("Whose day"), "e3");
+    await waitFor(() => expect(calls.filter((c) => c.url.startsWith("/api/tasks/my-day")).pop()!.url).toBe("/api/tasks/my-day?assignee=e3"));
+    unmount();
+    manager = false;
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    const sel = screen.getByLabelText("Whose day");
+    expect(sel).toBeDisabled();
+    expect(sel.closest("[title]")).toHaveAttribute("title", "Only managers can see other people's day");
+    expect(within(screen.getByRole("group", { name: "Who" })).getByRole("button", { name: "Others" })).toBeDisabled();
+  });
+
+  it("search narrows the day and offers to clear", async () => {
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    await u.type(screen.getByLabelText("Search tasks"), "jane kim");
+    expect(screen.queryByText("QC check MacBook Air keyboard")).not.toBeInTheDocument();
+    expect(screen.getByText("Call Jane about collection")).toBeInTheDocument();
+    await u.clear(screen.getByLabelText("Search tasks"));
+    await u.type(screen.getByLabelText("Search tasks"), "zzz");
+    await u.click(screen.getByRole("button", { name: "Clear search" }));
+    expect(screen.getByText("QC check MacBook Air keyboard")).toBeInTheDocument();
+  });
+
+  it("an empty day invites a task instead of apologising", async () => {
+    dayBody = { date: DATE, catch_up: [], today: [], upcoming: [], later: [], done_today: [], counts: { catch_up: 0, today: 0, upcoming: 0, later: 0, done_today: 0 } };
+    renderAt();
+    expect(await screen.findByText("Nothing due today")).toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: /^Catch up/ })).not.toBeInTheDocument();
+  });
+
+  it("shows a skeleton while loading and a retry when it fails", async () => {
+    dayStatus = 500;
+    const u = userEvent.setup();
+    renderAt();
+    expect(screen.getByRole("status", { name: "Loading your day" })).toBeInTheDocument();
+    expect(await screen.findByText("Couldn't load your day")).toBeInTheDocument();
+    dayStatus = 200;
+    await u.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("QC check MacBook Air keyboard")).toBeInTheDocument();
+  });
+
+  it("falls back to the list when the server has no My day yet, with the tab greyed and explained", async () => {
+    dayStatus = 404;
+    renderAt();
+    expect(await screen.findByText("A task in the list")).toBeInTheDocument();
+    const tab = screen.getByRole("tab", { name: "My day" });
+    expect(tab).toBeDisabled();
+    expect(tab).toHaveAttribute("title", expect.stringContaining("latest server update"));
+  });
+});
+
+describe("Task deep links", () => {
+  it("/tasks?task=<id> opens that task's panel on load; closing clears the parameter", async () => {
+    const u = userEvent.setup();
+    renderAt("/tasks?task=c1");
+    expect(await screen.findByDisplayValue("Chase supplier RMA #A88")).toBeInTheDocument();
+    expect(calls.some((c) => c.url === "/api/tasks/c1")).toBe(true);
+    await u.click(screen.getByRole("button", { name: "Close" }));
+    expect(at).toBe("/tasks");
+    expect(screen.queryByLabelText("Task title")).not.toBeInTheDocument();
+  });
+
+  it("opens when the URL changes (a bell click while already on Tasks), and rows set the URL", async () => {
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    act(() => go("/tasks?task=t2"));
+    expect(await screen.findByDisplayValue("Call Jane about collection")).toBeInTheDocument();
+    await u.keyboard("{Escape}");
+    expect(at).toBe("/tasks");
+    await u.click(screen.getByRole("button", { name: "Chase supplier RMA #A88" }));
+    expect(at).toBe("/tasks?task=c1");
+    expect(await screen.findByDisplayValue("Chase supplier RMA #A88")).toBeInTheDocument();
+  });
+
+  it("a task that is gone or not yours: same neutral message, no panel, parameter cleared", async () => {
+    for (const id of ["gone", "secret"]) {
+      const { unmount } = renderAt(`/tasks?task=${id}`);
+      await waitFor(() => expect(screen.queryByRole("dialog")).not.toBeInTheDocument());
+      await waitFor(() => expect(at).toBe("/tasks"));
+      expect(await screen.findByText("This task isn't available")).toBeInTheDocument();
+      expect(await screen.findByText("QC check MacBook Air keyboard")).toBeInTheDocument();   // My day still there
+      unmount();
+    }
+  });
+
+  it("the panel takes focus, keeps Tab inside, and Back after closing doesn't reopen it", async () => {
+    const u = userEvent.setup();
+    renderAt();
+    const rowBtn = await screen.findByRole("button", { name: "Call Jane about collection" });
+    await u.click(rowBtn);
+    const dialog = await screen.findByRole("dialog");
+    await screen.findByDisplayValue("Call Jane about collection");
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    for (let i = 0; i < 25; i++) await u.tab();
+    expect(dialog.contains(document.activeElement)).toBe(true);
+    await u.click(within(dialog).getAllByRole("button", { name: "Close" })[0]);
+    expect(at).toBe("/tasks");
+    expect(document.activeElement).toBe(rowBtn);
+    act(() => go(-1 as any));
+    expect(screen.queryByRole("dialog")).not.toBeInTheDocument();
+  });
+});
+
+describe("My day: the rest of the acceptance list", () => {
+  it("quick add: a double Enter creates one task, sent with an idempotency key", async () => {
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    await u.type(screen.getByLabelText("Add a task"), "Order Pixel 8 screen{Enter}{Enter}");
+    await screen.findByText("Task added for today");
+    expect(posts("/api/tasks")).toHaveLength(1);
+    const init = (fetch as any).mock.calls.find((c: any[]) => c[0] === "/api/tasks" && c[1]?.method === "POST")[1];
+    expect(init.headers["Idempotency-Key"]).toBeTruthy();
+  });
+
+  it("quick add for someone else doesn't land in my Today, and names who it went to", async () => {
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    await u.click(within(screen.getByRole("group", { name: "Who" })).getByRole("button", { name: "Others" }));
+    await u.selectOptions(screen.getByLabelText("Who it's for"), "e3");
+    dayBody = DAY();   // the server's "me" view won't include it either
+    failPost = false;
+    const before = screen.getAllByRole("listitem").length;
+    await u.type(screen.getByLabelText("Add a task"), "Test Tom's MacBook keyboard{Enter}");
+    expect(await screen.findByText("Task added for Tom Reed, due today")).toBeInTheDocument();
+    expect(screen.getAllByRole("listitem").length).toBeLessThanOrEqual(before + 1);
+    expect(screen.queryByRole("button", { name: "Test Tom's MacBook keyboard" })).toBeNull();
+  });
+
+  it("an empty title can't be added, and says why", async () => {
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    const add = screen.getByRole("button", { name: "Add task" });
+    expect(add).toBeDisabled();
+    expect(add.closest("[title]")).toHaveAttribute("title", "Type what needs doing first");
+  });
+
+  it("Pick date sends the chosen date, with a time only when one is set", async () => {
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    await u.click(within(screen.getByRole("group", { name: "When" })).getByRole("button", { name: "Pick date" }));
+    await u.type(screen.getByLabelText("Add a task"), "Renew the bench insurance{Enter}");
+    expect(await screen.findByText("Pick a date first")).toBeInTheDocument();
+    expect(posts("/api/tasks")).toHaveLength(0);
+  });
+
+  it("whose day lives in the URL for managers; staff with a pasted link get their own day", async () => {
+    const u = userEvent.setup();
+    const { unmount } = renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    await u.selectOptions(screen.getByLabelText("Whose day"), "e2");
+    expect(at).toBe("/tasks?assignee=e2");
+    unmount();
+    manager = false;
+    calls = [];
+    renderAt("/tasks?assignee=e2");
+    await screen.findByText("QC check MacBook Air keyboard");
+    expect(calls.filter((c) => c.url.startsWith("/api/tasks/my-day")).every((c) => c.url === "/api/tasks/my-day?assignee=me")).toBe(true);
+  });
+
+  it("Everyone shows who each task is for; Me doesn't", async () => {
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    expect(screen.queryByRole("img", { name: /Assigned to/ })).not.toBeInTheDocument();
+    await u.selectOptions(screen.getByLabelText("Whose day"), "all");
+    expect(await screen.findByRole("img", { name: "Assigned to Me" })).toBeInTheDocument();
+  });
+
+  it("a ticked task offers Undo in its row too, and Undo puts back In progress", async () => {
+    dayBody.today[1].status = "in_progress";
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    await u.click(screen.getByRole("button", { name: 'Mark "Call Jane about collection" done' }));
+    await u.click(screen.getByRole("button", { name: /Done today/ }));
+    await u.click(await screen.findByRole("button", { name: 'Undo: mark "Call Jane about collection" not done' }));
+    expect(calls.filter((c) => c.method === "PATCH").pop()).toMatchObject({ url: "/api/tasks/t2", body: { status: "in_progress" } });
+  });
+
+  it("uses the server's counts, and says when a group has more than it sent", async () => {
+    dayBody.counts.catch_up = 137;
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    expect(screen.getByRole("heading", { name: "Catch up, 137 tasks" })).toBeInTheDocument();
+    expect(screen.getByText(/Showing 2 of 137/)).toBeInTheDocument();
+    const u = userEvent.setup();
+    await u.click(screen.getByRole("button", { name: "See all 137 in the List view" }));
+    expect(await screen.findByText("A task in the list")).toBeInTheDocument();
+  });
+
+  it("an empty day puts the cursor in quick add", async () => {
+    dayBody = { date: DATE, catch_up: [], today: [], upcoming: [], later: [], done_today: [], counts: { catch_up: 0, today: 0, upcoming: 0, later: 0, done_today: 0 } };
+    renderAt();
+    await screen.findByText("Nothing due today");
+    await waitFor(() => expect(screen.getByLabelText("Add a task")).toHaveFocus());
+  });
+});

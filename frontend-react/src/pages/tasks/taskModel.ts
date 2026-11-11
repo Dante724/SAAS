@@ -75,3 +75,139 @@ export function applyFilters(items: Task[], f: Filters): Task[] {
     && (!f.assignee || t.assigned_to_id === f.assignee || (t.assignee_ids || []).includes(f.assignee))
     && (f.priority == null || f.priority === "" || normPriority(t.priority) === Number(f.priority)));
 }
+
+// ── My day ────────────────────────────────────────────────────────────────────
+// GET /tasks/my-day sorts one person's open tasks into Catch up (late), Today, Upcoming and
+// Later, plus what they finished today. `date` is the SHOP's today, so the client never guesses it
+// from the browser clock. These helpers only regroup and move what the server sent.
+
+export type DayBucket = "catch_up" | "today" | "upcoming" | "later" | "done_today";
+export const DAY_BUCKETS: DayBucket[] = ["catch_up", "today", "upcoming", "later", "done_today"];
+export type MyDay = Record<DayBucket, Task[]> & { date: string; counts: Record<DayBucket, number> };
+
+/** Fill in anything an older or partial reply left out. */
+export function normDay(r: Partial<MyDay> | null | undefined, fallbackDate: string): MyDay {
+  const d = { date: r?.date || fallbackDate } as MyDay;
+  for (const b of DAY_BUCKETS) d[b] = Array.isArray(r?.[b]) ? (r![b] as Task[]) : [];
+  d.counts = {} as MyDay["counts"];
+  for (const b of DAY_BUCKETS) d.counts[b] = typeof r?.counts?.[b] === "number" ? r!.counts![b] : d[b].length;
+  return d;
+}
+
+/** Move tasks between groups, keeping the counts in step (optimistic updates and their undo). */
+export function moveTasks(day: MyDay, ids: string[], to: DayBucket, patch: Partial<Task> = {}): MyDay {
+  const want = new Set(ids);
+  const next = { ...day, counts: { ...day.counts } } as MyDay;
+  const moved: Task[] = [];
+  for (const b of DAY_BUCKETS) {
+    const keep: Task[] = [];
+    for (const t of day[b]) (want.has(t.id) ? moved : keep).push(t);
+    if (keep.length !== day[b].length) next.counts[b] = Math.max(0, day.counts[b] - (day[b].length - keep.length));
+    next[b] = keep;
+  }
+  const add = moved.map((t) => ({ ...t, ...patch }));
+  next[to] = to === "done_today" ? [...add, ...next[to]] : [...next[to], ...add];
+  next.counts[to] = next.counts[to] + add.length;
+  return next;
+}
+
+/** Add one task (a quick add) to a group. */
+export function insertTask(day: MyDay, t: Task, to: DayBucket): MyDay {
+  return { ...day, [to]: [...day[to], t], counts: { ...day.counts, [to]: day.counts[to] + 1 } };
+}
+
+/** Swap a task for a newer copy (the server's answer to a quick add), or drop it (`with` = null). */
+export function replaceTask(day: MyDay, id: string, withTask: Task | null): MyDay {
+  const next = { ...day, counts: { ...day.counts } } as MyDay;
+  for (const b of DAY_BUCKETS) {
+    if (!day[b].some((t) => t.id === id)) continue;
+    next[b] = withTask ? day[b].map((t) => (t.id === id ? withTask : t)) : day[b].filter((t) => t.id !== id);
+    if (!withTask) next.counts[b] = Math.max(0, day.counts[b] - 1);
+  }
+  return next;
+}
+
+/** "HH:MM" of a wall-clock due time, or null when the task is due "some time that day"
+ *  (a date-only value, or the end-of-day time the server stores for one). */
+export function dueClock(due?: string | null): string | null {
+  const m = /T(\d\d):(\d\d)/.exec(due || "");
+  if (!m) return null;
+  if (m[1] === "23" && Number(m[2]) >= 59) return null;
+  return `${m[1]}:${m[2]}`;
+}
+
+/** "9:30 AM" for a due time, in the viewer's 12/24h style. */
+export function fmtClock(hhmm: string): string {
+  const [h, m] = hhmm.split(":").map(Number);
+  const d = new Date(2000, 0, 1, h, m);
+  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+}
+
+export type TaskGroup = { key: string; label: string; items: Task[] };
+/** Today's list split into parts of the day, earliest first; tasks with no time go last. */
+export function groupByTime(items: Task[]): TaskGroup[] {
+  const parts: TaskGroup[] = [
+    { key: "morning", label: "Morning", items: [] }, { key: "afternoon", label: "Afternoon", items: [] },
+    { key: "evening", label: "Evening", items: [] }, { key: "anytime", label: "Any time today", items: [] },
+  ];
+  const sorted = [...items].sort((a, b) => (dueClock(a.due_at) || "99").localeCompare(dueClock(b.due_at) || "99") || normPriority(b.priority) - normPriority(a.priority));
+  for (const t of sorted) {
+    const c = dueClock(t.due_at);
+    const h = c ? Number(c.slice(0, 2)) : -1;
+    parts[h < 0 ? 3 : h < 12 ? 0 : h < 17 ? 1 : 2].items.push(t);
+  }
+  return parts.filter((p) => p.items.length);
+}
+
+const dayOf = (due?: string | null) => (due || "").slice(0, 10);
+const asLocal = (ymd: string) => new Date(`${ymd}T00:00`);
+export function addDays(ymd: string, n: number): string {
+  const d = asLocal(ymd); d.setDate(d.getDate() + n);
+  return `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, "0")}-${String(d.getDate()).padStart(2, "0")}`;
+}
+
+/** "Today", "Tomorrow", "Friday, Nov 14" or "No date", for a group heading. */
+export function dayLabel(ymd: string, today: string): string {
+  if (!ymd) return "No date";
+  if (ymd === today) return "Today";
+  if (ymd === addDays(today, 1)) return "Tomorrow";
+  const sameYear = ymd.slice(0, 4) === today.slice(0, 4);
+  return asLocal(ymd).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric", ...(sameYear ? {} : { year: "numeric" }) });
+}
+
+/** Upcoming and Later: one group per day, soonest first; tasks with no date last. */
+export function groupByDay(items: Task[], today: string): TaskGroup[] {
+  const map = new Map<string, Task[]>();
+  for (const t of [...items].sort((a, b) => (a.due_at || "9999").localeCompare(b.due_at || "9999"))) {
+    const k = dayOf(t.due_at);
+    if (!map.has(k)) map.set(k, []);
+    map.get(k)!.push(t);
+  }
+  return [...map.entries()].map(([k, v]) => ({ key: k || "none", label: dayLabel(k, today), items: v }));
+}
+
+/** When a catch-up task was due, short: "Yesterday", "Mon", "Nov 3". */
+export function lateLabel(due: string | null | undefined, today: string): string {
+  const k = dayOf(due);
+  if (!k) return "";
+  if (k === addDays(today, -1)) return "Yesterday";
+  const d = asLocal(k);
+  const diff = Math.round((asLocal(today).getTime() - d.getTime()) / 86_400_000);
+  return diff > 0 && diff < 7 ? d.toLocaleDateString([], { weekday: "short" }) : d.toLocaleDateString([], { month: "short", day: "numeric" });
+}
+
+export type QuickWhen = "today" | "tomorrow" | "pick";
+/** A quick add's due date: a date-only string, which the server reads as the end of that shop day. */
+export function quickDue(when: QuickWhen, picked: string, today: string): string | null {
+  if (when === "today") return today;
+  if (when === "tomorrow") return addDays(today, 1);
+  return picked || null;
+}
+
+/** Where a quick-added task shows before the server answers. Upcoming is the next seven days. */
+export function bucketForDue(due: string | null, today: string): DayBucket {
+  const k = dayOf(due);
+  if (!k) return "later";
+  if (k <= today) return "today";
+  return k <= addDays(today, 7) ? "upcoming" : "later";
+}

@@ -209,14 +209,8 @@
   "pages/settings/TeamSettings.tsx": {
     "text-px": 6
   },
-  "pages/settings/TemplateEditorDrawer.tsx": {
-    "text-px": 19
-  },
   "pages/settings/WebhooksSettings.tsx": {
     "text-px": 3
-  },
-  "pages/tasks/TasksHub.tsx": {
-    "text-px": 13
   },
   "pages/timesheets/BayChecklist.tsx": {
     "text-px": 7

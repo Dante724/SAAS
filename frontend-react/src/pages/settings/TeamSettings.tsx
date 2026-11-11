@@ -8,6 +8,7 @@ import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
 import { Avatar } from "../orders/look";
 import { clickable } from "../../lib/clickable";
+import { useMe } from "../../context/Me";
 
 /* Settings › Team & roles — people (with pending invites), roles (who has each one and what it
    can see), and commission rules. Same endpoints as before; the drawers for people and
@@ -203,7 +204,61 @@ export function TeamPage({ team, roles, invites, rules, catalog, payLabel, onEdi
           })}
         </div>
       )}
+
+      {tab === "pay" && <TaskCommissionCard onFlash={onFlash} />}
     </div>
+  );
+}
+
+// How a task's commission is paid when several people share the task. Shop-wide, one choice.
+// TODO(backend tasks/myday): GET/PUT /api/payroll/settings `task_commission_mode`
+// (split | each_full | first_only, default split) is the agreed contract; the backend PR confirms it.
+export const TASK_COMMISSION_MODES: [string, string, string][] = [
+  ["split", "Split the amount between them", "Two people on a task each get half."],
+  ["each_full", "Pay each person the full amount", "Everyone on the task gets the whole amount."],
+  ["first_only", "Pay only the main person", "The task's main person gets it all."],
+];
+
+export function TaskCommissionCard({ onFlash }: { onFlash: (m: string) => void }) {
+  const { can } = useMe();
+  const mayEdit = can("can_manage_payroll");
+  const [mode, setMode] = useState<string | null>(null);
+  const [state, setState] = useState<"loading" | "ready" | "missing" | "error">("loading");
+  const [saving, setSaving] = useState(false);
+  function load() {
+    setState("loading");
+    api.get<{ task_commission_mode?: string }>("/payroll/settings")
+      .then((r) => { setMode(r?.task_commission_mode || "split"); setState("ready"); })
+      .catch((e: any) => setState(e?.status === 404 ? "missing" : "error"));
+  }
+  useEffect(() => { load(); }, []);
+  async function save(next: string) {
+    const prev = mode;
+    setMode(next); setSaving(true);
+    try { await api.put("/payroll/settings", { task_commission_mode: next }); onFlash("Saved. Tasks closed from now on are paid this way."); }
+    catch (e: any) { setMode(prev); onFlash(e?.status === 403 ? "Only people who manage payroll can change this" : e?.message ? `Couldn't save: ${e.message}` : "Couldn't save. Try again."); }
+    finally { setSaving(false); }
+  }
+  const off = state !== "ready" || saving || !mayEdit;
+  const reason = state === "missing" ? "This setting arrives with the next server update."
+    : state === "error" ? "Couldn't load this setting."
+    : !mayEdit ? "Only people who manage payroll can change this" : undefined;
+  const hint = TASK_COMMISSION_MODES.find(([v]) => v === (mode || "split"))?.[2];
+  return (
+    <section aria-labelledby="task-commission-h" className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4 flex flex-col sm:flex-row sm:items-center gap-3">
+      <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n="group" c="text-lg" /></span>
+      <div className="min-w-0 flex-1">
+        <h3 id="task-commission-h" className="text-sm font-semibold text-ink-primary">When a task has several people</h3>
+        <p className="text-xs text-ink-tertiary">How commission on a task is paid when more than one person is on it. {state === "ready" && hint} Changes apply to tasks closed from now on.</p>
+        {state === "error" && <button onClick={load} className={buttonClass("link", "sm", "mt-1")}>Try again</button>}
+      </div>
+      <span title={reason} className="sm:w-64 flex-shrink-0">
+        <TeklySelect value={mode || "split"} onChange={(e) => save(e.target.value)} disabled={off} aria-label="When a task has several people"
+          className="glass-input w-full h-9 py-2 px-3 text-xs rounded-xl">
+          {TASK_COMMISSION_MODES.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+        </TeklySelect>
+      </span>
+    </section>
   );
 }
 

@@ -3,6 +3,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
+import { MemoryRouter } from "react-router-dom";
 
 vi.mock("../../components/Shell", () => ({ M: ({ n }: { n: string }) => <i data-icon={n} />, default: ({ children }: any) => <div>{children}</div> }));
 vi.mock("../../components/JobPicker", () => ({ default: () => <div data-testid="job-picker" /> }));
@@ -28,6 +29,8 @@ beforeEach(() => {
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method || "GET";
     calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : null });
+    // This file covers the List view: a server without /tasks/my-day falls back to it.
+    if (method === "GET" && url.startsWith("/api/tasks/my-day")) return { ok: false, status: 404, statusText: "Not Found", headers: new Headers(), json: async () => ({ detail: "Not Found" }), text: async () => '{"detail":"Not Found"}' } as Response;
     if (method === "GET" && url.startsWith("/api/tasks?")) return reply(paged ? { items: ITEMS, total: ITEMS.length } : { items: ITEMS, statuses: ["todo", "in_progress", "done"] });
     if (method === "GET" && url === "/api/tasks/t1") return reply({ ...ITEMS[0], description: "Old note", assignee_ids: ["me", "e2"], subtasks: [{ id: "s1", title: "Remove the old one", status: "done", completed_at: "2026-01-01T00:00:00Z" }] });
     if (method === "GET" && url.endsWith("/feed")) return reply({ items: [] });
@@ -41,7 +44,7 @@ const rows = () => screen.getAllByRole("row").slice(1);
 
 describe("TasksHub", () => {
   it("defaults to Mine and asks the server for my tasks", async () => {
-    render(<TasksHub />);
+    render(<MemoryRouter><TasksHub /></MemoryRouter>);
     expect(await screen.findByText("Order the screen")).toBeInTheDocument();
     expect(screen.getByText("Call the supplier")).toBeInTheDocument();          // I made it
     expect(screen.queryByText("Clean the bench")).not.toBeInTheDocument();      // someone else's
@@ -53,19 +56,19 @@ describe("TasksHub", () => {
 
   it("Everyone shows all tasks for a manager and is greyed out for others", async () => {
     const u = userEvent.setup();
-    const { unmount } = render(<TasksHub />);
+    const { unmount } = render(<MemoryRouter><TasksHub /></MemoryRouter>);
     await screen.findByText("Order the screen");
     await u.click(screen.getByRole("button", { name: "Everyone" }));
     expect(await screen.findByText("Clean the bench")).toBeInTheDocument();
     unmount();
     manager = false;
-    render(<TasksHub />);
+    render(<MemoryRouter><TasksHub /></MemoryRouter>);
     await screen.findByText("Order the screen");
     expect(screen.getByRole("button", { name: "Everyone" })).toBeDisabled();
   });
 
   it("reads unknown statuses as To do, shows links, Auto and priority", async () => {
-    render(<TasksHub />);
+    render(<MemoryRouter><TasksHub /></MemoryRouter>);
     await screen.findByText("Order the screen");
     const r1 = rows().find((r) => within(r).queryByText("Order the screen"))!;
     expect(within(r1).getByText("To do")).toBeInTheDocument();
@@ -81,7 +84,7 @@ describe("TasksHub", () => {
 
   it("searches by client and filters by priority and person", async () => {
     const u = userEvent.setup();
-    render(<TasksHub />);
+    render(<MemoryRouter><TasksHub /></MemoryRouter>);
     await screen.findByText("Order the screen");
     await u.click(screen.getByRole("button", { name: "Everyone" }));
     await screen.findByText("Clean the bench");
@@ -101,7 +104,7 @@ describe("TasksHub", () => {
 
   it("edits title, description and priority in the panel, shows subtasks, labels remove buttons", async () => {
     const u = userEvent.setup();
-    render(<TasksHub />);
+    render(<MemoryRouter><TasksHub /></MemoryRouter>);
     await u.click(await screen.findByText("Order the screen"));
     const title = await screen.findByLabelText("Task title");
     expect(screen.getByText("Remove the old one")).toBeInTheDocument();
@@ -120,7 +123,7 @@ describe("TasksHub", () => {
     paged = true;
     const u = userEvent.setup();
     const confirm = vi.spyOn(window, "confirm");
-    render(<TasksHub />);
+    render(<MemoryRouter><TasksHub /></MemoryRouter>);
     await u.click(await screen.findByText("Order the screen"));
     await screen.findByLabelText("Task title");
     await u.click(screen.getByRole("button", { name: /Delete task/ }));
@@ -135,7 +138,7 @@ describe("TasksHub", () => {
   it("uses server status filtering and paging once the API reports a total", async () => {
     paged = true;
     const u = userEvent.setup();
-    render(<TasksHub />);
+    render(<MemoryRouter><TasksHub /></MemoryRouter>);
     await screen.findByText("Order the screen");
     await u.click(screen.getByRole("button", { name: "In progress" }));
     await waitFor(() => expect(calls.filter((c) => c.url.startsWith("/api/tasks?")).pop()!.url).toContain("status=in_progress"));

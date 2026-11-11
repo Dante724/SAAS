@@ -32,7 +32,7 @@ export default function Tabs<T extends string>({ tabs, value, onChange, look = "
         return (
           <button key={t.id} type="button" disabled={t.disabled} title={t.title} onClick={() => onChange(t.id)}
             {...(isTabs ? { role: "tab", "aria-selected": on } : { "aria-pressed": on })}
-            className={`shrink-0 inline-flex items-center gap-1.5 whitespace-nowrap font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${cls}`}>
+            className={`hit44 shrink-0 inline-flex items-center gap-1.5 whitespace-nowrap font-semibold transition-colors disabled:opacity-40 disabled:cursor-not-allowed ${cls}`}>
             {t.icon}{t.label}
             {t.count != null && <span className={`tabular-nums font-medium ${on ? "text-primary" : "text-ink-tertiary"}`}>{t.count}</span>}
           </button>

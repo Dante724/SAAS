@@ -7,6 +7,9 @@ export function toAppPath(link?: string | null): string {
   if (!p.startsWith("/")) p = "/" + p;
   const m = p.match(/^\/tech\/?#\/order\/([^/?#]+)/);
   if (m) return `/orders?open=${encodeURIComponent(m[1])}`;
+  // Task bells: the panel opens from /tasks?task=<id> (older links named the phone app's task page).
+  const t = p.match(/^\/(?:tech\/?#|go)\/tasks?\/([^/?#]+)/);
+  if (t) return `/tasks?task=${encodeURIComponent(t[1])}`;
   if (/^\/tech\/?(#.*)?$/.test(p)) return "/my-work";
   return p;
 }

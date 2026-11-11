@@ -1,11 +1,12 @@
 import SkeletonRows from "../../components/SkeletonRows";
 import TeklySelect from "../../components/TeklySelect";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
+import { useSearchParams } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
-import EmptyState from "../../components/EmptyState";
 import DateField from "../../components/DateField";
+import Tabs from "../../components/Tabs";
 import { api } from "../../api/client";
-import { useMe, hasFeature } from "../../context/Me";
+import { useMe } from "../../context/Me";
 import Pager from "../../components/Pager";
 import JobPicker from "../../components/JobPicker";
 import { loadFailed } from "../../lib/notice";
@@ -13,20 +14,23 @@ import { clickableRow } from "../../lib/clickable";
 import { buttonClass } from "../../components/Button";
 import { Badge } from "../../components/Card";
 import { theadRowClass } from "../../components/Table";
-import { serverDate, wallDate } from "../../lib/serverTime";
-import { type Task, type StatusFilter, STATUS_LABEL, normStatus, statusLabel, normPriority, PRIORITY_LABEL, isAuto, applyFilters } from "./taskModel";
+import { wallDate } from "../../lib/serverTime";
+import { type Task, type StatusFilter, normStatus, statusLabel, normPriority, PRIORITY_LABEL, isAuto, applyFilters } from "./taskModel";
+import TaskPanel, { type Emp } from "./TaskPanel";
+import MyDay from "./MyDay";
 
-type Emp = { id: string; name: string };
-type Feed = { id: string; body?: string; kind?: string; author_name?: string; created_at?: string };
 type ListReply = { items?: Task[]; statuses?: string[]; total?: number };
-type Toast = { msg: string; undo?: () => void };
+type Toast = { msg: string; undo?: () => void; label?: string };
+type View = "day" | "list";
 
-// Due dates are shop wall-clock times; feed/completion stamps are instants.
+// Due dates are shop wall-clock times.
 const fmtWall = (iso?: string | null) => { const d = wallDate(iso); return d ? d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—"; };
-const fmtAt = (iso?: string | null) => { const d = serverDate(iso); return d ? d.toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—"; };
 const TASK_PAGE = 50;
 const STATUS_PILLS: [StatusFilter, string][] = [["all", "All"], ["todo", "To do"], ["in_progress", "In progress"], ["overdue", "Late"], ["done", "Done"]];
 const pill = (on: boolean) => `px-3 py-1.5 rounded-full text-2xs font-semibold disabled:opacity-40 disabled:cursor-not-allowed ${on ? "bg-primary text-white shadow-xs" : "bg-slate-100 text-ink-secondary hover:bg-slate-200"}`;
+// Which view this browser last used (a per-viewer convenience; storage may be off).
+const VIEW_KEY = "tekly.tasks.view";
+const savedView = (): View => { try { return localStorage.getItem(VIEW_KEY) === "list" ? "list" : "day"; } catch { return "day"; } };
 
 function PriorityBadge({ p }: { p: Task["priority"] }) {
   const n = normPriority(p);
@@ -35,8 +39,9 @@ function PriorityBadge({ p }: { p: Task["priority"] }) {
 
 export default function TasksHub() {
   const { me, can } = useMe();
-  const clockOk = hasFeature(me, "time_clock");   // task timer: Shop plan
   const isManager = can("can_assign_staff");      // seeing everyone's tasks is a manager view
+  const [view, setViewState] = useState<View>(savedView);
+  const [dayMissing, setDayMissing] = useState(false);   // server has no /tasks/my-day yet
   const [tasks, setTasks] = useState<Task[] | null>(null);
   const [total, setTotal] = useState<number | null>(null);   // set only by the paged (newer) API
   const [scope, setScope] = useState<"mine" | "everyone">("mine");
@@ -47,22 +52,42 @@ export default function TasksHub() {
   const [prio, setPrio] = useState("");
   const [taskPage, setTaskPage] = useState(1);
   const [emps, setEmps] = useState<Emp[]>([]);
-  const [sel, setSel] = useState<Task | null>(null);
-  const [draft, setDraft] = useState({ title: "", description: "" });
-  const [confirmDel, setConfirmDel] = useState(false);
-  const [feed, setFeed] = useState<Feed[]>([]);
-  const [comment, setComment] = useState("");
+  const [seed, setSeed] = useState<Task | null>(null);
+  const [dayReload, setDayReload] = useState(0);
   const [create, setCreate] = useState(false);
   const [form, setForm] = useState<any>({ title: "", assignee_ids: [] as string[], priority: 0, due_at: "", order_id: "" });
   const [toast, setToast] = useState<Toast | null>(null);
   const toastTimer = useRef<ReturnType<typeof setTimeout>>();
-  const flash = (msg: string, undo?: () => void) => {
+  // A toast, optionally with one action button: "Undo" by default, or another label ("Try again").
+  const flash = useCallback((msg: string, undo?: () => void, label?: string) => {
     clearTimeout(toastTimer.current);
-    setToast({ msg, undo });
+    setToast({ msg, undo, label });
     toastTimer.current = setTimeout(() => setToast(null), undo ? 6000 : 2400);
-  };
+  }, []);
   const paged = total !== null;
   const reqId = useRef(0);
+  const shownView: View = dayMissing ? "list" : view;
+  function setView(v: View) { setViewState(v); try { localStorage.setItem(VIEW_KEY, v); } catch { /* per-viewer convenience only */ } }
+  const onDayMissing = useCallback(() => setDayMissing(true), []);
+
+  // Deep link: /tasks?task=<id> opens that task's panel (on load, from the bell, or from another
+  // page); closing the panel takes the parameter off again. Opening a row sets it too, so the URL
+  // of an open task can be copied and shared.
+  const [sp, setSp] = useSearchParams();
+  const openId = sp.get("task");
+  // Whose day (managers only): kept in the URL so the view can be shared. Until we know who is
+  // signed in, and for anyone who isn't a manager, it is always "me" (the server refuses others').
+  const askedFor = sp.get("assignee") || "me";
+  const dayPerson = me && isManager ? askedFor : "me";
+  const setDayPerson = useCallback((v: string) => { setSp((p) => { if (v === "me") p.delete("assignee"); else p.set("assignee", v); return p; }, { replace: true }); }, [setSp]);
+  // A link to a task you can't open (gone, never existed, or not yours to see) gets one neutral
+  // message, so it never confirms that a hidden task exists.
+  const taskUnavailable = useCallback(() => { setSp((p) => { p.delete("task"); return p; }, { replace: true }); flash("This task isn't available"); }, [setSp, flash]);
+  function openTask(t: Task) {
+    setSeed(t);
+    setSp((p) => { p.set("task", t.id); return p; });
+  }
+  const closeTask = useCallback(() => { setSp((p) => { p.delete("task"); return p; }, { replace: true }); }, [setSp]);
 
   useEffect(() => { const h = setTimeout(() => setQDeb(q.trim()), 250); return () => clearTimeout(h); }, [q]);
   useEffect(() => { setTaskPage(1); }, [filter, scope, qDeb, person, prio]);
@@ -81,6 +106,7 @@ export default function TasksHub() {
     return `/tasks?${p.toString()}`;
   }
   function load() {
+    if (shownView !== "list") return;
     const id = ++reqId.current;
     api.get<ListReply>(listUrl()).then((r) => {
       if (id !== reqId.current) return;
@@ -89,59 +115,19 @@ export default function TasksHub() {
     }).catch(() => { if (id === reqId.current) setTasks([]); });
   }
   // eslint-disable-next-line react-hooks/exhaustive-deps
-  useEffect(() => { load(); }, [scope, qDeb, person, serverStatus, taskPage]);
+  useEffect(() => { load(); }, [scope, qDeb, person, serverStatus, taskPage, shownView]);
   useEffect(() => { api.get<any>("/staff/employees").then((r) => setEmps(r.items || r || [])).catch(loadFailed("the staff list")); }, []);
+  const changed = () => { load(); setDayReload((n) => n + 1); };
 
-  function show(d: Task) { setSel(d); setDraft({ title: d.title || "", description: d.description || "" }); }
-  function openTask(t: Task) {
-    setConfirmDel(false);
-    api.get<Task>(`/tasks/${t.id}`).then(show).catch(() => show(t));
-    api.get<{ items: Feed[] }>(`/tasks/${t.id}/feed`).then((r) => setFeed(r.items || [])).catch(() => setFeed([]));
-  }
   async function patch(id: string, body: any, note?: string) {
-    try { await api.patch(`/tasks/${id}`, body); if (note) flash(note); load(); if (sel?.id === id) openTask({ id } as Task); }
+    try { await api.patch(`/tasks/${id}`, body); if (note) flash(note); changed(); }
     catch (e: any) { flash(`Failed: ${e.message}`); }
   }
   async function toggleDone(t: Task) { patch(t.id, { status: t.completed_at ? "todo" : "done" }); }
-  function saveText(field: "title" | "description") {
-    if (!sel) return;
-    const v = field === "title" ? draft.title.trim() : draft.description;
-    if (field === "title" && !v) { setDraft((d) => ({ ...d, title: sel.title || "" })); flash("Title required"); return; }
-    if (v === ((sel[field] as string | null | undefined) || "")) return;
-    patch(sel.id, { [field]: v }, field === "title" ? "Title saved" : "Description saved");
-  }
-  async function restore(id: string) {
-    try { await api.post(`/tasks/${id}/restore`, {}); flash("Task restored"); load(); }
-    catch { flash("This task can't be brought back"); }
-  }
-  async function deleteTask(t: Task) {
-    try {
-      const r = await api.del<any>(`/tasks/${t.id}`);
-      setSel(null); setConfirmDel(false); load();
-      // Undo needs the soft-delete API: it pages (`total`) or says the task was archived.
-      const soft = paged || !!(r && (r.archived || r.archived_at || r.deleted_at || r.restorable));
-      flash("Task deleted", soft ? () => restore(t.id) : undefined);
-    } catch (e: any) { flash(`Failed: ${e.message}`); }
-  }
-  async function postComment(id: string) {
-    const b = comment.trim(); if (!b) return;
-    try { await api.post(`/tasks/${id}/comments`, { body: b }); setComment(""); api.get<{ items: Feed[] }>(`/tasks/${id}/feed`).then((r) => setFeed(r.items || [])); }
-    catch (e: any) { flash(`Failed: ${e.message}`); }
-  }
-  async function startTimer(id: string) {
-    try { await api.post(`/timeclock/start?switch=true`, { task_id: id, category: "task" }); flash("Timer started on this task"); }
-    catch (e: any) { flash(e.message?.includes("turned off") ? "Work-order timer is off in Settings" : `Could not start: ${e.message}`); }
-  }
   async function createTask() {
     if (!form.title.trim()) { flash("Title required"); return; }
-    try { await api.post("/tasks", { title: form.title.trim(), assignee_ids: form.assignee_ids, assigned_to_id: form.assignee_ids[0] || null, priority: Number(form.priority), due_at: form.due_at || null, order_id: form.order_id || null }); setCreate(false); setForm({ title: "", assignee_ids: [], priority: 0, due_at: "", order_id: "" }); load(); flash("Task created"); }
+    try { await api.post("/tasks", { title: form.title.trim(), assignee_ids: form.assignee_ids, assigned_to_id: form.assignee_ids[0] || null, priority: Number(form.priority), due_at: form.due_at || null, order_id: form.order_id || null }); setCreate(false); setForm({ title: "", assignee_ids: [], priority: 0, due_at: "", order_id: "" }); changed(); flash("Task created"); }
     catch (e: any) { flash(`Failed: ${e.message}`); }
-  }
-  const selIds = (sel?.assignee_ids && sel.assignee_ids.length ? sel.assignee_ids : (sel?.assigned_to_id ? [sel.assigned_to_id] : []));
-  function toggleAssignee(id: string) {
-    if (!sel) return;
-    const next = selIds.includes(id) ? selIds.filter((x) => x !== id) : [...selIds, id];
-    patch(sel.id, { assignee_ids: next }, "Assignees updated");
   }
 
   // Idempotent client-side pass: filters the full list from the older API, changes nothing the newer one already filtered.
@@ -157,7 +143,13 @@ export default function TasksHub() {
 
   return (
     <Shell title="Tasks">
-      <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
+      <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-4">
+        <Tabs label="Tasks views" value={shownView} onChange={setView} className="-mt-2"
+          tabs={[{ id: "day", label: "My day", disabled: dayMissing, title: dayMissing ? "My day needs the latest server update. The list shows every task meanwhile." : undefined }, { id: "list", label: "List" }]} />
+        {shownView === "day" && (
+          <MyDay meId={me?.id} emps={emps} isManager={isManager} person={dayPerson} onPerson={setDayPerson} onOpen={openTask} flash={flash} onUnavailable={onDayMissing} onShowAll={() => setView("list")} reloadKey={dayReload} />
+        )}
+        {shownView === "list" && (<>
         <div className="flex items-center gap-2 flex-wrap">
           <button onClick={() => setCreate(true)} className="h-[38px] px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New task</button>
           <div role="group" aria-label="Whose tasks" className="flex items-center p-0.5 rounded-full bg-slate-100 ml-1">
@@ -220,110 +212,13 @@ export default function TasksHub() {
           </table>
           {tasks && count > 0 && <Pager total={count} page={page} pageSize={TASK_PAGE} onPage={setTaskPage} noun="tasks" />}
         </div>
+        </>)}
       </div>
 
-      {/* task detail drawer */}
-      {sel && (
-        <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-          <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={() => setSel(null)} />
-          <div role="dialog" aria-label={`Task: ${sel.title || ""}`} className="relative h-full w-full max-w-[480px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
-            <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
-            <header className="px-6 py-4 border-b border-slate-100 flex items-start justify-between gap-2 bg-slate-50/70">
-              <div className="flex-1 min-w-0">
-                <input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} onBlur={() => saveText("title")}
-                  onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") setDraft({ ...draft, title: sel.title || "" }); }}
-                  aria-label="Task title" className="w-full bg-transparent text-base font-bold text-ink-primary rounded-md px-1 -mx-1 hover:bg-white focus:bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40" />
-                <p className="text-2xs text-ink-tertiary mt-0.5 flex items-center gap-1.5">{sel.completed_at ? `Completed ${fmtAt(sel.completed_at)}` : `Due ${fmtWall(sel.due_at)}`}{isAuto(sel) && <Badge tone="neutral" size="sm" className="gap-0.5"><M n="bolt" c="text-2xs" />Auto</Badge>}</p>
-              </div>
-              <button aria-label="Close" onClick={() => setSel(null)} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary flex-shrink-0"><M n="close" c="text-base" /></button>
-            </header>
-            <div className="flex-1 overflow-y-auto p-6 space-y-4 text-xs">
-              {/* status buttons */}
-              <div className="flex items-center gap-1.5">
-                {(["todo", "in_progress", "done"] as const).map((s) => (
-                  <button key={s} onClick={() => patch(sel.id, { status: s }, `Marked ${STATUS_LABEL[s]}`)} aria-pressed={(sel.completed_at ? "done" : normStatus(sel.status)) === s} className={`px-3 py-1.5 rounded-lg text-2xs font-bold ${(sel.completed_at ? "done" : normStatus(sel.status)) === s ? "bg-primary text-white shadow-clay-sm" : "bg-slate-100 text-ink-secondary hover:bg-slate-200"}`}>{STATUS_LABEL[s]}</button>
-                ))}
-                {clockOk && <button onClick={() => startTimer(sel.id)} className="ml-auto px-3 py-1.5 rounded-lg bg-emerald-50 text-emerald-700 border border-emerald-200 text-2xs font-bold flex items-center gap-1 hover:bg-emerald-100"><M n="play_arrow" c="text-sm" />Start timer</button>}
-              </div>
-              <div><label htmlFor="task-desc" className="block font-semibold text-ink-tertiary mb-1">Description</label>
-                <textarea id="task-desc" rows={3} value={draft.description} onChange={(e) => setDraft({ ...draft, description: e.target.value })} onBlur={() => saveText("description")}
-                  placeholder="Add details…" className="glass-input w-full py-2 px-3 text-xs text-ink-primary rounded-lg leading-relaxed resize-y" /></div>
-              <div className="grid grid-cols-2 gap-3">
-                <div><label className="block font-semibold text-ink-tertiary mb-1">Due</label>
-                  <DateField mode="datetime" value={sel.due_at ? sel.due_at.slice(0, 16) : ""} onChange={(v) => patch(sel.id, { due_at: v || "" }, v ? "Due date saved" : "Due date cleared")} /></div>
-                <div><label htmlFor="task-prio" className="block font-semibold text-ink-tertiary mb-1">Priority</label>
-                  <TeklySelect id="task-prio" aria-label="Priority" value={normPriority(sel.priority)} onChange={(e) => patch(sel.id, { priority: Number(e.target.value) }, "Priority saved")} className={inp}>
-                    <option value={0}>Normal</option><option value={1}>High</option><option value={2}>Urgent</option>
-                  </TeklySelect></div>
-              </div>
-              <div>
-                <label className="block font-semibold text-ink-tertiary mb-1">Assigned technicians</label>
-                <div className="flex flex-wrap gap-1.5 mb-2">
-                  {selIds.length === 0 && <span className="text-ink-tertiary">Unassigned</span>}
-                  {selIds.map((id) => <span key={id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-primary border border-blue-200 text-2xs font-semibold">{nameOf(id)}<button aria-label={`Remove ${nameOf(id)}`} onClick={() => toggleAssignee(id)} className="rounded-full hover:text-rose-600"><M n="close" c="text-2xs" /></button></span>)}
-                </div>
-                <div className="max-h-32 overflow-y-auto rounded-lg border border-slate-200 divide-y divide-slate-100">
-                  {emps.map((e) => (
-                    <label key={e.id} className="flex items-center gap-2 px-2.5 py-1.5 cursor-pointer hover:bg-slate-50 text-xs">
-                      <input type="checkbox" checked={selIds.includes(e.id)} onChange={() => toggleAssignee(e.id)} className="w-3.5 h-3.5 rounded text-primary border-slate-300" />
-                      <span className="text-ink-primary font-medium">{e.name}</span>
-                    </label>
-                  ))}
-                </div>
-              </div>
-              <div><label className="block font-semibold text-ink-tertiary mb-1">Linked work order</label>
-                <JobPicker value={sel.order_id ? { id: sel.order_id, order_number: sel.order_number } : null}
-                  onChange={(j) => patch(sel.id, { order_id: j ? j.id : "" }, j ? "Work order linked" : "Work order unlinked")} />
-              </div>
-              {sel.client_name && <div className="text-2xs text-ink-tertiary"><b className="text-ink-secondary">Client:</b> {sel.client_name}</div>}
-
-              {/* subtasks */}
-              {sel.subtasks && sel.subtasks.length > 0 && (
-                <div>
-                  <div className="font-semibold text-ink-tertiary mb-1">Subtasks <span className="font-normal">({sel.subtasks.filter((s) => s.completed_at).length}/{sel.subtasks.length} done)</span></div>
-                  <ul className="rounded-lg border border-slate-200 divide-y divide-slate-100">
-                    {sel.subtasks.map((s) => (
-                      <li key={s.id}><button onClick={() => openTask(s)} className="w-full flex items-center gap-2 px-2.5 py-1.5 text-left hover:bg-slate-50">
-                        <M n={s.completed_at ? "check_circle" : "radio_button_unchecked"} c={`text-sm ${s.completed_at ? "text-emerald-600" : "text-ink-tertiary"}`} />
-                        <span className={`flex-1 min-w-0 truncate ${s.completed_at ? "line-through text-ink-tertiary" : "text-ink-primary font-medium"}`}>{s.title}</span>
-                        <Badge tone={s.completed_at ? "success" : normStatus(s.status) === "in_progress" ? "warning" : "neutral"} size="sm">{statusLabel(s)}</Badge>
-                      </button></li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {/* activity + comments */}
-              <div className="pt-2 border-t border-slate-100">
-                <div className="text-2xs font-bold text-ink-tertiary mb-2">Activity &amp; comments</div>
-                <div className="flex items-center gap-2 mb-3">
-                  <input value={comment} onChange={(e) => setComment(e.target.value)} onKeyDown={(e) => e.key === "Enter" && postComment(sel.id)} className={inp} aria-label="Comment" placeholder="Add a comment…" />
-                  <button onClick={() => postComment(sel.id)} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:brightness-110">Post</button>
-                </div>
-                <div className="space-y-2.5">
-                  {feed.length === 0 && <EmptyState size="inline" title="No activity yet." />}
-                  {feed.map((f) => (
-                    <div key={f.id} className="flex gap-2.5">
-                      <div className={`w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-white text-2xs font-bold ${f.kind === "comment" ? "bg-primary" : "bg-slate-400"}`}>{f.kind === "comment" ? (f.author_name || "?").slice(0, 1).toUpperCase() : <M n="bolt" c="text-xs" />}</div>
-                      <div className="flex-1 min-w-0"><div className="text-xs text-ink-primary">{f.body}</div><div className="text-2xs text-ink-tertiary">{f.author_name || "System"}{f.kind !== "comment" ? " · system" : ""} · {fmtAt(f.created_at)}</div></div>
-                    </div>
-                  ))}
-                </div>
-              </div>
-            </div>
-            <div className="p-4 border-t border-slate-100 bg-slate-50/70 flex items-center gap-2">
-              {confirmDel ? (<>
-                <span className="text-xs font-semibold text-ink-primary">Delete this task?</span>
-                <button autoFocus onClick={() => deleteTask(sel)} className={buttonClass("dangerSolid", "md")}>Delete</button>
-                <button onClick={() => setConfirmDel(false)} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button>
-              </>) : (
-                <button onClick={() => setConfirmDel(true)} className={buttonClass("danger", "md")}><M n="delete" c="text-sm" />Delete task</button>
-              )}
-            </div>
-          </div>
-        </div>
+      {openId && (
+        <TaskPanel taskId={openId} seed={seed} emps={emps} onClose={closeTask} onUnavailable={taskUnavailable} onOpen={openTask} onChanged={changed} flash={flash}
+          softDelete={(r) => paged || shownView === "day" || !!(r && (r.archived || r.archived_at || r.deleted_at || r.restorable))} />
       )}
-
       {/* new task drawer */}
       {create && (
         <div className="fixed inset-0 flex justify-end" style={{ zIndex: 55 }}>
@@ -357,7 +252,7 @@ export default function TasksHub() {
       )}
       {toast && <div role="status" className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold pl-4 pr-2 py-2 rounded-xl shadow-clay-drawer z-[70] flex items-center gap-3">
         <span className="py-0.5">{toast.msg}</span>
-        {toast.undo && <button onClick={() => { const u = toast.undo!; setToast(null); u(); }} className="px-2.5 py-1 rounded-lg text-blue-200 font-bold hover:bg-white/10">Undo</button>}
+        {toast.undo && <button onClick={() => { const u = toast.undo!; setToast(null); u(); }} className="px-2.5 py-1 rounded-lg text-blue-200 font-bold hover:bg-white/10">{toast.label || "Undo"}</button>}
       </div>}
     </Shell>
   );
