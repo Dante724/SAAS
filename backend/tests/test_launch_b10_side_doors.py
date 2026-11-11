@@ -12,6 +12,7 @@ from sqlalchemy import select
 from backend.models import Employee, Invite, Role
 from backend.services.auth import hash_password
 from backend.services.permissions import new_role_permissions
+from backend.tests.invite_role import any_role
 
 
 async def _me(client, h):
@@ -95,10 +96,11 @@ async def test_specialist_cannot_pay_out_of_the_till(client, tenant, db):
 
 @pytest.mark.asyncio
 async def test_invitee_with_no_role_is_not_the_owner(client, tenant, db):
-    r = await client.post("/api/staff/invites", json={"email": "newbie@b10.dev"}, headers=tenant)
+    r = await client.post("/api/staff/invites", json={"email": "newbie@b10.dev", "role_id": await any_role(client, tenant)}, headers=tenant)
     assert r.status_code == 201, r.text
     # the raw token is only in the email; mint a known one for the test
     inv = (await db.execute(select(Invite).where(Invite.email == "newbie@b10.dev"))).scalar_one()
+    inv.role_id = None   # a roleless invite, as older data can hold (the API now refuses one)
     inv.token_hash = hashlib.sha256(b"b10-token").hexdigest()
     await db.commit()
     r = await client.post("/api/auth/invite/accept", json={"token": "b10-token", "name": "Newbie", "password": "pw-newbie-12345"})

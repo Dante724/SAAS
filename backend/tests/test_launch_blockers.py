@@ -13,6 +13,8 @@ import uuid
 import pytest
 from sqlalchemy import func, select
 
+from backend.tests.invite_role import any_role
+
 
 async def _tenant(client):
     email = f"lb-{uuid.uuid4().hex[:8]}@test.dev"
@@ -430,7 +432,7 @@ async def test_changing_your_own_email_or_password_needs_the_current_one(client)
 async def test_inviting_someone_from_another_shop_is_a_clear_409(client):
     a_email, _, _ = await _owner(client)
     _, hb, _ = await _owner(client)
-    r = await client.post("/api/staff/invites", json={"email": a_email, "name": "X"}, headers=hb)
+    r = await client.post("/api/staff/invites", json={"email": a_email, "name": "X", "role_id": await any_role(client, hb)}, headers=hb)
     assert r.status_code == 409, r.text
 
 

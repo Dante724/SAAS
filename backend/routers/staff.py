@@ -541,6 +541,10 @@ async def create_invite(data: InviteIn, db: AsyncSession = Depends(get_db),
     if not email or "@" not in email:
         raise HTTPException(400, "A valid email is required")
     await _assert_can_assign_role(db, current, data.role_id)
+    if not data.role_id:
+        # Someone who joins with no role can do nothing (only the owner works without one), so an
+        # invite must say what the new teammate may do.
+        raise HTTPException(422, "Pick a role for the new teammate")
     from backend.services.billing import assert_can_add
     await assert_can_add(db, current.org_id, "team_members")
     await _teammate_email_slot(current.org_id)

@@ -19,6 +19,7 @@ from backend.config import settings
 from backend.models import Employee, Invite, PaymentIntent, Role
 from backend.services import org_creds
 from backend.services.auth import hash_password
+from backend.tests.invite_role import any_role
 
 
 async def _me(client, h):
@@ -44,9 +45,10 @@ async def _staff(client, tenant, db, name, perms):
 
 
 async def _roleless(client, tenant, db):
-    r = await client.post("/api/staff/invites", json={"email": "norole@r2.dev"}, headers=tenant)
+    r = await client.post("/api/staff/invites", json={"email": "norole@r2.dev", "role_id": await any_role(client, tenant)}, headers=tenant)
     assert r.status_code == 201, r.text
     inv = (await db.execute(select(Invite).where(Invite.email == "norole@r2.dev"))).scalar_one()
+    inv.role_id = None   # a roleless invite, as older data can hold (the API now refuses one)
     inv.token_hash = hashlib.sha256(b"r2-token").hexdigest()
     await db.commit()
     r = await client.post("/api/auth/invite/accept", json={"token": "r2-token", "name": "No Role",
@@ -179,3 +181,53 @@ async def test_roleless_invitee_me_spells_out_no_permissions(client, tenant, db)
     assert perms and not any(perms.values())
     owner = (await _me(client, tenant))["permissions"]
     assert owner and all(owner.values())
+
+
+# ── recheck 2, small gaps ────────────────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_editing_a_line_cannot_change_its_tax(client, tenant, db):
+    # A line's tax comes from the shop's tax settings when it is added (which needs the add right);
+    # the line editor has no tax fields, so a tax sent there changes nothing.
+    tech = await _staff(client, tenant, db, "Tech", {"can_add_services": True})
+    oid, lid = await _order_with_line(client, tenant)
+    before = (await client.get(f"/api/orders/{oid}", headers=tenant)).json()
+    r = await client.patch(f"/api/orders/{oid}/lines/{lid}", json={"tax_rate": 20, "tax_mode": "included"},
+                           headers=tech)
+    assert r.status_code in (200, 422), r.text
+    after = (await client.get(f"/api/orders/{oid}", headers=tenant)).json()
+    assert float(after["lines"][0]["tax_rate"] or 0) == float(before["lines"][0]["tax_rate"] or 0)
+    assert after["lines"][0].get("tax_mode") == before["lines"][0].get("tax_mode")
+
+
+@pytest.mark.asyncio
+async def test_invite_must_name_a_role(client, tenant):
+    r = await client.post("/api/staff/invites", json={"email": "nobody@r2.dev"}, headers=tenant)
+    assert r.status_code == 422, r.text
+    assert "role" in r.json()["detail"].lower()
+    r = await client.post("/api/staff/invites", json={"email": "somebody@r2.dev",
+                                                      "role_id": await any_role(client, tenant)}, headers=tenant)
+    assert r.status_code == 201, r.text
+
+
+@pytest.mark.asyncio
+async def test_old_webhook_url_takes_only_the_shops_secret_when_it_has_one(monkeypatch, client, tenant, db):
+    monkeypatch.setattr(settings, "STRIPE_WEBHOOK_SECRET", "whsec_operator", raising=False)
+    me = await _me(client, tenant)
+    i = PaymentIntent(org_id=me["org_id"], amount=15.0, currency="usd", status="pending",
+                      provider="stripe", provider_ref="cs_r2_old")
+    db.add(i)
+    await db.commit()
+    await db.refresh(i)
+    await org_creds.set_creds(db, i.org_id, "stripe", {"secret_key": "sk_test_x", "webhook_secret": "whsec_shop"})
+    raw = json.dumps({"type": "checkout.session.completed", "data": {"object": {
+        "id": "cs_r2_old", "metadata": {"intent_id": i.id, "org_id": i.org_id}, "client_reference_id": i.id,
+        "amount_total": 1500, "currency": "usd", "payment_status": "paid"}}}).encode()
+
+    async def post(secret):
+        return await client.post("/api/payments/stripe/webhook", content=raw, headers={
+            "content-type": "application/json", "stripe-signature": _stripe_sig(secret, raw)})
+
+    assert (await post("whsec_operator")).status_code == 400
+    assert (await client.get(f"/api/public/pay/{i.id}")).json()["status"] != "succeeded"
+    assert (await post("whsec_shop")).status_code == 200
+    assert (await client.get(f"/api/public/pay/{i.id}")).json()["status"] == "succeeded"

@@ -260,9 +260,10 @@ async def _require_square_signature(request: Request, raw: bytes, db: AsyncSessi
     that matched nothing) checks the operator-wide key only. own_only (the shop's own URL): only
     the shop's key, since a shop's card money never goes through the operator's account."""
     if org_id:
-        secrets = await provider_secrets(db, org_id, "square", "webhook_signature_key",
-                                         None if own_only else settings.SQUARE_WEBHOOK_SIGNATURE_KEY,
-                                         own_only=own_only)
+        # A shop with its own secret signs its own events: the operator-wide secret is accepted
+        # only for a shop that has none (payments taken before card keys became the shop's own).
+        own = await provider_secrets(db, org_id, "square", "webhook_signature_key", None, own_only=True)
+        secrets = own if (own or own_only) else [s for s in [settings.SQUARE_WEBHOOK_SIGNATURE_KEY] if s]
     else:
         secrets = [s for s in [settings.SQUARE_WEBHOOK_SIGNATURE_KEY] if s]
     _signature_check(secrets, _square_verified(request, raw, secrets), "Square")
@@ -273,9 +274,10 @@ async def _require_stripe_signature(payload: bytes, sig: str, db: AsyncSession, 
                                     own_only: bool = False) -> None:
     """As _require_square_signature: own_only (the shop's own URL) accepts only the shop's secret."""
     if org_id:
-        secrets = await provider_secrets(db, org_id, "stripe", "webhook_secret",
-                                         None if own_only else settings.STRIPE_WEBHOOK_SECRET,
-                                         own_only=own_only)
+        # A shop with its own secret signs its own events: the operator-wide secret is accepted
+        # only for a shop that has none (payments taken before card keys became the shop's own).
+        own = await provider_secrets(db, org_id, "stripe", "webhook_secret", None, own_only=True)
+        secrets = own if (own or own_only) else [s for s in [settings.STRIPE_WEBHOOK_SECRET] if s]
     else:
         secrets = [s for s in [settings.STRIPE_WEBHOOK_SECRET] if s]
     _signature_check(secrets, any(_verify_stripe_sig(payload, sig, s) for s in secrets), "Stripe")

@@ -4,6 +4,7 @@ from sqlalchemy import select
 
 from backend.db.database import AsyncSessionLocal
 from backend.models import Employee, Invite
+from backend.tests.invite_role import any_role
 
 
 async def _owner(client):
@@ -27,7 +28,7 @@ async def _raw_token_for(email):
 async def test_invite_create_list_and_accept(client):
     hdr = await _owner(client)
     # create invite
-    r = await client.post("/api/staff/invites", json={"email": "tech@inv.dev", "name": "Tara Tech"}, headers=hdr)
+    r = await client.post("/api/staff/invites", json={"email": "tech@inv.dev", "name": "Tara Tech", "role_id": await any_role(client, hdr)}, headers=hdr)
     assert r.status_code == 201, r.text
     # it appears in the pending list
     lst = await client.get("/api/staff/invites", headers=hdr)
@@ -66,7 +67,7 @@ async def test_invite_create_list_and_accept(client):
 async def test_invite_duplicate_email_blocked(client):
     hdr = await _owner(client)
     # inviting the owner's own email should be blocked (already on the team)
-    r = await client.post("/api/staff/invites", json={"email": "owner@inv.dev"}, headers=hdr)
+    r = await client.post("/api/staff/invites", json={"email": "owner@inv.dev", "role_id": await any_role(client, hdr)}, headers=hdr)
     assert r.status_code == 400
 
 
@@ -80,7 +81,7 @@ async def test_invite_accept_rejects_bad_token(client):
 @pytest.mark.asyncio
 async def test_invite_accept_short_password(client):
     hdr = await _owner(client)
-    await client.post("/api/staff/invites", json={"email": "short2@inv.dev"}, headers=hdr)
+    await client.post("/api/staff/invites", json={"email": "short2@inv.dev", "role_id": await any_role(client, hdr)}, headers=hdr)
     import hashlib
     import secrets
     raw = secrets.token_urlsafe(32)

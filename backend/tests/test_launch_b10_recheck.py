@@ -13,6 +13,7 @@ from sqlalchemy import select
 from backend.models import Employee, Invite, Organisation, Role, TimeEntry
 from backend.services.auth import hash_password
 from backend.services.dates import now_utc
+from backend.tests.invite_role import any_role
 
 
 async def _me(client, h):
@@ -92,9 +93,10 @@ async def test_billing_tracked_time_takes_the_line_rights(client, tenant, db):
 @pytest.mark.asyncio
 async def test_teammate_with_no_role_is_not_the_owner_for_time_and_pay(client, tenant, db):
     owner = await _me(client, tenant)
-    r = await client.post("/api/staff/invites", json={"email": "norole@b10r.dev"}, headers=tenant)
+    r = await client.post("/api/staff/invites", json={"email": "norole@b10r.dev", "role_id": await any_role(client, tenant)}, headers=tenant)
     assert r.status_code == 201, r.text
     inv = (await db.execute(select(Invite).where(Invite.email == "norole@b10r.dev"))).scalar_one()
+    inv.role_id = None   # a roleless invite, as older data can hold (the API now refuses one)
     inv.token_hash = hashlib.sha256(b"b10r-token").hexdigest()
     await db.commit()
     r = await client.post("/api/auth/invite/accept", json={"token": "b10r-token", "name": "No Role",

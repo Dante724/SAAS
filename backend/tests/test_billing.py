@@ -29,6 +29,7 @@ from backend.config import Settings, settings
 from backend.models import BillingEvent, Employee, Location, Organisation
 from backend.services import billing
 from backend.services.dates import platform_today  # billing's clock: the UTC day, not the machine's
+from backend.tests.invite_role import any_role
 
 WHSEC = "whsec_test_billing"
 PRICES = {"STRIPE_BILLING_PRICE_SOLO_MONTH": "price_om", "STRIPE_BILLING_PRICE_SOLO_YEAR": "price_oy",
@@ -269,7 +270,7 @@ async def test_solo_allows_two_team_members(client, db):
     over = await client.post("/api/staff/employees", json={"name": "X", "email": f"x-{org_id[:6]}@x.dev"}, headers=hdr)
     assert over.status_code == 403 and "up to 2" in over.json()["detail"]
     assert over.headers["X-Plan-Required"] == "shop"
-    inv = await client.post("/api/staff/invites", json={"email": f"inv-{org_id[:6]}@x.dev"}, headers=hdr)
+    inv = await client.post("/api/staff/invites", json={"email": f"inv-{org_id[:6]}@x.dev", "role_id": await any_role(client, hdr)}, headers=hdr)
     assert inv.status_code == 403
     # deactivate one, then reactivating someone else is the only way back to the cap
     emp = (await db.execute(select(Employee).where(Employee.org_id == org_id, Employee.name == "T0"))).scalar_one()
