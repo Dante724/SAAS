@@ -1,11 +1,13 @@
-import { useEffect, useState, type ReactElement } from "react";
+import { useEffect, useRef, useState, type ReactElement } from "react";
+import TeklySelect from "../../components/TeklySelect";
+import { buttonClass } from "../../components/Button";
 import { sectionCard } from "../../components/Section";
 import HexTile from "../../components/HexTile";
 import { Avatar } from "./look";
 import { M } from "../../components/Shell";
 import DateField from "../../components/DateField";
 import ScanButton from "../../components/ScanButton";
-import { api } from "../../api/client";
+import { api, idempotencyKey } from "../../api/client";
 import { autoPrintForJob } from "../../lib/autoPrint";
 import AutoPrintPicker from "../../components/AutoPrintPicker";
 import { useClientSearch } from "../../hooks/useClientSearch";
@@ -25,6 +27,7 @@ import IdentifyHint, { type IdMatch } from "../../components/IdentifyHint";
 import NameSuggestInput from "../../components/NameSuggestInput";
 import { loadFailed } from "../../lib/notice";
 import { JobSuggestions } from "../../components/sense/Sense";
+import { Badge } from "../../components/Card";
 
 type ClientLite = { id: string; name?: string; phone?: string; email?: string };
 type Emp = { id: string; name: string; in_managers?: boolean; in_assignees?: boolean };
@@ -135,6 +138,11 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
   // Document display currency (optional override; blank = client preference / base).
   const { base, items: curItems, opts: curOpts, multi: multiCurrency } = useCurrencies();
   const [curCode, setCurCode] = useState("");
+  // Council M13: one key per attempt at this job, kept until it has gone through, so a double
+  // click or a retry after a timeout gets the same job back instead of a second one (as Tekly
+  // Go's NewJob does). Each kit expands through its own keyed add-line call.
+  const jobKey = useRef(idempotencyKey());
+  const bundleKeys = useRef<Record<string, string>>({});
   const docCur: CurItem | undefined = curItems.find((c) => c.code === curCode);
   // registry rate is "1 <code> = rate <base>", so a base amount shows in the currency as amount / rate.
   const conv = (amt: number) => (docCur && docCur.rate ? amt / docCur.rate : amt);
@@ -155,7 +163,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
     const m = missingRequired(); if (m) { setErr(m); setStep(1); return; }
     setBusy(true); setErr(null);
     try {
-      const created = await api.post<any>("/orders", {
+      const created = await api.postOnce<any>("/orders", {
         client_id: client?.id || null,
         type_id: typeId,
         custom_data: woCustom,
@@ -176,8 +184,12 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
         currency_code: curCode || null,
         // Bundles expand into their components only through the add-line endpoint (below).
         lines: lines.filter((l) => l.kind !== "bundle").map(lineBody),
-      });
-      for (const b of lines.filter((l) => l.kind === "bundle")) await api.post(`/orders/${created.id}/lines`, lineBody(b));
+      }, jobKey.current);
+      for (const b of lines.filter((l) => l.kind === "bundle")) {
+        const k = (bundleKeys.current[b.id] ||= idempotencyKey());
+        await api.postOnce(`/orders/${created.id}/lines`, lineBody(b), k);
+      }
+      jobKey.current = idempotencyKey(); bundleKeys.current = {};   // done: the next job gets fresh keys
       if (!estimate) void autoPrintForJob(created.id);   // label templates set to print on new jobs
       onCreated();
       if (!reopen) onClose();
@@ -239,7 +251,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                           {!q.trim() && results.length > 0 && <div className="px-2.5 pt-1 pb-0.5 text-[11px] text-ink-tertiary">Recent customers</div>}
                           {q.trim() && results.length === 0 && <div className="px-2.5 py-2 text-xs text-ink-tertiary">No customer matches "{q.trim()}"</div>}
                           {results.map((r) => <button key={r.id} onClick={() => { setClient(r); setCOpen(false); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-sm"><span className="font-semibold text-ink-primary">{r.name}</span><span className="text-ink-tertiary font-mono text-xs">{r.phone}</span></button>)}
-                          <button onClick={() => { setNewClient(true); setCOpen(false); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-sm text-primary font-bold border-t border-slate-100 mt-1"><M n="person_add" c="text-base" />New customer{q.trim() ? ` "${q.trim()}"` : ""}</button>
+                          <button onClick={() => { setNewClient(true); setCOpen(false); }} className="flex items-center gap-2 w-full text-left px-2.5 py-2 rounded-lg hover:bg-blue-50/60 text-sm text-primary font-semibold border-t border-slate-100 mt-1"><M n="person_add" c="text-base" />New customer{q.trim() ? ` "${q.trim()}"` : ""}</button>
                         </div>
                       </>)}
                     </div>
@@ -250,17 +262,17 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
     ),
     priority: (
 <div className="space-y-1.5"><label className={lbl}>Priority{star("priority")}</label>
-                  <div className="relative"><select value={priority} onChange={(e) => setPriority(Number(e.target.value))} className={`${inp} pr-8 appearance-none`}><option value={0}>Normal</option><option value={1}>High</option><option value={2}>Urgent</option></select><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div>
+                  <div className="relative"><TeklySelect value={priority} onChange={(e) => setPriority(Number(e.target.value))} className={`${inp} pr-8 appearance-none bg-none`}><option value={0}>Normal</option><option value={1}>High</option><option value={2}>Urgent</option></TeklySelect><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div>
                 </div>
     ),
     manager: (
 <div className="space-y-1.5"><label className={lbl}>Manager{star("manager")}</label>
-                  <div className="relative"><select value={managerId} onChange={(e) => setManagerId(e.target.value)} className={`${inp} pr-8 appearance-none`}><option value="">Choose a manager</option>{emps.filter((e) => e.in_managers !== false).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div>
+                  <div className="relative"><TeklySelect value={managerId} onChange={(e) => setManagerId(e.target.value)} className={`${inp} pr-8 appearance-none bg-none`}><option value="">Choose a manager</option>{emps.filter((e) => e.in_managers !== false).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</TeklySelect><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div>
                 </div>
     ),
     assignee: (
 <div className="space-y-1.5"><label className={lbl}>Technician{star("assignee")}</label>
-                <div className="relative"><select value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)} className={`${inp} pr-8 appearance-none`}><option value="">Unassigned</option>{emps.filter((e) => e.in_assignees !== false).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div>
+                <div className="relative"><TeklySelect value={assigneeId} onChange={(e) => setAssigneeId(e.target.value)} className={`${inp} pr-8 appearance-none bg-none`}><option value="">Unassigned</option>{emps.filter((e) => e.in_assignees !== false).map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</TeklySelect><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div>
               </div>
     ),
     scheduled_for: (
@@ -303,7 +315,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                   <div className="sm:col-span-8 space-y-3">
                     <div className="grid grid-cols-2 gap-3">
                       <div className="space-y-1"><label className="block text-xs font-medium text-ink-secondary">Group</label>
-                        <div className="relative"><select value={group} onChange={(e) => setGroup(e.target.value)} className="glass-input block w-full h-10 px-3 text-sm font-medium text-ink-primary rounded-xl appearance-none">{(term.groups.length ? term.groups.map((g) => g.label) : ["Device", "Vehicle", "Equipment"]).map((g) => <option key={g}>{g}</option>)}</select><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div></div>
+                        <div className="relative"><TeklySelect value={group} onChange={(e) => setGroup(e.target.value)} className="glass-input block w-full h-10 px-3 text-sm font-medium text-ink-primary rounded-xl appearance-none bg-none">{(term.groups.length ? term.groups.map((g) => g.label) : ["Device", "Vehicle", "Equipment"]).map((g) => <option key={g}>{g}</option>)}</TeklySelect><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div></div>
                       <div className="space-y-1"><label className="block text-xs font-medium text-ink-secondary">Brand</label><NameSuggestInput field="brand" group={group} template={term.key} value={brand} onChange={setBrand} className="glass-input block w-full h-10 px-3 text-sm font-medium text-ink-primary rounded-xl" placeholder="Samsung" /></div>
                     </div>
                     <div className="grid grid-cols-2 gap-3">
@@ -327,7 +339,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                 </div>
 
                 {!moreOpen ? (
-                  <button type="button" onClick={() => setMoreOpen(true)} className="flex items-center gap-1 text-xs font-semibold text-primary hover:text-primary/80 transition-colors">
+                  <button type="button" onClick={() => setMoreOpen(true)} className="flex items-center gap-1 text-xs font-semibold text-primary hover:underline transition-colors">
                     <M n="add" c="text-sm" />More details
                   </button>
                 ) : (
@@ -338,7 +350,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                     </div>
                     <div className="grid grid-cols-2 gap-3">
                       <div className="space-y-1"><label className="block text-xs font-medium text-ink-secondary">Condition</label>
-                        <div className="relative"><select value={condition} onChange={(e) => setCondition(e.target.value)} className="glass-input block w-full h-10 px-3 text-sm font-medium text-ink-primary rounded-xl appearance-none"><option value="">—</option>{["New", "Good", "Fair", "Poor", "For parts"].map((c) => <option key={c} value={c}>{c}</option>)}</select><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div></div>
+                        <div className="relative"><TeklySelect value={condition} onChange={(e) => setCondition(e.target.value)} className="glass-input block w-full h-10 px-3 text-sm font-medium text-ink-primary rounded-xl appearance-none bg-none"><option value="">—</option>{["New", "Good", "Fair", "Poor", "For parts"].map((c) => <option key={c} value={c}>{c}</option>)}</TeklySelect><M n="expand_more" c="absolute right-3 top-3 text-ink-tertiary pointer-events-none text-sm" /></div></div>
                       <div className="space-y-1"><label className="block text-xs font-medium text-ink-secondary">Color</label><input value={color} onChange={(e) => setColor(e.target.value)} className="glass-input block w-full h-10 px-3 text-sm font-medium text-ink-primary rounded-xl" placeholder="Titanium Black" /></div>
                     </div>
                     {moreIds.length > 0 && (
@@ -408,7 +420,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 45 }}>
-      <div className="absolute inset-0 bg-ink-primary/30 backdrop-blur-[2.5px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/30" aria-hidden="true" onClick={onClose} />
       <div className="intake relative h-full w-full max-w-[780px] bg-slate-50 shadow-clay-drawer flex flex-col border-l border-slate-200/80 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
 
@@ -416,7 +428,7 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
         <header className="px-7 pt-5 pb-4 flex items-center justify-between bg-white">
           <div className="flex items-center gap-3">
             <h2 className="text-xl font-semibold tracking-tight text-ink-primary">New {estimate ? "estimate" : "work order"}</h2>
-            {estimate && <span className="rounded-full bg-amber-50 px-2.5 py-0.5 text-xs font-medium text-amber-800 ring-1 ring-inset ring-amber-200">Not billed until approved</span>}
+            {estimate && <Badge tone="warning" size="sm">Not billed until approved</Badge>}
           </div>
           <div className="flex items-center gap-1">
             {canCustomize && typeId && (
@@ -516,9 +528,9 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
                 {multiCurrency && (
                   <div className="flex items-center justify-between pb-2 mb-1 border-b border-slate-200">
                     <span className="text-xs font-medium text-ink-secondary">Document currency</span>
-                    <select value={curCode} onChange={(e) => setCurCode(e.target.value)} className="glass-input py-1 px-2 text-xs font-semibold text-ink-primary rounded-lg">
+                    <TeklySelect value={curCode} onChange={(e) => setCurCode(e.target.value)} className="glass-input py-1 px-2 text-xs font-semibold text-ink-primary rounded-lg">
                       <option value="">Customer default</option>{curOpts.map(([c, l]) => <option key={c} value={c}>{l}</option>)}
-                    </select>
+                    </TeklySelect>
                   </div>
                 )}
                 <div className="flex justify-between text-xs text-ink-secondary"><span>Subtotal</span><span className="tabular-nums font-semibold text-ink-primary">{money(subtotal)}</span></div>
@@ -546,17 +558,17 @@ export default function CreateOrderDrawer({ isEstimate: initEstimate, prefillCli
         <footer className="px-7 py-3.5 border-t border-slate-200/80 bg-white flex items-center justify-between">
           {step === 1 ? (
             <div className="w-full flex items-center justify-between">
-              <button type="button" onClick={onClose} className="h-10 px-4 rounded-xl text-sm font-medium text-ink-secondary border border-slate-200 bg-white hover:bg-slate-50 transition-colors">Cancel</button>
-              <button type="button" onClick={next} className="h-10 px-5 rounded-xl bg-primary text-white text-sm font-semibold shadow-sm hover:brightness-110 flex items-center gap-1.5 transition-all"><span>Next: services and products</span><M n="arrow_forward" c="text-sm" /></button>
+              <button type="button" onClick={next} className={buttonClass("primary", "lg")}><span>Next: services and products</span><M n="arrow_forward" c="text-sm" /></button>
+              <button type="button" onClick={onClose} className={buttonClass("secondary", "lg")}>Cancel</button>
             </div>
           ) : (
             <div className="w-full flex items-center justify-between">
-              <button type="button" onClick={() => setStep(1)} className="h-10 px-4 rounded-xl text-sm font-medium text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 transition-colors flex items-center gap-1.5"><M n="arrow_back" c="text-sm" /><span>Back</span></button>
               <div className="flex items-center space-x-2">
+                <button type="button" disabled={busy} onClick={() => submit(false)} className={buttonClass("primary", "lg")}>{busy ? "Creating…" : `Create ${estimate ? "estimate" : "work order"}`}</button>
                 {!estimate && <AutoPrintPicker event="create" />}
-                <button type="button" disabled={busy} onClick={() => submit(true)} className="hidden sm:inline-flex h-10 items-center px-4 rounded-xl text-sm font-medium text-ink-primary bg-white border border-slate-200 hover:bg-slate-50 transition-colors">Save and create another</button>
-                <button type="button" disabled={busy} onClick={() => submit(false)} className="h-10 px-5 rounded-xl bg-primary text-white text-sm font-semibold shadow-sm hover:brightness-110 transition-all">{busy ? "Creating…" : `Create ${estimate ? "estimate" : "work order"}`}</button>
+                <button type="button" disabled={busy} onClick={() => submit(true)} className={buttonClass("secondary", "lg", "hidden sm:inline-flex")}>Save and create another</button>
               </div>
+              <button type="button" onClick={() => setStep(1)} className={buttonClass("secondary", "lg")}><M n="arrow_back" c="text-sm" /><span>Back</span></button>
             </div>
           )}
         </footer>

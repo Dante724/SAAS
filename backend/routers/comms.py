@@ -499,19 +499,25 @@ async def send_campaign(
     recipients = [cl for cl in clients
                   if getattr(cl, contact_field, None) and getattr(cl, consent_field, True)]
 
-    sent = 0
+    sent, capped = 0, None
     for cl in recipients:
         try:
             from backend.services.notifications import _adapter_for, notif_creds
             _creds = await notif_creds(db, current.org_id, c.channel)
-            await _adapter_for(c.channel, _creds).send(
+            res = await _adapter_for(c.channel, _creds).send(
                 recipient=getattr(cl, contact_field), subject=c.subject, body=c.body)
+            if res.get("capped"):   # daily cap on the operator's shared Twilio account
+                capped = res.get("error")
+                break
         except Exception:
             pass   # seam: simulated/absent gateway → still count the intent
         sent += 1
+    if capped and not sent:
+        raise HTTPException(429, capped)
 
     c.status = "sent"
     c.recipients = sent
     c.sent_at = now_utc()
     await db.commit()
-    return {"ok": True, "recipients": sent, "channel": c.channel, "segment": c.segment}
+    return {"ok": True, "recipients": sent, "channel": c.channel, "segment": c.segment,
+            "error": capped}   # set when the cap stopped the campaign part-way: `recipients` got it

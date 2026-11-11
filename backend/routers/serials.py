@@ -18,6 +18,7 @@ from backend.models import (
     Device, Employee, Location, Order, Part, Sale, SerialEvent, SerializedItem, StorageBin, Supplier, Warehouse,
 )
 from backend.services.auth import get_current_employee, require_perm
+from backend.services.dates import shop_today
 from backend.services.redact import can_see_costs
 
 router = APIRouter(prefix="/api/serials", tags=["serials"])
@@ -133,7 +134,8 @@ async def unit_passport(
         "supplier": {"id": sup.id, "name": sup.name} if sup else None,
         "po_id": u.po_id,
         "supplier_warranty_until": until.isoformat() if until else None,
-        "in_supplier_warranty": (until >= date.today()) if until else None,
+        # Covered through its last day on the shop's clock (where the unit is kept).
+        "in_supplier_warranty": (until >= await shop_today(db, current.org_id, u.location_id)) if until else None,
         "received_at": u.created_at.isoformat() if u.created_at else None,
         "where": {"location_id": u.location_id, "location": locs.get(u.location_id),
                   "warehouse": wh_name, "bin_id": u.bin_id, "bin": bins.get(u.bin_id),

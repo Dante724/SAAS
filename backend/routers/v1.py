@@ -1,6 +1,6 @@
 """Public REST API v1 (Phase 2B, hardened in apih1).
 
-Authenticated with a public API key (Authorization: Bearer rok_...). Org scope and
+Authenticated with a public API key (Authorization: Bearer tk_...). Org scope and
 scopes (read / write / costs:read) come from the key. Responses use a consistent envelope:
   list:   {"data": [...], "page": n, "page_size": m, "total": t}
   single: {"data": {...}}
@@ -832,7 +832,7 @@ _OPENAPI_DESCRIPTION = """\
 The Tekly public API: read and create contacts, work orders, appointments and time entries, and
 read estimates, products, invoices and credit notes.
 
-**Authentication.** Send an API key as a bearer token: `Authorization: Bearer rok_…`. Create keys
+**Authentication.** Send an API key as a bearer token: `Authorization: Bearer tk_…`. Create keys
 in Settings → Integrations → API keys. HTTPS only.
 
 **Scopes.** `read` for every GET, `write` for the POSTs (write includes read), and `costs:read` to

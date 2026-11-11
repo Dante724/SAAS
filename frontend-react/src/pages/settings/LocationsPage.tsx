@@ -1,4 +1,6 @@
 import { useEffect, useMemo, useRef, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
+import { buttonClass } from "../../components/Button";
 import DateField from "../../components/DateField";
 import { M } from "../../components/Shell";
 import Switch from "../../components/Switch";
@@ -25,14 +27,76 @@ const PRESETS: [string, Hours][] = [
   ["Every day 10–7", Object.fromEntries(DAYS.map(([k]) => [k, { open: "10:00", close: "19:00" }]))],
 ];
 
-const COMMON_TZ = ["America/New_York", "America/Chicago", "America/Denver", "America/Phoenix", "America/Los_Angeles", "America/Anchorage",
-  "Pacific/Honolulu", "America/Toronto", "America/Winnipeg", "America/Edmonton", "America/Vancouver", "America/Halifax", "America/St_Johns"];
 function allZones(extra: string[]): string[] {
   let zones: string[] = [];
   try { zones = (Intl as any).supportedValuesOf?.("timeZone") || []; } catch { /* old browser */ }
+  // Chrome still lists some zones under their old names; show the names people search for.
+  const RENAMED: Record<string, string> = {
+    "Asia/Calcutta": "Asia/Kolkata", "Asia/Katmandu": "Asia/Kathmandu", "Asia/Saigon": "Asia/Ho_Chi_Minh",
+    "Asia/Rangoon": "Asia/Yangon", "Europe/Kiev": "Europe/Kyiv", "America/Godthab": "America/Nuuk",
+    "Pacific/Enderbury": "Pacific/Kanton", "Atlantic/Faeroe": "Atlantic/Faroe", "Pacific/Truk": "Pacific/Chuuk", "Pacific/Ponape": "Pacific/Pohnpei",
+  };
+  zones = zones.map((z) => RENAMED[z] || z);
   return Array.from(new Set([...zones, "UTC", ...extra.filter(Boolean)])).sort();
 }
 const tzLabel = (z: string) => z.replace(/_/g, " ").replace(/^America\//, "").replace(/^Pacific\//, "");
+
+// UTC offset of a zone right now, e.g. "UTC+5:30" (empty if the browser can't tell).
+function tzOffset(z: string): string {
+  try {
+    const p = new Intl.DateTimeFormat("en-US", { timeZone: z, timeZoneName: "shortOffset" }).formatToParts(new Date()).find((x) => x.type === "timeZoneName");
+    return (p?.value || "").replace(/^GMT/, "UTC").replace(/^UTC$/, "UTC+0");
+  } catch { return ""; }
+}
+
+// A searchable time zone picker: the browser's own list holds 400+ zones and is unusable.
+// Suggested zones (the company's, this location's, this computer's) come first.
+function TimezonePicker({ value, onChange, zones, suggested, warn }: { value: string; onChange: (z: string) => void; zones: string[]; suggested: string[]; warn: boolean }) {
+  const [open, setOpen] = useState(false);
+  const [q, setQ] = useState("");
+  const top = Array.from(new Set(suggested.filter(Boolean)));
+  const needle = q.trim().toLowerCase().replace(/\s+/g, "_");
+  const match = (z: string) => !needle || z.toLowerCase().includes(needle) || tzOffset(z).toLowerCase().includes(needle);
+  const list = (open ? zones.filter((z) => !top.includes(z) && match(z)) : []);
+  const pick = (z: string) => { onChange(z); setOpen(false); setQ(""); };
+  const row = (z: string) => (
+    <button key={z} type="button" role="option" aria-selected={z === value} onClick={() => pick(z)}
+      className={`w-full flex items-center gap-2 px-3 py-1.5 rounded-lg text-left text-xs ${z === value ? "bg-primary/[0.06] text-primary font-semibold" : "text-ink-primary hover:bg-slate-50"}`}>
+      <span className="flex-1 truncate">{z.replace(/_/g, " ")}</span>
+      <span className="text-2xs text-ink-tertiary tabular-nums">{tzOffset(z)}</span>
+      <M n="check" c={`text-xs ${z === value ? "" : "invisible"}`} />
+    </button>
+  );
+  return (
+    <div className="relative flex-shrink-0">
+      <button type="button" onClick={() => setOpen((o) => !o)} aria-haspopup="listbox" aria-expanded={open} aria-label="Time zone"
+        className={`inline-flex items-center gap-1 rounded-lg px-2 py-1 text-[11px] max-w-[190px] ${warn ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-ink-secondary hover:text-ink-primary"}`}>
+        <M n="public" c="text-[12px]" /><span className="truncate">{value.replace(/_/g, " ")}</span><M n="expand_more" c="text-xs" />
+      </button>
+      {open && (<>
+        <div className="fixed inset-0 z-30" aria-hidden="true" onClick={() => { setOpen(false); setQ(""); }} />
+        <div className="absolute right-0 top-full mt-1.5 z-40 w-80 bg-white rounded-2xl border border-slate-200/90 shadow-drawer p-1.5"
+          onKeyDown={(e) => { if (e.key === "Escape") { setOpen(false); setQ(""); } }}>
+          <div className="relative p-1">
+            <M n="search" c="absolute left-3.5 top-1/2 -translate-y-1/2 text-sm text-ink-tertiary pointer-events-none" />
+            <input autoFocus value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search a city or offset (e.g. Kolkata, +5:30)" aria-label="Search time zones"
+              onKeyDown={(e) => { if (e.key === "Enter") { const first = [...top.filter(match), ...list][0]; if (first) pick(first); } }}
+              className="glass-input w-full h-9 pl-8 pr-3 rounded-xl text-sm" />
+          </div>
+          <div role="listbox" aria-label="Time zones" className="max-h-72 overflow-y-auto mt-1">
+            {top.filter(match).length > 0 && (<>
+              <p className="px-3 pt-1.5 pb-1 text-2xs font-semibold text-ink-tertiary">Suggested</p>
+              {top.filter(match).map(row)}
+              <div className="my-1 border-t border-slate-100" />
+            </>)}
+            {list.map(row)}
+            {top.filter(match).length + list.length === 0 && <p className="px-3 py-3 text-xs text-ink-tertiary">No time zone matches “{q}”.</p>}
+          </div>
+        </div>
+      </>)}
+    </div>
+  );
+}
 
 /** Local weekday key + "HH:MM" for a time zone, or null when the zone is unknown. */
 function nowIn(tz: string): { day: string; hm: string } | null {
@@ -203,16 +267,9 @@ function LocationDetail({ loc, companyTz, resources, onSaved, onResChanged, onCa
               <input value={f.phone} onChange={(e) => set("phone", e.target.value)} placeholder="Phone" aria-label="Phone" className={`${ghost} text-xs text-ink-secondary`} />
             </div>
           </div>
-          <label className="flex-shrink-0">
-            <span className="sr-only">Time zone</span>
-            <span className={`inline-flex items-center gap-1 rounded-lg pl-2 text-[11px] ${companyTz && f.timezone !== companyTz ? "bg-amber-50 text-amber-700" : "bg-slate-100 text-ink-secondary"}`}>
-              <M n="public" c="text-[12px]" />
-              <select value={f.timezone} onChange={(e) => set("timezone", e.target.value)} aria-label="Time zone" className="bg-transparent py-1 pr-1 outline-none text-[11px] max-w-[150px]">
-                <optgroup label="United States and Canada">{COMMON_TZ.map((z) => <option key={z} value={z}>{tzLabel(z)}</option>)}</optgroup>
-                <optgroup label="All time zones">{zones.map((z) => <option key={z} value={z}>{z.replace(/_/g, " ")}</option>)}</optgroup>
-              </select>
-            </span>
-          </label>
+          <TimezonePicker value={f.timezone} onChange={(z) => set("timezone", z)} zones={zones}
+            suggested={[companyTz || "", f.timezone, (() => { try { return Intl.DateTimeFormat().resolvedOptions().timeZone; } catch { return ""; } })()]}
+            warn={!!companyTz && f.timezone !== companyTz} />
         </div>
         {companyTz && f.timezone !== companyTz && (
           <div className="mt-2 text-[11px] text-amber-700">Your company uses {tzLabel(companyTz)}, so booking times here may be off. <button type="button" onClick={() => set("timezone", companyTz)} className="font-semibold underline">Use {tzLabel(companyTz)}</button></div>
@@ -294,10 +351,10 @@ function LocationDetail({ loc, companyTz, resources, onSaved, onResChanged, onCa
               </div>
               <div className="flex items-center gap-2">
                 <input value={nr.name} onChange={(e) => setNr({ ...nr, name: e.target.value })} onKeyDown={(e) => e.key === "Enter" && addRes()} placeholder="Lift 1, Bench 2, Room A" aria-label="Bay or room name" className={inp} />
-                <select value={nr.kind} onChange={(e) => setNr({ ...nr, kind: e.target.value })} aria-label="Kind" className="glass-input rounded-xl px-3 py-2 text-sm">
+                <TeklySelect value={nr.kind} onChange={(e) => setNr({ ...nr, kind: e.target.value })} aria-label="Kind" className="glass-input rounded-xl px-3 py-2 text-sm">
                   {[["bay", "Bay / lift"], ["room", "Room"], ["equipment", "Equipment"], ["other", "Other"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                </select>
-                <button onClick={addRes} disabled={!nr.name.trim()} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90 disabled:opacity-50">Add</button>
+                </TeklySelect>
+                <button onClick={addRes} disabled={!nr.name.trim()} className={buttonClass("primary", "md")}>Add</button>
               </div>
             </>)}
           </div>
@@ -306,9 +363,9 @@ function LocationDetail({ loc, companyTz, resources, onSaved, onResChanged, onCa
           <div className="sm:col-span-2 rounded-xl border border-slate-200 p-4 space-y-3">
             <div className="grid sm:grid-cols-2 gap-3">
               <label className="block"><span className="block text-sm font-medium text-ink-primary mb-1.5">Invoices are from</span>
-                <select value={f.legal_entity_id || ""} onChange={(e) => set("legal_entity_id", e.target.value)} className={inp}><option value="">Company default</option>{legals.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></label>
+                <TeklySelect value={f.legal_entity_id || ""} onChange={(e) => set("legal_entity_id", e.target.value)} className={inp}><option value="">Company default</option>{legals.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</TeklySelect></label>
               <label className="block"><span className="block text-sm font-medium text-ink-primary mb-1.5">Price level</span>
-                <select value={f.price_type_id || ""} onChange={(e) => set("price_type_id", e.target.value)} className={inp}><option value="">Company default</option>{priceTypes.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</select></label>
+                <TeklySelect value={f.price_type_id || ""} onChange={(e) => set("price_type_id", e.target.value)} className={inp}><option value="">Company default</option>{priceTypes.map((x) => <option key={x.id} value={x.id}>{x.name}</option>)}</TeklySelect></label>
             </div>
             <label className="block"><span className="block text-sm font-medium text-ink-primary mb-1.5">Line at the top of receipts</span>
               <input value={f.receipt_header} onChange={(e) => set("receipt_header", e.target.value)} placeholder="Thanks for visiting our Downtown shop!" className={inp} /></label>
@@ -318,11 +375,11 @@ function LocationDetail({ loc, companyTz, resources, onSaved, onResChanged, onCa
 
       {err && <div className="mx-5 mb-4 rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
       <div className="px-5 py-3.5 border-t border-slate-100 flex items-center gap-2">
-        {loc?.id && <button onClick={archive} className="px-3 py-2 rounded-xl text-xs font-semibold text-ink-tertiary hover:text-rose-600 hover:bg-rose-50">Archive location</button>}
-        {isNew && <button onClick={onCancelNew} className="px-3 py-2 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>}
-        <span className="ml-auto text-[11px] text-ink-tertiary">{dirty && !isNew ? "Unsaved changes" : ""}</span>
+        <button onClick={save} disabled={busy || !dirty} className={buttonClass("primary", "md")}>{busy ? "Saving…" : isNew ? "Add location" : "Save"}</button>
         {!isNew && dirty && <button onClick={() => { const i = JSON.parse(orig.current); setF(i[0]); setWh(i[1]); setDay(null); }} className="px-3 py-2 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Discard</button>}
-        <button onClick={save} disabled={busy || !dirty} className="px-5 py-2 rounded-xl bg-ink-primary text-white font-semibold text-xs hover:opacity-90 disabled:opacity-40">{busy ? "Saving…" : isNew ? "Add location" : "Save"}</button>
+        {isNew && <button onClick={onCancelNew} className="px-3 py-2 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>}
+        <span className="text-[11px] text-ink-tertiary">{dirty && !isNew ? "Unsaved changes" : ""}</span>
+        {loc?.id && <button onClick={archive} className="ml-auto px-3 py-2 rounded-xl text-xs font-semibold text-ink-tertiary hover:text-rose-600 hover:bg-rose-50">Archive location</button>}
       </div>
     </section>
   );

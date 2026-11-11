@@ -22,6 +22,7 @@ class _Periodic:
     name: str
     interval_s: float
     fn: Callable[[], Awaitable[None]]
+    delay_first: bool = False   # wait one interval before the first run (not at every boot)
 
 
 @dataclass
@@ -31,10 +32,14 @@ class JobRunner:
     _running: bool = False
     _periodic_handles: list = field(default_factory=list)
 
-    def every(self, interval_s: float, name: str):
-        """Decorator to register a periodic coroutine: @job_runner.every(60, 'sweep')."""
+    def every(self, interval_s: float, name: str, *, delay_first: bool = False):
+        """Decorator to register a periodic coroutine: @job_runner.every(60, 'sweep').
+
+        Periodics run once at start, then every `interval_s`. `delay_first=True` waits one interval
+        before the first run instead: for heavy daily jobs that must not run on every deploy or
+        worker restart."""
         def deco(fn: Callable[[], Awaitable[None]]):
-            self._periodics.append(_Periodic(name=name, interval_s=interval_s, fn=fn))
+            self._periodics.append(_Periodic(name=name, interval_s=interval_s, fn=fn, delay_first=delay_first))
             return fn
         return deco
 
@@ -65,6 +70,8 @@ class JobRunner:
                 await asyncio.sleep(delay)
 
     async def _periodic_loop(self, p: _Periodic):
+        if p.delay_first:
+            await asyncio.sleep(p.interval_s)
         while self._running:
             try:
                 await run_exclusive(p.name, p.fn)

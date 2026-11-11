@@ -25,7 +25,7 @@ permissions:
 jobs:
   lint-migrations:
     runs-on: ubuntu-latest
-    timeout-minutes: 10
+    timeout-minutes: 15
     if: github.event_name != 'pull_request' || !github.event.pull_request.draft
     env:
       ENVIRONMENT: test
@@ -48,6 +48,13 @@ jobs:
         # migration (e.g. a duplicate index, or SQLite-incompatible batch DDL) before it reaches a
         # production deploy, where the app runs migrations rather than create_all.
         run: alembic -c backend/alembic.ini upgrade head
+      - name: Shop-clock subset with the server far from UTC
+        # Memberships and money dates must follow the shop's day, not the server's (council Q2).
+        # Between them the two zones are off the UTC date at every hour of the day.
+        run: |
+          S="backend/tests/test_shop_clock_memberships.py backend/tests/test_memberships.py backend/tests/test_shop_timezone_today.py backend/tests/test_billing.py"
+          TZ=Pacific/Kiritimati pytest -q -n auto $S
+          TZ=Pacific/Pago_Pago pytest -q -n auto $S
 
   test:
     # The suite is split into parallel shards (whole files, balanced by test count — see the
@@ -189,6 +196,10 @@ jobs:
         run: |
           python -m pip install --upgrade pip
           pip install --require-hashes -r requirements-dev.lock
+      - name: Postgres 16 client tools
+        # pg_dump/pg_restore for the restore drill and its tests (the server is Postgres 16; an
+        # older client refuses to dump it).
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq postgresql-client-16
       - name: Migrations from scratch on Postgres
         # Once, not per shard. Separate database so the migration run never collides with the
         # suite's create_all.
@@ -198,6 +209,13 @@ jobs:
         run: |
           psql -h localhost -U repairos -d repairos_test -c "CREATE DATABASE repairos_mig"
           alembic -c backend/alembic.ini upgrade head
+      - name: Restore drill on the migrated database
+        # Dump it, restore it into a scratch database, and check version, row counts and the
+        # integrity sweep (scripts/restore_drill.py; DEPLOY.md section 4).
+        if: ${{ matrix.shard == 1 }}
+        env:
+          DATABASE_URL: postgresql+asyncpg://repairos:repairos@localhost:5432/repairos_mig
+        run: python scripts/restore_drill.py
       - name: Test suite on Postgres (this shard)
         # Parallel: each worker works in its own database (repairos_test_<run>_gwN) on this server.
         env:
@@ -253,6 +271,8 @@ jobs:
         run: npx tsc --noEmit
       - name: UI-text lint (no raw snake_case in labels)
         run: npm run lint:uitext
+      - name: Design drift check (no new hand-made buttons, tabs, colours or sizes)
+        run: npm run lint:design
       - name: Unit tests + coverage floor (Vitest)
         run: npm run test:coverage
       - name: Upload frontend coverage report

@@ -1,6 +1,9 @@
 import { humanize } from "../../lib/humanize";
+import TeklySelect from "../../components/TeklySelect";
 import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
+import Tabs from "../../components/Tabs";
+import EmptyState from "../../components/EmptyState";
 import { useMe, hasFeature } from "../../context/Me";
 import { api } from "../../api/client";
 import { BARCODE_TYPES, barcodeTypeLabel, sortBarcodes } from "../../lib/barcodes";
@@ -24,13 +27,15 @@ import { loadFailed } from "../../lib/notice";
 import Switch from "../../components/Switch";
 import { sectionCard } from "../../components/Section";
 import { fitWithin } from "../../go/lib/photos";
+import { buttonClass } from "../../components/Button";
+import { Badge } from "../../components/Card";
 
 export type DrawerKind = "product" | "service" | "asset" | "bundle";
 type Props = { kind: DrawerKind; id?: string | null; initial?: any; onClose: () => void; onSaved?: () => void };
 
 const BREADCRUMB: Record<DrawerKind, string> = { product: "Inventory › Stock", service: "Catalog › Services", asset: "Inventory › Devices & assets", bundle: "Catalog › Job kits" };
 const lbl = "block font-semibold text-ink-secondary mb-1";
-const field = "glass-input w-full px-3 py-2 rounded-xl text-ink-primary text-xs";
+const field = "glass-input w-full h-9 px-3 rounded-xl text-ink-primary text-sm";
 
 type ProdTab = "details" | "stock" | "units" | "movements" | "purchasing" | "batches";
 type Movement = { type: string; qty: number; at?: string; ref_type?: string; ref_id?: string; location?: string; unit_cost?: number };
@@ -300,17 +305,14 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                 <p className="text-[11px] text-ink-tertiary font-mono truncate">{p.sku || p.code}{p.barcode ? ` · ${p.barcode}` : ""}</p>
               )}
             </div>
-            {kind === "product" && editing && p.low_stock && <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-rose-100 text-rose-800 border border-rose-200 shrink-0">Low stock</span>}
+            {kind === "product" && editing && p.low_stock && <Badge tone="danger" size="sm" className="shrink-0">Low stock</Badge>}
           </div>
           <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary hover:text-ink-primary shrink-0"><M n="close" c="text-base" /></button>
         </div>
 
         {kind === "product" && editing && (
-          <nav className="px-6 border-b border-slate-200 flex gap-6 text-xs font-semibold bg-slate-50/70">
-            {(([["details", "Details"], ["stock", "Stock"], ...(p.serialized ? [["units", "Units"]] : []), ["batches", "Batches"], ["movements", "Movements"], ["purchasing", "Purchasing"]] as [ProdTab, string][]).filter(([t]) => stockTabs || t === "details")).map(([t, label]) => (
-              <button key={t} onClick={() => setPtab(t)} className={`py-3 border-b-2 transition-colors ${ptab === t ? "text-primary border-primary font-bold" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{label}</button>
-            ))}
-          </nav>
+          <Tabs look="underline" label="Product sections" className="px-6 bg-slate-50/70" value={ptab} onChange={setPtab}
+            tabs={(([["details", "Details"], ["stock", "Stock"], ...(p.serialized ? [["units", "Units"]] : []), ["batches", "Batches"], ["movements", "Movements"], ["purchasing", "Purchasing"]] as [ProdTab, string][]).filter(([t]) => stockTabs || t === "details")).map(([id, label]) => ({ id, label }))} />
         )}
 
         <div className="flex-1 overflow-y-auto p-6 space-y-5 text-xs">
@@ -318,8 +320,10 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
             <div className={`grid ${seeCost ? "grid-cols-4" : "grid-cols-2"} gap-2.5`}>
               {([["Available", (p.qty_available ?? 0), p.low_stock ? "text-rose-600" : "text-ink-primary"],
                 ["Reserved", (p.qty_reserved ?? 0), "text-ink-primary"],
-                ...(seeCost ? [["Avg cost", money(p.avg_cost ?? p.cost_price ?? 0), "text-ink-primary"],
-                  ["Stock value", money((p.qty_available ?? 0) * Number(p.avg_cost ?? p.cost_price ?? 0)), "text-ink-primary"]] : [])] as [string, any, string][]).map(([l, v, c]) => (
+                // An average cost of 0 means "not worked out yet" (stock added without a receipt), so use
+                // the product's cost like the server's own pricing and the Stock tab do.
+                ...(seeCost ? [["Avg cost", money(Number(p.avg_cost) || Number(p.cost_price) || 0), "text-ink-primary"],
+                  ["Stock value", money((p.qty_available ?? 0) * (Number(p.avg_cost) || Number(p.cost_price) || 0)), "text-ink-primary"]] : [])] as [string, any, string][]).map(([l, v, c]) => (
                 <div key={l as string} className="bg-white rounded-xl p-3 border border-slate-200/90 shadow-sm">
                   <span className="text-[11px] font-bold text-ink-tertiary block">{l}</span>
                   <p className={`text-lg font-bold tabular-nums truncate ${c}`}>{v}</p>
@@ -389,18 +393,18 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                             className="ml-auto w-6 h-6 rounded-md grid place-items-center text-ink-tertiary hover:bg-rose-50 hover:text-rose-600 disabled:opacity-50"><M n="close" c="text-sm" /></button>
                         </li>
                       ))}
-                      {codes.length === 0 && <li className="text-[11px] text-ink-tertiary">No barcode yet.</li>}
+                      {codes.length === 0 && <li><EmptyState size="inline" title="No barcode yet." /></li>}
                     </ul>
                   )}
                   <div className="mt-1.5 flex items-center gap-2">
                     <input value={newCode} onChange={(e) => setNewCode(e.target.value)} maxLength={100} aria-label="Add a barcode"
                       onKeyDown={(e) => { if (e.key === "Enter") { e.preventDefault(); addCode(); } }}
                       placeholder="Scan or type another barcode" className={`${field} font-mono`} />
-                    <select value={newType} onChange={(e) => setNewType(e.target.value)} aria-label="Barcode type"
+                    <TeklySelect value={newType} onChange={(e) => setNewType(e.target.value)} aria-label="Barcode type"
                       className={`${field} w-auto appearance-none`}>
                       <option value="">Any type</option>
                       {BARCODE_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
-                    </select>
+                    </TeklySelect>
                     <ScanButton title="Scan a barcode" onScan={(c) => addCode(c)} />
                     <button type="button" onClick={() => addCode()} disabled={codeBusy || !newCode.trim()}
                       className="px-2.5 py-2 rounded-lg border border-slate-200 hover:bg-slate-50 text-ink-secondary text-xs font-medium disabled:opacity-50 whitespace-nowrap">Add</button>
@@ -411,7 +415,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
             {/* Built-in and custom fields in the order set in Settings → Forms → Customize. */}
             <LayoutFields layout={layout} gap="gap-x-3 gap-y-4" blocks={{
               category: { half: true, el: <div><label className={lbl}>Category{star("category")}</label><CategoryPicker entity="product" value={p.category_id} onChange={(id) => set("category_id", id)} /></div> },
-              description: { el: <div><label className={lbl}>Description{star("description")}</label><textarea value={p.description || ""} onChange={(e) => set("description", e.target.value)} className={`${field} h-20 resize-none`} placeholder="Optional details..." /></div> },
+              description: { el: <div><label className={lbl}>Description{star("description")}</label><textarea value={p.description || ""} onChange={(e) => set("description", e.target.value)} className="glass-input w-full px-3 py-2 rounded-xl text-ink-primary text-sm h-20 resize-none" placeholder="Optional details..." /></div> },
               code: { half: true, el: <div><label className={lbl}>Code{star("code")}</label><input value={p.code || ""} onChange={(e) => set("code", e.target.value)} className={`${field} font-mono`} /></div> },
               sku: { half: true, el: <div><label className={lbl}>SKU{star("sku")}</label><input value={p.sku || ""} onChange={(e) => set("sku", e.target.value)} className={`${field} font-mono`} /></div> },
               mpn: { half: true, el: <div><label htmlFor="prod-mpn" className={lbl}>MPN{star("mpn")} <span className="font-normal text-ink-tertiary">(manufacturer part number)</span></label><input id="prod-mpn" value={p.mpn || ""} maxLength={64} onChange={(e) => set("mpn", e.target.value)} className={`${field} font-mono`} /></div> },
@@ -426,7 +430,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
               pricing: { el: <>
                 <div className={`${sectionCard} p-4 space-y-3`}>
                   <div className="flex items-center justify-between"><span className="text-[11px] font-bold text-ink-primary">{seeCost ? "Pricing & margin" : "Pricing"}</span>
-                    {seeCost && <span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${margin < 0 ? "bg-rose-50 text-rose-700" : "bg-slate-100 text-ink-secondary"}`}>Margin {margin}%</span>}</div>
+                    {seeCost && <Badge tone={margin < 0 ? "danger" : "neutral"} size="sm">Margin {margin}%</Badge>}</div>
                   <div className="grid grid-cols-2 gap-3">
                     {seeCost && <div><label htmlFor="prod-cost" className={lbl}>Cost price ({currencySymbol()})</label><input id="prod-cost" type="number" min={0} value={p.cost_price ?? 0} onChange={(e) => set("cost_price", e.target.value)} className={`${field} font-mono font-bold bg-white`} /></div>}
                     <div><label htmlFor="prod-sell" className={lbl}>Store price ({currencySymbol()})</label><input id="prod-sell" type="number" min={0} value={p.sell_price ?? 0} onChange={(e) => set("sell_price", e.target.value)} className={`${field} font-mono font-bold bg-white`} /></div>
@@ -472,13 +476,13 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
               <div className="mb-3 rounded-2xl bg-slate-50/70 border border-slate-200/80 p-3.5 space-y-3">
                 <div className="grid grid-cols-2 gap-3">
                   <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Location</label>
-                    <div className="relative"><select value={adjLoc} onChange={(e) => setAdjLoc(e.target.value)} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-xl appearance-none">{locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select><M n="expand_more" c="absolute right-2 top-2 text-ink-tertiary pointer-events-none text-xs" /></div></div>
+                    <div className="relative"><TeklySelect value={adjLoc} onChange={(e) => setAdjLoc(e.target.value)} className="glass-input bg-none block w-full h-9 px-3 pr-8 text-sm font-semibold text-ink-primary rounded-xl appearance-none">{locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</TeklySelect><M n="expand_more" c="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary pointer-events-none text-sm" /></div></div>
                   <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Type</label>
-                    <div className="relative"><select value={adjType} onChange={(e) => setAdjType(e.target.value)} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-xl appearance-none"><option value="receive">Receive (+)</option><option value="writeoff">Write off (damaged or lost)</option><option value="adjust">Correction</option></select><M n="expand_more" c="absolute right-2 top-2 text-ink-tertiary pointer-events-none text-xs" /></div></div>
+                    <div className="relative"><TeklySelect value={adjType} onChange={(e) => setAdjType(e.target.value)} className="glass-input bg-none block w-full h-9 px-3 pr-8 text-sm font-semibold text-ink-primary rounded-xl appearance-none"><option value="receive">Receive (+)</option><option value="writeoff">Write off (damaged or lost)</option><option value="adjust">Correction</option></TeklySelect><M n="expand_more" c="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary pointer-events-none text-sm" /></div></div>
                 </div>
                 <div className="grid grid-cols-2 gap-3">
-                  <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Quantity</label><input type="number" value={adjQty} onChange={(e) => setAdjQty(e.target.value)} className="glass-input font-mono block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-xl" placeholder="0" /></div>
-                  <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Note</label><input value={adjNote} onChange={(e) => setAdjNote(e.target.value)} className="glass-input block w-full py-2 px-3 text-xs font-semibold text-ink-primary rounded-xl" placeholder="Reason (optional)" /></div>
+                  <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Quantity</label><input type="number" value={adjQty} onChange={(e) => setAdjQty(e.target.value)} className="glass-input font-mono block w-full h-9 px-3 text-sm font-semibold text-ink-primary rounded-xl" placeholder="0" /></div>
+                  <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">Note</label><input value={adjNote} onChange={(e) => setAdjNote(e.target.value)} className="glass-input block w-full h-9 px-3 text-sm font-semibold text-ink-primary rounded-xl" placeholder="Reason (optional)" /></div>
                 </div>
                 {adjNeedsSerials && (
                   <div className="space-y-1"><label className="block text-[11px] font-bold text-ink-tertiary">{adjType === "writeoff" ? "IMEI / serial of each unit written off" : "IMEI / serial of each unit"}</label>
@@ -486,13 +490,13 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                       ? <UnitSerials partId={id || ""} need={Math.floor(Number(adjQty))} value={adjSerials} onChange={setAdjSerials} label={p.name} />
                       : <SerialEntry value={adjSerials} onChange={setAdjSerials} target={Math.floor(Number(adjQty))} partId={id} />}</div>
                 )}
-                <div className="flex justify-end"><button type="button" onClick={submitAdjust} disabled={adjBusy} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{adjBusy ? "Saving…" : "Apply adjustment"}</button></div>
+                <div className="flex justify-end"><button type="button" onClick={submitAdjust} disabled={adjBusy} className={buttonClass("primary", "md")}>{adjBusy ? "Saving…" : "Apply adjustment"}</button></div>
               </div>
             )}
             {stock === null
               ? <p className="text-ink-tertiary">Loading stock…</p>
               : stock.items.length === 0
-                ? <p className="text-ink-tertiary">No stock at any location yet.</p>
+                ? <EmptyState size="inline" title="No stock at any location yet." />
                 : <div className="bg-white rounded-2xl border border-slate-200/90 shadow-sm overflow-hidden">
                     <div className="grid grid-cols-[1fr_auto_auto_auto_auto] gap-3 px-4 py-2.5 border-b border-slate-100 text-[11px] font-bold text-ink-tertiary"><span>Location · bin</span><span className="text-right">Reserved</span><span className="text-right">In stock</span><span className="text-right">Value</span><span className="w-12" /></div>
                     <div className="divide-y divide-slate-100">
@@ -568,7 +572,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
             moves === null
               ? <p className="text-ink-tertiary">Loading movements…</p>
               : moves.length === 0
-                ? <p className="text-ink-tertiary">No stock movements yet.</p>
+                ? <EmptyState size="inline" title="No stock movements yet." />
                 : (() => {
                     const shown = moves.filter((m) => mvFilter === "all" || (mvFilter === "in" ? m.qty >= 0 : m.qty < 0));
                     return <>
@@ -606,7 +610,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                 : <div className="divide-y divide-slate-100">
                     {pos.map((o) => (
                       <div key={o.id} className="px-4 py-2.5 flex items-center justify-between">
-                        <div><span className="font-bold text-ink-primary font-mono">{o.po_number || o.id.slice(0, 8)}</span><span className="ml-2 px-1.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-ink-secondary">{sentence(o.status)}</span></div>
+                        <div><span className="font-bold text-ink-primary font-mono">{o.po_number || o.id.slice(0, 8)}</span><Badge size="sm" className="ml-2">{sentence(o.status)}</Badge></div>
                         <div className="text-right text-ink-secondary"><span className="tabular-nums font-semibold">{o.qty_received ?? 0}/{o.qty_ordered ?? 0}</span><span className="text-ink-tertiary"> · exp {fmtDate(o.expected_at)}</span></div>
                       </div>
                     ))}
@@ -657,7 +661,7 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
               <div><label className={lbl}>Job kit name <span className="text-rose-500">*</span></label><input value={p.name || ""} onChange={(e) => set("name", e.target.value)} className={field} /></div>
               <div className="p-4 rounded-xl bg-slate-50/90 border border-slate-200/80 space-y-2.5">
                 <div className="text-[11px] font-bold text-ink-primary ">Services & products</div>
-                {comps.length === 0 && <p className="text-[11px] text-ink-tertiary">No items yet</p>}
+                {comps.length === 0 && <EmptyState size="inline" title="No items yet" />}
                 {comps.map((c: any, idx: number) => (
                   <div key={c.ref_id + idx} className="bg-white rounded-lg border border-slate-200/80 px-2.5 py-1.5 space-y-1">
                     <div className="flex items-center gap-2">
@@ -668,8 +672,8 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
                       <button type="button" onClick={() => removeComp(idx)} aria-label="Remove line" className="text-ink-tertiary hover:text-rose-600"><M n="close" c="text-sm" /></button>
                     </div>
                     {c.ref_type === "product" && (
-                      <button type="button" onClick={() => toggleVariant(idx)} className="flex items-center gap-1.5 text-[11px] font-semibold text-ink-tertiary hover:text-primary pl-0.5" title="At apply-time, swap this part for the one in its category that fits the work order's device">
-                        <M n={c.device_variant ? "check_box" : "check_box_outline_blank"} c={`text-[15px] ${c.device_variant ? "text-primary" : ""}`} />
+                      <button type="button" onClick={() => toggleVariant(idx)} className="flex items-center gap-1.5 text-2xs font-semibold text-ink-tertiary hover:text-primary pl-0.5" title="At apply-time, swap this part for the one in its category that fits the work order's device">
+                        <M n={c.device_variant ? "check_box" : "check_box_outline_blank"} c={` ${c.device_variant ? "text-primary" : ""}`} />
                         Auto-pick the part that fits the device
                       </button>
                     )}
@@ -691,10 +695,10 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
               <div className="grid grid-cols-2 gap-3">
                 <div>
                   <label className={lbl}>Pricing</label>
-                  <select value={p.price_mode || "sum"} onChange={(e) => set("price_mode", e.target.value)} className={field}>
+                  <TeklySelect value={p.price_mode || "sum"} onChange={(e) => set("price_mode", e.target.value)} className={field}>
                     <option value="sum">Sum of items</option>
                     <option value="fixed">Fixed kit price</option>
-                  </select>
+                  </TeklySelect>
                 </div>
                 <div>
                   <label className={lbl}>{(p.price_mode || "sum") === "fixed" ? `Kit price (${currencySymbol()})` : "Price (auto)"}</label>
@@ -707,9 +711,9 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
           })()}
         </div>
 
-        <div className="p-4 border-t border-slate-100 flex items-center justify-between bg-slate-50/70">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Cancel</button>
-          <button onClick={save} className="px-5 py-2 rounded-lg bg-primary text-white font-bold text-xs shadow-clay-sm hover:brightness-110">{footerLabel}</button>
+        <div className="p-4 border-t border-slate-100 flex items-center justify-start gap-2 bg-slate-50/70">
+          <button onClick={save} className={buttonClass("primary", "md")}>{footerLabel}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
         </div>
         {toast && <div className="absolute bottom-20 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2 rounded-xl shadow-clay-drawer z-20">{toast}</div>}
       </div>

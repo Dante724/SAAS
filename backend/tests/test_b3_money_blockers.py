@@ -7,14 +7,14 @@ cashbox balances and the P&L.
 Sign convention everywhere: client balance > 0 means the client owes the shop, < 0 means the
 shop holds the client's credit.
 """
-from datetime import date
-
 import httpx
 import pytest
 from sqlalchemy import select
 
 from backend.config import settings
 from backend.models import Invoice, Order, Payment
+from backend.services.dates import now_utc
+from backend.tests.shop_day import shop_today_for
 from backend.tests.test_opf_card_readers import (  # noqa: F401  (the stripe fixture is used by name)
     _charge,
     _reader,
@@ -187,7 +187,7 @@ async def test_till_counts_job_payments_as_money_in(client, tenant, db):
     oid = await _job(client, tenant, cid, 100)
     await _close(client, tenant, oid)
     await client.post(f"/api/cash/orders/{oid}/pay", json={"method": "cash", "account_id": cash}, headers=tenant)
-    s = (await client.get(f"/api/cash/transactions?summary=true&day={date.today().isoformat()}",
+    s = (await client.get(f"/api/cash/transactions?summary=true&day={await shop_today_for(client, tenant)}",
                           headers=tenant)).json()["summary"]
     assert s["today_in"] == pytest.approx(100) and s["today_out"] == 0
     assert s["income"] == pytest.approx(100) and s["expense"] == 0

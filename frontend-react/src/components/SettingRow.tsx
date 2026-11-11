@@ -23,7 +23,7 @@ export function SettingGroup({ icon, title, children }: { icon?: string; title: 
     <div className="px-6 py-5">
       <div className="mb-4 flex items-center gap-2">
         {icon && <M n={icon} c="text-base text-ink-tertiary" />}
-        <h3 className="text-xs font-semibold uppercase tracking-wide text-ink-tertiary">{title}</h3>
+        <h3 className="text-xs font-semibold text-ink-tertiary">{title}</h3>
       </div>
       <div className="divide-y divide-slate-100">{children}</div>
     </div>

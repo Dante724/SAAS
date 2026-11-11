@@ -2,6 +2,8 @@
 absurd one rejected), page with skip, and report the filtered total."""
 import pytest
 
+from backend.tests.shop_day import shop_today_for
+
 LISTS = ["/api/finance/invoices", "/api/assets", "/api/catalog/services",
          "/api/timeclock/entries", "/api/cash/transactions", "/api/clients"]
 
@@ -60,7 +62,7 @@ async def test_invoice_search_and_services_total_are_filtered(client, tenant):
 
 @pytest.mark.asyncio
 async def test_cash_summary_covers_every_row_not_just_the_page(client, tenant):
-    from datetime import date
+    from backend.services.dates import now_utc
     await client.post("/api/cash/accounts", json={"name": "Till", "payment_option": "cash"}, headers=tenant)
     accts = (await client.get("/api/cash/accounts", headers=tenant)).json()
     accts = accts.get("items", accts) if isinstance(accts, dict) else accts
@@ -69,7 +71,7 @@ async def test_cash_summary_covers_every_row_not_just_the_page(client, tenant):
         r = await client.post("/api/cash/transactions", json={"account_id": aid, "txn_type": kind, "amount": amt},
                               headers=tenant)
         assert r.status_code in (200, 201), r.text
-    r = (await client.get(f"/api/cash/transactions?account_id={aid}&limit=1&summary=true&day={date.today()}",
+    r = (await client.get(f"/api/cash/transactions?account_id={aid}&limit=1&summary=true&day={await shop_today_for(client, tenant)}",
                           headers=tenant)).json()
     assert len(r["items"]) == 1 and r["total"] >= 3
     s = r["summary"]

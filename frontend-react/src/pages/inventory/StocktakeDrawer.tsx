@@ -1,4 +1,5 @@
 import { useEffect, useRef, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { loadFailed } from "../../lib/notice";
 import { M } from "../../components/Shell";
 import SkeletonRows from "../../components/SkeletonRows";
@@ -7,6 +8,9 @@ import { api, openAuthedDoc } from "../../api/client";
 import { alertDialog, confirmDialog } from "../../lib/dialog";
 import { countRows } from "./countSheet";
 import type { Product } from "./types";
+import { buttonClass } from "../../components/Button";
+import { Badge } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 type StLine = { id: string; part_id: string; part_name: string; sku?: string | null; bin_id?: string | null; bin?: string | null;
   system_qty: number | null; counted_qty: number | null; variance: number | null; is_unknown?: boolean; serial_mismatch?: boolean; note?: string | null };
@@ -138,9 +142,9 @@ export default function StocktakeDrawer({ id, onClose, onDone }:
       <div className="relative w-[680px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h2 className="font-bold text-ink-primary flex items-center gap-2"><M n="fact_check" c="text-base text-primary" />{stId ? (posted ? "Stock take (posted)" : "Count in progress") : "New stock take"}
-            {sheet && !posted && <span className="px-2 py-0.5 rounded-full bg-amber-50 text-amber-700 border border-amber-200/70 text-[11px] font-bold">Draft</span>}
-            {sheet?.blind && <span className="px-2 py-0.5 rounded-full bg-slate-100 text-ink-secondary border border-slate-200 text-[11px] font-bold">Blind</span>}
-            {sheet?.by_bin && <span className="px-2 py-0.5 rounded-full bg-blue-50 text-primary border border-blue-100 text-[11px] font-bold">Bin by bin</span>}
+            {sheet && !posted && <Badge tone="warning" size="sm">Draft</Badge>}
+            {sheet?.blind && <Badge size="sm">Blind</Badge>}
+            {sheet?.by_bin && <Badge tone="info" size="sm">Bin by bin</Badge>}
           </h2>
           <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>
         </div>
@@ -150,7 +154,7 @@ export default function StocktakeDrawer({ id, onClose, onDone }:
           {!stId ? (
             <>
               <div><label className={lbl}>Location</label>
-                <select value={form.location_id} onChange={(e) => setForm({ ...form, location_id: e.target.value, bin_id: "" })} aria-label="Location" className={fld}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+                <TeklySelect value={form.location_id} onChange={(e) => setForm({ ...form, location_id: e.target.value, bin_id: "" })} aria-label="Location" className={fld}>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</TeklySelect></div>
               <div><label className={lbl}>What to count</label>
                 <div className="flex gap-2">
                   <button onClick={() => setForm({ ...form, scope: "all" })} className={choice(form.scope === "all")}>Whole location<span className="block font-normal text-ink-tertiary mt-0.5">Every product here.</span></button>
@@ -159,13 +163,13 @@ export default function StocktakeDrawer({ id, onClose, onDone }:
                 </div></div>
               {form.scope === "bin" && (
                 <div><label className={lbl}>Bin</label>
-                  <select value={form.bin_id} onChange={(e) => setForm({ ...form, bin_id: e.target.value })} aria-label="Bin to count" className={fld}>
-                    <option value="">Pick a bin…</option>{locBins.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</select></div>
+                  <TeklySelect value={form.bin_id} onChange={(e) => setForm({ ...form, bin_id: e.target.value })} aria-label="Bin to count" className={fld}>
+                    <option value="">Pick a bin…</option>{locBins.map((b) => <option key={b.id} value={b.id}>{b.name}</option>)}</TeklySelect></div>
               )}
               {form.scope === "category" && (
                 <div><label className={lbl}>Category</label>
-                  <select value={form.category_id} onChange={(e) => setForm({ ...form, category_id: e.target.value })} aria-label="Category to count" className={fld}>
-                    <option value="">Pick a category…</option>{cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</select></div>
+                  <TeklySelect value={form.category_id} onChange={(e) => setForm({ ...form, category_id: e.target.value })} aria-label="Category to count" className={fld}>
+                    <option value="">Pick a category…</option>{cats.map((c) => <option key={c.id} value={c.id}>{c.name}</option>)}</TeklySelect></div>
               )}
               <div><label className={lbl}>Count type</label>
                 <div className="flex gap-2">
@@ -208,7 +212,7 @@ export default function StocktakeDrawer({ id, onClose, onDone }:
               </div>
               <div className="rounded-xl border border-slate-200 overflow-hidden">
                 <table className="w-full text-left text-xs">
-                  <thead className="bg-slate-50/60 text-[11px] font-bold text-ink-tertiary"><tr>
+                  <thead><tr className={theadRowClass}>
                     <th className="py-2 px-3">Product</th>{showBin && <th className="py-2 px-3">Bin</th>}
                     <th className="py-2 px-3 text-right">Book</th><th className="py-2 px-3 text-right w-24">Counted</th><th className="py-2 px-3 text-right">Difference</th>
                   </tr></thead>
@@ -245,9 +249,9 @@ export default function StocktakeDrawer({ id, onClose, onDone }:
           )}
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
-          {!stId && <button onClick={start} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Starting…" : "Start count"}</button>}
-          {stId && !posted && !posting && <button onClick={() => setPosting(true)} disabled={busy || !sheet} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">Post count…</button>}
-          {stId && !posted && posting && <button onClick={post} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Posting…" : "Post and adjust stock"}</button>}
+          {!stId && <button onClick={start} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Starting…" : "Start count"}</button>}
+          {stId && !posted && !posting && <button onClick={() => setPosting(true)} disabled={busy || !sheet} className={buttonClass("primary", "md")}>Post count…</button>}
+          {stId && !posted && posting && <button onClick={post} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Posting…" : "Post and adjust stock"}</button>}
           <button onClick={posting ? () => setPosting(false) : stId && !posted ? onDone : onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">{posting ? "Back" : posted ? "Close" : stId ? "Save draft and close" : "Cancel"}</button>
           {stId && !posted && !posting && <button onClick={discard} className="ml-auto px-3 py-2 rounded-lg text-rose-600 hover:bg-rose-50 font-semibold text-xs">Discard draft</button>}
         </div>

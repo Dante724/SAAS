@@ -1,4 +1,6 @@
 import { askCancelReason, droppedStatus } from "../../lib/cancelReason";
+import TeklySelect from "../../components/TeklySelect";
+import { buttonClass } from "../../components/Button";
 import { PlanBanner, CheckoutOffer } from "../memberships/WOPlan";
 import RecommendationsPanel from "./RecommendationsPanel";
 import { DeferredWork, MarginNote, ReadyWhy, ServiceDue, TogetherChips } from "../../components/sense/Sense";
@@ -16,6 +18,8 @@ import { deliveryText, deliveryTone, flashDelivery, type Delivery, type Flash, t
 import PhotoAnnotator from "./PhotoAnnotator";
 import TagChips from "../../components/TagChips";
 import { M } from "../../components/Shell";
+import Tabs from "../../components/Tabs";
+import EmptyState from "../../components/EmptyState";
 import DateField from "../../components/DateField";
 import FloatingMenu from "../../components/FloatingMenu";
 import PrintMenu from "./PrintMenu";
@@ -37,6 +41,7 @@ import JobCardFields from "../../components/JobCardFields";
 import ReaderCharge from "../../components/ReaderCharge";
 import AccountPicker, { type PayAccount, type PaymentOption, accountsFor, pickDefaultAccount } from "../../components/AccountPicker";
 import CardPaymentsList from "../../components/CardPaymentsList";
+import { useCardReaders } from "../../lib/cardReaders";
 import LineQtyEditor from "./LineQtyEditor";
 import AutoPrintPicker from "../../components/AutoPrintPicker";
 import KitGroupHeader from "./KitGroupHeader";
@@ -48,6 +53,8 @@ import { binChoices, byLocation, needsBinChoice } from "../../lib/stockBins";
 import { loadFailed, saveFailed } from "../../lib/notice";
 import { clickable } from "../../lib/clickable";
 import { jobTypeLabel, type WOTypeRef } from "./jobType";
+import { Badge } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 type Emp = { id: string; name: string; in_managers?: boolean; in_assignees?: boolean };
 type Line = { id: string; kind?: string; line_type?: string; description?: string; qty?: number; unit_price?: number; discount?: number; discount_type?: string; technician_id?: string | null; work_share?: number; booked_hours?: number; co_technicians?: { employee_id: string; share: number }[]; total?: number; in_stock?: boolean; order_item_id?: string | null;
@@ -71,8 +78,8 @@ type Timing = {
 type Tab = "general" | "services" | "checklists" | "invoices" | "activity";
 
 // House button and input looks, shared across the drawer.
-const btnPrimary = "h-9 px-3.5 rounded-xl text-xs font-semibold bg-primary text-white hover:brightness-110 transition-all disabled:bg-slate-200 disabled:text-ink-tertiary disabled:hover:brightness-100 inline-flex items-center gap-1.5";
-const btnSecondary = "h-9 px-3.5 rounded-xl text-xs font-semibold bg-white text-ink-primary border border-slate-200 hover:bg-slate-50 transition-colors disabled:opacity-50 inline-flex items-center gap-1.5";
+const btnPrimary = buttonClass("primary", "md");
+const btnSecondary = buttonClass("secondary", "md");
 const btnGhost = "h-9 px-3.5 rounded-xl text-xs font-semibold text-ink-secondary hover:bg-slate-100 transition-colors";
 const houseInput = "glass-input rounded-xl px-3 py-2 text-sm";
 const menuRow = "w-full flex items-center gap-2.5 px-2.5 py-2 rounded-lg text-left hover:bg-slate-50";
@@ -369,9 +376,9 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   // 144dd — tab badges reflect real state (no always-on dots). Amber Checklists dot only when a
   // required checklist item is still undone; red Activity count only when a customer message is unread.
   const unread = Number((d as any).client_msg_unread || 0);
-  const ALL_TABS: { id: Tab; label: string; badge?: string; dot?: string }[] = [
+  const ALL_TABS: { id: Tab; label: string; count?: number | null; badge?: string; dot?: string }[] = [
     { id: "general", label: "General info" },
-    { id: "services", label: `Services & products${d.lines?.length ? ` (${d.lines.length})` : ""}` },
+    { id: "services", label: "Services & products", count: d.lines?.length || null },
     { id: "checklists", label: "Checklists", dot: (d as any).checklists_pending ? "bg-amber-500" : undefined },
     { id: "invoices", label: "Invoices & payments", badge: (d as any).payment_due ? "Due" : undefined },
     { id: "activity", label: "Activity", badge: (unread > 0 && tab !== "activity") ? String(unread) : undefined },
@@ -394,14 +401,14 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
             <StatusControl statuses={statuses} currentKey={d.status} elapsedMin={timing?.elapsed_min}
               isEstimate={isEst} onChange={changeStatus} />
             {urgent && (
-              <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200 flex items-center gap-1.5">
-                <span className="w-1.5 h-1.5 rounded-full bg-rose-500" />{(d.priority ?? 0) >= 2 ? "Urgent" : "High priority"}
-              </span>
+              <Badge tone="danger" size="sm" dot>
+                {(d.priority ?? 0) >= 2 ? "Urgent" : "High priority"}
+              </Badge>
             )}
             {!!(d as any).estimate_approved_at && (
-              <span className="px-2 py-0.5 rounded-full text-[11px] font-semibold bg-emerald-50 text-emerald-700 ring-1 ring-inset ring-emerald-200 flex items-center gap-1">
+              <Badge tone="success" size="sm" className="gap-1">
                 <M n="check" c="text-xs" />Customer approved
-              </span>
+              </Badge>
             )}
           </div>
           <div className="flex items-center gap-1.5 ml-auto">
@@ -577,16 +584,15 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
         {isEst && <EstimateTerms orderId={order.id} d={d as any} onChanged={() => { reload(); onChanged?.(); }} onFlash={flash} />}
 
         {/* Tabs */}
-        <nav className="px-4 sm:px-6 border-b border-slate-200/80 flex space-x-6 text-xs font-medium bg-white flex-shrink-0 overflow-x-auto whitespace-nowrap">
-          {TABS.map((t) => (
-            <button key={t.id} onClick={() => setTab(t.id)}
-              className={`py-3 border-b-2 transition-colors flex items-center gap-1.5 ${tab === t.id ? "text-ink-primary border-primary font-semibold" : "text-ink-secondary hover:text-ink-primary border-transparent"}`}>
+        <Tabs look="underline" label="Work order sections" className="px-4 sm:px-6 border-slate-200/80 bg-white flex-shrink-0" value={tab} onChange={setTab}
+          tabs={TABS.map((t) => ({
+            id: t.id, count: t.count,
+            label: <>
               <span>{t.label}</span>
               {t.badge && <span className="text-[11px] bg-rose-100 text-rose-700 px-1.5 rounded-full tabular-nums font-semibold">{t.badge}</span>}
               {t.dot && <span role="img" aria-label="Checklist incomplete" title="Checklist incomplete" className={`w-2 h-2 rounded-full ${t.dot}`} />}
-            </button>
-          ))}
-        </nav>
+            </>,
+          }))} />
 
         {/* Body */}
         <div className="flex-1 overflow-y-auto p-6 bg-slate-50/70 space-y-6">
@@ -598,7 +604,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                     <div className={`w-9 h-9 rounded-xl grid place-items-center ${urgent ? "bg-rose-50 text-rose-600" : "bg-primary/10 text-primary"}`}><M n="schedule" c="text-base" /></div>
                     <div>
                       <p className="text-sm font-semibold text-ink-primary">{urgent ? ((d.priority ?? 0) >= 2 ? "Urgent job, same day" : "High priority job") : "Booked job"}</p>
-                      <p className="text-xs text-ink-secondary">{[d.scheduled_for ? `Booked for ${friendlyDate(d.scheduled_for)}` : null, d.due_at ? `due ${fmtDT(d.due_at)}` : null].filter(Boolean).join(" · ") || "Being tracked"}</p>
+                      <p className="text-xs text-ink-secondary">{[d.scheduled_for ? `Booked for ${(friendlyDate(d.scheduled_for) || "").replace(/^(Today|Yesterday|Tomorrow)\b/, (w) => w.toLowerCase())}` : null, d.due_at ? `due ${fmtDT(d.due_at)}` : null].filter(Boolean).join(" · ") || "Being tracked"}</p>
                     </div>
                   </div>
                   {due ? <span className={`text-[11px] font-semibold px-2.5 py-1 rounded-full ${due[1] ? "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200" : "bg-slate-100 text-ink-secondary"}`}>{due[0]}</span>
@@ -699,7 +705,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                   <Ro label="Due">
                     <ReadOnly>
                       <span className={due?.[1] ? "text-rose-700 font-medium" : d.due_at ? "" : "text-ink-tertiary"}>{d.due_at ? fmtDT(d.due_at) : "No due date"}</span>
-                      {due && <span className={`ml-2 px-2 py-0.5 rounded-full text-[11px] font-semibold ${due[1] ? "bg-rose-50 text-rose-700 ring-1 ring-inset ring-rose-200" : "bg-slate-100 text-ink-secondary"}`}>{due[0]}</span>}
+                      {due && <Badge tone={due[1] ? "danger" : "neutral"} size="sm" className="ml-2">{due[0]}</Badge>}
                     </ReadOnly>
                   </Ro>
                 </div>
@@ -761,17 +767,17 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
           )}
         </div>
 
-        {/* Footer: print on the left; close and save on the right (the drawer convention) */}
+        {/* Footer: save and close first, on the left (the drawer convention); print and signature on the right */}
         <footer className="px-6 py-3.5 border-t border-slate-200/90 bg-white flex flex-wrap items-center justify-between gap-3 flex-shrink-0">
-          <div className="flex flex-wrap items-center gap-2">
+          <div className="flex items-center gap-2">
+            <button onClick={saveAndClose} disabled={saving} className={`${btnPrimary} shadow-clay-sm`}><M n="check" c="text-sm" />{saving ? "Saving…" : "Save and close"}</button>
+            <button onClick={tryClose} className={btnSecondary}>Close</button>
+          </div>
+          <div className="ml-auto flex flex-wrap items-center gap-2">
             <PrintMenu key={order.id} orderId={order.id} status={d.status} canInvoices={can("can_view_invoices")} onSticker={printWO}
               onItemised={hasKit && can("can_print_itemised_copy") ? printItemised : undefined} itemisedType={(order as any).is_estimate ? "estimate" : "work_order"}
               autoPrint={(order as any).is_estimate ? undefined : { canChange: can("can_manage_settings") }} onError={flash} />
             <button onClick={() => setSigOpen(true)} className={btnSecondary}><M n="draw" c="text-sm" />{d.signature ? "Sign again" : "Customer signature"}</button>
-          </div>
-          <div className="flex items-center gap-2">
-            <button onClick={tryClose} className={btnSecondary}>Close</button>
-            <button onClick={saveAndClose} disabled={saving} className={`${btnPrimary} shadow-clay-sm`}><M n="check" c="text-sm" />{saving ? "Saving…" : "Save and close"}</button>
           </div>
         </footer>
 
@@ -928,16 +934,16 @@ function JobItems({ orderId, onFlash, onChanged }: { orderId: string; onFlash: (
         <div className="px-4 py-3 bg-slate-50/70 border-b border-slate-100 space-y-2">
           <div className="flex flex-wrap gap-2">
             {cands.length > 0 && (
-              <select value={pickAsset} onChange={(e) => { setPickAsset(e.target.value); if (e.target.value) setLabel(""); }} aria-label="Customer's item" className="glass-input rounded-lg px-2 py-2 text-xs font-medium min-w-[200px]">
+              <TeklySelect value={pickAsset} onChange={(e) => { setPickAsset(e.target.value); if (e.target.value) setLabel(""); }} aria-label="Customer's item" className="glass-input rounded-lg px-2 py-2 text-xs font-medium min-w-[200px]">
                 <option value="">Pick one of the customer's items…</option>
                 {cands.map((a) => <option key={a.id} value={a.id}>{[a.brand, a.model].filter(Boolean).join(" ") || "Item"}{a.serial ? ` · ${a.serial}` : ""}</option>)}
-              </select>
+              </TeklySelect>
             )}
             <input value={label} onChange={(e) => { setLabel(e.target.value); if (e.target.value) setPickAsset(""); }} placeholder={cands.length ? "Or type what it is" : "Makita grinder"} aria-label="Item name" className="glass-input flex-1 min-w-[180px] rounded-lg px-3 py-2 text-xs" />
           </div>
           <textarea value={complaint} onChange={(e) => setComplaint(e.target.value)} rows={2} placeholder="What's wrong with it?" aria-label="Problem" className="glass-input w-full rounded-lg px-3 py-2 text-xs" />
           <div className="flex gap-2">
-            <button onClick={add} disabled={!pickAsset && !label.trim()} className="px-3.5 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-40">Add item</button>
+            <button onClick={add} disabled={!pickAsset && !label.trim()} className={buttonClass("primary", "sm")}>Add item</button>
             <button onClick={() => setAdding(false)} className="px-3 py-1.5 rounded-lg text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>
           </div>
         </div>
@@ -1037,11 +1043,11 @@ function Ro({ label, children }: { label: string; children: React.ReactNode }) {
 function Pick({ value, opts, onChange, label, red }: { value: string; opts: { value: string; label: string }[]; onChange: (v: string) => void; label: string; red?: boolean }) {
   return (
     <div className="relative">
-      <select value={value} onChange={(e) => onChange(e.target.value)} aria-label={label}
-        className={`glass-input w-full py-2 px-3 pr-8 text-xs rounded-xl appearance-none ${red ? "font-semibold text-rose-700" : "font-medium text-ink-primary"}`}>
+      <TeklySelect value={value} onChange={(e) => onChange(e.target.value)} aria-label={label}
+        className={`glass-input bg-none w-full h-9 px-3 pr-8 text-sm rounded-xl appearance-none ${red ? "font-semibold text-rose-700" : "font-medium text-ink-primary"}`}>
         {opts.map((o) => <option key={o.value} value={o.value}>{o.label}</option>)}
-      </select>
-      <M n="expand_more" c="absolute right-2.5 top-2.5 text-ink-tertiary pointer-events-none text-sm" />
+      </TeklySelect>
+      <M n="expand_more" c="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary pointer-events-none text-sm" />
     </div>
   );
 }
@@ -1053,11 +1059,11 @@ function SelEmp({ value, emps, onChange, label }: { value: string; emps: Emp[]; 
   return (
     <div className="relative">
       <span className="absolute left-2 top-1/2 -translate-y-1/2 pointer-events-none"><Avatar name={emps.find((e) => e.id === value)?.name} size={22} /></span>
-      <select value={value} onChange={(e) => onChange(e.target.value)} aria-label={label} className="glass-input w-full py-2 pl-9 pr-3 text-xs font-medium text-ink-primary rounded-xl appearance-none">
+      <TeklySelect value={value} onChange={(e) => onChange(e.target.value)} aria-label={label} className="glass-input bg-none w-full h-9 pl-9 pr-8 text-sm font-medium text-ink-primary rounded-xl appearance-none">
         <option value="">Unassigned</option>
         {emps.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
-      </select>
-      <M n="expand_more" c="absolute right-2.5 top-2.5 text-ink-tertiary pointer-events-none text-sm" />
+      </TeklySelect>
+      <M n="expand_more" c="absolute right-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary pointer-events-none text-sm" />
     </div>
   );
 }
@@ -1261,13 +1267,14 @@ function CustomLineForm({ orderId, forItem, kitId, onFlash, onClose, onAdded }: 
   const [price, setPrice] = useState(""); const [cost, setCost] = useState("");
   const [save, setSave] = useState(false); const [sku, setSku] = useState(""); const [barcode, setBarcode] = useState("");
   const [busy, setBusy] = useState(false);
+  const lineKey = useRef(idempotencyKey());   // council M13: a retried add lands once
   const canSave = type === "product" ? can("can_create_products") : can("can_edit_labors");
   const canCost = can("can_set_cost_price");
   async function submit() {
     if (!name.trim()) { onFlash("Give the item a name"); return; }
     setBusy(true);
     try {
-      const r = await api.post<any>(`/orders/${orderId}/lines`, {
+      const r = await api.postOnce<any>(`/orders/${orderId}/lines`, {
         description: name.trim(), kind: "custom", line_type: type === "product" ? "part" : "labour",
         qty, unit_price: Number(price) || 0, ...(canCost ? { cost_price: Number(cost) || 0 } : {}),
         ...(forItem ? { order_item_id: forItem } : {}),
@@ -1275,7 +1282,8 @@ function CustomLineForm({ orderId, forItem, kitId, onFlash, onClose, onAdded }: 
         ...(kitId && save && canSave ? { bundle_group_id: kitId } : {}),
         ...(save && canSave ? { save_to_catalog: true, catalog_kind: type,
           ...(type === "product" ? { catalog_sku: sku.trim() || null, catalog_barcode: barcode.trim() || null } : {}) } : {}),
-      });
+      }, lineKey.current);
+      lineKey.current = idempotencyKey();
       onFlash(save && canSave ? `Added and saved to the catalog${r?.margin_warning ? `. ${r.margin_warning}` : ""}` : (r?.margin_warning ? `Added. ${r.margin_warning}` : "Line added"));
       onAdded();
     } catch (e: any) { onFlash(e.message || "Could not add line"); setBusy(false); }
@@ -1310,8 +1318,8 @@ function CustomLineForm({ orderId, forItem, kitId, onFlash, onClose, onAdded }: 
         </div>
       )}
       <div className="flex justify-end gap-2">
-        <button type="button" onClick={onClose} className="px-3 py-2 rounded-lg border border-slate-200 text-ink-secondary text-xs font-semibold">Cancel</button>
-        <button type="button" onClick={submit} disabled={busy || !name.trim()} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50">{busy ? "Adding…" : save && canSave ? "Add and save" : "Add"}</button>
+        <button type="button" onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
+        <button type="button" onClick={submit} disabled={busy || !name.trim()} className={buttonClass("primary", "md")}>{busy ? "Adding…" : save && canSave ? "Add and save" : "Add"}</button>
       </div>
     </div>
   );
@@ -1376,6 +1384,9 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, tax, 
   const tagging = itemsOn && jobItems.length > 1;
   const [filter, setFilter] = useState("All");
   const [adding, setAdding] = useState(false);
+  // Council M13: one key per item until its add has gone through, so a double click or a retry
+  // after a timeout can't add it twice (and take stock twice).
+  const addKeys = useRef<Record<string, string>>({});
   const [custom, setCustom] = useState(false);     // 3: a line that isn't in the catalog (yet)
   const [intoKit, setIntoKit] = useState<{ id: string; name: string } | null>(null);   // add the pick inside this kit
   const [stock, setStock] = useState<{ total_available: number; items: { location: string; location_id?: string; bin_id?: string | null; bin?: string | null; available: number }[] } | null>(null);
@@ -1398,14 +1409,16 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, tax, 
     if (adding) return;
     setAdding(true);
     try {
-      const r = await api.post<any>(`/orders/${orderId}/lines`, {
+      const key = (addKeys.current[pick.ref_id] ||= idempotencyKey());
+      const r = await api.postOnce<any>(`/orders/${orderId}/lines`, {
         description: pick.name, kind: pick.kind,
         line_type: pick.kind === "service" ? "labour" : "part",
         ref_id: pick.ref_id, qty: 1, unit_price: pick.price || 0,
         ...(tagging && forItem ? { order_item_id: forItem } : {}),
         ...(intoKit && pick.kind !== "bundle" ? { bundle_group_id: intoKit.id } : {}),
         ...(pick.kind === "product" && takeBin ? { bin_id: takeBin } : {}),
-      });
+      }, key);
+      delete addKeys.current[pick.ref_id];
       const out = pick.kind === "product" && pick.available != null && pick.available <= 0 ? ". It's out of stock: order or transfer it" : "";
       const inKitNow = intoKit && pick.kind !== "bundle";
       onFlash(r?.margin_warning ? `${pick.name} added. ${r.margin_warning}` : `${inKitNow ? `Added to ${intoKit!.name}` : `${pick.name} added`}${out}`);
@@ -1459,17 +1472,17 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, tax, 
     const icon = isServ ? "build" : k.includes("bundle") ? "package_2" : "inventory_2";
     return (
       <div key={l.id} className={`group/row ${rowGrid} px-4 py-3 min-h-[56px] gap-y-1.5 hover:bg-slate-50/50 transition-colors`}>
-        <div className="w-7 h-7 rounded-lg grid place-items-center bg-slate-100 text-ink-secondary"><M n={icon} c="text-[15px]" /></div>
+        <div className="w-7 h-7 rounded-lg grid place-items-center bg-slate-100 text-ink-secondary"><M n={icon} c="" /></div>
         <div className="min-w-0">
           <h5 className="text-[13px] font-medium text-ink-primary truncate" title={full}>{displayName(full, kit?.name)}</h5>
           <p className="text-xs text-ink-secondary tabular-nums">{lineKindLabel(l)}{" · "}
             {editable ? <span {...clickable(() => setQtyOpen(l.id))} className="cursor-pointer hover:text-ink-primary">{amountTxt}</span> : amountTxt}
-            {onPlan && (l as any).kind !== "membership" && <span className="ml-1.5 inline-flex items-center gap-1 whitespace-nowrap rounded-full bg-primary/10 px-1.5 py-px text-[11px] font-semibold text-primary"><M n="workspace_premium" c="text-[11px]" />{Number(l.discount) >= 100 ? "Covered by plan" : `Plan ${l.discount}% off`}</span>}</p>
+            {onPlan && (l as any).kind !== "membership" && <Badge tone="info" size="sm" className="ml-1.5 gap-1"><M n="workspace_premium" c="text-[11px]" />{Number(l.discount) >= 100 ? "Covered by plan" : `Plan ${l.discount}% off`}</Badge>}</p>
           {tagging && (
-            <select value={l.order_item_id || ""} onChange={(e) => patchLine(l.id, { order_item_id: e.target.value })} aria-label={`Which item ${l.description || "this line"} is for`}
+            <TeklySelect value={l.order_item_id || ""} onChange={(e) => patchLine(l.id, { order_item_id: e.target.value })} aria-label={`Which item ${l.description || "this line"} is for`}
               className={`mt-1.5 max-w-[240px] ${houseInput}`}>
               <option value="">For: whole job</option>{jobItems.map((it) => <option key={it.id} value={it.id}>For: {itemName(it)}</option>)}
-            </select>
+            </TeklySelect>
           )}
         </div>
         <div className="flex items-center">
@@ -1530,12 +1543,12 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, tax, 
                     const pickTech = (id: string | null) => { patchLine(l.id, { technician_id: id, co_technicians: [] }); setAssignOpen(null); };
                     const q = techQuery.trim().toLowerCase();
                     const list = (emps || []).filter((e) => !q || e.name.toLowerCase().includes(q));
-                    const row = "w-full flex items-center gap-2.5 px-2.5 h-9 rounded-lg text-left text-[13px] hover:bg-slate-50 focus-visible:bg-slate-100 outline-none";
-                    const check = <M n="check" c="ml-auto text-[16px] text-primary" />;
+                    const row = "w-full flex items-center gap-2.5 px-2.5 h-9 rounded-lg text-left text-sm hover:bg-slate-50 focus-visible:bg-slate-100 outline-none";
+                    const check = <M n="check" c="ml-auto text-primary" />;
                     const first = (id?: string | null) => empName(id).split(" ")[0];
                     return (
                       <div className="text-[13px]">
-                        <div className="px-2.5 pt-1 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-tertiary">Technician for this line</div>
+                        <div className="px-2.5 pt-1 pb-1.5 text-[11px] font-semibold text-ink-tertiary">Technician for this line</div>
                         {(emps || []).length > 6 && (
                           <input autoFocus value={techQuery} onChange={(e) => setTechQuery(e.target.value)} placeholder="Search technicians"
                             onKeyDown={(e) => { if (e.key === "Enter" && list[0]) pickTech(list[0].id); }}
@@ -1543,7 +1556,7 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, tax, 
                         )}
                         {!q && (
                           <button type="button" onClick={() => pickTech(null)} className={`${row} text-ink-secondary`}>
-                            <span className="w-6 h-6 rounded-full border border-dashed border-slate-300 grid place-items-center flex-none"><M n="person_off" c="text-[14px] text-ink-tertiary" /></span>
+                            <span className="w-6 h-6 rounded-full border border-dashed border-slate-300 grid place-items-center flex-none"><M n="person_off" c="text-xs text-ink-tertiary" /></span>
                             Unassigned{!l.technician_id && check}
                           </button>
                         )}
@@ -1560,14 +1573,14 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, tax, 
                           <div className="mt-1 pt-1 border-t border-slate-100">
                             {co.length > 1 && (
                               <div className="flex items-center gap-2 px-2.5 h-9 text-ink-secondary">
-                                <M n="group" c="text-[16px] text-ink-tertiary" />
+                                <M n="group" c="text-ink-tertiary" />
                                 <span className="truncate">{co.map((c) => `${first(c.employee_id)} ${Math.round((c.share || 0) * 100)}%`).join(" + ")}</span>
                                 <button type="button" onClick={() => { patchLine(l.id, { co_technicians: [] }); setAssignOpen(null); }} className="ml-auto text-[12px] font-semibold text-rose-600 hover:underline">Clear</button>
                               </div>
                             )}
                             <button type="button" onClick={() => setSplitOpen((v) => !v)} aria-expanded={splitOpen} className={`${row} text-ink-secondary`}>
-                              <M n="group_add" c="text-[18px] text-ink-tertiary" />{co.length > 1 ? "Change the split" : "Split the work"}
-                              <M n={splitOpen ? "expand_less" : "expand_more"} c="ml-auto text-[16px] text-ink-tertiary" />
+                              <M n="group_add" c="text-lg text-ink-tertiary" />{co.length > 1 ? "Change the split" : "Split the work"}
+                              <M n={splitOpen ? "expand_less" : "expand_more"} c="ml-auto text-ink-tertiary" />
                             </button>
                             {splitOpen && (
                               <div className="pb-1">
@@ -1634,7 +1647,7 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, tax, 
         {/* #4 swimlane toggle */}
         <button type="button" onClick={() => setGroupBy((v) => !v)} title="Group line items by technician"
           aria-pressed={groupBy} className={`ml-auto flex h-8 items-center gap-1.5 px-2.5 rounded-xl text-xs font-medium border ${groupBy ? "bg-slate-100 text-ink-primary border-slate-300" : "bg-white text-ink-secondary border-slate-200 hover:text-ink-primary"}`}>
-          <M n="groups" c="text-[14px]" />By technician</button>
+          <M n="groups" c="text-xs" />By technician</button>
       </div>
 
       {/* Time on the job shows in the header timer and General › Time on this job; clock into a line below. */}
@@ -1646,9 +1659,9 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, tax, 
             <div className="flex-1 min-w-[160px]"><label className="block text-xs font-medium text-ink-secondary mb-1">Item</label>
               <div className={`${houseInput} text-xs font-semibold flex items-center justify-between`}><span className="truncate">{binPick.name}</span><button type="button" aria-label="Cancel" onClick={() => { setBinPick(null); setStock(null); }} className="text-ink-tertiary hover:text-rose-600 ml-2"><M n="close" c="text-sm" /></button></div></div>
             <div className="min-w-[180px]"><label className="block text-xs font-medium text-ink-secondary mb-1">Take from</label>
-              <select value={takeBin} onChange={(e) => setTakeBin(e.target.value)} aria-label="Which bin to take it from" className={`${houseInput} w-full text-xs font-semibold text-ink-primary`}>
+              <TeklySelect value={takeBin} onChange={(e) => setTakeBin(e.target.value)} aria-label="Which bin to take it from" className={`${houseInput} w-full text-xs font-semibold text-ink-primary`}>
                 <option value="">Any (unbinned stock first)</option>{binChoices(stock.items, locationId).map((b) => <option key={b.bin_id} value={b.bin_id}>{b.label}</option>)}
-              </select></div>
+              </TeklySelect></div>
             <button type="button" onClick={() => addLine(binPick)} disabled={adding} className={btnPrimary}>{adding ? "Adding…" : "Add"}</button>
             <div className="w-full text-xs text-ink-secondary">In stock: <b className="text-emerald-600">{stock.total_available}</b> · {byLocation(stock.items).filter((i) => i.available > 0).map((i) => `${i.location} ${i.available}`).join(" · ") || "—"}</div>
           </div>
@@ -1662,10 +1675,10 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, tax, 
               type={filter === "Services" ? "service" : filter === "Products" ? "product" : filter === "Kits" ? "bundle" : "all"}
               placeholder={filter === "Services" ? "Search services…" : filter === "Products" ? "Search products…" : filter === "Kits" ? "Search kits…" : "Search services, products and kits…"} /></div>
             {tagging && !intoKit && (
-              <select value={forItem} onChange={(e) => setForItem(e.target.value)} aria-label="Which item new lines are for"
+              <TeklySelect value={forItem} onChange={(e) => setForItem(e.target.value)} aria-label="Which item new lines are for"
                 className="glass-input max-w-[180px] px-2 py-2 rounded-lg text-xs font-semibold text-ink-primary">
                 <option value="">For: whole job</option>{jobItems.map((it) => <option key={it.id} value={it.id}>For: {itemName(it)}</option>)}
-              </select>
+              </TeklySelect>
             )}
             {(can("can_add_custom_product") || can("can_add_custom_service")) && (
               <button type="button" onClick={() => setCustom(true)} className="h-9 px-2.5 rounded-xl text-xs font-semibold text-primary hover:bg-primary/5 flex items-center gap-1.5 whitespace-nowrap"><M n="add" c="text-sm" />Custom line</button>
@@ -1779,21 +1792,21 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
       <Section title="Apply a checklist" icon="fact_check">
         {templates.length ? (
           <div className="flex flex-wrap items-center gap-2">
-            <select value={pick} onChange={(e) => setPick(e.target.value)} aria-label="Checklist template" className={`${houseInput} flex-1 min-w-[200px]`}>
+            <TeklySelect value={pick} onChange={(e) => setPick(e.target.value)} aria-label="Checklist template" className={`${houseInput} flex-1 min-w-[200px]`}>
               <option value="">Choose a template…</option>
               {templates.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-            </select>
+            </TeklySelect>
             <button onClick={apply} disabled={!pick || busy} className={btnPrimary}>Apply</button>
           </div>
         ) : (
-          <p className="text-xs text-ink-tertiary">
+          <EmptyState size="inline" title={<>
             No checklist templates yet. <Link to="/settings?section=checklists" className="font-semibold text-primary hover:underline">Create one in Settings › Checklists</Link>
-          </p>
+          </>} />
         )}
       </Section>
 
       {cls === null && <p className="text-xs text-ink-tertiary">Loading checklists…</p>}
-      {cls?.length === 0 && <p className="text-xs text-ink-tertiary">No checklists on this job yet.</p>}
+      {cls?.length === 0 && <EmptyState size="inline" title="No checklists on this job yet." />}
       {cls?.map((c: any) => {
         const items = c.items || []; const done = items.filter((i: any) => i.done).length; const pct = items.length ? Math.round((done / items.length) * 100) : 0;
         return (
@@ -1829,9 +1842,9 @@ function ChecklistsTab({ orderId, typeId }: { orderId: string; typeId?: string }
                     )}
                     {/* Templates save "dropdown" (pick one) and "multiselect" (pick several); older ones "select". */}
                     {(i.field_kind === "select" || i.field_kind === "dropdown") && (
-                      <select aria-label={i.label} value={v ?? ""} onChange={(e) => fill(c.id, i.id, e.target.value)} className={`${houseInput} w-full mt-2`}>
+                      <TeklySelect aria-label={i.label} value={v ?? ""} onChange={(e) => fill(c.id, i.id, e.target.value)} className={`${houseInput} w-full mt-2`}>
                         <option value="">Choose…</option>{(i.options || []).map((o: string) => <option key={o} value={o}>{o}</option>)}
-                      </select>
+                      </TeklySelect>
                     )}
                     {i.field_kind === "multiselect" && (
                       <div role="group" aria-label={`${i.label} options`} className="flex flex-wrap gap-1.5 mt-2">
@@ -1968,6 +1981,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
   // from the server instead of posting the money again. A new key once it has gone through.
   const payKey = useRef(idempotencyKey());
   const [onReader, setOnReader] = useState(false);   // F2/F3: card taken on a reader instead of recorded by hand
+  const cardReaders = useCardReaders();   // off: card is only recorded by hand
   const submit = async () => {
     if (payBusyRef.current) return;
     payBusyRef.current = true; setPayBusy(true);
@@ -2007,11 +2021,11 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
         return (
           <section aria-label="Balance" className={`${sectionCard} relative overflow-hidden p-6`}>
             <div aria-hidden="true" className={`absolute inset-x-0 top-0 h-0.5 ${tone.edge}`} />
-            <span className="text-[11px] font-medium uppercase tracking-[0.08em] text-ink-tertiary">Still to pay</span>
+            <span className="text-xs font-medium text-ink-tertiary">Still to pay</span>
             <div className="mt-1.5 flex flex-wrap items-center gap-x-3 gap-y-2">
               <h2 className={`flex items-start tabular-nums ${state === "due" ? "text-ink-primary" : "text-ink-tertiary"}`} aria-label={`Still to pay ${shown}`}>
-                {m ? <><span className="mt-1.5 mr-0.5 text-xl font-medium text-ink-tertiary">{m[1].trim()}</span><span className="text-[44px] leading-none font-medium tracking-[-0.035em]">{m[2]}</span></>
-                  : <span className="text-[44px] leading-none font-medium tracking-[-0.035em]">{shown}</span>}
+                {m ? <><span className="mt-1.5 mr-0.5 text-xl font-medium text-ink-tertiary">{m[1].trim()}</span><span className="text-hero leading-none font-medium tracking-[-0.035em]">{m[2]}</span></>
+                  : <span className="text-hero leading-none font-medium tracking-[-0.035em]">{shown}</span>}
               </h2>
               <span className={`inline-flex items-center gap-1.5 h-6 px-2.5 rounded-full text-xs font-semibold ring-1 ring-inset ${tone.pill}`}>
                 <span aria-hidden="true" className={`size-1.5 rounded-full ${tone.dot}`} />{tone.label}
@@ -2034,9 +2048,9 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
         {multiCurrency && (
           <div className="mt-3 flex items-center gap-2">
             <label htmlFor={`wo-currency-${orderId}`} className="text-xs font-medium text-ink-secondary">Currency</label>
-            <select id={`wo-currency-${orderId}`} value={currencyCode || base?.code || ""} onChange={(e) => changeCurrency(e.target.value)} className={houseInput}>
+            <TeklySelect id={`wo-currency-${orderId}`} value={currencyCode || base?.code || ""} onChange={(e) => changeCurrency(e.target.value)} className={houseInput}>
               {curOpts.map(([c, l]) => <option key={c} value={c}>{l}</option>)}
-            </select>
+            </TeklySelect>
           </div>
         )}
         {((!settled && t > 0) || link) && (
@@ -2085,11 +2099,11 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
       {data && data.invoices.length > 0 && (
         <Section flush title="Invoices" meta={data.invoices.length}>
           <table className="w-full text-xs text-left">
-            <thead className="bg-slate-50 text-xs text-ink-tertiary font-medium"><tr><th className="py-2.5 px-4 font-medium">Invoice</th><th className="py-2.5 px-4 font-medium">Status</th><th className="py-2.5 px-4 font-medium text-right">Amount</th><th className="py-2.5 px-4"><span className="sr-only">Send</span></th></tr></thead>
+            <thead><tr className={theadRowClass}><th className="py-2.5 px-4">Invoice</th><th className="py-2.5 px-4">Status</th><th className="py-2.5 px-4 text-right">Amount</th><th className="py-2.5 px-4"><span className="sr-only">Send</span></th></tr></thead>
             <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
               {data.invoices.map((i) => (
                 <tr key={i.id} className="hover:bg-slate-50/50"><td className="py-2.5 px-4 font-mono font-semibold text-primary">{i.invoice_number}</td>
-                  <td className="py-2.5 px-4"><span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${/(paid|settled)/i.test(i.status) ? "bg-emerald-100 text-emerald-800" : "bg-blue-100 text-blue-800"}`}>{humanize(i.status)}</span></td>
+                  <td className="py-2.5 px-4"><Badge tone={/(paid|settled)/i.test(i.status) ? "success" : "info"} size="sm">{humanize(i.status)}</Badge></td>
                   <td className="py-2.5 px-4 text-right tabular-nums font-semibold text-ink-primary">{money(i.total)}</td>
                   <td className="py-2 px-4 text-right">{!/(cancel|void)/i.test(i.status || "") && <SendMenu small primary={false} label="Send invoice" busy={sendingInv === i.id} onSend={(w) => sendInv(i.id, w)} />}</td></tr>
               ))}
@@ -2113,7 +2127,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
 
       <CardPaymentsList orderId={orderId} reloadKey={data?.payments.length} onChanged={load} />
 
-      {data && data.invoices.length === 0 && data.payments.length === 0 && <p className="text-xs text-ink-tertiary">No invoices or payments yet.</p>}
+      {data && data.invoices.length === 0 && data.payments.length === 0 && <EmptyState size="inline" title="No invoices or payments yet." />}
 
       {/* Portaled to <body>: inside the drawer the header (z-20) painted over the scrim as a white strip. */}
       {modal && ctx && createPortal(
@@ -2125,18 +2139,18 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
             <div className="text-xs text-ink-secondary">Remaining balance: <b className="tabular-nums">{money(ctx.remaining)}</b></div>
             <div><label className="block text-xs font-medium text-ink-secondary mb-1">Amount <span className="text-ink-tertiary font-normal normal-case">({base?.code || "base"})</span></label><input value={amount} onChange={(e) => setAmount(e.target.value)} type="number" className="glass-input w-full h-10 px-3 text-sm font-semibold tabular-nums rounded-xl" />
               {isForeign && amount && !isNaN(parseFloat(amount)) && (
-                <p className="mt-1 text-[11px] text-ink-tertiary tabular-nums">≈ {currencySymbol}{conv(parseFloat(amount)).toFixed(2)} {currencyCode} <span className="text-ink-placeholder">at the document rate</span></p>
+                <p className="mt-1 text-2xs text-ink-tertiary tabular-nums">≈ {currencySymbol}{conv(parseFloat(amount)).toFixed(2)} {currencyCode} <span className="text-ink-tertiary">at the document rate</span></p>
               )}</div>
             <div className="grid grid-cols-2 gap-3 items-start">
               <div><label className="block text-xs font-medium text-ink-secondary mb-1">Method</label>
-                <select value={method} onChange={(e) => { setMethod(e.target.value); setAccount(pickDefaultAccount(accountsFor(allAccts, e.target.value as PaymentOption), ctx.location_id)); }} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl"><option value="cash">Cash</option><option value="cashless">Cashless / UPI</option><option value="card">Card</option></select></div>
+                <TeklySelect value={method} onChange={(e) => { setMethod(e.target.value); setAccount(pickDefaultAccount(accountsFor(allAccts, e.target.value as PaymentOption), ctx.location_id)); }} className="glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl"><option value="cash">Cash</option><option value="cashless">Cashless / UPI</option><option value="card">Card</option></TeklySelect></div>
               {accountsFor(allAccts, method as PaymentOption).length > 0 && <div><label htmlFor="wo-pay-account" className="block text-xs font-medium text-ink-secondary mb-1">Account</label>
                 <AccountPicker id="wo-pay-account" accounts={allAccts} paymentOption={method as PaymentOption} locationId={ctx.location_id} value={account} onChange={setAccount} onCreated={addAccount} /></div>}
             </div>
             {accountsFor(allAccts, method as PaymentOption).length === 0 && (
               <AccountPicker accounts={allAccts} paymentOption={method as PaymentOption} locationId={ctx.location_id} value={account} onChange={setAccount} onCreated={addAccount} />
             )}
-            {modal === "pay" && method === "card" && can("can_take_card_payments") && (
+            {cardReaders && modal === "pay" && method === "card" && can("can_take_card_payments") && (
               <button onClick={() => setOnReader(true)} disabled={!(parseFloat(amount) > 0)} className="w-full py-2 rounded-xl border border-primary/30 bg-white text-primary text-xs font-semibold hover:bg-blue-50 disabled:opacity-50 flex items-center justify-center gap-2"><M n="contactless" c="text-base" />Charge on reader</button>
             )}
             {/* Like Orderry: what prints by itself is chosen where it happens. Shop-wide, kept until changed. */}
@@ -2150,7 +2164,7 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
           </div>
         </div>
       , document.body)}
-      {onReader && <ReaderCharge orderId={orderId} amount={parseFloat(amount) || 0} accountId={account || undefined}
+      {cardReaders && onReader && <ReaderCharge orderId={orderId} amount={parseFloat(amount) || 0} accountId={account || undefined}
         onApproved={() => { onFlash("Card payment approved"); load(); }}
         onClose={(c) => { setOnReader(false); if (c?.status === "succeeded") setModal(null); }} />}
     </div>
@@ -2220,7 +2234,7 @@ export function JobNotes({ orderId, filter, onFlash }: { orderId: string; filter
         <textarea value={text} onChange={(e) => setText(e.target.value)} rows={2} aria-label="Add a note" placeholder="Add a note, e.g. ordered the screen, back Thursday"
           className="glass-input w-full py-2 px-3 text-xs rounded-xl resize-none" />
         <div className="flex flex-wrap items-center gap-2">
-          <button type="button" onClick={addNote} disabled={busy || !text.trim()} className="px-3.5 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-40">Add note</button>
+          <button type="button" onClick={addNote} disabled={busy || !text.trim()} className={buttonClass("primary", "sm")}>Add note</button>
           <label className={`px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50 flex items-center gap-1 cursor-pointer ${busy ? "opacity-50 pointer-events-none" : ""}`}>
             <input type="file" multiple className="hidden" aria-label="Attach photo or file" onChange={(e) => { attach(e.target.files); e.currentTarget.value = ""; }} />
             <M n="attach_file" c="text-sm" />Attach photo or file
@@ -2246,7 +2260,7 @@ export function JobNotes({ orderId, filter, onFlash }: { orderId: string; filter
                   {!isImg && i.media_name && <p className="text-xs text-ink-secondary flex items-center gap-1"><M n="description" c="text-sm" />{i.media_name}</p>}
                   <p className="text-[11px] text-ink-tertiary flex flex-wrap items-center gap-1.5">
                     <span>{i.item_type === "system" ? "Automatic" : i.author_name || "Staff"} · {fmtServerTime(i.created_at)}</span>
-                    {i.visibility === "client" && <span className="px-1.5 py-0.5 rounded-full bg-amber-50 text-amber-800 ring-1 ring-inset ring-amber-200 font-semibold flex items-center gap-0.5"><M n="visibility" c="text-[11px]" />Customer can see</span>}
+                    {i.visibility === "client" && <Badge tone="warning" size="sm" className="gap-0.5"><M n="visibility" c="text-[11px]" />Customer can see</Badge>}
                   </p>
                 </div>
               </li>
@@ -2314,7 +2328,7 @@ function ActivityTab({ orderId, clientPhone, onFlash, threadKey, onSent }: { ord
       {f === "Payments" && <p className="text-xs text-ink-tertiary">Payments for this job are on the Invoices &amp; payments tab.</p>}
       {showLogs && <Section title="Notifications & delivery" icon="notifications">
         {logs.length === 0 ? (
-          <div className="text-xs text-ink-tertiary">No messages sent for this job yet.</div>
+          <EmptyState size="inline" title="No messages sent for this job yet." />
         ) : (
           <div className="relative pl-6 space-y-4 before:absolute before:left-2 before:top-2 before:bottom-2 before:w-[2px] before:bg-slate-200 text-xs">
             {logs.map((l) => (
@@ -2323,7 +2337,7 @@ function ActivityTab({ orderId, clientPhone, onFlash, threadKey, onSent }: { ord
                 <div>
                   <p className="font-semibold text-ink-primary flex flex-wrap items-center gap-2">
                     {(l.subject || humanize(l.trigger_event) || "Notification")}
-                    {l.channel && <span className="text-[11px] font-semibold px-1.5 py-0.5 rounded-full bg-slate-100 text-ink-secondary">{channelLabel(l.channel)}</span>}
+                    {l.channel && <Badge size="sm">{channelLabel(l.channel)}</Badge>}
                     <span className={`text-[11px] font-semibold ${l.status === "failed" ? "text-rose-600" : l.status === "sent" ? "text-emerald-600" : "text-amber-600"}`}>{humanize(l.status)}</span>
                   </p>
                   {l.body && <p className="text-xs text-ink-secondary line-clamp-2">{l.body}</p>}
@@ -2344,7 +2358,7 @@ function ActivityTab({ orderId, clientPhone, onFlash, threadKey, onSent }: { ord
                 return (
                   <div key={m.id} className={`flex flex-col max-w-[80%] ${staff ? "items-end ml-auto" : "items-start"}`}>
                     <div className={`p-2.5 rounded-2xl shadow-2xs text-xs whitespace-pre-wrap break-words ${staff ? "bg-primary text-white rounded-tr-none" : "bg-white border border-slate-200 text-ink-primary rounded-tl-none"}`}>{m.body}</div>
-                    <span className="text-[11px] text-slate-400 mx-1 mt-0.5 tabular-nums">{m.who || (staff ? "Staff" : "Customer")} · {fmtShort(m.at)}</span>
+                    <span className="text-2xs text-ink-tertiary mx-1 mt-0.5 tabular-nums">{m.who || (staff ? "Staff" : "Customer")} · {fmtShort(m.at)}</span>
                   </div>
                 );
               })}
@@ -2353,7 +2367,7 @@ function ActivityTab({ orderId, clientPhone, onFlash, threadKey, onSent }: { ord
           <div className="flex items-center gap-2 pt-1">
             <ChannelPicker id={`act-ch-${orderId}`} value={channel} onChange={setChannel} />
             <input value={msg} onChange={(e) => setMsg(e.target.value)} onKeyDown={(e) => e.key === "Enter" && send()} aria-label="Message to the customer" className="glass-input flex-1 py-2 px-3 text-xs rounded-xl" placeholder="Send the customer an update…" />
-            <button onClick={send} disabled={busy || !msg.trim()} className="px-3.5 py-2 rounded-xl bg-primary text-white text-xs font-bold hover:brightness-110 flex items-center gap-1 disabled:opacity-40"><span>{busy ? "Sending…" : "Send"}</span><M n="send" c="text-xs" /></button>
+            <button onClick={send} disabled={busy || !msg.trim()} className={buttonClass("primary", "md")}><span>{busy ? "Sending…" : "Send"}</span><M n="send" c="text-xs" /></button>
           </div>
           <DeliveryNote note={note} />
         </div>

@@ -1,8 +1,10 @@
 import SkeletonRows from "../../components/SkeletonRows";
+import TeklySelect from "../../components/TeklySelect";
 import { humanize } from "../../lib/humanize";
 import { safeHttpsUrl } from "../../lib/safeHtml";
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
+import Tabs from "../../components/Tabs";
 import { api } from "../../api/client";
 import { fmtServerTime } from "../../lib/serverTime";
 import Pager from "../../components/Pager";
@@ -10,6 +12,9 @@ import { confirmDialog, alertDialog } from "../../lib/dialog";
 import { Link } from "react-router-dom";
 import { Avatar } from "../orders/look";
 import { PhoneIncoming, PhoneOutgoing } from "lucide-react";
+import { buttonClass } from "../../components/Button";
+import { Badge, type BadgeTone } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 // Marketing: campaigns (SMS/email blasts by segment) + call log — legacy /comms surface.
 const CHANNEL: Record<string, string> = { sms: "SMS", email: "Email" };
@@ -41,7 +46,7 @@ export default function MarketingHub() {
     try { const r = await api.post<any>(`/comms/campaigns/${c.id}/send`, {}); loadCamps(); flash(`Sent to ${r.recipients ?? 0} recipient(s)`); }
     catch (e: any) { await alertDialog(e.message || "Send failed"); } finally { setBusy(false); }
   }
-  const pill = (s: string) => s === "sent" ? "bg-emerald-50 text-emerald-700" : "bg-amber-50 text-amber-700";
+  const pill = (s: string): BadgeTone => s === "sent" ? "success" : "warning";
   const inp = "w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 text-ink-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/10";
   // Pagination — one shared page (campaigns/calls tabs never show at once).
   const MK_PAGE = 50;
@@ -54,13 +59,8 @@ export default function MarketingHub() {
 
   return (
     <Shell title="Marketing">
-      <div className="px-4 md:px-6 pt-3 border-b border-slate-200/60 flex-shrink-0">
-        <nav className="flex space-x-6 -mb-px text-xs font-semibold overflow-x-auto whitespace-nowrap">
-          {([["campaigns", "Campaigns"], ["calls", "Call log"]] as [typeof tab, string][]).map(([id, l]) => (
-            <button key={id} onClick={() => setTab(id)} className={`pb-3 border-b-2 transition-colors ${tab === id ? "text-primary border-primary" : "text-ink-secondary hover:text-ink-primary border-transparent"}`}>{l}</button>
-          ))}
-        </nav>
-      </div>
+      <Tabs label="Marketing sections" className="px-4 md:px-6 pt-3 flex-shrink-0" value={tab} onChange={setTab}
+        tabs={([["campaigns", "Campaigns"], ["calls", "Call log"]] as [typeof tab, string][]).map(([id, label]) => ({ id, label }))} />
 
       <div className="flex-1 overflow-y-auto px-4 md:px-6 py-5">
         {tab === "campaigns" && (
@@ -69,7 +69,7 @@ export default function MarketingHub() {
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
               <div className="overflow-x-auto">
               <table className="w-full min-w-[640px] text-left text-xs">
-                <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-xs font-semibold"><th className="py-3 px-4">Name</th><th className="py-3 px-4">Channel</th><th className="py-3 px-4">Segment</th><th className="py-3 px-4">Status</th><th className="py-3 px-4 text-right">Recipients</th><th className="py-3 px-4 text-right">Action</th></tr></thead>
+                <thead><tr className={theadRowClass}><th className="py-3 px-4">Name</th><th className="py-3 px-4">Channel</th><th className="py-3 px-4">Segment</th><th className="py-3 px-4">Status</th><th className="py-3 px-4 text-right">Recipients</th><th className="py-3 px-4 text-right">Action</th></tr></thead>
                 <tbody className="divide-y divide-slate-100">
                   {!camps && <SkeletonRows cols={6} />}
                   {camps?.length === 0 && <tr><td colSpan={6} className="py-10 px-4 text-center text-xs text-ink-secondary">No campaigns yet. Write one SMS or email and send it to a group of clients.</td></tr>}
@@ -78,7 +78,7 @@ export default function MarketingHub() {
                       <td className="py-2.5 px-4 font-semibold text-ink-primary">{c.name}</td>
                       <td className="py-2.5 px-4">{CHANNEL[c.channel] || humanize(c.channel)}</td>
                       <td className="py-2.5 px-4">{SEGMENT[c.segment] || humanize(c.segment)}</td>
-                      <td className="py-2.5 px-4"><span className={`px-2 py-0.5 rounded-full text-[11px] font-semibold ${pill(c.status)}`}>{humanize(c.status)}</span>{c.sent_at ? <span className="block text-[11px] text-ink-tertiary">{d(c.sent_at)}</span> : null}</td>
+                      <td className="py-2.5 px-4"><Badge tone={pill(c.status)} size="sm">{humanize(c.status)}</Badge>{c.sent_at ? <span className="block text-[11px] text-ink-tertiary">{d(c.sent_at)}</span> : null}</td>
                       <td className="py-2.5 px-4 text-right tabular-nums">{c.recipients ?? "—"}</td>
                       <td className="py-2.5 px-4 text-right">{c.status !== "sent" && <button onClick={() => send(c)} disabled={busy} className="px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50">Send</button>}</td>
                     </tr>
@@ -95,7 +95,7 @@ export default function MarketingHub() {
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
             <div className="overflow-x-auto">
             <table className="w-full min-w-[760px] text-left text-xs">
-              <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-xs font-semibold"><th className="py-3 px-4 font-semibold">When</th><th className="py-3 px-4 font-semibold">Direction</th><th className="py-3 px-4 font-semibold">Contact</th><th className="py-3 px-4 font-semibold">Status</th><th className="py-3 px-4 font-semibold text-right">Duration</th><th className="py-3 px-4 font-semibold">Recording</th></tr></thead>
+              <thead><tr className={theadRowClass}><th className="py-3 px-4">When</th><th className="py-3 px-4">Direction</th><th className="py-3 px-4">Contact</th><th className="py-3 px-4">Status</th><th className="py-3 px-4 text-right">Duration</th><th className="py-3 px-4">Recording</th></tr></thead>
               <tbody className="divide-y divide-slate-100 text-ink-secondary">
                 {!calls && <SkeletonRows cols={6} />}
                 {calls?.length === 0 && (
@@ -147,12 +147,12 @@ export default function MarketingHub() {
             <div className="p-5 space-y-3">
               <input value={draft.name || ""} onChange={(e) => setDraft({ ...draft, name: e.target.value })} placeholder="Campaign name" className={inp} />
               <div className="grid grid-cols-2 gap-2">
-                <select value={draft.channel} onChange={(e) => setDraft({ ...draft, channel: e.target.value })} className={inp}><option value="sms">SMS</option><option value="email">Email</option></select>
-                <select value={draft.segment} onChange={(e) => setDraft({ ...draft, segment: e.target.value })} className={inp}><option value="all">All clients</option><option value="loyalty">Loyalty members</option><option value="lapsed">Lapsed clients</option></select>
+                <TeklySelect value={draft.channel} onChange={(e) => setDraft({ ...draft, channel: e.target.value })} className={inp}><option value="sms">SMS</option><option value="email">Email</option></TeklySelect>
+                <TeklySelect value={draft.segment} onChange={(e) => setDraft({ ...draft, segment: e.target.value })} className={inp}><option value="all">All clients</option><option value="loyalty">Loyalty members</option><option value="lapsed">Lapsed clients</option></TeklySelect>
               </div>
               {draft.channel === "email" && <input value={draft.subject || ""} onChange={(e) => setDraft({ ...draft, subject: e.target.value })} placeholder="Email subject" className={inp} />}
               <textarea value={draft.body || ""} onChange={(e) => setDraft({ ...draft, body: e.target.value })} placeholder="Message…" className={`${inp} h-24 resize-none`} />
-              <div className="flex justify-end gap-2"><button onClick={() => setDraft(null)} className="px-4 py-2 rounded-lg border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50">Cancel</button><button onClick={saveCampaign} disabled={busy || !draft.name?.trim()} className="px-4 py-2 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-50">Save draft</button></div>
+              <div className="flex justify-start gap-2"><button onClick={saveCampaign} disabled={busy || !draft.name?.trim()} className={buttonClass("primary", "md")}>Save draft</button><button onClick={() => setDraft(null)} className="px-4 py-2 rounded-lg border border-slate-200 bg-white text-ink-primary text-xs font-semibold hover:bg-slate-50">Cancel</button></div>
             </div>
           </div>
         </div>

@@ -4,7 +4,8 @@ Everything Excel does to a shop's data on the way in lives here, so every list i
 same rules:
 
 - ``read_sheet``: XLSX (openpyxl read-only, size + zip-bomb caps from core/spreadsheet) or CSV
-  (BOM stripped, UTF-8 with a cp1252 fallback, comma / semicolon / tab sniffed). Cells come back
+  (BOM stripped; UTF-8, else the best-scoring of cp1252 / Mac Roman / latin-1; comma /
+  semicolon / tab sniffed). Cells come back
   as text; a number Excel stored for a barcode keeps every digit ("4006381333931", never
   "4.00638E+12"); a date cell becomes YYYY-MM-DD; formula-guard apostrophes are removed.
 - ``to_number``: decimal commas ("12,50", "1.234,56") as well as "1,234.56".
@@ -60,17 +61,62 @@ def _cell_text(v) -> str:
     return str(unguard_cell(v)).strip()
 
 
-def _decode(raw: bytes) -> str:
-    for enc in ("utf-8-sig", "cp1252"):
+# Council M14: Excel for Mac's default "Comma Separated Values (.csv)" writes Mac Roman, whose
+# accented letters sit in the 0x80-0x9F bytes that cp1252 reads as symbols (é → Ž, ü → Ÿ) or
+# doesn't define at all (ç, è, ù). After UTF-8, each 8-bit guess is scored on how much of that
+# tell-tale junk it produces and the cleanest reading wins; latin-1 (every byte defined) is the
+# last resort so a text file is never refused. A tie keeps the old order: cp1252 first.
+_ODD_CHARS = {
+    # cp1252 reading of Mac Roman accents (not ‘ ’ “ ” • – — … € ™, which real Windows text uses)
+    "cp1252": set("ŽŸ‚ƒ„†‡ˆ‰Š‹ŒœšžŸ˜›"),
+    # Mac Roman reading of cp1252 accents: math signs, bare diacritics and ligatures
+    "mac_roman": set("√≈∆◊⁄ﬁﬂ‡·‚„‰ıˆ˜¯˘˙˚¸˝˛ˇ∞±≤≥∂∑∏π∫Ωæø¬≠"),
+    "latin-1": set(),
+}
+_C1 = re.compile(r"[\x80-\x9f]")
+_MIDWORD_CAPITAL = re.compile(r"[a-z][ÀÁÂÃÄÅÇÈÉÊËÌÍÎÏÑÒÓÔÕÖÙÚÛÜÝ]")   # "JosË", "MÁller": the wrong guess
+ENCODING_LABELS = {"cp1252": "Windows text", "mac_roman": "Mac Roman", "latin-1": "Latin-1"}
+
+
+def _oddness(text: str, enc: str) -> int:
+    odd = _ODD_CHARS[enc]
+    return (sum(1 for ch in text if ch in odd)
+            + 3 * len(_C1.findall(text))
+            + len(_MIDWORD_CAPITAL.findall(text)))
+
+
+def decode_text(raw: bytes) -> tuple[str, str]:
+    """(text, encoding) for a CSV upload: "utf-8" (BOM stripped), else the best of cp1252,
+    mac_roman and latin-1 by score (see _ODD_CHARS)."""
+    try:
+        return raw.decode("utf-8-sig"), "utf-8"
+    except UnicodeDecodeError:
+        pass
+    best = None
+    for enc in ("cp1252", "mac_roman", "latin-1"):
         try:
-            return raw.decode(enc)
+            text = raw.decode(enc)
         except UnicodeDecodeError:
             continue
-    raise HTTPException(422, "Could not read the file's text encoding — save it as CSV UTF-8")
+        score = _oddness(text, enc)
+        if best is None or score < best[0]:
+            best = (score, text, enc)
+    if best is None:    # unreachable: latin-1 defines every byte
+        raise HTTPException(422, "Could not read the file's text encoding — save it as CSV UTF-8")
+    return best[1], best[2]
 
 
-def _csv_rows(raw: bytes) -> list[list[str]]:
-    text = _decode(raw).lstrip("﻿")
+def encoding_note(enc: str | None) -> str | None:
+    """What the preview says when the file wasn't UTF-8, so the shop checks the accents before
+    committing (a guessed 8-bit encoding is a guess)."""
+    if not enc or enc == "utf-8":
+        return None
+    return f"Read as {ENCODING_LABELS.get(enc, enc)} (not UTF-8) — check accents"
+
+
+def _csv_rows(raw: bytes) -> tuple[list[list[str]], str]:
+    text, enc = decode_text(raw)
+    text = text.lstrip("﻿")
     if "\x00" in text:
         raise HTTPException(422, "That doesn't look like a CSV file")
     sample = text[:20000]
@@ -88,7 +134,7 @@ def _csv_rows(raw: bytes) -> list[list[str]]:
         filled += bool(row)
         if filled > MAX_IMPORT_ROWS + 1:
             raise HTTPException(413, too_many_rows(filled - 1))
-    return out
+    return out, enc
 
 
 def _xlsx_rows(raw: bytes) -> list[list[str]]:
@@ -114,16 +160,23 @@ def _xlsx_rows(raw: bytes) -> list[list[str]]:
 def read_sheet(raw: bytes, file_name: str) -> tuple[list[str], list[list[str]], list[int]]:
     """(headers, data rows, sheet row number of each data row). Blank rows are dropped; the
     first non-blank row is the header."""
+    return read_sheet_ex(raw, file_name)[:3]
+
+
+def read_sheet_ex(raw: bytes, file_name: str) -> tuple[list[str], list[list[str]], list[int], Optional[str]]:
+    """read_sheet plus the text encoding a CSV was read with ("utf-8", "cp1252", "mac_roman",
+    "latin-1"; None for an xlsx), so the preview can say so."""
     if len(raw) > MAX_XLSX_BYTES:
         raise HTTPException(413, f"File too large (max {MAX_XLSX_BYTES // (1024 * 1024)} MB)")
     name = (file_name or "").lower()
     ext = name.rsplit(".", 1)[-1] if "." in name else ""
     if ext in ("xlsm", "xls", "xlsb", "ods", "numbers"):
         raise HTTPException(422, "Save the file as .xlsx or .csv first (macro and old Excel files aren't accepted)")
+    enc = None
     if ext == "xlsx" or (ext not in ("csv", "txt", "tsv") and raw[:2] == b"PK"):
         grid = _xlsx_rows(raw)
     else:
-        grid = _csv_rows(raw)
+        grid, enc = _csv_rows(raw)
     numbered = [(i + 1, r) for i, r in enumerate(grid) if any(c.strip() for c in r)]
     if not numbered:
         raise HTTPException(422, "The file is empty")
@@ -141,7 +194,7 @@ def read_sheet(raw: bytes, file_name: str) -> tuple[list[str], list[list[str]], 
             seen[h] = 1
         headers.append(h)
     rows = [(r + [""] * (width - len(r)))[:width] for _, r in numbered[1:]]
-    return headers, rows, [n for n, _ in numbered[1:]]
+    return headers, rows, [n for n, _ in numbered[1:]], enc
 
 
 # ── header matching ──────────────────────────────────────────────────────────

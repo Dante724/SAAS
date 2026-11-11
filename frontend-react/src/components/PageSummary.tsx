@@ -43,7 +43,7 @@ export default function PageSummary({ title, subtitle, actions, stats, className
               {s.hint && <span className="block mt-0.5 text-xs text-ink-tertiary line-clamp-2">{s.hint}</span>}
             </>
           );
-          const cls = `${stats.length > 5 ? "min-[1400px]:flex-1" : "lg:flex-1"} min-w-0 text-left px-5 py-4 ${s.active ? "shadow-[inset_0_-2px_0] shadow-primary" : ""}`;
+          const cls = `${stats.length > 5 ? "min-[1400px]:flex-1" : "lg:flex-1"} min-w-0 text-left px-5 py-4 flex flex-col justify-start ${s.active ? "shadow-[inset_0_-2px_0] shadow-primary" : ""}`;
           return s.onClick ? (
             <button key={s.label} type="button" onClick={s.onClick} aria-pressed={s.active}
               className={`${cls} hover:bg-slate-50/80 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/30 first:rounded-bl-2xl last:rounded-br-2xl`}>{body}</button>

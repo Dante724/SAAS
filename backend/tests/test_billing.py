@@ -20,7 +20,7 @@ import hmac
 import json
 import time
 import uuid
-from datetime import date, timedelta
+from datetime import timedelta
 
 import pytest
 from sqlalchemy import func, select
@@ -28,6 +28,7 @@ from sqlalchemy import func, select
 from backend.config import Settings, settings
 from backend.models import BillingEvent, Employee, Location, Organisation
 from backend.services import billing
+from backend.services.dates import platform_today  # billing's clock: the UTC day, not the machine's
 
 WHSEC = "whsec_test_billing"
 PRICES = {"STRIPE_BILLING_PRICE_SOLO_MONTH": "price_om", "STRIPE_BILLING_PRICE_SOLO_YEAR": "price_oy",
@@ -97,7 +98,7 @@ async def test_signup_starts_a_14_day_trial_with_pro_unlocked(client, db):
     hdr, org_id = await _signup(client, plan="solo")
     org = await _org(db, org_id)
     assert org.sub_status == "trial" and org.plan == "solo" and org.billing_mode == "stripe"
-    assert org.trial_ends_at == date.today() + timedelta(days=14)
+    assert org.trial_ends_at == platform_today() + timedelta(days=14)
     me = (await client.get("/api/auth/me", headers=hdr)).json()["billing"]
     assert me["trial_days_left"] == 14 and me["read_only"] is False
     assert me["effective_plan"] == "pro" and set(me["features"]) == set(billing.FEATURES)
@@ -112,7 +113,7 @@ async def test_trial_expiry_makes_the_shop_read_only_not_deleted(client, db, str
     hdr, org_id = await _signup(client)
     made = await client.post("/api/clients", json={"name": "Before"}, headers=hdr)
     assert made.status_code == 201
-    await _set(db, org_id, trial_ends_at=date.today())   # the trial's last moment has passed
+    await _set(db, org_id, trial_ends_at=platform_today())   # the trial's last moment has passed
 
     me = (await client.get("/api/auth/me", headers=hdr)).json()["billing"]
     assert me["read_only"] is True and me["trial_days_left"] == 0
@@ -136,15 +137,15 @@ async def test_trial_expiry_makes_the_shop_read_only_not_deleted(client, db, str
     ("active", False), ("past_due", False), ("unpaid", True), ("churned", True),
     ("trial_lost", True), ("mystery", True)])
 async def test_subscription_states(db, status, read_only):
-    org = Organisation(name="X", sub_status=status, plan="pro", past_due_since=date.today())
+    org = Organisation(name="X", sub_status=status, plan="pro", past_due_since=platform_today())
     assert billing.state(org).read_only is read_only
 
 
 def test_past_due_grace_period_then_read_only():
     org = Organisation(name="X", sub_status="past_due", plan="pro")
-    org.past_due_since = date.today() - timedelta(days=billing.PAST_DUE_GRACE_DAYS)
+    org.past_due_since = platform_today() - timedelta(days=billing.PAST_DUE_GRACE_DAYS)
     assert not billing.state(org).read_only
-    org.past_due_since = date.today() - timedelta(days=billing.PAST_DUE_GRACE_DAYS + 1)
+    org.past_due_since = platform_today() - timedelta(days=billing.PAST_DUE_GRACE_DAYS + 1)
     assert billing.state(org).read_only
 
 
@@ -550,7 +551,7 @@ async def test_change_plan_and_portal(client, db, stripe_cfg):
 async def test_custom_shop_never_reaches_stripe(client, db, stripe_cfg):
     hdr, org_id = await _signup(client)
     await _set(db, org_id, billing_mode="custom", sub_status="active", plan="shop", stripe_customer_id="cus_c",
-               billing_period_end=date.today() + timedelta(days=30))
+               billing_period_end=platform_today() + timedelta(days=30))
     for path, body in (("/api/billing/checkout", {"plan": "pro"}), ("/api/billing/change-plan", {"plan": "pro"}),
                        ("/api/billing/portal", None)):
         r = await client.post(path, json=body, headers=hdr)
@@ -567,7 +568,7 @@ async def test_custom_shop_never_reaches_stripe(client, db, stripe_cfg):
 async def test_custom_term_end_makes_the_shop_read_only(client, db):
     hdr, org_id = await _signup(client)
     await _set(db, org_id, billing_mode="custom", sub_status="active", plan="pro",
-               billing_period_end=date.today() - timedelta(days=1))
+               billing_period_end=platform_today() - timedelta(days=1))
     r = await client.post("/api/clients", json={"name": "Late"}, headers=hdr)
     assert r.status_code == 402 and "term has ended" in r.json()["detail"]
     assert (await client.get("/api/clients", headers=hdr)).status_code == 200
@@ -578,7 +579,7 @@ async def test_admin_sets_custom_billing_and_price_lock(client, db, stripe_cfg):
     from backend.tests.test_build144ce_platform_admin import _admin_hdr
     ahdr = await _admin_hdr(client)
     hdr, org_id = await _signup(client)
-    lock = (date.today() + timedelta(days=730)).isoformat()
+    lock = (platform_today() + timedelta(days=730)).isoformat()
     r = await client.patch(f"/api/admin/tenants/{org_id}", headers=ahdr, json={
         "billing_mode": "custom", "sub_status": "active",
         "billing_period_end": "2027-03-31", "billing_note": "INR 2,500/month, invoiced quarterly",
@@ -684,7 +685,7 @@ async def test_webhook_accepts_any_of_several_v1_signatures(client, db, stripe_c
 @pytest.mark.asyncio
 async def test_checkout_completed_activates_the_shop(client, db, stripe_cfg):
     hdr, org_id = await _signup(client)
-    await _set(db, org_id, trial_ends_at=date.today() - timedelta(days=1))   # trial already over
+    await _set(db, org_id, trial_ends_at=platform_today() - timedelta(days=1))   # trial already over
     ev = _event("checkout.session.completed", {
         "object": "checkout.session", "mode": "subscription", "status": "complete",
         "payment_status": "paid", "client_reference_id": org_id, "customer": "cus_9",
@@ -707,7 +708,7 @@ async def test_subscription_updated_maps_price_status_and_period_end(client, db,
     await _post(client, _event("customer.subscription.updated", sub))
     org = await _org(db, org_id)
     assert (org.sub_status, org.plan, org.billing_period) == ("past_due", "pro", "year")
-    assert org.past_due_since == date.today() and org.cancel_at_period_end is True
+    assert org.past_due_since == platform_today() and org.cancel_at_period_end is True
     assert org.stripe_subscription_item_id == "si_2" and org.billing_period_end is not None
     await _post(client, _event("customer.subscription.updated", {**sub, "status": "active"}))
     org = await _org(db, org_id)
@@ -737,7 +738,7 @@ async def test_payment_failed_starts_grace_and_finds_shop_by_customer(client, db
     await _post(client, _event("invoice.payment_failed", {"object": "invoice", "customer": "cus_3",
                                                           "subscription": "sub_3"}))
     org = await _org(db, org_id)
-    assert org.sub_status == "past_due" and org.past_due_since == date.today()
+    assert org.sub_status == "past_due" and org.past_due_since == platform_today()
     assert not billing.state(org).read_only
 
 
@@ -812,7 +813,8 @@ def _deployed(env, **kw):
     base = dict(ENVIRONMENT=env, SECRET_KEY="s" * 48, CORS_ORIGINS="https://app.example.com",
                 TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode(),
                 DATABASE_URL="postgresql+asyncpg://u@db/tekly", PUBLIC_BASE_URL="https://app.example.com",
-                SMTP_HOST="smtp.example.com", SMTP_FROM="no-reply@example.com")
+                SMTP_HOST="smtp.example.com", SMTP_FROM="no-reply@example.com",
+                NO_REVERSE_PROXY=True, SINGLE_WORKER=True)  # M18/M20: deployed needs proxy trust and REDIS_URL, or these explicit opt-outs
     return Settings(_env_file=None, **{**base, **kw})
 
 
@@ -846,7 +848,7 @@ def test_admin_segments_follow_billing_states():
     from backend.routers.admin import _segment
     assert _segment(Organisation(sub_status="past_due")) == "paid"
     assert _segment(Organisation(sub_status="unpaid")) == "lost_paid"
-    assert _segment(Organisation(sub_status="trial", trial_ends_at=date.today() - timedelta(days=1))) == "lost_trial"
+    assert _segment(Organisation(sub_status="trial", trial_ends_at=platform_today() - timedelta(days=1))) == "lost_trial"
 
 
 async def test_trial_suggests_pro_only_when_the_shop_uses_a_pro_feature(client, db):

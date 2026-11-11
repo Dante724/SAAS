@@ -104,7 +104,7 @@ async def _reader_paid_sale(client, h, price=100):
 
 
 @pytest.mark.asyncio
-async def test_till_return_then_reader_refund_is_capped(client, tenant):
+async def test_till_return_then_reader_refund_is_capped(client, tenant, card_readers_on):
     till, sid, chid, line = await _reader_paid_sale(client, tenant)
     r = await client.post(f"/api/sales/{sid}/returns", json={"account_id": till, "lines": [{"line_id": line, "qty": 1}]},
                           headers=tenant)
@@ -115,7 +115,7 @@ async def test_till_return_then_reader_refund_is_capped(client, tenant):
 
 
 @pytest.mark.asyncio
-async def test_reader_refund_then_till_return_gives_no_more_money(client, tenant):
+async def test_reader_refund_then_till_return_gives_no_more_money(client, tenant, card_readers_on):
     till, sid, chid, line = await _reader_paid_sale(client, tenant)
     r = await client.post(f"/api/payments/terminal/charges/{chid}/refund", json={"amount": 60}, headers=tenant)
     assert r.status_code == 200, r.text

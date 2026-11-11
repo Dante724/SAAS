@@ -10,6 +10,7 @@
    - With no account for the method it shows a small "Set up a cashbox" form that creates one
      (POST /cash/accounts) and selects it. Without the permission it says who can set one up. */
 import { useEffect, useMemo, useState } from "react";
+import TeklySelect from "./TeklySelect";
 import { api } from "../api/client";
 import { useMe } from "../context/Me";
 
@@ -79,10 +80,10 @@ export default function AccountPicker({ accounts, paymentOption, locationId, val
     );
   }
   return (
-    <select id={id} aria-label={id ? undefined : "Account"} value={value} onChange={(e) => onChange(e.target.value)}
+    <TeklySelect id={id} aria-label={id ? undefined : "Account"} value={value} onChange={(e) => onChange(e.target.value)}
       className={selectClassName || "glass-input w-full py-2 px-3 text-xs font-semibold rounded-xl"}>
       {fitting.map((a) => <option key={a.id} value={a.id}>{a.name || "Account"}</option>)}
-    </select>
+    </TeklySelect>
   );
 }
 

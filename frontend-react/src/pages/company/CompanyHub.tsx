@@ -1,10 +1,13 @@
 import SkeletonRows from "../../components/SkeletonRows";
+import TeklySelect from "../../components/TeklySelect";
+import { buttonClass } from "../../components/Button";
 import PageSummary, { type SummaryStat } from "../../components/PageSummary";
 import { useEffect, useState } from "react";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import { useMe } from "../../context/Me";
 import Shell, { M } from "../../components/Shell";
+import { TableEmpty } from "../../components/EmptyState";
 import { api } from "../../api/client";
 import { AgentDraftsCard, MorningBriefCard, WatchdogPanel } from "../../components/sense/Sense";
 import { Product, Service, Bundle, money } from "../inventory/types";
@@ -14,15 +17,16 @@ import { useServerPage } from "../../hooks/useServerPage";
 import { inputCls } from "../invoices/billing";
 import { clickable, clickableRow } from "../../lib/clickable";
 import ImportDrawer from "../../components/ImportDrawer";
+import { Badge } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 import { fmtServerTime } from "../../lib/serverTime";
 
 const CO_PAGE = 50;
 
 // Catalog toolbar look: a filter that is set reads as active in the primary tint.
 const filterCls = (on: boolean) => `h-9 text-xs font-semibold rounded-xl border px-3 cursor-pointer ${on ? "bg-primary/10 text-primary border-primary/30" : "bg-white text-ink-secondary border-slate-200 hover:bg-slate-50"}`;
-const primaryBtn = "h-9 bg-primary text-white text-xs font-semibold px-3.5 rounded-xl hover:bg-primary-container flex items-center gap-1.5";
-const ghostBtn = "h-9 bg-white border border-slate-200 text-ink-secondary text-xs font-semibold px-3.5 rounded-xl hover:bg-slate-50 flex items-center gap-1.5";
-const thCls = "border-b border-slate-200 bg-slate-50/60 text-xs font-semibold text-ink-tertiary";
+const primaryBtn = buttonClass("primary", "md");
+const ghostBtn = buttonClass("secondary", "md");
 
 export type RowMenuItem = { label: string; icon: string; onClick: () => void; danger?: boolean };
 /* The "⋮" at the end of a row. The row itself opens the record; this holds the extra actions.
@@ -313,13 +317,13 @@ export function EmployeeHours() {
       </div>
       <div className="rounded-2xl bg-white border border-slate-200/80 shadow-clay-card overflow-hidden">
         <table className="w-full text-left border-collapse">
-          <thead className="border-b border-slate-100 bg-slate-50/60 text-[11px] font-bold text-ink-tertiary "><tr>
+          <thead><tr className={theadRowClass}>
             <th className="py-3 px-5">Employee</th><th className="py-3 px-3">Work order</th><th className="py-3 px-3">Type</th>
             <th className="py-3 px-3">Started</th><th className="py-3 px-3 text-right">Duration</th><th className="py-3 px-3">Status</th>
           </tr></thead>
           <tbody className="divide-y divide-slate-100 text-xs">
             {!entries && <SkeletonRows cols={6} />}
-            {entries?.length === 0 && <tr><td colSpan={6} className="py-6 px-5 text-ink-tertiary">No time entries yet.</td></tr>}
+            {entries?.length === 0 && <TableEmpty cols={6} icon={<M n="schedule" c="text-lg" />} title="No time entries yet." />}
             {pageEntries.map((e) => (
               <tr key={e.id} className="hover:bg-blue-50/30">
                 <td className="py-3 px-5 font-bold text-ink-primary">{e.employee_name || "—"}</td>
@@ -328,8 +332,8 @@ export function EmployeeHours() {
                 <td className="py-3 px-3 text-ink-secondary">{fmtServerTime(e.started_at, {}) || "—"}</td>
                 <td className="py-3 px-3 text-right tabular-nums font-bold text-ink-primary">{hm(e.duration_min)}</td>
                 <td className="py-3 px-3">{e.running
-                  ? <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-700">Running</span>
-                  : <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-ink-secondary">Done</span>}</td>
+                  ? <Badge tone="success" size="sm">Running</Badge>
+                  : <Badge size="sm">Done</Badge>}</td>
               </tr>
             ))}
           </tbody>
@@ -369,13 +373,13 @@ export function Services({ onOpen, refresh }: { onOpen: (s?: Service) => void; r
       {cat && <CategoryManager entity="service" onClose={() => setCat(false)} onChanged={() => { load(); loadCats(); }} />}
       {importing && <ImportDrawer kind="services" onClose={() => setImporting(false)} onDone={() => { load(); loadCats(); }} />}
       <div className="flex items-center gap-3 flex-wrap">
-        <button onClick={() => onOpen()} className={primaryBtn}><M n="add" c="text-sm" />New service</button>
+        <button onClick={() => onOpen()} className={`${primaryBtn} min-w-[8.5rem] justify-center`}><M n="add" c="text-sm" />New service</button>
         {can("can_edit_labors") && <button onClick={() => setImporting(true)} className={ghostBtn}><M n="upload" c="text-sm" />Import</button>}
         <button onClick={() => setCat(true)} className={ghostBtn}><M n="inventory" c="text-sm" />Categories</button>
-        <select aria-label="Category" value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className={filterCls(!!catFilter)}>
+        <TeklySelect aria-label="Category" value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className={filterCls(!!catFilter)}>
           <option value="">Category: All</option>
           {cats.map((c) => <option key={c.id} value={c.id}>{`${"  ".repeat(c.depth)}${c.name}`}</option>)}
-        </select>
+        </TeklySelect>
         <div className="relative flex-1 min-w-[240px] max-w-md">
           <M n="search" c="absolute left-3 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search services…" aria-label="Search services" className={`${inputCls} pl-9`} />
@@ -384,18 +388,16 @@ export function Services({ onOpen, refresh }: { onOpen: (s?: Service) => void; r
       <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
         <div className="overflow-x-auto">
         <table className="w-full min-w-[560px] text-left border-collapse">
-          <thead className={thCls}><tr>
-            <th className="py-3 px-5 font-semibold">Service</th><th className="py-3 px-3 font-semibold">Category</th><th className="py-3 px-3 text-right font-semibold">Duration</th><th className="py-3 px-3 text-right font-semibold">Price</th><th className="py-3 pr-4 w-12"><span className="sr-only">Actions</span></th>
+          <thead><tr className={theadRowClass}>
+            <th className="py-3 px-5">Service</th><th className="py-3 px-3">Category</th><th className="py-3 px-3 text-right">Duration</th><th className="py-3 px-3 text-right">Price</th><th className="py-3 pr-4 w-12"><span className="sr-only">Actions</span></th>
           </tr></thead>
           <tbody className="divide-y divide-slate-100 text-xs">
             {!items && <SkeletonRows cols={5} />}
             {items && err && <tr><td colSpan={5} className="py-6 px-5 text-rose-600">Couldn't load services. <button onClick={load} className="font-semibold underline">Try again</button></td></tr>}
-            {items && !err && rows.length === 0 && <tr><td colSpan={5} className="py-12 px-5 text-center">
-              {items.length
-                ? <><div className="text-sm font-semibold text-ink-primary">No services match</div><div className="text-xs text-ink-tertiary mt-1">Try another name, or clear the category filter.</div></>
-                : <><div className="text-sm font-semibold text-ink-primary">No services yet</div><div className="text-xs text-ink-tertiary mt-1">Services are the work you charge for. Add one to put it on jobs, sales and online booking.</div>
-                    <button onClick={() => onOpen()} className={`${primaryBtn} mx-auto mt-3`}><M n="add" c="text-sm" />New service</button></>}
-            </td></tr>}
+            {items && !err && rows.length === 0 && (items.length
+              ? <TableEmpty cols={5} icon={<M n="search_off" c="text-lg" />} title="No services match" body="Try another name, or clear the category filter." />
+              : <TableEmpty cols={5} icon={<M n="handyman" c="text-lg" />} title="No services yet" body="Services are the work you charge for. Add one to put it on jobs, sales and online booking."
+                  action={<button onClick={() => onOpen()} className={primaryBtn}><M n="add" c="text-sm" />New service</button>} />)}
             {pageRows.map((s) => (
               <tr key={s.id} className="hover:bg-slate-50 cursor-pointer" {...clickableRow(() => onOpen(s))}>
                 <td className="py-3 px-5">
@@ -451,13 +453,13 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
       {cat && <CategoryManager entity="product" onClose={() => setCat(false)} onChanged={loadCats} />}
       {importing && <ImportDrawer kind="products" onClose={() => setImporting(false)} onDone={() => { load(); loadCats(); }} />}
       <div className="flex items-center gap-3 flex-wrap">
-        <button onClick={() => onOpen()} className={primaryBtn}><M n="add" c="text-sm" />New product</button>
+        <button onClick={() => onOpen()} className={`${primaryBtn} min-w-[8.5rem] justify-center`}><M n="add" c="text-sm" />New product</button>
         {(can("can_create_products") || can("can_edit_products") || can("can_manage_inventory")) && <button onClick={() => setImporting(true)} className={ghostBtn}><M n="upload" c="text-sm" />Import</button>}
         <button onClick={() => setCat(true)} className={ghostBtn}><M n="inventory" c="text-sm" />Categories</button>
-        <select aria-label="Category" value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className={filterCls(!!catFilter)}>
+        <TeklySelect aria-label="Category" value={catFilter} onChange={(e) => setCatFilter(e.target.value)} className={filterCls(!!catFilter)}>
           <option value="">Category: All</option>
           {cats.map((c) => <option key={c.id} value={c.id}>{`${"  ".repeat(c.depth)}${c.name}`}</option>)}
-        </select>
+        </TeklySelect>
         <div className="relative flex-1 min-w-[240px] max-w-md">
           <M n="search" c="absolute left-3 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" />
           <input value={q} onChange={(e) => setQ(e.target.value)} placeholder="Search products, SKU, MPN…" aria-label="Search products" className={`${inputCls} pl-9`} />
@@ -466,18 +468,16 @@ export function Products({ onOpen, refresh }: { onOpen: (p?: Product) => void; r
       <div className="bg-white rounded-2xl border border-slate-200/90 overflow-hidden">
         <div className="overflow-x-auto">
         <table className="w-full min-w-[720px] text-left border-collapse">
-          <thead className={thCls}><tr>
-            <th className="py-3 px-5 font-semibold">Product</th><th className="py-3 px-3 font-semibold">Category</th><th className="py-3 px-3 font-semibold">SKU</th><th className="py-3 px-3 font-semibold">MPN</th><th className="py-3 px-3 text-right font-semibold">Cost</th><th className="py-3 px-3 text-right font-semibold">Sell price</th><th className="py-3 px-3 text-right font-semibold">In stock</th><th className="py-3 pr-4 w-12"><span className="sr-only">Actions</span></th>
+          <thead><tr className={theadRowClass}>
+            <th className="py-3 px-5">Product</th><th className="py-3 px-3">Category</th><th className="py-3 px-3">SKU</th><th className="py-3 px-3">MPN</th><th className="py-3 px-3 text-right">Cost</th><th className="py-3 px-3 text-right">Sell price</th><th className="py-3 px-3 text-right">In stock</th><th className="py-3 pr-4 w-12"><span className="sr-only">Actions</span></th>
           </tr></thead>
           <tbody className="divide-y divide-slate-100 text-xs">
             {!items && <SkeletonRows cols={8} />}
             {items && err && <tr><td colSpan={8} className="py-6 px-5 text-rose-600">Couldn't load products. <button onClick={load} className="font-semibold underline">Try again</button></td></tr>}
-            {items && !err && rows.length === 0 && <tr><td colSpan={8} className="py-12 px-5 text-center">
-              {items.length
-                ? <><div className="text-sm font-semibold text-ink-primary">No products match</div><div className="text-xs text-ink-tertiary mt-1">Search by name, SKU, MPN or barcode, or clear the category filter.</div></>
-                : <><div className="text-sm font-semibold text-ink-primary">No products yet</div><div className="text-xs text-ink-tertiary mt-1">Products are the parts and items you sell. Add one to use it on jobs and at the till.</div>
-                    <button onClick={() => onOpen()} className={`${primaryBtn} mx-auto mt-3`}><M n="add" c="text-sm" />New product</button></>}
-            </td></tr>}
+            {items && !err && rows.length === 0 && (items.length
+              ? <TableEmpty cols={8} icon={<M n="search_off" c="text-lg" />} title="No products match" body="Search by name, SKU, MPN or barcode, or clear the category filter." />
+              : <TableEmpty cols={8} icon={<M n="inventory_2" c="text-lg" />} title="No products yet" body="Products are the parts and items you sell. Add one to use it on jobs and at the till."
+                  action={<button onClick={() => onOpen()} className={primaryBtn}><M n="add" c="text-sm" />New product</button>} />)}
             {pageRows.map((p) => (
               <tr key={p.id} className="hover:bg-slate-50 cursor-pointer" {...clickableRow(() => onOpen(p))}>
                 <td className="py-3 px-5 font-semibold text-ink-primary">{p.name}</td>
@@ -512,8 +512,10 @@ export function Bundles({ onOpen, refresh }: { onOpen: (b?: Bundle) => void; ref
   return (
     <div className="space-y-4">
       {cat && <CategoryManager entity="bundle" onClose={() => setCat(false)} onChanged={load} />}
-      <div className="flex items-center gap-3">
-        {can("can_manage_bundles") && <button onClick={() => onOpen()} className={primaryBtn}><M n="add" c="text-sm" />New job kit</button>}
+      {/* Same buttons in the same spots as Services and Products; Import is greyed here (kits can't be imported) so nothing slides. */}
+      <div className="flex items-center gap-3 flex-wrap">
+        {can("can_manage_bundles") && <button onClick={() => onOpen()} className={`${primaryBtn} min-w-[8.5rem] justify-center`}><M n="add" c="text-sm" />New job kit</button>}
+        <button disabled title="Job kits can't be imported" className={`${ghostBtn} disabled:opacity-40 disabled:cursor-not-allowed`}><M n="upload" c="text-sm" />Import</button>
         <button onClick={() => setCat(true)} className={ghostBtn}><M n="inventory" c="text-sm" />Categories</button>
       </div>
       <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-6 space-y-3">

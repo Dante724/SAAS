@@ -1,4 +1,5 @@
 import { ReactNode, useEffect, useRef, useState } from "react";
+import TeklySelect from "./TeklySelect";
 import DeviceList from "./DeviceList";
 import { useVisibleInterval } from "../hooks/useVisibleInterval";
 import { toAppPath } from "../lib/deepLink";
@@ -31,7 +32,7 @@ import {
   ShieldCheck, Target, EyeOff, Car, Sailboat, Bike, Laptop, Cog, Upload,
   ShoppingBag, Split, Nfc, Phone, PhoneIncoming, PhoneOutgoing, PhoneMissed, Network, HelpCircle,
   LogOut, Menu as MenuIcon, PackageOpen, Info, UserCheck, KeyRound, MapPin, Crown,
-  CircleDot, CloudOff, Footprints, Hand, Infinity as InfinityIcon, LayoutGrid, LogIn, MessageSquareText, MessagesSquare, MoveRight, Redo2, SquareCheck, Star, ThumbsUp, TriangleAlert, UserX,
+  CircleDot, CloudOff, Footprints, Hand, Infinity as InfinityIcon, LayoutGrid, LogIn, MessageSquareText, MessagesSquare, MoveRight, Redo2, SquareCheck, Star, ThumbsDown, ThumbsUp, TriangleAlert, UserX,
 } from "lucide-react";
 import { loadFailed } from "../lib/notice";
 import { supportContact } from "../lib/support";
@@ -42,7 +43,7 @@ import { fmtServerTime } from "../lib/serverTime";
 const ICONS: Record<string, any> = {
   // Names used in the app that had no mapping (they drew as an empty circle).
   forum: MessagesSquare, grid_view: LayoutGrid, summarize: FileText, reviews: Star,
-  check_box: SquareCheck, check_box_outline_blank: Square, sms: MessageSquareText, thumb_up: ThumbsUp,
+  check_box: SquareCheck, check_box_outline_blank: Square, sms: MessageSquareText, thumb_up: ThumbsUp, thumb_down: ThumbsDown, assignment: ClipboardList,
   directions_walk: Footprints, insert_chart: BarChart3, login: LogIn, all_inclusive: InfinityIcon, bedtime: Moon,
   list_alt: ClipboardList, back_hand: Hand, cloud_off: CloudOff, sync_problem: TriangleAlert,
   trending_flat: MoveRight, person_off: UserX, redo: Redo2, replay: RotateCcw, print_disabled: Printer,
@@ -171,8 +172,8 @@ const PLAN_LABEL = { solo: "Solo", shop: "Shop", pro: "Pro" } as const;
 // Next to the logo: the plan the shop is on (TRIAL while trialling). Nothing until /me loads.
 export function planBadge(b?: Billing | null): string | null {
   if (!b) return null;
-  if (b.status === "trial" && !b.read_only) return "TRIAL";
-  return (PLAN_LABEL[b.plan] || "Solo").toUpperCase();
+  if (b.status === "trial" && !b.read_only) return "Trial";
+  return PLAN_LABEL[b.plan] || "Solo";
 }
 
 function BillingBanner({ billing }: { billing?: Billing | null }) {
@@ -259,7 +260,7 @@ export default function Shell({ title, children }: { title: string; children: Re
         return (
           <div key={group.name || "home"} className="pb-1">
             {group.name && !collapsed && (
-              <div className="px-2.5 pt-2.5 pb-1 text-[11px] font-bold text-ink-tertiary/80">{t(group.name)}</div>
+              <div className="px-2.5 pt-2.5 pb-1 text-2xs font-bold text-ink-tertiary">{t(group.name)}</div>
             )}
             {group.name && collapsed && <div className="my-1.5 mx-2 border-t border-slate-200/70" />}
             {visible.map((it) => (
@@ -272,7 +273,7 @@ export default function Shell({ title, children }: { title: string; children: Re
                 className={({ isActive }) =>
                   `flex items-center gap-2 px-2.5 rounded-lg text-xs transition-colors ${onNavigate ? "py-2.5 text-[13px]" : "py-1.5"} ${collapsed ? "justify-center" : ""} ${
                     isActive
-                      ? "font-bold text-primary bg-blue-50/80 shadow-sm"
+                      ? "font-medium text-primary bg-blue-50/80"
                       : "font-medium text-ink-secondary hover:bg-slate-100 hover:text-ink-primary"
                   }`
                 }
@@ -298,7 +299,7 @@ export default function Shell({ title, children }: { title: string; children: Re
       <TeklyMark size={32} />
       {!collapsed && (
         <div>
-          <div className="font-bold text-[17px] leading-none tracking-[-0.05em] text-ink-primary flex items-center gap-1.5" aria-label="Tekly">tekly {planBadge(me?.billing) && <span className="text-[10px] tracking-normal px-1 py-px rounded bg-blue-100 text-primary font-bold">{planBadge(me?.billing)}</span>}</div>
+          <div className="font-bold text-[17px] leading-none tracking-[-0.05em] text-ink-primary flex items-center gap-1.5" aria-label="Tekly">tekly {planBadge(me?.billing) && <span className="text-2xs tracking-normal px-1.5 py-px rounded-md bg-blue-50 text-primary font-semibold">{planBadge(me?.billing)}</span>}</div>
           {me?.org_name && <p className="max-w-[140px] truncate text-[11px] text-ink-tertiary font-medium" title={me.org_name}>{me.org_name}</p>}
         </div>
       )}
@@ -338,14 +339,14 @@ export default function Shell({ title, children }: { title: string; children: Re
 
         {/* MAIN */}
         <main className="app-main flex-1 flex flex-col min-w-0 bg-canvas overflow-hidden">
-          <header className="h-[52px] bg-white/80 backdrop-blur-md border-b border-slate-200/80 px-2 sm:px-4 min-[1100px]:px-6 flex items-center justify-between gap-2 flex-shrink-0 z-10">
+          <header className="h-[52px] bg-white border-b border-slate-200/80 px-2 sm:px-4 min-[900px]:px-6 flex items-center justify-between gap-2 flex-shrink-0 z-10">
             <div className="flex items-center gap-1.5 sm:gap-4 min-w-0">
               <button onClick={() => setNavOpen(true)} aria-label={t("Open menu")} aria-expanded={navOpen} aria-controls="nav-drawer"
                 className="min-[900px]:hidden w-10 h-10 shrink-0 rounded-lg flex items-center justify-center text-ink-secondary hover:bg-slate-100 hover:text-ink-primary"><M n="menu" c="text-xl" /></button>
               <h1 className="text-base font-bold text-ink-primary tracking-tight whitespace-nowrap truncate">{t(title)}</h1>
               <button onClick={() => setPalette(true)} aria-label={t("Search")} className="relative shrink-0 text-left group w-8 h-8 sm:h-auto sm:w-44 min-[1100px]:w-64">
                 <M n="search" c="absolute left-2.5 top-2 text-ink-tertiary text-sm" />
-                <div className="w-full h-8 sm:h-auto bg-slate-100/80 group-hover:bg-white text-xs pl-8 sm:pr-12 py-1.5 rounded-lg border border-slate-200/70 font-medium text-ink-placeholder whitespace-nowrap overflow-hidden text-ellipsis"><span className="hidden sm:inline">{t("Search jobs, customers…")}</span></div>
+                <div className="w-full h-8 sm:h-auto bg-slate-100/80 group-hover:bg-white text-xs pl-8 sm:pr-12 py-1.5 rounded-lg border border-slate-200/70 font-medium text-ink-tertiary whitespace-nowrap overflow-hidden text-ellipsis"><span className="hidden sm:inline">{t("Search jobs, customers…")}</span></div>
                 <span className="hidden sm:inline absolute right-2 top-1.5 text-[11px] bg-white border border-slate-200 text-ink-tertiary font-mono px-1 rounded shadow-2xs">⌘K</span>
               </button>
             </div>
@@ -463,7 +464,7 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
   const inp = "glass-input w-full px-3 py-2 rounded-lg text-sm font-semibold text-ink-primary";
   return (
     <div className="fixed inset-0 z-[80] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={forced ? undefined : onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={forced ? undefined : onClose} />
       <div className="relative w-full max-w-lg max-h-[90vh] flex flex-col bg-white rounded-2xl shadow-clay-drawer border border-slate-200/90 overflow-hidden">
         <div className="px-5 py-4 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
           <h3 className="text-sm font-bold text-ink-primary flex items-center gap-2"><M n="lock" c="text-base" />Security</h3>
@@ -472,7 +473,7 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
             : <button aria-label="Close" onClick={onClose} className="w-7 h-7 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button>}
         </div>
         <div className="p-5 space-y-4 text-sm overflow-y-auto">
-          <p className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary">Two-factor authentication</p>
+          <p className="text-xs font-semibold text-ink-tertiary">Two-factor authentication</p>
           {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
 
           {enabled && step !== "done" && (
@@ -520,12 +521,12 @@ function SecurityModal({ me, onClose, onChanged, forced = false }: { me: any; on
                   </div>
                 </div>
               )}
-              <button onClick={onClose} className="w-full px-4 py-2 rounded-lg bg-ink-primary text-white text-xs font-bold">Done</button>
+              <button onClick={onClose} className="w-full px-4 py-2 rounded-lg bg-primary text-white hover:bg-primary-container text-xs font-bold">Done</button>
             </>
           )}
           {!forced && (
             <div className="border-t border-slate-100 pt-4">
-              <p className="text-[11px] font-bold uppercase tracking-wide text-ink-tertiary">Signed-in devices</p>
+              <p className="text-xs font-semibold text-ink-tertiary">Signed-in devices</p>
               <p className="mt-0.5 mb-1 text-xs text-ink-tertiary">Don't recognise one? Sign it out and change your password.</p>
               <DeviceList base="/auth/sessions" />
             </div>
@@ -571,7 +572,7 @@ function CommandPalette({ onClose }: { onClose: () => void }) {
 
   return (
     <div className="fixed inset-0 z-[80] flex items-start justify-center pt-[12vh]" role="presentation" onClick={onClose}>
-      <div className="absolute inset-0 bg-ink-primary/30 backdrop-blur-[2px]" />
+      <div className="absolute inset-0 bg-ink-primary/30" />
       <div className="relative w-[560px] max-w-[92vw] bg-white rounded-2xl shadow-drawer border border-slate-200 overflow-hidden" onClick={(e) => e.stopPropagation()}>
         <div className="flex items-center gap-2 px-4 py-3 border-b border-slate-100">
           <M n="search" c="text-ink-tertiary text-base" />
@@ -819,10 +820,10 @@ function LocationSwitcher({ block = false }: { block?: boolean }) {
   }, []);
   if (locs.length < 2) return null; // single branch: no switcher needed
   return (
-    <select value={sel} onChange={(e) => { setSel(e.target.value); setLocationScope(e.target.value); window.location.reload(); }}
+    <TeklySelect value={sel} onChange={(e) => { setSel(e.target.value); setLocationScope(e.target.value); window.location.reload(); }}
       title="Location" aria-label={t("Location")} className={`rounded-full border border-slate-200 bg-white text-xs font-semibold text-ink-secondary px-2 shadow-xs ${block ? "h-10 w-full" : "h-8 max-w-[140px]"}`}>
       <option value="">All locations</option>
       {locs.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-    </select>
+    </TeklySelect>
   );
 }

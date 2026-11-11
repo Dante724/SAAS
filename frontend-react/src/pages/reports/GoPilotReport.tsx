@@ -3,9 +3,11 @@
 // looked jobs up. The headline is the share of status changes made on a phone against the 50%
 // decision rule. See docs/pilot/tekly-go-shop-pilot.md.
 import { useEffect, useState } from "react";
+import { buttonClass } from "../../components/Button";
 import { api, openAuthedDoc } from "../../api/client";
 import { alertDialog } from "../../lib/dialog";
 import DateField from "../../components/DateField";
+import { theadRowClass } from "../../components/Table";
 
 type Counts = { total: number; go: number };
 export type PilotRow = {
@@ -53,7 +55,7 @@ export default function GoPilotReport() {
   }
 
   const h = rep?.headline;
-  const th = "py-2 px-3 text-left text-[11px] font-semibold text-ink-tertiary whitespace-nowrap";
+  const th = "py-2 px-3 text-left whitespace-nowrap";
   const td = "py-2 px-3 text-xs tabular-nums whitespace-nowrap";
   return (
     <div className="flex-1 overflow-y-auto px-6 py-5 space-y-4">
@@ -62,7 +64,7 @@ export default function GoPilotReport() {
           <DateField mode="date" label="From" value={from} max={to} onChange={setFrom} className="w-40" /></div>
         <div className="space-y-1"><span className="block text-[11px] font-semibold text-ink-secondary">To</span>
           <DateField mode="date" label="To" value={to} min={from} onChange={setTo} className="w-40" /></div>
-        <button type="button" onClick={csv} className="px-3 py-2 rounded-xl text-xs font-semibold border border-slate-200 hover:bg-slate-50">Download CSV</button>
+        <button type="button" onClick={csv} className={buttonClass("secondary", "md")}>Download CSV</button>
         <p className="text-[11px] text-ink-tertiary">Dates are UTC. Jobs: those that got a pilot QR label.</p>
       </div>
 
@@ -83,8 +85,8 @@ export default function GoPilotReport() {
       {rep && (
         <div className="bg-white rounded-2xl border border-slate-200 overflow-x-auto">
           <table className="w-full">
-            <thead className="border-b border-slate-100">
-              <tr>
+            <thead>
+              <tr className={theadRowClass}>
                 <th className={th}>Person</th><th className={th}>Status changes (phone / all)</th><th className={th}>Photos (phone / all)</th>
                 <th className={th}>Messages from Go</th><th className={th}>Scans</th>
                 {LOOKUP_KINDS.map(([k, l]) => <th key={k} className={th}>Lookups: {l}</th>)}

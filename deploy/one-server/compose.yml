@@ -1,0 +1,103 @@
+# Tekly on one server: app + Postgres + Redis + Cloudflare Tunnel + nightly off-site backups.
+# Runbook: deploy/one-server/README.md.   Start:  ./deploy.sh
+#
+# Nothing listens on the internet: the only way in is the Cloudflare Tunnel (outbound connection),
+# so the server's firewall can block every inbound port except SSH.
+
+name: tekly
+
+# Shared by every service that runs the Tekly image (app and migrate): both load the
+# settings, and deployed settings refuse to start without proxy trust and shared rate limits (Redis).
+# Only the tunnel may set X-Forwarded-For.
+x-db-url: &db-url
+  FORWARDED_ALLOW_IPS: 172.30.0.10
+  REDIS_URL: redis://redis:6379/0
+  DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-tekly}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-tekly}
+
+services:
+  db:
+    image: postgres:16-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: ${POSTGRES_USER:-tekly}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      POSTGRES_DB: ${POSTGRES_DB:-tekly}
+    # Sized for a 4 GB server. Connections: WEB_CONCURRENCY x (DB_POOL_SIZE + DB_MAX_OVERFLOW)
+    # = 2 x 20 = 40 by default, plus migrations and backups, under 100.
+    command: ["postgres", "-c", "max_connections=100", "-c", "shared_buffers=512MB",
+              "-c", "effective_cache_size=1536MB", "-c", "work_mem=8MB"]
+    shm_size: 256mb
+    volumes: [ "pgdata:/var/lib/postgresql/data" ]
+    healthcheck:
+      test: [ "CMD-SHELL", "pg_isready -U ${POSTGRES_USER:-tekly} -d ${POSTGRES_DB:-tekly}" ]
+      interval: 5s
+      timeout: 5s
+      retries: 20
+    networks: [ internal ]
+
+  redis:
+    # Rate-limit counters only (shared by the app's workers); nothing worth persisting.
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: [ "redis-server", "--save", "", "--appendonly", "no", "--maxmemory", "128mb", "--maxmemory-policy", "allkeys-lru" ]
+    networks: [ internal ]
+
+  # Runs the database migrations, then exits. The app starts only if they succeed.
+  migrate:
+    image: ${TEKLY_IMAGE:-tekly:latest}
+    env_file: .env
+    environment:
+      <<: *db-url
+    command: [ "alembic", "-c", "backend/alembic.ini", "upgrade", "head" ]
+    depends_on:
+      db: { condition: service_healthy }
+    networks: [ internal ]
+
+  app:
+    image: ${TEKLY_IMAGE:-tekly:latest}
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      <<: *db-url
+      WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
+    depends_on:
+      migrate: { condition: service_completed_successfully }
+      redis: { condition: service_started }
+    # This server only (for ./smoke.sh and SSH port-forwarding); the public way in is the tunnel.
+    ports: [ "127.0.0.1:8000:8000" ]
+    networks: [ internal ]
+
+  tunnel:
+    # Cloudflare keeps versions supported for about a year: bump CLOUDFLARED_VERSION when it nags.
+    image: cloudflare/cloudflared:${CLOUDFLARED_VERSION:-latest}
+    restart: unless-stopped
+    command: [ "tunnel", "--no-autoupdate", "run" ]
+    environment:
+      TUNNEL_TOKEN: ${CLOUDFLARE_TUNNEL_TOKEN:?set CLOUDFLARE_TUNNEL_TOKEN in .env}
+    depends_on: [ app ]
+    networks:
+      internal: { ipv4_address: 172.30.0.10 }
+
+  backup:
+    build: ./backup
+    image: tekly-backup:local
+    restart: unless-stopped
+    env_file: .env
+    environment:
+      PGHOST: db
+      PGUSER: ${POSTGRES_USER:-tekly}
+      PGPASSWORD: ${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}
+      PGDATABASE: ${POSTGRES_DB:-tekly}
+    volumes: [ "backups:/backups" ]
+    depends_on:
+      db: { condition: service_healthy }
+    networks: [ internal ]
+
+networks:
+  internal:
+    ipam:
+      config: [ { subnet: 172.30.0.0/24 } ]
+
+volumes:
+  pgdata:
+  backups:

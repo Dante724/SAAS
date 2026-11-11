@@ -7,7 +7,8 @@ import { useCallback, useEffect, useRef, useState } from "react";
 import { Banknote, CheckCircle2, CreditCard, Loader2, QrCode, Share2 } from "lucide-react";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
-import { PrimaryButton, Sheet } from "./ui";
+import { GoButton, PrimaryButton, Sheet } from "./ui";
+import Chip from "./Chip";
 import { finishWithPayment } from "../lib/finish";
 import { changeDue, clampAmount, money, quickTender } from "../lib/pay";
 import { newKey } from "../lib/photos";
@@ -17,7 +18,7 @@ import { useLock } from "./Lock";
 import AccountPicker, { type PayAccount, type PaymentOption, accountsFor, pickDefaultAccount } from "../../components/AccountPicker";
 
 type Ctx = { remaining: number; order_total: number; already_paid: number; location_id?: string | null; accounts_by_method: Record<string, PayAccount[]> };
-// Card covers card readers and cashless (bank / UPI) accounts on the phone.
+// Card covers card and cashless (bank / UPI) accounts on the phone; it is recorded, not taken on a reader.
 const OPTIONS: Record<"cash" | "card", PaymentOption[]> = { cash: ["cash"], card: ["card", "cashless"] };
 const allAccounts = (c: Ctx | null): PayAccount[] =>
   c ? Object.entries(c.accounts_by_method || {}).flatMap(([k, list]) => (list || []).map((a) => ({ ...a, payment_option: a.payment_option || k }))) : [];
@@ -155,7 +156,7 @@ export default function PaySheet({ open, onClose, orderId, orderNumber, customer
                 <p className="mb-2 text-go-sub font-semibold text-ink-tertiary">Customer handed you</p>
                 <div className="flex flex-wrap gap-2">
                   {quickTender(amount).map((v) => (
-                    <button key={v} onClick={() => setTendered(v)} className={`min-h-[2.75rem] px-4 rounded-full border font-semibold tabular-nums ${tendered === v ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`}>{fmt(v)}</button>
+                    <Chip key={v} on={tendered === v} onClick={() => setTendered(v)} className="tabular-nums">{fmt(v)}</Chip>
                   ))}
                 </div>
                 {tendered != null && tendered > amount && <p className="mt-3 text-center text-go-title font-bold text-emerald-700">Change {fmt(changeDue(tendered, amount))}</p>}
@@ -177,8 +178,8 @@ export default function PaySheet({ open, onClose, orderId, orderNumber, customer
                     <img src={link.qr_svg} alt="Pay link QR code" className="mx-auto h-56 w-56 rounded-xl bg-white p-3" />
                     <p className="mt-2 text-go-sub text-ink-secondary inline-flex items-center gap-1.5"><Loader2 size={14} className="animate-spin" />Waiting for the customer to pay…</p>
                     {"share" in navigator && (
-                      <button onClick={() => navigator.share({ title: `Pay for ${orderNumber}`, url: link.url }).catch(() => { /* silent: the share sheet rejects when the person cancels it */ })}
-                        className="mt-3 min-h-[2.75rem] px-5 rounded-xl border border-slate-200 bg-white font-semibold text-ink-primary inline-flex items-center gap-2"><Share2 size={18} />Send the link</button>
+                      <GoButton onClick={() => navigator.share({ title: `Pay for ${orderNumber}`, url: link.url }).catch(() => { /* silent: the share sheet rejects when the person cancels it */ })}
+                        className="mt-3 px-5"><Share2 size={18} />Send the link</GoButton>
                     )}
                   </>
                 )}

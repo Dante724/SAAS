@@ -4,11 +4,12 @@
 import { useEffect, useState } from "react";
 import { NotebookPen } from "lucide-react";
 import { api } from "../../api/client";
-import { Card, PrimaryButton, Sheet } from "./ui";
+import { Card, GoButton, PrimaryButton, Sheet, goArea } from "./ui";
 import { haptic } from "../lib/scanner";
 import { useToast } from "../lib/useGo";
+import EmptyState from "../../components/EmptyState";
 
-const area = "w-full min-h-[7rem] rounded-xl border border-slate-200 bg-white px-4 py-3 text-go-body text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary focus:ring-4 focus:ring-primary/15 resize-none";
+const area = goArea("min-h-[7rem]");
 
 export default function NotesCard({ orderId, techNotes, conclusion, readOnly, onSaved }: {
   orderId: string; techNotes?: string | null; conclusion?: string | null; readOnly?: boolean;
@@ -39,16 +40,16 @@ export default function NotesCard({ orderId, techNotes, conclusion, readOnly, on
     <div className="mt-4">
       <h2 className="px-4 mb-1.5 text-go-sub font-medium text-ink-tertiary">Bench notes</h2>
       <Card className="p-4">
-        {empty ? <p className="text-go-body text-ink-tertiary">No notes yet.</p> : (
+        {empty ? <EmptyState size="inline" title="No notes yet." /> : (
           <div className="space-y-3">
             {techNotes && <div><p className="text-go-sub text-ink-tertiary">Working notes · team only</p><p className="text-go-body text-ink-primary whitespace-pre-wrap break-words">{techNotes}</p></div>}
             {conclusion && <div><p className="text-go-sub text-ink-tertiary">For the customer</p><p className="text-go-body text-ink-primary whitespace-pre-wrap break-words">{conclusion}</p></div>}
           </div>
         )}
         {!readOnly && (
-          <button onClick={() => setOpen(true)} className="mt-3 min-h-[2.75rem] inline-flex items-center gap-2 font-semibold text-primary">
+          <GoButton variant="link" onClick={() => setOpen(true)} className="mt-3">
             <NotebookPen size={18} />{empty ? "Add notes" : "Edit notes"}
-          </button>
+          </GoButton>
         )}
       </Card>
       <Sheet open={open} onClose={() => setOpen(false)} title="Bench notes">

@@ -1,4 +1,5 @@
 import { BARCODE_TYPES } from "../../lib/barcodes";
+import TeklySelect from "../../components/TeklySelect";
 // Label templates: which product field {Barcode} encodes, and the barcode type for each field
 // (Orderry parity A4). EAN-13 / UPC-A are checked at print time; a product whose value isn't a
 // valid code is named in the error instead of printing an unscannable label.
@@ -27,19 +28,19 @@ export default function LabelBarcodePicker({ value, onChange }: { value: Barcode
     <div className="space-y-2 pt-1 border-t border-slate-100">
       <div>
         <label htmlFor="lbl-bc-field" className="block text-[11px] font-semibold text-ink-tertiary mb-1">{"{Barcode}"} encodes</label>
-        <select id="lbl-bc-field" value={field} className={sel}
+        <TeklySelect id="lbl-bc-field" value={field} className={sel}
           onChange={(e) => onChange({ ...value, barcode_field: e.target.value || null })}>
           <option value="">First filled: barcode, SKU, code</option>
           {BARCODE_FIELDS.map((f) => <option key={f.key} value={f.key}>{f.label}</option>)}
-        </select>
+        </TeklySelect>
       </div>
       {field && (
         <div>
           <label htmlFor="lbl-bc-type" className="block text-[11px] font-semibold text-ink-tertiary mb-1">Barcode type for {BARCODE_FIELDS.find((f) => f.key === field)?.label}</label>
-          <select id="lbl-bc-type" value={kind} className={sel}
+          <TeklySelect id="lbl-bc-type" value={kind} className={sel}
             onChange={(e) => onChange({ ...value, barcode_types: { ...(value.barcode_types || {}), [field]: e.target.value } })}>
             {BARCODE_TYPES.map((t) => <option key={t.key} value={t.key}>{t.label}</option>)}
-          </select>
+          </TeklySelect>
           {hint && <p className="mt-1 text-[11px] text-ink-tertiary">{hint}</p>}
         </div>
       )}

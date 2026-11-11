@@ -5,6 +5,10 @@ show_on_print fields, the public tracking page only show_in_portal fields.
 """
 import pytest
 
+# Letters and symbols on purpose: a digits-only passcode such as "4321" also turns up inside
+# timestamps and ids (e.g. "09:11:14.432168"), which made the "never exposed" checks flaky.
+PASSCODE = "pw-Kx#4321"
+
 
 async def _loc(client, H):
     b = (await client.get("/api/staff/locations", headers=H)).json()
@@ -18,7 +22,7 @@ async def _order_with_fields(client, H):
     acc = (await client.post(f"/api/forms/types/{t['id']}/fields", json={"field_label": "Accessories", "field_type": "multiselect",
                                                                          "options": ["Charger", "Case"]}, headers=H)).json()
     o = (await client.post("/api/orders", json={"location_id": loc, "type_id": t["id"], "complaint": "screen",
-                                                "custom_data": {pw["field_key"]: "4321", acc["field_key"]: ["Charger", "Case"]}},
+                                                "custom_data": {pw["field_key"]: PASSCODE, acc["field_key"]: ["Charger", "Case"]}},
                            headers=H)).json()
     return t["id"], pw, acc, o
 
@@ -54,7 +58,7 @@ async def test_printed_receipt_lists_only_print_fields(client, tenant):
     await _toggle(client, H, acc, show_on_print=True)
     html = (await client.get(f"/api/documents/render/{o['id']}/{tpl['id']}", headers=H)).json()["html"]
     assert "Accessories" in html and "Charger, Case" in html
-    assert "Passcode" not in html and "4321" not in html   # not ticked for print → stays off the receipt
+    assert "Passcode" not in html and PASSCODE not in html   # not ticked for print → stays off the receipt
 
 
 @pytest.mark.asyncio
@@ -67,7 +71,7 @@ async def test_portal_shows_only_portal_fields(client, tenant):
     await _toggle(client, H, acc, show_in_portal=True)
     d = (await client.get(f"/api/public/track/{tok}")).json()
     assert d["custom_fields"] == [{"label": "Accessories", "value": "Charger, Case"}]
-    assert "4321" not in str(d)   # the passcode is never exposed unless the shop ticks it
+    assert PASSCODE not in str(d)   # the passcode is never exposed unless the shop ticks it
 
 
 @pytest.mark.asyncio

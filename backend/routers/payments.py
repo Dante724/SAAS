@@ -350,6 +350,8 @@ async def _square_terminal_event(request: Request, raw: bytes, event: dict, db: 
     from backend.services import terminal as term
     co = ((event.get("data") or {}).get("object") or {}).get("checkout") or {}
     ch = await term.find_charge(db, "square", co.get("id"), org_id=scope_org)
+    if ch is None:   # a checkout whose create call never answered (charge left waiting, no id yet)
+        ch = await term.find_unconfirmed_charge(db, "square", co.get("reference_id"), co.get("id"), org_id=scope_org)
     if not scope_org:
         await _require_square_signature(request, raw, db, ch.org_id if ch else None)
     if not ch:

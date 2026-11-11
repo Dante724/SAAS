@@ -36,7 +36,7 @@ afterEach(() => vi.unstubAllGlobals());
 describe("statusBadge", () => {
   it("names the state, with Test mode for test credentials", () => {
     expect(statusBadge(cfg())).toEqual({ text: "Off", tone: "off" });
-    expect(statusBadge(cfg({ enabled: true }))).toEqual({ text: "Simulated", tone: "test" });
+    expect(statusBadge(cfg({ enabled: true }))).toEqual({ text: "Practice mode", tone: "test" });
     expect(statusBadge(cfg({ enabled: true, provider: "twilio", twilio: tw({ connected: true, mode: "test", test_mode: true }) })).text).toBe("Twilio · Test mode");
     expect(statusBadge(cfg({ enabled: true, provider: "twilio", twilio: tw({ connected: true, mode: "live" }) })).text).toBe("Twilio · Live");
   });
