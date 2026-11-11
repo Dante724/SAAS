@@ -103,6 +103,7 @@ Merged into `roadmap/orderry-parity`, each on the exact commit tested with all 1
 
 - **#164:** GitHub reported merge conflicts after the earlier merges, although `git merge-tree` showed a clean merge. The base was merged into its branch (ce1fd143, normal push). Lint and the metrics/cache/integrity tests passed on Postgres, CI went 18/18 green, and it merged.
 - **#191 (new, flaky test):** #165's `test (shard 4)` failed in `test_portal_shows_only_portal_fields`. The test asserted the passcode `"4321"` never appears in the portal response, and a timestamp (`09:11:14.432168`) contained those digits. The test now uses the passcode `pw-Kx#4321`, and the checks are unchanged. Reproduced: `'4321' in str({'at': '2026-11-11T09:11:14.432168'})` is `True`.
-- **#165:** the base, now with #191, was merged into its branch (3eda197b). Lint is clean and 98 related tests pass on Postgres and SQLite. **Waiting for CI, then merge.**
+- **#165:** the base, now with #191, was merged into its branch (3eda197b). Lint is clean and 98 related tests pass on Postgres and SQLite. CI went 18/18 green, including the shard that had failed. **Merged (04b89447).** The "production host on UTC" beta condition can now be dropped.
+- **All council and hardening PRs are merged.** The base is at 04b89447 with one alembic head (`nn01`).
 - **Alembic:** the base has one head (`nn01`), and `test_alembic_single_head` passes at e16a42ef.
 - **#95** (not a council PR) still needs `nob01` re-chained onto `nn01`.
