@@ -746,7 +746,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
 
           {tab === "services" && (
             <div className="space-y-4">
-              <ServicesTab orderId={order.id} locationId={(d as any).location_id} deviceId={d.device?.id} lines={d.lines} total={d.total} onFlash={flash} onChanged={reload}
+              <ServicesTab orderId={order.id} locationId={(d as any).location_id} deviceId={d.device?.id} lines={d.lines} total={d.total} tax={d.tax} onFlash={flash} onChanged={reload}
                 labor={labor} onClockIn={(lineId) => startTimer(lineId)} isEstimate={isEst} emps={emps}
                 locked={isClosed && !can("can_edit_closed_ticket")} />
             </div>
@@ -1328,7 +1328,7 @@ export function displayName(description: string, kitName?: string | null): strin
   return description.endsWith(suffix) && description.length > suffix.length ? description.slice(0, -suffix.length) : description;
 }
 const lineKindLabel = (l: Line) => LINE_KIND[(l.kind || l.line_type || "").toLowerCase()] || humanize(l.kind || l.line_type) || "Item";
-export function ServicesTab({ orderId, locationId, deviceId, lines, total, onFlash, onChanged, labor, onClockIn, isEstimate, emps, locked }: { orderId: string; locationId?: string; deviceId?: string; lines?: Line[]; total?: number; onFlash: (m: string) => void; onChanged?: () => void; labor?: any; onClockIn?: (lineId: string) => void; isEstimate?: boolean; emps?: { id: string; name: string }[]; locked?: boolean }) {
+export function ServicesTab({ orderId, locationId, deviceId, lines, total, tax, onFlash, onChanged, labor, onClockIn, isEstimate, emps, locked }: { orderId: string; locationId?: string; deviceId?: string; lines?: Line[]; total?: number; tax?: number; onFlash: (m: string) => void; onChanged?: () => void; labor?: any; onClockIn?: (lineId: string) => void; isEstimate?: boolean; emps?: { id: string; name: string }[]; locked?: boolean }) {
   const { can } = useMe();
   const seePrices = can("can_view_item_prices");   // off: the API leaves line prices out
   const [recsVersion, setRecsVersion] = useState(0);   // bumped when a deferred item becomes a draft
@@ -1708,6 +1708,8 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, onFla
         {/* Totals are for the whole job, whatever filter is on. No lines yet but a price on the job
             (agreed at check-in) reads as the quoted price, not a $0 subtotal next to a real total. */}
         {seePrices && (lines || []).length > 0 && <div className="flex justify-between text-xs text-ink-secondary"><span>Subtotal ({(lines || []).length} {(lines || []).length === 1 ? "line" : "lines"})</span><span className="tabular-nums font-semibold text-ink-primary">{money((lines || []).reduce((s, l) => s + (l.total || 0), 0))}</span></div>}
+        {/* B4: line totals already carry their tax, so show how much of the total is tax */}
+        {seePrices && !!tax && <div className="flex justify-between text-xs text-ink-secondary"><span>Tax included</span><span className="tabular-nums font-semibold text-ink-primary">{money(tax)}</span></div>}
         <div className={`${(lines || []).length ? "pt-2 border-t border-slate-200 " : ""}flex justify-between items-baseline`}><span className="text-sm font-semibold text-ink-primary">{(lines || []).length ? "Total" : "Quoted price"}</span><span className="text-xl font-semibold tracking-tight tabular-nums text-ink-primary">{money(total)}</span></div>
         {!(lines || []).length && !!total && <div className="text-[11px] text-ink-tertiary">Agreed when the job came in. Add services and parts to build the invoice.</div>}
       </div>
