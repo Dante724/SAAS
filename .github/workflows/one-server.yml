@@ -1,0 +1,102 @@
+name: One-server deploy
+# Boots deploy/one-server the way a real server runs it (migrations first, app, Redis, backup
+# service) and proves the backups work: dump, off-site copy, restore drill from the off-site copy,
+# encrypted backup round trip, and a live restore that brings deleted data back.
+on:
+  pull_request:
+    types: [ opened, reopened, synchronize, ready_for_review ]
+    paths: [ "deploy/one-server/**", ".github/workflows/one-server.yml", "Dockerfile" ]
+  workflow_dispatch:
+
+concurrency:
+  group: one-server-${{ github.ref }}
+  cancel-in-progress: true
+
+permissions:
+  contents: read
+
+jobs:
+  stack-and-backups:
+    runs-on: ubuntu-latest
+    timeout-minutes: 25
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    defaults:
+      run:
+        working-directory: deploy/one-server
+    env:
+      COMPOSE: docker compose -f compose.yml -f ci/compose.ci.yml
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: Test settings (.env)
+        run: |
+          rnd() { python3 -c 'import secrets; print(secrets.token_urlsafe(32))'; }
+          {
+            echo "ENVIRONMENT=staging"
+            echo "PUBLIC_BASE_URL=http://localhost:8000"
+            echo "CORS_ORIGINS=http://localhost:8000"
+            echo "SECRET_KEY=$(rnd)$(rnd)"
+            echo "TOKEN_ENCRYPTION_KEY=$(python3 -c 'import base64,os; print(base64.urlsafe_b64encode(os.urandom(32)).decode())')"
+            echo "POSTGRES_PASSWORD=$(rnd)"
+            echo "CLOUDFLARE_TUNNEL_TOKEN=unused-in-ci"
+            echo "MEDIA_BACKEND=db"
+            echo "SMTP_HOST=smtp.invalid"
+            echo "SMTP_FROM=ci@tekly.invalid"
+            echo "BACKUP_S3_BUCKET=tekly-backups"
+            echo "BACKUP_S3_ACCESS_KEY_ID=ci-key"
+            echo "BACKUP_S3_SECRET_ACCESS_KEY=ci-secret"
+            echo "STRIPE_BILLING_SECRET_KEY=sk_test_ci_placeholder"
+            echo "STRIPE_BILLING_WEBHOOK_SECRET=whsec_ci_placeholder"
+            for p in SOLO SHOP PRO SHOP_SEAT; do for t in MONTH YEAR; do
+              echo "STRIPE_BILLING_PRICE_${p}_${t}=price_ci_${p}_${t}"
+            done; done
+          } > .env
+          chmod 600 .env
+      - name: Build images
+        run: |
+          docker build -t tekly:latest ../..
+          $COMPOSE build backup
+      - name: Start (migrate -> app, redis, backup, s3 stand-in)
+        run: |
+          $COMPOSE up -d app backup
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:8000/api/readyz && break; sleep 2; done
+          curl -sf http://127.0.0.1:8000/api/health
+          curl -sf http://127.0.0.1:8000/api/readyz | grep -q '"ready"'
+          curl -sf http://127.0.0.1:8000/ | grep -qi 'id="root"'
+          $COMPOSE ps
+      - name: Backup goes off-site
+        run: |
+          psql() { $COMPOSE exec -T db psql -U tekly -d tekly -v ON_ERROR_STOP=1 "$@"; }
+          psql -qc "CREATE TABLE drill_canary(n int); INSERT INTO drill_canary SELECT generate_series(1,5000)"
+          $COMPOSE exec -T backup backup-now.sh ci
+          $COMPOSE exec -T backup list.sh | tee list.txt
+          grep -A5 '^Off-site' list.txt | grep -q 'tekly-.*-ci.dump'
+      - name: Restore drill from the off-site copy only
+        run: |
+          $COMPOSE exec -T backup sh -c 'rm -f /backups/tekly-*'
+          $COMPOSE exec -T backup drill.sh | tee drill.txt
+          grep -q 'drill passed' drill.txt
+      - name: Encrypted backup round trip
+        run: |
+          $COMPOSE exec -T backup sh -c 'age-keygen -o /backups/ci-age.key 2>/dev/null; age-keygen -y /backups/ci-age.key > /backups/ci-age.pub'
+          $COMPOSE exec -T backup sh -c 'BACKUP_AGE_RECIPIENT=$(cat /backups/ci-age.pub) backup-now.sh encrypted' | tail -1 | grep -q '\.dump\.age$'
+          $COMPOSE exec -T backup sh -c 'rm -f /backups/tekly-*'
+          $COMPOSE exec -T -e BACKUP_AGE_IDENTITY_FILE=/backups/ci-age.key backup restore.sh latest --into tekly_age_check
+          $COMPOSE exec -T db psql -U tekly -d tekly_age_check -tAc "SELECT count(*) FROM drill_canary" | grep -qx 5000
+      - name: Live restore brings deleted data back
+        run: |
+          psql() { $COMPOSE exec -T db psql -U tekly -d tekly -v ON_ERROR_STOP=1 "$@"; }
+          psql -qc "DELETE FROM drill_canary WHERE n > 10"
+          # Refuses while the app is connected.
+          if $COMPOSE exec -T -e BACKUP_AGE_IDENTITY_FILE=/backups/ci-age.key backup restore.sh latest --replace-live; then
+            echo "restore over a live, connected database should have been refused"; exit 1
+          fi
+          $COMPOSE stop app
+          $COMPOSE exec -T -e BACKUP_AGE_IDENTITY_FILE=/backups/ci-age.key backup restore.sh latest --replace-live
+          $COMPOSE up -d app
+          for i in $(seq 1 60); do curl -sf http://127.0.0.1:8000/api/readyz && break; sleep 2; done
+          curl -sf http://127.0.0.1:8000/api/readyz | grep -q '"ready"'
+          test "$(psql -tAc 'SELECT count(*) FROM drill_canary' | tr -d '[:space:]')" = 5000
+          $COMPOSE exec -T db psql -U tekly -d postgres -tAc "SELECT datname FROM pg_database WHERE datname LIKE 'tekly_before_%'" | grep -q tekly_before_
+      - name: Logs
+        if: always()
+        run: $COMPOSE logs --no-color --tail 80 migrate app backup || true

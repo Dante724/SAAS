@@ -115,10 +115,7 @@ async def list_parts(
     q = select(Part).where(Part.org_id == current.org_id, Part.active == True)
     if search:
         # Build 144an — POS findability: match name, SKU, barcode, or internal code.
-        s = search.strip()
-        q = q.where(or_(Part.name.icontains(s), Part.sku.icontains(s),
-                        Part.barcode.icontains(s), Part.code.icontains(s), Part.mpn.icontains(s),
-                        Part.id.in_(product_codes.barcode_part_ids(current.org_id, s))))   # ii144a: extra barcodes
+        q = q.where(product_codes.list_search(current.org_id, search))   # + extra barcodes (ii144a)
     if category_id:
         q = q.where(Part.category_id == category_id)
     if category:
@@ -419,6 +416,10 @@ async def _do_posting(db, org_id, created_by_id, location_id, supplier_id, lines
     posted = 0
     total_cost = 0.0
     seen_serials: set = set()
+    lines = list(lines)
+    # Every product first, in id order (receive_po does the same): line by line, two postings
+    # holding the same products in opposite order deadlocked on each other's first line.
+    await stock_posting.lock_parts(db, [_g(ln, "part_id") for ln in lines])
     for ln in lines:
         qty = float(_g(ln, "qty") or 0)
         if qty <= 0:
@@ -629,12 +630,12 @@ async def _check_posting_serials(db, current, rows: list, parts: dict, generate:
     if not generate:
         return
     from backend.models import Organisation
-    from backend.services import importer
+    from backend.services import importer, serial_intake
     org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one()
     ctx = importer.Ctx(db=db, current=current, org=org, options={}, perms={})
     ctx.data["serials_in_stock"] = set((await db.execute(select(SerializedItem.serial_number).where(
         SerializedItem.org_id == current.org_id,
-        SerializedItem.status.in_(("in_stock", "allocated_to_order"))))).scalars())
+        SerializedItem.status.in_(serial_intake.IN_STOCK)))).scalars())
     ctx.data["serial_n"] = (await db.execute(select(func.count()).select_from(SerializedItem).where(
         SerializedItem.org_id == current.org_id))).scalar() or 0
     seen: set = set()
@@ -1142,25 +1143,36 @@ DEFAULT_PO_CHARGE_TYPES = ["Shipping", "In-transit"]
 async def _release_expired(db: AsyncSession, org_id: str):
     """Release reservations whose hold period has elapsed (Orderry auto-release)."""
     now = now_utc()
-    rows = (await db.execute(
-        select(StockReservation).where(
+    q = (select(StockReservation).where(
             StockReservation.org_id == org_id,
             StockReservation.released == False,  # noqa: E712
             StockReservation.expires_at != None,  # noqa: E711
             StockReservation.expires_at < now,
-        )
-    )).scalars().all()
+        ).order_by(StockReservation.part_id, StockReservation.location_id))
+    rows = (await db.execute(q)).scalars().all()
+    if not rows:
+        return
+    # Lock order: the stock rows (by product, location), then the holds, re-read locked — an
+    # archive of the hold's job may have released it meanwhile, and releasing it twice took a
+    # unit off another job's hold.
+    for pid, lid in sorted({(r.part_id, r.location_id) for r in rows}):
+        await stock_rows.rows(db, pid, lid, lock=True)
+    # only the holds whose stock rows were just locked: one that expired in between waits for the
+    # next sweep rather than being locked out of order
+    rows = (await db.execute(q.where(StockReservation.id.in_([r.id for r in rows])).with_for_update()
+                             .execution_options(populate_existing=True))).scalars().all()
     for r in rows:
+        if r.released:
+            continue
         await stock_rows.reserve(db, r.part_id, r.location_id, -r.qty)
         r.released = True
-    if rows:
-        await db.commit()
+    await db.commit()
 
 
 class ReserveIn(BaseModel):
     part_id: str
     location_id: str
-    qty: float
+    qty: float = Field(gt=0, le=MAX_STOCK_QTY)     # a hold is always positive: a negative one released other jobs' stock
     order_id: Optional[str] = None
     hold_days: int = 7
 
@@ -1173,12 +1185,23 @@ async def reserve_stock(
 ):
     """Reserve stock for an order. Reserved qty is excluded from available."""
     from backend.models import Location
+    # council M7: holds past their date used to block until someone opened the reservations list
+    await _release_expired(db, current.org_id)
     part = (await db.execute(select(Part.id).where(
         Part.id == data.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
     loc = (await db.execute(select(Location.id).where(
         Location.id == data.location_id, Location.org_id == current.org_id))).scalar_one_or_none()
     if not part or not loc:      # checked first: another shop's stock levels never show
         raise HTTPException(404, "Product not found")
+    if data.order_id:
+        from backend.models import Order
+        if not (await db.execute(select(Order.id).where(
+                Order.id == data.order_id, Order.org_id == current.org_id))).scalar_one_or_none():
+            raise HTTPException(404, "Order not found")
+    hold_days = max(1, min(int(data.hold_days or 7), 180))       # same clamp as the work-order hold
+    # Lock the stock rows before counting (same order as stock_consume.lock_rows): two reserves of
+    # the last unit used to both read "1 free" and both get it.
+    await stock_rows.rows(db, data.part_id, data.location_id, lock=True)
     avail, held = await stock_rows.totals(db, data.part_id, data.location_id)
     free = avail - held
     if data.qty > free:
@@ -1188,7 +1211,7 @@ async def reserve_stock(
     await stock_rows.reserve(db, data.part_id, data.location_id, data.qty)
     r = StockReservation(org_id=current.org_id, part_id=data.part_id, location_id=data.location_id,
                          order_id=data.order_id, qty=data.qty,
-                         expires_at=now_utc() + timedelta(days=data.hold_days))
+                         expires_at=now_utc() + timedelta(days=hold_days))
     db.add(r)
     await db.commit()
     await db.refresh(r)
@@ -1204,6 +1227,14 @@ async def release_reservation(
     r = (await db.execute(select(StockReservation).where(
         StockReservation.id == res_id, StockReservation.org_id == current.org_id))).scalar_one_or_none()
     if not r or r.released:
+        raise HTTPException(404, "Reservation not found or already released")
+    # Lock order: the stock rows, then the hold, re-read locked — an archive of its job or the
+    # expiry sweep may have released it meanwhile, and releasing it twice took a unit off
+    # another job's hold.
+    await stock_rows.rows(db, r.part_id, r.location_id, lock=True)
+    r = (await db.execute(select(StockReservation).where(StockReservation.id == res_id)
+                          .with_for_update().execution_options(populate_existing=True))).scalar_one()
+    if r.released:
         raise HTTPException(404, "Reservation not found or already released")
     await stock_rows.reserve(db, r.part_id, r.location_id, -r.qty)
     r.released = True
@@ -1586,8 +1617,9 @@ async def edit_po(
 
     # ── line edits ──
     if data.lines is not None:
+        # locked: a receipt landing between this read and the write below must not be rewritten
         existing = {l.id: l for l in (await db.execute(
-            select(POLine).where(POLine.po_id == po.id))).scalars().all()}
+            select(POLine).where(POLine.po_id == po.id).with_for_update())).scalars().all()}
         # validate every referenced part belongs to this org
         req_parts = {ln.part_id for ln in data.lines}
         owned = set((await db.execute(select(Part.id).where(
@@ -1598,6 +1630,18 @@ async def edit_po(
         for ln in data.lines:
             row = existing.get(ln.id) if ln.id else None
             if row:
+                got = float(row.qty_received or 0)
+                if got > 0:
+                    # council M4: a received line IS the receiving record (movements, cost layers,
+                    # qty_received). Its product and price stay; its quantity can't drop below
+                    # what has arrived. Add a new line for a different product or price.
+                    if ln.part_id != row.part_id:
+                        raise HTTPException(409, "Can't change the product on a line that has already been received")
+                    if float(ln.qty_ordered or 0) < got - 1e-9:
+                        raise HTTPException(409, f"{got:g} of this line has already been received — "
+                                                 "the quantity can't go below that")
+                    if abs(float(ln.unit_cost or 0) - float(row.unit_cost or 0)) > 1e-9:
+                        raise HTTPException(409, "Can't change the price on a line that has already been received")
                 row.part_id = ln.part_id
                 row.qty_ordered = ln.qty_ordered
                 row.unit_cost = ln.unit_cost
@@ -1895,6 +1939,12 @@ async def recost_po(
         raise HTTPException(404, "Purchase order not found")
     if (po.status or "").lower() in ("cancelled", "canceled"):
         raise HTTPException(409, "This purchase order is cancelled")
+    # Same lock order as receive_po — the PO's lines, then its products, and only then the PO row.
+    # Writing the charges first autoflushed the PO row before the products were locked, so a
+    # recost racing a receive of the same PO deadlocked.
+    po_lines = (await db.execute(select(POLine).where(POLine.po_id == po_id)
+                                 .with_for_update())).scalars().all()
+    await stock_posting.lock_parts(db, [pl.part_id for pl in po_lines])   # id order: no deadlock
     if data.charges is not None:
         po.charges = [{"label": (c.label or "Charge").strip(), "amount": q2(float(c.amount or 0))}
                       for c in (data.charges or []) if (c.amount or 0) or (c.label or "").strip()]
@@ -1903,7 +1953,6 @@ async def recost_po(
     if data.alloc_basis is not None:
         po.alloc_basis = data.alloc_basis if data.alloc_basis in _ALLOC_BASES else "value"
 
-    po_lines = (await db.execute(select(POLine).where(POLine.po_id == po_id))).scalars().all()
     charges_total = _po_charges_total(po)
     if not (po.charges_to_cost and charges_total > 0):
         await db.commit()
@@ -1937,7 +1986,7 @@ async def recost_po(
     # count as accounted for, so the same bill recosted again applies nothing.
     applied = expensed = 0.0
     scale = (delta_total / target) if target else 0
-    for part_id, tpart in per_part_target.items():
+    for part_id, tpart in sorted(per_part_target.items()):      # products locked above
         part = (await db.execute(select(Part).where(
             Part.id == part_id, Part.org_id == current.org_id))).scalar_one_or_none()
         if not part:
@@ -2045,6 +2094,7 @@ async def receive_po(
     # the same qty_received and doubled stock and supplier AP. The loser now waits and sees 0 left.
     po_lines = (await db.execute(select(POLine).where(POLine.po_id == po_id)
                                  .with_for_update())).scalars().all()
+    await stock_posting.lock_parts(db, [pl.part_id for pl in po_lines])   # id order: no deadlock
     basis = po.alloc_basis if po.alloc_basis in _ALLOC_BASES else "value"
     weights = await _po_part_weights(db, po_lines) if basis == "weight" else {}
     # Build 144al — landed cost: when the PO opts in, spread its charges (shipping/transit/custom)

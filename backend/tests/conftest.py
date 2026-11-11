@@ -19,11 +19,13 @@ os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
 # <run> is shared by the workers of one xdist run and unique per run. Both the test engine (get_db
 # override) AND the app engine (AsyncSessionLocal, used directly by some auth/platform tests) read
 # their URL from the environment at import, so BOTH are rewritten here, BEFORE `from main import app`.
+import asyncio  # noqa: E402
 import sys  # noqa: E402
 import time  # noqa: E402
 import uuid  # noqa: E402
 
-from backend.tests import db_isolation  # noqa: E402 — pure helpers; imports nothing from the app
+# Pure helpers: import nothing from the app (hang_guard: standard library only).
+from backend.tests import db_isolation, hang_guard  # noqa: E402
 
 assert "backend.config" not in sys.modules, "conftest must isolate DATABASE_URL before the app reads it"
 _xw = os.environ.get("PYTEST_XDIST_WORKER")
@@ -42,6 +44,7 @@ import pytest
 import pytest_asyncio
 from httpx import ASGITransport, AsyncClient
 from sqlalchemy.engine import make_url
+from sqlalchemy.exc import DBAPIError
 from sqlalchemy.ext.asyncio import async_sessionmaker, create_async_engine
 
 from backend.db.database import Base, get_db
@@ -198,6 +201,49 @@ def pytest_sessionfinish(session, exitstatus):
             f.unlink(missing_ok=True)
 
 
+# --- a hung test fails the run (with the culprit named) instead of hanging it ---------------------
+# See backend/tests/hang_guard.py. TEST_HANG_TIMEOUT_S overrides the bound (0 turns it off).
+def _db_sessions() -> list[str]:
+    if make_url(TEST_DB_URL).get_backend_name() != "postgresql":
+        return []
+    return db_isolation.run(db_isolation.activity(TEST_DB_URL))
+
+
+# An xdist worker's parent is the controller, which prints the report (the worker's stderr is lost).
+_hang_owner = os.getppid() if _xw else os.getpid()
+_watchdog = hang_guard.Watchdog(hang_guard.hang_timeout_s(), hang_guard.report_path(_hang_owner, _xw or "main"),
+                                diagnostics=_db_sessions)
+
+
+@pytest.hookimpl(hookwrapper=True)
+def pytest_runtest_protocol(item, nextitem):
+    _watchdog.start(item.nodeid)
+    try:
+        yield
+    finally:
+        _watchdog.cancel()
+
+
+def pytest_terminal_summary(terminalreporter):
+    for path in hang_guard.reports_for(os.getpid()):
+        with open(path) as f:
+            terminalreporter.write_sep("=", "HANG report", red=True)
+            terminalreporter.write(f.read())
+        os.unlink(path)
+
+
+@pytest_asyncio.fixture(autouse=True)
+async def _no_work_outlives_its_test():
+    """Cancel whatever the test left running on its loop (see hang_guard): the loop is closed
+    next without cancelling anything, which would freeze those tasks mid-transaction, holding
+    their connections and row locks for the rest of the run."""
+    _watchdog.loop = asyncio.get_running_loop()   # a hang report then shows where each task waits
+    yield
+    _, stuck = await hang_guard.cancel_leftover_tasks()
+    if stuck:
+        pytest.fail(f"tasks still running 10s after being cancelled at the end of the test: {stuck}")
+
+
 @pytest_asyncio.fixture(autouse=True)
 async def _reset_rate_limits():
     # The in-process rate limiters count every test's requests as one client IP within a 60s window,
@@ -213,6 +259,7 @@ async def _reset_rate_limits():
 
 
 _pg_schema_built = False
+_CLEANUP_LOCK_TIMEOUT = "60s"
 
 
 @pytest_asyncio.fixture(autouse=True)
@@ -250,15 +297,26 @@ async def _schema(request):
             if _pg_incarnation is not None and incarnation != _pg_incarnation:
                 _stop_run(request.session, db_isolation.infra_message(
                     "the database server crashed or restarted during the run", TEST_DB_URL))
-            async with conn.begin():
-                if not _pg_schema_built:
-                    await conn.run_sync(Base.metadata.drop_all)
-                    await conn.run_sync(Base.metadata.create_all)
-                    _pg_schema_built = True
-                else:
-                    deletes = "".join(f'DELETE FROM "{t.name}";' for t in reversed(Base.metadata.sorted_tables))
-                    await conn.exec_driver_sql("SET LOCAL session_replication_role = replica")
-                    await conn.exec_driver_sql(f"DO $$BEGIN {deletes} END$$")
+            # Bounded: a connection something left idle in a transaction must not make this wait
+            # forever on its locks (that hung a CI shard silently). Fail with who holds them.
+            try:
+                async with conn.begin():
+                    await conn.exec_driver_sql(f"SET LOCAL lock_timeout = '{_CLEANUP_LOCK_TIMEOUT}'")
+                    if not _pg_schema_built:
+                        await conn.run_sync(Base.metadata.drop_all)
+                        await conn.run_sync(Base.metadata.create_all)
+                        _pg_schema_built = True
+                    else:
+                        deletes = "".join(f'DELETE FROM "{t.name}";' for t in reversed(Base.metadata.sorted_tables))
+                        await conn.exec_driver_sql("SET LOCAL session_replication_role = replica")
+                        await conn.exec_driver_sql(f"DO $$BEGIN {deletes} END$$")
+            except DBAPIError as e:
+                if "lock timeout" not in str(e):
+                    raise
+                sessions = "\n  ".join(await db_isolation.activity(TEST_DB_URL)) or "(none)"
+                raise RuntimeError(
+                    f"emptying the tables before this test waited {_CLEANUP_LOCK_TIMEOUT} for a lock: an "
+                    f"earlier test on this worker left a connection holding it. Sessions:\n  {sessions}") from e
         finally:
             await conn.close()
         yield
@@ -279,6 +337,14 @@ def _fresh_rate_limits():
     ratelimit._HITS.clear()
     sense._HISTORY_CACHE.clear()
     yield
+
+
+@pytest.fixture
+def card_readers_on(monkeypatch):
+    """Card readers are off by default (settings.CARD_READERS_ENABLED); tests of the reader
+    feature switch it on."""
+    from backend.config import settings
+    monkeypatch.setattr(settings, "CARD_READERS_ENABLED", True)
 
 
 @pytest_asyncio.fixture

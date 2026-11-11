@@ -1,6 +1,9 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { M } from "../../components/Shell";
+import Tabs from "../../components/Tabs";
 import { api } from "../../api/client";
+import { buttonClass } from "../../components/Button";
 
 export type Account = { id: string; name?: string; icon?: string; payment_option?: string; is_company?: boolean; is_virtual?: boolean; fee_pct?: number; fee_fixed?: number; currency_code?: string; balance?: number };
 type Props = { edit?: Account | null; onClose: () => void; onSaved: () => void };
@@ -56,16 +59,15 @@ export default function NewAccountDrawer({ edit, onClose, onSaved }: Props) {
 
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 60 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={onClose} />
       <div className="relative h-full w-full max-w-[540px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <header className="px-6 py-4 border-b border-slate-100 flex items-center justify-between">
           <h3 className="text-lg font-bold text-ink-primary">{edit ? "Configure account" : "New account"}</h3>
           <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 flex items-center justify-center text-ink-tertiary hover:text-ink-primary"><M n="close" c="text-lg" /></button>
         </header>
-        <nav className="px-6 border-b border-slate-200 flex space-x-6 text-sm font-semibold">
-          {(["general", "access"] as const).map((t) => <button key={t} onClick={() => setTab(t)} className={`py-3 border-b-2 capitalize transition-colors ${tab === t ? "text-primary border-primary font-bold" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{t}</button>)}
-        </nav>
+        <Tabs look="underline" label="Account sections" className="px-6" value={tab} onChange={setTab}
+          tabs={[{ id: "general", label: "General" }, { id: "access", label: "Access" }]} />
 
         <div className="flex-1 overflow-y-auto p-6 space-y-5 text-xs">
           {tab === "general" ? (<>
@@ -77,7 +79,7 @@ export default function NewAccountDrawer({ edit, onClose, onSaved }: Props) {
             </div>
             <div><label className="block font-semibold text-ink-secondary mb-1">Title <span className="text-rose-500">*</span></label><input autoFocus value={name} onChange={(e) => setName(e.target.value)} className="glass-input w-full px-3 py-2.5 rounded-lg text-sm font-semibold text-ink-primary" placeholder="e.g. Main Register" /></div>
             <div><label className="block font-semibold text-ink-secondary mb-1">Currency <span className="text-rose-500">*</span></label>
-              <select value={currency} onChange={(e) => setCurrency(e.target.value)} disabled={!!edit} className="glass-input w-full px-3 py-2.5 rounded-lg text-sm font-semibold text-ink-primary appearance-none disabled:opacity-60">{curOpts.map(([c, l]) => <option key={c} value={c}>{l}</option>)}</select>
+              <TeklySelect value={currency} onChange={(e) => setCurrency(e.target.value)} disabled={!!edit} className="glass-input w-full px-3 py-2.5 rounded-lg text-sm font-semibold text-ink-primary appearance-none disabled:opacity-60">{curOpts.map(([c, l]) => <option key={c} value={c}>{l}</option>)}</TeklySelect>
               {edit && <p className="text-[11px] text-ink-tertiary mt-1">Currency is locked after creation.</p>}</div>
             <div><label className="block font-semibold text-ink-secondary mb-1.5">Type</label><Seg opts={[["company", "Company account"], ["location", "Location account"]]} value={type} onChange={(v) => setType(v as any)} /></div>
             <Check v={virtual} set={setVirtual} label="Virtual account" />
@@ -104,9 +106,9 @@ export default function NewAccountDrawer({ edit, onClose, onSaved }: Props) {
           {err && <div className="text-status-overdue-ink font-semibold">{err}</div>}
         </div>
 
-        <div className="p-4 border-t border-slate-100 bg-blue-50/30 flex items-center justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-lg bg-primary text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-50">{busy ? "Saving…" : edit ? "Save changes" : "Create"}</button>
+        <div className="p-4 border-t border-slate-100 bg-blue-50/30 flex items-center justify-start gap-2">
+          <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : edit ? "Save changes" : "Create"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
         </div>
       </div>
     </div>

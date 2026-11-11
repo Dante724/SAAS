@@ -1,7 +1,9 @@
 import SkeletonRows from "../../components/SkeletonRows";
+import TeklySelect from "../../components/TeklySelect";
 import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import DateField from "../../components/DateField";
 import { api } from "../../api/client";
 import { useMe, hasFeature } from "../../context/Me";
@@ -9,6 +11,9 @@ import Pager from "../../components/Pager";
 import JobPicker from "../../components/JobPicker";
 import { loadFailed } from "../../lib/notice";
 import { clickableRow } from "../../lib/clickable";
+import { buttonClass } from "../../components/Button";
+import { Badge } from "../../components/Card";
+import { theadRowClass } from "../../components/Table";
 
 type Task = { id: string; title?: string; description?: string; status?: string; priority?: number; assigned_to_id?: string | null; assignee_name?: string; assignee_ids?: string[]; assignee_names?: string[]; due_at?: string | null; completed_at?: string | null; overdue?: boolean; order_id?: string | null; order_number?: string | null; client_name?: string };
 type Emp = { id: string; name: string };
@@ -79,14 +84,15 @@ export default function TasksHub() {
           <button onClick={() => setCreate(true)} className="h-[38px] px-4 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 flex items-center gap-1.5"><M n="add" c="text-sm" />New task</button>
           <div className="flex items-center gap-1.5 ml-1">
             {[["all", "All"], ...statuses.filter((s) => s !== "done").map((s) => [s, STATUS_LABEL[s] || humanize(s)] as [string, string]), ["done", "Done"], ["overdue", "Late"]].map(([id, label]) => (
-              <button key={id} onClick={() => setFilter(id)} className={`px-3 py-1.5 rounded-full text-[11px] font-semibold ${filter === id ? "bg-primary text-white shadow-xs" : "bg-slate-100 text-ink-secondary hover:bg-slate-200"}`}>{label}</button>
+              <button key={id} onClick={() => setFilter(id)} aria-pressed={filter === id} className={`px-3 py-1.5 rounded-full text-[11px] font-semibold ${filter === id ? "bg-primary text-white shadow-xs" : "bg-slate-100 text-ink-secondary hover:bg-slate-200"}`}>{label}</button>
             ))}
           </div>
         </div>
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-          <table className="w-full text-left border-collapse text-xs">
-            <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-[11px] font-bold ">
-              <th className="py-3 pl-5 pr-2 w-10"></th><th className="py-3 px-3">Task</th><th className="py-3 px-3">Status</th><th className="py-3 px-3">Links</th><th className="py-3 px-3">Assigned to</th><th className="py-3 px-3">Due</th>
+          {/* Fixed column widths on desktop: switching filters never re-sizes the columns. */}
+          <table className="w-full text-left border-collapse text-xs xl:table-fixed">
+            <thead><tr className={theadRowClass}>
+              <th className="py-3 pl-5 pr-2 w-10 xl:w-12"></th><th className="py-3 px-3">Task</th><th className="py-3 px-3 xl:w-32">Status</th><th className="py-3 px-3 xl:w-48">Links</th><th className="py-3 px-3 xl:w-40">Assigned to</th><th className="py-3 px-3 xl:w-32">Due</th>
             </tr></thead>
             <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
               {!tasks && <SkeletonRows cols={6} />}
@@ -101,8 +107,8 @@ export default function TasksHub() {
                 <tr key={t.id} className="hover:bg-blue-50/30 cursor-pointer" {...clickableRow(() => openTask(t))}>
                   <td className="py-3 pl-5 pr-2" onClick={(e) => e.stopPropagation()}><button onClick={() => toggleDone(t)} aria-label={t.completed_at ? `Mark "${t.title}" not done` : `Mark "${t.title}" done`} aria-pressed={!!t.completed_at} className={`w-6 h-6 rounded-md border-2 flex items-center justify-center ${t.completed_at ? "bg-emerald-500 border-emerald-500 text-white" : "border-slate-300 hover:border-primary"}`}>{t.completed_at && <M n="check" c="text-xs" />}</button></td>
                   <td className="py-3 px-3"><span className={`font-bold ${t.completed_at ? "text-ink-tertiary line-through" : "text-ink-primary"}`}>{t.title}</span></td>
-                  <td className="py-3 px-3"><span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${t.completed_at ? "bg-emerald-100 text-emerald-800" : t.status === "in_progress" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"}`}>{t.completed_at ? "Done" : STATUS_LABEL[t.status || "todo"]}</span></td>
-                  <td className="py-3 px-3">{t.order_id ? <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-blue-100 text-blue-800 inline-flex items-center gap-1"><M n="handyman" c="text-[11px]" />{t.order_number || "WO"}</span> : "—"}</td>
+                  <td className="py-3 px-3"><Badge tone={t.completed_at ? "success" : t.status === "in_progress" ? "warning" : "neutral"} size="sm">{t.completed_at ? "Done" : STATUS_LABEL[t.status || "todo"]}</Badge></td>
+                  <td className="py-3 px-3">{t.order_id ? <Badge tone="info" size="sm" className="gap-1"><M n="handyman" c="text-[11px]" />{t.order_number || "WO"}</Badge> : "—"}</td>
                   <td className="py-3 px-3">{(t.assignee_names && t.assignee_names.length) ? (t.assignee_names.length > 2 ? `${t.assignee_names.slice(0, 2).join(", ")} +${t.assignee_names.length - 2}` : t.assignee_names.join(", ")) : (t.assignee_name || "—")}</td>
                   <td className={`py-3 px-3 ${t.overdue ? "text-rose-600 font-bold" : ""}`}>{fmt(t.due_at)}</td>
                 </tr>
@@ -116,7 +122,7 @@ export default function TasksHub() {
       {/* task detail drawer */}
       {sel && (
         <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={() => setSel(null)} />
+          <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={() => setSel(null)} />
           <div className="relative h-full w-full max-w-[480px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
             <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
             <header className="px-6 py-4 border-b border-slate-100 flex items-start justify-between bg-slate-50/70">
@@ -161,7 +167,7 @@ export default function TasksHub() {
                   <button onClick={() => postComment(sel.id)} className="px-3 py-2 rounded-lg bg-primary text-white text-xs font-bold hover:brightness-110">Post</button>
                 </div>
                 <div className="space-y-2.5">
-                  {feed.length === 0 && <p className="text-[11px] text-ink-tertiary">No activity yet.</p>}
+                  {feed.length === 0 && <EmptyState size="inline" title="No activity yet." />}
                   {feed.map((f) => (
                     <div key={f.id} className="flex gap-2.5">
                       <div className={`w-6 h-6 rounded-full flex-shrink-0 flex items-center justify-center text-white text-[11px] font-bold ${f.kind === "comment" ? "bg-primary" : "bg-slate-400"}`}>{f.kind === "comment" ? (f.author_name || "?").slice(0, 1).toUpperCase() : <M n="bolt" c="text-xs" />}</div>
@@ -178,7 +184,7 @@ export default function TasksHub() {
       {/* new task drawer */}
       {create && (
         <div className="fixed inset-0 flex justify-end" style={{ zIndex: 55 }}>
-          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={() => setCreate(false)} />
+          <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={() => setCreate(false)} />
           <div className="relative h-full w-full max-w-[440px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
             <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70"><h3 className="text-base font-bold text-ink-primary">New task</h3><button aria-label="Close" onClick={() => setCreate(false)} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
             <div className="flex-1 overflow-y-auto p-6 space-y-4 text-xs">
@@ -198,11 +204,11 @@ export default function TasksHub() {
                   ))}
                 </div>
               </div>
-              <div><label className="block font-semibold text-ink-secondary mb-1">Priority</label><select value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} className={inp}><option value={0}>Normal</option><option value={1}>High</option><option value={2}>Urgent</option></select></div>
+              <div><label className="block font-semibold text-ink-secondary mb-1">Priority</label><TeklySelect value={form.priority} onChange={(e) => setForm({ ...form, priority: e.target.value })} className={inp}><option value={0}>Normal</option><option value={1}>High</option><option value={2}>Urgent</option></TeklySelect></div>
               <div><label className="block font-semibold text-ink-secondary mb-1">Link to work order <span className="text-ink-tertiary font-normal">(optional)</span></label><JobPicker value={form.order_id ? { id: form.order_id, order_number: form.order_number } : null} onChange={(j) => setForm({ ...form, order_id: j?.id || "", order_number: j?.order_number || "" })} /></div>
               <div><label className="block font-semibold text-ink-secondary mb-1">Due</label><DateField mode="datetime" value={form.due_at} onChange={(v) => setForm({ ...form, due_at: v })} /></div>
             </div>
-            <div className="p-4 border-t border-slate-100 bg-slate-50/70 flex items-center gap-2"><button onClick={createTask} className="px-5 py-2 rounded-lg bg-primary text-white font-bold text-xs shadow-clay-sm">Create task</button><button onClick={() => setCreate(false)} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button></div>
+            <div className="p-4 border-t border-slate-100 bg-slate-50/70 flex items-center gap-2"><button onClick={createTask} className={buttonClass("primary", "md")}>Create task</button><button onClick={() => setCreate(false)} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button></div>
           </div>
         </div>
       )}

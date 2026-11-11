@@ -12,13 +12,13 @@ Existing rows keep their status. Old "failed" rows stay "failed" (they are histo
 old rows left in "sending" have no claimed_at and are never re-sent, as before.
 
 Revision ID: nob01
-Revises: trg01
+Revises: nn01
 """
 import sqlalchemy as sa
 from alembic import op
 
 revision = "nob01"
-down_revision = "trg01"
+down_revision = "nn01"
 branch_labels = None
 depends_on = None
 

@@ -1,4 +1,7 @@
 import { useEffect, useRef, useState, type ReactNode } from "react";
+import TeklySelect from "../../components/TeklySelect";
+import HexTile from "../../components/HexTile";
+import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import CurrencyManager from "../../components/CurrencyManager";
 import Switch from "../../components/Switch";
@@ -6,6 +9,8 @@ import { getLang, setLang, LANGS } from "../../i18n";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
 import { SenseSettingsSection } from "../../components/sense/Sense";
+import { laborText } from "../../lib/labor";
+import SaveFooter from "../../components/SaveFooter";
 
 /* Settings › General — the shop's profile. Edits land in local state and save together from a
    bar that only appears when something changed; a live preview shows how customers see the
@@ -35,7 +40,7 @@ function Section({ icon, title, hint, children }: { icon: string; title: string;
   return (
     <section className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card">
       <div className="flex items-start gap-3 px-5 pt-4 pb-3">
-        <span className="w-9 h-9 rounded-xl bg-primary/10 text-primary grid place-items-center flex-shrink-0"><M n={icon} c="text-lg" /></span>
+        <span className="w-9 h-9 grid place-items-center flex-shrink-0"><HexTile icon={icon} /></span>
         <div className="min-w-0">
           <h3 className="text-sm font-semibold text-ink-primary">{title}</h3>
           {hint && <p className="text-xs text-ink-tertiary">{hint}</p>}
@@ -59,7 +64,7 @@ function AccountId({ value }: { value: string }) {
         <div className="text-[11px] font-semibold text-ink-tertiary">Tekly account ID</div>
         <div className="font-mono text-sm text-ink-primary select-all">{value}</div>
       </div>
-      <button type="button" onClick={copy} className="ml-auto inline-flex items-center gap-1.5 px-2.5 py-1 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">
+      <button type="button" onClick={copy} className={buttonClass("secondary", "sm", "ml-auto")}>
         <M n={copied ? "check" : "content_copy"} c="text-sm" />{copied ? "Copied" : "Copy"}</button>
       <div className="w-full text-[11px] text-ink-tertiary">Give this to Tekly support so they can find your shop.</div>
     </div>
@@ -189,30 +194,30 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
           <Section icon="language" title="Region, money and language" hint="Picking a country fills in the time zone and currency. You can still change them.">
             <div className="grid sm:grid-cols-2 gap-4">
               <Field label="Country">
-                <select value={co.country || ""} onChange={(e) => pickCountry(e.target.value)} className={inp}>
+                <TeklySelect value={co.country || ""} onChange={(e) => pickCountry(e.target.value)} className={inp}>
                   <option value="">Choose a country</option>{opts.countries.map((c) => <option key={c[0]} value={c[0]}>{c[1]}</option>)}
-                </select>
+                </TeklySelect>
               </Field>
               <Field label="Time zone">
-                <select value={co.timezone || ""} onChange={(e) => set("timezone", e.target.value)} className={inp}>
+                <TeklySelect value={co.timezone || ""} onChange={(e) => set("timezone", e.target.value)} className={inp}>
                   <option value="">Choose a time zone</option>{opts.timezones.map((t) => <option key={t} value={t}>{t.replace(/_/g, " ")}</option>)}
-                </select>
+                </TeklySelect>
               </Field>
               <Field label="Currency">
-                <select value={co.currency_code || ""} onChange={(e) => pickCurrency(e.target.value)} className={inp}>
+                <TeklySelect value={co.currency_code || ""} onChange={(e) => pickCurrency(e.target.value)} className={inp}>
                   <option value="">Choose a currency</option>{opts.currencies.map(([c, s]) => <option key={c} value={c}>{c} ({s})</option>)}
-                </select>
+                </TeklySelect>
               </Field>
               <Field label="Currency symbol"><input value={co.currency || ""} onChange={(e) => set("currency", e.target.value)} className={inp} /></Field>
               <Field label="Language on printed documents">
-                <select value={co.document_language || "en"} onChange={(e) => set("document_language", e.target.value)} className={inp}>
+                <TeklySelect value={co.document_language || "en"} onChange={(e) => set("document_language", e.target.value)} className={inp}>
                   {opts.docLangs.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-                </select>
+                </TeklySelect>
               </Field>
               <Field label="My language in the app" hint="Just for you, on this device. Saved right away.">
-                <select value={getLang()} onChange={(e) => setLang(e.target.value as any)} className={inp}>
+                <TeklySelect value={getLang()} onChange={(e) => setLang(e.target.value as any)} className={inp}>
                   {LANGS.map((l) => <option key={l.code} value={l.code}>{l.label}</option>)}
-                </select>
+                </TeklySelect>
               </Field>
             </div>
           </Section>
@@ -268,7 +273,7 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
             <div className="min-w-0">
               <div className="text-sm text-ink-primary">Recalculate balances</div>
               <div className="text-xs text-ink-tertiary">Rebuilds every customer and supplier balance from history. Safe to run any time.</div>
-              <button onClick={onRebuild} disabled={rebuilding} className="mt-3 h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 disabled:opacity-60">{rebuilding ? "Working…" : "Recalculate"}</button>
+              <button onClick={onRebuild} disabled={rebuilding} className={buttonClass("secondary", "md", "mt-3")}>{rebuilding ? "Working…" : "Recalculate"}</button>
             </div>
           </div>
         </div>
@@ -293,7 +298,7 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
               {co.company_details && <div className="text-[11px] text-ink-tertiary">{co.company_details}</div>}
               <div className="mt-3 border-t border-dashed border-slate-200 pt-3 space-y-1.5 text-[11px]">
                 <div className="flex justify-between text-ink-secondary"><span>Screen replacement</span><span>{co.currency || "$"}189.00</span></div>
-                <div className="flex justify-between text-ink-secondary"><span>Labour</span><span>{co.currency || "$"}40.00</span></div>
+                <div className="flex justify-between text-ink-secondary"><span>{laborText("Labour")}</span><span>{co.currency || "$"}40.00</span></div>
                 <div className="flex justify-between font-semibold text-ink-primary pt-1"><span>Total</span><span>{co.currency || "$"}229.00</span></div>
               </div>
               {co.company_note && <div className="mt-3 text-[11px] text-ink-tertiary italic leading-snug">{co.company_note}</div>}
@@ -313,14 +318,10 @@ export default function GeneralSettings({ co, setCo, saved, onSave, rebuilding, 
         </aside>
       </div>
 
-      {dirty && (
-        <div className="fixed bottom-5 left-1/2 -translate-x-1/2 z-40 flex items-center gap-3 bg-ink-primary text-white rounded-2xl pl-4 pr-2 py-2 shadow-clay-drawer">
-          <span className="w-2 h-2 rounded-full bg-amber-400" />
-          <span className="text-xs">You have unsaved changes</span>
-          <button onClick={discard} className="px-3 py-1.5 rounded-lg text-xs text-white/80 hover:text-white hover:bg-white/10">Discard</button>
-          <button onClick={save} disabled={saving} className="px-4 py-1.5 rounded-lg bg-white text-ink-primary text-xs font-semibold hover:bg-white/90 disabled:opacity-60">{saving ? "Saving…" : "Save changes"}</button>
-        </div>
-      )}
+      {/* Save sits at the end of the page in a normal bar (never floating over the fields). */}
+      <div className="mt-4 rounded-2xl border border-slate-200/90 bg-white shadow-clay-sm">
+        <SaveFooter dirty={dirty} busy={saving} onSave={save} onDiscard={discard} saveLabel="Save changes" />
+      </div>
     </div>
   );
 }

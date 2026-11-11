@@ -1,4 +1,5 @@
 import { useCallback, useEffect, useState } from "react";
+import { buttonClass } from "../../components/Button";
 import { useNavigate } from "react-router-dom";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
@@ -82,7 +83,7 @@ export default function WalkinsView() {
   }
 
   const canConvert = can("can_create_tickets");
-  const btn = "h-9 px-3 rounded-xl text-xs font-semibold border border-slate-200 bg-white text-ink-secondary hover:bg-slate-50 disabled:opacity-50";
+  const btn = buttonClass("secondary", "md");
   const primary = "h-9 px-3 rounded-xl text-xs font-semibold bg-primary text-white hover:brightness-110 disabled:opacity-50";
 
   return (

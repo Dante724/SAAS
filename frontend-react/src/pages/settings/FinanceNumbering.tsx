@@ -1,9 +1,12 @@
 import { useEffect, useState, type ReactNode } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { confirmDialog } from "../../lib/dialog";
 import Switch from "../../components/Switch";
 import { loadFailed } from "../../lib/notice";
+import { laborText } from "../../lib/labor";
+import { buttonClass } from "../../components/Button";
 
 /* Settings › Finance & numbering — document numbers, sales tax, and the business details printed
    on invoices. Same endpoints as before (/settings/numbering, /catalog/taxes, /settings/tax-rules,
@@ -81,7 +84,7 @@ export default function FinanceNumbering({ currency, shop }: { currency: string;
   const invNo = inv ? renderNumber(inv.template, Number(inv.next_value) || 1) : "INV-00001";
   const jobTaxes = (stacks.tickets_sales || []).map((id) => (taxes || []).find((t) => t.id === id)).filter(Boolean) as any[];
   const ent = (ents || []).find((e) => e.is_default) || (ents || [])[0];
-  const lines: [string, number][] = [["Screen replacement", 189], ["Labour", 40]];
+  const lines: [string, number][] = [["Screen replacement", 189], [laborText("Labour"), 40]];
   const net = lines.reduce((a, [, v]) => a + v, 0);
   const taxLines = jobTaxes.map((t) => { const r = (Number(t.rate) || 0) / 100; return { t, amount: t.mode === "included" ? net - net / (1 + r) : net * r }; });
   const added = taxLines.filter((x) => x.t.mode !== "included").reduce((a, x) => a + x.amount, 0);
@@ -212,9 +215,9 @@ function NumberEditor({ row, onClose, onSaved }: { row: any; onClose: () => void
         <div className="grid sm:grid-cols-3 gap-3">
           <Field label="Starts with"><input value={p.prefix} onChange={(e) => setP({ ...p, prefix: e.target.value })} placeholder="INV-" className={`${inp} tabular-nums`} /></Field>
           <Field label="Digits">
-            <select value={p.digits} onChange={(e) => setP({ ...p, digits: Number(e.target.value) })} className={inp}>
+            <TeklySelect value={p.digits} onChange={(e) => setP({ ...p, digits: Number(e.target.value) })} className={inp}>
               {[0, 3, 4, 5, 6, 7].map((d) => <option key={d} value={d}>{d === 0 ? "No padding (1, 2, 3)" : `${d} (${"0".repeat(d - 1)}1)`}</option>)}
-            </select>
+            </TeklySelect>
           </Field>
           <Field label="Add the year">
             <div className="inline-flex rounded-xl bg-white border border-slate-200 p-1 w-full">
@@ -233,8 +236,8 @@ function NumberEditor({ row, onClose, onSaved }: { row: any; onClose: () => void
         <div className="sm:col-span-2 flex items-center gap-2 justify-end pb-0.5">
           <button onClick={() => { if (custom && parsePattern(raw)) setP(parsePattern(raw)!); if (!custom) setRaw(buildPattern(p)); setCustom(!custom); }}
             className="mr-auto text-[11px] font-semibold text-ink-tertiary hover:text-ink-secondary">{custom ? "Use the simple editor" : "Custom pattern"}</button>
-          <button onClick={onClose} className="px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-4 py-2 rounded-xl bg-ink-primary text-white text-xs font-semibold hover:opacity-90 disabled:opacity-60">{busy ? "Saving…" : "Save"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
+          <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save"}</button>
         </div>
       </div>
       {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
@@ -309,7 +312,7 @@ function Taxes({ taxes, stacks, exc, locations, currency, onChanged }: {
             <div className="text-[11px] font-semibold text-ink-tertiary mb-1">Exceptions</div>
             {(exc || []).filter((e) => e.doc_family === fam).map((e) => (
               <div key={e.id} className="flex items-center gap-2 py-1.5 text-xs">
-                <span className="text-ink-secondary">{e.target_type === "labor" ? "Labour" : e.target_type.charAt(0).toUpperCase() + e.target_type.slice(1)}</span>
+                <span className="text-ink-secondary">{e.target_type === "labor" ? laborText("Labour") : e.target_type.charAt(0).toUpperCase() + e.target_type.slice(1)}</span>
                 <span className="ml-auto font-semibold text-ink-primary">{e.exempt ? "No tax" : nameOf(e.tax_id)}</span>
                 <button aria-label="Remove exception" onClick={() => delExc(e.id)} className="w-6 h-6 rounded-md grid place-items-center text-ink-tertiary hover:bg-rose-50 hover:text-rose-600"><M n="close" c="text-sm" /></button>
               </div>
@@ -378,8 +381,8 @@ function TaxEditor({ tax, locations, onClose, onSaved }: { tax: any; locations: 
       {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
       <div className="flex items-center gap-2">
         {t.id && <button onClick={remove} className="px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50">Remove</button>}
-        <button onClick={onClose} className="ml-auto px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50">Cancel</button>
-        <button onClick={save} disabled={busy} className="px-4 py-2 rounded-xl bg-ink-primary text-white text-xs font-semibold hover:opacity-90 disabled:opacity-60">{busy ? "Saving…" : t.id ? "Save" : "Add tax"}</button>
+        <button onClick={onClose} className={buttonClass("secondary", "md", "ml-auto")}>Cancel</button>
+        <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : t.id ? "Save" : "Add tax"}</button>
       </div>
     </div>
   );
@@ -458,8 +461,8 @@ function EntityEditor({ ent, onClose, onSaved }: { ent: any; onClose: () => void
       <div className="flex items-center gap-2">
         {e.id && <button onClick={remove} className="px-3 py-2 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50">Remove</button>}
         <span className="flex items-center gap-2 text-xs text-ink-secondary"><Switch size="sm" label="Use by default" on={!!e.is_default} onChange={(v) => set("is_default", v)} />Use by default</span>
-        <button onClick={onClose} className="ml-auto px-3.5 py-2 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50">Cancel</button>
-        <button onClick={save} disabled={busy} className="px-4 py-2 rounded-xl bg-ink-primary text-white text-xs font-semibold hover:opacity-90 disabled:opacity-60">{busy ? "Saving…" : e.id ? "Save" : "Add business"}</button>
+        <button onClick={onClose} className={buttonClass("secondary", "md", "ml-auto")}>Cancel</button>
+        <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : e.id ? "Save" : "Add business"}</button>
       </div>
     </div>
   );

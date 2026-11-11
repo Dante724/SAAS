@@ -1,11 +1,15 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
+import { buttonClass } from "../../components/Button";
 import Shell, { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import DateField from "../../components/DateField";
 import { api, getLocationScope } from "../../api/client";
 import { loadFailed } from "../../lib/notice";
 import { clickable } from "../../lib/clickable";
 import { useClientSearch } from "../../hooks/useClientSearch";
 import { fmtDay, wallDate } from "../../lib/serverTime";
+import { Badge } from "../../components/Card";
 
 type Appointment = { id: string; client_name?: string; service_name?: string; employee_name?: string; scheduled_for?: string; ends_at?: string; duration_min?: number; status?: string; note?: string; order_id?: string | null };
 type Emp = { id: string; name: string };
@@ -200,7 +204,7 @@ export default function AppointmentsHub() {
                     <div key={h} onDragOver={(e) => e.preventDefault()} onDrop={() => { if (drag) { moveToHour(drag, h); setDrag(null); } }} className="flex gap-3 px-5 py-2 min-h-[52px] hover:bg-blue-50/20">
                       <div className="w-14 flex-shrink-0 text-[11px] tabular-nums font-bold text-ink-tertiary pt-1.5">{pad(h)}:00</div>
                       <div className="flex-1 flex flex-wrap gap-2">
-                        {cards.length === 0 && <div className="text-[11px] text-ink-placeholder pt-1.5">—</div>}
+                        {cards.length === 0 && <div className="text-2xs text-ink-tertiary pt-1.5">—</div>}
                         {cards.map((b) => (
                           <div key={b.id} draggable onDragStart={() => setDrag(b.id)} onDragEnd={() => setDrag(null)} {...clickable(() => { setSel(b); setReDate(""); setReTime(""); })} className={`bg-white rounded-xl border border-slate-200/80 shadow-clay-sm px-3 py-1.5 cursor-pointer hover:border-primary/40 ${drag === b.id ? "opacity-50" : ""}`}>
                             <div className="text-xs font-bold text-ink-primary">{b.service_name || "Appointment"} · {time(b.scheduled_for)}</div>
@@ -216,7 +220,7 @@ export default function AppointmentsHub() {
             </div>
           );
         })()}
-        {view === "agenda" && rows?.length === 0 && <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-12 text-center"><M n="calendar_month" c="mx-auto mb-2 text-3xl text-ink-placeholder" /><p className="text-sm font-bold text-ink-secondary mt-2">No appointments yet</p><p className="text-xs text-ink-tertiary">Create an appointment or wait for online requests.</p><button onClick={() => openNew()} className="mt-4 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 inline-flex items-center gap-1.5"><M n="add" c="text-sm" />New appointment</button></div>}
+        {view === "agenda" && rows?.length === 0 && <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card"><EmptyState size="section" icon={<M n="calendar_month" c="text-lg" />} title="No appointments yet" body="Create an appointment or wait for online requests." action={<button onClick={() => openNew()} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 inline-flex items-center gap-1.5"><M n="add" c="text-sm" />New appointment</button>} /></div>}
         {view === "agenda" && Object.entries(groups).map(([day, list]) => (
           <div key={day}>
             <div className="text-[11px] font-bold text-ink-tertiary mb-2">{day}</div>
@@ -228,7 +232,7 @@ export default function AppointmentsHub() {
                     <div className="text-center flex-shrink-0 w-16"><div className="text-sm font-bold tabular-nums text-ink-primary">{time(b.scheduled_for)}</div>{b.duration_min && <div className="text-[11px] text-ink-tertiary">{b.duration_min}m</div>}</div>
                     <div className="w-px h-9 bg-slate-200" />
                     <div className="flex-1 min-w-0"><div className="text-sm font-bold text-ink-primary truncate">{b.service_name || "Appointment"}</div><div className="text-[11px] text-ink-tertiary">{b.client_name || "Walk-in"}{b.employee_name ? ` · ${b.employee_name}` : ""}</div></div>
-                    {b.order_id && <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-blue-50 text-primary border border-blue-100">Work order created</span>}
+                    {b.order_id && <Badge tone="info" size="sm">Work order created</Badge>}
                     <span className={`px-2.5 py-1 rounded-full text-[11px] font-semibold border ${STATUS[st] || STATUS.booked}`}>{STATUS_LABEL[st] || st}</span>
                   </div>
                 );
@@ -240,7 +244,7 @@ export default function AppointmentsHub() {
 
       {drawer && (
         <div className="fixed inset-0 flex justify-end" style={{ zIndex: 50 }}>
-          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={() => setDrawer(false)} />
+          <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={() => setDrawer(false)} />
           <div className="relative h-full w-full max-w-[460px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
             <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
             <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70"><h3 className="text-base font-bold text-ink-primary">New appointment</h3><button aria-label="Close" onClick={() => setDrawer(false)} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary"><M n="close" c="text-base" /></button></div>
@@ -274,8 +278,8 @@ export default function AppointmentsHub() {
                   </>
                 )}
               </div>
-              <div><label className="block font-semibold text-ink-secondary mb-1">Service</label><select value={f.service_id} onChange={(e) => { const s = services.find((x) => x.id === e.target.value); setF({ ...f, service_id: e.target.value, duration_min: s?.duration_min || f.duration_min }); }} className={`${inp} appearance-none`}><option value="">— Select —</option>{services.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</select></div>
-              <div><label className="block font-semibold text-ink-secondary mb-1">Specialist</label><select value={f.employee_id} onChange={(e) => setF({ ...f, employee_id: e.target.value })} className={`${inp} appearance-none`}><option value="">— Unassigned —</option>{emps.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</select></div>
+              <div><label className="block font-semibold text-ink-secondary mb-1">Service</label><TeklySelect value={f.service_id} onChange={(e) => { const s = services.find((x) => x.id === e.target.value); setF({ ...f, service_id: e.target.value, duration_min: s?.duration_min || f.duration_min }); }} className={`${inp} appearance-none`}><option value="">— Select —</option>{services.map((s) => <option key={s.id} value={s.id}>{s.name}</option>)}</TeklySelect></div>
+              <div><label className="block font-semibold text-ink-secondary mb-1">Specialist</label><TeklySelect value={f.employee_id} onChange={(e) => setF({ ...f, employee_id: e.target.value })} className={`${inp} appearance-none`}><option value="">— Unassigned —</option>{emps.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}</TeklySelect></div>
               <div className="grid grid-cols-2 gap-3">
                 <div><label className="block font-semibold text-ink-secondary mb-1">Date</label><DateField mode="date" value={bkDate} onChange={pickDate} label="Date" /></div>
                 <div><label className="block font-semibold text-ink-secondary mb-1">Duration (min)</label><input type="number" value={f.duration_min} onChange={(e) => setF({ ...f, duration_min: e.target.value })} className={`${inp} font-mono`} /></div>
@@ -307,13 +311,13 @@ export default function AppointmentsHub() {
               {!bkDate && <p className="text-ink-tertiary">Pick a date to see open times.</p>}
               <div><label className="block font-semibold text-ink-secondary mb-1">Note</label><textarea value={f.note} onChange={(e) => setF({ ...f, note: e.target.value })} className={`${inp} h-20 resize-none`} placeholder="Optional…" /></div>
             </div>
-            <div className="p-4 border-t border-slate-100 bg-slate-50/70 flex items-center justify-end gap-2"><button onClick={() => setDrawer(false)} className="h-9 px-3.5 rounded-xl border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button><button onClick={create} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white font-semibold text-xs shadow-clay-sm disabled:opacity-50">{busy ? "Creating…" : "Create appointment"}</button></div>
+            <div className="p-4 border-t border-slate-100 bg-slate-50/70 flex items-center justify-start gap-2"><button onClick={create} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Creating…" : "Create appointment"}</button><button onClick={() => setDrawer(false)} className="h-9 px-3.5 rounded-xl border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button></div>
           </div>
         </div>
       )}
       {sel && (
         <div className="fixed inset-0 flex justify-end" style={{ zIndex: 55 }}>
-          <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={() => setSel(null)} />
+          <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={() => setSel(null)} />
           <div className="relative h-full w-full max-w-[460px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
             <div className="px-6 py-5 border-b border-slate-100 flex items-center justify-between bg-slate-50/70">
               <div><h3 className="text-base font-bold text-ink-primary">{sel.service_name || "Appointment"}</h3><div className="text-[11px] text-ink-tertiary">{dayKey(sel.scheduled_for)} · {time(sel.scheduled_for)}</div></div>

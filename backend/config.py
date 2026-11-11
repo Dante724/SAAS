@@ -16,6 +16,10 @@ _PLACEHOLDER_SECRETS = {
 }
 
 
+# FORWARDED_ALLOW_IPS values that trust no real proxy (uvicorn's default is 127.0.0.1).
+_LOOPBACK = {"127.0.0.1", "::1", "localhost"}
+
+
 def _valid_fernet_keys(raw: str) -> bool:
     keys = [k.strip() for k in (raw or "").split(",") if k.strip()]
     if not keys:
@@ -56,6 +60,7 @@ class Settings(BaseSettings):
     DB_MAX_OVERFLOW: int = 10
     DB_POOL_TIMEOUT_S: int = 10                # wait this long for a free connection, then error (not hang)
     DB_POOL_RECYCLE_S: int = 1800
+    SLOW_QUERY_MS: int = 500                   # log a WARNING (and count it in /metrics) for statements slower than this; 0 = off
     DB_STATEMENT_TIMEOUT_MS: int = 15000       # Postgres cancels any single statement running longer; 0 = off
     DB_IDLE_IN_TX_TIMEOUT_MS: int = 60000      # ends a session left idle inside a transaction; 0 = off
     # Read-side shop isolation (db/tenancy.py): enforce | report (log other-shop reads, filter none) | off
@@ -72,6 +77,15 @@ class Settings(BaseSettings):
     # address appended by the N-th proxy from the right. Alternatively run uvicorn with
     # --proxy-headers --forwarded-allow-ips=<proxy ip> and leave this at 0.
     TRUSTED_PROXY_HOPS: int = 0
+    # Deployed, the app refuses to boot until proxy trust is configured (TRUSTED_PROXY_HOPS >= 1,
+    # or FORWARDED_ALLOW_IPS set to the load balancer's address): otherwise every anonymous user
+    # behind the balancer shares one rate-limit bucket. Set this true only when nothing sits in
+    # front of the app and clients connect straight to uvicorn.
+    NO_REVERSE_PROXY: bool = False
+    # Deployed, the app refuses to boot without REDIS_URL: with several workers or replicas,
+    # in-process counters let each one allow the full limit. Set this true only to promise one
+    # worker on one instance (the beta setup); WEB_CONCURRENCY > 1 is still refused.
+    SINGLE_WORKER: bool = False
     # Global request ceilings per minute (core.observability.RateLimitMiddleware). Static files are
     # never counted. Signed-in requests count per user; anonymous ones per client IP.
     RATE_LIMIT_USER_PER_MIN: int = 600
@@ -89,6 +103,19 @@ class Settings(BaseSettings):
     TWILIO_AUTH_TOKEN: str = ""
     TWILIO_FROM: str = ""
     TWILIO_WHATSAPP_FROM: str = ""
+    # Texts (SMS/WhatsApp) one shop may send per day through the OPERATOR's Twilio account above,
+    # i.e. while it has no Twilio keys of its own. Stops a free sign-up running toll fraud / SMS
+    # pumping on the shared number; a shop on its own Twilio account is never capped. Trial shops
+    # get the lower cap (every status other than "active" counts as trial). The day is the shop's own
+    # calendar day; the count is kept in the database (operator_text_usage), so it holds across
+    # workers and restarts. Enforced in services/notifications.TwilioAdapter. 0 refuses every text
+    # on the shared account.
+    OPERATOR_SMS_DAILY_CAP: int = 200
+    OPERATOR_SMS_DAILY_CAP_TRIAL: int = 50
+    # Percent of that daily cap kept back for transactional texts (job status updates, reminders,
+    # messages about a job): campaigns, chats, birthday and win-back texts stop at cap - reserve,
+    # so a blast can't use up the texts a shop's customers are waiting for.
+    OPERATOR_SMS_RESERVE_PCT: int = 20
     # D1: a shop's live Twilio voice credentials are refused unless this is true AND
     # ENVIRONMENT=production. Test credentials (magic numbers, nothing dials) always work.
     ALLOW_LIVE_TELEPHONY: bool = False
@@ -135,6 +162,12 @@ class Settings(BaseSettings):
     SQUARE_LOCATION_ID: str = ""
     SQUARE_ENV: str = "sandbox"                # sandbox | production
     SQUARE_WEBHOOK_SIGNATURE_KEY: str = ""
+
+    # -- Card readers (Stripe Terminal / Square Terminal) --
+    # Off until a shop can actually connect a reader: every /api/payments/terminal/* route answers
+    # 404 and the app hides every reader entry point (/auth/me card_readers). The tables, past
+    # charges and the provider webhooks stay, so switching it on brings the feature back as it was.
+    CARD_READERS_ENABLED: bool = False
 
     # -- Live-money guardrail (F4) --
     # Live keys (Stripe sk_live_/rk_live_, Square production) are refused unless this is true AND
@@ -348,10 +381,9 @@ class Settings(BaseSettings):
             self.META_VERIFY_TOKEN, self.META_PAGE_TOKEN,
             self.META_IG_TOKEN, self.WHATSAPP_TOKEN,
         ])
-        import logging
         import os
-        _log = logging.getLogger(__name__)
-        # (several workers without REDIS_URL is refused by _shared_rate_limits below)
+        # (WEB_CONCURRENCY > 1 without REDIS_URL is refused by _shared_rate_limits below, even
+        # with SINGLE_WORKER)
         # Uploads written under /tmp vanish on the next container restart (photos, signatures,
         # attachments). The db and s3 backends never touch MEDIA_LOCAL_DIR.
         if (self.MEDIA_BACKEND or "").lower() == "local" and _is_temp_dir(self.MEDIA_LOCAL_DIR):
@@ -360,10 +392,24 @@ class Settings(BaseSettings):
                 "files would be lost on every restart. Use MEDIA_BACKEND=s3 with MEDIA_S3_BUCKET "
                 "(recommended), or point MEDIA_LOCAL_DIR at a persistent volume.")
         # Behind a load balancer with neither setting changed, every anonymous request looks
-        # like it comes from the balancer, so they all share one rate-limit bucket.
-        if self.TRUSTED_PROXY_HOPS == 0 and os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1") == "127.0.0.1":
-            _log.warning("TRUSTED_PROXY_HOPS=0 and FORWARDED_ALLOW_IPS=127.0.0.1: if a load balancer "
-                         "sits in front, set one of them so rate limits see real client IPs.")
+        # like it comes from the balancer, so they all share one rate-limit bucket (M18).
+        forwarded = {p.strip() for p in os.environ.get("FORWARDED_ALLOW_IPS", "127.0.0.1").split(",")
+                     if p.strip()}
+        if (self.TRUSTED_PROXY_HOPS < 1 and forwarded <= _LOOPBACK and not self.NO_REVERSE_PROXY):
+            raise ValueError(
+                "Proxy trust is not configured: with TRUSTED_PROXY_HOPS=0 and FORWARDED_ALLOW_IPS="
+                "127.0.0.1, every user behind a load balancer shares one rate limit. Set "
+                "FORWARDED_ALLOW_IPS to the load balancer's address/CIDR (or TRUSTED_PROXY_HOPS to "
+                "the number of proxies in front), or NO_REVERSE_PROXY=true if clients connect "
+                "straight to this server. See DEPLOY.md.")
+        # Rate limits counted per process let N workers or replicas allow N times every limit
+        # (M20). WEB_CONCURRENCY can't see `--workers N` or replicas, so require the shared
+        # store unless the operator explicitly promises a single worker.
+        if not self.REDIS_URL and not self.SINGLE_WORKER:
+            raise ValueError(
+                "REDIS_URL must be set in production/staging so rate limits are shared by every "
+                "worker and instance. Running exactly one worker on one instance? Set "
+                "SINGLE_WORKER=true. See DEPLOY.md.")
         if _meta_configured and not self.META_APP_SECRET:
             import logging
             logging.getLogger(__name__).warning(
@@ -379,7 +425,8 @@ class Settings(BaseSettings):
         import os
         if self.is_deployed and not self.REDIS_URL and int(os.environ.get("WEB_CONCURRENCY", "1") or 1) > 1:
             raise ValueError("REDIS_URL must be set when WEB_CONCURRENCY > 1 in production/staging, so "
-                             "rate limits are shared by every worker. Set REDIS_URL or run one worker.")
+                             "rate limits are shared by every worker. Set REDIS_URL or run one worker "
+                             "(SINGLE_WORKER=true promises exactly one).")
         return self
 
 

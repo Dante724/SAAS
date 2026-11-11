@@ -2,10 +2,10 @@
 // Ticking one off is safe to queue offline (it sets a value), so it goes through the offline queue.
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router-dom";
-import { CheckCircle2, Circle, Link2, ListTodo, RefreshCw } from "lucide-react";
+import { AlertTriangle, CheckCircle2, Circle, Link2, ListTodo, RefreshCw } from "lucide-react";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
-import { Card, Empty, Page, Section, SkeletonRows } from "../components/ui";
+import { Empty, GoButton, IconButton, Page, Section, SkeletonRows } from "../components/ui";
 import { goQueue } from "../lib/offlineQueue";
 import { haptic } from "../lib/scanner";
 import { announceChange, useOnChange, useToast } from "../lib/useGo";
@@ -71,7 +71,7 @@ function TaskRow({ t, meId, onToggle }: { t: Task; meId?: string; onToggle: (t: 
         <p className="mt-0.5 flex flex-wrap items-center gap-x-2 text-go-sub text-ink-secondary">
           {t.due_at && <span className={late && !done ? "font-semibold text-rose-700" : ""}>{late && !done ? "Overdue · " : ""}{when(t.due_at)}</span>}
           {(from || forWho) && <span>{from || forWho}</span>}
-          {t.order_id && <Link to={`/job/${encodeURIComponent(t.order_id)}`} className="inline-flex items-center gap-1 font-semibold text-primary"><Link2 size={13} />Job</Link>}
+          {t.order_id && <Link to={`/job/${encodeURIComponent(t.order_id)}`} className="-my-3 -mx-2 inline-flex min-h-11 min-w-11 items-center gap-1 px-2 font-semibold text-primary"><Link2 size={14} />Open job</Link>}
         </p>
       </div>
     </div>
@@ -107,14 +107,14 @@ export default function Tasks() {
   const groups = { overdue: [] as Task[], today: [] as Task[], later: [] as Task[], someday: [] as Task[], done: [] as Task[] };
   (items || []).forEach((t) => groups[bucket(t)].push(t));
   const refresh = (
-    <button onClick={load} aria-label="Refresh" className="h-11 w-11 -mr-2 inline-flex items-center justify-center rounded-full text-ink-secondary active:bg-slate-100"><RefreshCw size={20} /></button>
+    <IconButton label="Refresh" onClick={load} className="-mr-2" icon={<RefreshCw size={20} />} />
   );
   const list = (ts: Task[]) => <div className="space-y-2">{ts.map((t) => <TaskRow key={t.id} t={t} meId={me?.id} onToggle={toggle} />)}</div>;
   const open = groups.overdue.length + groups.today.length + groups.later.length + groups.someday.length;
 
   return (
     <Page title="Tasks" right={refresh} subtitle={items ? (open ? `${open} to do` : "All done") : undefined}>
-      {err && !items && <Card className="p-4 text-ink-secondary">{err}</Card>}
+      {err && !items && <Empty icon={<AlertTriangle size={22} />} title="Couldn't load" body={err} action={<GoButton variant="link" onClick={load}>Try again</GoButton>} />}
       {!items && !err && <SkeletonRows n={3} />}
       {items && !open && !groups.done.length && <Empty icon={<ListTodo size={22} />} title="No tasks" body="Tasks assigned to you, and ones you make with +, show up here." />}
       {groups.overdue.length > 0 && <Section title="Overdue" count={groups.overdue.length}>{list(groups.overdue)}</Section>}
@@ -124,7 +124,7 @@ export default function Tasks() {
       {groups.done.length > 0 && (
         <Section title="Done" count={groups.done.length}>
           {showDone ? list(groups.done.slice(0, 20))
-            : <button onClick={() => setShowDone(true)} className="min-h-[2.75rem] px-1 font-semibold text-primary">Show done tasks</button>}
+            : <GoButton variant="link" onClick={() => setShowDone(true)} className="px-1">Show done tasks</GoButton>}
         </Section>
       )}
     </Page>

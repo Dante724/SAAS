@@ -41,7 +41,14 @@ from backend.services.dates import now_utc
 log_ = logging.getLogger("tekly.notifications")
 
 
-async def _send(db, org_id, channel, *, recipient, subject, body, log=None, headers=None):
+# Texts that market to the customer rather than tell them about their own job/booking: they use
+# the non-transactional part of the operator's daily text budget (notifications.notif_creds).
+def is_marketing_event(trigger_event: Optional[str]) -> bool:
+    ev = trigger_event or ""
+    return ev == "birthday" or ev.startswith("agent.win_back")
+
+
+async def _send(db, org_id, channel, *, recipient, subject, body, log=None, headers=None, transactional=None):
     """144jn: send through THIS shop's own provider credentials (per-tenant).
     An email is HTML only when its template was when the message was filled (log.is_html, fixed
     when the log row is first saved); built-in and template-less messages are plain text.
@@ -56,7 +63,9 @@ async def _send(db, org_id, channel, *, recipient, subject, body, log=None, head
         result = await try_oauth_email(db, org_id, recipient=recipient, subject=subject, body=body, html=html)
         if result is not None:
             return result
-    creds = await notif_creds(db, org_id, channel)
+    if transactional is None:
+        transactional = not is_marketing_event(log.trigger_event if log is not None else None)
+    creds = await notif_creds(db, org_id, channel, transactional=transactional)
     adapter = _adapter_for(channel, creds)
     if headers:
         return await adapter.send(recipient=recipient, subject=subject, body=body, html=html, headers=headers)
@@ -547,6 +556,10 @@ async def run_due(db: AsyncSession, *, org_id: str, now: Optional[datetime] = No
             from backend.services.sense_agents import email_headers
             h = email_headers(log)
             extra = {"headers": h} if h else {}   # no template: plain text, nothing to look up
+        if is_marketing_event(log.trigger_event):
+            # Win-back / birthday: the marketing part of the operator's daily text budget. (Agent
+            # texts carry no log here, so _send can't tell from it; everything else is transactional.)
+            extra["transactional"] = False
         try:
             result = await asyncio.wait_for(_send(db, org_id, log.channel,
                 recipient=log.recipient, subject=log.subject, body=log.body, **extra), SEND_TIMEOUT_S)

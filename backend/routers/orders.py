@@ -444,8 +444,6 @@ def _apply_order_filters(q, org_id: str, *, status=None, location_id=None, searc
     """The work-order list filters, shared by the list, its facet counts and the board, so a
     total always counts exactly the rows the filters select. Device/client filters use
     subqueries (not joins) so rows never duplicate and the count stays a plain count."""
-    from sqlalchemy import or_
-
     from backend.models import Device
     if is_estimate is not None:
         q = q.where(Order.is_estimate == is_estimate)
@@ -486,17 +484,42 @@ def _apply_order_filters(q, org_id: str, *, status=None, location_id=None, searc
         q = q.where(Order.created_at >= parse_dt(created_from, "created_from"))
     if created_to:
         q = q.where(Order.created_at <= parse_dt(created_to, "created_to"))
-    s = (search or "").strip()
+    s = " ".join((search or "").split())
     if s:
-        # order number, client name/phone, or the device (brand, model, serial, IMEI)
-        cq = select(Client.id).where(Client.org_id == org_id, or_(
-            Client.name.icontains(s), Client.phone.contains(s)))
-        dq = select(Device.id).where(Device.org_id == org_id, or_(
-            Device.brand.icontains(s), Device.model.icontains(s),
-            Device.serial.icontains(s), Device.imei.contains(s)))
-        q = q.where(or_(Order.order_number.icontains(s),
-                        Order.client_id.in_(cq), Order.device_id.in_(dq)))
+        q = q.where(_order_search_clause(s, org_id))
     return q
+
+
+def _order_search_clause(s: str, org_id: str):
+    """One search box: the job number (with or without its prefix, separators or zero padding),
+    the client's name (every word, any order, any case — or the company they're billed to),
+    the client's phone however it's formatted, or the asset (brand, model, serial, IMEI, VIN, HIN).
+    Every subquery is pinned to the shop, so another shop's clients or assets never match."""
+    from sqlalchemy import or_
+
+    from backend.models import Device
+    from backend.services import search_match as sm
+    conds = []
+    num = sm.number_match(Order.order_number, s)
+    if num is not None:
+        conds.append(num)
+    name_ids = select(Client.id).where(Client.org_id == org_id, sm.words_match(Client.name, s))
+    client_or = [Client.id.in_(name_ids),
+                 Client.payer_id.in_(name_ids)]      # people billed to a matching company
+    phone = sm.phone_match(Client.phone, s)
+    if phone is not None:
+        client_or.append(phone)
+    conds.append(Order.client_id.in_(
+        select(Client.id).where(Client.org_id == org_id, or_(*client_or))))
+    # The asset: brand/model, or any of its identifiers (serial, IMEI, VIN, HIN) with spaces,
+    # dashes and case ignored.
+    dev_or = [Device.brand.icontains(s, autoescape=True), Device.model.icontains(s, autoescape=True)]
+    for col in (Device.serial, Device.imei, Device.vin, Device.hin):
+        code = sm.code_match(col, s)
+        if code is not None:
+            dev_or.append(code)
+    conds.append(Order.device_id.in_(select(Device.id).where(Device.org_id == org_id, or_(*dev_or))))
+    return or_(*conds)
 
 
 def _device_image_url(device_id: Optional[str], has_image: bool) -> Optional[str]:
@@ -1952,10 +1975,13 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     # off is_closing (which has its own fallback) rather than prev_terminal, so it works
     # even for the built-in 'done/closed/delivered' statuses that aren't in OrderStatus.
     if not order.is_estimate and order.client_id:
-        from backend.services.ledger import order_charge_net, post_contact_ledger
+        from backend.services.ledger import credit_spent_target, order_charge_net, post_contact_ledger
         _net = await order_charge_net(db, order.client_id, order.id)
-        # A dropped job is charged only what wasn't written off, so it leaves no debt.
-        _target = q2(float(order.total or 0) - float(order.written_off or 0)) if is_closing else 0.0
+        # A dropped job is charged only what wasn't written off, so it leaves no debt. A job that
+        # isn't closing keeps the client credit already spent on it charged (H6): reversing that
+        # handed the credit back while the job stayed paid from it, so it paid a second job.
+        _target = (q2(float(order.total or 0) - float(order.written_off or 0)) if is_closing
+                   else await credit_spent_target(db, order))
         _delta = q2(_target - _net)
         if _delta:
             _note = (f"Order {order.order_number} ready" if is_closing
@@ -2147,7 +2173,7 @@ async def convert_estimate_endpoint(
     job needs the same permission as creating one at the counter, and the record must be
     within the person's access (E1)."""
     est = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
-        .options(selectinload(Order.lines)).with_for_update(of=Order))).scalar_one_or_none()
+        .options(selectinload(Order.lines)).with_for_update(of=Order, key_share=True))).scalar_one_or_none()
     if not est:
         raise HTTPException(404, "Estimate not found")
     await _guard_order_access(db, current, est)
@@ -3069,7 +3095,7 @@ async def notify_order_customer(
             if result is not None:
                 delivery = "oauth"
         if result is None:
-            _creds = await notif_creds(db, current.org_id, data.channel)
+            _creds = await notif_creds(db, current.org_id, data.channel, transactional=True)   # about this job
             result = await _adapter_for(data.channel, _creds).send(
                 recipient=recipient, subject=data.subject, body=data.body)
             delivery = "smtp" if (data.channel == "email" and _settings.SMTP_HOST) else "simulated"
@@ -3412,9 +3438,19 @@ async def reserve_stock_for_order(
     from datetime import timedelta
     from backend.models import Part, StockReservation
 
+    # council M7: holds past their date used to block until someone opened the reservations list.
+    # First, before the job is loaded: the sweep commits, and a commit after the job's row lock
+    # (#108) would drop it and let a second reserve click in.
+    from backend.routers.inventory import _release_expired
+    await _release_expired(db, current.org_id)
+
+    # Lock the job first (Order FOR NO KEY UPDATE, then its stock rows sorted by product): two
+    # reserve clicks at once each read "nothing held yet" and together held twice what the job
+    # needs. NO KEY UPDATE, like the money paths, so rows that only reference the job by FK
+    # (invoices, holds) don't queue behind it.
     order = (await db.execute(
         select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
-        .options(selectinload(Order.lines)))).scalar_one_or_none()
+        .options(selectinload(Order.lines)).with_for_update(of=Order, key_share=True))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, order)
@@ -3441,11 +3477,16 @@ async def reserve_stock_for_order(
     reserved, short = [], []
     part_names = await names_by_id(db, Part.id, Part.name, list(need),
                                    org_col=Part.org_id, org_id=current.org_id)
-    for part_id, qty_needed in need.items():
+    # product-id order, so two jobs needing the same products lock their stock rows the same way
+    # round (a job needing [X, Y] and one needing [Y, X] deadlocked)
+    for part_id, qty_needed in sorted(need.items()):
         want = qty_needed - held.get(part_id, 0)      # still to hold for this job
         if want <= 0:
             continue
         from backend.services import stock_rows
+        # lock the rows before counting (stock_consume.lock_rows order): two jobs reserving the
+        # last unit at once both used to get it
+        await stock_rows.rows(db, part_id, order.location_id, lock=True)
         free = await stock_rows.free(db, part_id, order.location_id)
         take = min(want, max(free, 0))
         if take <= 0:
@@ -3588,7 +3629,7 @@ async def _archive_order(db, current, order_id, reason, do_refund):
             took = (await db.execute(select(func.coalesce(func.sum(Transaction.amount), 0)).where(
                 Transaction.org_id == current.org_id, Transaction.account_id == acc_id,
                 Transaction.ref_type == "order", Transaction.ref_id == order_id,
-                Transaction.txn_type == "invoice_payment", Transaction.status == "active"))).scalar() or 0
+                Transaction.txn_type == "invoice_payment", Transaction.status != "deleted"))).scalar() or 0
             if q2(float(took)) > 0:
                 raise HTTPException(409, f"{amt:.2f} has to go back to the customer from the “{acct.name}” drawer, "
                                          f"but it holds only {float(acct.balance or 0):.2f}. Put the cash back in "
@@ -3633,6 +3674,25 @@ async def _archive_order(db, current, order_id, reason, do_refund):
                     await detach_order(db, _inv, order.id)
                 except HTTPException:
                     pass          # this job's money is on it: it stays, as the refund left it
+    # Stock lock order: Order → StockLevel sorted by (part_id, location_id) → holds. Every stock row
+    # this archive touches — what its lines drew and what it holds — is locked here, sorted, before
+    # the lines are put back and the holds released below; putting a drawn Y back and then
+    # releasing a held X (X < Y) took them in the reverse of a reserve needing [X, Y], and deadlocked.
+    from backend.models import StockReservation
+    from backend.services import stock_rows
+    _hold_q = (select(StockReservation).where(
+        StockReservation.org_id == current.org_id, StockReservation.order_id == order_id,
+        StockReservation.released == False)  # noqa: E712
+        .order_by(StockReservation.part_id, StockReservation.location_id))
+    _holds = (await db.execute(_hold_q)).scalars().all()
+    _stock_keys = {(_h.part_id, _h.location_id) for _h in _holds}
+    if not order.is_estimate:
+        _stock_keys |= {tuple(k) for k in (await db.execute(
+            select(StockMovement.part_id, StockMovement.location_id).where(
+                StockMovement.ref_id == order.id, StockMovement.ref_type == "order",
+                StockMovement.movement_type.in_(("use", "return"))).distinct())).all()}
+    for _pid, _lid in sorted(k for k in _stock_keys if k[0] and k[1]):
+        await stock_rows.rows(db, _pid, _lid, lock=True)
     # Return consumed stock to inventory — archiving an order must not silently lose the parts it
     # deducted (reuses the same reversal the delete-line/reopen paths use). Safe against re-run:
     # archiving an already-archived order is rejected above.
@@ -3647,6 +3707,20 @@ async def _archive_order(db, current, order_id, reason, do_refund):
                     # The parts are back on the shelf: the line no longer holds stock. Without this,
                     # restore -> archive (or delete the line) returned the same parts again.
                     _l.pending_stock = _l.qty or 0
+    # Its stock holds go with it: an archived job must not keep its units reserved (up to 180
+    # days) from every other job and transfer. Same release as the expiry sweep. Restore un-hides
+    # only — reserve again by hand if the job still needs the parts.
+    # The holds are locked after their stock rows (above) — the work-order draw locks the stock rows
+    # and then takes units off these holds (an override), so locking the holds first deadlocked an
+    # archive against a job drawing this one's units. Re-read locked: one drawn down meanwhile is
+    # already released.
+    _holds = (await db.execute(_hold_q.where(StockReservation.id.in_([_h.id for _h in _holds]))
+                               .with_for_update().execution_options(populate_existing=True))).scalars().all()
+    for _h in _holds:
+        if _h.released:
+            continue
+        await stock_rows.reserve(db, _h.part_id, _h.location_id, -float(_h.qty or 0))
+        _h.released = True
     if not order.is_estimate:
         from backend.services.payroll import CommissionEngine
         await CommissionEngine(db, current.org_id).reverse_for_deletion(order)
@@ -4437,14 +4511,59 @@ async def _catalog_warranty(db, org_id, kind, ref_id) -> int:
     return int(row or 0)
 
 
+# Hardening council M16: every line change on a job leaves an audit row ("who changed the price?").
+_LINE_AUDIT_KEYS = ["qty", "unit_price", "discount", "cost_price", "description"]
+
+
+def _line_snapshot(line) -> dict:
+    out = {}
+    for k in _LINE_AUDIT_KEYS:
+        v = getattr(line, k, None)
+        out[k] = v if k == "description" else (float(v) if v is not None else None)
+    return out
+
+
+async def _audit_line(db, actor, order_id: str, line, action: str, before: Optional[dict] = None) -> None:
+    """order.line_add / order.line_update / order.line_delete on the order, in the caller's
+    transaction (audit.record only add+flushes). An update that changed none of the tracked
+    fields writes nothing."""
+    from backend.services.audit import diff_fields, record as _audit
+    after = _line_snapshot(line)
+    if before is not None:
+        diff = diff_fields(before, after, _LINE_AUDIT_KEYS)
+        if not diff:
+            return
+    else:
+        diff = dict(after)
+    diff = {"line_id": line.id, "kind": line.kind, "line_type": line.line_type, **diff}
+    await _audit(db, org_id=actor.org_id, actor_id=actor.id, action=action,
+                 entity_type="order", entity_id=order_id, diff=diff)
+
+
 @router.post("/{order_id}/lines", status_code=201)
 async def add_line(
     order_id: str,
     data: LineIn,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
+    request: Request = None,   # last and optional: in-process callers keep add_line(oid, data, db, emp)
 ):
-    """Add a service/product/fee to an existing order (Orderry Services & Products tab)."""
+    """Add a service/product/fee to an existing order (Orderry Services & Products tab).
+
+    Council M13: a retried add (double tap, a phone timeout that did reach the server, Tekly Go's
+    queue replay) with the same Idempotency-Key gets the first answer back instead of adding the
+    line again and taking stock twice, the same way orders.create and orders.finish work."""
+    from backend.services.idempotency import run_once
+    if request is None:
+        return await _add_line(order_id, data, db, current)
+    # Bound to what was asked (#99): the same key for another line or another job is a 422, and the
+    # key is never released once the line (and its stock draw) committed.
+    return await run_once(db, current.org_id, request, "orders.add_line",
+                          {"order_id": order_id, "line": data.model_dump(mode="json")},
+                          lambda: _add_line(order_id, data, db, current))
+
+
+async def _add_line(order_id: str, data: LineIn, db: AsyncSession, current: Employee):
     order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
@@ -4586,6 +4705,7 @@ async def add_line(
             await db.flush()
             if kind == "product" and not order.is_estimate:
                 await _maybe_deduct(db, order, nl, li.qty, perms, current)
+            await _audit_line(db, current, order_id, nl, "order.line_add")
             made.append(nl.id)
         await _respread_kit(db, order_id, group_id)
         await _recalc_order(db, order)
@@ -4620,6 +4740,7 @@ async def add_line(
             .execution_options(populate_existing=True))).scalars().all()
         existing = next((ln for ln in same if abs(float(ln.unit_price or 0) - float(data.unit_price or 0)) < 0.005), None)
         if existing and not kit_group:
+            _before = _line_snapshot(existing)
             existing.qty += data.qty
             existing.total = q2(existing.qty * existing.unit_price *
                                    (1 - (existing.discount or 0)/100 if existing.discount_type != "fixed" else 1))
@@ -4632,6 +4753,7 @@ async def add_line(
             if not order.is_estimate:      # estimates never deduct
                 await _maybe_deduct(db, order, existing, data.qty, perms, current,
                                     bin_id=data.bin_id, serial_number=data.serial_number)
+            await _audit_line(db, current, order_id, existing, "order.line_update", before=_before)
             await _recalc_order(db, order)
             await db.commit()
             return {"ok": True, "line_id": existing.id, "merged": True}
@@ -4688,6 +4810,7 @@ async def add_line(
         line.total = _calc_line(_line_as_in(line))
         await _respread_kit(db, order_id, kit_group.bundle_group_id, actor=current,
                             change=f"Added {data.description}")
+    await _audit_line(db, current, order_id, line, "order.line_add")
     await _recalc_order(db, order)
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "order", order.id, f"Added {data.kind or data.line_type}: {data.description}")
@@ -5200,6 +5323,7 @@ async def update_line(
                                 adds_value=(payload["qty"] or 0) > old_qty)
     if line.bundle_group_id and "order_item_id" in payload and payload["order_item_id"] != line.order_item_id:
         raise HTTPException(409, "A kit's lines stay with the kit. Move the whole kit, or remove this line and add it again.")
+    _before = _line_snapshot(line)
     for k, v in payload.items():
         setattr(line, k, v)
     # Stock follows the qty change for product lines on real orders (Orderry).
@@ -5249,6 +5373,7 @@ async def update_line(
         change = (f"{line.description}: qty {old_qty:g} → {line.qty:g}" if (line.qty or 0) != old_qty
                   else f"{line.description} edited")
         await _respread_kit(db, order_id, line.bundle_group_id, actor=current, change=change)
+    await _audit_line(db, current, order_id, line, "order.line_update", before=_before)
     await _recalc_order(db, order)
     await db.commit()
     resp = {"ok": True, "total": line.total, "order_total": order.total}
@@ -5295,6 +5420,7 @@ async def delete_line(
     _kit = line.bundle_group_id
     from backend.services.invoice_money import release_line
     await release_line(db, line.id)   # refused on a sent/paid invoice; off any draft that lists it
+    await _audit_line(db, current, order_id, line, "order.line_delete")
     await db.delete(line)
     await db.flush()
     if _kit:

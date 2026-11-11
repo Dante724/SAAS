@@ -6,5 +6,6 @@
 /** A soft fill of `hex` at `pct`% in light mode (about 1.8× that in dark). */
 export const tint = (hex: string, pct = 12) => `color-mix(in srgb, ${hex} calc(${pct}% * var(--tint-boost, 1)), transparent)`;
 
-/** `hex` as text: unchanged in light, mixed toward white in dark. */
-export const hueText = (hex: string) => `color-mix(in srgb, ${hex}, white var(--hue-lift, 0%))`;
+/** `hex` as text: mixed toward black in light and toward white in dark, so a status's own colour
+ *  stays readable (4.5:1) on its own soft tint; a bright green or yellow can't be read raw. */
+export const hueText = (hex: string) => `color-mix(in srgb, color-mix(in srgb, ${hex}, black var(--hue-sink, 0%)), white var(--hue-lift, 0%))`;

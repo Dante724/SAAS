@@ -2,6 +2,7 @@ import { createContext, useContext, useEffect, useState, type ReactNode } from "
 import { api } from "../api/client";
 import { setCurrencySymbol } from "../pages/orders/types";
 import { getLocale } from "../i18n";
+import { setLaborSpelling } from "../lib/labor";
 
 // Global signed-in-user context — the React equivalent of legacy `App.me`.
 // Boots once from /api/auth/me and exposes:
@@ -13,12 +14,14 @@ export type Me = {
   id?: string; name?: string; email?: string; role?: string | null; org_name?: string | null;
   is_owner?: boolean; is_shop_owner?: boolean; permissions?: Record<string, boolean>; home_route?: string | null;
   currency?: string; currency_code?: string;
+  country?: string | null;   // ISO alpha-2; decides "Labor" vs "Labour"
   clock_wo_enabled?: boolean; clock_attendance_enabled?: boolean;
   track_job_hours?: boolean; track_attendance?: boolean;
   mfa_enabled?: boolean; mfa_required?: boolean; email_verified?: boolean;
   pin_set?: boolean;   // Tekly Go payment PIN
   location_id?: string | null;
   support?: { email?: string; url?: string };
+  card_readers?: boolean;   // card readers switched on for this server (off by default)
   billing?: Billing | null;
 };
 
@@ -108,6 +111,7 @@ export function MeProvider({ children }: { children: ReactNode }) {
       const m = await api.get<Me>("/auth/me");
       setMe(m);
       if (m.currency) setCurrencySymbol(m.currency); // wire money() to the org currency
+      setLaborSpelling(m.country, m.currency_code);  // "Labor" for US shops, "Labour" elsewhere
     } catch { /* keep prior me; unauthenticated flows are handled elsewhere */ }
     finally { setLoading(false); }
   }

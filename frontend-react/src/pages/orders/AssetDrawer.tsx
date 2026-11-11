@@ -1,9 +1,12 @@
 import NameSuggestInput from "../../components/NameSuggestInput";
+import Tabs from "../../components/Tabs";
+import { buttonClass } from "../../components/Button";
 import { useEffect, useState, type ReactNode } from "react";
 import { useNavigate } from "react-router-dom";
 import { balanceView } from "../../lib/balance";
 import { sectionCard } from "../../components/Section";
 import { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import { api } from "../../api/client";
 import { useClientSearch } from "../../hooks/useClientSearch";
 import { confirmDialog } from "../../lib/dialog";
@@ -17,6 +20,7 @@ import { useFormLayout, LayoutFields, reqStar, missingRequired, has } from "../.
 import { loadFailed } from "../../lib/notice";
 import { MembershipsCard } from "../memberships/shared";
 import { MembershipDrawer } from "../memberships/MembershipsView";
+import { Badge } from "../../components/Card";
 
 const TABS = ["General", "Work orders", "History"];
 
@@ -99,7 +103,7 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
         <header className="px-6 pt-4 border-b border-slate-200/90 bg-white">
           <div className="flex items-center gap-2 mb-3">
             <button onClick={onClose} className="flex items-center gap-1.5 text-xs font-semibold text-primary"><M n="arrow_back" c="text-sm" /> {woNum ? `Back to ${woNum}` : "Back"}</button>
-            <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-ink-secondary border border-slate-200">{assetNoun(a, term)}</span>
+            <Badge size="sm">{assetNoun(a, term)}</Badge>
             <div className="flex-1" />
             <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-full flex items-center justify-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100"><M n="close" c="text-lg" /></button>
           </div>
@@ -107,9 +111,8 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
             <div className="w-11 h-11 rounded-xl bg-slate-100 text-ink-secondary grid place-items-center border border-slate-200"><M n="smartphone" c="text-xl" /></div>
             <div><div className="text-base font-bold text-ink-primary">{creating ? `New ${assetNoun(a, term).toLowerCase()}` : title}{!creating && a.color ? ` (${a.color})` : ""}</div><div className="text-xs text-ink-tertiary">{creating ? `Register a ${assetNoun(a, term).toLowerCase()}` : (a.owner_name ? `Owned by ${a.owner_name}` : "Company-owned")}</div></div>
           </div>
-          <div className="flex gap-6 text-xs font-semibold">
-            {(creating ? [TABS[0]] : TABS).map((t, i) => <button key={t} onClick={() => setTab(i)} className={`py-3 border-b-2 transition-colors ${tab === i ? "text-primary border-primary font-bold" : "text-ink-secondary border-transparent hover:text-ink-primary"}`}>{t}</button>)}
-          </div>
+          <Tabs look="underline" label="Asset sections" className="border-b-0" value={String(tab)} onChange={(id) => setTab(Number(id))}
+            tabs={(creating ? [TABS[0]] : TABS).map((t, i) => ({ id: String(i), label: t }))} />
         </header>
         <div className="flex-1 overflow-y-auto p-6 bg-canvas space-y-4">
           {tab === 0 ? (
@@ -190,7 +193,7 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
                   <div className="divide-y divide-slate-100">
                     {a.history.map((o) => (
                       <button type="button" key={o.id} onClick={() => openOrder(o.id)} aria-label={`Open work order ${o.order_number || ""}`.trim()} className="w-full text-left grid grid-cols-[1fr_auto_auto] gap-3 px-4 py-2.5 items-center text-xs hover:bg-slate-50 transition-colors">
-                        <div><span className="font-bold text-ink-primary font-mono">{o.order_number || o.id.slice(0, 8)}</span>{o.status && <span className="ml-2 px-1.5 py-0.5 rounded-full text-[11px] font-bold bg-slate-100 text-ink-secondary capitalize">{o.status.replace(/_/g, " ")}</span>}</div>
+                        <div><span className="font-bold text-ink-primary font-mono">{o.order_number || o.id.slice(0, 8)}</span>{o.status && <Badge size="sm" className="ml-2 capitalize">{o.status.replace(/_/g, " ")}</Badge>}</div>
                         <span className="text-right tabular-nums font-semibold text-ink-primary">{money(o.total ?? 0)}</span>
                         <span className="text-right text-ink-tertiary whitespace-nowrap">{fmtDate(o.created_at)}</span>
                       </button>
@@ -204,7 +207,7 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
             moves === null
               ? <p className="text-xs text-ink-tertiary">Loading history…</p>
               : moves.length === 0
-                ? <p className="text-xs text-ink-tertiary">No lifecycle events logged yet.</p>
+                ? <EmptyState size="inline" title="No lifecycle events logged yet." />
                 : <div className={`${sectionCard} divide-y divide-slate-100`}>
                     {moves.map((m, i) => (
                       <div key={i} className="px-4 py-3 flex items-start gap-3">
@@ -221,8 +224,8 @@ export default function AssetDrawer({ woNum, assetId, onClose, onSaved }: { woNu
           )}
         </div>
         <footer className="px-6 py-3.5 border-t border-slate-200/90 bg-white flex items-center gap-2">
-          <button onClick={save} disabled={busy} className="h-9 px-4 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Saving…" : creating ? `Create ${assetNoun(a, term).toLowerCase()}` : "Save"}</button>
-          <button onClick={onClose} className="h-9 px-3.5 rounded-xl text-xs font-semibold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50">Cancel</button>
+          <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : creating ? `Create ${assetNoun(a, term).toLowerCase()}` : "Save"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
           {!creating && <button onClick={archive} disabled={busy} className="ml-auto h-9 px-3 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 disabled:opacity-50">Archive {assetNoun(a, term).toLowerCase()}</button>}
         </footer>
         {toast && <div className="absolute bottom-16 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-drawer">{toast}</div>}

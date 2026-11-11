@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import { api } from "../../api/client";
 import { alertDialog } from "../../lib/dialog";
+import { buttonClass } from "../../components/Button";
 
 type Kind = { key: string; label: string; days: number | null };
 type Data = { kinds: Kind[]; min_days: number; max_days: number };
@@ -44,7 +45,7 @@ export default function RetentionCard({ Card }: { Card: (p: { title: string; chi
           </div>
         ))}
         <div className="flex items-center gap-3 pt-1">
-          <button onClick={save} disabled={busy} className="px-3 py-2 rounded-lg bg-primary text-white font-semibold disabled:opacity-60">Save</button>
+          <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>Save</button>
           {saved && <span role="status" className="text-emerald-700">Saved</span>}
         </div>
       </div>

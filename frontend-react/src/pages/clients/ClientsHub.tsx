@@ -3,6 +3,7 @@ import { useMe, hasFeature } from "../../context/Me";
 import { humanize } from "../../lib/humanize";
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
+import { TableEmpty } from "../../components/EmptyState";
 import { api } from "../../api/client";
 import { downloadSheet } from "../../lib/downloadSheet";
 import { isoDate } from "../../lib/localDate";
@@ -23,6 +24,8 @@ import MembershipsView from "../memberships/MembershipsView";
 import { hueText, tint } from "../../lib/tint";
 import { clickableRow } from "../../lib/clickable";
 import ImportDrawer from "../../components/ImportDrawer";
+import { buttonClass } from "../../components/Button";
+import { theadRowClass } from "../../components/Table";
 
 type Client = { id: string; name?: string; phone?: string; email?: string; loyalty_tier?: string; balance?: number; devices?: any[]; order_count?: number };
 type Tab = "clients" | "memberships" | "suppliers";
@@ -32,7 +35,7 @@ type Tab = "clients" | "memberships" | "suppliers";
 const TIER_HUE: Record<string, string> = { vip: "#7F77DD", gold: "#BA7517", silver: "#64748b" };
 export function TierPill({ tier }: { tier?: string | null }) {
   const k = (tier || "").trim().toLowerCase();
-  if (!k || k === "standard") return <span className="text-ink-placeholder">—</span>;
+  if (!k || k === "standard") return <span className="text-ink-tertiary">—</span>;
   const hue = TIER_HUE[k] || "#378ADD";
   return <span className="inline-flex items-center px-2 py-0.5 rounded-full text-[11px] font-semibold whitespace-nowrap" style={{ background: tint(hue), color: hueText(hue) }}>{k === "vip" ? "VIP" : humanize(tier)}</span>;
 }
@@ -70,7 +73,18 @@ export default function ClientsHub() {
   useEffect(() => { if (tab === "suppliers" && !suppliers) loadSuppliers(); }, [tab]);
 
   const cRows = rows ?? [];
-  const sRows = (suppliers ?? []).filter((s) => !q || [s.name, s.contact_name, s.phone, s.email].some((v) => (v || "").toLowerCase().includes(q.toLowerCase())));
+  // The server search also finds a phone typed in another format ("+1 646 555 0101" vs
+  // "(646) 555-0101") and name words in any order; its hits are kept alongside the local filter.
+  const [sHits, setSHits] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    if (tab !== "suppliers" || !dq) { setSHits(null); return; }
+    let live = true;
+    api.get<{ items: Supplier[] }>(`/suppliers?search=${encodeURIComponent(dq)}`)
+      .then((r) => { if (live) setSHits(new Set((r.items || []).map((s) => s.id))); })
+      .catch(() => { if (live) setSHits(null); });
+    return () => { live = false; };
+  }, [tab, dq]);
+  const sRows = (suppliers ?? []).filter((s) => !q || !!sHits?.has(s.id) || [s.name, s.contact_name, s.phone, s.email].some((v) => (v || "").toLowerCase().includes(q.toLowerCase())));
   // Numbered pagination — one shared page (Clients and Suppliers tabs never show at once).
   const PAGE_SIZE = 50;
   const [listPage, setListPage] = useState(1);
@@ -145,11 +159,11 @@ export default function ClientsHub() {
           <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-3.5 flex flex-wrap items-center justify-between gap-3">
             {tab === "clients"
               ? <div className="flex items-center gap-2">
-                  {can("can_create_clients") && <button onClick={() => setNewClient(true)} className={btnPrimary}><M n="add" c="text-sm" />New client</button>}
+                  {can("can_create_clients") && <button onClick={() => setNewClient(true)} className={`${btnPrimary} min-w-[8.5rem] justify-center`}><M n="add" c="text-sm" />New client</button>}
                   {can("can_create_clients") && <button onClick={() => setImporting("clients")} className={`${btnGhost} bg-white`}><M n="upload" c="text-sm" />Import</button>}
                 </div>
               : tab === "suppliers" ? <div className="flex items-center gap-2">
-                  <button onClick={() => setNewSupplier(true)} className={btnPrimary}><M n="add" c="text-sm" />New supplier</button>
+                  <button onClick={() => setNewSupplier(true)} className={`${btnPrimary} min-w-[8.5rem] justify-center`}><M n="add" c="text-sm" />New supplier</button>
                   {can("can_manage_inventory") && <button onClick={() => setImporting("suppliers")} className={`${btnGhost} bg-white`}><M n="upload" c="text-sm" />Import</button>}
                 </div>
               : <a href="/catalog?tab=plans" className={`${btnGhost} bg-white`}><M n="workspace_premium" c="text-sm" />Manage plans</a>}
@@ -186,10 +200,10 @@ export default function ClientsHub() {
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
               <div className="overflow-x-auto">
               <table className="w-full min-w-[860px] text-left border-collapse text-xs">
-                <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-xs font-semibold">
+                <thead><tr className={theadRowClass}>
                   <th className="py-3 pl-4 pr-1 w-8"><input type="checkbox" aria-label="Select all" checked={allSel} onChange={toggleAll} className="accent-primary cursor-pointer" /></th>
                   <th className="py-3 px-4">Client</th><th className="py-3 px-4">Phone</th><th className="py-3 px-4">Email</th>
-                  <th className="py-3 px-4">Tier</th><th className="py-3 px-4 text-right">Balance</th><th className="py-3 px-4">{term.assets}</th><th className="py-3 px-4">Orders</th><th className="py-3 pl-2 pr-3 w-12"><span className="sr-only">Actions</span></th>
+                  <th className="py-3 px-4">Tier</th><th className="py-3 px-4 text-right">Balance</th><th className="py-3 px-4 text-right tabular-nums">{term.assets}</th><th className="py-3 px-4 text-right tabular-nums">Orders</th><th className="py-3 pl-2 pr-3 w-12"><span className="sr-only">Actions</span></th>
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
                   {err && <tr><td colSpan={9} className="py-6 px-4 text-status-overdue-ink">Error: {err}</td></tr>}
@@ -199,7 +213,7 @@ export default function ClientsHub() {
                       {tagId || dq ? <p className="text-ink-tertiary">{tagId ? "No clients with this tag." : "No clients found."}</p> : (
                         <div className="space-y-3">
                           <p className="text-ink-secondary">No clients yet. Add one or import a CSV to start.</p>
-                          {can("can_create_clients") && <button onClick={() => setNewClient(true)} className={btnPrimary}><M n="add" c="text-sm" />New client</button>}
+                          {can("can_create_clients") && <button onClick={() => setNewClient(true)} className={`${btnPrimary} min-w-[8.5rem] justify-center`}><M n="add" c="text-sm" />New client</button>}
                         </div>
                       )}
                     </td></tr>
@@ -212,8 +226,8 @@ export default function ClientsHub() {
                       <td className="py-3 px-4 text-ink-tertiary">{c.email || "—"}</td>
                       <td className="py-3 px-4"><TierPill tier={c.loyalty_tier} /></td>
                       <td className="py-3 px-4 text-right tabular-nums font-semibold text-ink-primary">{money(c.balance ?? 0)}</td>
-                      <td className="py-3 px-4 tabular-nums font-semibold text-ink-primary">{c.devices?.length ?? 0}</td>
-                      <td className="py-3 px-4 tabular-nums font-semibold text-ink-primary">{c.order_count ?? 0}</td>
+                      <td className="py-3 px-4 text-right tabular-nums font-semibold text-ink-primary">{c.devices?.length ?? 0}</td>
+                      <td className="py-3 px-4 text-right tabular-nums font-semibold text-ink-primary">{c.order_count ?? 0}</td>
                       <td className="py-1.5 pl-2 pr-3" onClick={(e) => e.stopPropagation()}>
                         <MoreMenu label={`More actions for ${c.name || "client"}`} items={[
                           { label: "Open", icon: "open_in_new", onClick: () => setOpenClient(c.id) },
@@ -234,20 +248,15 @@ export default function ClientsHub() {
             <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm overflow-hidden">
               <div className="overflow-x-auto">
               <table className="w-full min-w-[720px] text-left border-collapse text-xs">
-                <thead><tr className="bg-slate-50/80 border-b border-slate-200 text-ink-tertiary text-xs font-semibold">
+                <thead><tr className={theadRowClass}>
                   <th className="py-3 px-4">Supplier</th><th className="py-3 px-4">Contact</th><th className="py-3 px-4">Phone</th><th className="py-3 px-4">Email</th>
                   <th className="py-3 px-4 text-right">Lead days</th><th className="py-3 px-4 text-right">Balance</th>
                 </tr></thead>
                 <tbody className="divide-y divide-slate-100 font-medium text-ink-secondary">
                   {!suppliers && <SkeletonRows cols={6} />}
-                  {suppliers && sRows.length === 0 && <tr><td colSpan={6} className="py-10 px-4 text-center">
-                    {q ? <p className="text-ink-tertiary">No suppliers found.</p> : (
-                      <div className="space-y-3">
-                        <p className="text-ink-secondary">No suppliers yet.</p>
-                        <button onClick={() => setNewSupplier(true)} className={btnPrimary}><M n="add" c="text-sm" />New supplier</button>
-                      </div>
-                    )}
-                  </td></tr>}
+                  {suppliers && sRows.length === 0 && <TableEmpty cols={6} icon={<M n="local_shipping" c="text-lg" />}
+                    title={q ? "No suppliers found." : "No suppliers yet."}
+                    action={q ? undefined : <button onClick={() => setNewSupplier(true)} className={`${btnPrimary} min-w-[8.5rem] justify-center`}><M n="add" c="text-sm" />New supplier</button>} />}
                   {pageS.map((s) => (
                     <tr key={s.id} {...clickableRow(() => s.client_id ? setOpenClient(s.client_id) : setOpenSupplier(s))} className="hover:bg-slate-50 cursor-pointer">
                       <td className="py-3 px-4 font-semibold text-ink-primary">{s.name || "—"}</td>
@@ -288,7 +297,7 @@ function MergePreviewDialog({ preview, busy, onCancel, onConfirm }: { preview: a
   const FLD: Record<string, string> = { phone: "Phone", email: "Email", address: "Address", notes: "Notes", discount_card: "Discount card", source: "Lead source", manager_id: "Manager" };
   return (
     <div className="fixed inset-0 z-[60] flex items-center justify-center p-4">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={busy ? undefined : onCancel} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={busy ? undefined : onCancel} />
       <div className="relative bg-white rounded-2xl shadow-clay-drawer border border-slate-200 w-full max-w-md max-h-[85vh] overflow-y-auto">
         <div className="p-5 border-b border-slate-200 flex items-center gap-2">
           <span className="w-9 h-9 rounded-xl bg-amber-50 text-amber-600 grid place-items-center border border-amber-100"><M n="merge" c="text-base" /></span>
@@ -317,9 +326,9 @@ function MergePreviewDialog({ preview, busy, onCancel, onConfirm }: { preview: a
           </div>
           <div className="flex items-start gap-1.5 p-2.5 rounded-lg bg-slate-50 border border-slate-200 text-[11px] text-ink-secondary"><M n="history" c="text-sm mt-0.5" /><span>The source contacts are removed, but you can undo this right after if it's wrong.</span></div>
         </div>
-        <div className="p-4 border-t border-slate-200 flex justify-end gap-2">
-          <button onClick={onCancel} disabled={busy} className="px-4 py-2 rounded-xl text-xs font-bold text-ink-secondary bg-white border border-slate-200 hover:bg-slate-50 disabled:opacity-50">Cancel</button>
-          <button onClick={onConfirm} disabled={busy} className="px-4 py-2 rounded-xl bg-primary text-white text-xs font-bold shadow-clay-sm hover:brightness-110 disabled:opacity-50">{busy ? "Merging…" : "Merge contacts"}</button>
+        <div className="p-4 border-t border-slate-200 flex justify-start gap-2">
+          <button onClick={onConfirm} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Merging…" : "Merge contacts"}</button>
+          <button onClick={onCancel} disabled={busy} className={buttonClass("secondary", "md")}>Cancel</button>
         </div>
       </div>
     </div>
@@ -345,7 +354,7 @@ function NewSupplierDrawer({ onClose, onCreated }: { onClose: () => void; onCrea
   }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[440px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h2 className="font-bold text-ink-primary">New supplier</h2>
@@ -360,9 +369,9 @@ function NewSupplierDrawer({ onClose, onCreated }: { onClose: () => void; onCrea
             </div>
           ))}
         </div>
-        <div className="px-5 py-4 border-t border-slate-200 flex justify-end gap-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : "Create supplier"}</button>
+        <div className="px-5 py-4 border-t border-slate-200 flex justify-start gap-2">
+          <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Create supplier"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
         </div>
       </div>
     </div>

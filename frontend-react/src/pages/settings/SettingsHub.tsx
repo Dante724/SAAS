@@ -1,8 +1,11 @@
 import { lazy, Suspense, useEffect, useRef, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
+import { buttonClass } from "../../components/Button";
 import DeviceList from "../../components/DeviceList";
 import { createPortal } from "react-dom";
 import { useNavigate } from "react-router-dom";
 import Shell, { M } from "../../components/Shell";
+import EmptyState from "../../components/EmptyState";
 import DateField from "../../components/DateField";
 import { api } from "../../api/client";
 import type { FormKey } from "../../components/FormCustomizer";
@@ -16,11 +19,14 @@ import { Avatar } from "../orders/look";
 import { escapeHtml, sanitizeHtml } from "../../lib/safeHtml";
 import RetentionCard from "./RetentionCard";
 import Switch from "../../components/Switch";
+import Tabs from "../../components/Tabs";
 import SaveFooter from "../../components/SaveFooter";
 import { SettingRow, SettingGroup, NumField } from "../../components/SettingRow";
 import { money } from "../orders/types";
 import { loadFailed } from "../../lib/notice";
 import { clickable, clickableRow } from "../../lib/clickable";
+import { Badge, type BadgeTone } from "../../components/Card";
+import { useCardReaders } from "../../lib/cardReaders";
 
 // Each settings page is its own chunk, fetched when its section opens (the hub was one ~470 kB file).
 const TemplateEditorDrawer = lazy(() => import("./TemplateEditorDrawer"));
@@ -36,6 +42,7 @@ const InventoryPage = lazy(() => import("./PricingInventory").then((m) => ({ def
 const FinanceNumbering = lazy(() => import("./FinanceNumbering"));
 const InvoiceSettings = lazy(() => import("./InvoiceSettings"));
 const DocumentTemplatesPage = lazy(() => import("./DocumentTemplatesPage"));
+const BrandDocumentsPage = lazy(() => import("./documents/BrandDocumentsPage"));
 const LocationsPage = lazy(() => import("./LocationsPage"));
 const TeamPage = lazy(() => import("./TeamSettings").then((m) => ({ default: m.TeamPage })));
 const RoleEditor = lazy(() => import("./TeamSettings").then((m) => ({ default: m.RoleEditor })));
@@ -52,11 +59,21 @@ const sectionLoading = <div className="text-xs text-ink-tertiary py-6">Loading�
 
 // Full section set = the registry sections + a few that have no nav entry of their own.
 type Section = SectionId | "overview" | "automation" | "payroll-rules";
+// What one row of each settings list is called, for the drawer title ("New price level", not "New Pricing").
+const EDIT_NOUN: Record<string, string> = {
+  automation: "automation", notifications: "notification rule", templates: "template", invites: "invite", forms: "form",
+  warehouses: "warehouse", statuses: "status", pricing: "price level", directories: "list",
+};
+const MOVED_SECTIONS: Record<string, { to: Section; note: string }> = {
+  automation: { to: "notifications", note: "Automations now live in Notifications › Automations." },
+  "payroll-rules": { to: "team", note: "Commission rules now live in Team & roles › Commissions." },
+  ...(FEATURES.ecommerce ? {} : { ecommerce: { to: "integrations" as Section, note: "Online store sync isn't switched on yet. Your other connections are here." } }),
+};
 
 const lbl = "block text-sm font-medium text-ink-primary mb-1.5";
 const field = "glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary";
-const btnPrimary = "h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90 disabled:opacity-50 inline-flex items-center gap-1.5";
-const btnSecondary = "h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-ink-secondary text-xs font-semibold hover:bg-slate-50 disabled:opacity-50 inline-flex items-center gap-1.5";
+const btnPrimary = buttonClass("primary", "md");
+const btnSecondary = buttonClass("secondary", "md");
 
 // Plain-word labels for the stored option values shown in settings (events, actions, kinds…).
 const OPT_LABELS: Record<string, string> = {
@@ -151,8 +168,12 @@ export default function SettingsHub() {
   const { me } = useMe();
   const NAV = sectionsFor(me);
   const proOk = (f: Parameters<typeof hasFeature>[1]) => hasFeature(me, f);
-  // ?section=… deep-links a section (e.g. "Manage options" in a directory dropdown).
-  const [sec, setSec] = useState<Section>(() => (new URLSearchParams(window.location.search).get("section") as Section) || "overview");
+  // ?section=… deep-links a section (e.g. "Manage options" in a directory dropdown). Old links to
+  // sections that moved (or are switched off) open their new home instead of a blank page.
+  const [movedFrom] = useState(() => { const raw = new URLSearchParams(window.location.search).get("section") || ""; return Object.prototype.hasOwnProperty.call(MOVED_SECTIONS, raw) ? raw : ""; });
+  // Settings › Documents opens on Brand & details; "All templates" shows every template.
+  const [docsView, setDocsView] = useState<"brand" | "all">("brand");
+  const [sec, setSec] = useState<Section>(() => { const raw = new URLSearchParams(window.location.search).get("section") || "overview"; return Object.prototype.hasOwnProperty.call(MOVED_SECTIONS, raw) ? MOVED_SECTIONS[raw].to : (raw as Section); });
   const [q, setQ] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
   const [co, setCo] = useState<any>(null);
@@ -169,8 +190,10 @@ export default function SettingsHub() {
   const [lists, setLists] = useState<Record<string, any[] | null>>({});
   const [roles, setRoles] = useState<any[] | null>(null);
   const { me: hubMe } = useMe();
+  const cardReaders = useCardReaders();   // off: no Card readers card in Integrations
   const [toast, setToast] = useState<string | null>(null);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2200); };
+  useEffect(() => { if (movedFrom) flash(MOVED_SECTIONS[movedFrom].note); }, [movedFrom]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const coSaved = useRef<any>(null);   // last saved company settings (General shows a save bar when they differ)
   useEffect(() => { api.get<any>("/staff/company").then((c) => { coSaved.current = c; setCo(c); }).catch(() => setCo({})); }, []);
@@ -463,9 +486,16 @@ export default function SettingsHub() {
               )} />
           )}
 
-          {sec === "templates" && (
-            <DocumentTemplatesPage templates={lists.templates} onOpen={(row) => setEditing({ sec: "templates", row })}
-              onChanged={() => reloadSec("templates")} onFlash={flash} />
+          {sec === "templates" && docsView === "brand" && (
+            <BrandDocumentsPage templates={lists.templates} reload={() => reloadSec("templates")}
+              onOpenEditor={(row) => setEditing({ sec: "templates", row })} onAllTemplates={() => setDocsView("all")} />
+          )}
+          {sec === "templates" && docsView === "all" && (
+            <div className="space-y-3">
+              <button type="button" onClick={() => setDocsView("brand")} className="text-xs font-semibold text-primary hover:underline">← Brand &amp; details</button>
+              <DocumentTemplatesPage templates={lists.templates} onOpen={(row) => setEditing({ sec: "templates", row })}
+                onChanged={() => reloadSec("templates")} onFlash={flash} />
+            </div>
           )}
 
           {sec === "finance" && <InvoiceSettings />}
@@ -477,7 +507,7 @@ export default function SettingsHub() {
           {sec === "approvals" && <ApprovalsSettings />}
 
           {sec === "forms" && (
-            <FormsDesigner types={lists.forms || []} onAddType={() => setEditing({ sec: "forms", row: null })}
+            <FormsDesigner types={lists.forms || []} onAddType={() => setEditing({ sec: "forms", row: null })} onEditType={(r) => setEditing({ sec: "forms", row: r })}
               onDeleteType={(r) => delRow("forms", r)} onAdvanced={(t) => setFormFieldsFor(t)} onChanged={() => reloadSec("forms")} />
           )}
 
@@ -508,7 +538,7 @@ export default function SettingsHub() {
           {sec === "integrations" && (
             <div className="max-w-4xl space-y-5">
               <IntegrationsHub data={integrations} goSection={setSec} reload={() => setIntegrations(null)} pro={{ accounting: proOk("accounting_sync"), api: proOk("api_keys") }} />
-              <CardReadersCard />
+              {cardReaders && <CardReadersCard />}
               <TelephonySettings />
               {proOk("api_keys") && <ApiKeysCard />}
               <WebhooksCard />
@@ -526,7 +556,7 @@ export default function SettingsHub() {
         />
       ) : editing && EDITORS[editing.sec] && (
         <EditorDrawer
-          title={`${editing.row?.id ? "Edit" : "New"} ${NAV.find((n) => n.id === (editing.sec as Section))?.label || editing.sec}`}
+          title={`${editing.row?.id ? "Edit" : "New"} ${EDIT_NOUN[editing.sec] || NAV.find((n) => n.id === (editing.sec as Section))?.label || editing.sec}`}
           fields={EDITORS[editing.sec].fields}
           initial={editing.row}
           varModule={editing.module}
@@ -582,7 +612,7 @@ function DeliveryStatusBanner() {
         {order.map((k) => (
           <span key={k} className={"inline-flex items-center gap-1.5 rounded-full px-2.5 py-1 text-[12px] font-semibold " + (ch[k] === "live" ? "bg-emerald-100 text-emerald-800" : "bg-slate-100 text-ink-secondary")}>
             <span className={"h-1.5 w-1.5 rounded-full " + (ch[k] === "live" ? "bg-emerald-500" : "bg-slate-400")} />
-            {k.toUpperCase()} · {ch[k]}
+            {k === "whatsapp" ? "WhatsApp" : k === "push" ? "Push" : k.toUpperCase()} · {ch[k] === "simulated" ? "practice mode" : ch[k]}
           </span>
         ))}
       </div>
@@ -697,14 +727,8 @@ function NotificationsSettings({ fixedView, rules, templates, automations, reloa
 
           {/* Workflows splits into Jobs vs Estimates (Orderry parity) */}
           {module === "order" && (
-            <div className="flex gap-4 text-xs font-semibold border-b border-slate-200">
-              {([["work_order", "Jobs"], ["estimate", "Estimates"]] as const).map(([k, l]) => (
-                <button key={k} onClick={() => setRecType(k)}
-                  className={"py-2 border-b-2 transition-colors " + (recType === k ? "text-primary border-primary" : "text-ink-tertiary border-transparent hover:text-ink-secondary")}>
-                  {l}
-                </button>
-              ))}
-            </div>
+            <Tabs label="Workflow type" value={recType} onChange={setRecType}
+              tabs={[{ id: "work_order", label: "Jobs" }, { id: "estimate", label: "Estimates" }]} />
           )}
 
           <SectionCard
@@ -817,7 +841,7 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[440px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <div>
@@ -830,9 +854,9 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
           {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
           {!isReminder && (
             <div><label className={lbl}>Event</label>
-              <select value={f.event} onChange={(e) => set("event", e.target.value)} className={field}>
+              <TeklySelect value={f.event} onChange={(e) => set("event", e.target.value)} className={field}>
                 {events.map(([k, l]) => <option key={k} value={k}>{l}</option>)}
-              </select></div>
+              </TeklySelect></div>
           )}
           {!isReminder && f.event === "status_changed" && statusRT && (
             <div><label className={lbl}>Status changed to</label>
@@ -847,15 +871,15 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
               <input value={f.trigger_status_key} onChange={(e) => set("trigger_status_key", e.target.value)} placeholder="blank = any" className={field} /></div>
           )}
           <div><label className={lbl}>Send via</label>
-            <select value={f.channel} onChange={(e) => set("channel", e.target.value)} className={field}>
+            <TeklySelect value={f.channel} onChange={(e) => set("channel", e.target.value)} className={field}>
               {channels.map((c) => <option key={c} value={c}>{c === "push" ? "In-app / push" : c.toUpperCase()}</option>)}
-            </select></div>
+            </TeklySelect></div>
           {!internal && (
             <div><label className={lbl}>Template</label>
-              <select value={f.template_id} onChange={(e) => set("template_id", e.target.value)} className={field}>
+              <TeklySelect value={f.template_id} onChange={(e) => set("template_id", e.target.value)} className={field}>
                 <option value="">Default message</option>
                 {tplOpts.map((t) => <option key={t.id} value={t.id}>{t.name || optLabel(t.trigger_event)}</option>)}
-              </select>
+              </TeklySelect>
               <div className="mt-1 text-[11px] text-ink-tertiary">No template → a sensible default message is sent.</div>
             </div>
           )}
@@ -877,18 +901,18 @@ function NotifRuleDrawer({ module, internal, recordType, forceReminder, rule, te
           )}
           {locations.length > 1 && (
             <div><label className={lbl}>Location</label>
-              <select value={f.location_id} onChange={(e) => set("location_id", e.target.value)} className={field}>
+              <TeklySelect value={f.location_id} onChange={(e) => set("location_id", e.target.value)} className={field}>
                 <option value="">All locations</option>
                 {locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}
-              </select></div>
+              </TeklySelect></div>
           )}
           <ToggleRow label="Only send during working hours" on={f.working_hours_only} onToggle={() => set("working_hours_only", !f.working_hours_only)} />
           {!internal && <ToggleRow label="Try the client's latest chat first" on={f.chat_first} onToggle={() => set("chat_first", !f.chat_first)} />}
           <ToggleRow label="Active" on={f.active} onToggle={() => set("active", !f.active)} />
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs ml-auto">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : "Save"}</button>
+          <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
         </div>
       </div>
     </div>
@@ -955,9 +979,9 @@ function RichTextEditor({ value, onChange, registerInsert }: {
     <div className="border border-slate-200 rounded-lg overflow-hidden bg-white">
       <div className="flex flex-wrap items-center gap-0.5 border-b border-slate-200 bg-slate-50 px-2 py-1">
         <select title="Font" onMouseDown={saveSel} onChange={(e) => applyFont(e.target.value)} defaultValue="" className="h-8 border border-slate-200 rounded-md text-xs px-1.5 bg-white text-ink-secondary"><option value="" disabled>Font</option>{fonts.map((ff) => <option key={ff} value={ff} style={{ fontFamily: ff }}>{ff}</option>)}</select>
-        <select title="Size" onMouseDown={saveSel} onChange={(e) => applySize(Number(e.target.value))} defaultValue="" className="h-8 border border-slate-200 rounded-md text-xs px-1.5 bg-white text-ink-secondary w-16"><option value="" disabled>Size</option>{sizes.map((s) => <option key={s} value={s}>{s}px</option>)}</select>
-        <label className={btn + " relative cursor-pointer"} title="Text colour"><M n="format_color_text" c="text-[18px]" /><input type="color" onMouseDown={saveSel} onChange={(e) => applyColor(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" /></label>
-        <label className={btn + " relative cursor-pointer"} title="Highlight"><M n="format_ink_highlighter" c="text-[18px]" /><input type="color" onMouseDown={saveSel} onChange={(e) => applyHilite(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" /></label>
+        <select title="Size" onMouseDown={saveSel} onChange={(e) => applySize(Number(e.target.value))} defaultValue="" className="h-8 border border-slate-200 rounded-md text-xs px-1.5 bg-white text-ink-secondary w-16 bg-none"><option value="" disabled>Size</option>{sizes.map((s) => <option key={s} value={s}>{s}px</option>)}</select>
+        <label className={btn + " relative cursor-pointer"} title="Text colour"><M n="format_color_text" c="text-lg" /><input type="color" onMouseDown={saveSel} onChange={(e) => applyColor(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" /></label>
+        <label className={btn + " relative cursor-pointer"} title="Highlight"><M n="format_ink_highlighter" c="text-lg" /><input type="color" onMouseDown={saveSel} onChange={(e) => applyHilite(e.target.value)} className="absolute inset-0 opacity-0 cursor-pointer" /></label>
         <span className="w-px h-5 bg-slate-200 mx-1" />
         <TB cmd="bold" icon="format_bold" title="Bold" />
         <TB cmd="italic" icon="format_italic" title="Italic" />
@@ -1038,7 +1062,7 @@ function NotifTemplateDrawer({ tpl, module, onClose, onSaved }: {
   }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[720px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h2 className="font-bold text-ink-primary">{tpl?.id ? "Edit template" : "New template"}</h2>
@@ -1079,10 +1103,10 @@ function NotifTemplateDrawer({ tpl, module, onClose, onSaved }: {
           <ToggleRow label="Active" on={f.active} onToggle={() => set("active", !f.active)} />
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
-          <button onClick={sendTest} className="px-3 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs">Send test</button>
+          <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
+          <button onClick={sendTest} className={buttonClass("secondary", "md", "ml-auto")}>Send test</button>
           {testMsg && <span className="text-[11px] text-emerald-600 font-medium">{testMsg}</span>}
-          <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs ml-auto">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-4 py-2 rounded-lg bg-primary text-white font-semibold text-xs hover:bg-primary-container disabled:opacity-60">{busy ? "Saving…" : "Save"}</button>
         </div>
       </div>
     </div>
@@ -1127,7 +1151,7 @@ function FeedbackSettingsEditor() {
               <Switch on={!!c.active} onChange={(v) => set("active", v)} label="Ask customers for feedback after a work order closes" />
             </SettingRow>
             <SettingRow label="Rating system" htmlFor="fb-system" dim={!c.active}>
-              <select id="fb-system" value={c.system || "five_point"} onChange={(e) => set("system", e.target.value)} className={inp}>{[["five_point", "5-point stars"], ["like", "Like / dislike"], ["nps", "NPS (0–10)"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select>
+              <TeklySelect id="fb-system" value={c.system || "five_point"} onChange={(e) => set("system", e.target.value)} className={inp}>{[["five_point", "5-point stars"], ["like", "Like / dislike"], ["nps", "NPS (0–10)"]].map(([v, l]) => <option key={v} value={v}>{l}</option>)}</TeklySelect>
             </SettingRow>
           </SettingGroup>
           <div className="border-t border-slate-100">
@@ -1161,7 +1185,7 @@ function IntegrationsHub({ data, goSection, reload, pro = { accounting: true, ap
     if (s === "org") return { text: "Your keys", tone: "on" };
     if (s === "env") return { text: "Shared default", tone: "neutral" };
     if (s === "unreadable") return { text: "Enter keys again", tone: "off" };
-    return { text: "Not set", tone: "off" };
+    return { text: "Not set up", tone: "off" };
   };
   const keyAction = (p: string) => ({ label: srcOf(p) === "org" ? "Edit keys" : srcOf(p) === "unreadable" ? "Re-enter keys" : "Add keys", onClick: () => setKeyProv(p) });
   const emailOn = (data.email?.accounts?.length || 0) > 0;
@@ -1176,13 +1200,13 @@ function IntegrationsHub({ data, goSection, reload, pro = { accounting: true, ap
     try { navigator.clipboard.writeText(snip); alertDialog("Website status-widget embed snippet copied to clipboard."); }
     catch { await promptDialog("Copy the embed snippet:", { defaultValue: snip }); }
   };
-  type Badge = { text: string; tone: "on" | "off" | "neutral" };
+  type CardBadge = { text: string; tone: "on" | "off" | "neutral" };
   // A Pro connector on Starter: say so and point at Billing instead of offering setup.
-  const proCard = { badge: { text: "Pro plan", tone: "neutral" } as Badge, hint: "Upgrade to Pro to use this",
+  const proCard = { badge: { text: "Pro plan", tone: "neutral" } as CardBadge, hint: "Upgrade to Pro to use this",
     action: { label: "See plans", onClick: () => goSection("billing") } };
-  const B = { on: "bg-emerald-100 text-emerald-700", off: "bg-slate-100 text-ink-secondary", neutral: "bg-indigo-50 text-indigo-700" } as const;
+  const B = { on: "success", off: "neutral", neutral: "info" } as const;
   type Webhook = { url: string; help: string };
-  const allGroups: { group: string; cards: { name: string; desc: string; badge: Badge; hint?: string; action?: { label: string; onClick: () => void }; webhook?: Webhook }[] }[] = [
+  const allGroups: { group: string; cards: { name: string; desc: string; badge: CardBadge; hint?: string; action?: { label: string; onClick: () => void }; webhook?: Webhook }[] }[] = [
     { group: "Payments", cards: [
       { name: "Online payments (Stripe)", desc: "Hosted checkout & payment links; reconciles into your cashboxes.",
         badge: payLive ? { text: `Live: ${payGw}`, tone: "on" } : keyBadge("stripe"),
@@ -1196,10 +1220,10 @@ function IntegrationsHub({ data, goSection, reload, pro = { accounting: true, ap
         badge: keyBadge("sumup"), action: keyAction("sumup") } ] },
     { group: "Accounting", cards: [
       { name: "QuickBooks Online", desc: "Send invoices, payments and contacts to QuickBooks.",
-        badge: data.qbo?.connected ? { text: "Connected", tone: "on" } : { text: data.qbo?.configured ? "Not connected" : "Not configured", tone: "off" },
+        badge: data.qbo?.connected ? { text: "Connected", tone: "on" } : { text: data.qbo?.configured ? "Not connected" : "Not set up", tone: "off" },
         hint: data.qbo?.configured ? undefined : "Contact Tekly support to turn this on", ...(pro.accounting ? {} : proCard) },
       { name: "Xero", desc: "Sync invoices, payments and clients both ways.",
-        badge: data.xero?.connected ? { text: "Connected", tone: "on" } : { text: data.xero?.configured ? "Not connected" : "Not configured", tone: "off" },
+        badge: data.xero?.connected ? { text: "Connected", tone: "on" } : { text: data.xero?.configured ? "Not connected" : "Not set up", tone: "off" },
         hint: data.xero?.configured ? undefined : "Contact Tekly support to turn this on", ...(pro.accounting ? {} : proCard) } ] },
     { group: "Communication", cards: [
       { name: "Email (Gmail / Outlook)", desc: "Send from your own mailbox (OAuth). SMTP fallback available.",
@@ -1209,7 +1233,7 @@ function IntegrationsHub({ data, goSection, reload, pro = { accounting: true, ap
       { name: "SMS & WhatsApp (Twilio)", desc: "Two-way messages; replies land on the right job.",
         badge: keyBadge("twilio"), action: keyAction("twilio") },
       { name: "Calls / VoIP", desc: "Click-to-call and an inbound-call feed through your Twilio account.",
-        badge: telOn ? { text: telProv === "simulated" ? "Simulated" : telProv === "twilio" && data.tel?.twilio?.test_mode ? "Twilio: test mode" : `Live: ${telProv}`, tone: "on" } : { text: "Off", tone: "off" }, hint: telOn ? undefined : "Set up below in Calls & telephony" },
+        badge: telOn ? { text: telProv === "simulated" ? "Practice mode" : telProv === "twilio" && data.tel?.twilio?.test_mode ? "Twilio: test mode" : `Live: ${telProv}`, tone: "on" } : { text: "Off", tone: "off" }, hint: telOn ? undefined : "Set up below in Calls & telephony" },
       { name: "Chat inbox (Messenger / Instagram / WhatsApp)", desc: "Meta channels land in one inbox, linked to clients & jobs.",
         badge: keyBadge("meta"), action: keyAction("meta") } ] },
     { group: "E-commerce", cards: [
@@ -1245,7 +1269,7 @@ function IntegrationsHub({ data, goSection, reload, pro = { accounting: true, ap
                 <div key={c.name} className="border border-slate-200/90 rounded-xl p-3.5 flex flex-col gap-1.5 bg-white hover:border-slate-300 transition-colors">
                   <div className="flex items-start justify-between gap-2">
                     <span className="text-sm font-semibold text-ink-primary leading-tight">{c.name}</span>
-                    <span className={`px-2 py-0.5 rounded-full text-xs font-medium whitespace-nowrap ${B[c.badge.tone]}`}>{c.badge.text}</span>
+                    <Badge tone={B[c.badge.tone]} size="sm">{c.badge.text}</Badge>
                   </div>
                   <p className="text-xs text-ink-secondary leading-snug">{c.desc}</p>
                   {c.hint && <p className="text-xs text-ink-tertiary mt-0.5">{c.hint}</p>}
@@ -1338,13 +1362,13 @@ function CredDrawer({ provider, status, onClose, onSaved }: {
           {err && <div className="text-xs text-rose-600">{err}</div>}
         </div>
         <div className="px-5 py-3 border-t border-slate-100 flex items-center justify-between">
+          <div className="flex gap-2">
+            <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save keys"}</button>
+            <button onClick={onClose} className="px-3 py-2 rounded-lg text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>
+          </div>
           {status?.source === "org" || status?.source === "unreadable"
             ? <button onClick={clearKeys} disabled={busy} className="text-[12px] font-semibold text-rose-600 hover:underline">Remove keys</button>
             : <span />}
-          <div className="flex gap-2">
-            <button onClick={onClose} className="px-3 py-2 rounded-lg text-xs font-semibold text-ink-secondary hover:bg-slate-100">Cancel</button>
-            <button onClick={save} disabled={busy} className="px-3.5 py-2 rounded-lg bg-primary text-white text-xs font-semibold disabled:opacity-60">{busy ? "Saving…" : "Save keys"}</button>
-          </div>
         </div>
       </div>
     </div>, document.body);
@@ -1359,7 +1383,7 @@ function SectionCard({ title, count, onAdd, children }: { title: string; count?:
   return (
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
       <div className="p-3.5 border-b border-slate-100">
-        <h3 className="text-sm font-semibold text-ink-primary flex items-center">{title}{count != null && <span className="ml-2 text-xs font-medium bg-slate-100 text-ink-secondary px-2 py-0.5 rounded-full">{count}</span>}</h3>
+        <h3 className="text-sm font-semibold text-ink-primary flex items-center">{title}{count != null && <Badge size="sm" className="ml-2">{count}</Badge>}</h3>
         {onAdd && <button type="button" onClick={onAdd} className={`mt-2.5 ${btnPrimary}`}><M n="add" c="text-sm" />Add</button>}
       </div>
       {children}
@@ -1425,7 +1449,7 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
   const fld = "w-full bg-white border border-slate-200 rounded-xl px-3 py-2.5 text-sm text-ink-primary outline-none focus:border-primary focus:ring-2 focus:ring-primary/10";
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[540px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="px-5 pt-5 pb-3">
@@ -1467,9 +1491,9 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div><label className={lblc}>Role</label>
-                <select value={f.role_id || ""} onChange={(e) => set("role_id", e.target.value)} className={`${fld} appearance-none`}><option value="">{me?.is_owner ? "— No role (full access) —" : "Choose a role…"}</option>{roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
+                <TeklySelect value={f.role_id || ""} onChange={(e) => set("role_id", e.target.value)} className={`${fld} appearance-none`}><option value="">{me?.is_owner ? "— No role (full access) —" : "Choose a role…"}</option>{roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</TeklySelect></div>
               <div><label className={lblc}>Home location</label>
-                <select value={f.location_id || ""} onChange={(e) => set("location_id", e.target.value)} className={`${fld} appearance-none`}><option value="">All locations</option>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
+                <TeklySelect value={f.location_id || ""} onChange={(e) => set("location_id", e.target.value)} className={`${fld} appearance-none`}><option value="">All locations</option>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</TeklySelect></div>
             </div>
             {!isNew && (
               <label className="flex items-center justify-between py-1 cursor-pointer">
@@ -1484,10 +1508,10 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
           <div className="space-y-4">
             <div className="grid grid-cols-3 gap-3">
               <div><label className={lblc}>Wage type</label>
-                <select value={f.wage_type || "fixed"} onChange={(e) => set("wage_type", e.target.value)} className={`${fld} appearance-none`}><option value="fixed">Fixed salary</option><option value="hourly">Hourly</option></select></div>
+                <TeklySelect value={f.wage_type || "fixed"} onChange={(e) => set("wage_type", e.target.value)} className={`${fld} appearance-none`}><option value="fixed">Fixed salary</option><option value="hourly">Hourly</option></TeklySelect></div>
               <div><label className={lblc}>Wage value</label><input type="number" value={f.wage_value ?? ""} onChange={(e) => set("wage_value", e.target.value)} className={`${fld} font-mono`} /></div>
               <div><label className={lblc}>Pay hours from</label>
-                <select value={f.hourly_basis === "attendance" ? "attendance" : "labour"} onChange={(e) => set("hourly_basis", e.target.value)} className={`${fld} appearance-none`}><option value="labour">Approved job timesheets</option><option value="attendance">Shop clock-in / out</option></select></div>
+                <TeklySelect value={f.hourly_basis === "attendance" ? "attendance" : "labour"} onChange={(e) => set("hourly_basis", e.target.value)} className={`${fld} appearance-none`}><option value="labour">Approved job timesheets</option><option value="attendance">Shop clock-in / out</option></TeklySelect></div>
             </div>
             <div className="divide-y divide-slate-100">
               <label className="flex items-center justify-between py-2 cursor-pointer"><span className="text-xs font-semibold text-ink-primary">Work-order / job timer</span>
@@ -1503,11 +1527,11 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
             <div className="space-y-4">
                 <div className="flex items-end gap-2">
                 <div className="flex-1"><label className={lblc}>Set new password</label><input value={pw} onChange={(e) => setPw(e.target.value)} type="text" placeholder="Min 8 chars" className={fld} /></div>
-                <button onClick={resetPassword} disabled={!pw.trim()} className="px-3 py-2 rounded-lg border border-slate-200 text-xs font-bold text-ink-secondary hover:bg-slate-50 disabled:opacity-50">Set</button>
+                <button onClick={resetPassword} disabled={!pw.trim()} className={buttonClass("secondary", "md")}>Set</button>
               </div>
               <div className="flex gap-2">
-                <button onClick={sendReset} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">Email reset link</button>
-                <button onClick={resetMfa} className="px-3 py-1.5 rounded-lg border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50">Reset 2FA</button>
+                <button onClick={sendReset} className={buttonClass("secondary", "sm")}>Email reset link</button>
+                <button onClick={resetMfa} className={buttonClass("secondary", "sm")}>Reset 2FA</button>
               </div>
               {!isSelf && (
                 <div className="border-t border-slate-100 pt-4">
@@ -1519,8 +1543,8 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
           )}
         </div>
         <div className="px-5 py-4 border-t border-slate-100 flex items-center gap-2">
-          <button onClick={onClose} className="ml-auto px-4 py-2 rounded-xl border border-slate-200 text-ink-secondary hover:bg-slate-50 font-semibold text-xs">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-xl bg-ink-primary text-white font-semibold text-xs hover:opacity-90 disabled:opacity-60">{busy ? "Saving…" : isNew ? "Add teammate" : "Save"}</button>
+          <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : isNew ? "Add teammate" : "Save"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
         </div>
       </div>
     </div>
@@ -1563,7 +1587,7 @@ function PayrollRuleDrawer({ rule, employees, statuses, onClose, onSaved }: { ru
   const isPct = f.calc_type === "percent";
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[520px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-100">
@@ -1577,25 +1601,25 @@ function PayrollRuleDrawer({ rule, employees, statuses, onClose, onSaved }: { ru
             <h3 className="text-xs font-bold text-ink-primary">Trigger</h3>
             <div><label className={lblc}>Rule name</label><input value={f.name || ""} onChange={(e) => set("name", e.target.value)} className={fld} /></div>
             <div><label className={lblc}>Pays when this happens (event)</label>
-              <select value={f.event} onChange={(e) => set("event", e.target.value)} className={fld}>
+              <TeklySelect value={f.event} onChange={(e) => set("event", e.target.value)} className={fld}>
                 {PAYROLL_EVENTS.map((ev) => <option key={ev} value={ev}>{PAYROLL_EVENT_LABELS[ev]}</option>)}
-              </select></div>
+              </TeklySelect></div>
             <div><label className={lblc}>Applies to</label>
-              <select value={f.employee_id || ""} onChange={(e) => set("employee_id", e.target.value)} className={fld}>
+              <TeklySelect value={f.employee_id || ""} onChange={(e) => set("employee_id", e.target.value)} className={fld}>
                 <option value="">All employees (or by role default)</option>
                 {employees.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
-              </select></div>
+              </TeklySelect></div>
           </div>
 
           <div className="bg-white rounded-xl border border-slate-200/90 shadow-clay-card p-4 space-y-3">
             <h3 className="text-xs font-bold text-ink-primary">Amount</h3>
             <div className="grid grid-cols-2 gap-3">
               <div><label className={lblc}>Type</label>
-                <select value={f.calc_type} onChange={(e) => set("calc_type", e.target.value)} className={fld}><option value="percent">Percentage</option><option value="flat">Flat amount</option></select></div>
+                <TeklySelect value={f.calc_type} onChange={(e) => set("calc_type", e.target.value)} className={fld}><option value="percent">Percentage</option><option value="flat">Flat amount</option></TeklySelect></div>
               <div><label className={lblc}>{isPct ? "Percent (%)" : "Amount"}</label><input type="number" value={f.amount ?? ""} onChange={(e) => set("amount", e.target.value)} className={`${fld} font-mono`} /></div>
               {isPct && (
                 <div><label className={lblc}>Percentage of</label>
-                  <select value={f.percent_basis} onChange={(e) => set("percent_basis", e.target.value)} className={fld}><option value="total">Line / order total</option><option value="margin">Gross profit (margin)</option></select></div>
+                  <TeklySelect value={f.percent_basis} onChange={(e) => set("percent_basis", e.target.value)} className={fld}><option value="total">Line / order total</option><option value="margin">Gross profit (margin)</option></TeklySelect></div>
               )}
               <div><label className={lblc}>Coefficient (×)</label><input type="number" step="0.1" value={f.coefficient ?? ""} onChange={(e) => set("coefficient", e.target.value)} className={`${fld} font-mono`} /></div>
             </div>
@@ -1605,15 +1629,15 @@ function PayrollRuleDrawer({ rule, employees, statuses, onClose, onSaved }: { ru
             <h3 className="text-xs font-bold text-ink-primary">Conditions</h3>
             <div className="grid grid-cols-2 gap-3">
               <div><label className={lblc}>Accrue</label>
-                <select value={f.calc_timing} onChange={(e) => set("calc_timing", e.target.value)} className={fld}>{PAYROLL_TIMINGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
+                <TeklySelect value={f.calc_timing} onChange={(e) => set("calc_timing", e.target.value)} className={fld}>{PAYROLL_TIMINGS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</TeklySelect></div>
               {f.calc_timing === "on_status" && (
                 <div><label className={lblc}>At status</label>
-                  <select value={f.trigger_status_key || ""} onChange={(e) => set("trigger_status_key", e.target.value)} className={fld}><option value="">— pick —</option>{statuses.map((s) => <option key={s.key} value={s.key}>{s.name}</option>)}</select></div>
+                  <TeklySelect value={f.trigger_status_key || ""} onChange={(e) => set("trigger_status_key", e.target.value)} className={fld}><option value="">— pick —</option>{statuses.map((s) => <option key={s.key} value={s.key}>{s.name}</option>)}</TeklySelect></div>
               )}
               <div><label className={lblc}>Only for orders</label>
-                <select value={f.term_condition} onChange={(e) => set("term_condition", e.target.value)} className={fld}>{PAYROLL_TERMS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
+                <TeklySelect value={f.term_condition} onChange={(e) => set("term_condition", e.target.value)} className={fld}>{PAYROLL_TERMS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</TeklySelect></div>
               <div><label className={lblc}>Level</label>
-                <select value={f.rule_level} onChange={(e) => set("rule_level", e.target.value)} className={fld}>{PAYROLL_LEVELS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</select></div>
+                <TeklySelect value={f.rule_level} onChange={(e) => set("rule_level", e.target.value)} className={fld}>{PAYROLL_LEVELS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}</TeklySelect></div>
               {f.rule_level === "category" && (
                 <div className="col-span-2"><label className={lblc}>Category name</label><input value={f.category || ""} onChange={(e) => set("category", e.target.value)} className={fld} placeholder="e.g. Screens" /></div>
               )}
@@ -1628,11 +1652,11 @@ function PayrollRuleDrawer({ rule, employees, statuses, onClose, onSaved }: { ru
           </div>
         </div>
         <div className="px-5 py-4 border-t border-slate-100 flex items-center justify-between gap-2 bg-slate-50/60">
-          {!isNew ? <button onClick={del} className="px-3 py-2 rounded-lg text-xs font-bold text-rose-600 hover:bg-rose-50">Delete</button> : <span />}
           <div className="flex gap-2">
-            <button onClick={onClose} className="px-4 py-2 rounded-lg border border-slate-200 text-ink-secondary hover:bg-white font-semibold text-xs">Cancel</button>
-            <button onClick={save} disabled={busy} className="px-5 py-2 rounded-lg bg-primary text-white font-bold text-xs shadow-clay-sm hover:brightness-110 disabled:opacity-60">{busy ? "Saving…" : isNew ? "Add rule" : "Save"}</button>
+            <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : isNew ? "Add rule" : "Save"}</button>
+            <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
           </div>
+          {!isNew ? <button onClick={del} className="px-3 py-2 rounded-lg text-xs font-bold text-rose-600 hover:bg-rose-50">Delete</button> : <span />}
         </div>
       </div>
     </div>
@@ -1663,7 +1687,7 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
   async function del(id: string) { try { await api.del(`/forms/fields/${id}`); load(); onChanged(); } catch { /* ignore */ } }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className="relative w-[480px] max-w-full bg-white h-full shadow-drawer flex flex-col">
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <div><h2 className="font-bold text-ink-primary">Custom fields</h2><p className="text-[11px] text-ink-tertiary">{type.name || type.label}</p></div>
@@ -1672,7 +1696,7 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
         <div className="flex-1 overflow-y-auto p-5 space-y-4">
           <div className="rounded-xl border border-slate-200 divide-y divide-slate-100">
             {!fields && <div className="p-4 text-xs text-ink-tertiary">Loading…</div>}
-            {fields?.length === 0 && <div className="p-4 text-xs text-ink-tertiary">No custom fields yet.</div>}
+            {fields?.length === 0 && <EmptyState size="section" icon={<M n="tune" c="text-lg" />} title="No custom fields yet." />}
             {fields?.map((f) => (
               <div key={f.id} className="flex items-center justify-between px-4 py-2.5 text-xs">
                 <div><span className="font-bold text-ink-primary">{f.field_label}</span><span className="ml-2 text-[11px] bg-slate-100 text-ink-tertiary px-1.5 py-0.5 rounded">{f.field_type}</span>{f.required && <span className="ml-1 text-[11px] text-rose-600 font-semibold">required</span>}{f.show_when_field_key && <span className="ml-1 text-[11px] text-primary font-semibold">conditional</span>}{f.upsell_comparator && <span className="ml-1 text-[11px] text-amber-700 font-semibold">upsell</span>}{f.gate_status_key && <span className="ml-1 text-[11px] text-rose-600 font-semibold">gate</span>}</div>
@@ -1684,34 +1708,34 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
             <div className="text-[11px] font-bold text-ink-tertiary">Add a field</div>
             <input value={nf.field_label} onChange={(e) => setNf({ ...nf, field_label: e.target.value })} placeholder="Field label" className="w-full bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 focus:outline-none focus:ring-1 focus:ring-primary" />
             <div className="flex items-center gap-3">
-              <select value={nf.field_type} onChange={(e) => setNf({ ...nf, field_type: e.target.value })} className="bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 capitalize">
+              <TeklySelect value={nf.field_type} onChange={(e) => setNf({ ...nf, field_type: e.target.value })} className="bg-white border border-slate-200 rounded-lg text-sm px-3 py-2 capitalize">
                 {/* "bool" is the server's yes/no type — the old "checkbox" option was rejected with a 400 */}
                 {[["text", "Short text"], ["textarea", "Long text"], ["number", "Number"], ["select", "Pick one"], ["multiselect", "Pick several"], ["bool", "Yes / no"], ["date", "Date"], ["link", "Link"]].map(([t, l]) => <option key={t} value={t}>{l}</option>)}
-              </select>
+              </TeklySelect>
               <label className="flex items-center gap-1.5 text-xs text-ink-secondary"><input type="checkbox" checked={nf.required} onChange={(e) => setNf({ ...nf, required: e.target.checked })} className="w-4 h-4 rounded border-slate-300 text-primary" />Required</label>
-              <button onClick={add} disabled={busy} className="ml-auto px-3 py-1.5 rounded-lg bg-primary text-white text-xs font-semibold hover:bg-primary-container disabled:opacity-60">Add</button>
+              <button onClick={add} disabled={busy} className={buttonClass("primary", "sm", "ml-auto")}>Add</button>
             </div>
             {/* When to show */}
             <div className="flex flex-wrap items-center gap-2 text-xs text-ink-secondary pt-1 border-t border-slate-100">
-              <span className="font-semibold"><M n="visibility" c="text-[13px] align-middle" /> Show only when</span>
-              <select value={nf.show_when_field_key} onChange={(e) => setNf({ ...nf, show_when_field_key: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
+              <span className="font-semibold"><M n="visibility" c="text-xs align-middle" /> Show only when</span>
+              <TeklySelect value={nf.show_when_field_key} onChange={(e) => setNf({ ...nf, show_when_field_key: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
                 <option value="">always</option>
                 {(fields || []).map((f) => <option key={f.id} value={f.field_key}>{f.field_label}</option>)}
-              </select>
+              </TeklySelect>
               {nf.show_when_field_key && <>
-                <select value={nf.show_when_op} onChange={(e) => setNf({ ...nf, show_when_op: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
+                <TeklySelect value={nf.show_when_op} onChange={(e) => setNf({ ...nf, show_when_op: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
                   <option value="is">is</option><option value="is_not">is not</option><option value="gt">&gt;</option><option value="lt">&lt;</option><option value="filled">is filled</option>
-                </select>
+                </TeklySelect>
                 {nf.show_when_op !== "filled" && <input value={nf.show_when_value} onChange={(e) => setNf({ ...nf, show_when_value: e.target.value })} placeholder="value" className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 w-24" />}
               </>}
             </div>
             {/* What it does — upsell rule (shared engine with checklist) */}
             <div className="flex flex-wrap items-center gap-2 text-xs text-ink-secondary pt-1 border-t border-slate-100">
-              <label className="font-semibold flex items-center gap-1"><input type="checkbox" checked={nf.upsell_on} onChange={(e) => setNf({ ...nf, upsell_on: e.target.checked })} className="w-4 h-4 rounded border-slate-300 text-primary" /><M n="sell" c="text-[13px] align-middle" /> Draft upsell when value</label>
+              <label className="font-semibold flex items-center gap-1"><input type="checkbox" checked={nf.upsell_on} onChange={(e) => setNf({ ...nf, upsell_on: e.target.checked })} className="w-4 h-4 rounded border-slate-300 text-primary" /><M n="sell" c="text-xs align-middle" /> Draft upsell when value</label>
               {nf.upsell_on && <>
-                <select value={nf.upsell_comparator} onChange={(e) => setNf({ ...nf, upsell_comparator: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
+                <TeklySelect value={nf.upsell_comparator} onChange={(e) => setNf({ ...nf, upsell_comparator: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
                   <option value="lt">&lt;</option><option value="gt">&gt;</option><option value="is">is</option><option value="is_not">is not</option>
-                </select>
+                </TeklySelect>
                 {(nf.upsell_comparator === "lt" || nf.upsell_comparator === "gt")
                   ? <input value={nf.upsell_threshold} onChange={(e) => setNf({ ...nf, upsell_threshold: e.target.value })} placeholder="80" className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 w-16" />
                   : <input value={nf.upsell_value} onChange={(e) => setNf({ ...nf, upsell_value: e.target.value })} placeholder="value" className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 w-24" />}
@@ -1721,15 +1745,15 @@ function FormFieldsDrawer({ type, onClose, onChanged }: { type: any; onClose: ()
             </div>
             {/* Gate a status — a value can block entering a status */}
             <div className="flex flex-wrap items-center gap-2 text-xs text-ink-secondary pt-1 border-t border-slate-100">
-              <label className="font-semibold flex items-center gap-1"><input type="checkbox" checked={nf.gate_on} onChange={(e) => setNf({ ...nf, gate_on: e.target.checked })} className="w-4 h-4 rounded border-slate-300 text-primary" /><M n="block" c="text-[13px] align-middle" /> Block status</label>
+              <label className="font-semibold flex items-center gap-1"><input type="checkbox" checked={nf.gate_on} onChange={(e) => setNf({ ...nf, gate_on: e.target.checked })} className="w-4 h-4 rounded border-slate-300 text-primary" /><M n="block" c="text-xs align-middle" /> Block status</label>
               {nf.gate_on && <>
-                <select value={nf.gate_status_key} onChange={(e) => setNf({ ...nf, gate_status_key: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
+                <TeklySelect value={nf.gate_status_key} onChange={(e) => setNf({ ...nf, gate_status_key: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
                   <option value="">choose…</option>{statuses.map((s) => <option key={s.id} value={s.key}>{s.name}</option>)}
-                </select>
+                </TeklySelect>
                 <span>when value</span>
-                <select value={nf.gate_comparator} onChange={(e) => setNf({ ...nf, gate_comparator: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
+                <TeklySelect value={nf.gate_comparator} onChange={(e) => setNf({ ...nf, gate_comparator: e.target.value })} className="bg-white border border-slate-200 rounded-lg px-2 py-1.5">
                   <option value="is">is</option><option value="is_not">is not</option><option value="lt">&lt;</option><option value="gt">&gt;</option>
-                </select>
+                </TeklySelect>
                 {(nf.gate_comparator === "lt" || nf.gate_comparator === "gt")
                   ? <input value={nf.gate_threshold} onChange={(e) => setNf({ ...nf, gate_threshold: e.target.value })} placeholder="0" className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 w-16" />
                   : <input value={nf.gate_value} onChange={(e) => setNf({ ...nf, gate_value: e.target.value })} placeholder="value" className="bg-white border border-slate-200 rounded-lg px-2 py-1.5 w-24" />}
@@ -1875,7 +1899,7 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
   }
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/40 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/40" aria-hidden="true" onClick={onClose} />
       <div className={`relative ${hasVars ? "w-[720px]" : "w-[440px]"} max-w-full bg-white h-full shadow-drawer flex flex-col`}>
         <div className="flex items-center justify-between px-5 py-4 border-b border-slate-200">
           <h2 className="font-bold text-ink-primary">{title}</h2>
@@ -1893,11 +1917,11 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
             <div key={f.k}>
               <label htmlFor={`ed-${f.k}`} className="block text-sm font-medium text-ink-primary mb-1.5">{f.label}{f.req ? " *" : ""}</label>
               {f.type === "select" && f.choices ? (
-                <select id={`ed-${f.k}`} value={v[f.k]} onChange={set(f.k)} className={edInp}><option value="">Choose…</option>{f.choices.map((o: { value: string; label: string }) => <option key={o.value} value={o.value}>{o.label}</option>)}</select>
+                <TeklySelect id={`ed-${f.k}`} value={v[f.k]} onChange={set(f.k)} className={edInp}><option value="">Choose…</option>{f.choices.map((o: { value: string; label: string }) => <option key={o.value} value={o.value}>{o.label}</option>)}</TeklySelect>
               ) : f.type === "select" ? (
                 f.options
-                  ? <select id={`ed-${f.k}`} value={v[f.k] ?? ""} onChange={set(f.k)} className={edInp}>{f.options.map((o: { value: string; label: string }) => <option key={o.value} value={o.value}>{o.label}</option>)}</select>
-                  : <select id={`ed-${f.k}`} value={v[f.k]} onChange={set(f.k)} className={edInp}>{f.opts.map((o: string) => <option key={o} value={o}>{f.labels?.[o] || optLabel(o)}</option>)}</select>
+                  ? <TeklySelect id={`ed-${f.k}`} value={v[f.k] ?? ""} onChange={set(f.k)} className={edInp}>{f.options.map((o: { value: string; label: string }) => <option key={o.value} value={o.value}>{o.label}</option>)}</TeklySelect>
+                  : <TeklySelect id={`ed-${f.k}`} value={v[f.k]} onChange={set(f.k)} className={edInp}>{f.opts.map((o: string) => <option key={o} value={o}>{f.labels?.[o] || optLabel(o)}</option>)}</TeklySelect>
               ) : f.type === "color" ? (
                 <input id={`ed-${f.k}`} type="color" value={v[f.k]} onChange={set(f.k)} className="h-9 w-16 rounded-xl border border-slate-200" />
               ) : f.type === "textarea" ? (
@@ -1931,9 +1955,9 @@ function EditorDrawer({ title, fields, initial, varModule, onClose, onSave, onDe
           ))}
         </div>
         <div className="px-5 py-4 border-t border-slate-200 flex items-center gap-2">
-          {onDelete && initial?.id && <button onClick={async () => { if (await confirmDialog("Delete this item?", { danger: true, confirmLabel: "Delete" })) { await onDelete(); } }} className="h-9 px-3.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 mr-auto">Delete</button>}
-          <button onClick={onClose} className="h-9 px-3.5 rounded-xl border border-slate-200 text-ink-secondary hover:bg-slate-100 font-semibold text-xs ml-auto">Cancel</button>
-          <button onClick={save} disabled={busy} className="h-9 px-3.5 rounded-xl bg-primary text-white font-semibold text-xs hover:opacity-90 disabled:opacity-60">{busy ? "Saving…" : "Save"}</button>
+          <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : "Save"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
+          {onDelete && initial?.id && <button onClick={async () => { if (await confirmDialog("Delete this item?", { danger: true, confirmLabel: "Delete" })) { await onDelete(); } }} className="ml-auto h-9 px-3.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50 mr-auto">Delete</button>}
         </div>
       </div>
     </div>
@@ -2094,7 +2118,7 @@ function EcommerceSettings() {
         {open && (
           <div className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-[180px_1fr] gap-3">
-              <div><label htmlFor="ecom-platform" className={lbl}>Platform</label><select id="ecom-platform" value={f.platform} onChange={(e) => setF({ ...f, platform: e.target.value })} className={field}><option value="shopify">Shopify</option><option value="woocommerce">WooCommerce</option></select></div>
+              <div><label htmlFor="ecom-platform" className={lbl}>Platform</label><TeklySelect id="ecom-platform" value={f.platform} onChange={(e) => setF({ ...f, platform: e.target.value })} className={field}><option value="shopify">Shopify</option><option value="woocommerce">WooCommerce</option></TeklySelect></div>
               <div><label htmlFor="ecom-url" className={lbl}>Store address</label><input id="ecom-url" value={f.store_url} onChange={(e) => setF({ ...f, store_url: e.target.value })} placeholder="my-shop.myshopify.com" className={field} /></div>
             </div>
             <div className="divide-y divide-slate-100">
@@ -2120,7 +2144,7 @@ function EcommerceSettings() {
             <span className="text-xs text-ink-tertiary">{[i.sync_products && "Products", i.sync_orders && "Orders"].filter(Boolean).join(" + ")}</span>
             <div className="flex-1" />
             <span className="text-xs text-ink-tertiary">{i.last_synced_at ? `Synced ${new Date(i.last_synced_at).toLocaleDateString()}` : "Never synced"}</span>
-            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${i.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-ink-secondary"}`}>{i.active ? "Active" : "Off"}</span>
+            <Badge tone={i.active ? "success" : "neutral"} size="sm">{i.active ? "Active" : "Off"}</Badge>
           </div>
         ))}
         {items && items.length === 0 && <div className="px-5 py-3 text-xs text-ink-tertiary">No stores connected.</div>}
@@ -2154,7 +2178,7 @@ function SsoSettings() {
         {open && (
           <div className="space-y-4">
             <div className="grid grid-cols-1 sm:grid-cols-2 gap-3">
-              <div><label htmlFor="sso-protocol" className={lbl}>Protocol</label><select id="sso-protocol" value={f.protocol} onChange={(e) => setF({ ...f, protocol: e.target.value })} className={field}><option value="oidc">OIDC</option><option value="saml">SAML</option></select></div>
+              <div><label htmlFor="sso-protocol" className={lbl}>Protocol</label><TeklySelect id="sso-protocol" value={f.protocol} onChange={(e) => setF({ ...f, protocol: e.target.value })} className={field}><option value="oidc">OIDC</option><option value="saml">SAML</option></TeklySelect></div>
               {inp("display_name", "Display name", { placeholder: "Google Workspace" })}
               {inp("metadata_url", "Issuer or metadata address", { placeholder: "https://…/.well-known/openid-configuration" })}
               {inp("email_domain", "Email domain", { placeholder: "company.com" })}
@@ -2178,7 +2202,7 @@ function SsoSettings() {
             <span className="font-medium text-ink-primary">{s.display_name}</span>
             {s.email_domain && <span className="text-xs text-ink-tertiary">@{s.email_domain}</span>}
             <div className="flex-1" />
-            <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${s.enabled ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-ink-secondary"}`}>{s.enabled ? "Enabled" : "Disabled"}</span>
+            <Badge tone={s.enabled ? "success" : "neutral"} size="sm">{s.enabled ? "Enabled" : "Disabled"}</Badge>
             <button type="button" aria-label="Delete" onClick={() => del(s.id)} className="w-8 h-8 grid place-items-center rounded-lg text-ink-tertiary hover:text-rose-600 hover:bg-rose-50"><M n="delete" c="text-sm" /></button>
           </div>
         ))}
@@ -2200,7 +2224,7 @@ function ApprovalsSettings() {
     try { await api.post(`/approvals/${id}/decide`, { decision }); reload(); }
     catch (e: any) { alertDialog(e.message || "Failed"); } finally { setBusy(false); }
   }
-  const pill = (s: string) => s === "approved" ? "bg-emerald-100 text-emerald-700" : s === "rejected" ? "bg-rose-100 text-rose-700" : "bg-amber-100 text-amber-700";
+  const pill = (s: string): BadgeTone => s === "approved" ? "success" : s === "rejected" ? "danger" : "warning";
   return (
     <div className="max-w-3xl"><SectionCard title="Approval requests" count={items?.length}>
       <div className="px-5 py-2.5 border-b border-slate-100">
@@ -2220,7 +2244,7 @@ function ApprovalsSettings() {
             <div className="flex-1" />
             {r.status === "pending"
               ? <><button type="button" onClick={() => decide(r.id, "approve")} disabled={busy} className={btnPrimary}>Approve</button><button type="button" onClick={() => decide(r.id, "reject")} disabled={busy} className="h-9 px-3.5 rounded-xl border border-rose-200 bg-white text-rose-600 text-xs font-semibold hover:bg-rose-50 disabled:opacity-50">Reject</button></>
-              : <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${pill(r.status)}`}>{humanize(r.status || "")}</span>}
+              : <Badge tone={pill(r.status)} size="sm">{humanize(r.status || "")}</Badge>}
           </div>
         ))}
       </div>
@@ -2364,7 +2388,7 @@ function IndustryNote({ onChange }: { onChange: () => void }) {
         <div className="text-sm text-ink-primary">{cur ? <>Your shop repairs: <span className="font-semibold">{cur.label}</span></> : "What your shop repairs"}</div>
         <div className="text-[11px] text-ink-tertiary">The brands, models and groups below follow this. Change it in General.</div>
       </div>
-      <button onClick={onChange} className="ml-auto px-3.5 py-2 rounded-xl border border-slate-200 text-xs font-semibold text-ink-secondary hover:bg-slate-50 flex-shrink-0">Change</button>
+      <button onClick={onChange} className={buttonClass("secondary", "md", "ml-auto flex-shrink-0")}>Change</button>
     </div>
   );
 }
@@ -2391,10 +2415,7 @@ function MultiAssetSwitch() {
           <div className="text-xs text-ink-tertiary leading-relaxed">For customers who drop off a batch, like six tools at once. One job holds every item, each with its own problem and result, and each service or part can be marked for one item.</div>
           {err && <div className="mt-1 text-xs text-rose-600">{err}</div>}
         </div>
-        <button type="button" role="switch" aria-checked={st.on} aria-label="Several items per job" disabled={busy} onClick={flip}
-          className={`ml-auto w-10 h-6 rounded-full relative transition-colors flex-shrink-0 disabled:opacity-60 ${st.on ? "bg-primary" : "bg-slate-300"}`}>
-          <span className={`absolute top-0.5 w-5 h-5 rounded-full bg-white shadow transition-all ${st.on ? "left-[18px]" : "left-0.5"}`} />
-        </button>
+        <span className="ml-auto"><Switch on={st.on} onChange={() => flip()} label="Several items per job" disabled={busy} /></span>
       </div>
     </div>
   );
@@ -2427,8 +2448,8 @@ function TierManager({ types }: { types: any[] }) {
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-sm p-5 space-y-3">
       <div><h4 className="text-sm font-semibold text-ink-primary">Quantity break tiers</h4>
         <p className="text-xs text-ink-tertiary mt-0.5">Lower the markup automatically once a line reaches a quantity. The highest matching tier wins.</p></div>
-      <select value={ptId} onChange={(e) => setPtId(e.target.value)} aria-label="Price type" className="glass-input rounded-xl px-3 py-2 text-sm max-w-xs">
-        <option value="">Choose a price type…</option>{types.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</select>
+      <TeklySelect value={ptId} onChange={(e) => setPtId(e.target.value)} aria-label="Price type" className="glass-input rounded-xl px-3 py-2 text-sm max-w-xs">
+        <option value="">Choose a price type…</option>{types.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}</TeklySelect>
       {ptId && <div className="space-y-2">
         {tiers.length === 0 && <p className="text-xs text-ink-tertiary">No tiers yet. The type's base markup applies at every quantity.</p>}
         {tiers.map((t) => (
@@ -2463,7 +2484,7 @@ function TierManager({ types }: { types: any[] }) {
 // in FormCustomizer (drag to reorder, click to edit, add a field where it belongs).
 // J1: what a job of this type needs before it can be closed. The type is saved whole (the
 // server's PUT replaces every field), so send its current values with the one switch changed.
-function CloseRules({ type, onChanged }: { type: any; onChanged?: () => void }) {
+function CloseRules({ type, onChanged, inline }: { type: any; onChanged?: () => void; inline?: boolean }) {
   const [v, setV] = useState({ requires_signature: !!type.requires_signature, requires_checklist: !!type.requires_checklist });
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
   useEffect(() => { setV({ requires_signature: !!type.requires_signature, requires_checklist: !!type.requires_checklist }); }, [type.id, type.requires_signature, type.requires_checklist]);
@@ -2485,15 +2506,24 @@ function CloseRules({ type, onChanged }: { type: any; onChanged?: () => void }) 
     ["requires_signature", "Customer must sign before the job can be closed"],
     ["requires_checklist", "All required checklist items must be done before the job can be closed"],
   ];
+  const short: Record<string, string> = { requires_signature: "Customer signs before closing", requires_checklist: "Checklist done before closing" };
+  if (inline) return (
+    <div className="flex flex-wrap items-center gap-x-6 gap-y-2">
+      {rows.map(([k, label]) => (
+        <label key={k} className="flex items-center gap-2.5 text-xs text-ink-secondary cursor-pointer">
+          <Switch size="sm" on={v[k]} onChange={() => flip(k)} label={label} disabled={busy} />
+          <span title={label}>{short[k]}</span>
+        </label>
+      ))}
+      {err && <p role="alert" className="text-2xs text-rose-600">{err}</p>}
+    </div>
+  );
   return (
     <div className="rounded-xl border border-slate-200 bg-white p-3 space-y-2">
       <div className="text-xs font-semibold text-ink-primary">Before a {type.name} job can be closed</div>
       {rows.map(([k, label]) => (
         <label key={k} className="flex items-center gap-2.5 text-xs text-ink-secondary cursor-pointer">
-          <button type="button" role="switch" aria-checked={v[k]} aria-label={label} disabled={busy} onClick={() => flip(k)}
-            className={`w-9 h-5 rounded-full transition-colors relative shrink-0 disabled:opacity-60 ${v[k] ? "bg-primary" : "bg-slate-300"}`}>
-            <span className={`absolute top-0.5 w-4 h-4 rounded-full bg-white shadow transition-all ${v[k] ? "left-[18px]" : "left-0.5"}`} />
-          </button>
+          <Switch size="sm" on={v[k]} onChange={() => flip(k)} label={label} disabled={busy} />
           <span>{label}</span>
         </label>
       ))}
@@ -2502,33 +2532,102 @@ function CloseRules({ type, onChanged }: { type: any; onChanged?: () => void }) 
   );
 }
 
-function FormsDesigner({ types, onAddType, onDeleteType, onAdvanced, onChanged }: {
-  types: any[]; onAddType: () => void; onDeleteType: (t: any) => void; onAdvanced: (t: any) => void; onChanged?: () => void;
+// Forms & fields (owner's pick "A"): five fixed tabs, one per thing a shop fills in. Work orders and
+// estimates share one form (an estimate is a work order that isn't approved yet). Under that tab, one
+// "Job type" box picks the custom job type (Repair, Warranty claim …) with its start status, closing
+// rules and a ⋯ menu. The box sits in the same spot on every tab, so switching never moves the fields.
+type FormGroup = "order" | "client" | "device" | "product" | "lead";
+const FORM_GROUPS: { id: FormGroup; label: string; icon: string; note: string }[] = [
+  { id: "order", label: "Work orders and estimates", icon: "build", note: "" },
+  { id: "client", label: "Clients", icon: "person", note: "Used when you add or edit a client, at the desk or on Tekly Go." },
+  { id: "device", label: "Devices", icon: "devices", note: "Used for every device or asset a client brings in." },
+  { id: "product", label: "Products", icon: "inventory_2", note: "Used when you add or edit a product in Inventory." },
+  { id: "lead", label: "Inquiries", icon: "mail", note: "Used for walk-ins, calls and web inquiries before they become jobs." },
+];
+
+function FormsDesigner({ types, onAddType, onEditType, onDeleteType, onAdvanced, onChanged }: {
+  types: any[]; onAddType: () => void; onEditType?: (t: any) => void; onDeleteType: (t: any) => void; onAdvanced: (t: any) => void; onChanged?: () => void;
 }) {
-  const want = new URLSearchParams(window.location.search).get("form");
-  const [pick, setPick] = useState<string>(() => want || "");
-  const choices: { id: string; label: string; form: FormKey; typeId?: string; type?: any }[] = [
-    ...types.map((t) => ({ id: `type:${t.id}`, label: `Work order · ${t.name}`, form: "order" as FormKey, typeId: t.id, type: t })),
-    { id: "client", label: "Client", form: "client" }, { id: "device", label: "Device / asset", form: "device" },
-    { id: "product", label: "Product", form: "product" }, { id: "lead", label: "Inquiry", form: "lead" },
-  ];
-  const cur = choices.find((c) => c.id === pick) || choices[0];
-  const pill = (on: boolean) => `px-3.5 py-1.5 rounded-full text-xs font-semibold border transition-colors ${on ? "bg-primary text-white border-primary" : "bg-white text-ink-secondary border-slate-200 hover:border-slate-300"}`;
+  // ?form= still deep-links: "type:<id>" opens that job type, "client"/"device"/"product"/"lead" a tab.
+  const want = new URLSearchParams(window.location.search).get("form") || "";
+  const [group, setGroup] = useState<FormGroup>(() => (want && !want.startsWith("type:") ? (want as FormGroup) : "order"));
+  const defaultType = types.find((t) => t.is_default) || types[0];
+  const [typeId, setTypeId] = useState<string>(() => (want.startsWith("type:") ? want.slice(5) : ""));
+  const type = types.find((t) => String(t.id) === typeId) || defaultType;
+  const [open, setOpen] = useState<"" | "types" | "more">("");
+  const g = FORM_GROUPS.find((x) => x.id === group) || FORM_GROUPS[0];
+  const isOrder = group === "order";
+  const formKey = (isOrder ? "order" : group) as FormKey;
+  const title = isOrder ? `${type?.name || "Work order"} job` : g.label.replace(/s$/, "");
+  const menu = "absolute top-full mt-1.5 z-40 bg-white rounded-2xl border border-slate-200/90 shadow-drawer p-1.5";
+  const item = "w-full flex items-center gap-2.5 px-3 py-2 rounded-xl text-left text-xs transition-colors";
   return (
     <div className="max-w-6xl space-y-4">
-      <div className="flex flex-wrap items-center gap-2">
-        {choices.map((c) => <button key={c.id} onClick={() => setPick(c.id)} className={pill(c.id === cur?.id)}>{c.label}</button>)}
-        <button onClick={onAddType} className="px-3 py-1.5 rounded-full text-xs font-semibold text-primary hover:bg-blue-50 flex items-center gap-1"><M n="add" c="text-sm" />Work order type</button>
+      <Tabs label="Forms" value={group} onChange={(id) => { setGroup(id); setOpen(""); }}
+        tabs={FORM_GROUPS.map((x) => ({ id: x.id, label: x.label, icon: <M n={x.icon} c="text-sm" /> }))} />
+
+      {/* The box: same place and height on every tab. */}
+      <div className="relative rounded-2xl border border-slate-200/90 bg-white shadow-clay-sm px-4 py-3.5 h-[104px] max-md:h-auto max-md:min-h-[104px]">
+        {open && <div className="fixed inset-0 z-30" aria-hidden="true" onClick={() => setOpen("")} />}
+        {isOrder && type ? (<div className="space-y-3">
+          <div className="flex flex-wrap items-center gap-3">
+            <span className="text-xs font-semibold text-ink-tertiary">Job type</span>
+            <div className="relative">
+              <button type="button" onClick={() => setOpen(open === "types" ? "" : "types")} aria-haspopup="menu" aria-expanded={open === "types"}
+                className="h-9 pl-3 pr-2.5 rounded-xl border border-slate-200 bg-white hover:border-slate-300 inline-flex items-center gap-2 text-xs font-semibold text-ink-primary transition-colors">
+                <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: type.color || "#2563eb" }} />
+                {type.name}
+                <span className="font-normal text-ink-tertiary">{type.is_default ? "default · " : ""}{types.length} {types.length === 1 ? "type" : "types"}</span>
+                <M n="expand_more" c={`text-sm text-ink-tertiary transition-transform ${open === "types" ? "rotate-180" : ""}`} />
+              </button>
+              {open === "types" && (
+                <div role="menu" className={`${menu} left-0 w-64`}>
+                  {types.map((t) => {
+                    const on = String(t.id) === String(type.id);
+                    return (
+                      <button key={t.id} role="menuitem" onClick={() => { setTypeId(String(t.id)); setOpen(""); }}
+                        className={`${item} ${on ? "bg-primary/[0.06] text-primary font-semibold" : "text-ink-primary hover:bg-slate-50"}`}>
+                        <span className="w-2.5 h-2.5 rounded-full shrink-0" style={{ background: t.color || "#2563eb" }} />
+                        <span className="flex-1">{t.name}{t.is_default && <span className="ml-1.5 font-normal text-ink-tertiary">default</span>}</span>
+                        <M n="check" c={`text-sm ${on ? "" : "invisible"}`} />
+                      </button>
+                    );
+                  })}
+                  <div className="my-1 border-t border-slate-100" />
+                  <button role="menuitem" onClick={() => { setOpen(""); onAddType(); }} className={`${item} text-primary font-semibold hover:bg-blue-50`}><M n="add" c="text-sm" />New job type</button>
+                </div>
+              )}
+            </div>
+            <span className="text-xs text-ink-tertiary">Starts as <span className="font-semibold text-ink-secondary">{type.initial_status || "new"}</span></span>
+            <div className="relative ml-auto">
+              <button type="button" onClick={() => setOpen(open === "more" ? "" : "more")} aria-haspopup="menu" aria-expanded={open === "more"}
+                className="h-9 px-3 rounded-xl border border-slate-200 bg-white hover:border-slate-300 inline-flex items-center gap-1.5 text-xs font-semibold text-ink-secondary transition-colors">
+                <M n="more_horiz" c="text-sm" />More
+              </button>
+              {open === "more" && (
+                <div role="menu" className={`${menu} right-0 w-72`}>
+                  {onEditType && <button role="menuitem" onClick={() => { setOpen(""); onEditType(type); }} className={`${item} text-ink-primary hover:bg-slate-50`}><M n="edit" c="text-sm text-ink-tertiary" />Edit name, colour and start status</button>}
+                  <button role="menuitem" onClick={() => { setOpen(""); onAdvanced(type); }} className={`${item} text-ink-primary hover:bg-slate-50`}><M n="tune" c="text-sm text-ink-tertiary" /><span>Advanced rules<span className="block text-2xs font-normal text-ink-tertiary">Show only when, upsell, block status</span></span></button>
+                  <div className="my-1 border-t border-slate-100" />
+                  <button role="menuitem" disabled={!!type.is_default} title={type.is_default ? "The default job type can't be deleted" : undefined}
+                    onClick={() => { setOpen(""); onDeleteType(type); }} className={`${item} text-rose-600 hover:bg-rose-50 disabled:opacity-40 disabled:hover:bg-transparent disabled:cursor-not-allowed`}><M n="delete" c="text-sm" />Delete this job type</button>
+                </div>
+              )}
+            </div>
+          </div>
+          <CloseRules inline type={type} onChanged={onChanged} />
+        </div>) : (
+          <div className="flex items-center gap-3 h-full">
+            <span className="w-9 h-9 rounded-xl grid place-items-center bg-slate-50 border border-slate-200/80 text-ink-tertiary"><M n={g.icon} c="text-base" /></span>
+            <div>
+              <div className="text-xs font-semibold text-ink-primary">One {title.toLowerCase()} form</div>
+              <div className="text-xs text-ink-tertiary mt-0.5">{g.note}</div>
+            </div>
+          </div>
+        )}
       </div>
-      {cur?.type && (
-        <div className="flex flex-wrap items-center gap-3 text-xs text-ink-tertiary">
-          <span>New orders start as <span className="font-semibold text-ink-secondary">{cur.type.initial_status || "new"}</span>{cur.type.is_default ? " · default type" : ""}</span>
-          <button onClick={() => onAdvanced(cur.type)} className="font-semibold text-primary hover:underline">Advanced rules (show only when, upsell, block status)</button>
-          {!cur.type.is_default && <button onClick={() => onDeleteType(cur.type)} className="font-semibold text-rose-600 hover:underline">Delete this type</button>}
-        </div>
-      )}
-      {cur?.type && <CloseRules type={cur.type} onChanged={onChanged} />}
-      {cur && <FormCustomizer key={cur.id} form={cur.form} typeId={cur.typeId} title={cur.label} />}
+
+      <FormCustomizer key={isOrder ? `type:${type?.id}` : group} form={formKey} typeId={isOrder ? type?.id : undefined} title={isOrder ? `${type?.name || "Work order"} · work orders and estimates` : g.label} />
     </div>
   );
 }

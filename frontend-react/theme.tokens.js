@@ -36,10 +36,13 @@ export const NEUTRALS = {
   // text
   "ink-primary": ["#14213f", "#e4e8f2"],
   "ink-secondary": ["#435577", "#aab4c9"],
-  "ink-tertiary": ["#6c7a99", "#8e9ab4"],
-  "ink-placeholder": ["#9aa7c4", "#76829d"],
-  "text-slate-400": [colors.slate[400], "#76829d"],
-  "text-slate-500": [colors.slate[500], "#8e9ab4"],
+  // tertiary was 4.3:1 on white; now 5.3:1. Placeholders count as text (WCAG), so the placeholder
+  // grey is 4.5:1+ too: light #63708c on the header search fill, dark 4.5:1+ on every surface up to
+  // slate-100. Dark tertiary is 5.3:1+ on every surface up to slate-200.
+  "ink-tertiary": ["#5e6b88", "#99a4bc"],
+  "ink-placeholder": ["#63708c", "#8a95ae"],
+  "text-slate-400": ["#63708c", "#8a95ae"],   // legacy grey text: same as the placeholder grey
+  "text-slate-500": [colors.slate[500], "#99a4bc"],
   "text-slate-600": [colors.slate[600], "#aab4c9"],
   "text-slate-700": [colors.slate[700], "#c3cbdb"],
   "text-slate-800": [colors.slate[800], "#d6dce8"],
@@ -78,12 +81,15 @@ export function cssVars() {
     const set = (k, l, d) => { light[`--c-${fam}-${k}`] = hex(l); dark[`--c-${fam}-${k}`] = hex(d); };
     set("bg50", c[50], t.bg50); set("bg100", c[100], t.bg100);
     set("line100", c[100], t.line); set("line200", c[200], t.line); set("line300", c[300], t.line3);
-    set("t500", c[500], t.text); set("t600", c[600], t.text); set("t700", c[700], t.text); set("t800", c[800], t.text); set("t900", c[900], t.text);
+    // Light mode: coloured TEXT in the 500/600 shades renders at the 700 shade, so small red / green /
+    // amber text (required asterisks, amounts, "Delete") reaches 4.5:1 on white and the canvas.
+    set("t500", c[700], t.text); set("t600", c[700], t.text); set("t700", c[700], t.text); set("t800", c[800], t.text); set("t900", c[900], t.text);
   }
-  // Shadows: soft clay in light; in dark depth comes from surfaces, so shadows go quiet.
-  light["--sh-sm"] = "0 2px 8px -1px rgba(20,33,63,.06), inset 0 1px 0 rgba(255,255,255,.95)";
-  light["--sh-card"] = "0 12px 30px -4px rgba(20,33,63,.08), inset 0 1px 0 rgba(255,255,255,.95)";
-  light["--sh-drawer"] = "-16px 0 48px -6px rgba(15,28,60,.18), inset 1px 0 0 rgba(255,255,255,.9)";
+  // Shadows: flat and quiet in light (hairline border + a 1–2px lift, no glossy inset highlight);
+  // in dark depth comes from surfaces, so shadows go quiet.
+  light["--sh-sm"] = "0 1px 2px rgba(20,33,63,.05)";
+  light["--sh-card"] = "0 1px 2px rgba(20,33,63,.05), 0 6px 16px -10px rgba(20,33,63,.10)";
+  light["--sh-drawer"] = "-24px 0 48px -12px rgba(20,33,63,.22)";
   light["--sh-menu"] = "0 12px 30px -4px rgba(20,33,63,.12)";
   light["--scrim"] = "20 33 63";
   dark["--sh-sm"] = "inset 0 1px 0 rgba(255,255,255,.03)";

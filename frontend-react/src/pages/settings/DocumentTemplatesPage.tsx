@@ -6,7 +6,7 @@ import PrintSetupCard from "../../components/PrintSetupCard";
 
 /* Settings › Document templates — a gallery of what you print, one section per kind of document,
    each template shown as a real page filled with a recent job (/documents/preview). Kinds with no
-   template say so and offer to create one. The editor itself (TemplateEditorDrawer) is unchanged. */
+   template say so and offer to create one. The editor itself is TemplateEditorDrawer (Design / Text / HTML views). */
 
 const KINDS: { key: string; label: string; hint: string; icon: string }[] = [
   { key: "work_order", label: "Work order receipt", hint: "Given at check-in", icon: "build" },
@@ -46,7 +46,6 @@ function Thumb({ t }: { t: any }) {
           className="absolute top-0 left-0 origin-top-left pointer-events-none border-0"
           style={{ width: label ? 520 : 794, height: label ? 300 : 1123, transform: `scale(${label ? 0.4 : 0.3})` }} />
       )}
-      <div className="absolute inset-x-0 bottom-0 h-10 bg-gradient-to-t from-white to-transparent" />
     </div>
   );
 }

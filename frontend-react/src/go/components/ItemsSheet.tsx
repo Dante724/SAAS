@@ -3,9 +3,9 @@
 // so a queued replay could take it twice.
 import { useEffect, useRef, useState } from "react";
 import { Check, Loader2, Package, PackageSearch, ScanBarcode, Search, Wrench, X } from "lucide-react";
-import { api } from "../../api/client";
+import { api, idempotencyKey } from "../../api/client";
 import { useMe } from "../../context/Me";
-import { Sheet } from "./ui";
+import { GoButton, Sheet, goField } from "./ui";
 import { cameraSupported, haptic, startScanner, type Stop } from "../lib/scanner";
 import { useToast } from "../lib/useGo";
 import { money } from "../lib/pay";
@@ -30,6 +30,7 @@ export default function ItemsSheet({ open, onClose, orderId, deviceId, onAdded, 
 
   const [scanning, setScanning] = useState(false);
   const video = useRef<HTMLVideoElement>(null);
+  const addKeys = useRef<Record<string, string>>({});   // council M13: one key per item until it lands
   const stopRef = useRef<Stop | null>(null);
   useEffect(() => { if (open) { setQ(""); setAdded({}); } else setScanning(false); }, [open]);
   // Scan a part's barcode/SKU label and put it straight on the job.
@@ -67,10 +68,12 @@ export default function ItemsSheet({ open, onClose, orderId, deviceId, onAdded, 
     if (!navigator.onLine) { toast({ title: "You're offline", body: "Adding items needs a connection (it takes stock).", tone: "warn" }); return; }
     setAdding(h.ref_id);
     try {
-      await api.post(`/orders/${encodeURIComponent(orderId)}/lines`, {
+      const key = (addKeys.current[h.ref_id] ||= idempotencyKey());
+      await api.postOnce(`/orders/${encodeURIComponent(orderId)}/lines`, {
         description: h.name, kind: h.kind === "bundle" ? "bundle" : h.kind, line_type: h.kind === "service" ? "labour" : "part",
         ref_id: h.ref_id, qty: 1, unit_price: h.price ?? 0,
-      });
+      }, key);
+      delete addKeys.current[h.ref_id];
       haptic();
       if (h.kind === "product" && h.available != null && h.available <= 0) toast({ title: `${h.name} added`, body: "It's out of stock, so it shows as waiting for stock until it's ordered and received." });
       setAdded((a) => ({ ...a, [h.ref_id]: (a[h.ref_id] || 0) + 1 }));
@@ -98,17 +101,17 @@ export default function ItemsSheet({ open, onClose, orderId, deviceId, onAdded, 
           <div className="relative flex-1">
             <Search size={18} className="absolute left-4 top-1/2 -translate-y-1/2 text-ink-tertiary" />
             <input value={q} onChange={(e) => setQ(e.target.value)} placeholder={type === "service" ? "Search services" : "Search parts, SKU, barcode"} enterKeyHint="search" aria-label="Search the catalogue"
-              className="w-full min-h-[3rem] rounded-xl border border-slate-200 bg-white pl-11 pr-4 text-go-body text-ink-primary placeholder:text-ink-placeholder focus:outline-none focus:border-primary" />
+              className={goField("pl-11")} />
           </div>
           {type === "product" && cameraSupported() && (
             <button onClick={() => setScanning((v) => !v)} aria-label={scanning ? "Stop scanning" : "Scan a part's barcode"} aria-pressed={scanning}
-              className={`h-12 w-12 shrink-0 rounded-xl border inline-flex items-center justify-center ${scanning ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`}>
+              className={`h-11 w-11 shrink-0 rounded-xl border inline-flex items-center justify-center ${scanning ? "border-primary bg-blue-50 text-primary" : "border-slate-200 bg-white text-ink-primary"}`}>
               {scanning ? <X size={20} /> : <ScanBarcode size={22} />}
             </button>
           )}
         </div>
         {scanning && (
-          <div className="relative mb-3 aspect-[4/3] w-full overflow-hidden rounded-xl bg-[#0b1020]">
+          <div className="relative mb-3 aspect-[4/3] w-full overflow-hidden rounded-xl bg-camera">
             <video ref={video} className="h-full w-full object-cover" playsInline muted />
             <div className="pointer-events-none absolute inset-x-8 top-1/2 h-0.5 -translate-y-1/2 bg-rose-500/80" />
             <p className="absolute inset-x-0 bottom-2 text-center text-go-sub text-white/90">Point at the part's barcode</p>
@@ -142,9 +145,9 @@ export default function ItemsSheet({ open, onClose, orderId, deviceId, onAdded, 
           </div>
         )}
         {type === "product" && onRequestPart && (
-          <button onClick={() => onRequestPart(q.trim())} className="mt-2 w-full min-h-[3.25rem] rounded-xl border border-dashed border-slate-300 inline-flex items-center justify-center gap-2 font-semibold text-primary active:bg-slate-50">
+          <GoButton variant="link" main onClick={() => onRequestPart(q.trim())} className="mt-2 w-full">
             <PackageSearch size={18} />Part not here? Ask for it to be ordered
-          </button>
+          </GoButton>
         )}
       </div>
     </Sheet>

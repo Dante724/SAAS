@@ -703,12 +703,19 @@ class SalePayIn(BaseModel):
 
 @router.post("/{sale_id}/pay")
 async def pay_sale(
-    sale_id: str, data: SalePayIn,
+    sale_id: str, data: SalePayIn, request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_create_sales")),
 ):
     """B5 — take payment for a parked sale, or one whose card was declined: what is still due
-    (the total less any gift card) goes into the chosen cashbox."""
+    (the total less any gift card) goes into the chosen cashbox. A retry with the same
+    Idempotency-Key gets the first answer back (the sale lock already stops a second payment)."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "sales.pay", {"sale_id": sale_id, "body": data},
+                          lambda: _pay_sale(sale_id, data, db, current))
+
+
+async def _pay_sale(sale_id: str, data: SalePayIn, db: AsyncSession, current: Employee):
     from backend.models import Account
     sale = await _load_sale(db, current, sale_id, lock=True)
     if sale.voided_at:
@@ -888,10 +895,14 @@ async def _return_sale_items(sale_id: str, data: SaleReturnIn, db: AsyncSession,
                         reason=ret.reason, created_by_id=current.id)
         db.add(refund)
         await db.flush()
-        from backend.routers.cash import post_transaction
-        await post_transaction(db, current.org_id, acc.id, "refund", -money_back,
-                               comment=f"Refund for sale {sale.sale_number}", ref_type="refund",
-                               ref_id=refund.id, employee_id=current.id)
+        from backend.routers.cash import open_drawer_shift, post_transaction
+        txn = await post_transaction(db, current.org_id, acc.id, "refund", -money_back,
+                                     comment=f"Refund for sale {sale.sale_number}", ref_type="refund",
+                                     ref_id=refund.id, employee_id=current.id)
+        # M9: cash handed back out of a till leaves that drawer, the same way the sale's cash leg
+        # entered it (post_transaction links income/expense only); otherwise every close after a
+        # cash return read short by the refund.
+        txn.shift_id = await open_drawer_shift(db, current.org_id, acc)
     if gift_back > 0:
         leg = (await db.execute(select(GiftCardLedger).where(
             GiftCardLedger.ref_type == "sale", GiftCardLedger.ref_id == sale.id))).scalars().first()
@@ -1403,18 +1414,37 @@ async def post_stocktake(
         line_bin = l.bin_id or st.bin_id
         if line_bin:
             await stock_rows.check_bin(db, current.org_id, st.location_id, line_bin)
+        part = (await db.execute(select(Part).where(Part.id == l.part_id))).scalar_one_or_none()
+        unit_cost = float((part.avg_cost or part.cost_price or 0) if part else 0)
         if line_bin or l.variance > 0:
             await stock_rows.add(db, l.part_id, st.location_id, l.variance, bin_id=line_bin)
+            moved = l.variance
         elif st.by_bin:      # the no-bin line of a by-bin count: only the unbinned rows, none below zero
             loose = [r for r in await stock_rows.rows(db, l.part_id, st.location_id) if r.bin_id is None]
-            await stock_rows.draw(db, l.part_id, st.location_id, -l.variance, allow_short=True, only=loose)
+            taken = await stock_rows.draw(db, l.part_id, st.location_id, -l.variance, allow_short=True, only=loose)
+            moved = -sum(q for _b, q in taken)
         else:
-            await stock_rows.draw(db, l.part_id, st.location_id, -l.variance, allow_short=True)
-        part = (await db.execute(select(Part).where(Part.id == l.part_id))).scalar_one_or_none()
+            taken = await stock_rows.draw(db, l.part_id, st.location_id, -l.variance, allow_short=True)
+            moved = -sum(q for _b, q in taken)
+        # council M3: the cost layers follow the shelf. A shortage drains layers the way a write-off
+        # does (FIFO / FEFO, locked); a surplus gets its own layer at the average cost. Before this
+        # the layers kept units the count said were gone, and the next sale drew COGS from them.
+        if part is not None and moved < 0:
+            from backend.services.stock_writeoff import consume_layers
+            cost = await consume_layers(db, part=part, location_id=st.location_id, qty=-moved)
+            unit_cost = cost / -moved if moved else unit_cost
+        elif part is not None and moved > 0:
+            from decimal import Decimal as _D
+
+            from backend.models import StockItemBatch
+            db.add(StockItemBatch(org_id=current.org_id, part_id=l.part_id, location_id=st.location_id,
+                                  warehouse_id=st.warehouse_id or await stock_rows.warehouse_for(db, st.location_id, line_bin),
+                                  bin_id=line_bin, unit_cost=_D(str(unit_cost)),
+                                  qty_received=_D(str(moved)), qty_remaining=_D(str(moved))))
         db.add(StockMovement(part_id=l.part_id, location_id=st.location_id,
                              warehouse_id=st.warehouse_id, bin_id=line_bin,
                              movement_type="adjust", qty=l.variance,
-                             unit_cost=(part.avg_cost or part.cost_price or 0) if part else 0,
+                             unit_cost=unit_cost,
                              ref_type="stocktake", ref_id=st.id, created_by_id=current.id))
         adjusted += 1
     await _settle_counted_units(db, current, st)

@@ -15,6 +15,7 @@ from backend.db.database import get_db
 from backend.models import AuditLog, Device, Employee, Order, OrderStatus, Organisation
 from backend.services import pilot, scoping
 from backend.services.auth import require_perm
+from backend.services.dates import shop_tzname, today_in
 
 router = APIRouter(prefix="/api/pilot", tags=["pilot"])
 
@@ -98,7 +99,8 @@ async def go_report(
     """The pilot report: per employee, status changes and photos total vs from Tekly Go, messages
     from Go, scans and counter lookups by kind; plus the share of status changes made on a phone
     against the 50% decision rule. Owners and admins only."""
-    end = date_to or date.today()
+    tz = await shop_tzname(db, current.org_id)
+    end = date_to or today_in(tz)
     start = date_from or (end - timedelta(days=6))
     if start > end:
         raise HTTPException(422, "from must be on or before to")
@@ -116,7 +118,7 @@ async def go_report(
             Employee.org_id == current.org_id, Employee.id.in_(eids)))).scalars().all())
         if found != set(eids):
             raise HTTPException(404, "Employee not found")
-    rep = await pilot.go_report(db, current.org_id, start, end, order_ids=oids, employee_ids=eids)
+    rep = await pilot.go_report(db, current.org_id, start, end, order_ids=oids, employee_ids=eids, tzname=tz)
     if format == "csv":
         return Response(content=pilot.report_csv(rep), media_type="text/csv; charset=utf-8",
                         headers={"Content-Disposition": f'attachment; filename="tekly-go-pilot-{start}-{end}.csv"',
