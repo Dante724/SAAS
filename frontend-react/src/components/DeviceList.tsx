@@ -2,6 +2,7 @@ import { useCallback, useEffect, useState } from "react";
 import { Laptop, Smartphone } from "lucide-react";
 import { api, readableError } from "../api/client";
 import { confirmDialog } from "../lib/dialog";
+import { serverDate } from "../lib/serverTime";
 
 // Signed-in devices, shared by your own Security panel and an admin's view of a teammate
 // (Team → person → Sign-in). One row per sign-in on one device; signing a row out ends that
@@ -16,7 +17,7 @@ const PHONE = /iPhone|iPad|Android|Tekly Go/;
 
 export function ago(iso: string | null, now = Date.now()): string {
   if (!iso) return "";
-  const mins = Math.round((now - new Date(iso).getTime()) / 60000);
+  const mins = Math.round((now - (serverDate(iso)?.getTime() ?? now)) / 60000);
   if (mins < 2) return "Active now";
   if (mins < 60) return `Active ${mins} min ago`;
   const hrs = Math.round(mins / 60);
@@ -26,7 +27,7 @@ export function ago(iso: string | null, now = Date.now()): string {
 }
 
 const day = (iso: string | null) =>
-  iso ? new Date(iso).toLocaleDateString([], { month: "short", day: "numeric" }) : "";
+  serverDate(iso)?.toLocaleDateString([], { month: "short", day: "numeric" }) ?? "";
 
 export function DeviceRow({ d, action }: { d: Device; action?: React.ReactNode }) {
   const Icon = PHONE.test(d.device) ? Smartphone : Laptop;

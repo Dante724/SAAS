@@ -1,4 +1,5 @@
 // Inquiries (leads): shared types and small helpers for the board, the drawers and Tekly Go.
+import { serverDate } from "../../lib/serverTime";
 export type Lead = {
   id: string; name?: string; phone?: string | null; email?: string | null; source?: string; inquiry?: string | null;
   status?: string; client_id?: string | null; manager_id?: string | null;
@@ -19,9 +20,9 @@ export const CHANNELS: [string, string][] = [
 export const channelLabel = (s?: string) => CHANNELS.find(([k]) => k === s)?.[1] || "Other";
 export const SRC_ICON: Record<string, string> = { phone: "call", whatsapp: "chat", sms: "sms", email: "mail", instagram: "photo_camera", facebook: "thumb_up", web: "public", walk_in: "directions_walk", api: "hub", other: "help" };
 
-/** The server sends UTC times without a zone ("2026-10-25T06:46:00"); read them as UTC, not local. */
+/** A server instant (UTC) as a Date: lib/serverTime's reading, never the browser's local time. */
 export function utc(iso: string): Date {
-  return new Date(/[zZ]$|[+-]\d\d:?\d\d$/.test(iso) ? iso : `${iso}Z`);
+  return serverDate(iso) ?? new Date(NaN);
 }
 export const fmt = (iso?: string | null) => (iso ? utc(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—");
 

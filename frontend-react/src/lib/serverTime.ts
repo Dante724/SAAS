@@ -2,9 +2,9 @@
 //
 // The API sends two kinds of time:
 //  • Instants — when something happened (created_at, started_at, clock-in). Stored in UTC and sent
-//    with a "Z". Older endpoints still send them without one; they are UTC all the same, so a bare
-//    value is read as UTC, never as the browser's local time (that put an IST clock-in of 10:00 at
-//    04:30, and the activity log 4–5 hours off).
+//    with a "Z" (the API's default response adds it to every "*_at", "at" and "ts" field). A bare
+//    value is still read as UTC, never as the browser's local time (that put an IST clock-in of
+//    10:00 at 04:30, and the activity log 4–5 hours off).
 //  • Wall-clock times — when something is booked (scheduled_for, due dates). Kept in the shop's
 //    own clock with no zone, so they show exactly as stored.
 
@@ -24,11 +24,18 @@ export function wallDate(iso?: string | null): Date | null {
   return isNaN(d.getTime()) ? null : d;
 }
 
-/** "Oct 29, 2026" for a shop date or wall-clock time ("2026-10-29" or "2026-10-29T11:00"), the app's
- *  one date format. A bare date is read as local midnight, not UTC (which can show the day before). */
+/** The calendar day of any server value: an instant sent with its zone ("…Z") falls on the
+ *  viewer's day, a bare date ("2026-10-29") is local midnight, not UTC (which can show the day
+ *  before), and a bare date-time is the shop's wall clock. */
+export function dayDate(iso?: string | null): Date | null {
+  if (!iso) return null;
+  return ZONED.test(iso) ? serverDate(iso) : wallDate(iso.length <= 10 ? iso + "T00:00" : iso);
+}
+
+/** "Oct 29, 2026" for a server date, wall-clock time or instant (see dayDate), the app's one date
+ *  format. */
 export function fmtDay(iso?: string | null): string {
-  if (!iso) return "";
-  const d = wallDate(iso.length <= 10 ? iso + "T00:00" : iso);
+  const d = dayDate(iso);
   return d ? d.toLocaleDateString([], { month: "short", day: "numeric", year: "numeric" }) : "";
 }
 
