@@ -1952,10 +1952,13 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     # off is_closing (which has its own fallback) rather than prev_terminal, so it works
     # even for the built-in 'done/closed/delivered' statuses that aren't in OrderStatus.
     if not order.is_estimate and order.client_id:
-        from backend.services.ledger import order_charge_net, post_contact_ledger
+        from backend.services.ledger import credit_spent_target, order_charge_net, post_contact_ledger
         _net = await order_charge_net(db, order.client_id, order.id)
-        # A dropped job is charged only what wasn't written off, so it leaves no debt.
-        _target = q2(float(order.total or 0) - float(order.written_off or 0)) if is_closing else 0.0
+        # A dropped job is charged only what wasn't written off, so it leaves no debt. A job that
+        # isn't closing keeps the client credit already spent on it charged (H6): reversing that
+        # handed the credit back while the job stayed paid from it, so it paid a second job.
+        _target = (q2(float(order.total or 0) - float(order.written_off or 0)) if is_closing
+                   else await credit_spent_target(db, order))
         _delta = q2(_target - _net)
         if _delta:
             _note = (f"Order {order.order_number} ready" if is_closing
@@ -3048,7 +3051,7 @@ async def notify_order_customer(
             if result is not None:
                 delivery = "oauth"
         if result is None:
-            _creds = await notif_creds(db, current.org_id, data.channel)
+            _creds = await notif_creds(db, current.org_id, data.channel, transactional=True)   # about this job
             result = await _adapter_for(data.channel, _creds).send(
                 recipient=recipient, subject=data.subject, body=data.body)
             delivery = "smtp" if (data.channel == "email" and _settings.SMTP_HOST) else "simulated"

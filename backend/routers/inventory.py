@@ -419,6 +419,10 @@ async def _do_posting(db, org_id, created_by_id, location_id, supplier_id, lines
     posted = 0
     total_cost = 0.0
     seen_serials: set = set()
+    lines = list(lines)
+    # Every product first, in id order (receive_po does the same): line by line, two postings
+    # holding the same products in opposite order deadlocked on each other's first line.
+    await stock_posting.lock_parts(db, [_g(ln, "part_id") for ln in lines])
     for ln in lines:
         qty = float(_g(ln, "qty") or 0)
         if qty <= 0:
@@ -1925,6 +1929,12 @@ async def recost_po(
         raise HTTPException(404, "Purchase order not found")
     if (po.status or "").lower() in ("cancelled", "canceled"):
         raise HTTPException(409, "This purchase order is cancelled")
+    # Same lock order as receive_po — the PO's lines, then its products, and only then the PO row.
+    # Writing the charges first autoflushed the PO row before the products were locked, so a
+    # recost racing a receive of the same PO deadlocked.
+    po_lines = (await db.execute(select(POLine).where(POLine.po_id == po_id)
+                                 .with_for_update())).scalars().all()
+    await stock_posting.lock_parts(db, [pl.part_id for pl in po_lines])   # id order: no deadlock
     if data.charges is not None:
         po.charges = [{"label": (c.label or "Charge").strip(), "amount": q2(float(c.amount or 0))}
                       for c in (data.charges or []) if (c.amount or 0) or (c.label or "").strip()]
@@ -1933,7 +1943,6 @@ async def recost_po(
     if data.alloc_basis is not None:
         po.alloc_basis = data.alloc_basis if data.alloc_basis in _ALLOC_BASES else "value"
 
-    po_lines = (await db.execute(select(POLine).where(POLine.po_id == po_id))).scalars().all()
     charges_total = _po_charges_total(po)
     if not (po.charges_to_cost and charges_total > 0):
         await db.commit()
@@ -1967,7 +1976,7 @@ async def recost_po(
     # count as accounted for, so the same bill recosted again applies nothing.
     applied = expensed = 0.0
     scale = (delta_total / target) if target else 0
-    for part_id, tpart in per_part_target.items():
+    for part_id, tpart in sorted(per_part_target.items()):      # products locked above
         part = (await db.execute(select(Part).where(
             Part.id == part_id, Part.org_id == current.org_id))).scalar_one_or_none()
         if not part:
@@ -2075,6 +2084,7 @@ async def receive_po(
     # the same qty_received and doubled stock and supplier AP. The loser now waits and sees 0 left.
     po_lines = (await db.execute(select(POLine).where(POLine.po_id == po_id)
                                  .with_for_update())).scalars().all()
+    await stock_posting.lock_parts(db, [pl.part_id for pl in po_lines])   # id order: no deadlock
     basis = po.alloc_basis if po.alloc_basis in _ALLOC_BASES else "value"
     weights = await _po_part_weights(db, po_lines) if basis == "weight" else {}
     # Build 144al — landed cost: when the PO opts in, spread its charges (shipping/transit/custom)
