@@ -21,6 +21,7 @@ import { SettingRow, SettingGroup, NumField } from "../../components/SettingRow"
 import { money } from "../orders/types";
 import { loadFailed } from "../../lib/notice";
 import { clickable, clickableRow } from "../../lib/clickable";
+import { serverDate } from "../../lib/serverTime";
 
 // Each settings page is its own chunk, fetched when its section opens (the hub was one ~470 kB file).
 const TemplateEditorDrawer = lazy(() => import("./TemplateEditorDrawer"));
@@ -2118,7 +2119,7 @@ function EcommerceSettings() {
             <span className="font-medium text-ink-primary">{i.store_url || "—"}</span>
             <span className="text-xs text-ink-tertiary">{[i.sync_products && "Products", i.sync_orders && "Orders"].filter(Boolean).join(" + ")}</span>
             <div className="flex-1" />
-            <span className="text-xs text-ink-tertiary">{i.last_synced_at ? `Synced ${new Date(i.last_synced_at).toLocaleDateString()}` : "Never synced"}</span>
+            <span className="text-xs text-ink-tertiary">{i.last_synced_at ? `Synced ${serverDate(i.last_synced_at)?.toLocaleDateString()}` : "Never synced"}</span>
             <span className={`px-2 py-0.5 rounded-full text-xs font-medium ${i.active ? "bg-emerald-100 text-emerald-700" : "bg-slate-100 text-ink-secondary"}`}>{i.active ? "Active" : "Off"}</span>
           </div>
         ))}

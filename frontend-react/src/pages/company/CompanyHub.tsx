@@ -14,6 +14,7 @@ import { useServerPage } from "../../hooks/useServerPage";
 import { inputCls } from "../invoices/billing";
 import { clickable, clickableRow } from "../../lib/clickable";
 import ImportDrawer from "../../components/ImportDrawer";
+import { fmtServerTime } from "../../lib/serverTime";
 
 const CO_PAGE = 50;
 
@@ -324,7 +325,7 @@ export function EmployeeHours() {
                 <td className="py-3 px-5 font-bold text-ink-primary">{e.employee_name || "—"}</td>
                 <td className="py-3 px-3 text-primary font-mono">{e.order_number || "—"}</td>
                 <td className="py-3 px-3 text-ink-secondary capitalize">{e.category || "—"}</td>
-                <td className="py-3 px-3 text-ink-secondary">{e.started_at ? new Date(e.started_at).toLocaleString() : "—"}</td>
+                <td className="py-3 px-3 text-ink-secondary">{fmtServerTime(e.started_at, {}) || "—"}</td>
                 <td className="py-3 px-3 text-right tabular-nums font-bold text-ink-primary">{hm(e.duration_min)}</td>
                 <td className="py-3 px-3">{e.running
                   ? <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-emerald-100 text-emerald-700">Running</span>

@@ -5,6 +5,7 @@ import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { money } from "../orders/types";
+import { fmtServerTime } from "../../lib/serverTime";
 
 type Shift = { id: string; open: boolean; opening_float?: number; closing_float?: number;
                expected_cash?: number | null; discrepancy?: number | null; opened_by?: string | null;
@@ -47,7 +48,7 @@ export default function ShiftHistoryModal({ sym, onClose }: { sym?: string; onCl
                   const st = status(s);
                   return (
                     <tr key={s.id} className="border-b border-slate-100">
-                      <td className="py-2 px-2 text-ink-secondary">{s.opened_at ? new Date(s.opened_at).toLocaleString() : "—"}</td>
+                      <td className="py-2 px-2 text-ink-secondary">{fmtServerTime(s.opened_at, {}) || "—"}</td>
                       <td className="px-2 text-ink-secondary">{s.opened_by || "—"}</td>
                       <td className="px-2 text-right tabular-nums">{money(s.opening_float, sym)}</td>
                       <td className="px-2 text-right tabular-nums">{s.expected_cash != null ? money(s.expected_cash, sym) : "—"}</td>

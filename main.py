@@ -157,17 +157,18 @@ _docs_kwargs = {} if not settings.is_deployed else {
     "docs_url": None, "redoc_url": None, "openapi_url": None,
 }
 from backend.core.finite_numbers import (  # noqa: E402
-    FiniteJSONResponse,
     NonFiniteJsonMiddleware,
     too_large_number_handler,
 )
+from backend.core.utc_instants import ApiJSONResponse  # noqa: E402
 
 app = FastAPI(
     title="Tekly API",
     description="Orderry-style repair shop management",
     version="0.1.0",
     lifespan=lifespan,
-    default_response_class=FiniteJSONResponse,   # B9: a stored NaN goes out as null, not a 500
+    # B9: a stored NaN goes out as null, not a 500. B6: instants go out with a "Z".
+    default_response_class=ApiJSONResponse,
     **_docs_kwargs,
 )
 

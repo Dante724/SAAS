@@ -14,7 +14,7 @@ from sqlalchemy import desc, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
-from backend.services.dates import day_start_utc, now_utc, parse_dt, shop_today, shop_tzname, today_in
+from backend.services.dates import day_end_utc, day_start_utc, now_utc, parse_dt, shop_today, shop_tzname, today_in
 from backend.models import (
     Account,
     CashFlowItem,
@@ -984,7 +984,13 @@ async def list_transactions(
     if since:
         q = q.where(Transaction.actual_date >= since)
     total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
-    extra = {"summary": await _txn_summary(db, q, day)} if summary else {}
+    tz = None
+    if summary and day:
+        # "In today" is the shop's day: the day starts at the branch's midnight, not UTC's (B3).
+        loc = (await db.execute(select(Account.location_id).where(
+            Account.id == account_id, Account.org_id == current.org_id))).scalar() if account_id else None
+        tz = await shop_tzname(db, current.org_id, loc)
+    extra = {"summary": await _txn_summary(db, q, day, tz)} if summary else {}
     q = q.order_by(desc(Transaction.actual_date), desc(Transaction.id)).offset(skip).limit(limit)
     rows = (await db.execute(q)).scalars().all()
 
@@ -1006,11 +1012,11 @@ async def list_transactions(
     } for t in rows], "total": total, "skip": skip, "limit": limit, **extra}
 
 
-async def _txn_summary(db, q, day: Optional[str]) -> dict:
+async def _txn_summary(db, q, day: Optional[str], tz: Optional[str] = None) -> dict:
     """Totals the cash panel shows under a paged ledger, computed in SQL over all matching
-    rows: live (not deleted) count, money in, money out, and in/out on `day`."""
+    rows: live (not deleted) count, money in, money out, and in/out on `day` (a day on the shop's
+    clock `tz`; actual_date is naive UTC)."""
     from datetime import date as _date
-    from datetime import timedelta
 
     from sqlalchemy import case
     sub = q.where(func.coalesce(Transaction.status, "") != "deleted").subquery()
@@ -1025,10 +1031,10 @@ async def _txn_summary(db, q, day: Optional[str]) -> dict:
             func.coalesce(func.sum(case((is_out, absamt), else_=0)), 0)]
     if day:
         try:
-            d0 = datetime.combine(_date.fromisoformat(day), datetime.min.time())
+            d = _date.fromisoformat(day)
         except ValueError:
             raise HTTPException(422, "day must be YYYY-MM-DD")
-        on_day = (sub.c.actual_date >= d0) & (sub.c.actual_date < d0 + timedelta(days=1))
+        on_day = (sub.c.actual_date >= day_start_utc(d, tz)) & (sub.c.actual_date < day_end_utc(d, tz))
         cols += [func.coalesce(func.sum(case((on_day & is_in, absamt), else_=0)), 0),
                  func.coalesce(func.sum(case((on_day & is_out, absamt), else_=0)), 0)]
     r = (await db.execute(select(*cols).select_from(sub))).one()

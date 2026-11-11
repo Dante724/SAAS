@@ -3,8 +3,9 @@ import { describe, it, expect } from "vitest";
 import { todayTotals, txnDirection } from "./cashStats";
 
 const now = new Date("2026-10-05T14:00:00");
-const iso = (h: number) => `2026-10-05T${String(h).padStart(2, "0")}:00:00`;
-const yesterday = "2026-10-04T10:00:00";
+// actual_date is a UTC instant from the server ("…Z"); "today" is the viewer's local day.
+const iso = (h: number) => new Date(2026, 9, 5, h).toISOString();
+const yesterday = new Date(2026, 9, 4, 10).toISOString();
 
 describe("todayTotals", () => {
   it("empty", () => expect(todayTotals([], now)).toEqual({ in: 0, out: 0, net: 0 }));

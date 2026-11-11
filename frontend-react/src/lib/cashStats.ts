@@ -1,10 +1,10 @@
 // Cash drawer glance stats. Pure + tested — the only new logic in the /cash redesign (144bg).
+import { serverDate } from "./serverTime";
 export type CashTxn = { txn_type?: string; amount?: number; actual_date?: string; status?: string };
 
 function sameDay(iso: string | undefined, ref: Date): boolean {
-  if (!iso) return false;
-  const d = new Date(iso);
-  if (isNaN(d.getTime())) return false;
+  const d = serverDate(iso);
+  if (!d) return false;
   return d.getFullYear() === ref.getFullYear() && d.getMonth() === ref.getMonth() && d.getDate() === ref.getDate();
 }
 

@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useState, type FormEvent } from "react";
 import { adminApi, fmtDate, type Me } from "./api";
+import { fmtServerTime } from "../lib/serverTime";
 
 const card = "bg-white rounded-xl border border-slate-200";
 const input = "px-3 py-2 rounded-lg border border-slate-300 text-sm";
@@ -255,7 +256,7 @@ export function LogView() {
           <tbody>
             {data.items.map((r) => (
               <tr key={r.id} className="border-b border-slate-100 last:border-0 align-top">
-                <td className="px-4 py-2 whitespace-nowrap text-ink-secondary">{new Date(r.at + "Z").toLocaleString()}</td>
+                <td className="px-4 py-2 whitespace-nowrap text-ink-secondary">{fmtServerTime(r.at, {})}</td>
                 <td className="px-4 py-2">{r.by || "Unknown"}</td>
                 <td className="px-4 py-2">{r.action.replace(/_/g, " ")}{r.target ? <span className="text-ink-tertiary"> · {r.target}</span> : null}</td>
                 <td className={`px-4 py-2 ${r.outcome === "refused" ? "text-rose-600" : r.outcome === "requested" ? "text-amber-700" : ""}`}>{r.outcome === "allowed" ? "Done" : r.outcome === "refused" ? "Refused" : "Sent for approval"}</td>

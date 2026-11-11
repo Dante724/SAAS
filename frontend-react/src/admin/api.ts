@@ -1,6 +1,7 @@
 // The /admin app talks to /api/admin with the HttpOnly session cookie plus the
 // X-Tekly-Admin header (a cross-site page can't add that header, so the cookie alone
 // can't be used against us). The token is never kept in JavaScript or localStorage.
+import { dayDate } from "../lib/serverTime";
 
 export class AdminApiError extends Error {
   status: number;
@@ -67,7 +68,6 @@ export const SEGMENTS: Record<string, string> = {
 };
 
 export function fmtDate(iso?: string | null) {
-  if (!iso) return "—";
-  const d = new Date(iso.length === 10 ? iso + "T00:00:00" : iso);
-  return d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" });
+  const d = dayDate(iso);
+  return d ? d.toLocaleDateString(undefined, { day: "numeric", month: "short", year: "numeric" }) : "—";
 }

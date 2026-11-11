@@ -2,6 +2,7 @@ import { useEffect, useState } from "react";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { loadFailed } from "../../lib/notice";
+import { dayDate } from "../../lib/serverTime";
 
 // ADR-144po — everything about this job's parts in one place, opened from the work order's
 // ⋯ menu (or the "Waiting on parts" chip): what the job still owes from stock, the purchase
@@ -25,7 +26,7 @@ const STATUS: Record<string, [string, string]> = {
   cancelled: ["Cancelled", "bg-rose-50 text-rose-700"],
 };
 const OPEN = ["draft", "ordered", "partial"];
-const day = (iso?: string | null) => (iso ? new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "");
+const day = (iso?: string | null) => dayDate(iso)?.toLocaleDateString(undefined, { month: "short", day: "numeric" }) ?? "";
 const daysUntil = (iso: string) => Math.round((new Date(iso).setHours(0, 0, 0, 0) - new Date().setHours(0, 0, 0, 0)) / 86400000);
 const HOLD_PRESETS = [7, 14, 30];
 const n = (x: number) => (Number.isInteger(x) ? String(x) : x.toFixed(2));
