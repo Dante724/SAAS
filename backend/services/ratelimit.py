@@ -2,11 +2,15 @@
 
 Single instance uses an in-memory deque. Set ``REDIS_URL`` and every app
 instance shares one counter, so horizontal scaling actually enforces the limit.
+If Redis is configured but unreachable the limiter counts per process until the next
+retry (``_REDIS_RETRY_S``): it says so with one WARNING per retry window, and
+``store_status()`` reports which store is counting (shown by ``GET /api/readyz``).
 
 ``aenforce()`` is what request handlers and middleware use: redis.asyncio, one pipelined
 round trip, never blocks the event loop. ``enforce()`` is the same rule for sync callers
 (sync redis client). Same signature and same in-process fallback either way.
 """
+import logging
 import time
 from collections import defaultdict, deque
 
@@ -14,6 +18,7 @@ from fastapi import HTTPException
 
 from backend.config import settings
 
+log = logging.getLogger("tekly.ratelimit")
 _HITS: dict = defaultdict(deque)
 _redis = None          # None = untried / retry due, False = unavailable, else a client
 _redis_retry_at = 0.0  # after a failure, try Redis again at this time (was: never again)
@@ -41,14 +46,33 @@ def _get_redis():
         c.ping()
         _redis = c
         return c
-    except Exception:   # noqa: BLE001 — any failure => in-process fallback
-        _redis, _redis_retry_at = False, time.time() + _REDIS_RETRY_S
+    except Exception as exc:   # noqa: BLE001 — any failure => in-process fallback
+        _redis_failed(exc)
         return None
 
 
-def _redis_failed():
-    global _redis, _redis_retry_at
-    _redis, _redis_retry_at = False, time.time() + _REDIS_RETRY_S
+def _redis_failed(exc: BaseException | None = None, *, asynchronous: bool = False) -> None:
+    """Fall back to per-process counting until the next retry, and say so — once per retry
+    window, since the next attempt is only made after _REDIS_RETRY_S. The URL is not logged
+    (it may carry a password); the driver's message names only host and port."""
+    global _redis, _redis_retry_at, _aredis, _aredis_retry_at
+    if asynchronous:
+        _aredis, _aredis_retry_at = False, time.time() + _REDIS_RETRY_S
+    else:
+        _redis, _redis_retry_at = False, time.time() + _REDIS_RETRY_S
+    log.warning("rate limits: Redis (REDIS_URL) is unreachable — %s: %s. Counting per-process for the next "
+                "%ss; with several workers each one enforces its own copy of every limit.",
+                type(exc).__name__ if exc else "error", exc, _REDIS_RETRY_S)
+
+
+async def store_status() -> str:
+    """Which store is counting right now, for readiness: "redis", "local" (no REDIS_URL), or
+    "local (redis unreachable)" (REDIS_URL set but the last attempt failed; retried after
+    _REDIS_RETRY_S). Readiness stays "ready" either way: a rate-limit store outage must not take
+    the instance out of rotation."""
+    if not getattr(settings, "REDIS_URL", ""):
+        return "local"
+    return "redis" if await _get_aredis() is not None else "local (redis unreachable)"
 
 
 def _prune(now: float) -> None:
@@ -93,8 +117,8 @@ async def _get_aredis():
         await c.ping()
         _aredis = c
         return c
-    except Exception:   # noqa: BLE001 — any failure => in-process fallback
-        _aredis, _aredis_retry_at = False, time.time() + _REDIS_RETRY_S
+    except Exception as exc:   # noqa: BLE001 — any failure => in-process fallback
+        _redis_failed(exc, asynchronous=True)
         return None
 
 
@@ -117,7 +141,6 @@ async def aenforce(bucket: str, key: str, limit: int, window_sec: int) -> int:
     Redis: SET NX EX (start the window) + INCR + TTL in one pipeline — one round trip, and the
     expiry is set atomically with the key, so a crash between calls can't leave a key that
     never expires."""
-    global _aredis, _aredis_retry_at
     r = await _get_aredis()
     if r is not None:
         try:
@@ -132,8 +155,8 @@ async def aenforce(bucket: str, key: str, limit: int, window_sec: int) -> int:
             return max(0, limit - int(n))
         except HTTPException:
             raise
-        except Exception:   # noqa: BLE001 — Redis hiccup => fall back to in-process
-            _aredis, _aredis_retry_at = False, time.time() + _REDIS_RETRY_S
+        except Exception as exc:   # noqa: BLE001 — Redis hiccup => fall back to in-process
+            _redis_failed(exc, asynchronous=True)
     return _local_enforce(bucket, key, limit, window_sec)
 
 
@@ -151,8 +174,8 @@ def enforce(bucket: str, key: str, limit: int, window_sec: int) -> None:
             return
         except HTTPException:
             raise
-        except Exception:   # noqa: BLE001 — Redis hiccup => fall back to in-process
-            _redis_failed()
+        except Exception as exc:   # noqa: BLE001 — Redis hiccup => fall back to in-process
+            _redis_failed(exc)
     _local_enforce(bucket, key, limit, window_sec)
 
 

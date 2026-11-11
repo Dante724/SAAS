@@ -8,7 +8,7 @@ from sqlalchemy.orm import selectinload
 from backend.db.database import get_db
 from backend.models import Order, Client, Invoice, Part, StockLevel, Task, Employee
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.dates import day_start_utc, now_utc, shop_today, shop_tzname, today_in
+from backend.services.dates import day_end_utc, day_start_utc, now_utc, shop_today, shop_tzname, today_in
 # The money figures and low stock are defined once, in services/revenue (read its docstring).
 from backend.services import revenue as money_rules, stock_rows
 from backend.services.revenue import low_stock_count_query, low_stock_query, line_net
@@ -179,17 +179,25 @@ from backend.services.money import q2
 from backend.core.spreadsheet import safe_row
 
 
-def _parse_range(date_from, date_to):
-    df = datetime.fromisoformat(date_from) if date_from else now_utc() - timedelta(days=30)
-    if date_to:
-        dt = datetime.fromisoformat(date_to)
-        # A date-only "To" (YYYY-MM-DD) parses to 00:00:00 — that would silently drop
-        # everything that happened *on* the end date (e.g. today's activity). Extend it
-        # to the end of that day so the range is inclusive, as users expect.
-        if dt.time() == datetime.min.time():
-            dt = dt + timedelta(days=1) - timedelta(seconds=1)
-    else:
-        dt = now_utc() + timedelta(days=1)
+def _range_edge(value: str, tz, *, end: bool) -> datetime:
+    """One end of a report window as naive UTC. A date-only value (YYYY-MM-DD, what the Reports
+    page sends) is a whole day on the shop's clock, the same rule as the dashboard's "today"
+    (council M12: a Kiritimati shop asking for its own today got rows=[]). A value with a time
+    is taken as given."""
+    parsed = datetime.fromisoformat(value)
+    if parsed.time() != datetime.min.time():
+        return parsed
+    if end:
+        # A date-only "To" parses to 00:00:00 — that would silently drop everything that
+        # happened *on* the end date (e.g. today's activity). Extend it to the end of that
+        # day so the range is inclusive, as users expect.
+        return day_end_utc(parsed.date(), tz) - timedelta(seconds=1)
+    return day_start_utc(parsed.date(), tz)
+
+
+def _parse_range(date_from, date_to, tz: str | None = None):
+    df = _range_edge(date_from, tz, end=False) if date_from else now_utc() - timedelta(days=30)
+    dt = _range_edge(date_to, tz, end=True) if date_to else now_utc() + timedelta(days=1)
     return df, dt
 
 
@@ -1068,9 +1076,9 @@ async def run_report(
         from fastapi import HTTPException
         raise HTTPException(404, "Unknown report")
     tab, title, builder = REPORTS[report_key]
-    df, dt = _parse_range(date_from, date_to)
-    df = await _report_from(db, current, report_key, df)
     location_id = await _scoped_location(db, current, location_id)
+    df, dt = _parse_range(date_from, date_to, await shop_tzname(db, current.org_id, location_id))
+    df = await _report_from(db, current, report_key, df)
     cols, rows = await builder(db, current.org_id, df, dt,
                                **await _builder_kw(db, current, report_key, location_id, role_id, employee_id, filters))
     # totals row for numeric columns
@@ -1098,9 +1106,9 @@ async def export_report(
     import openpyxl
     from openpyxl.styles import Font, PatternFill, Alignment
     tab, title, builder = REPORTS[report_key]
-    df, dt = _parse_range(date_from, date_to)
-    df = await _report_from(db, current, report_key, df)
     location_id = await _scoped_location(db, current, location_id)
+    df, dt = _parse_range(date_from, date_to, await shop_tzname(db, current.org_id, location_id))
+    df = await _report_from(db, current, report_key, df)
     cols, rows = await builder(db, current.org_id, df, dt,
                                **await _builder_kw(db, current, report_key, location_id, role_id, employee_id, filters))
 
@@ -1151,9 +1159,9 @@ async def export_report_csv(
         raise HTTPException(404, "Unknown report")
     import csv
     _tab, _title, builder = REPORTS[report_key]
-    df, dt = _parse_range(date_from, date_to)
-    df = await _report_from(db, current, report_key, df)
     location_id = await _scoped_location(db, current, location_id)
+    df, dt = _parse_range(date_from, date_to, await shop_tzname(db, current.org_id, location_id))
+    df = await _report_from(db, current, report_key, df)
     cols, rows = await builder(db, current.org_id, df, dt,
                                **await _builder_kw(db, current, report_key, location_id, role_id, employee_id, filters))
     buf = io.StringIO()
@@ -1365,8 +1373,9 @@ async def job_profitability(
 
     # date window (default: trailing 30 days), on the day each job was earned
     # Same window rules as every report: a date-only "to" covers that whole day.
-    end = _parse_range(None, to)[1] if to else now_utc()
-    start = datetime.fromisoformat(from_) if from_ else (end - timedelta(days=30))
+    _tz = await shop_tzname(db, oid, location_id)
+    end = _parse_range(None, to, _tz)[1] if to else now_utc()
+    start = _parse_range(from_, None, _tz)[0] if from_ else (end - timedelta(days=30))
 
     # honour a location-scoped role
     role = None
@@ -1492,13 +1501,13 @@ async def _total_profit_for(db, current, date_from, date_to, location_id, techni
     from backend.services.profit import total_profit
     from backend.services.redact import can_see_costs
     await assert_perm(db, current, "can_view_reports")
+    location_id = await _scoped_location(db, current, location_id)
     try:
-        df, dt = _parse_range(date_from, date_to)
+        df, dt = _parse_range(date_from, date_to, await shop_tzname(db, current.org_id, location_id))
     except ValueError:
         raise HTTPException(422, "Use dates like 2026-10-24")
     if dt - df > timedelta(days=731):
         raise HTTPException(422, "Pick a period of two years or less")
-    location_id = await _scoped_location(db, current, location_id)
     role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none() \
         if current.role_id else None
     out = await total_profit(db, current.org_id, df, dt, location_id=location_id,

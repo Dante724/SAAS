@@ -265,6 +265,8 @@ async def create_employee(
     await _assert_can_assign_role(db, current, data.role_id)
     from backend.services.billing import assert_can_add
     await assert_can_add(db, current.org_id, "team_members")
+    if not data.password:
+        await _teammate_email_slot(current.org_id)   # the welcome e-mail goes to any address typed
     from backend.services.auth import has_perm
     from backend.services.payroll_views import payroll_scope_ids
     # A role limited to some people's payroll (E3) can't set a newcomer's pay: they're outside it.
@@ -309,6 +311,21 @@ async def create_employee(
 
 MIN_PASSWORD_LEN = 8
 SET_PASSWORD_TTL_MIN = 60 * 24 * 7   # same 7 days as teammate invites
+# M17: the three e-mails a shop can send to any address it types (invite, set-password, send-reset)
+# share one per-shop budget, so a shop can't use Tekly's sender as a relay. The subject line is
+# fixed and the shop's name appears only in the body, capped, so it can't carry a pitch or a link.
+TEAMMATE_EMAILS_PER_DAY = 20
+SHOP_NAME_IN_EMAIL_MAX = 80
+
+
+async def _teammate_email_slot(org_id: str) -> None:
+    from backend.services.ratelimit import aenforce
+    await aenforce("invite", org_id, TEAMMATE_EMAILS_PER_DAY, 86400)
+
+
+def _shop_name(org) -> str:
+    name = " ".join((getattr(org, "name", None) or "").split())
+    return name[:SHOP_NAME_IN_EMAIL_MAX] or "your team"
 
 
 async def _send_set_password_email(db: AsyncSession, emp: Employee, org_id: str) -> None:
@@ -323,8 +340,9 @@ async def _send_set_password_email(db: AsyncSession, emp: Employee, org_id: str)
     org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one_or_none()
     url = _link(f"/reset-password?token={raw}")
     await send_direct_email(
-        emp.email, f"You've been added to {org.name if org else 'your team'} on Tekly",
-        f"Hi {emp.name},\n\nAn account has been created for you. Choose your password here:\n\n{url}\n\n"
+        emp.email, "You've been added to your team on Tekly",
+        f"Hi {emp.name},\n\nAn account has been created for you at {_shop_name(org)}. "
+        f"Choose your password here:\n\n{url}\n\n"
         f"The link expires in 7 days and can be used once.")
 
 
@@ -433,6 +451,7 @@ async def send_password_reset(
     if not emp:
         raise HTTPException(404, "Employee not found")
     await _assert_can_manage(db, current, emp)
+    await _teammate_email_slot(current.org_id)
     from backend.routers.auth import _link
     from backend.services import tokens as _tok
     from backend.services.notifications import send_direct_email
@@ -515,6 +534,7 @@ async def create_invite(data: InviteIn, db: AsyncSession = Depends(get_db),
     await _assert_can_assign_role(db, current, data.role_id)
     from backend.services.billing import assert_can_add
     await assert_can_add(db, current.org_id, "team_members")
+    await _teammate_email_slot(current.org_id)
     # skip_tenant_filter: sign-in emails are unique across every shop (one email = one login), so
     # an address already used at another shop can't be invited either. Only its shop id is read.
     dupe_org = (await db.execute(select(Employee.org_id).where(func.lower(Employee.email) == email)
@@ -551,11 +571,11 @@ async def create_invite(data: InviteIn, db: AsyncSession = Depends(get_db),
     from backend.services.notifications import send_direct_email
     org = (await db.execute(select(Organisation).where(
         Organisation.id == current.org_id))).scalar_one_or_none()
-    org_name = org.name if org else "your team"
+    org_name = _shop_name(org)
     url = _link(f"/accept-invite?token={raw}")
     await send_direct_email(
-        email, f"You're invited to {org_name} on Tekly",
-        f"{current.name} invited you to join {org_name} on Tekly.\n\n"
+        email, "You're invited to join your team on Tekly",
+        f"{(current.name or '')[:SHOP_NAME_IN_EMAIL_MAX]} invited you to join {org_name} on Tekly.\n\n"
         f"Set your password and get started:\n\n{url}\n\n"
         f"This invitation expires in 7 days.")
     return {"ok": True, "invite_id": inv.id}

@@ -3394,6 +3394,12 @@ async def reserve_stock_for_order(
     from datetime import timedelta
     from backend.models import Part, StockReservation
 
+    # council M7: holds past their date used to block until someone opened the reservations list.
+    # First, before the job is loaded: the sweep commits, and a commit after the job's row lock
+    # (#108) would drop it and let a second reserve click in.
+    from backend.routers.inventory import _release_expired
+    await _release_expired(db, current.org_id)
+
     # Lock the job first (Order FOR NO KEY UPDATE, then its stock rows sorted by product): two
     # reserve clicks at once each read "nothing held yet" and together held twice what the job
     # needs. NO KEY UPDATE, like the money paths, so rows that only reference the job by FK
@@ -4461,14 +4467,59 @@ async def _catalog_warranty(db, org_id, kind, ref_id) -> int:
     return int(row or 0)
 
 
+# Hardening council M16: every line change on a job leaves an audit row ("who changed the price?").
+_LINE_AUDIT_KEYS = ["qty", "unit_price", "discount", "cost_price", "description"]
+
+
+def _line_snapshot(line) -> dict:
+    out = {}
+    for k in _LINE_AUDIT_KEYS:
+        v = getattr(line, k, None)
+        out[k] = v if k == "description" else (float(v) if v is not None else None)
+    return out
+
+
+async def _audit_line(db, actor, order_id: str, line, action: str, before: Optional[dict] = None) -> None:
+    """order.line_add / order.line_update / order.line_delete on the order, in the caller's
+    transaction (audit.record only add+flushes). An update that changed none of the tracked
+    fields writes nothing."""
+    from backend.services.audit import diff_fields, record as _audit
+    after = _line_snapshot(line)
+    if before is not None:
+        diff = diff_fields(before, after, _LINE_AUDIT_KEYS)
+        if not diff:
+            return
+    else:
+        diff = dict(after)
+    diff = {"line_id": line.id, "kind": line.kind, "line_type": line.line_type, **diff}
+    await _audit(db, org_id=actor.org_id, actor_id=actor.id, action=action,
+                 entity_type="order", entity_id=order_id, diff=diff)
+
+
 @router.post("/{order_id}/lines", status_code=201)
 async def add_line(
     order_id: str,
     data: LineIn,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
+    request: Request = None,   # last and optional: in-process callers keep add_line(oid, data, db, emp)
 ):
-    """Add a service/product/fee to an existing order (Orderry Services & Products tab)."""
+    """Add a service/product/fee to an existing order (Orderry Services & Products tab).
+
+    Council M13: a retried add (double tap, a phone timeout that did reach the server, Tekly Go's
+    queue replay) with the same Idempotency-Key gets the first answer back instead of adding the
+    line again and taking stock twice, the same way orders.create and orders.finish work."""
+    from backend.services.idempotency import run_once
+    if request is None:
+        return await _add_line(order_id, data, db, current)
+    # Bound to what was asked (#99): the same key for another line or another job is a 422, and the
+    # key is never released once the line (and its stock draw) committed.
+    return await run_once(db, current.org_id, request, "orders.add_line",
+                          {"order_id": order_id, "line": data.model_dump(mode="json")},
+                          lambda: _add_line(order_id, data, db, current))
+
+
+async def _add_line(order_id: str, data: LineIn, db: AsyncSession, current: Employee):
     order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
@@ -4610,6 +4661,7 @@ async def add_line(
             await db.flush()
             if kind == "product" and not order.is_estimate:
                 await _maybe_deduct(db, order, nl, li.qty, perms, current)
+            await _audit_line(db, current, order_id, nl, "order.line_add")
             made.append(nl.id)
         await _respread_kit(db, order_id, group_id)
         await _recalc_order(db, order)
@@ -4644,6 +4696,7 @@ async def add_line(
             .execution_options(populate_existing=True))).scalars().all()
         existing = next((ln for ln in same if abs(float(ln.unit_price or 0) - float(data.unit_price or 0)) < 0.005), None)
         if existing and not kit_group:
+            _before = _line_snapshot(existing)
             existing.qty += data.qty
             existing.total = q2(existing.qty * existing.unit_price *
                                    (1 - (existing.discount or 0)/100 if existing.discount_type != "fixed" else 1))
@@ -4656,6 +4709,7 @@ async def add_line(
             if not order.is_estimate:      # estimates never deduct
                 await _maybe_deduct(db, order, existing, data.qty, perms, current,
                                     bin_id=data.bin_id, serial_number=data.serial_number)
+            await _audit_line(db, current, order_id, existing, "order.line_update", before=_before)
             await _recalc_order(db, order)
             await db.commit()
             return {"ok": True, "line_id": existing.id, "merged": True}
@@ -4712,6 +4766,7 @@ async def add_line(
         line.total = _calc_line(_line_as_in(line))
         await _respread_kit(db, order_id, kit_group.bundle_group_id, actor=current,
                             change=f"Added {data.description}")
+    await _audit_line(db, current, order_id, line, "order.line_add")
     await _recalc_order(db, order)
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "order", order.id, f"Added {data.kind or data.line_type}: {data.description}")
@@ -5224,6 +5279,7 @@ async def update_line(
                                 adds_value=(payload["qty"] or 0) > old_qty)
     if line.bundle_group_id and "order_item_id" in payload and payload["order_item_id"] != line.order_item_id:
         raise HTTPException(409, "A kit's lines stay with the kit. Move the whole kit, or remove this line and add it again.")
+    _before = _line_snapshot(line)
     for k, v in payload.items():
         setattr(line, k, v)
     # Stock follows the qty change for product lines on real orders (Orderry).
@@ -5273,6 +5329,7 @@ async def update_line(
         change = (f"{line.description}: qty {old_qty:g} → {line.qty:g}" if (line.qty or 0) != old_qty
                   else f"{line.description} edited")
         await _respread_kit(db, order_id, line.bundle_group_id, actor=current, change=change)
+    await _audit_line(db, current, order_id, line, "order.line_update", before=_before)
     await _recalc_order(db, order)
     await db.commit()
     resp = {"ok": True, "total": line.total, "order_total": order.total}
@@ -5319,6 +5376,7 @@ async def delete_line(
     _kit = line.bundle_group_id
     from backend.services.invoice_money import release_line
     await release_line(db, line.id)   # refused on a sent/paid invoice; off any draft that lists it
+    await _audit_line(db, current, order_id, line, "order.line_delete")
     await db.delete(line)
     await db.flush()
     if _kit:
