@@ -2,8 +2,8 @@
 
 - employee_balance_ledger.idempotency_key is VARCHAR(120) but per-line commission keys are three
   UUIDs plus an event (~126 chars): every such accrual failed on Postgres.
-- tasks.priority is text but the API sends numbers: asyncpg rejected the int, so creating any task
-  returned 500.
+- tasks.priority was text but the API sends numbers: asyncpg rejected the int, so creating any task
+  returned 500. (tk01 made the column an integer.)
 """
 import pytest
 
@@ -23,8 +23,10 @@ def test_long_ledger_keys_fit_the_column_and_stay_stable():
     assert EmployeeBalanceLedger.normalize_key(short) == short   # existing rows keep matching
 
 
-def test_task_priority_is_stored_as_text():
-    assert Task(priority=2).priority == "2"
+def test_task_priority_is_an_integer():
+    # tk01 turned the column into an integer; legacy words are normalised on the way in
+    assert Task(priority=2).priority == 2
+    assert Task(priority="high").priority == 1
 
 
 @pytest.mark.asyncio

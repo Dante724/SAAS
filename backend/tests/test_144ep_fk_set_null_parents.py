@@ -36,7 +36,9 @@ async def test_deleting_a_task_keeps_its_time_entries(client, tenant, db):
     db.expire_all()
     entries = (await db.execute(select(TimeEntry).where(TimeEntry.org_id == me["org_id"]))).scalars().all()
     assert len(entries) == 1                    # payroll/labour history kept
-    assert entries[0].task_id is None           # link cleared, nothing dangling
+    # tasks phase 0: delete archives the task, so the time keeps pointing at a row that still
+    # exists (and comes back with it on restore). The FK stays ON DELETE SET NULL for purges.
+    assert entries[0].task_id == tid
 
 
 async def test_unflagging_a_supplier_clears_parts_default_supplier(client, tenant, db):

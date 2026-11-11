@@ -25,7 +25,7 @@ async def test_a_failing_hook_is_logged_and_later_hooks_still_commit(client, ten
         await db_.flush()
 
     async def automation_adds_task(db_, org_id, event, *, order=None, part=None):
-        db_.add(Task(org_id=org_id, title="Call the customer", order_id=order.id, status="open"))
+        db_.add(Task(org_id=org_id, title="Call the customer", order_id=order.id, status="todo"))
         return {"matched": 1, "fired": 1}
 
     monkeypatch.setattr(forms, "sync_order_field_upsells", broken_upsells)

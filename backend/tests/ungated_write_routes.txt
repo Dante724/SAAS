@@ -223,9 +223,6 @@ POST /api/scan/parse [staff]
 POST /api/scan/resolve [staff]
 # settings
 POST /api/settings/numbering/preview [staff]
-# staff
-POST /api/staff/tasks [staff]
-PATCH /api/staff/tasks/{task_id} [staff]
 # tags
 POST /api/tags/attach [staff]
 POST /api/tags/detach [staff]
@@ -235,6 +232,7 @@ POST /api/tasks/part-request [staff]
 DELETE /api/tasks/{task_id} [staff]
 PATCH /api/tasks/{task_id} [staff]
 POST /api/tasks/{task_id}/comments [staff]
+POST /api/tasks/{task_id}/restore [staff]  # same creator/assignee/manager check as delete
 # tech
 POST /api/tech/notifications/dismiss-all [staff]
 POST /api/tech/notifications/read-all [staff]
