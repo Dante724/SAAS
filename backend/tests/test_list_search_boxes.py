@@ -159,7 +159,9 @@ async def assets(client):
     car = await _post(client, h, "/api/assets", client_id=john, asset_type="Vehicle",
                       brand="Ford", model="Transit", serial="CAR-0001",
                       vin="1FTBW2CM5HKA12345")
-    return h, {"phone": phone, "car": car}
+    boat = await _post(client, h, "/api/assets", client_id=john, asset_type="Boat",
+                       brand="Boston Whaler", model="Montauk", hin="BWC12345H506")
+    return h, {"phone": phone, "car": car, "boat": boat}
 
 
 async def _assets(client, h, text):
@@ -175,6 +177,8 @@ async def test_assets_by_serial_imei_vin(client, assets):
         assert await _assets(client, h, typed) == {a["phone"]}, typed
     for typed in ("1FTBW2CM5HKA12345", "hka12345", "car0001"):
         assert await _assets(client, h, typed) == {a["car"]}, typed
+    for typed in ("BWC12345H506", "bwc12345h506", "BWC-12345-H506", "12345h506"):
+        assert await _assets(client, h, typed) == {a["boat"]}, typed
 
 
 @pytest.mark.asyncio
@@ -192,7 +196,7 @@ async def test_assets_by_owner_name(client, assets):
     for typed in ("jane", "o'neill", "O'Neill Jane"):
         assert await _assets(client, h, typed) == {a["phone"]}, typed
     for typed in ("smith", "smith john", "john smith"):
-        assert await _assets(client, h, typed) == {a["car"]}, typed
+        assert await _assets(client, h, typed) == {a["car"], a["boat"]}, typed
     assert await _assets(client, h, "john iphone") == set()
 
 
