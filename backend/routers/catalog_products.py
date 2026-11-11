@@ -16,7 +16,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, UploadFile, File
 from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import func, or_, select
+from sqlalchemy import func, select
 from sqlalchemy.orm import defer
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -32,7 +32,6 @@ from backend.services.money import MAX_MONEY, q2
 from backend.services.owned import get_owned_or_404, require_unique_name
 from backend.services.redact import can_see_costs, drop_cost_fields
 from backend.services import valuation
-from backend.core.likes import contains as _contains
 from backend.core.spreadsheet import (
     MAX_IMPORT_ROWS, MAX_XLSX_BYTES, open_xlsx, safe_row, too_many_rows, unguard_cell,
 )
@@ -275,9 +274,8 @@ async def list_products(search: Optional[str] = None, category_id: Optional[str]
     q = select(Part).where(Part.org_id == current.org_id, Part.active == True)  # noqa: E712
     if not include_variants:
         q = q.where(Part.parent_id.is_(None))  # base products only
-    if search:
-        q = q.where(or_(*(_contains(c, search) for c in (Part.name, Part.sku, Part.barcode, Part.code, Part.mpn)),
-                        Part.id.in_(product_codes.barcode_part_ids(current.org_id, search.strip()))))   # ii144a
+    if search and search.strip():
+        q = q.where(product_codes.list_search(current.org_id, search))   # + extra barcodes (ii144a)
     if category_id:
         q = q.where(Part.category_id == category_id)
     wh_location_id = None

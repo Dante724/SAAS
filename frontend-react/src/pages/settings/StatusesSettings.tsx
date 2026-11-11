@@ -1,18 +1,12 @@
 import { useEffect, useRef, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
+import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import Switch from "../../components/Switch";
 import { api } from "../../api/client";
 import { confirmDialog, selectDialog } from "../../lib/dialog";
 import { CHANNEL_LABEL, cellRules, channelPhrase, firesOnStatus, firingLabel, statusEvent, toggleCell, withOverrides, type NotifRule } from "../../lib/notifRules";
 import { clickable } from "../../lib/clickable";
-import SettingsPage from "../../components/SettingsPage";
-import Tabs from "../../components/Tabs";
-import Button, { IconButton } from "../../components/Button";
-import Drawer from "../../components/Drawer";
-import Section, { sectionCard } from "../../components/Section";
-import { Badge } from "../../components/Card";
-import { Field, Input, Select } from "../../components/Field";
-import { SettingRow } from "../../components/SettingRow";
 
 /* Settings › Statuses — the list (grouped by stage, live job counts, icon badges) and the edit panel
    (plain-English summary, example text, everyday switches up front, the rest under Advanced).
@@ -109,19 +103,23 @@ export function StatusList({ statuses, recordType, onRecordType, onOpen, onAdd, 
   const inMore = more.some(([rt]) => rt === recordType);
 
   return (
-    <SettingsPage wide title="Statuses" sub="The steps a job moves through. Drag to change the order, or open one to choose what it does."
-      actions={<Button variant="primary" icon={<M n="add" c="text-sm" />} onClick={onAdd}>Add status</Button>}>
-      <div className="flex flex-wrap items-center gap-2">
-        <Tabs look="segmented" label="Status list" value={recordType} onChange={onRecordType}
-          tabs={RECORD_TYPES.slice(0, 2).map(([id, label]) => ({ id, label }))} />
-        <Select value={inMore ? recordType : ""} onChange={(e) => e.target.value && onRecordType(e.target.value)} aria-label="More status lists"
-          className={`!w-auto ${inMore ? "!border-primary/40 text-ink-primary" : "text-ink-secondary"}`}>
-          <option value="">More lists…</option>
-          {more.map(([rt, label]) => <option key={rt} value={rt}>{label}</option>)}
-        </Select>
+    <div className="max-w-3xl space-y-4">
+      <div className="flex items-center gap-2 flex-wrap">
+        <button onClick={onAdd} className={buttonClass("primary", "md")}><M n="add" c="text-sm" />Add status</button>
+        <div className="inline-flex items-center bg-slate-100 rounded-xl p-1">
+          {RECORD_TYPES.slice(0, 2).map(([rt, label]) => (
+            <button key={rt} onClick={() => onRecordType(rt)}
+              className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${recordType === rt ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>{label}</button>
+          ))}
+          <TeklySelect value={inMore ? recordType : ""} onChange={(e) => e.target.value && onRecordType(e.target.value)} aria-label="More status lists"
+            className={`bg-transparent pl-3 pr-1 py-1.5 rounded-lg text-xs font-semibold cursor-pointer outline-none ${inMore ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary"}`}>
+            <option value="">More…</option>
+            {more.map(([rt, label]) => <option key={rt} value={rt}>{label}</option>)}
+          </TeklySelect>
+        </div>
       </div>
 
-      <div className={`${sectionCard} p-3`}>
+      <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-3">
         {counts && (
           <div className="px-2 pt-1 pb-3 border-b border-slate-100">
             <div className="flex gap-1 h-1.5">
@@ -129,13 +127,13 @@ export function StatusList({ statuses, recordType, onRecordType, onOpen, onAdd, 
                 <div key={k} className="rounded-full transition-all" style={{ flex: totalJobs ? Math.max(stageTotals[k], totalJobs * 0.04) : 1, background: STAGE_COLOR[k], opacity: stageTotals[k] ? 1 : 0.25 }} />
               ))}
             </div>
-            <div className="flex flex-wrap justify-between gap-x-3 mt-1.5 text-2xs text-ink-tertiary tabular-nums">
+            <div className="flex justify-between mt-1.5 text-[11px] text-ink-tertiary">
               <span>{stageTotals.arrived} just arrived</span><span>{stageTotals.working} in the shop</span><span>{stageTotals.ready} ready</span><span>{stageTotals.finished} finished in 30 days</span>
             </div>
           </div>
         )}
 
-        {statuses.length === 0 && <div className="p-5 text-xs text-ink-tertiary" role="status">Loading statuses…</div>}
+        {statuses.length === 0 && <div className="p-5 text-xs text-ink-tertiary">Loading statuses…</div>}
         {statuses.map((s, idx) => {
           const stage = STAGE_OF[s.status_group] || "working";
           const head = idx === 0 || (STAGE_OF[statuses[idx - 1].status_group] || "working") !== stage;
@@ -143,7 +141,7 @@ export function StatusList({ statuses, recordType, onRecordType, onOpen, onAdd, 
           return (
             <div key={s.id}>
               {head && (
-                <div className="flex items-center gap-1.5 px-3 pt-4 pb-1 text-2xs font-semibold text-ink-tertiary">
+                <div className="flex items-center gap-1.5 px-3 pt-4 pb-1 text-[11px] font-semibold text-ink-tertiary">
                   <M n={STAGES[stage].icon} c="text-sm" />{plainStages ? STAGES[stage].label : STAGES[stage].plain}
                 </div>
               )}
@@ -159,16 +157,16 @@ export function StatusList({ statuses, recordType, onRecordType, onOpen, onAdd, 
                     <button aria-label={`Move ${s.name} down`} disabled={idx === statuses.length - 1} onClick={() => onMove(idx, idx + 1)} className="text-ink-tertiary hover:text-primary disabled:opacity-20 leading-none"><M n="expand_more" c="text-sm" /></button>
                   </div>
                 </div>
-                <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: s.color || "#94a3b8", boxShadow: `0 0 0 3px #fff, 0 0 0 4px ${(s.color || "#94a3b8")}55` }} />
-                <span className="min-w-0 flex-1 flex items-baseline gap-2"><span className="text-sm font-medium text-ink-primary truncate">{s.name}</span>
-                {s.is_default && <span className="text-2xs text-ink-tertiary whitespace-nowrap max-sm:hidden">starts every job</span>}</span>
-                <span className="flex items-center gap-1.5 flex-shrink-0">
-                  {counts && <span className="text-2xs text-ink-tertiary tabular-nums mr-1 whitespace-nowrap">{terminal ? `${s.job_count || 0} in 30 days` : `${s.job_count || 0} ${s.job_count === 1 ? "job" : "jobs"}`}</span>}
+                <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: s.color || "#94a3b8", boxShadow: `0 0 0 3px rgb(var(--c-card)), 0 0 0 4px ${(s.color || "#94a3b8")}55` }} />
+                <span className="text-sm font-medium text-ink-primary truncate">{s.name}</span>
+                {s.is_default && <span className="text-[11px] text-ink-tertiary">starts every job</span>}
+                <span className="ml-auto flex items-center gap-1.5">
+                  {counts && <span className="text-[11px] text-ink-tertiary mr-1 whitespace-nowrap">{terminal ? `${s.job_count || 0} in 30 days` : `${s.job_count || 0} ${s.job_count === 1 ? "job" : "jobs"}`}</span>}
                   {badges(s, ownMessages(s)).map((b) => (
-                    <span key={b.icon} title={b.title} aria-label={b.title} className="w-6 h-6 rounded-md bg-slate-100 text-ink-secondary grid place-items-center max-sm:hidden"><M n={b.icon} c="text-[14px]" /></span>
+                    <span key={b.icon} title={b.title} aria-label={b.title} className="w-6 h-6 rounded-md bg-slate-100 text-ink-secondary grid place-items-center"><M n={b.icon} c="text-[14px]" /></span>
                   ))}
-                  <IconButton size="sm" label={`More actions for ${s.name}`} onClick={(e) => { e.stopPropagation(); setMenu(menu === s.id ? null : s.id); }}
-                    icon={<M n="more_horiz" c="text-base" />} className="sm:opacity-0 sm:group-hover:opacity-100 focus:opacity-100" />
+                  <button aria-label={`More actions for ${s.name}`} onClick={(e) => { e.stopPropagation(); setMenu(menu === s.id ? null : s.id); }}
+                    className="w-7 h-7 rounded-lg grid place-items-center text-ink-tertiary hover:bg-slate-100 hover:text-ink-primary opacity-0 group-hover:opacity-100 focus:opacity-100"><M n="more_horiz" c="text-base" /></button>
                 </span>
                 {menu === s.id && (
                   <div className="absolute right-2 top-11 z-20 w-40 bg-white rounded-xl border border-slate-200 shadow-clay-drawer py-1 text-xs" onClick={(e) => e.stopPropagation()}>
@@ -185,7 +183,7 @@ export function StatusList({ statuses, recordType, onRecordType, onOpen, onAdd, 
 
         {hasCounts(recordType) && statuses.length > 1 && <MovesPanel statuses={statuses} onFlash={onFlash} />}
       </div>
-    </SettingsPage>
+    </div>
   );
 }
 
@@ -226,7 +224,7 @@ function MovesPanel({ statuses, onFlash }: { statuses: any[]; onFlash: (m: strin
           <span className="block text-sm text-ink-primary">Which status can follow which</span>
           <span className="block text-xs text-ink-tertiary">{limited ? `${limited} ${limited === 1 ? "status has" : "statuses have"} limits. The rest can move anywhere.` : "Jobs can move to any status"}</span>
         </span>
-        <span className="ml-auto text-xs font-semibold text-primary whitespace-nowrap">{open ? "Done" : "Set rules"}</span>
+        <span className="ml-auto text-xs font-semibold text-primary">{open ? "Done" : "Set rules"}</span>
       </button>
       {open && (
         <div className="px-3 pb-3">
@@ -246,15 +244,15 @@ function MovesPanel({ statuses, onFlash }: { statuses: any[]; onFlash: (m: strin
                     {!isEdit && (mine.length === 0
                       ? <span className="text-xs text-ink-tertiary">Any status</span>
                       : <span className="flex items-center gap-1.5 flex-wrap">
-                          <span className="text-2xs text-ink-tertiary">Only</span>
+                          <span className="text-[11px] text-ink-tertiary">Only</span>
                           {mine.map((tid) => { const t = statuses.find((x) => x.id === tid); return t && (
                             <span key={tid} className="inline-flex items-center gap-1.5 px-2 py-0.5 rounded-full bg-white border border-slate-200 text-xs text-ink-primary"><Dot c={t.color} />{t.name}</span>
                           ); })}
                         </span>)}
-                    {isEdit && <span className="text-2xs text-ink-tertiary">{mine.length ? "Only the ones you pick" : "Pick where a job can go next"}</span>}
+                    {isEdit && <span className="text-[11px] text-ink-tertiary">{mine.length ? "Only the ones you pick" : "Pick where a job can go next"}</span>}
                     <span className="ml-auto flex items-center gap-2">
-                      {isEdit && mine.length > 0 && <Button variant="ghost" size="sm" onClick={() => reset(fr.id)} disabled={busy}>Allow any</Button>}
-                      <Button variant="link" onClick={() => setEditing(isEdit ? null : fr.id)}>{isEdit ? "Done" : mine.length ? "Change" : "Limit"}</Button>
+                      {isEdit && mine.length > 0 && <button onClick={() => reset(fr.id)} disabled={busy} className="text-[11px] text-ink-secondary hover:text-ink-primary">Allow any</button>}
+                      <button onClick={() => setEditing(isEdit ? null : fr.id)} className="text-xs font-semibold text-primary">{isEdit ? "Done" : mine.length ? "Change" : "Limit"}</button>
                     </span>
                   </div>
                   {isEdit && (
@@ -264,7 +262,7 @@ function MovesPanel({ statuses, onFlash }: { statuses: any[]; onFlash: (m: strin
                         return (
                           <button key={t.id} onClick={() => toggle(fr.id, t.id)} disabled={busy} aria-pressed={on}
                             className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border transition-colors disabled:opacity-60 ${on ? "bg-white border-primary/40 text-ink-primary shadow-sm" : "border-dashed border-slate-300 text-ink-tertiary hover:border-slate-400 hover:text-ink-secondary"}`}>
-                            {on ? <M n="check" c="text-[12px] text-primary" /> : <Dot c={t.color} />}{t.name}
+                            {on ? <M n="check" c="text-xs text-primary" /> : <Dot c={t.color} />}{t.name}
                           </button>
                         );
                       })}
@@ -300,10 +298,13 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
   useEffect(() => { api.get<any>("/settings/warehouses").then((r) => setWarehouses(r.items || r || [])).catch(() => setWarehouses([])); }, []);
   const [rules, setRules] = useState<NotifRule[] | null>(null);
   const [providers, setProviders] = useState<Record<string, string>>({});
-  // Customer-message switches are changed here and saved with the status (the drawer's one Save).
-  const [msgFlip, setMsgFlip] = useState<string[]>([]);
+  const [msgBusy, setMsgBusy] = useState<string | null>(null);
   const loadRules = () => api.get<any>("/notifications/rules").then((r) => setRules(r.items || [])).catch(() => setRules([]));
   useEffect(() => { loadRules(); api.get<any>("/notifications/providers").then((r) => setProviders(r.channels || {})).catch(() => setProviders({})); }, []);
+  useEffect(() => {
+    const onKey = (e: KeyboardEvent) => { if (e.key === "Escape") onClose(); };
+    window.addEventListener("keydown", onKey); return () => window.removeEventListener("keydown", onKey);
+  }, [onClose]);
   const set = (k: string, v: any) => setF((s: any) => ({ ...s, [k]: v }));
   const terminal = f.status_group === "closed" || f.status_group === "dropped";
   const jobs = hasCounts(rt);
@@ -321,14 +322,6 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
       record_type: rt, allow_messages: f.allow_messages ?? null,
     };
     try {
-      // The message switches first (they belong to this status's saved stage), then the status.
-      if (key && msgFlip.length) {
-        let now = rules || [];
-        for (const ch of msgFlip) {
-          await toggleCell(api, now, rt, ownEvent, key, ch);
-          now = await api.get<any>("/notifications/rules").then((r) => r.items || []);
-        }
-      }
       if (isNew) await api.post("/statuses", body); else await api.put(`/statuses/${status.id}`, body);
       onSaved(isNew ? "Status added" : "Status saved");
     } catch (e: any) { setErr(e?.message || "Couldn't save"); setBusy(false); }
@@ -342,7 +335,11 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
   const fires = rules ? withOverrides([...firesOnStatus(rules, rt, formEvent).filter((x) => !x.own),
     ...(key ? firesOnStatus(rules, rt, ownEvent, key).filter((x) => x.own) : [])]) : [];
   const msgChannels = ["sms", "email", ...(providers.whatsapp === "live" || (rules || []).some((r) => r.channel === "whatsapp") ? ["whatsapp"] : [])];
-  const flipMessage = (ch: string) => setMsgFlip((l) => (l.includes(ch) ? l.filter((x) => x !== ch) : [...l, ch]));
+  async function flipMessage(ch: string) {
+    if (!rules || !key || msgBusy) return; setMsgBusy(ch);
+    try { await toggleCell(api, rules, rt, ownEvent, key, ch); await loadRules(); }
+    catch (e: any) { setErr(e?.message || "Couldn't change that message"); } finally { setMsgBusy(null); }
+  }
   const openNotifications = () => { if (onOpenNotifications) onOpenNotifications(); else window.location.assign("/settings?section=notifications"); };
 
   // Plain-English summary of everything this status does.
@@ -365,160 +362,184 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
     : terminal ? " Customers can still message for a few days." : " Customers can message the shop.";
 
   const order = [...statuses.filter((s) => s.id !== status?.id)];
+  const lbl = "block text-sm font-medium text-ink-primary mb-1.5";
   // A plain function (not a component), so the rows aren't remounted on every keystroke.
-  const switchRow = (k: string, label: string, hint?: string) => (
-    <SettingRow key={k} label={label} help={hint}><Switch label={label} on={!!f[k]} onChange={(v) => set(k, v)} /></SettingRow>
+  const switchRow = (k: string, icon: string, label: string, hint?: string) => (
+    <div key={k} className="flex items-center gap-3 py-2.5 border-t border-slate-100 first:border-0">
+      <span className="w-8 h-8 rounded-lg bg-slate-100 text-ink-secondary grid place-items-center flex-shrink-0"><M n={icon} c="text-base" /></span>
+      <span className="min-w-0"><span className="block text-sm text-ink-primary">{label}</span>{hint && <span className="block text-xs text-ink-tertiary">{hint}</span>}</span>
+      <span className="ml-auto"><Switch label={label} on={!!f[k]} onChange={(v) => set(k, v)} /></span>
+    </div>
   );
-  const MSG_MODES: { id: "auto" | "allow" | "block"; label: string; v: boolean | null }[] = [{ id: "auto", label: "Automatic", v: null }, { id: "allow", label: "Allow", v: true }, { id: "block", label: "Block", v: false }];
-  const msgMode = MSG_MODES.find((m) => m.v === (f.allow_messages ?? null))!.id;
+  const Pill = ({ k, label }: { k: string; label: string }) => (
+    <button type="button" onClick={() => set(k, !f[k])} aria-pressed={!!f[k]}
+      className={`text-xs px-3 py-1.5 rounded-full font-semibold border transition-colors ${f[k] ? "bg-primary/10 text-primary border-primary/30" : "border-slate-200 text-ink-secondary hover:border-slate-300"}`}>{f[k] && <M n="check" c="text-[12px] mr-0.5" />}{label}</button>
+  );
 
   return (
-    <Drawer size="sm" label={isNew ? "New status" : `Edit ${f.name}`} onClose={onClose}
-      title={<span className="inline-flex items-center gap-2.5 min-w-0"><span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: f.color }} /><span className="truncate">{isNew ? "New status" : (f.name?.trim() || "Status")}</span></span>}
-      sub={isNew ? "A new step in your job flow" : undefined}
-      footer={<>
-        <Button variant="primary" onClick={save} busy={busy}>{busy ? "Saving…" : isNew ? "Add status" : "Save"}</Button>
-        <Button onClick={onClose}>Cancel</Button>
-      </>}>
-      {err && <div role="alert" className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
-
-      <Field label="Name" htmlFor="status-name">
-        <Input id="status-name" value={f.name || ""} onChange={(e) => set("name", e.target.value)} placeholder="Status name, like Ready for pickup" autoFocus={isNew} />
-      </Field>
-
-      <div>
-        <div className="block text-xs font-semibold text-ink-secondary mb-1.5">Colour</div>
-        <div className="flex items-center gap-2 flex-wrap">
-          {SWATCHES.map((c) => (
-            <button key={c} type="button" onClick={() => set("color", c)} aria-label={`Colour ${c}`} aria-pressed={f.color === c}
-              className={`w-7 h-7 rounded-full flex-shrink-0 grid place-items-center transition-transform hover:scale-110 ${f.color === c ? "ring-2 ring-offset-2 ring-slate-400" : ""}`} style={{ background: c }}>
-              {f.color === c && <M n="check" c="text-2xs text-white" />}
-            </button>
-          ))}
-          <label className="w-7 h-7 rounded-full border border-dashed border-slate-300 grid place-items-center cursor-pointer text-ink-tertiary hover:border-primary hover:text-primary" title="Custom colour">
-            <M n="colorize" c="text-xs" /><input type="color" value={f.color || "#888888"} onChange={(e) => set("color", e.target.value)} className="sr-only" aria-label="Custom colour" />
-          </label>
-          {order.length > 0 && (
-            <span className="ml-auto flex items-center gap-1" title="Your other statuses, for comparison">
-              {order.slice(0, 8).map((s) => <span key={s.id} className="w-2.5 h-2.5 rounded-full" style={{ background: s.color }} />)}
-            </span>
-          )}
+    <div className="fixed inset-0 z-50 flex justify-end">
+      <div className="absolute inset-0 bg-ink-primary/30" aria-hidden="true" onClick={onClose} />
+      <div role="dialog" aria-label={isNew ? "New status" : `Edit ${f.name}`} className="relative w-[460px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.28s_cubic-bezier(.16,1,.3,1)]">
+        <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
+        <div className="flex items-center gap-3 px-5 pt-5 pb-3">
+          <span className="w-4 h-4 rounded-full flex-shrink-0" style={{ background: f.color, boxShadow: `0 0 0 3px #fff, 0 0 0 5px ${f.color}55` }} />
+          <input value={f.name || ""} onChange={(e) => set("name", e.target.value)} placeholder="Status name, like Ready for pickup" autoFocus={isNew}
+            aria-label="Status name" className="flex-1 min-w-0 text-lg font-semibold text-ink-primary bg-transparent outline-none placeholder:text-ink-tertiary placeholder:font-normal border-b border-transparent focus:border-slate-200 py-0.5" />
+          <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-100 grid place-items-center text-ink-tertiary flex-shrink-0"><M n="close" c="text-base" /></button>
         </div>
-      </div>
 
-      <Field label="Stage" htmlFor="status-stage">
-        <Select id="status-stage" value={f.status_group} onChange={(e) => set("status_group", e.target.value)}>
-          {GROUP_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-        </Select>
-      </Field>
+        <div className="flex-1 overflow-y-auto px-5 pb-5 space-y-5">
+          {err && <div className="rounded-lg bg-rose-50 border border-rose-200 text-rose-700 text-xs px-3 py-2">{err}</div>}
 
-      <div className="rounded-xl bg-slate-50 border border-slate-100 px-4 py-3">
-        <div className="text-xs font-medium text-ink-tertiary mb-1">What happens</div>
-        <p className="text-sm text-ink-primary leading-relaxed">{summary}</p>
-      </div>
-
-      {jobs && fires.length > 0 && (
-        <div className="flex items-start gap-2.5">
-          <span className="w-8 h-8 rounded-full bg-slate-100 grid place-items-center flex-shrink-0 text-ink-secondary"><M n="smartphone" c="text-sm" /></span>
-          <div>
-            <div className="bg-primary/10 text-ink-primary rounded-2xl rounded-bl-md px-3.5 py-2.5 text-sm leading-snug">Hi Sam, your iPhone 14 is now: <span className="font-semibold">{f.name?.trim() || "…"}</span>. Track it here: shop.link/t/8F2K</div>
-            <div className="text-2xs text-ink-tertiary mt-1">Example. The exact wording is set in Notifications.</div>
-          </div>
-        </div>
-      )}
-
-      <Section title="When a job moves here">
-        <div className="divide-y divide-slate-100">
-          {jobs && (
-            <div className="py-4 first:pt-0 last:pb-0" data-testid="status-messages">
-              <div className="flex items-start gap-3">
-                <span className="min-w-0 flex-1">
-                  <span className="block text-sm font-medium text-ink-primary">Message the customer</span>
-                  <span className="block text-xs text-ink-tertiary">
-                    {rules === null ? "Checking…" : fires.length ? fires.map((x) => firingLabel(x, rt)).join(", ") : "Nothing is sent"}
-                  </span>
-                </span>
-                <Button variant="link" onClick={openNotifications}>Edit message</Button>
-              </div>
-              <div className="mt-3 divide-y divide-slate-100">
-                {msgChannels.map((ch) => {
-                  const saved = !!rules && !!key && cellRules(rules, rt, ownEvent, key, ch).some((r) => r.active);
-                  const on = msgFlip.includes(ch) ? !saved : saved;
-                  const cov = !saved && fires.some((x) => !x.own && x.channel === ch);
-                  const label = CHANNEL_LABEL[ch] || ch;
-                  return (
-                    <SettingRow key={ch} label={label} help={cov ? "Already sent for every status. Change it in Notifications." : undefined}>
-                      <Switch label={`${label} when a job moves here`} on={on || cov} disabled={!key || !rules || cov} onChange={() => flipMessage(ch)} />
-                    </SettingRow>
-                  );
-                })}
-              </div>
-              {!key && <p className="text-xs text-ink-tertiary mt-2">Save the status first to give it its own message.</p>}
-            </div>
-          )}
-          {switchRow("triggers_invoice", "Create an invoice")}
-          {switchRow("triggers_payment", "Ask for payment")}
-          <SettingRow label="Alert if a job is stuck here" htmlFor={customLimit ? "status-limit-min" : "status-limit"}>
-            {customLimit ? (
-              <span className="flex items-center gap-1.5">
-                <Input id="status-limit-min" type="number" min={1} value={f.time_limit_min ?? ""} onChange={(e) => set("time_limit_min", e.target.value)} aria-label="Minutes" className="!w-24 text-right tabular-nums" />
-                <span className="text-xs text-ink-secondary">min</span>
+          <div className="flex items-center gap-2 flex-wrap">
+            {SWATCHES.map((c) => (
+              <button key={c} type="button" onClick={() => set("color", c)} aria-label={`Colour ${c}`}
+                className={`w-6 h-6 rounded-full flex-shrink-0 grid place-items-center transition-transform hover:scale-110 ${f.color === c ? "ring-2 ring-offset-2 ring-slate-400" : ""}`} style={{ background: c }}>
+                {f.color === c && <M n="check" c="text-[11px] text-white" />}
+              </button>
+            ))}
+            <label className="w-6 h-6 rounded-full border border-dashed border-slate-300 grid place-items-center cursor-pointer text-ink-tertiary hover:border-primary hover:text-primary" title="Custom colour">
+              <M n="colorize" c="text-xs" /><input type="color" value={f.color || "#888888"} onChange={(e) => set("color", e.target.value)} className="sr-only" />
+            </label>
+            {order.length > 0 && (
+              <span className="ml-auto flex items-center gap-1" title="Your other statuses, for comparison">
+                {order.slice(0, 8).map((s) => <span key={s.id} className="w-2.5 h-2.5 rounded-full" style={{ background: s.color }} />)}
               </span>
-            ) : (
-              <Select id="status-limit" value={f.time_limit_min ?? ""} aria-label="Alert after" className="!w-36"
-                onChange={(e) => { if (e.target.value === "custom") { setCustomLimit(true); return; } set("time_limit_min", e.target.value ? Number(e.target.value) : null); }}>
-                {LIMITS.map(([v, l]) => <option key={l} value={v ?? ""}>{l}</option>)}
-                <option value="custom">Custom…</option>
-              </Select>
             )}
-          </SettingRow>
-          {rt === "estimate" && <>
-            {switchRow("shows_accept", "Let the customer accept or decline", "Shows Accept / Decline on their estimate page")}
-            {switchRow("converts_to_order", "Turn into a work order")}
-          </>}
-        </div>
-      </Section>
-
-      {jobs && (
-        <div>
-          <div className="block text-xs font-semibold text-ink-secondary mb-1.5">Customer messages</div>
-          <Tabs look="segmented" label="Customer messages" value={msgMode} onChange={(id) => set("allow_messages", MSG_MODES.find((m) => m.id === id)!.v)}
-            tabs={MSG_MODES.map(({ id, label }) => ({ id, label }))} />
-          <p className="text-xs text-ink-tertiary mt-1.5">
-            {f.allow_messages === true ? "Customers can always message the shop from their tracking link."
-              : f.allow_messages === false ? "The message box is hidden. Customers see \"Start a new request\" instead."
-              : terminal ? "Open for a few days after the job finishes (Public pages), then \"Start a new request\"."
-              : "Customers can message the shop while the job is here."}
-          </p>
-        </div>
-      )}
-
-      <div className="rounded-2xl border border-slate-200 bg-white">
-        <button type="button" onClick={() => setAdv((v) => !v)} aria-expanded={adv} className="w-full flex items-center gap-2 px-4 py-3 text-sm text-ink-secondary hover:text-ink-primary">
-          <M n="tune" c="text-base" />Advanced
-          {advCount > 0 && <Badge tone="info">{advCount} on</Badge>}
-          <M n={adv ? "expand_less" : "expand_more"} c="ml-auto text-base" />
-        </button>
-        {adv && (
-          <div className="px-4 pb-4">
-            <div className="divide-y divide-slate-100">
-              {switchRow("is_default", "Start every new job here")}
-              {switchRow("locks_edits", "Lock the job", "No edits once a job is here")}
-              <SettingRow label="Move the item to" htmlFor="status-move">
-                <Select id="status-move" value={f.moves_asset_to || ""} onChange={(e) => set("moves_asset_to", e.target.value)} className="!w-40">
-                  <option value="">Don't move</option>
-                  {warehouses.filter((w) => w.kind !== "product").map((w) => <option key={w.id} value={w.name}>{w.name}</option>)}
-                  {f.moves_asset_to && !warehouses.some((w) => w.name === f.moves_asset_to) && <option value={f.moves_asset_to}>{f.moves_asset_to}</option>}
-                </Select>
-              </SettingRow>
-              {switchRow("require_comment", "Needs a comment first", "Before a job can move here")}
-              {switchRow("require_payment", "Needs full payment first")}
-              {switchRow("require_checklist", "Needs the checklist done first")}
-            </div>
-            {!isNew && <div className="mt-4 text-2xs text-ink-tertiary">Code used in reports and integrations: <span className="font-mono text-ink-secondary">{status.key}</span></div>}
           </div>
-        )}
+
+          <div>
+            <label className={lbl}>Stage</label>
+            <TeklySelect value={f.status_group} onChange={(e) => set("status_group", e.target.value)} className="glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary">
+              {GROUP_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
+            </TeklySelect>
+          </div>
+
+          <div className="rounded-xl bg-slate-50 border border-slate-100 px-4 py-3">
+            <div className="text-xs font-medium text-ink-tertiary mb-1">What happens</div>
+            <p className="text-sm text-ink-primary leading-relaxed">{summary}</p>
+          </div>
+
+          {jobs && fires.length > 0 && (
+            <div className="flex items-start gap-2.5">
+              <span className="w-8 h-8 rounded-full bg-slate-100 grid place-items-center flex-shrink-0 text-ink-secondary"><M n="smartphone" c="text-sm" /></span>
+              <div>
+                <div className="bg-primary/10 text-ink-primary rounded-2xl rounded-bl-md px-3.5 py-2.5 text-[13px] leading-snug">Hi Sam, your iPhone 14 is now: <span className="font-semibold">{f.name?.trim() || "…"}</span>. Track it here: shop.link/t/8F2K</div>
+                <div className="text-[11px] text-ink-tertiary mt-1">Example. The exact wording is set in Notifications.</div>
+              </div>
+            </div>
+          )}
+
+          <div>
+            <div className="text-sm font-medium text-ink-primary mb-1">When a job moves here</div>
+            {jobs && (
+              <div className="py-2.5" data-testid="status-messages">
+                <div className="flex items-start gap-3">
+                  <span className="w-8 h-8 rounded-lg bg-slate-100 text-ink-secondary grid place-items-center flex-shrink-0"><M n="chat" c="text-base" /></span>
+                  <span className="min-w-0">
+                    <span className="block text-sm text-ink-primary">Message the customer</span>
+                    <span className="block text-xs text-ink-tertiary">
+                      {rules === null ? "Checking…" : fires.length ? fires.map((x) => firingLabel(x, rt)).join(", ") : "Nothing is sent"}
+                    </span>
+                  </span>
+                  <button type="button" onClick={openNotifications} className="ml-auto text-xs font-semibold text-primary whitespace-nowrap">Edit message</button>
+                </div>
+                <div className="flex items-center gap-4 mt-2 pl-11 flex-wrap">
+                  {msgChannels.map((ch) => {
+                    const on = !!rules && !!key && cellRules(rules, rt, ownEvent, key, ch).some((r) => r.active);
+                    const cov = !on && fires.some((x) => !x.own && x.channel === ch);
+                    const label = CHANNEL_LABEL[ch] || ch;
+                    return (
+                      <span key={ch} className="flex items-center gap-1.5" title={cov ? "Already sent to every status. Change it in Notifications." : undefined}>
+                        <Switch size="sm" label={`${label} when a job moves here`} on={on || cov}
+                          disabled={!key || !rules || cov || msgBusy === ch} onChange={() => flipMessage(ch)} />
+                        <span className="text-xs text-ink-secondary">{label}</span>
+                      </span>
+                    );
+                  })}
+                </div>
+                <p className="text-xs text-ink-tertiary mt-1.5 pl-11">{key ? "Switches save right away." : "Save the status first to give it its own message."}</p>
+              </div>
+            )}
+            {switchRow("triggers_invoice", "receipt_long", "Create an invoice")}
+            {switchRow("triggers_payment", "payments", "Ask for payment")}
+            <div className="flex items-center gap-3 py-2.5 border-t border-slate-100">
+              <span className="w-8 h-8 rounded-lg bg-slate-100 text-ink-secondary grid place-items-center flex-shrink-0"><M n="timer" c="text-base" /></span>
+              <span className="text-sm text-ink-primary">Alert if a job is stuck here</span>
+              {customLimit ? (
+                <span className="ml-auto flex items-center gap-1.5">
+                  <input type="number" min={1} value={f.time_limit_min ?? ""} onChange={(e) => set("time_limit_min", e.target.value)} aria-label="Minutes"
+                    className="glass-input w-20 py-1.5 px-2 text-xs text-right rounded-lg" /><span className="text-xs text-ink-secondary">min</span>
+                </span>
+              ) : (
+                <TeklySelect value={f.time_limit_min ?? ""} aria-label="Alert after"
+                  onChange={(e) => { if (e.target.value === "custom") { setCustomLimit(true); return; } set("time_limit_min", e.target.value ? Number(e.target.value) : null); }}
+                  className="ml-auto glass-input py-1.5 px-2 text-xs rounded-lg">
+                  {LIMITS.map(([v, l]) => <option key={l} value={v ?? ""}>{l}</option>)}
+                  <option value="custom">Custom…</option>
+                </TeklySelect>
+              )}
+            </div>
+            {rt === "estimate" && <>
+              {switchRow("shows_accept", "verified", "Let the customer accept or decline", "Shows Accept / Decline on their estimate page")}
+              {switchRow("converts_to_order", "autorenew", "Turn into a work order")}
+            </>}
+          </div>
+
+          {jobs && (
+            <div>
+              <div className="text-sm font-medium text-ink-primary mb-1.5">Customer messages</div>
+              <div className="inline-flex rounded-xl bg-slate-100 p-1">
+                {([[null, "Automatic"], [true, "Allow"], [false, "Block"]] as [boolean | null, string][]).map(([v, l]) => (
+                  <button key={l} type="button" onClick={() => set("allow_messages", v)} aria-pressed={(f.allow_messages ?? null) === v}
+                    className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${(f.allow_messages ?? null) === v ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>{l}</button>
+                ))}
+              </div>
+              <p className="text-xs text-ink-tertiary mt-1.5">
+                {f.allow_messages === true ? "Customers can always message the shop from their tracking link."
+                  : f.allow_messages === false ? "The message box is hidden. Customers see \"Start a new request\" instead."
+                  : terminal ? "Open for a few days after the job finishes (Public pages), then \"Start a new request\"."
+                  : "Customers can message the shop while the job is here."}
+              </p>
+            </div>
+          )}
+
+          <div className="rounded-xl border border-slate-200">
+            <button type="button" onClick={() => setAdv((v) => !v)} aria-expanded={adv} className="w-full flex items-center gap-2 px-4 py-3 text-sm text-ink-secondary hover:text-ink-primary">
+              <M n="tune" c="text-base" />Advanced
+              {advCount > 0 && <span className="text-[11px] px-1.5 py-0.5 rounded-md bg-primary/10 text-primary font-semibold">{advCount} on</span>}
+              <M n={adv ? "expand_less" : "expand_more"} c="ml-auto text-base" />
+            </button>
+            {adv && (
+              <div className="px-4 pb-4 space-y-4">
+                <div>
+                  {switchRow("is_default", "flag", "Start every new job here")}
+                  {switchRow("locks_edits", "lock", "Lock the job", "No edits once a job is here")}
+                  <div className="flex items-center gap-3 py-2.5 border-t border-slate-100">
+                    <span className="w-8 h-8 rounded-lg bg-slate-100 text-ink-secondary grid place-items-center flex-shrink-0"><M n="inventory_2" c="text-base" /></span>
+                    <span className="text-sm text-ink-primary">Move the item to</span>
+                    <TeklySelect value={f.moves_asset_to || ""} onChange={(e) => set("moves_asset_to", e.target.value)} className="ml-auto glass-input py-1.5 px-2 text-xs rounded-lg w-40">
+                      <option value="">Don't move</option>
+                      {warehouses.filter((w) => w.kind !== "product").map((w) => <option key={w.id} value={w.name}>{w.name}</option>)}
+                      {f.moves_asset_to && !warehouses.some((w) => w.name === f.moves_asset_to) && <option value={f.moves_asset_to}>{f.moves_asset_to}</option>}
+                    </TeklySelect>
+                  </div>
+                </div>
+                <div>
+                  <div className={lbl}>Needs before a job can move here</div>
+                  <div className="flex gap-2 flex-wrap"><Pill k="require_comment" label="A comment" /><Pill k="require_payment" label="Full payment" /><Pill k="require_checklist" label="Checklist done" /></div>
+                </div>
+                {!isNew && <div className="text-[11px] text-ink-tertiary">Code used in reports and integrations: <span className="font-mono text-ink-secondary">{status.key}</span></div>}
+              </div>
+            )}
+          </div>
+        </div>
+
+        <div className="px-5 py-4 border-t border-slate-100 flex items-center gap-2">
+          <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : isNew ? "Add status" : "Save"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
+        </div>
       </div>
-    </Drawer>
+    </div>
   );
 }

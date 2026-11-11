@@ -14,13 +14,29 @@ from backend.models import Part, StockLevel, StockMovement
 from backend.services.money import q2, q4
 
 
+async def _lock_part(db, part: Part) -> None:
+    """Row-lock `part` and reload it, so a moving-average update reads the average and on-hand
+    another receipt just committed (two concurrent receipts otherwise each weight against the old
+    average and the later write wins). Lock order: the part, then its stock rows."""
+    await db.execute(select(Part).where(Part.id == part.id)
+                     .with_for_update().execution_options(populate_existing=True))
+
+
+async def lock_parts(db, part_ids) -> None:
+    """Row-lock several parts in id order before a multi-line receipt or recost, so two documents
+    holding the same products in a different line order can't deadlock on `_lock_part`."""
+    ids = sorted({p for p in part_ids if p})
+    if ids:
+        await db.execute(select(Part.id).where(Part.id.in_(ids)).order_by(Part.id).with_for_update())
+
+
 async def apply_receipt_line(
     db, *, org_id: str, part: Part, location_id: str, qty: float, unit_cost: float,
     created_by_id: str | None = None, ref_type: str = "posting", ref_id: str | None = None,
     bin_id: str | None = None, serials: list[str] | None = None,
     create_batch: bool = True, set_last_cost: bool = False, expiry_date=None, lot: str | None = None,
     supplier_id: str | None = None, movement_type: str = "receive", warehouse_id: str | None = None,
-    cost_known: bool = False,
+    cost_known: bool = False, out: dict | None = None,
 ) -> float:
     """Post `qty` of `part` into `location_id` at `unit_cost`. Returns the unit cost used.
 
@@ -35,6 +51,8 @@ async def apply_receipt_line(
       its supplier and supplier-warranty end date (the product's supplier warranty from today).
     - `movement_type` names the audit row (a manual count-in is an `adjust`, not a `receive`);
       `warehouse_id` tags the movement and the cost layer (default: the stock row's warehouse).
+    - `out`, when given, gets `out["batch"]`: the cost layer this receipt created (None without
+      one) — a caller that answers with its id must not go looking for "the newest layer".
     """
     from backend.services import stock_rows
     if bin_id:
@@ -47,6 +65,7 @@ async def apply_receipt_line(
     # supplied — a zero-cost line must not drag the average to zero — unless the caller says 0 is
     # the real cost (`cost_known`: a free PO line, opening stock entered at 0).
     if unit_cost or cost_known:
+        await _lock_part(db, part)
         on_hand = (await db.execute(select(func.coalesce(func.sum(StockLevel.qty_available), 0))
             .where(StockLevel.part_id == part.id))).scalar() or 0
         old_avg = part.avg_cost or part.cost_price or 0
@@ -67,6 +86,8 @@ async def apply_receipt_line(
                          warehouse_id=warehouse_id,
                          created_by_id=created_by_id, ref_type=ref_type, ref_id=ref_id))
 
+    if out is not None:
+        out["batch"] = None
     if create_batch:
         from backend.models import SerializedItem, StockItemBatch
         batch = StockItemBatch(org_id=org_id, part_id=part.id, location_id=location_id,
@@ -76,12 +97,16 @@ async def apply_receipt_line(
                                lot_number=(lot or "").strip()[:40] or None)
         db.add(batch)
         await db.flush()
-        from datetime import date, timedelta
+        if out is not None:
+            out["batch"] = batch
+        from datetime import timedelta
 
         from backend.models import _uuid
         from backend.services import serial_log
-        until = (date.today() + timedelta(days=int(part.supplier_warranty_days))
-                 if part.supplier_warranty_days else None)
+        from backend.services.dates import shop_today
+        # The warranty runs from the day the shop received it, on the receiving branch's clock.
+        until = (await shop_today(db, org_id, location_id) + timedelta(days=int(part.supplier_warranty_days))
+                 if part.supplier_warranty_days and serials else None)
         for sn in (serials or [])[:int(qty)]:
             unit = SerializedItem(id=_uuid(), org_id=org_id, part_id=part.id, serial_number=sn, bin_id=bin_id,
                                   location_id=location_id, batch_id=batch.id,
@@ -116,6 +141,7 @@ async def apply_cost_adjustment(
     if not add_cost_total:
         return {"applied": 0.0, "on_hand": 0.0, "expensed": 0.0}
     from backend.models import StockItemBatch
+    await _lock_part(db, part)
     rows = (await db.execute(select(StockLevel).where(StockLevel.part_id == part.id))).scalars().all()
     on_hand = float(sum(r.qty_available or 0 for r in rows))
     if on_hand <= 0:

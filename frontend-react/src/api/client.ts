@@ -41,8 +41,40 @@ let clientTag = "";
 export function setClientTag(tag: string) { clientTag = tag; }
 export function clientHeader(): Record<string, string> { return clientTag ? { "X-Tekly-Client": clientTag } : {}; }
 
-async function request<T>(method: string, path: string, body?: unknown, extra?: Record<string, string>): Promise<T> {
-  const res = await fetch(BASE + scoped(method, path), {
+// Council M13: a request that hangs (dead wifi, a captive portal, a server that stopped
+// answering) used to hang forever, and a dropped connection showed the browser's raw
+// "Failed to fetch". Every JSON call now gives up after REQUEST_TIMEOUT_MS, and both cases throw
+// an ApiError with status 0 and this sentence. A retry of a create or an add sent with postOnce
+// reuses its Idempotency-Key, so a request that did reach the server is not carried out twice.
+export const REQUEST_TIMEOUT_MS = 25_000;
+export const NO_CONNECTION = "No connection. Check your internet and try again.";
+
+export type RequestOptions = { signal?: AbortSignal };
+
+/** fetch with a timeout (0 = none) composed with the caller's signal. A network failure or the
+ *  timeout becomes ApiError(0, NO_CONNECTION); the caller's own abort is rethrown as it is. */
+async function send(url: string, init: RequestInit, timeoutMs: number, opts?: RequestOptions): Promise<Response> {
+  const caller = opts?.signal;
+  if (caller?.aborted) throw caller.reason ?? new DOMException("The request was cancelled", "AbortError");
+  const ctl = new AbortController();
+  const onCallerAbort = () => ctl.abort(caller!.reason);
+  caller?.addEventListener("abort", onCallerAbort, { once: true });
+  const timer = timeoutMs > 0
+    ? setTimeout(() => ctl.abort(new DOMException("The request timed out", "TimeoutError")), timeoutMs)
+    : undefined;
+  try {
+    return await fetch(url, { ...init, signal: ctl.signal });
+  } catch (e) {
+    if (caller?.aborted) throw e;   // cancelled on purpose (left the page): not a lost connection
+    throw new ApiError(0, NO_CONNECTION);
+  } finally {
+    if (timer !== undefined) clearTimeout(timer);
+    caller?.removeEventListener("abort", onCallerAbort);
+  }
+}
+
+async function request<T>(method: string, path: string, body?: unknown, extra?: Record<string, string>, opts?: RequestOptions): Promise<T> {
+  const res = await send(BASE + scoped(method, path), {
     method,
     credentials: "include", // send the existing session cookie
     headers: {
@@ -52,7 +84,7 @@ async function request<T>(method: string, path: string, body?: unknown, extra?: 
       ...(extra || {}),
     },
     body: body != null ? JSON.stringify(body) : undefined,
-  });
+  }, REQUEST_TIMEOUT_MS, opts);
   if (!res.ok) {
     // An expired or invalid session goes back to the sign-in page.
     if (res.status === 401) {
@@ -120,7 +152,7 @@ export class ApiError extends Error {
 // token, so window.open(url) would 401. Fetch with auth, then open the blob in a
 // new tab. Reused by WO, PO, invoice and payroll print buttons.
 export async function openAuthedDoc(path: string): Promise<void> {
-  const res = await fetch(BASE + path, { credentials: "include", headers: { ...authHeader(), ...clientHeader() } });
+  const res = await send(BASE + path, { credentials: "include", headers: { ...authHeader(), ...clientHeader() } }, 0);
   if (!res.ok) throw new ApiError(res.status, (await res.text().catch(() => "")) || res.statusText);
   const blob = await res.blob();
   // A blob URL runs with this app's origin, so only open types that can't execute script;
@@ -153,7 +185,7 @@ function downloadName(disposition: string | null): string {
 
 // Fetch a file with the session and save it (templates, exports) — never opened inline.
 export async function downloadAuthed(path: string): Promise<void> {
-  const res = await fetch(BASE + path, { credentials: "include", headers: { ...authHeader() } });
+  const res = await send(BASE + path, { credentials: "include", headers: { ...authHeader() } }, 0);
   if (!res.ok) throw new ApiError(res.status, (await res.text().catch(() => "")) || res.statusText);
   const url = URL.createObjectURL(new Blob([await res.blob()], { type: "application/octet-stream" }));
   const a = document.createElement("a");
@@ -165,7 +197,8 @@ export async function downloadAuthed(path: string): Promise<void> {
 
 // Multipart upload (no JSON Content-Type → browser sets the boundary). Reuses the session.
 async function postForm<T>(path: string, form: FormData): Promise<T> {
-  const res = await fetch(BASE + path, { method: "POST", credentials: "include", headers: { ...authHeader(), ...clientHeader() }, body: form });
+  // No timeout: a photo or a file on a slow line can take longer than a JSON call.
+  const res = await send(BASE + path, { method: "POST", credentials: "include", headers: { ...authHeader(), ...clientHeader() }, body: form }, 0);
   if (!res.ok) throw new ApiError(res.status, (await res.text().catch(() => "")) || res.statusText);
   if (res.status === 204) return undefined as T;
   return (await res.json()) as T;
@@ -178,7 +211,7 @@ export function idempotencyKey(): string {
 }
 
 export const api = {
-  get: <T>(p: string) => request<T>("GET", p),
+  get: <T>(p: string, opts?: RequestOptions) => request<T>("GET", p, undefined, undefined, opts),
   post: <T>(p: string, b?: unknown) => request<T>("POST", p, b),
   // Creates and payments a double click, a retry or a phone could send twice: the server runs one
   // request per Idempotency-Key and answers a repeat with the first result (backend/services/idempotency.py).

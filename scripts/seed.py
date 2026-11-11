@@ -297,7 +297,9 @@ async def seed_demo_data():
                 scheduled_for=_sched_when if status not in ("delivered",) else None,
                 duration_min=_sched_dur,
                 created_at=now() - timedelta(days=i * 2),
-                closed_at=now() - timedelta(days=1) if status == "delivered" else None,
+                # Done and Delivered are closed statuses: a closed job has a closed date, as when
+                # staff close it in the app (reports count a job from the day it was closed).
+                closed_at=now() - timedelta(days=1) if status in ("done", "delivered") else None,
             )
             db.add(o)
             # Real lines behind the totals, so invoices, receipts and reports show what was done.

@@ -136,23 +136,27 @@ async def trends(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_reports")),
 ):
-    start, _ = _window(days)
-    terminal = await _terminal_keys(db, current.org_id)
-    orders = (await db.execute(select(Order).where(
-        Order.org_id == current.org_id, Order.is_estimate == False,  # noqa: E712
-        Order.created_at >= start))).scalars().all()
+    """Daily created / closed / revenue. Created is by the day a job was opened; closed and revenue
+    by the day it was earned, ex tax, the same rule as every other report (services/revenue)."""
+    from backend.services import revenue as money_rules
+    start, end = _window(days)
     series: dict = {}
-    for o in orders:
-        d = o.created_at.date().isoformat() if o.created_at else None
-        if not d:
+    created = (await db.execute(select(Order.created_at).where(
+        Order.org_id == current.org_id, Order.is_estimate == False, Order.archived == False,  # noqa: E712
+        Order.created_at >= start))).scalars().all()
+    for at in created:
+        if at:
+            series.setdefault(at.date().isoformat(), {"created": 0, "closed": 0, "revenue": 0.0})["created"] += 1
+    rows = (await db.execute(await money_rules.earned_jobs_query(db, current.org_id, start, end, with_date=True))).all()
+    figs = await money_rules.job_figures(db, [o for o, _ in rows]) if rows else {}
+    for o, at in rows:
+        if not at:
             continue
-        s = series.setdefault(d, {"created": 0, "closed": 0, "revenue": 0.0})
-        s["created"] += 1
-        if o.status in terminal:
-            s["closed"] += 1
-            s["revenue"] += float(o.total or 0)
+        s = series.setdefault(at.date().isoformat(), {"created": 0, "closed": 0, "revenue": 0.0})
+        s["closed"] += 1
+        s["revenue"] += float((figs.get(o.id) or {}).get("revenue") or 0)
     return {"period_days": days,
-            "series": [{"date": d, **v} for d, v in sorted(series.items())]}
+            "series": [{"date": d, **{**v, "revenue": q2(v["revenue"])}} for d, v in sorted(series.items())]}
 
 
 # ── A8 Fleet / B2B accounts ──────────────────────────────────────────────────

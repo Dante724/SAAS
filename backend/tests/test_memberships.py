@@ -8,13 +8,23 @@ from sqlalchemy import select
 
 from backend.models import Membership, MembershipPeriod, Organisation
 from backend.services import memberships as svc
+from backend.services.dates import today_in
 from backend.services.permissions import grant_membership_codes
+
+SHOP_TZ = "UTC"
+
+
+def _shop_day():
+    """Today on the test shop's clock (registered on SHOP_TZ), not the machine's: memberships
+    run on the shop's calendar day."""
+    return today_in(SHOP_TZ)
 
 
 async def _register(client):
     email = f"mb-{uuid.uuid4().hex[:8]}@t.dev"
     r = await client.post("/api/auth/register", json={
-        "org_name": "Harbor", "name": "Owner", "email": email, "password": "pw-test-12345"})
+        "org_name": "Harbor", "name": "Owner", "email": email, "password": "pw-test-12345",
+        "timezone": SHOP_TZ})
     assert r.status_code == 201, r.text
     body = r.json()
     return {"Authorization": f"Bearer {body['access_token']}"}, body["org_id"]
@@ -116,7 +126,7 @@ async def test_selling_a_yearly_plan_invoices_it_and_tags_the_member(client):
     cid, boat = await _client_and_boat(client, H)
     m = await _sell(client, H, plan["id"], cid, boat)
     assert m["status"] == "active" and m["billing"] == "yearly" and m["invoice_id"]
-    assert m["renews_on"] == (svc.add_months(date.today(), 12)).isoformat()
+    assert m["renews_on"] == (svc.add_months(_shop_day(), 12)).isoformat()
     inv = (await client.get(f"/api/finance/invoices/{m['invoice_id']}", headers=H)).json()
     assert inv["total"] == 449
     assert "Boat Care member" in await _tags(client, H, cid)
@@ -210,7 +220,7 @@ async def test_monthly_billing_pauses_then_lapses_when_unpaid_and_paying_restore
     await client.post(f"/api/finance/invoices/{m['invoice_id']}/pay", headers=H,
                       json={"amount": 45, "method": "cash", "account_id": acc})
     org = (await db.execute(select(Organisation).where(Organisation.id == org_id))).scalar_one()
-    start = date.today()
+    start = _shop_day()
     nxt = svc.add_months(start, 1)
 
     stats = await svc.sweep(db, org, today=nxt)                 # month 2 invoiced
@@ -272,7 +282,7 @@ async def test_yearly_renewal_is_invoiced_ahead_and_rolls_the_plan_year(client, 
 async def test_season_plans_presell_and_prorate_late_joiners(client):
     H, _ = await _register(client)
     oil = await _service(client, H, "Oil change", 80)
-    today = date.today()
+    today = _shop_day()
     start = today + timedelta(days=30)
     end = start + timedelta(days=120)                 # a summer-style season that hasn't started
     plan = await _plan(client, H, oil, term="season", season_start=f"{start:%m-%d}",

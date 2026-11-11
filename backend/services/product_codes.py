@@ -43,6 +43,20 @@ def barcode_part_ids(org_id: str, code: str):
     return select(ProductBarcode.part_id).where(*live, cond)
 
 
+def list_search(org_id: str, text: str):
+    """The Products list / POS search box: the name (every word, any order, any case), SKU, code
+    or MPN with separators and case ignored ("scr ip12" finds SCR-IP12-OLED), or any barcode
+    the product answers to (main or extra, in any GTIN form). Pinned to the shop."""
+    from backend.services import search_match as sm
+    s = " ".join((text or "").split())
+    conds = [sm.words_match(Part.name, s), Part.id.in_(barcode_part_ids(org_id, s))]
+    for col in (Part.sku, Part.code, Part.mpn, Part.barcode):
+        code = sm.code_match(col, s)
+        if code is not None:
+            conds.append(code)
+    return or_(*conds)
+
+
 def matches_code(org_id: str, code: str, *, include_mpn: bool = False):
     """SQL condition on Part: the scanned / typed `code` is this product's SKU, a barcode, or its code."""
     texts = scan_codes.parse(code).all_texts() or [code]

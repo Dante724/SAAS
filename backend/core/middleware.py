@@ -5,12 +5,17 @@ import logging
 import re
 import time
 import uuid
+from contextvars import ContextVar
 
 from starlette.middleware.base import BaseHTTPMiddleware
 from starlette.requests import Request
 from starlette.responses import JSONResponse, Response
 
 log = logging.getLogger("tekly.access")
+
+# The current request's id, for log lines written far from the request object (the slow-query
+# log in core/observability runs inside SQLAlchemy's engine events). None outside a request.
+request_id_var: ContextVar[str | None] = ContextVar("tekly_request_id", default=None)
 
 # A caller-supplied id is echoed into headers and every log line for the request, so it must
 # be short and inert (no newlines to forge log entries, no megabyte values).
@@ -27,6 +32,7 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
     async def dispatch(self, request: Request, call_next) -> Response:
         request_id = _request_id(request.headers.get("x-request-id"))
         request.state.request_id = request_id
+        token = request_id_var.set(request_id)
         start = time.perf_counter()
         try:
             response = await call_next(request)
@@ -40,6 +46,8 @@ class RequestContextMiddleware(BaseHTTPMiddleware):
                 status_code=500,
                 headers={"x-request-id": request_id},
             )
+        finally:
+            request_id_var.reset(token)
         dur = (time.perf_counter() - start) * 1000
         response.headers["x-request-id"] = request_id
         log.info("%s %s -> %s (%.1fms)", request.method, request.url.path,

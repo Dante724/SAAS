@@ -15,7 +15,7 @@ regexes = [
   # Idempotency-Key values. They are published examples, never real credentials.
   '''whsec_test_5WbX3nC1p9QeK2tLmZ8rYvA4''',
   '''rok_5f2c9a1e_\.\.\.''',
-  '''tek_5f2c9a1e_\.\.\.''',
+  '''tk_5f2c9a1e_\.\.\.''',
   '''4f9a3c1e-2b7d-4e8f-9a61-0c5d2e7b8f13''',
   '''0c6a2f4e-8d1b-4b7a-9e35-71f0c2d8a944''',
   '''7d3e9b1a-4c2f-4a8e-b6d0-2e9f5c1a7b38''',

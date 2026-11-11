@@ -27,13 +27,13 @@ The API only answers over HTTPS. A plain `http://` request gets `403` (see [Secu
    - **Only some things**: pick each thing the key can use, with **Read** or **Read and change** (for example only **Inquiries**). These keys work with API v2 only. Webhooks can only be given here.
    - **Include cost prices**: adds product costs and staff pay rates (the `costs:read` scope). Leave this off unless the other system needs them. Only someone whose role can **View the purchase price of products** can turn it on.
 5. Choose when the key expires: 30 days, 90 days, 1 year (the default) or never. Optionally set **Requests a minute** (120 if you leave it empty, at most 6,000).
-6. Copy the key. It looks like `tek_5f2c9a1e_…` and is **shown only once**.
+6. Copy the key. It looks like `tk_5f2c9a1e_…` and is **shown only once**.
 
 Store the key in your server's secret store or environment, never in a browser, a mobile app or source control. See [Authentication](02-authentication.md) for scopes, rotation and revocation.
 
 ```bash
 export TEKLY_BASE_URL="https://<your-shop-domain>/api/v1"
-export TEKLY_API_KEY="tek_5f2c9a1e_..."   # paste your real key here, not this placeholder
+export TEKLY_API_KEY="tk_5f2c9a1e_..."   # paste your real key here, not this placeholder
 ```
 
 ## 2. Make your first request

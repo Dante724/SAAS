@@ -65,6 +65,9 @@ class Organisation(Base):
     brand_custom_domain: Mapped[Optional[str]] = mapped_column(String(120))   # portal.acme.com
     brand_email_from: Mapped[Optional[str]] = mapped_column(String(160))      # "Acme <no-reply@acme.com>"
     brand_hide_powered_by: Mapped[bool] = mapped_column(Boolean, default=False)
+    # Settings › Documents: print the brand colour on documents. Off until the owner picks a colour
+    # there, so a colour set for the portal alone never changes a printed page.
+    doc_brand_color_on: Mapped[bool] = mapped_column(Boolean, default=False, server_default=text("false"))
     subdomain: Mapped[Optional[str]] = mapped_column(String(100), unique=True)
     # The employee who created the shop. Only they can change their own account (password,
     # 2-step, email, role, access) — a teammate with equal permissions cannot. Not a foreign
@@ -2921,7 +2924,7 @@ class ApiKey(OrgScoped, Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     name: Mapped[str] = mapped_column(String(120), default="API key")
-    prefix: Mapped[str] = mapped_column(String(16), index=True)      # tek_xxxxxxxx (older keys: rok_xxxxxxxx), shown in UI
+    prefix: Mapped[str] = mapped_column(String(16), index=True)      # tk_xxxxxxxx (rok_ for keys made before the rename; shown in UI)
     key_hash: Mapped[str] = mapped_column(String(64), index=True)    # sha256 of the full key
     scopes: Mapped[str] = mapped_column(String(300), default="read,write")  # csv
     rate_limit_per_min: Mapped[Optional[int]] = mapped_column(Integer)   # WS-C: null = the default limit
@@ -4067,6 +4070,17 @@ class TerminalCharge(OrgScoped, Base):
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
+    # One open charge per reader, and per order / sale across readers, enforced by the database
+    # (idg01): the start check alone was check-then-insert, so two taps at once could both pass it
+    # and send two card charges. "pending" is services/terminal.OPEN.
+    __table_args__ = (
+        Index("uq_terminal_charges_open_per_reader", "terminal_id", unique=True,
+              sqlite_where=text("status = 'pending'"), postgresql_where=text("status = 'pending'")),
+        Index("uq_terminal_charges_open_per_order", "order_id", unique=True,
+              sqlite_where=text("status = 'pending'"), postgresql_where=text("status = 'pending'")),
+        Index("uq_terminal_charges_open_per_sale", "sale_id", unique=True,
+              sqlite_where=text("status = 'pending'"), postgresql_where=text("status = 'pending'")),
+    )
 
 
 class PaymentWebhookEvent(OrgScoped, Base):
@@ -4123,6 +4137,15 @@ class IdempotencyRecord(OrgScoped, Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     key: Mapped[str] = mapped_column(String(80))
     endpoint: Mapped[str] = mapped_column(String(80))
+    # sha256 of what was asked (path ids + body), when the endpoint passes it: the same key sent
+    # with a different request is refused instead of replaying the first answer for it (idg01).
+    request_hash: Mapped[Optional[str]] = mapped_column(String(64))
+    # Set in the same transaction as the work's first commit (idg01). Once set, the work's money
+    # is in: the key is never released or taken over, so a retry can't post it again.
+    committed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    # Who holds the key right now (idg02): a retry that takes over a dead request's key gets a
+    # new token, and the original's commits only go through while the token is still its own.
+    claim_token: Mapped[Optional[str]] = mapped_column(String(32))
     response: Mapped[Optional[dict]] = mapped_column(JSON)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
     __table_args__ = (UniqueConstraint("org_id", "key", name="uq_idempotency_org_key"),)
@@ -4276,3 +4299,13 @@ class MembershipUsage(OrgScoped, Base):
     value: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
     term_start: Mapped[date] = mapped_column(Date)                         # which plan year it counts in
     used_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
+class OperatorTextUsage(OrgScoped, Base):
+    """Texts a shop sent today through the OPERATOR's shared Twilio account (H12 toll-fraud cap).
+    One row per shop per shop-local day; services/notifications.reserve_operator_text() bumps
+    `sent` with one conditional upsert, so concurrent sends from every worker share the count."""
+    __tablename__ = "operator_text_usage"
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), primary_key=True)
+    day: Mapped[date] = mapped_column(Date, primary_key=True)
+    sent: Mapped[int] = mapped_column(Integer, default=0, nullable=False)

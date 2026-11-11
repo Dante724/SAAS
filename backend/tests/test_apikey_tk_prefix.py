@@ -1,7 +1,8 @@
 """Design audit BUG-15: API keys were still issued as `rok_…`, from when the product was RepairOS.
 
-New keys start with `tek_`. Keys already handed out as `rok_…` keep working (only their hash is
-stored, so they can't be renamed), and both kinds get their own rate budget.
+New keys start with `tk_` (test_design_followups covers issuing and the legacy key working). This
+adds: a rotated key also gets `tk_`, an old key's stored row is never rewritten, and both kinds get
+their own rate budget while a made-up `tk_` token counts against the IP.
 """
 import pytest
 from sqlalchemy import select
@@ -16,20 +17,11 @@ async def _make(client, h, name="Zap"):
 
 
 @pytest.mark.asyncio
-async def test_new_key_starts_with_tek(client, tenant):
-    made = await _make(client, tenant)
-    assert made["key"].startswith("tek_"), made["key"]
-    assert made["prefix"].startswith("tek_") and made["key"].startswith(made["prefix"] + "_"), made
-    r = await client.get("/api/v1/contacts", headers={"Authorization": f"Bearer {made['key']}"})
-    assert r.status_code == 200, r.text
-
-
-@pytest.mark.asyncio
-async def test_rotated_key_starts_with_tek(client, tenant):
+async def test_rotated_key_starts_with_tk(client, tenant):
     made = await _make(client, tenant)
     r = await client.post(f"/api/api-keys/{made['id']}/rotate", headers=tenant)
     assert r.status_code == 200, r.text
-    assert r.json()["key"].startswith("tek_"), r.json()
+    assert r.json()["key"].startswith("tk_"), r.json()
 
 
 @pytest.mark.asyncio
@@ -50,13 +42,7 @@ async def test_an_old_rok_key_still_authenticates(client, tenant, db):
 
 
 @pytest.mark.asyncio
-async def test_other_bearer_tokens_are_still_not_api_keys(client):
-    r = await client.get("/api/v1/contacts", headers={"Authorization": "Bearer xyz_5f2c9a1e_nope"})
-    assert r.status_code == 401 and "Not a public API key" in r.text
-
-
-@pytest.mark.asyncio
-async def test_tek_and_rok_keys_both_get_their_own_rate_budget(client, tenant, db, monkeypatch):
+async def test_tk_and_rok_keys_both_get_their_own_rate_budget(client, tenant, db, monkeypatch):
     from backend.core import observability
     from backend.services import ratelimit
     from backend.services.apikeys import hash_key
@@ -82,5 +68,5 @@ async def test_tek_and_rok_keys_both_get_their_own_rate_budget(client, tenant, d
     await client.get("/api/v1/contacts", headers={"Authorization": f"Bearer {legacy}"})
     assert seen == ["k:" + new["id"], "k:" + old["id"]], seen
     seen.clear()
-    await client.get("/api/v1/contacts", headers={"Authorization": "Bearer tek_aaaaaaaa_made-up"})
+    await client.get("/api/v1/contacts", headers={"Authorization": "Bearer tk_aaaaaaaa_made-up"})
     assert seen and all(k.startswith("ip:") for k in seen), seen

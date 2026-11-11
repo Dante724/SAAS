@@ -50,6 +50,7 @@ def test_docs_hidden_in_production(monkeypatch):
                  TOKEN_ENCRYPTION_KEY=Fernet.generate_key().decode(),
                  DATABASE_URL="postgresql+asyncpg://u@db/tekly", PUBLIC_BASE_URL="https://app.example.com",
                  SMTP_HOST="smtp.example.com", SMTP_FROM="no-reply@example.com",
+                 NO_REVERSE_PROXY=True, SINGLE_WORKER=True,  # M18/M20: deployed needs proxy trust and REDIS_URL, or these explicit opt-outs
                  STRIPE_BILLING_SECRET_KEY="sk_test_x", STRIPE_BILLING_WEBHOOK_SECRET="whsec_x",
                  STRIPE_BILLING_PRICE_SOLO_MONTH="price_om", STRIPE_BILLING_PRICE_SOLO_YEAR="price_oy",
                  STRIPE_BILLING_PRICE_SHOP_MONTH="price_sm", STRIPE_BILLING_PRICE_SHOP_YEAR="price_sy",

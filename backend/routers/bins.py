@@ -366,17 +366,12 @@ async def transfer_stock_between_bins(
 
 
 # ── Serialized inventory & cost layers (Mandate 2) ──
-from backend.models import StockItemBatch, SerializedItem
-from backend.services.serialized import consume_fifo_lifo, allocate_serialized_item
-from decimal import Decimal as _Dec
-
-
 class BatchIn(BaseModel):
     part_id: str
     location_id: str
     bin_id: Optional[str] = None
-    unit_cost: float
-    qty: float
+    unit_cost: float = Field(ge=0)
+    qty: float = Field(gt=0, le=1_000_000)
     serials: Optional[list[str]] = Field(None, max_length=500)  # if provided, also create SerializedItems
 
 
@@ -386,76 +381,37 @@ async def create_batch(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_inventory")),
 ):
-    """Record an intake cost layer (and optional serialized units)."""
-    from backend.models import Part
-    from backend.services import serial_intake
+    """Receive an intake cost layer (and optional serialized units) into a location/bin.
+
+    Hardening council: this used to write the StockItemBatch and the in-stock units on their own —
+    no StockLevel, no StockMovement — so the shelf count never saw them. It is a receipt like any
+    other now: quantity, movement, FIFO layer, moving average and units move together through
+    `stock_posting.apply_receipt_line`."""
+    from backend.services import serial_intake, stock_posting
+    from backend.services import warehouses as _wh
+    from backend.services.owned import require_location
     part = (await db.execute(select(Part).where(
         Part.id == data.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
     if not part:
         raise HTTPException(404, "Product not found")
+    await require_location(db, current.org_id, data.location_id)
+    # The warehouse must allow posting and this employee must be allowed to post here — the
+    # guard /inventory/parts/{id}/adjust applies (Build 89); this route skipped it.
+    await _wh.guard_action(db, current, "post", location_id=data.location_id)
+    stock_rows.check_whole(part, data.qty)
     # Same serial rules as postings and PO receiving (one per unit, no repeats, none already in stock).
     serials = await serial_intake.validate_intake(db, current.org_id, part, data.qty, data.serials)
-    batch = StockItemBatch(
-        org_id=current.org_id, part_id=data.part_id, location_id=data.location_id,
-        bin_id=data.bin_id, unit_cost=_Dec(str(data.unit_cost)),
-        qty_received=_Dec(str(data.qty)), qty_remaining=_Dec(str(data.qty)))
-    db.add(batch)
-    await db.flush()
-    created_serials = 0
-    from backend.models import _uuid
-    from backend.services import serial_log
-    for sn in serials:
-        unit = SerializedItem(id=_uuid(), org_id=current.org_id, part_id=data.part_id, serial_number=sn,
-                              bin_id=data.bin_id, location_id=data.location_id, batch_id=batch.id,
-                              unit_cost=_Dec(str(data.unit_cost)), status="in_stock")
-        db.add(unit)
-        serial_log.record(db, unit, "received", ref_type="batch", ref_id=batch.id, actor_id=current.id)
-        created_serials += 1
+    made: dict = {}
+    await stock_posting.apply_receipt_line(
+        db, org_id=current.org_id, part=part, location_id=data.location_id, qty=data.qty,
+        unit_cost=float(data.unit_cost), created_by_id=current.id, ref_type="batch",
+        bin_id=data.bin_id, serials=serials or None, cost_known=True, out=made)
+    # The layer this receipt made — not the product's newest by received_at, which is another
+    # request's layer when one commits in between.
+    batch_id = made["batch"].id if made.get("batch") else None
+    warnings = serial_intake.take_warnings(db)
     await db.commit()
-    return {"batch_id": batch.id, "serials_created": created_serials}
-
-
-class ConsumeIn(BaseModel):
-    part_id: str
-    qty: float
-    method: str = "fifo"  # fifo|lifo
-
-
-@router.post("/consume")
-async def consume(
-    data: ConsumeIn,
-    db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
-):
-    res = await consume_fifo_lifo(db, org_id=current.org_id, part_id=data.part_id,
-                                  qty=_Dec(str(data.qty)), method=data.method)
-    await db.commit()
-    return res
-
-
-class AllocateIn(BaseModel):
-    part_id: str
-    order_id: str
-    bin_id: Optional[str] = None
-    serial_number: Optional[str] = None
-
-
-@router.post("/allocate-serial")
-async def allocate_serial(
-    data: AllocateIn,
-    db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
-):
-    from backend.models import Order
-    if not (await db.execute(select(Order.id).where(
-            Order.id == data.order_id, Order.org_id == current.org_id))).scalar_one_or_none():
-        raise HTTPException(404, "Order not found")
-    item = await allocate_serialized_item(
-        db, org_id=current.org_id, part_id=data.part_id, order_id=data.order_id,
-        bin_id=data.bin_id, serial_number=data.serial_number)
-    await db.commit()
-    return {"ok": True, "serial_number": item.serial_number, "unit_cost": float(item.unit_cost),
-            "status": item.status, "order_id": item.order_id}
+    return {"batch_id": batch_id, "serials_created": len(serials or []), "warnings": warnings}
 
 
 @router.get("/part/{part_id}/detail")

@@ -103,8 +103,19 @@ def outbox(monkeypatch):
     return sent
 
 
+@pytest.fixture
+def ids_contain_999(monkeypatch):
+    """Every new row id (employee, org, ...) carries the digits of the overdue invoice, so the
+    test can only pass by looking at what the push SAYS, never at the ids it is addressed to."""
+    n = iter(range(1, 1 << 40))
+
+    def uuid4_with_999():
+        return uuid.UUID(f"99900000-0000-4000-8000-{next(n):012x}")
+    monkeypatch.setattr(uuid, "uuid4", uuid4_with_999)
+
+
 @pytest.mark.asyncio
-async def test_the_brief_goes_out_once_after_the_hour_in_the_shops_time_zone(client, db, outbox):
+async def test_the_brief_goes_out_once_after_the_hour_in_the_shops_time_zone(client, db, outbox, ids_contain_999):
     from backend.models import Invoice
     H, org_id = await _register(client)
     org = await _org(db, org_id)
@@ -121,7 +132,11 @@ async def test_the_brief_goes_out_once_after_the_hour_in_the_shops_time_zone(cli
 
     assert await sense.send_briefs(db, org_id, now=seven_am_ny) == 1
     assert len(outbox["email"]) == 1 and len(outbox["push"]) == 1
-    assert outbox["push"][0]["title"] == "Your morning brief is ready" and "999" not in str(outbox["push"])
+    push = outbox["push"][0]
+    assert push["title"] == "Your morning brief is ready"
+    # Nothing private on a lock screen: the money figure must not appear in anything the push
+    # SAYS. The ids it is addressed to are not text (and, by the fixture, all contain "999").
+    assert "999" not in push["title"] and "999" not in push["body"]
     assert "999" in outbox["email"][0]["body"]          # the owner can see money
 
     assert await sense.send_briefs(db, org_id, now=seven_am_ny + timedelta(hours=3)) == 0   # not twice

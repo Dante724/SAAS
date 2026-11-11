@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { createPortal } from "react-dom";
 import { KeyRound } from "lucide-react";
 import { M } from "../../components/Shell";
@@ -6,15 +7,8 @@ import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
 import { confirmDialog } from "../../lib/dialog";
 import Switch from "../../components/Switch";
-import { ErrorNote, MoreMenu } from "../invoices/billing";
-import Drawer from "../../components/Drawer";
-import Button from "../../components/Button";
-import Section from "../../components/Section";
-import EmptyState, { ErrorState } from "../../components/EmptyState";
+import { Drawer, ErrorNote, MoreMenu, btnGhost, btnPrimary, inputCls, labelCls } from "../invoices/billing";
 import { Badge } from "../../components/Card";
-import { Input, Select, Field, labelClass } from "../../components/Field";
-import { SettingRow } from "../../components/SettingRow";
-import { settingsToast } from "./kit";
 
 // Settings › Integrations › API keys. Create a key with the access it needs (read only by
 // default) — everything, or only some things (WS-C resource scopes, API v2) — an expiry, its own
@@ -85,7 +79,7 @@ export function lastUsedText(iso?: string | null): string {
 function StatusPill({ k }: { k: ApiKey }) {
   const status = k.status || (k.active ? "active" : "revoked");
   if (status === "active") return null;
-  return <Badge tone={status === "expired" ? "warning" : "neutral"}>{status === "expired" ? "Expired" : "Revoked"}</Badge>;
+  return <Badge tone={status === "expired" ? "warning" : "neutral"} size="sm">{status === "expired" ? "Expired" : "Revoked"}</Badge>;
 }
 
 export default function ApiKeysCard() {
@@ -95,7 +89,8 @@ export default function ApiKeysCard() {
   const [err, setErr] = useState<string | null>(null);
   const [creating, setCreating] = useState(false);
   const [fresh, setFresh] = useState<Fresh | null>(null);
-  const flash = (m: string) => settingsToast(m);
+  const [msg, setMsg] = useState<string | null>(null);
+  const flash = (m: string) => { setMsg(m); setTimeout(() => setMsg(null), 2600); };
 
   const load = () => {
     setErr(null);
@@ -119,16 +114,24 @@ export default function ApiKeysCard() {
   const gone = (keys || []).filter((k) => (k.status || (k.active ? "active" : "revoked")) === "revoked");
 
   return (
-    <Section title="API keys" icon="key"
-      meta={keys ? `${live.length} ${live.length === 1 ? "key" : "keys"}` : null}
-      description="A key lets another system, like Zapier or your own website, read your jobs and customers or add new ones."
-      actions={<Button variant="primary" disabled={!keys} onClick={() => setCreating(true)} icon={<M n="add" c="text-sm" />}>Create key</Button>}>
-      {!keys && !err && <div className="space-y-2" aria-busy="true">{[0, 1].map((i) => <div key={i} className="h-12 rounded-xl bg-slate-100 animate-pulse" />)}</div>}
-      {err && <ErrorState title="API keys didn't load" body={err} onRetry={load} />}
+    <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
+      <div className="p-3.5 border-b border-slate-100">
+        <h3 className="text-sm font-semibold text-ink-primary">API keys</h3>
+        {keys && <div className="text-xs text-ink-tertiary mt-0.5 tabular-nums">{live.length} {live.length === 1 ? "key" : "keys"}</div>}
+        {keys && keys.length > 0 && <div className="mt-3"><button onClick={() => setCreating(true)} className={btnPrimary}><M n="add" c="text-sm" />Create key</button></div>}
+      </div>
+
+      {!keys && !err && <div className="p-4 text-xs text-ink-tertiary">Loading API keys…</div>}
+      {err && <div role="alert" className="p-4 text-xs text-rose-600 flex items-center gap-2"><M n="error" c="text-sm" />{err}<button onClick={load} className="ml-auto font-semibold text-primary hover:underline">Retry</button></div>}
 
       {keys && (
-        <div className="space-y-3">
-          {keys.length === 0 && <EmptyState icon={<KeyRound size={18} aria-hidden />} title="No API keys yet." />}
+        <div className="p-3.5 space-y-3">
+          {keys.length === 0 && (
+            <div className="py-4 text-center space-y-3">
+              <p className="text-xs text-ink-secondary">No API keys yet. A key lets another system, like Zapier or your own website, read your jobs and customers or add new ones.</p>
+              <button onClick={() => setCreating(true)} className={btnPrimary}><M n="add" c="text-sm" />Create key</button>
+            </div>
+          )}
           {live.length > 0 && <KeyList keys={live} onRotate={rotate} onRevoke={revoke} />}
           {gone.length > 0 && (
             <details className="text-xs text-ink-tertiary">
@@ -137,14 +140,15 @@ export default function ApiKeysCard() {
             </details>
           )}
           <p className="text-xs text-ink-tertiary leading-relaxed">
-            Send the key as <span className="font-mono">Authorization: Bearer tek_…</span>. The full reference is at <a href="/api/v1/openapi.json" target="_blank" rel="noreferrer" className="font-semibold text-primary hover:underline">/api/v1/openapi.json</a> and, for API v2 (inquiries, tags, services, bundles, locations, staff, contact search, job status changes, invoice lines and webhooks), <a href="/api/v2/openapi.json" target="_blank" rel="noreferrer" className="font-semibold text-primary hover:underline">/api/v2/openapi.json</a>.
+            Send the key as <span className="font-mono">Authorization: Bearer tk_…</span>. The full reference is at <a href="/api/v1/openapi.json" target="_blank" rel="noreferrer" className="font-semibold text-primary hover:underline">/api/v1/openapi.json</a> and, for API v2 (inquiries, tags, services, bundles, locations, staff, contact search, job status changes, invoice lines and webhooks), <a href="/api/v2/openapi.json" target="_blank" rel="noreferrer" className="font-semibold text-primary hover:underline">/api/v2/openapi.json</a>.
           </p>
         </div>
       )}
 
       {creating && <CreateKeyDrawer onClose={() => setCreating(false)} onCreated={(f) => { setCreating(false); setFresh(f); load(); }} />}
       {fresh && <ShowKeyOnce fresh={fresh} onClose={() => setFresh(null)} />}
-    </Section>
+      {msg && createPortal(<div role="status" className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold px-4 py-2.5 rounded-xl shadow-drawer z-[95]">{msg}</div>, document.body)}
+    </div>
   );
 }
 
@@ -154,10 +158,10 @@ function KeyList({ keys, onRotate, onRevoke }: { keys: ApiKey[]; onRotate?: (k: 
       {keys.map((k) => {
         const active = (k.status || (k.active ? "active" : "revoked")) === "active";
         return (
-          <li key={k.id} className="flex items-start gap-2.5 pl-3 pr-1.5 py-2.5">
-            <KeyRound size={16} strokeWidth={2} aria-hidden className="text-ink-tertiary flex-shrink-0 mt-0.5" />
+          <li key={k.id} className="flex items-center gap-2.5 pl-3 pr-1.5 py-2.5">
+            <KeyRound size={16} strokeWidth={2} aria-hidden className="text-ink-tertiary flex-shrink-0" />
             <div className="min-w-0 flex-1">
-              <div className="flex flex-wrap items-center gap-x-2 gap-y-1 min-w-0">
+              <div className="flex items-center gap-2 min-w-0">
                 <span className="text-sm font-semibold text-ink-primary truncate">{k.name}</span>
                 <span className="font-mono text-xs text-ink-tertiary flex-shrink-0">{k.prefix}…</span>
                 <StatusPill k={k} />
@@ -221,15 +225,15 @@ function CreateKeyDrawer({ onClose, onCreated }: { onClose: () => void; onCreate
   );
 
   return createPortal(
-    <Drawer z={90} size="sm" label="Create API key" title="Create API key" onClose={onClose}
+    <Drawer z={90} width={448} label="Create API key" title="Create API key" onClose={onClose}
       footer={<>
-        <Button variant="primary" onClick={create} disabled={busy}>{busy ? "Creating…" : "Create key"}</Button>
-        <Button onClick={onClose}>Cancel</Button>
+        <button onClick={create} disabled={busy} className={btnPrimary}>{busy ? "Creating…" : "Create key"}</button>
+        <button onClick={onClose} className={btnGhost}>Cancel</button>
       </>}>
-      <Field label="Name" htmlFor="ak-name">
-        <Input id="ak-name" value={name} maxLength={120} onChange={(e) => setName(e.target.value)} placeholder="e.g. Zapier" /></Field>
+      <div><label htmlFor="ak-name" className={labelCls}>Name</label>
+        <input id="ak-name" value={name} maxLength={120} onChange={(e) => setName(e.target.value)} placeholder="e.g. Zapier" className={inputCls} /></div>
       <fieldset className="space-y-2">
-        <legend className={labelClass}>Access</legend>
+        <legend className={labelCls}>Access</legend>
         {radio("read", "Read only", "See customers, jobs, inquiries, products, appointments, invoices and time.")}
         {radio("write", "Read and write", "Also add and change them. Managing webhooks is never included.")}
         {radio("some", "Only some things", "Choose each thing it can use. Works with API version 2 only.")}
@@ -238,27 +242,28 @@ function CreateKeyDrawer({ onClose, onCreated }: { onClose: () => void; onCreate
         <div className="rounded-xl border border-slate-200 divide-y divide-slate-100" role="group" aria-label="What this key can use">
           {RESOURCES.map(([k, label]) => (
             <div key={k} className="flex items-center justify-between gap-3 px-3 py-2">
-              <label htmlFor={`ak-scope-${k}`} className="min-w-0 text-sm text-ink-primary">{label}</label>
-              <Select id={`ak-scope-${k}`} value={pick[k] || ""} onChange={(e) => setPick({ ...pick, [k]: e.target.value as ScopePick[string] })}
-                className="!w-40 shrink-0">
+              <label htmlFor={`ak-scope-${k}`} className="text-sm text-ink-primary">{label}</label>
+              <TeklySelect id={`ak-scope-${k}`} value={pick[k] || ""} onChange={(e) => setPick({ ...pick, [k]: e.target.value as ScopePick[string] })}
+                className="glass-input rounded-xl px-3 py-2 text-sm">
                 <option value="">No access</option><option value="read">Read</option><option value="write">Read and change</option>
-              </Select>
+              </TeklySelect>
             </div>
           ))}
         </div>
       )}
       {canCosts && (
-        <SettingRow label="Include cost prices" help="Product costs and staff pay rates. Leave off unless the other system needs them.">
+        <div className="flex items-start gap-3 text-sm text-ink-primary">
+          <span className="min-w-0 flex-1"><span className="block font-medium">Include cost prices</span><span className="block text-xs text-ink-tertiary">Product costs and staff pay rates. Leave off unless the other system needs them.</span></span>
           <Switch label="Include cost prices" on={costs} onChange={setCosts} />
-        </SettingRow>
+        </div>
       )}
       <div className="grid grid-cols-2 gap-3">
-        <Field label="Expires after" htmlFor="ak-exp">
-          <Select id="ak-exp" value={expiry} onChange={(e) => setExpiry(e.target.value)}>
+        <div><label htmlFor="ak-exp" className={labelCls}>Expires after</label>
+          <TeklySelect id="ak-exp" value={expiry} onChange={(e) => setExpiry(e.target.value)} className={inputCls}>
             {EXPIRY.map(([l]) => <option key={l} value={l}>{l}</option>)}
-          </Select></Field>
-        <Field label="Requests a minute" htmlFor="ak-rate">
-          <Input id="ak-rate" type="number" inputMode="numeric" min={1} max={6000} value={rate} onChange={(e) => setRate(e.target.value)} placeholder={String(DEFAULT_RATE)} className="tabular-nums" /></Field>
+          </TeklySelect></div>
+        <div><label htmlFor="ak-rate" className={labelCls}>Requests a minute</label>
+          <input id="ak-rate" type="number" inputMode="numeric" min={1} max={6000} value={rate} onChange={(e) => setRate(e.target.value)} placeholder={String(DEFAULT_RATE)} className={`${inputCls} tabular-nums`} /></div>
       </div>
       <ErrorNote msg={err} />
     </Drawer>, document.body);
@@ -270,13 +275,13 @@ function ShowKeyOnce({ fresh, onClose }: { fresh: Fresh; onClose: () => void }) 
     try { await navigator.clipboard.writeText(fresh.key); setCopied(true); } catch { setCopied(false); }
   }
   return createPortal(
-    <Drawer z={91} size="sm" label="Your new API key" title="Your new API key" sub={fresh.name} onClose={onClose}
-      footer={<Button variant="primary" onClick={onClose}>I've saved it</Button>}>
+    <Drawer z={91} width={448} label="Your new API key" title="Your new API key" sub={fresh.name} onClose={onClose}
+      footer={<button onClick={onClose} className={btnPrimary}>I've saved it</button>}>
       <p className="text-sm text-ink-secondary">Copy it now and keep it somewhere safe. You won't be able to see it again.</p>
       <div className="rounded-xl border border-slate-200 bg-slate-50 p-3">
         <div className="font-mono text-xs text-ink-primary break-all select-all" data-testid="fresh-key">{fresh.key}</div>
       </div>
-      <div><Button onClick={copy} icon={<M n={copied ? "check" : "content_copy"} c="text-sm" />}>{copied ? "Copied" : "Copy key"}</Button></div>
+      <button onClick={copy} className={btnGhost}><M n={copied ? "check" : "content_copy"} c="text-sm" />{copied ? "Copied" : "Copy key"}</button>
       {fresh.rotated && <p className="text-xs text-ink-tertiary">The old key keeps working for 24 hours, so you have time to swap this one in.</p>}
     </Drawer>, document.body);
 }
