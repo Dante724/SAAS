@@ -1,5 +1,6 @@
 """Simple document setup: the shop's brand colour reaches every printed document (preview and
 print match), receipts carry the terms text, and the receipt preview uses a real sale."""
+import re as _re
 import uuid
 
 import pytest
@@ -58,7 +59,8 @@ async def test_a_colour_that_is_not_a_hex_colour_is_never_written_into_css(clien
 async def test_one_shops_brand_never_reaches_another_shop(client):
     A = await _shop(client, "Shop A")
     B = await _shop(client, "Shop B")
-    await _job(client, A); await _job(client, B)
+    await _job(client, A)
+    await _job(client, B)
     await client.put("/api/branding", json={"primary_color": "#123456", "doc_color_on": True}, headers=A)
     html_b = (await client.post("/api/documents/preview", json={"body_html": BODY, "doc_type": "work_order"}, headers=B)).json()["html"]
     assert "#123456" not in html_b and "tk-branded" not in html_b
@@ -133,7 +135,6 @@ async def test_auto_printed_labels_are_never_branded(client):
 
 
 # ── review: the standard layouts fill every field (no leftover {…} on the page) ────────────────
-import re as _re
 LEFT = _re.compile(r"\{[A-Z][^{}]*\}")
 
 
