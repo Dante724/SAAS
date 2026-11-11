@@ -1620,8 +1620,9 @@ async def edit_po(
 
     # ── line edits ──
     if data.lines is not None:
+        # locked: a receipt landing between this read and the write below must not be rewritten
         existing = {l.id: l for l in (await db.execute(
-            select(POLine).where(POLine.po_id == po.id))).scalars().all()}
+            select(POLine).where(POLine.po_id == po.id).with_for_update())).scalars().all()}
         # validate every referenced part belongs to this org
         req_parts = {ln.part_id for ln in data.lines}
         owned = set((await db.execute(select(Part.id).where(
@@ -1632,6 +1633,18 @@ async def edit_po(
         for ln in data.lines:
             row = existing.get(ln.id) if ln.id else None
             if row:
+                got = float(row.qty_received or 0)
+                if got > 0:
+                    # council M4: a received line IS the receiving record (movements, cost layers,
+                    # qty_received). Its product and price stay; its quantity can't drop below
+                    # what has arrived. Add a new line for a different product or price.
+                    if ln.part_id != row.part_id:
+                        raise HTTPException(409, "Can't change the product on a line that has already been received")
+                    if float(ln.qty_ordered or 0) < got - 1e-9:
+                        raise HTTPException(409, f"{got:g} of this line has already been received — "
+                                                 "the quantity can't go below that")
+                    if abs(float(ln.unit_cost or 0) - float(row.unit_cost or 0)) > 1e-9:
+                        raise HTTPException(409, "Can't change the price on a line that has already been received")
                 row.part_id = ln.part_id
                 row.qty_ordered = ln.qty_ordered
                 row.unit_cost = ln.unit_cost
