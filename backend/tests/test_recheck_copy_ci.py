@@ -110,10 +110,10 @@ def test_legal_placeholder_check_matches_the_committed_pages():
     left = any("[[" in p.read_text() and _check_token(p.read_text()) for p in pages)
     r = _check()
     assert r.returncode == (1 if left else 0), r.stdout
-    # CI runs it, failing for main and pull requests into main.
+    # CI runs it (warn-only until the founder's legal details are in).
     ci = yaml.safe_load((REPO / ".github" / "workflows" / "ci.yml").read_text())
     run = " ".join(s.get("run", "") for s in ci["jobs"]["website-legal"]["steps"])
-    assert "check_legal_placeholders.py" in run and 'GITHUB_BASE_REF" = "main"' in run
+    assert "check_legal_placeholders.py" in run
 
 
 def _check_token(text):
