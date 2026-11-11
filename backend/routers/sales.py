@@ -704,12 +704,19 @@ class SalePayIn(BaseModel):
 
 @router.post("/{sale_id}/pay")
 async def pay_sale(
-    sale_id: str, data: SalePayIn,
+    sale_id: str, data: SalePayIn, request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_create_sales")),
 ):
     """B5 — take payment for a parked sale, or one whose card was declined: what is still due
-    (the total less any gift card) goes into the chosen cashbox."""
+    (the total less any gift card) goes into the chosen cashbox. A retry with the same
+    Idempotency-Key gets the first answer back (the sale lock already stops a second payment)."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "sales.pay", {"sale_id": sale_id, "body": data},
+                          lambda: _pay_sale(sale_id, data, db, current))
+
+
+async def _pay_sale(sale_id: str, data: SalePayIn, db: AsyncSession, current: Employee):
     from backend.models import Account
     sale = await _load_sale(db, current, sale_id, lock=True)
     if sale.voided_at:

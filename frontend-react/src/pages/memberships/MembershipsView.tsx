@@ -1,4 +1,5 @@
 import { useEffect, useState } from "react";
+import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
@@ -63,7 +64,7 @@ export default function MembershipsView({ q = "" }: { q?: string }) {
             <div className="mx-auto h-11 w-11 rounded-2xl grid place-items-center bg-primary/10 text-primary"><M n="workspace_premium" c="text-xl" /></div>
             <div className="mt-3 text-sm font-semibold text-ink-primary">{view === "all" ? "No members yet" : "Nothing here"}</div>
             <div className="mt-1 text-xs text-ink-tertiary">{view === "all" ? "Sell a plan from a customer's page, one of their assets, or at checkout." : "All caught up."}</div>
-            {view === "all" && <a href="/catalog?tab=plans" className="mt-4 inline-flex h-9 px-3.5 rounded-xl bg-ink-primary text-white text-xs font-semibold items-center">Set up plans</a>}
+            {view === "all" && <a href="/catalog?tab=plans" className="mt-4 inline-flex h-9 px-3.5 rounded-xl bg-primary text-white hover:bg-primary-container text-xs font-semibold items-center">Set up plans</a>}
           </div>
         )}
         {data?.items.map((m) => (
@@ -124,10 +125,10 @@ export function MembershipDrawer({ id, onClose, onChanged }: { id: string; onClo
     }, "Payment link copied");
   }
 
-  const btn = "h-9 px-3.5 rounded-xl border border-slate-200 bg-white text-xs font-semibold text-ink-secondary hover:bg-slate-50 disabled:opacity-50";
+  const btn = buttonClass("secondary", "md");
   return (
     <div className="fixed inset-0 flex justify-end" style={{ zIndex: 55 }}>
-      <div className="absolute inset-0 bg-ink-primary/35 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/35" aria-hidden="true" onClick={onClose} />
       <div className="relative h-full w-full max-w-[520px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90">
         <header className="px-6 py-4 border-b border-slate-200/90 flex items-center gap-2">
           {m && <Avatar name={m.client} size={44} />}
@@ -172,11 +173,11 @@ export function MembershipDrawer({ id, onClose, onChanged }: { id: string; onClo
         </div>
         {m && ["scheduled", "active", "paused"].includes(m.status) && (
           <footer className="border-t border-slate-200/90 p-4 bg-white flex flex-wrap gap-2">
-            {m.unpaid && can("can_create_payment_links") && <button disabled={busy} onClick={link} className="h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold shadow-clay-sm">Copy payment link</button>}
+            {m.unpaid && can("can_create_payment_links") && <button disabled={busy} onClick={link} className={buttonClass("primary", "md")}>Copy payment link</button>}
             {canChange && <button disabled={busy} className={btn} onClick={() => act(() => api.post(`/memberships/${m.id}/billing`, { billing: m.billing === "monthly" ? "yearly" : "monthly" }), `Switches to ${m.billing === "monthly" ? "yearly" : "monthly"} from the next payment`)}>
               Switch to {m.billing === "monthly" ? "yearly" : "monthly"}</button>}
             {canChange && (!m.renews || m.status === "paused") && <button disabled={busy} className={btn} onClick={() => act(() => api.post(`/memberships/${m.id}/resume`, {}), "Back on")}>Resume</button>}
-            {canChange && m.renews && <button disabled={busy} onClick={() => setAsking(true)} className="h-9 px-3.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50">Cancel plan</button>}
+            {canChange && m.renews && <button disabled={busy} onClick={() => setAsking(true)} className="ml-auto h-9 px-3.5 rounded-xl text-xs font-semibold text-rose-600 hover:bg-rose-50">Cancel plan</button>}
           </footer>
         )}
       </div>

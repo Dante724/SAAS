@@ -13,6 +13,11 @@ vi.mock("../../components/ReaderCharge", () => ({ default: ({ onApproved, onClos
     <button onClick={() => onClose({ status: "declined" })}>Decline card</button>
   </div>) }));
 
+// Card readers are switched off by default (CARD_READERS_ENABLED); the reader tests below run with
+// them on, and "card readers off" checks that no reader UI shows.
+const readers = vi.hoisted(() => ({ on: true }));
+vi.mock("../../lib/cardReaders", () => ({ useCardReaders: () => readers.on }));
+
 import SalesPOS from "./SalesPOS";
 import { scanBeep } from "../../lib/scanner";
 
@@ -452,5 +457,24 @@ describe("SalesPOS pay dialog", () => {
     await u.click(await within(box).findByRole("button", { name: /Take payment/ }));
     await vi.waitFor(() => expect(calls.some((c) => c.path === "/api/sales/s1/pay")).toBe(true));
     expect(calls.find((c) => c.path === "/api/sales/s1/pay")!.body).toMatchObject({ account_id: "new-till" });
+  });
+});
+
+describe("SalesPOS with card readers off", () => {
+  beforeEach(() => { readers.on = false; });
+  afterEach(() => { readers.on = true; });
+
+  it("shows no reader button or reader payments list; cash still charges", async () => {
+    accounts = [{ id: "till", name: "Till", payment_option: "cash" }];
+    const u = userEvent.setup();
+    render(<SalesPOS />);
+    await u.click(await screen.findByText("USB-C cable"));
+    const charge = () => screen.getByRole("button", { name: /^Charge/ });
+    await waitFor(() => expect(charge()).toBeEnabled());
+    expect(screen.queryByRole("button", { name: /on reader/i })).toBeNull();
+    expect(screen.queryByText("Card reader payments")).toBeNull();
+    expect(calls.some((c) => c.path.startsWith("/api/payments/terminal"))).toBe(false);
+    await u.click(charge());
+    await waitFor(() => expect(calls.some((c) => c.method === "POST" && c.path === "/api/sales")).toBe(true));
   });
 });

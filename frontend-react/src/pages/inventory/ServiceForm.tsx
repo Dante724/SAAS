@@ -8,6 +8,8 @@ import { currencySymbol } from "./types";
 import CategoryPicker from "../../components/CategoryPicker";
 import Switch from "../../components/Switch";
 import { inputCls } from "../invoices/billing";
+import { laborText } from "../../lib/labor";
+import EmptyState from "../../components/EmptyState";
 
 const lbl = "block font-semibold text-ink-secondary mb-1";
 const field = `${inputCls} text-ink-primary`;
@@ -80,7 +82,7 @@ export default function ServiceForm({ p, set }: { p: any; set: (k: string, v: an
         <div><label htmlFor="svc-dur" className={lbl}>Standard duration (min)</label><input id="svc-dur" type="number" min={0} value={p.duration_min ?? 60} onChange={(e) => set("duration_min", e.target.value)} className={`${field} tabular-nums`} /></div>
       </div>
       <div className="grid grid-cols-2 gap-3">
-        <div><label htmlFor="svc-price" className={lbl}>Labor price ({currencySymbol()})</label><input id="svc-price" type="number" value={p.price ?? 0} onChange={(e) => set("price", e.target.value)} className={`${field} tabular-nums font-semibold`} /></div>
+        <div><label htmlFor="svc-price" className={lbl}>{laborText("Labor price")} ({currencySymbol()})</label><input id="svc-price" type="number" value={p.price ?? 0} onChange={(e) => set("price", e.target.value)} className={`${field} tabular-nums font-semibold`} /></div>
         <div><label htmlFor="svc-cost" className={lbl}>Cost ({currencySymbol()})</label><input id="svc-cost" type="number" value={p.cost_price ?? 0} onChange={(e) => set("cost_price", e.target.value)} className={`${field} tabular-nums`} /></div>
       </div>
       <div className="grid grid-cols-1 sm:grid-cols-3 gap-3">
@@ -88,7 +90,7 @@ export default function ServiceForm({ p, set }: { p: any; set: (k: string, v: an
         <div><label htmlFor="svc-warranty" className={lbl}>Warranty (days)</label><input id="svc-warranty" type="number" min={0} value={p.warranty_days ?? 0} onChange={(e) => set("warranty_days", e.target.value)} className={`${field} tabular-nums`} /></div>
         <div><label htmlFor="svc-barcode" className={lbl}>Barcode</label><input id="svc-barcode" value={p.barcode || ""} onChange={(e) => set("barcode", e.target.value)} className={`${field} font-mono`} /></div>
       </div>
-      <div className={`flex items-center justify-between gap-3 ${box}`}><span className="text-ink-secondary font-medium">This is a labor operation</span><Switch on={!!p.is_labor} onChange={(v) => set("is_labor", v)} label="This is a labor operation" /></div>
+      <div className={`flex items-center justify-between gap-3 ${box}`}><span className="text-ink-secondary font-medium">{laborText("This is a labor operation")}</span><Switch on={!!p.is_labor} onChange={(v) => set("is_labor", v)} label={laborText("This is a labor operation")} /></div>
       {/* 144ax G3 — flat-rate labour: bill the standard duration × the fee as an hourly rate */}
       <div className={`flex items-center justify-between gap-3 ${box}`}><span className="text-ink-secondary font-medium">Flat-rate <span className="block text-xs text-ink-tertiary font-normal">Bills booked hours × the price, so the price is the hourly rate.</span></span><Switch on={!!p.flat_rate} onChange={(v) => set("flat_rate", v)} label="Flat-rate" /></div>
 
@@ -103,7 +105,7 @@ export default function ServiceForm({ p, set }: { p: any; set: (k: string, v: an
           <p className="text-xs text-ink-tertiary mb-1.5">None selected means anyone. Online bookings only offer these people.</p>
           {emps === null ? <p className="text-xs text-ink-tertiary">Loading team…</p>
             : empErr ? <p className="text-xs text-rose-600">Couldn't load the team. Close and reopen to try again.</p>
-            : emps.length === 0 && missing.length === 0 ? <p className="text-xs text-ink-tertiary">No team members yet.</p>
+            : emps.length === 0 && missing.length === 0 ? <EmptyState size="inline" title="No team members yet." />
             : <div className="flex flex-wrap gap-1.5">
                 {emps.map((e) => <Chip key={e.id} on={allowed.includes(e.id)} label={e.name || "Unnamed"} onClick={() => toggle("allowed_employee_ids", allowed, e.id)} />)}
                 {missing.map((id) => <Chip key={id} on label="Former team member" onClick={() => toggle("allowed_employee_ids", allowed, id)} />)}

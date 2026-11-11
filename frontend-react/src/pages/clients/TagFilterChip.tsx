@@ -2,6 +2,7 @@
 // (GET /clients?tag=<id>); the chosen tag shows as a removable chip. Same height and radius
 // as the search field next to it.
 import { useEffect, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 
@@ -26,10 +27,10 @@ export default function TagFilterChip({ value, onChange }: { value: string | nul
   return (
     <label className={`${chip} glass-input pl-3 pr-2 text-ink-secondary cursor-pointer`}>
       <M n="sell" c="text-sm text-ink-tertiary" />
-      <select aria-label="Filter by tag" value="" onChange={(e) => onChange(e.target.value || null)} className="bg-transparent text-xs font-semibold outline-none cursor-pointer pr-1">
+      <TeklySelect aria-label="Filter by tag" value="" onChange={(e) => onChange(e.target.value || null)} className="bg-transparent text-xs font-semibold outline-none cursor-pointer pr-1">
         <option value="">Tag</option>
         {tags.map((t) => <option key={t.id} value={t.id}>{t.name}</option>)}
-      </select>
+      </TeklySelect>
     </label>
   );
 }

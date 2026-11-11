@@ -1,5 +1,5 @@
 // One job: who, what device, what's wrong; photos, items and the customer's signature; and one main
-// button that does the next step (Mark Ready → Finish & take payment). Ordinary status changes show
+// button that does the next step (Mark ready → Finish & take payment). Ordinary status changes show
 // at once and roll back if refused (409 gates in plain words), and are queued offline. Finishing and
 // payment are online only: pay first, then close, so a job is never closed on a payment that failed.
 import { useCallback, useEffect, useMemo, useRef, useState } from "react";
@@ -8,7 +8,7 @@ import { AlertTriangle, Camera, Check, ChevronDown, ChevronLeft, CloudOff, Ellip
 import { api } from "../../api/client";
 import { useMe } from "../../context/Me";
 import AuthedImage from "../../components/AuthedImage";
-import { Card, Empty, Page, PrimaryButton, Sheet, SkeletonRows, StatusBadge, StatusDot, humanKey } from "../components/ui";
+import { Card, Empty, GoButton, IconButton, Page, PrimaryButton, Sheet, SkeletonRows, StatusBadge, StatusDot, goButtonClass, humanKey } from "../components/ui";
 import ItemsSheet from "../components/ItemsSheet";
 import SignatureSheet from "../components/SignatureSheet";
 import PaySheet from "../components/PaySheet";
@@ -48,6 +48,8 @@ type Line = NonNullable<Order["lines"]>[number];
 
 const GROUP_ORDER = ["new", "in_progress", "pending", "ready", "closed", "dropped"];
 const GROUP_LABEL: Record<string, string> = { new: "New", in_progress: "In progress", pending: "Waiting", ready: "Ready", closed: "Done", dropped: "Cancelled" };
+// "Ready" → "ready" for the main button ("Mark ready"); leaves names that start with an acronym ("QC check") alone.
+const sentenceCase = (name: string) => /^[A-Z][^A-Z]/.test(name) ? name[0].toLowerCase() + name.slice(1) : name;
 const when = (iso?: string | null) => iso ? new Date(iso).toLocaleString([], { weekday: "short", day: "numeric", month: "short", hour: "numeric", minute: "2-digit" }) : "";
 
 function Detail({ icon, label, children }: { icon: React.ReactNode; label: string; children: React.ReactNode }) {
@@ -247,12 +249,12 @@ export default function Job() {
   );
   const headerRight = (
     <div className="flex -mr-2">
-      <button onClick={load} aria-label="Refresh" className="h-11 w-11 inline-flex items-center justify-center rounded-full text-ink-secondary active:bg-slate-100"><RefreshCw size={20} /></button>
-      <button onClick={() => setOpen("more")} aria-label="More actions" className="h-11 w-11 inline-flex items-center justify-center rounded-full text-ink-secondary active:bg-slate-100"><Ellipsis size={22} /></button>
+      <IconButton label="Refresh" onClick={load} icon={<RefreshCw size={20} />} />
+      <IconButton label="More actions" onClick={() => setOpen("more")} icon={<Ellipsis size={22} />} />
     </div>
   );
 
-  if (err) return <Page title="Job" back={back}><Empty icon={<AlertTriangle size={22} />} title="Can't open this job" body={err} action={<Link to="/today" className="font-semibold text-primary inline-flex min-h-[2.75rem] items-center">Back to Today</Link>} /></Page>;
+  if (err) return <Page title="Job" back={back}><Empty icon={<AlertTriangle size={22} />} title="Can't open this job" body={err} action={<Link to="/today" className={goButtonClass("link")}>Back to Today</Link>} /></Page>;
   if (!order) return <Page title="Job" back={back}><SkeletonRows n={2} /></Page>;
 
   const meta = byKey.get(order.status);
@@ -275,7 +277,7 @@ export default function Job() {
     primary = !target || !mayClose ? { label: "Change status", run: () => setSheet(true), note: mayClose ? undefined : "Ready. Front desk finishes the job and takes payment." }
       : { label: mayPay && owes ? `Finish & take ${fmt(balance)}` : "Finish job", run: finish };
   } else if (choices.next) {
-    primary = { label: `Mark ${choices.next.name}`, run: () => pickStatus(choices.next!) };
+    primary = { label: `Mark ${sentenceCase(choices.next.name)}`, run: () => pickStatus(choices.next!) };
   } else {
     primary = { label: "Change status", run: () => setSheet(true) };
   }
@@ -302,7 +304,7 @@ export default function Job() {
           <div className="flex gap-2">
             <PrimaryButton onClick={primary.run} disabled={finishing} className="flex-1">{finishing ? "Finishing…" : primary.label}</PrimaryButton>
             {primary.label !== "Change status" && (
-              <button onClick={() => setSheet(true)} aria-label="Other statuses" className="min-h-[3.25rem] w-14 rounded-xl border-[0.5px] border-slate-200 bg-white inline-flex items-center justify-center text-ink-primary active:bg-slate-100"><ChevronDown size={22} /></button>
+              <GoButton main onClick={() => setSheet(true)} aria-label="Other statuses" className="w-14 shrink-0 !px-0"><ChevronDown size={22} /></GoButton>
             )}
           </div>
         </>}>
@@ -430,11 +432,11 @@ export default function Job() {
       <Sheet open={open === "shoot"} onClose={() => setOpen(null)} title="What's in the photo?">
         <div className="grid grid-cols-2 gap-2 px-2">
           {PHOTO_LABELS.map((l) => (
-            <button key={l.key} onClick={() => shoot(l.key)} className="min-h-[4rem] rounded-xl border border-slate-200 bg-white inline-flex items-center justify-center gap-2 text-go-body font-semibold text-ink-primary active:bg-slate-50">
+            <GoButton key={l.key} onClick={() => shoot(l.key)} className="min-h-[4rem]">
               <Tag size={18} className={l.key === "damage" ? "text-rose-600" : l.key === "after" ? "text-emerald-700" : "text-ink-tertiary"} />{l.name}
-            </button>
+            </GoButton>
           ))}
-          <button onClick={() => shoot(null)} className="col-span-2 min-h-[3.25rem] rounded-xl text-go-body font-semibold text-primary active:bg-slate-50 inline-flex items-center justify-center gap-2"><Camera size={18} />Just a photo</button>
+          <GoButton variant="link" main onClick={() => shoot(null)} className="col-span-2"><Camera size={18} />Just a photo</GoButton>
         </div>
       </Sheet>
 
@@ -447,7 +449,7 @@ export default function Job() {
               <button onClick={() => setLineQty(line, (line.qty ?? 1) + 1)} aria-label="One more" className="h-14 w-14 rounded-full border border-slate-200 bg-white inline-flex items-center justify-center text-ink-primary"><Plus size={22} /></button>
             </div>
             <p className="text-center text-ink-secondary">{fmt(line.unit_price)} each</p>
-            <button onClick={() => setLineQty(line, 0)} className="mt-4 w-full min-h-[3.25rem] rounded-xl border border-rose-200 bg-rose-50 font-semibold text-rose-700 inline-flex items-center justify-center gap-2"><Trash2 size={18} />Remove from job</button>
+            <GoButton variant="danger" main onClick={() => setLineQty(line, 0)} className="mt-4 w-full"><Trash2 size={18} />Remove from job</GoButton>
           </div>
         )}
       </Sheet>
@@ -469,7 +471,7 @@ export default function Job() {
             <div className="absolute inset-x-0 bottom-[calc(env(safe-area-inset-bottom)+1rem)] flex justify-center gap-1.5 px-3" onClick={(e) => e.stopPropagation()} role="group" aria-label="What this photo shows">
               {PHOTO_LABELS.map((l) => (
                 <button key={l.key} onClick={() => relabel(photo, photo.label === l.key ? null : l.key)} aria-pressed={photo.label === l.key}
-                  className={`min-h-[2.75rem] rounded-full px-4 text-go-sub font-semibold ${photo.label === l.key ? "bg-[#fff] text-[#14213f]" : "bg-[#fff]/15 text-[#fff]"}`}>{l.name}</button>
+                  className={`min-h-[2.75rem] rounded-full px-4 text-go-sub font-semibold ${photo.label === l.key ? "bg-camera-ink text-paper-ink" : "bg-camera-ink/15 text-camera-ink"}`}>{l.name}</button>
               ))}
             </div>
           )}

@@ -121,9 +121,6 @@ POST /api/auth/sessions/{session_id}/sign-out [staff]
 POST /api/auth/pin [staff]
 POST /api/auth/pin/verify [staff]
 POST /api/auth/refresh [staff]
-# bins
-POST /api/bins/allocate-serial [staff]
-POST /api/bins/consume [staff]
 # chats
 POST /api/chats/threads [staff]
 POST /api/chats/threads/{tid}/inbound [staff]

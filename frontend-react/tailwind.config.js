@@ -12,6 +12,11 @@ export default {
   theme: {
     extend: {
       colors: {
+        // Printed-document previews (receipts, estimates) stay white paper in dark mode too.
+        paper: "#ffffff",
+        "paper-ink": "#14213f",   // text on a paper preview: stays dark in dark mode too
+        // Tekly Go's camera and photo viewers: a near-black stage with white controls, in both themes.
+        camera: { DEFAULT: "#0b1020", ink: "#ffffff" },
         surface: "#faf8ff",
         "surface-dim": "#cdd9ff",
         "surface-bright": "#faf8ff",
@@ -55,6 +60,12 @@ export default {
       },
       // Tekly Go's five type steps (size/line-height): large title, title, body, subhead, caption.
       fontSize: {
+        // Web app steps between Tailwind's own (xs 12, sm 14, base 16, xl 20, 2xl 24).
+        "2xs": ["11px", { lineHeight: "16px" }],
+        md: ["15px", { lineHeight: "22px" }],
+        title: ["17px", { lineHeight: "24px" }],
+        display: ["28px", { lineHeight: "34px" }],
+        hero: ["44px", { lineHeight: "1" }],   // the one big amount on a job (work-order drawer)
         "go-display": ["28px", { lineHeight: "34px" }],
         "go-title": ["20px", { lineHeight: "25px" }],
         "go-body": ["16px", { lineHeight: "22px" }],
@@ -76,7 +87,9 @@ export default {
   },
   plugins: [
     plugin(({ addBase }) => {
-      addBase({ ":root": light, ".dark": { ...dark, "color-scheme": "dark" } });
+      // `.always-light` keeps a subtree in the light palette inside the dark app: previews of
+      // customer-facing pages (which are always light) shown in Settings.
+      addBase({ ":root": light, ".dark": { ...dark, "color-scheme": "dark" }, ".dark .always-light": { ...light, "color-scheme": "light", color: "rgb(var(--c-ink-primary))" } });
     }),
   ],
 };

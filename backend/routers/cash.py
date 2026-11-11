@@ -281,9 +281,18 @@ class TxnIn(BaseModel):
 @router.post("/transactions", status_code=201)
 async def create_transaction(
     data: TxnIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
+    """A manual income or expense. A retry with the same Idempotency-Key gets the first answer
+    back instead of posting twice."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "cash.transaction", data,
+                          lambda: _create_transaction(data, db, current))
+
+
+async def _create_transaction(data: TxnIn, db: AsyncSession, current: Employee):
     if data.txn_type not in ("income", "expense"):
         raise HTTPException(400, "Use income or expense (transfer has its own endpoint)")
     await assert_perm(db, current, "can_create_incomes" if data.txn_type == "income" else "can_create_expenses")
@@ -471,9 +480,18 @@ async def _registry_rate(db, org_id: str, code: str) -> Optional[float]:
 @router.post("/transfer", status_code=201)
 async def transfer(
     data: TransferIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_transfer_money")),
 ):
+    """Move money between two accounts. A retry with the same Idempotency-Key gets the first
+    answer back instead of moving it twice."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "cash.transfer", data,
+                          lambda: _transfer(data, db, current))
+
+
+async def _transfer(data: TransferIn, db: AsyncSession, current: Employee):
     if data.from_account_id == data.to_account_id:
         raise HTTPException(400, "Choose two different accounts")
     if data.amount <= 0:
@@ -650,7 +668,7 @@ async def _refuse_double_click(db, org_id, order_id, account_id, amount) -> None
     since = now_utc() - timedelta(seconds=_DOUBLE_CLICK_S)
     hit = (await db.execute(select(Transaction.id).where(
         Transaction.org_id == org_id, Transaction.account_id == account_id, Transaction.ref_type == "order",
-        Transaction.ref_id == order_id, Transaction.txn_type == "invoice_payment", Transaction.status == "active",
+        Transaction.ref_id == order_id, Transaction.txn_type == "invoice_payment", Transaction.status != "deleted",
         Transaction.amount == q2(abs(amount)), Transaction.created_at >= since).limit(1))).scalar_one_or_none()
     if hit:
         raise HTTPException(409, f"{q2(abs(amount)):.2f} was just taken for this job into this account. "
@@ -685,12 +703,20 @@ async def _pay_order(order_id: str, data: OrderPaymentIn, db: AsyncSession, curr
     # Lock the order row so two concurrent "pay" requests serialize (Postgres) — combined with the
     # remaining<=0 guard below this prevents a double-click / webhook-race from double-posting a
     # payment. (with_for_update is a no-op on SQLite, which already serializes writes.)
+    # FOR NO KEY UPDATE, not FOR UPDATE: invoices and payments reference the job by foreign key,
+    # so writing one of them takes FOR KEY SHARE on the job, which a plain FOR UPDATE held by the
+    # other job's payment blocks — two jobs billed on one invoice and paid together deadlocked.
+    # NO KEY UPDATE still serialises two payments on one job. Locking the job's invoices before
+    # the job instead (Invoice -> Order) deadlocked against prepayments, pay links, the card
+    # reader and refunds, which all take Order -> Invoice.
     o = (await db.execute(select(Order).where(
-        Order.id == order_id, Order.org_id == current.org_id).with_for_update())).scalar_one_or_none()
+        Order.id == order_id, Order.org_id == current.org_id)
+        .with_for_update(key_share=True))).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
     # remaining = total minus everything already paid, net of refunds and credit notes (shared definition)
-    from backend.services.order_money import balance_due, cancel_open_pay_links, reader_charge_in_flight
+    from backend.services.order_money import balance_due, cancel_open_pay_links, reader_charge_in_flight, refuse_archived
+    refuse_archived(o)
     if await reader_charge_in_flight(db, order_id):
         raise HTTPException(409, "A card reader charge for this order is still in progress. "
                                  "Finish or cancel it on the reader first.")
@@ -710,9 +736,10 @@ async def _pay_order(order_id: str, data: OrderPaymentIn, db: AsyncSession, curr
     from backend.services.invoice_money import apply_order_payment, notify_payment_received
     if data.method == "balance":
         # Paid out of credit the client already has with the shop (an advance, an overpayment).
-        # No money moves and the ledger already holds that credit, so nothing is posted to it:
-        # posting "income" here erased real debt when the client had no credit at all (B3).
-        from backend.services.ledger import available_credit
+        # No money moves: posting "income" here erased real debt when the client had no credit at
+        # all (B3). The credit is spent by charging the job up front (spend_credit), so the same
+        # credit can't pay a second job before this one closes.
+        from backend.services.ledger import available_credit, spend_credit
         credit = await available_credit(db, current.org_id, o.client_id, order_id)
         if q2(amount) > credit:
             raise HTTPException(400, f"This client has only {credit:.2f} of credit to pay from. "
@@ -720,6 +747,8 @@ async def _pay_order(order_id: str, data: OrderPaymentIn, db: AsyncSession, curr
         await _before_new_invoice(db, current.org_id, o, True)
         await apply_order_payment(db, o, amount, method="balance", received_by_id=current.id,
                                   reference="Paid from client credit")
+        await spend_credit(db, current.org_id, o.client_id, amount, order_id=order_id,
+                           parts=[(order_id, amount)], label=o.order_number, created_by_id=current.id)
         await log_system_event(db, current.org_id, "order", order_id,
                                f"Paid from client credit: {amount}")
         await db.flush()
@@ -786,9 +815,12 @@ async def _prepay_order(order_id: str, data: PrepayIn, db: AsyncSession, current
         raise HTTPException(404, "Order not found")
     # The job's lock (a real one on SQLite too), then a fresh read: two prepayments at once both
     # count in prepayment_total below.
-    from backend.services.invoice_money import lock_order
+    from backend.services.invoice_money import lock_invoices_of, lock_order
     await lock_order(db, o.id)
+    await lock_invoices_of(db, o.id)     # then its invoices, before the till and the ledger (M22)
     await db.refresh(o)
+    from backend.services.order_money import refuse_archived
+    refuse_archived(o)
     if data.amount <= 0:
         raise HTTPException(400, "Amount must be positive")
     acc = (await db.execute(select(Account).where(Account.id == data.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
@@ -806,19 +838,21 @@ async def _prepay_order(order_id: str, data: PrepayIn, db: AsyncSession, current
                   reference="Prepayment",
                   shift_id=await open_drawer_shift(db, current.org_id, acc) if data.method == "cash" else None)
     db.add(pay)
-    if o.client_id:
-        await db.flush()
-        from backend.services.ledger import post_contact_ledger
-        await post_contact_ledger(db, current.org_id, o.client_id, "prepayment", -abs(data.amount),
-                                  note=f"Prepayment for {o.order_number}", ref_type="payment",
-                                  ref_id=pay.id, created_by_id=current.id)
     o.prepayment_total = (o.prepayment_total or 0) + data.amount
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "order", order_id, f"Prepayment {data.amount} to {acc.name}")
     from backend.services.invoice_money import apply_order_money, notify_payment_received
     from backend.services.order_money import cancel_open_pay_links, resync_write_off
     await db.flush()
+    # The invoice before the client ledger (Invoice -> Client), the order Invoices › Record
+    # payment takes: posting the ledger first deadlocked against an invoice payment taken at the
+    # same moment.
     await apply_order_money(db, o)
+    if o.client_id:
+        from backend.services.ledger import post_contact_ledger
+        await post_contact_ledger(db, current.org_id, o.client_id, "prepayment", -abs(data.amount),
+                                  note=f"Prepayment for {o.order_number}", ref_type="payment",
+                                  ref_id=pay.id, created_by_id=current.id)
     await resync_write_off(db, o, current.id)   # paid after dropping: less is written off
     await cancel_open_pay_links(db, o)
     await db.commit()
@@ -840,8 +874,9 @@ async def refund_overpayment(
     returned goods go through /api/returns/refunds, which also lowers the bill."""
     await assert_perm(db, current, "can_create_returns")   # paying money back, not just seeing it
     # Row lock (B11): two refunds at once both read the same overpayment and paid it out twice.
+    # NO KEY UPDATE: the refund's Payment row references the job (see _pay_order).
     o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
-                          .with_for_update())).scalar_one_or_none()
+                          .with_for_update(key_share=True))).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
     from backend.services.invoice_money import lock_order
@@ -887,6 +922,8 @@ async def create_sub_invoice(
     o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
+    from backend.services.order_money import refuse_archived
+    refuse_archived(o)
     lines = (await db.execute(select(OrderLine).where(OrderLine.order_id == order_id))).scalars().all()
     # A line is billed once. No lines picked = bill the rest (every line not on an invoice yet).
     from backend.services.invoice_money import billed_on, lock_order
@@ -941,14 +978,19 @@ async def void_document_legs(db, org_id, ref_type, ref_id, reason, actor_id) -> 
     """Soft-delete the cash legs a document posted (a sale's takings, a refund's payout) when
     the document itself is voided: each leg's amount comes back out of its account balance and
     the row stays, struck through. The document-side caller has already undone everything else."""
+    # In account order: two voids whose documents hit tills A and B in opposite order each took
+    # one till's row lock and waited for the other's (Postgres then failed one with a deadlock).
     legs = (await db.execute(select(Transaction).where(
         Transaction.org_id == org_id, Transaction.ref_type == ref_type, Transaction.ref_id == ref_id,
-        func.coalesce(Transaction.status, "active") != "deleted"))).scalars().all()
+        func.coalesce(Transaction.status, "active") != "deleted")
+        .order_by(Transaction.account_id, Transaction.id))).scalars().all()
     for leg in legs:
         acc = (await db.execute(select(Account).where(
             Account.id == leg.account_id, Account.org_id == org_id))).scalar_one_or_none()
         if acc:
-            acc.balance = q2((acc.balance or 0) - leg.amount)
+            # Atomic like post_transaction: a read-modify-write here lost a sale that posted
+            # into the same till between the read and the commit.
+            await add_to_column(db, acc, "balance", -float(leg.amount or 0))
         leg.status = "deleted"
         leg.void_reason = reason
         leg.voided_by_id = actor_id

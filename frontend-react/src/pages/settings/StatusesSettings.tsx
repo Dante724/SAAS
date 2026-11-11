@@ -1,4 +1,6 @@
 import { useEffect, useRef, useState } from "react";
+import TeklySelect from "../../components/TeklySelect";
+import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import Switch from "../../components/Switch";
 import { api } from "../../api/client";
@@ -103,17 +105,17 @@ export function StatusList({ statuses, recordType, onRecordType, onOpen, onAdd, 
   return (
     <div className="max-w-3xl space-y-4">
       <div className="flex items-center gap-2 flex-wrap">
-        <button onClick={onAdd} className="inline-flex items-center gap-1.5 h-9 px-3.5 rounded-xl bg-primary text-white text-xs font-semibold hover:opacity-90"><M n="add" c="text-sm" />Add status</button>
+        <button onClick={onAdd} className={buttonClass("primary", "md")}><M n="add" c="text-sm" />Add status</button>
         <div className="inline-flex items-center bg-slate-100 rounded-xl p-1">
           {RECORD_TYPES.slice(0, 2).map(([rt, label]) => (
             <button key={rt} onClick={() => onRecordType(rt)}
               className={`px-3.5 py-1.5 rounded-lg text-xs font-semibold transition-colors ${recordType === rt ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary hover:text-ink-primary"}`}>{label}</button>
           ))}
-          <select value={inMore ? recordType : ""} onChange={(e) => e.target.value && onRecordType(e.target.value)} aria-label="More status lists"
+          <TeklySelect value={inMore ? recordType : ""} onChange={(e) => e.target.value && onRecordType(e.target.value)} aria-label="More status lists"
             className={`bg-transparent pl-3 pr-1 py-1.5 rounded-lg text-xs font-semibold cursor-pointer outline-none ${inMore ? "bg-white text-ink-primary shadow-sm" : "text-ink-secondary"}`}>
             <option value="">More…</option>
             {more.map(([rt, label]) => <option key={rt} value={rt}>{label}</option>)}
-          </select>
+          </TeklySelect>
         </div>
       </div>
 
@@ -155,7 +157,7 @@ export function StatusList({ statuses, recordType, onRecordType, onOpen, onAdd, 
                     <button aria-label={`Move ${s.name} down`} disabled={idx === statuses.length - 1} onClick={() => onMove(idx, idx + 1)} className="text-ink-tertiary hover:text-primary disabled:opacity-20 leading-none"><M n="expand_more" c="text-sm" /></button>
                   </div>
                 </div>
-                <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: s.color || "#94a3b8", boxShadow: `0 0 0 3px #fff, 0 0 0 4px ${(s.color || "#94a3b8")}55` }} />
+                <span className="w-3 h-3 rounded-full flex-shrink-0" style={{ background: s.color || "#94a3b8", boxShadow: `0 0 0 3px rgb(var(--c-card)), 0 0 0 4px ${(s.color || "#94a3b8")}55` }} />
                 <span className="text-sm font-medium text-ink-primary truncate">{s.name}</span>
                 {s.is_default && <span className="text-[11px] text-ink-tertiary">starts every job</span>}
                 <span className="ml-auto flex items-center gap-1.5">
@@ -260,7 +262,7 @@ function MovesPanel({ statuses, onFlash }: { statuses: any[]; onFlash: (m: strin
                         return (
                           <button key={t.id} onClick={() => toggle(fr.id, t.id)} disabled={busy} aria-pressed={on}
                             className={`inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs border transition-colors disabled:opacity-60 ${on ? "bg-white border-primary/40 text-ink-primary shadow-sm" : "border-dashed border-slate-300 text-ink-tertiary hover:border-slate-400 hover:text-ink-secondary"}`}>
-                            {on ? <M n="check" c="text-[12px] text-primary" /> : <Dot c={t.color} />}{t.name}
+                            {on ? <M n="check" c="text-xs text-primary" /> : <Dot c={t.color} />}{t.name}
                           </button>
                         );
                       })}
@@ -376,7 +378,7 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
 
   return (
     <div className="fixed inset-0 z-50 flex justify-end">
-      <div className="absolute inset-0 bg-ink-primary/30 backdrop-blur-[2px]" aria-hidden="true" onClick={onClose} />
+      <div className="absolute inset-0 bg-ink-primary/30" aria-hidden="true" onClick={onClose} />
       <div role="dialog" aria-label={isNew ? "New status" : `Edit ${f.name}`} className="relative w-[460px] max-w-full bg-white h-full shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.28s_cubic-bezier(.16,1,.3,1)]">
         <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
         <div className="flex items-center gap-3 px-5 pt-5 pb-3">
@@ -408,9 +410,9 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
 
           <div>
             <label className={lbl}>Stage</label>
-            <select value={f.status_group} onChange={(e) => set("status_group", e.target.value)} className="glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary">
+            <TeklySelect value={f.status_group} onChange={(e) => set("status_group", e.target.value)} className="glass-input w-full rounded-xl px-3 py-2 text-sm text-ink-primary">
               {GROUP_OPTIONS.map(([v, l]) => <option key={v} value={v}>{l}</option>)}
-            </select>
+            </TeklySelect>
           </div>
 
           <div className="rounded-xl bg-slate-50 border border-slate-100 px-4 py-3">
@@ -470,12 +472,12 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
                     className="glass-input w-20 py-1.5 px-2 text-xs text-right rounded-lg" /><span className="text-xs text-ink-secondary">min</span>
                 </span>
               ) : (
-                <select value={f.time_limit_min ?? ""} aria-label="Alert after"
+                <TeklySelect value={f.time_limit_min ?? ""} aria-label="Alert after"
                   onChange={(e) => { if (e.target.value === "custom") { setCustomLimit(true); return; } set("time_limit_min", e.target.value ? Number(e.target.value) : null); }}
                   className="ml-auto glass-input py-1.5 px-2 text-xs rounded-lg">
                   {LIMITS.map(([v, l]) => <option key={l} value={v ?? ""}>{l}</option>)}
                   <option value="custom">Custom…</option>
-                </select>
+                </TeklySelect>
               )}
             </div>
             {rt === "estimate" && <>
@@ -516,11 +518,11 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
                   <div className="flex items-center gap-3 py-2.5 border-t border-slate-100">
                     <span className="w-8 h-8 rounded-lg bg-slate-100 text-ink-secondary grid place-items-center flex-shrink-0"><M n="inventory_2" c="text-base" /></span>
                     <span className="text-sm text-ink-primary">Move the item to</span>
-                    <select value={f.moves_asset_to || ""} onChange={(e) => set("moves_asset_to", e.target.value)} className="ml-auto glass-input py-1.5 px-2 text-xs rounded-lg w-40">
+                    <TeklySelect value={f.moves_asset_to || ""} onChange={(e) => set("moves_asset_to", e.target.value)} className="ml-auto glass-input py-1.5 px-2 text-xs rounded-lg w-40">
                       <option value="">Don't move</option>
                       {warehouses.filter((w) => w.kind !== "product").map((w) => <option key={w.id} value={w.name}>{w.name}</option>)}
                       {f.moves_asset_to && !warehouses.some((w) => w.name === f.moves_asset_to) && <option value={f.moves_asset_to}>{f.moves_asset_to}</option>}
-                    </select>
+                    </TeklySelect>
                   </div>
                 </div>
                 <div>
@@ -534,8 +536,8 @@ export function StatusEditor({ status, recordType = "work_order", statuses, onCl
         </div>
 
         <div className="px-5 py-4 border-t border-slate-100 flex items-center gap-2">
-          <button onClick={onClose} className="ml-auto px-4 py-2 rounded-xl border border-slate-200 text-ink-secondary hover:bg-slate-50 font-semibold text-xs">Cancel</button>
-          <button onClick={save} disabled={busy} className="px-5 py-2 rounded-xl bg-ink-primary text-white font-semibold text-xs hover:opacity-90 disabled:opacity-60">{busy ? "Saving…" : isNew ? "Add status" : "Save"}</button>
+          <button onClick={save} disabled={busy} className={buttonClass("primary", "md")}>{busy ? "Saving…" : isNew ? "Add status" : "Save"}</button>
+          <button onClick={onClose} className={buttonClass("secondary", "md")}>Cancel</button>
         </div>
       </div>
     </div>

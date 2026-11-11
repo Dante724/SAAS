@@ -3,6 +3,7 @@
 // G3: this box and the Activity tab's message box share the same thread, and both show what the
 // server says really happened (sent by email/text, or saved but not sent and why).
 import { useEffect, useRef, useState } from "react";
+import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
 import { deliveryText, deliveryTone, type Delivery, type Flash } from "../../lib/delivery";
@@ -108,7 +109,7 @@ export default function ConversationPanel({ orderId, onFlash, reloadKey, onSent 
           onKeyDown={(e) => { if (e.key === "Enter" && !e.shiftKey) { e.preventDefault(); send(); } }}
           className="glass-input flex-1 py-2 px-3 text-xs rounded-xl resize-none max-h-24" />
         <button onClick={send} disabled={busy || !text.trim()} aria-label="Send message"
-          className="shrink-0 w-9 h-9 rounded-xl bg-primary text-white flex items-center justify-center shadow-clay-sm disabled:opacity-40"><M n="send" c="text-base" /></button>
+          className={buttonClass("primary", "md", "shrink-0 w-9")}><M n="send" c="text-base" /></button>
       </div>
       <DeliveryNote note={note} />
     </div>

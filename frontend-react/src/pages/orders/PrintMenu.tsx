@@ -101,6 +101,8 @@ export default function PrintMenu({ orderId, status, canInvoices = true, onStick
 
   const choice = pickDefault(fitting, last, all, !!onItemised);
   const woName = (all.find((t) => t.doc_type === itemisedType && t.is_default) || all.find((t) => t.doc_type === itemisedType))?.name || (itemisedType === "estimate" ? "Estimate" : "Work order");
+  // "Print work order receipt": a name read mid-sentence starts lower-case, unless it opens with an acronym (VAT invoice).
+  const midSentence = (s: string) => /^[A-Z][a-z]/.test(s) ? s[0].toLowerCase() + s.slice(1) : s;
   const nameOf = (id: string) => id === STICKER ? "sticker" : id === ITEMISED ? `${woName} (itemised)`
     : id.startsWith(INV) ? (invTpls.find((t) => INV + t.id === id)?.name || "invoice")
     : (all.find((t) => t.id === id)?.name || "document");
@@ -148,8 +150,8 @@ export default function PrintMenu({ orderId, status, canInvoices = true, onStick
   const autoOn = (id: string) => (autoTpls || []).some((t) => t.id === id && (t.auto_print_events || []).includes("close"));
   // Which listed document the "List every kit item" switch belongs to: the default work order (or estimate).
   const itemisedAnchor = (listed.find((t) => t.doc_type === itemisedType && t.is_default) || listed.find((t) => t.doc_type === itemisedType))?.id;
-  const row = "flex w-full min-h-10 items-center gap-2 rounded-lg px-3 py-2 text-left text-[13px] text-ink-primary hover:bg-slate-50";
-  const tag = "shrink-0 rounded-full px-1.5 py-px text-[10px] font-semibold";
+  const row = "flex w-full min-h-10 items-center gap-2 rounded-lg px-3 py-2 text-left text-sm text-ink-primary hover:bg-slate-50";
+  const tag = "shrink-0 rounded-full px-1.5 py-px text-2xs font-semibold";
   const printRow = (id: string, label: string, opts?: { auto?: boolean }) => (
     <button key={id} type="button" onClick={() => print(id)} className={row}>
       <span className="min-w-0 flex-1 truncate">{label}</span>
@@ -161,7 +163,7 @@ export default function PrintMenu({ orderId, status, canInvoices = true, onStick
     <div className="flex items-stretch">
       <button type="button" onClick={() => print(choice)} disabled={busy}
         className="h-9 px-3.5 text-xs text-ink-primary font-semibold flex items-center gap-1.5 border border-slate-200 rounded-l-xl bg-white hover:bg-slate-50 disabled:opacity-60">
-        <M n="print" c="text-sm" />{busy ? "Preparing…" : `Print ${nameOf(choice)}`}</button>
+        <M n="print" c="text-sm" />{busy ? "Preparing…" : `Print ${midSentence(nameOf(choice))}`}</button>
       <button type="button" data-print-menu={orderId} aria-label="Choose what to print" aria-expanded={open}
         onClick={() => setOpen((v) => !v)} disabled={busy}
         className="h-9 px-2 text-ink-secondary hover:text-ink-primary border border-l-0 border-slate-200 rounded-r-xl bg-white hover:bg-slate-50">
@@ -171,7 +173,7 @@ export default function PrintMenu({ orderId, status, canInvoices = true, onStick
           <div className="-m-1.5">
             {/* Print now: click a row and it prints. The sticker sits in the same list. */}
             <div className="p-1.5">
-              <div className="px-3 pb-1 pt-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-tertiary">Print now</div>
+              <div className="px-3 pb-1 pt-1.5 text-[11px] font-semibold text-ink-tertiary">Print now</div>
               {listed.map((t) => (<Fragment key={t.id}>
                 {printRow(onItemised && t.id === itemisedAnchor && kitItems ? ITEMISED : t.id, t.name, { auto: autoOn(t.id) })}
                 {/* The itemised copy isn't another document: it's this one with every kit item listed. */}
@@ -198,7 +200,7 @@ export default function PrintMenu({ orderId, status, canInvoices = true, onStick
             {autoPrint && autoTpls && autoTpls.length > 0 && (
               <div className="rounded-b-xl border-t border-slate-200 bg-slate-50 px-1.5 pb-2 pt-2">
                 <div className="flex items-baseline justify-between px-3 pb-1">
-                  <span className="text-[11px] font-semibold uppercase tracking-wide text-ink-tertiary">Automatic</span>
+                  <span className="text-[11px] font-semibold text-ink-tertiary">Automatic</span>
                   <span className="text-[11px] text-ink-tertiary">Applies to every job</span>
                 </div>
                 {autoTpls.map((t) => {

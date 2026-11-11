@@ -65,7 +65,7 @@ export default function KitGroupHeader({ orderId, groupId, name, qty, mode, lock
           <M n={open ? "expand_more" : "chevron_right"} c="text-base" />
         </button>
         <div className="min-w-0 flex items-center gap-3">
-          <div className="w-7 h-7 rounded-lg grid place-items-center flex-none bg-slate-100 text-ink-secondary"><M n="package_2" c="text-[15px]" /></div>
+          <div className="w-7 h-7 rounded-lg grid place-items-center flex-none bg-slate-100 text-ink-secondary"><M n="package_2" c="" /></div>
           <div className="min-w-0">
             <h5 className="text-[13px] font-semibold text-ink-primary truncate">{name}{qty > 1 ? ` × ${qty}` : ""}</h5>
             <p className="text-xs text-ink-secondary" title={locked != null ? "The customer's price for this kit stays the same when its parts change." : undefined}>{sub}</p>
@@ -82,12 +82,12 @@ export default function KitGroupHeader({ orderId, groupId, name, qty, mode, lock
             <FloatingMenu anchorSel={menuSel} onClose={() => setMenuOpen(false)} width={256}>
               <div className="text-[13px]">
                 {canPrint && <>
-                  <div className="px-2.5 pt-1 pb-1.5 text-[11px] font-semibold uppercase tracking-wide text-ink-tertiary">Customer sees</div>
+                  <div className="px-2.5 pt-1 pb-1.5 text-[11px] font-semibold text-ink-tertiary">Customer sees</div>
                   {KIT_PRINT_LABELS.map((o) => (
                     <button type="button" key={o.value} role="menuitemradio" aria-checked={mode === o.value} title={o.hint}
                       onClick={pick(() => { if (o.value !== mode) save({ print_mode: o.value }, "Kit print setting saved"); })}
                       className={`${item} ${mode === o.value ? "font-semibold text-ink-primary" : "text-ink-primary"}`}>
-                      <span className="truncate">{o.label}</span>{mode === o.value && <M n="check" c="ml-auto text-[16px] text-primary" />}
+                      <span className="truncate">{o.label}</span>{mode === o.value && <M n="check" c="ml-auto text-primary" />}
                     </button>
                   ))}
                 </>}

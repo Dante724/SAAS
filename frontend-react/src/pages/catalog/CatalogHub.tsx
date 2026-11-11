@@ -3,6 +3,7 @@
 // edit drawer as before — only the location changed.
 import { useState } from "react";
 import Shell from "../../components/Shell";
+import Tabs from "../../components/Tabs";
 import { useMe } from "../../context/Me";
 import InventoryDrawer, { DrawerKind } from "../inventory/InventoryDrawer";
 import { Services, Products, Bundles } from "../company/CompanyHub";
@@ -12,7 +13,7 @@ type Tab = "services" | "products" | "bundles" | "plans";
 const TABS: { id: Tab; label: string }[] = [
   { id: "services", label: "Services" },
   { id: "products", label: "Products" },
-  { id: "bundles", label: "Job Kits" },
+  { id: "bundles", label: "Job kits" },
   { id: "plans", label: "Plans" },
 ];
 
@@ -26,21 +27,7 @@ export default function CatalogHub() {
   return (
     <Shell title="Catalog">
       <div className="flex-1 overflow-y-auto">
-        <div className="px-6 pt-4 flex items-center gap-1 border-b border-slate-200/70">
-          {tabs.map((t) => (
-            <button
-              key={t.id}
-              onClick={() => setTab(t.id)}
-              className={`px-3 py-2 text-sm font-semibold rounded-t-lg -mb-px border-b-2 whitespace-nowrap ${
-                tab === t.id
-                  ? "text-primary border-primary"
-                  : "text-ink-tertiary border-transparent hover:text-ink-primary"
-              }`}
-            >
-              {t.label}
-            </button>
-          ))}
-        </div>
+        <Tabs label="Catalog sections" className="px-6 pt-4" value={tab} onChange={setTab} tabs={tabs} />
 
         <div className="p-6">
           {tab === "services" && can("can_view_labors") && <Services refresh={refresh} onOpen={(s) => setDrawer({ kind: "service", id: s?.id, initial: s })} />}
