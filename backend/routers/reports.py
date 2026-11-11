@@ -8,7 +8,7 @@ from sqlalchemy.orm import selectinload
 from backend.db.database import get_db
 from backend.models import Order, Client, Invoice, Part, StockLevel, Task, Employee
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.dates import day_end_utc, day_start_utc, now_utc, shop_today, shop_tzname, today_in
+from backend.services.dates import day_start_utc, now_utc, range_edge, shop_today, shop_tzname, today_in
 # The money figures and low stock are defined once, in services/revenue (read its docstring).
 from backend.services import revenue as money_rules, stock_rows
 from backend.services.revenue import low_stock_count_query, low_stock_query, line_net
@@ -167,7 +167,7 @@ async def low_stock_report(
 # Gross profit = Price - Discount - Cost ; Markup % = GrossProfit / Cost * 100
 # Sold/Provided reports count only Ready + Closed status groups.
 # ════════════════════════════════════════════════════
-from datetime import datetime, timedelta
+from datetime import timedelta
 from fastapi import Query
 from fastapi.responses import StreamingResponse
 import io
@@ -179,20 +179,10 @@ from backend.services.money import q2
 from backend.core.spreadsheet import safe_row
 
 
-def _range_edge(value: str, tz, *, end: bool) -> datetime:
-    """One end of a report window as naive UTC. A date-only value (YYYY-MM-DD, what the Reports
-    page sends) is a whole day on the shop's clock, the same rule as the dashboard's "today"
-    (council M12: a Kiritimati shop asking for its own today got rows=[]). A value with a time
-    is taken as given."""
-    parsed = datetime.fromisoformat(value)
-    if parsed.time() != datetime.min.time():
-        return parsed
-    if end:
-        # A date-only "To" parses to 00:00:00 — that would silently drop everything that
-        # happened *on* the end date (e.g. today's activity). Extend it to the end of that
-        # day so the range is inclusive, as users expect.
-        return day_end_utc(parsed.date(), tz) - timedelta(seconds=1)
-    return day_start_utc(parsed.date(), tz)
+# One end of a report window: services/dates.range_edge, shared with the P&L, the accountant
+# export and custom reports so they all read a date-only range as the shop's day (council M12: a
+# Kiritimati shop asking for its own today got rows=[]).
+_range_edge = range_edge
 
 
 def _parse_range(date_from, date_to, tz: str | None = None):
