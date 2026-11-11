@@ -60,6 +60,7 @@ class Settings(BaseSettings):
     DB_MAX_OVERFLOW: int = 10
     DB_POOL_TIMEOUT_S: int = 10                # wait this long for a free connection, then error (not hang)
     DB_POOL_RECYCLE_S: int = 1800
+    SLOW_QUERY_MS: int = 500                   # log a WARNING (and count it in /metrics) for statements slower than this; 0 = off
     DB_STATEMENT_TIMEOUT_MS: int = 15000       # Postgres cancels any single statement running longer; 0 = off
     DB_IDLE_IN_TX_TIMEOUT_MS: int = 60000      # ends a session left idle inside a transaction; 0 = off
     # Read-side shop isolation (db/tenancy.py): enforce | report (log other-shop reads, filter none) | off

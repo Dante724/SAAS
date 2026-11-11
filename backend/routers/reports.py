@@ -17,9 +17,45 @@ router = APIRouter(prefix="/api/reports", tags=["reports"])
 
 # Short per-org cache for the dashboard tiles: every reports visit (and every tab) used to
 # re-run all of these aggregates. Shop-wide numbers, the same for everyone allowed to see
-# them, so a few seconds of staleness is harmless. In-process; bounded.
+# them, so a few seconds of staleness is harmless (no invalidation: up to _DASH_TTL_S stale).
+# With REDIS_URL set the entry lives in Redis (`dash:{org_id}`), shared by every worker;
+# without Redis, or while it is unreachable, the bounded in-process dict below is used and
+# the request never fails because of the cache.
 _DASH_TTL_S = 30
 _dash_cache: dict = {}   # org_id -> (expires_at, payload)
+
+
+async def _dash_get(oid: str):
+    import json
+    import time
+
+    from backend.services import ratelimit
+    r = await ratelimit.get_aredis()
+    if r is not None:
+        try:
+            raw = await r.get(f"dash:{oid}")
+            return json.loads(raw) if raw else None
+        except Exception:   # noqa: BLE001 — Redis down or bad entry: fall back in-process
+            ratelimit.aredis_failed()
+    hit = _dash_cache.get(oid)
+    return hit[1] if hit and hit[0] > time.monotonic() else None
+
+
+async def _dash_put(oid: str, out: dict) -> None:
+    import time
+
+    from backend.services import ratelimit
+    from backend.services.money import json_dumps
+    r = await ratelimit.get_aredis()
+    if r is not None:
+        try:
+            await r.set(f"dash:{oid}", json_dumps(out), ex=_DASH_TTL_S)
+            return
+        except Exception:   # noqa: BLE001 — fall back in-process
+            ratelimit.aredis_failed()
+    if len(_dash_cache) > 5000:
+        _dash_cache.clear()
+    _dash_cache[oid] = (time.monotonic() + _DASH_TTL_S, out)
 
 
 @router.get("/dashboard")
@@ -27,15 +63,11 @@ async def dashboard(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_reports")),
 ):
-    import time
-    now = time.monotonic()
-    hit = _dash_cache.get(current.org_id)
-    if hit and hit[0] > now:
-        return hit[1]
+    hit = await _dash_get(current.org_id)
+    if hit is not None:
+        return hit
     out = await _dashboard(db, current.org_id)
-    if len(_dash_cache) > 5000:
-        _dash_cache.clear()
-    _dash_cache[current.org_id] = (now + _DASH_TTL_S, out)
+    await _dash_put(current.org_id, out)
     return out
 
 
