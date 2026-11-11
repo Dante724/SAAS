@@ -180,11 +180,58 @@ class SmtpEmailAdapter(ChannelAdapter):
         return await asyncio.to_thread(_blocking)
 
 
+OPERATOR_TEXT_CAP_MESSAGE = ("Daily text limit reached on Tekly's shared number — connect your own Twilio "
+                             "account in Settings › Integrations to send more.")
+# notif_creds() tags the creds it returns with these; _adapter_for() strips them off again.
+_ORG_KEY = "_org_id"
+_CAP_KEY = "_operator_daily_cap"   # texts this kind of send may take today (cap, or cap - reserve)
+_DB_KEY = "_db"                    # the caller's session: the shop's day, and the count on SQLite
+
+
+async def reserve_operator_text(db, org_id: str, limit: int) -> bool:
+    """Count one text against the shop's budget on the operator's Twilio account for the shop's
+    current day; False (nothing counted) once `limit` texts have gone out today.
+
+    One conditional upsert, atomic on Postgres and SQLite (>= 3.35):
+    INSERT … ON CONFLICT (org_id, day) DO UPDATE SET sent = sent + 1 WHERE sent < :limit RETURNING
+    sent. On Postgres it runs and commits on its own connection, so the count survives a caller that
+    rolls back after the text went out, and the row lock is not held across the Twilio call. SQLite
+    (dev / tests) has one writer: a second connection would wait on the caller's own write lock, so
+    there it runs in the caller's session."""
+    if limit <= 0:
+        return False
+    from backend.models import OperatorTextUsage
+    from backend.services.dates import shop_today
+    day = await shop_today(db, org_id)
+    t = OperatorTextUsage.__table__
+    if db.bind.dialect.name == "postgresql":
+        from sqlalchemy.dialects.postgresql import insert
+    else:
+        from sqlalchemy.dialects.sqlite import insert
+    stmt = insert(t).values(org_id=org_id, day=day, sent=1)
+    stmt = stmt.on_conflict_do_update(index_elements=[t.c.org_id, t.c.day], set_={"sent": t.c.sent + 1},
+                                      where=t.c.sent < limit).returning(t.c.sent)
+    if db.bind.dialect.name == "postgresql":
+        async with db.bind.connect() as conn:
+            got = (await conn.execute(stmt)).scalar_one_or_none()
+            await conn.commit()
+    else:
+        got = (await db.execute(stmt)).scalar_one_or_none()
+    return got is not None
+
+
 class TwilioAdapter(ChannelAdapter):
-    """Real SMS / WhatsApp delivery via the Twilio REST API (async httpx)."""
-    def __init__(self, channel: str, creds: Optional[dict] = None):
+    """Real SMS / WhatsApp delivery via the Twilio REST API (async httpx).
+
+    `daily_cap` (with `org_id`) is set when the shop texts through the OPERATOR's Twilio account:
+    sends past it are refused with OPERATOR_TEXT_CAP_MESSAGE (toll fraud / SMS pumping guard)."""
+    def __init__(self, channel: str, creds: Optional[dict] = None, *, org_id: Optional[str] = None,
+                 daily_cap: Optional[int] = None, db=None):
         self.name = channel  # 'sms' or 'whatsapp'
         self.creds = creds or {}   # 144jn: this shop's own Twilio account
+        self.org_id = org_id
+        self.daily_cap = daily_cap
+        self.db = db
 
     async def send(self, *, recipient: str, subject: Optional[str], body: str,
                    html: Optional[bool] = None, headers: Optional[dict] = None) -> dict:
@@ -202,6 +249,13 @@ class TwilioAdapter(ChannelAdapter):
         refused = sms_refusal(c, whatsapp=is_wa)   # S7: no billed texts outside production
         if refused:
             return {"status": "failed", "error": refused}
+        if self.daily_cap is not None and self.org_id and self.db is not None:
+            # Counted before the send (a Twilio error still used a slot): at worst an undercount
+            # of the shop's budget, never an overrun of the operator's bill.
+            if not await reserve_operator_text(self.db, self.org_id, self.daily_cap):
+                # Reported, never raised: automatic notifications log a failed send and move on;
+                # the manual send endpoints turn `capped` into a 429.
+                return {"status": "failed", "error": OPERATOR_TEXT_CAP_MESSAGE, "capped": True}
         try:
             import httpx
             url = f"https://api.twilio.com/2010-04-01/Accounts/{sid}/Messages.json"
@@ -243,7 +297,8 @@ def _adapter_for(channel: str, creds: Optional[dict] = None) -> ChannelAdapter:
     """
     from backend.config import settings
     ch = (channel or "").lower()
-    c = creds or {}
+    c = dict(creds or {})
+    org_id, daily_cap, db = c.pop(_ORG_KEY, None), c.pop(_CAP_KEY, None), c.pop(_DB_KEY, None)
     if ch == "email":
         host = c.get("host") or settings.SMTP_HOST
         from_ok = c.get("from") or c.get("user") or settings.SMTP_FROM or settings.SMTP_USER
@@ -253,19 +308,59 @@ def _adapter_for(channel: str, creds: Optional[dict] = None) -> ChannelAdapter:
         sid = c.get("account_sid") or settings.TWILIO_ACCOUNT_SID
         token = c.get("auth_token") or settings.TWILIO_AUTH_TOKEN
         if sid and token:
-            return TwilioAdapter(ch, c)
+            return TwilioAdapter(ch, c, org_id=org_id, daily_cap=daily_cap, db=db)
     return SimulatedAdapter(channel)
 
 
-async def notif_creds(db, org_id: str, channel: str) -> Optional[dict]:
-    """This shop's effective creds for a notification channel (email→smtp,
-    sms/whatsapp→twilio); None for anything else."""
+async def notif_creds(db, org_id: str, channel: str, *, transactional: bool = False) -> Optional[dict]:
+    """This shop's own credentials for `channel`'s provider (or the env defaults).
+
+    `transactional`: the text is about the customer's own job or booking (status updates,
+    reminders, a message from the job page). Those may use the whole daily cap on the operator's
+    Twilio account; everything else (campaigns, chats, birthday / win-back, test sends) stops
+    OPERATOR_SMS_RESERVE_PCT short of it. Defaults to False so a new caller can't eat the reserve.
+    None for a channel with no provider (email→smtp, sms/whatsapp→twilio)."""
     ch = (channel or "").lower()
     provider = "smtp" if ch == "email" else ("twilio" if ch in ("sms", "whatsapp") else None)
     if not provider:
         return None
     from backend.services import org_creds
-    return await org_creds.effective(db, org_id, provider)
+    creds = dict(await org_creds.effective(db, org_id, provider))
+    if provider == "twilio":
+        # Tag for TwilioAdapter: which shop is sending, and its daily cap when the keys are the
+        # operator's shared account (None on the shop's own account).
+        creds[_ORG_KEY] = org_id
+        cap = await operator_text_cap(db, org_id, creds, transactional=transactional)
+        if cap is not None:
+            creds[_CAP_KEY] = cap
+            creds[_DB_KEY] = db
+    return creds
+
+
+def uses_operator_twilio(creds: dict) -> bool:
+    """The texts are billed to the OPERATOR's Twilio account: the shop has no account SID of its own
+    (a shop that saved only a `from` number still sends on the server's SID and token)."""
+    from backend.config import settings
+    sid = settings.TWILIO_ACCOUNT_SID
+    return bool(sid) and (creds.get("account_sid") or sid) == sid
+
+
+async def operator_text_cap(db, org_id: str, creds: dict, *, transactional: bool = False) -> Optional[int]:
+    """Texts per day this shop may send on the OPERATOR's Twilio account (the server env keys);
+    None when the keys are the shop's own. Only an active (paying) subscription gets the full cap;
+    trial and every other status (past_due, unpaid, suspended, trial_lost, churned) get the trial
+    cap. Non-transactional sends stop OPERATOR_SMS_RESERVE_PCT short of it."""
+    from backend.config import settings
+    if not uses_operator_twilio(creds):
+        return None
+    from backend.models import Organisation
+    status = (await db.execute(select(Organisation.sub_status).where(
+        Organisation.id == org_id))).scalar_one_or_none()
+    cap = int(settings.OPERATOR_SMS_DAILY_CAP if status == "active" else settings.OPERATOR_SMS_DAILY_CAP_TRIAL)
+    if transactional:
+        return cap
+    pct = min(max(int(settings.OPERATOR_SMS_RESERVE_PCT), 0), 100)
+    return cap - cap * pct // 100
 
 
 async def send_direct_email(recipient: str, subject: str, body: str) -> dict:
@@ -348,7 +443,7 @@ async def dispatch_order_notifications(db: AsyncSession, *, org_id: str, order_i
                 result = await try_oauth_email(db, org_id, recipient=recipient, subject=subject, body=body,
                                                html=message_vars.is_html(t.body_template))
             if result is None:
-                _creds = await notif_creds(db, org_id, t.channel)
+                _creds = await notif_creds(db, org_id, t.channel, transactional=True)
                 result = await _adapter_for(t.channel, _creds).send(
                     recipient=recipient, subject=subject, body=body,
                     html=message_vars.is_html(t.body_template))
