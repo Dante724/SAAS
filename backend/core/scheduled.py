@@ -380,3 +380,26 @@ async def sweep_integrity() -> None:
 
     async with AsyncSessionLocal() as db:
         await sweep(db)
+
+
+@job_runner.every(900, "task-overdue-sweep")
+async def sweep_overdue_tasks() -> None:
+    """tk02: tell every assignee once when an open task passes its due time (bell + push,
+    kind task.overdue). Held outside the branch's working hours until the next opening; see
+    services/task_alerts.py for the rules."""
+    from backend.db.database import AsyncSessionLocal
+    from backend.services.task_alerts import overdue_org_ids, sweep_overdue
+
+    now = now_utc()
+    async with AsyncSessionLocal() as db:
+        org_ids = await overdue_org_ids(db, now)
+    sent = 0
+    for oid in org_ids:
+        async with AsyncSessionLocal() as db:   # a session per shop: one failure never stalls the rest
+            try:
+                sent += await sweep_overdue(db, oid, now)
+            except Exception:  # noqa: BLE001
+                log.exception("task-overdue-sweep failed for org %s", oid)
+                await db.rollback()
+    if sent:
+        log.info("task-overdue-sweep: alerted %d overdue task(s)", sent)

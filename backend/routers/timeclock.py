@@ -326,8 +326,11 @@ async def start_timer(
     task_id = data.task_id
     if task_id:
         from backend.models import Task
+        from backend.services.task_visibility import visibility_conds
+        # tk02: a task you can't see is a 404 here too (its title would show on the time entry)
         task = (await db.execute(select(Task).where(
-            Task.id == task_id, Task.org_id == current.org_id))).scalar_one_or_none()
+            Task.id == task_id, Task.org_id == current.org_id,
+            *await visibility_conds(db, current)))).scalar_one_or_none()
         if not task:
             raise HTTPException(404, "Task not found")
         if order is None and task.order_id:

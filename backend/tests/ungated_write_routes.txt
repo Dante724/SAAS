@@ -229,6 +229,7 @@ POST /api/tags/detach [staff]
 # tasks
 POST /api/tasks [staff]
 POST /api/tasks/part-request [staff]
+POST /api/tasks/move-to-today [staff]  # moves only tasks the caller may change (assignee/author, or a manager)
 DELETE /api/tasks/{task_id} [staff]
 PATCH /api/tasks/{task_id} [staff]
 POST /api/tasks/{task_id}/comments [staff]

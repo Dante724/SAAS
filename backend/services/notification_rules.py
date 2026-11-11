@@ -960,9 +960,11 @@ async def notify_contact_birthdays(db: AsyncSession, *, org_id: str,
 # ── Build 86: internal task notifications ────────────────────────────────────
 # Tasks phase 0: task alerts land in the staff bell (StaffNotification) + Web Push, like missed
 # calls and job assignments, in addition to any email/SMS rules the shop configured.
-TASK_PUSH_KINDS = {"assigned": "task.assigned", "changed": "task.changed", "completed": "task.completed"}
+TASK_PUSH_KINDS = {"assigned": "task.assigned", "changed": "task.changed", "completed": "task.completed",
+                   "overdue": "task.overdue"}
 _TASK_BELL_TITLES = {"assigned": "New task for you", "changed": "Task updated",
-                     "completed": "Task completed"}
+                     "completed": "Task completed", "overdue": "Task overdue"}
+TASK_LINK = "/tasks?task={id}"   # every task alert opens the task (bell row and push payload)
 
 
 def task_people(task) -> set:
@@ -975,7 +977,7 @@ def _task_targets(task, event: str, actor_id: Optional[str], recipients=None) ->
     edit never re-announces an assignment. Never the person who acted."""
     if recipients is not None:
         targets = {i for i in recipients if i}
-    elif event == "assigned":
+    elif event in ("assigned", "overdue"):
         targets = task_people(task)
     elif event in ("changed", "completed"):
         targets = task_people(task) | ({task.created_by_id} if task.created_by_id else set())
@@ -998,7 +1000,7 @@ async def notify_task_bell(db: AsyncSession, *, org_id: str, task, event: str,
         return 0
     live = set((await db.execute(select(_Emp.id).where(
         _Emp.id.in_(targets), _Emp.org_id == org_id, _Emp.active == True))).scalars().all())  # noqa: E712
-    link = f"/tasks?task={task.id}"
+    link = TASK_LINK.format(id=task.id)
     body = (task.title or "")[:200] + (f" · due {task.due_at:%d %b %H:%M}" if task.due_at else "")
     sent = 0
     for emp_id in sorted(live):

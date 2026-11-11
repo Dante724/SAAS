@@ -146,10 +146,15 @@ async def test_task_assignment_and_ownership(client, db, tenant):
     assert mine.status_code == 201
     r = await client.post("/api/tasks", headers=h, json={"title": "Do this", "assigned_to_id": owner.id})
     assert r.status_code == 403
-    # a task between other people can't be changed or deleted by them
+    # a task between other people can't be changed or deleted by them; since tk02 they can't
+    # see it at all (404, not 403, so its existence isn't revealed)
     other = (await client.post("/api/tasks", headers=tenant, json={"title": "Owner's", "assigned_to_id": owner.id})).json()
-    assert (await client.patch(f"/api/tasks/{other['id']}", headers=h, json={"status": "done"})).status_code == 403
-    assert (await client.delete(f"/api/tasks/{other['id']}", headers=h)).status_code == 403
+    assert (await client.patch(f"/api/tasks/{other['id']}", headers=h, json={"status": "done"})).status_code == 404
+    assert (await client.delete(f"/api/tasks/{other['id']}", headers=h)).status_code == 404
+    # an unassigned task someone else made is visible (the shop's pool) but still not theirs to change
+    pool = (await client.post("/api/tasks", headers=tenant, json={"title": "Pool"})).json()
+    assert (await client.get(f"/api/tasks/{pool['id']}", headers=h)).status_code == 200
+    assert (await client.patch(f"/api/tasks/{pool['id']}", headers=h, json={"status": "done"})).status_code == 403
     # their own task they can complete
     assert (await client.patch(f"/api/tasks/{mine.json()['id']}", headers=h, json={"status": "done"})).status_code == 200
 
