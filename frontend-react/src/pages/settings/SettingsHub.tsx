@@ -42,6 +42,7 @@ const InventoryPage = lazy(() => import("./PricingInventory").then((m) => ({ def
 const FinanceNumbering = lazy(() => import("./FinanceNumbering"));
 const InvoiceSettings = lazy(() => import("./InvoiceSettings"));
 const DocumentTemplatesPage = lazy(() => import("./DocumentTemplatesPage"));
+const BrandDocumentsPage = lazy(() => import("./documents/BrandDocumentsPage"));
 const LocationsPage = lazy(() => import("./LocationsPage"));
 const TeamPage = lazy(() => import("./TeamSettings").then((m) => ({ default: m.TeamPage })));
 const RoleEditor = lazy(() => import("./TeamSettings").then((m) => ({ default: m.RoleEditor })));
@@ -170,6 +171,8 @@ export default function SettingsHub() {
   // ?section=… deep-links a section (e.g. "Manage options" in a directory dropdown). Old links to
   // sections that moved (or are switched off) open their new home instead of a blank page.
   const [movedFrom] = useState(() => { const raw = new URLSearchParams(window.location.search).get("section") || ""; return Object.prototype.hasOwnProperty.call(MOVED_SECTIONS, raw) ? raw : ""; });
+  // Settings › Documents opens on Brand & details; "All templates" shows every template.
+  const [docsView, setDocsView] = useState<"brand" | "all">("brand");
   const [sec, setSec] = useState<Section>(() => { const raw = new URLSearchParams(window.location.search).get("section") || "overview"; return Object.prototype.hasOwnProperty.call(MOVED_SECTIONS, raw) ? MOVED_SECTIONS[raw].to : (raw as Section); });
   const [q, setQ] = useState("");
   const [collapsed, setCollapsed] = useState<Record<string, boolean>>({});
@@ -483,9 +486,16 @@ export default function SettingsHub() {
               )} />
           )}
 
-          {sec === "templates" && (
-            <DocumentTemplatesPage templates={lists.templates} onOpen={(row) => setEditing({ sec: "templates", row })}
-              onChanged={() => reloadSec("templates")} onFlash={flash} />
+          {sec === "templates" && docsView === "brand" && (
+            <BrandDocumentsPage templates={lists.templates} reload={() => reloadSec("templates")}
+              onOpenEditor={(row) => setEditing({ sec: "templates", row })} onAllTemplates={() => setDocsView("all")} />
+          )}
+          {sec === "templates" && docsView === "all" && (
+            <div className="space-y-3">
+              <button type="button" onClick={() => setDocsView("brand")} className="text-xs font-semibold text-primary hover:underline">← Brand &amp; details</button>
+              <DocumentTemplatesPage templates={lists.templates} onOpen={(row) => setEditing({ sec: "templates", row })}
+                onChanged={() => reloadSec("templates")} onFlash={flash} />
+            </div>
           )}
 
           {sec === "finance" && <InvoiceSettings />}
