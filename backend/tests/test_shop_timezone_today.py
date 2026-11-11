@@ -155,3 +155,40 @@ async def test_cash_flow_floor_is_shop_midnight(client, monkeypatch, db):
     monkeypatch.setattr("backend.routers.cash.has_perm", _no)
     # Kiritimati's today began at 10:00 UTC on the UTC calendar day.
     assert await cash_flow_floor(db, emp) == datetime(utc_day.year, utc_day.month, utc_day.day, 10, 0)
+
+
+async def test_every_money_report_reads_a_date_only_range_as_the_shop_day(client, db):
+    """A counter sale and a new client at 01:30 on 11 Nov in Kolkata are 20:00 UTC on 10 Nov.
+    Asked for 11 Nov, the P&L, Total profit and a custom report all count them, and the P&L takes
+    that day's expense record only. The P&L and custom reports used to read a date-only range as
+    UTC days while Total profit and the Reports page read the shop's day, so near the shop's
+    midnight two reports for the same day disagreed."""
+    from decimal import Decimal
+
+    from sqlalchemy import update
+
+    from backend.models import Client, Expense, Sale
+    from backend.services import custom_reports
+    from backend.tests.test_b5_pos_quote import _product
+    H, acc, _ = await _shop(client, "Asia/Kolkata")
+    org = (await client.get("/api/auth/me", headers=H)).json()["org_id"]
+    pid, _loc = await _product(client, H, db, qty=5, price=50)
+    r = await client.post("/api/sales", json={"account_id": acc, "lines": [
+        {"kind": "product", "ref_id": pid, "description": "Charger", "qty": 1, "unit_price": 50}]}, headers=H)
+    assert r.status_code == 201, r.text
+    late_evening_utc = datetime(2026, 11, 10, 20, 0)          # 01:30 on 11 Nov in Kolkata
+    await db.execute(update(Sale).where(Sale.id == r.json()["id"]).values(created_at=late_evening_utc))
+    await db.execute(update(Client).where(Client.org_id == org).values(created_at=late_evening_utc))
+    db.add_all([Expense(org_id=org, description="Rent", amount=Decimal("7"), expense_date=date(2026, 11, 10)),
+                Expense(org_id=org, description="Tea", amount=Decimal("3"), expense_date=date(2026, 11, 11))])
+    await db.commit()
+
+    async def figures(day):
+        pnl = (await client.get(f"/api/finance/pnl?date_from={day}&date_to={day}", headers=H)).json()
+        tp = (await client.get(f"/api/reports/total-profit?date_from={day}&date_to={day}", headers=H)).json()
+        clients = await custom_reports.build_and_run(db, org, {"source": "clients", "columns": ["name"]}, day, day)
+        return (pnl["revenue"], tp["totals"]["revenue"], pnl["opex"], pnl["date_from"], pnl["date_to"],
+                clients["row_count"])
+
+    assert await figures("2026-11-11") == (50.0, 50.0, 3.0, "2026-11-11", "2026-11-11", 1)
+    assert await figures("2026-11-10") == (0.0, 0.0, 7.0, "2026-11-10", "2026-11-10", 0)
