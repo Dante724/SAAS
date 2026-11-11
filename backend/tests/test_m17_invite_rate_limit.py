@@ -10,6 +10,7 @@ import uuid
 import pytest
 
 from backend.services import notifications
+from backend.tests.invite_role import any_role
 
 LIMIT = 20
 
@@ -38,11 +39,11 @@ def _addr():
 @pytest.mark.asyncio
 async def test_a_shop_gets_20_teammate_emails_a_day_across_invite_reset_and_create(client, sent):
     H, me = await _owner(client)
-    codes = [(await client.post("/api/staff/invites", json={"email": _addr(), "name": "T"}, headers=H)).status_code
+    codes = [(await client.post("/api/staff/invites", json={"email": _addr(), "name": "T", "role_id": await any_role(client, H)}, headers=H)).status_code
              for _ in range(LIMIT)]
     assert codes == [201] * LIMIT and len(sent) == LIMIT
     # The 21st of ANY of the three kinds is refused, and sends nothing.
-    r = await client.post("/api/staff/invites", json={"email": _addr(), "name": "T"}, headers=H)
+    r = await client.post("/api/staff/invites", json={"email": _addr(), "name": "T", "role_id": await any_role(client, H)}, headers=H)
     assert r.status_code == 429, r.text
     assert r.headers.get("Retry-After")
     emp = (await client.get("/api/auth/me", headers=H)).json()
@@ -64,16 +65,16 @@ async def test_the_limit_is_per_shop(client, sent):
     H1, _ = await _owner(client)
     H2, _ = await _owner(client)
     for _ in range(LIMIT):
-        assert (await client.post("/api/staff/invites", json={"email": _addr(), "name": "T"}, headers=H1)).status_code == 201
-    assert (await client.post("/api/staff/invites", json={"email": _addr(), "name": "T"}, headers=H1)).status_code == 429
-    assert (await client.post("/api/staff/invites", json={"email": _addr(), "name": "T"}, headers=H2)).status_code == 201
+        assert (await client.post("/api/staff/invites", json={"email": _addr(), "name": "T", "role_id": await any_role(client, H1)}, headers=H1)).status_code == 201
+    assert (await client.post("/api/staff/invites", json={"email": _addr(), "name": "T", "role_id": await any_role(client, H1)}, headers=H1)).status_code == 429
+    assert (await client.post("/api/staff/invites", json={"email": _addr(), "name": "T", "role_id": await any_role(client, H2)}, headers=H2)).status_code == 201
 
 
 @pytest.mark.asyncio
 async def test_subject_is_fixed_and_the_shop_name_only_appears_capped_in_the_body(client, sent):
     name = "WIN A PRIZE click https://evil.example " + "x" * 150       # within the 200-char column
     H, _ = await _owner(client, org_name=name)
-    assert (await client.post("/api/staff/invites", json={"email": _addr(), "name": "T"}, headers=H)).status_code == 201
+    assert (await client.post("/api/staff/invites", json={"email": _addr(), "name": "T", "role_id": await any_role(client, H)}, headers=H)).status_code == 201
     assert (await client.post("/api/staff/employees", json={"name": "New", "email": _addr()}, headers=H)).status_code == 201
     assert [m["subject"] for m in sent] == ["You're invited to join your team on Tekly",
                                             "You've been added to your team on Tekly"]

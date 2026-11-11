@@ -13,6 +13,7 @@ from sqlalchemy import select
 
 from backend.models import Role
 from backend.services import permissions as P
+from backend.tests.invite_role import any_role
 
 
 async def _owner(client):
@@ -242,7 +243,7 @@ async def test_invoicing_a_job_uses_the_invoice_rights(client):
 async def test_technician_reads_names_not_contacts_invites_or_roles(client):
     H = await _owner(client)
     T = await _person(client, H, (await _role(client, H, {"name": "Tech", "template": "Specialist"}))["id"], "Tess")
-    await client.post("/api/staff/invites", json={"email": f"new-{uuid.uuid4().hex[:6]}@test.dev", "name": "New"}, headers=H)
+    await client.post("/api/staff/invites", json={"email": f"new-{uuid.uuid4().hex[:6]}@test.dev", "name": "New", "role_id": await any_role(client, H)}, headers=H)
     team = await client.get("/api/staff/employees", headers=T)
     assert team.status_code == 200
     rows = team.json()
