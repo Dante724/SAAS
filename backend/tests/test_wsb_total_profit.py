@@ -14,6 +14,8 @@ from datetime import datetime, timedelta
 import pytest
 from sqlalchemy import select
 
+from backend.tests.shop_day import shop_today_for
+
 pytestmark = pytest.mark.asyncio
 
 
@@ -114,7 +116,7 @@ async def test_trend_against_the_previous_period(client, tenant, db):
     o = (await db.execute(select(Order).where(Order.id == w["a"]))).scalar_one()
     o.closed_at = datetime.utcnow() - timedelta(days=20)
     await db.commit()
-    today = datetime.utcnow().date()
+    today = await shop_today_for(client, tenant)
     q = {"date_from": (today - timedelta(days=13)).isoformat(), "date_to": today.isoformat()}
     rep = (await client.get("/api/reports/total-profit", params=q, headers=tenant)).json()
     assert rep["totals"]["profit"] == 50.0                 # −10 dropped + 60 sale
@@ -224,8 +226,8 @@ async def test_period_is_capped_and_bad_dates_are_refused(client, tenant):
 
 async def test_date_only_range_ending_today_matches_job_profitability(client, tenant, db):
     await _world(client, tenant, db)
-    today = datetime.utcnow().date().isoformat()
-    start = (datetime.utcnow().date() - timedelta(days=7)).isoformat()
+    day = await shop_today_for(client, tenant)
+    today, start = day.isoformat(), (day - timedelta(days=7)).isoformat()
     tp = (await client.get("/api/reports/total-profit", params={"date_from": start, "date_to": today},
                            headers=tenant)).json()
     jp = (await client.get("/api/reports/job-profitability", params={"from_": start, "to": today},
