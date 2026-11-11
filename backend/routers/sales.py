@@ -97,7 +97,7 @@ class SaleIn(BaseModel):
         return v
 
 
-async def _check_coupon(db, org_id, code, client_id, gross):
+async def _check_coupon(db, org_id, code, client_id, spend):
     """The coupon, or (status, message) saying why it can't be used. Reads only."""
     from backend.models import Coupon
     c = (await db.execute(select(Coupon).where(
@@ -111,7 +111,7 @@ async def _check_coupon(db, org_id, code, client_id, gross):
         return None, (400, "Coupon is not valid at this time")
     if c.max_uses and c.uses >= c.max_uses:
         return None, (400, "Coupon usage limit reached")
-    if gross < c.min_total:
+    if spend < c.min_total:
         return None, (400, f"Order total below coupon minimum ({c.min_total:.2f})")
     return c, None
 
@@ -153,7 +153,8 @@ async def _price_sale(db, org_id, data: SaleIn, *, location_id, sale: Optional[S
 
     coupon = 0.0
     if data.coupon_code and data.coupon_code.strip():
-        c, err = await _check_coupon(db, org_id, data.coupon_code, data.client_id, gross)
+        # The coupon applies after the sale discount, so its minimum spend is checked on that amount.
+        c, err = await _check_coupon(db, org_id, data.coupon_code, data.client_id, remaining)
         if err:
             refuse("coupon", err)
         else:

@@ -8,7 +8,7 @@ from sqlalchemy import select, desc
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
-from backend.models import Employee, Order, EventFeedItem, ChatThread, ChatMessage
+from backend.models import Employee, Order, EventFeedItem, ChatThread, ChatMessage, Part, Service
 from backend.services.auth import get_current_employee, record_scope
 from backend.services import ai
 
@@ -46,11 +46,37 @@ class DraftIn(BaseModel):
     device: Optional[str] = ""
 
 
+# Catalog items offered to the drafter per kind (most relevant to the complaint first);
+# the model picks from these by code. DRAFT_CATALOG_SCAN bounds the rows read per kind.
+DRAFT_CATALOG_LIMIT = 150
+DRAFT_CATALOG_SCAN = 2000
+
+
+def _relevant(items: list, text: str) -> list:
+    words = {w for w in text.lower().replace("/", " ").split() if len(w) > 2}
+    return sorted(items, key=lambda x: -sum(w in (x.name or "").lower() for w in words))[:DRAFT_CATALOG_LIMIT]
+
+
 @router.post("/estimate/draft")
-async def estimate_draft(data: DraftIn, current: Employee = Depends(get_current_employee)):
+async def estimate_draft(data: DraftIn, db: AsyncSession = Depends(get_db),
+                         current: Employee = Depends(get_current_employee)):
     if not data.complaint.strip():
         raise HTTPException(400, "complaint is required")
-    return await ai.draft_estimate_lines(complaint=data.complaint, device=data.device or "")
+    # The shop's own services and products are the only source of prices on a drafted line
+    # (a product on a work order uses its repair price, falling back to the store price).
+    services = (await db.execute(select(Service).where(
+        Service.org_id == current.org_id, Service.active == True)  # noqa: E712
+        .order_by(Service.name).limit(DRAFT_CATALOG_SCAN))).scalars().all()
+    parts = (await db.execute(select(Part).where(
+        Part.org_id == current.org_id, Part.active == True)  # noqa: E712
+        .order_by(Part.name).limit(DRAFT_CATALOG_SCAN))).scalars().all()
+    hint = f"{data.complaint} {data.device or ''}"
+    services, parts = _relevant(services, hint), _relevant(parts, hint)
+    catalog = ([{"ref": f"S{i}", "kind": "service", "ref_id": s.id, "name": s.name, "price": s.price or 0}
+                for i, s in enumerate(services, 1)]
+               + [{"ref": f"P{i}", "kind": "product", "ref_id": p.id, "name": p.name,
+                   "price": (p.repair_price or 0) or p.sell_price or 0} for i, p in enumerate(parts, 1)])
+    return await ai.draft_estimate_lines(complaint=data.complaint, device=data.device or "", catalog=catalog)
 
 
 @router.post("/chat/{thread_id}/suggest")

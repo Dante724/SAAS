@@ -177,35 +177,80 @@ async def summarize_order(*, order_number: str, complaint: str, status: str,
     return {"provider": "stub", "summary": summary}
 
 
-async def draft_estimate_lines(*, complaint: str, device: str = "") -> dict:
-    sys = ("You draft repair estimate line items. Return ONLY JSON: a list of objects "
-           "with keys description (string), qty (number), unit_price (number). 1-5 lines.")
+def _norm_name(s: str) -> str:
+    return " ".join((s or "").lower().split())
+
+
+def _price_from_catalog(raw: list[dict], catalog: list[dict]) -> tuple[list[dict], int]:
+    """Price each drafted line from the shop's own catalog and nothing else. A line the model tied
+    to a catalog item (or whose text is that item's name) takes the item's name, kind and price;
+    anything else stays at 0 with needs_price set. Returns (lines, unpriced count)."""
+    by_ref = {c["ref"]: c for c in catalog}
+    by_name = {_norm_name(c["name"]): c for c in catalog}
+    out, unpriced = [], 0
+    for line in raw:
+        desc = str(line.get("description", "") or "").strip()
+        hit = by_ref.get(str(line.get("catalog") or "").strip().upper()) or by_name.get(_norm_name(desc))
+        try:
+            qty = float(line.get("qty", 1) or 1)
+        except (TypeError, ValueError):
+            qty = 1.0
+        if hit:
+            out.append({"description": hit["name"], "qty": qty, "unit_price": float(hit["price"] or 0),
+                        "kind": hit["kind"], "ref_id": hit["ref_id"], "needs_price": False})
+        elif desc:
+            unpriced += 1
+            out.append({"description": desc, "qty": qty, "unit_price": 0.0,
+                        "kind": "service", "ref_id": None, "needs_price": True})
+    return out[:5], unpriced
+
+
+def _unpriced_note(n: int) -> str:
+    return (f"{n} line{'s' if n != 1 else ''} didn't match anything in your services or products, "
+            f"so {'they have' if n != 1 else 'it has'} no price. Set a price before sending the estimate.")
+
+
+async def draft_estimate_lines(*, complaint: str, device: str = "", catalog: Optional[list[dict]] = None) -> dict:
+    """Draft estimate lines from a complaint. Prices only ever come from `catalog` (the shop's own
+    services and products: {ref, kind, ref_id, name, price}); the model only picks items and never
+    sees or writes a price, so it cannot invent one."""
+    catalog = catalog or []
+    sys = ("You draft repair estimate line items for a repair shop. Return ONLY JSON: a list of "
+           "objects with keys description (string), qty (number), catalog (string or null). 1-5 lines. "
+           "Use the shop's catalog below: when an item fits, set catalog to its code (e.g. S3) and "
+           "description to its name. Otherwise set catalog to null. Never include prices.\n"
+           "Catalog:\n" + ("\n".join(f"{c['ref']}: {c['name']}" for c in catalog) or "(empty)"))
     usr = f"Device: {device or 'unspecified'}\nCustomer complaint: {complaint}"
     text = await _complete(sys, usr, 600)
     if text:
         try:
             cleaned = text.strip().removeprefix("```json").removeprefix("```").removesuffix("```").strip()
-            lines = json.loads(cleaned)
-            norm = [{"description": str(l.get("description", "")).strip(),
-                     "qty": float(l.get("qty", 1) or 1),
-                     "unit_price": float(l.get("unit_price", 0) or 0)} for l in lines][:5]
-            if norm:
-                return {"provider": "anthropic", "lines": norm}
+            lines, unpriced = _price_from_catalog(json.loads(cleaned), catalog)
+            if lines:
+                out = {"provider": "anthropic", "lines": lines}
+                if unpriced:
+                    out["note"] = _unpriced_note(unpriced)
+                return out
         except Exception:
             pass
-    # No AI configured: a diagnostic + labour scaffold with no prices. Made-up amounts would land on
-    # a customer's estimate as if the shop had priced them, so the shop prices every line itself.
+    # No AI configured: a diagnostic + labour scaffold. A line only gets a price when the shop's own
+    # catalog has an item of that exact name; made-up amounts would land on a customer's estimate.
     c = (complaint or "").lower()
-    lines = [{"description": "Diagnostic / inspection", "qty": 1, "unit_price": 0.0},
-             {"description": "Bench labor (1h)", "qty": 1, "unit_price": 0.0}]
+    raw = [{"description": "Diagnostic / inspection", "qty": 1},
+           {"description": "Bench labor (1h)", "qty": 1}]
     if "screen" in c or "crack" in c or "display" in c:
-        lines.insert(1, {"description": "Display assembly replacement", "qty": 1, "unit_price": 0.0})
+        raw.insert(1, {"description": "Display assembly replacement", "qty": 1})
     elif "battery" in c:
-        lines.insert(1, {"description": "Battery replacement", "qty": 1, "unit_price": 0.0})
+        raw.insert(1, {"description": "Battery replacement", "qty": 1})
     elif "water" in c or "liquid" in c:
-        lines.insert(1, {"description": "Liquid-damage cleaning + reball", "qty": 1, "unit_price": 0.0})
-    return {"provider": "stub", "lines": lines,
-            "note": "AI drafting isn't set up, so these lines have no prices. Price each one before sending the estimate."}
+        raw.insert(1, {"description": "Liquid-damage cleaning + reball", "qty": 1})
+    lines, unpriced = _price_from_catalog(raw, catalog)
+    out = {"provider": "stub", "lines": lines}
+    if unpriced == len(lines):
+        out["note"] = "AI drafting isn't set up, so these lines have no prices. Price each one before sending the estimate."
+    elif unpriced:
+        out["note"] = _unpriced_note(unpriced)
+    return out
 
 
 async def suggest_reply(*, customer_message: str, context: str = "") -> dict:
