@@ -164,7 +164,8 @@ async def apply_deposits(db: AsyncSession, inv: Invoice, order: Order) -> float:
             break
         p.invoice_id = inv.id
         add = min(float(p.amount or 0), room)
-        inv.amount_paid = q2(float(inv.amount_paid or 0) + add)
+        from backend.services.money import add_to_column
+        await add_to_column(db, inv, "amount_paid", add)         # atomic, like _credit
         applied = q2(applied + add)
     if applied:
         settle_status(inv)

@@ -703,8 +703,15 @@ async def _pay_order(order_id: str, data: OrderPaymentIn, db: AsyncSession, curr
     # Lock the order row so two concurrent "pay" requests serialize (Postgres) — combined with the
     # remaining<=0 guard below this prevents a double-click / webhook-race from double-posting a
     # payment. (with_for_update is a no-op on SQLite, which already serializes writes.)
+    # FOR NO KEY UPDATE, not FOR UPDATE: invoices and payments reference the job by foreign key,
+    # so writing one of them takes FOR KEY SHARE on the job, which a plain FOR UPDATE held by the
+    # other job's payment blocks — two jobs billed on one invoice and paid together deadlocked.
+    # NO KEY UPDATE still serialises two payments on one job. Locking the job's invoices before
+    # the job instead (Invoice -> Order) deadlocked against prepayments, pay links, the card
+    # reader and refunds, which all take Order -> Invoice.
     o = (await db.execute(select(Order).where(
-        Order.id == order_id, Order.org_id == current.org_id).with_for_update())).scalar_one_or_none()
+        Order.id == order_id, Order.org_id == current.org_id)
+        .with_for_update(key_share=True))).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
     # remaining = total minus everything already paid, net of refunds and credit notes (shared definition)
@@ -805,8 +812,9 @@ async def _prepay_order(order_id: str, data: PrepayIn, db: AsyncSession, current
         raise HTTPException(404, "Order not found")
     # The job's lock (a real one on SQLite too), then a fresh read: two prepayments at once both
     # count in prepayment_total below.
-    from backend.services.invoice_money import lock_order
+    from backend.services.invoice_money import lock_invoices_of, lock_order
     await lock_order(db, o.id)
+    await lock_invoices_of(db, o.id)     # then its invoices, before the till and the ledger (M22)
     await db.refresh(o)
     from backend.services.order_money import refuse_archived
     refuse_archived(o)
@@ -827,19 +835,21 @@ async def _prepay_order(order_id: str, data: PrepayIn, db: AsyncSession, current
                   reference="Prepayment",
                   shift_id=await open_drawer_shift(db, current.org_id, acc) if data.method == "cash" else None)
     db.add(pay)
-    if o.client_id:
-        await db.flush()
-        from backend.services.ledger import post_contact_ledger
-        await post_contact_ledger(db, current.org_id, o.client_id, "prepayment", -abs(data.amount),
-                                  note=f"Prepayment for {o.order_number}", ref_type="payment",
-                                  ref_id=pay.id, created_by_id=current.id)
     o.prepayment_total = (o.prepayment_total or 0) + data.amount
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "order", order_id, f"Prepayment {data.amount} to {acc.name}")
     from backend.services.invoice_money import apply_order_money, notify_payment_received
     from backend.services.order_money import cancel_open_pay_links, resync_write_off
     await db.flush()
+    # The invoice before the client ledger (Invoice -> Client), the order Invoices › Record
+    # payment takes: posting the ledger first deadlocked against an invoice payment taken at the
+    # same moment.
     await apply_order_money(db, o)
+    if o.client_id:
+        from backend.services.ledger import post_contact_ledger
+        await post_contact_ledger(db, current.org_id, o.client_id, "prepayment", -abs(data.amount),
+                                  note=f"Prepayment for {o.order_number}", ref_type="payment",
+                                  ref_id=pay.id, created_by_id=current.id)
     await resync_write_off(db, o, current.id)   # paid after dropping: less is written off
     await cancel_open_pay_links(db, o)
     await db.commit()
@@ -861,8 +871,9 @@ async def refund_overpayment(
     returned goods go through /api/returns/refunds, which also lowers the bill."""
     await assert_perm(db, current, "can_create_returns")   # paying money back, not just seeing it
     # Row lock (B11): two refunds at once both read the same overpayment and paid it out twice.
+    # NO KEY UPDATE: the refund's Payment row references the job (see _pay_order).
     o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
-                          .with_for_update())).scalar_one_or_none()
+                          .with_for_update(key_share=True))).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
     from backend.services.invoice_money import lock_order
