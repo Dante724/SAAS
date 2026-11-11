@@ -129,6 +129,15 @@ DATABASE_URL=postgresql+asyncpg://…/repairos_restore_test alembic -c backend/a
 Then start a container against the restored DB and sign in. Write down how long it took — that
 is your real recovery time.
 
+`scripts/restore_drill.py` automates the restore and the checks (migration version, every table's
+row count, the integrity sweep) and times each step; CI runs it on every push. Full procedure,
+troubleshooting and the per-shop restore: [docs/runbooks/restore-drill-and-integrity.md](docs/runbooks/restore-drill-and-integrity.md).
+
+**Integrity sweep (nightly, automatic).** The `integrity-sweep` job checks that every till balance,
+client balance, invoice `amount_paid` and on-hand count equals the ledger it summarises. A mismatch
+is logged at ERROR on `tekly.reconcile` and shown as `repairos_integrity_mismatches` in `/metrics`;
+alert on either. It reads only. What to do when it fires: the runbook above.
+
 ## 5. Media (photos, signatures, attachments)
 
 `MEDIA_BACKEND=db` (default) stores files in Postgres — simple, but it bloats the database and
