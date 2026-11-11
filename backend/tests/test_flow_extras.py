@@ -244,12 +244,17 @@ async def test_task_read_path_never_shows_another_shops_job(client, db):
     # (a core insert skips the ORM tenancy guard, like rows from before it existed)
     tid = str(uuid.uuid4())
     await db.execute(insert(Task.__table__).values(id=tid, org_id=me["org_id"], title="Bad link", status="todo",
-                                                   priority="0", order_id=other["id"], client_id=cid2))
+                                                   priority=0, order_id=other["id"], client_id=cid2))
     await db.commit()
     d = (await client.get(f"/api/tasks/{tid}", headers=H)).json()
     assert d.get("order_number") is None and d.get("client_name") is None
     rows = (await client.get("/api/tasks", headers=H)).json()["items"]
     assert all(r.get("order_number") is None for r in rows if r["id"] == tid)
+    # tasks phase 0: client_name and the q search never follow the bad link either
+    assert all(r.get("client_name") is None for r in rows if r["id"] == tid)
+    for term in (other["order_number"], "Dana"):   # Shop B's job number and its client's name
+        hits = (await client.get("/api/tasks", params={"q": term}, headers=H)).json()["items"]
+        assert all(r["id"] != tid for r in hits), term
 
 
 async def test_task_cannot_link_another_shops_job(client):

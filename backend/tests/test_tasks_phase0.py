@@ -468,3 +468,32 @@ async def test_list_client_name_priority_overdue_filters(client, tenant):
     assert titles(await client.get("/api/tasks?overdue=true&assignee=me&nonsense=1",
                                    headers=tenant)) == {"Via job"}
     assert (await client.get("/api/tasks?priority=banana", headers=tenant)).status_code == 422
+
+
+@pytest.mark.asyncio
+async def test_list_never_leaks_another_shops_job_or_client(client, tenant, db):
+    """A task row pointing at another shop's job and client (written straight to the database;
+    the API refuses such links): client_name, order_number and q search must not follow it."""
+    import uuid
+
+    from sqlalchemy import insert
+    r = await client.post("/api/auth/register", json={
+        "org_name": "Other shop", "name": "O", "email": f"o-{uuid.uuid4().hex[:8]}@x.dev",
+        "password": "pw-test-12345"})
+    H2 = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    theirs = await _order(client, H2, client_name="Quentin Secretname")
+    org = (await _me(client, tenant))["org_id"]
+    tid = str(uuid.uuid4())
+    await db.execute(insert(Task.__table__).values(
+        id=tid, org_id=org, title="Bad link", status="todo", priority=0,
+        order_id=theirs["id"], client_id=theirs["client_id"]))
+    await db.commit()
+
+    rows = (await client.get("/api/tasks", headers=tenant)).json()["items"]
+    row = next(x for x in rows if x["id"] == tid)
+    assert row["client_name"] is None and row["order_number"] is None
+    for term in ("Secretname", theirs["order_number"]):
+        hits = (await client.get("/api/tasks", params={"q": term}, headers=tenant)).json()["items"]
+        assert all(x["id"] != tid for x in hits), term
+    # and the other shop never sees this shop's task
+    assert all(x["id"] != tid for x in (await client.get("/api/tasks", headers=H2)).json()["items"])
