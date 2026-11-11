@@ -485,7 +485,8 @@ _USE_UNDONE_BY = ("order", "sale_void", "client_return")
 
 def _unit_cost(p) -> float:
     """The one cost basis for stock value (moving average, else list cost), as on the product card."""
-    return float(p.avg_cost or p.cost_price or 0)
+    from backend.services.valuation import unit_cost
+    return unit_cost(p)
 
 
 async def _rep_product_turnover(db, org, df, dt, **kw):

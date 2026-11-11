@@ -14,7 +14,7 @@ COST_KEYS = frozenset({
     "supplier_price", "purchase_cost", "cost_total", "total_cost",
     "margin", "margin_pct", "usual_pct", "profit", "cogs", "received_cost", "expected_cost",
     # stock and purchasing valued at cost (transfers, write-off risk, supplier spend)
-    "line_value", "total_value", "value_at_risk", "total_spend",
+    "line_value", "total_value", "value_at_risk", "total_spend", "stock_value",
 })
 # Next to a unit cost, a value/amount is that cost × qty (batches, stocktake variance, serials).
 VALUE_NEXT_TO_COST = frozenset({"amount", "value", "cost"})

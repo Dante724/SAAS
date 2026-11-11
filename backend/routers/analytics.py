@@ -47,27 +47,26 @@ async def technician_productivity(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_reports")),
 ):
-    """Per-technician: jobs closed, avg turnaround (hrs), labor revenue, throughput.
-    Attribution is by the order's assignee for closed orders in the window."""
+    """Per-technician: jobs closed, avg turnaround (hrs), revenue, throughput.
+    A closed job is one earned in the window and its revenue is what it earned, ex tax
+    (services/revenue, the rule every report uses; design audit BUG-05: this summed job totals with
+    tax inside for any finished status). Attribution is by the order's assignee."""
+    from backend.services import revenue as money_rules
     start, end = _window(days)
-    terminal = await _terminal_keys(db, current.org_id)
-    q = select(Order).where(Order.org_id == current.org_id, Order.is_estimate == False,  # noqa: E712
-                            Order.closed_at.isnot(None), Order.closed_at >= start)
-    if location_id:
-        q = q.where(Order.location_id == location_id)
-    orders = (await db.execute(q)).scalars().all()
+    earned = await money_rules.earned_jobs_query(db, current.org_id, start, end, location_id)
+    orders = (await db.execute(earned)).scalars().all()
+    figs = await money_rules.job_figures(db, earned.with_only_columns(Order.id))
 
     emps = {e.id: e.name for e in (await db.execute(select(Employee).where(
         Employee.org_id == current.org_id))).scalars().all()}
     agg: dict = {}
     for o in orders:
-        if o.status not in terminal:
-            continue
         tid = o.assigned_to_id or "unassigned"
-        a = agg.setdefault(tid, {"jobs": 0, "turnaround_h": 0.0, "revenue": 0.0})
+        a = agg.setdefault(tid, {"jobs": 0, "timed": 0, "turnaround_h": 0.0, "revenue": 0.0})
         a["jobs"] += 1
-        a["revenue"] += float(o.total or 0)
+        a["revenue"] += figs.get(o.id, {}).get("revenue", 0.0)
         if o.created_at and o.closed_at:
+            a["timed"] += 1
             a["turnaround_h"] += (o.closed_at - o.created_at).total_seconds() / 3600.0
 
     rows = []
@@ -76,7 +75,7 @@ async def technician_productivity(
             "technician_id": None if tid == "unassigned" else tid,
             "technician": "Unassigned" if tid == "unassigned" else emps.get(tid, tid),
             "jobs_closed": a["jobs"],
-            "avg_turnaround_hours": round(a["turnaround_h"] / a["jobs"], 1) if a["jobs"] else 0,
+            "avg_turnaround_hours": round(a["turnaround_h"] / a["timed"], 1) if a["timed"] else 0,
             "revenue": q2(a["revenue"]),
             "throughput_per_week": q2(a["jobs"] / (days / 7.0)) if days else 0,
         })
@@ -91,31 +90,42 @@ async def location_comparison(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_reports")),
 ):
-    """Per location: jobs created and closed in the window, and revenue. Closed and revenue follow
-    the one rule every report uses (services/revenue: a job counts when it is earned, revenue is
-    net sales), so the rows add up to Business & analytics' own Revenue tile."""
+    """Per location: jobs created and closed in the window, and revenue. Revenue is net sales for
+    the location (services/revenue: jobs earned in the window ex tax, counter sales, less refunds
+    and credit notes) and a closed job is one earned in the window, exactly as on the Revenue and
+    Orders closed tiles above it (design audit BUG-05: rows summed job totals with tax inside, by
+    the day the job was created). Revenue tied to no location (invoices that bill no job, a sale
+    with no location) gets its own row, so the rows add up to the shop's revenue."""
     from backend.services import revenue as money_rules
     start, end = _window(days)
+    org = current.org_id
     locs = {loc.id: loc.name for loc in (await db.execute(select(Location).where(
-        Location.org_id == current.org_id))).scalars().all()}
-    created = dict((await db.execute(select(Order.location_id, func.count()).where(
-        Order.org_id == current.org_id, Order.is_estimate == False, Order.archived == False,  # noqa: E712
-        Order.created_at >= start).group_by(Order.location_id))).all())
-    earned = await money_rules.earned_jobs_query(db, current.org_id, start, end, cols=(Order.location_id,))
-    closed: dict = {}
-    for (lid,) in (await db.execute(earned)).all():
-        closed[lid] = closed.get(lid, 0) + 1
+        Location.org_id == org))).scalars().all()}
+    created = dict((await db.execute(
+        select(Order.location_id, func.count()).where(
+            Order.org_id == org, Order.is_estimate == False, Order.archived == False,  # noqa: E712
+            Order.created_at >= start, Order.created_at <= end)
+        .group_by(Order.location_id))).all())
+    earned = await money_rules.earned_jobs_query(db, org, start, end, cols=(Order.location_id, func.count()))
+    closed = dict((await db.execute(earned.group_by(Order.location_id))).all())
+
     rows = []
-    for lid in set(created) | set(closed):
-        c, k = created.get(lid, 0), closed.get(lid, 0)
-        rev = (await money_rules.net_sales(db, current.org_id, start, end, location_id=lid))["revenue"] if lid else 0.0
+    for lid in {*locs, *created, *closed}:
+        rev = (await money_rules.net_sales(db, org, start, end, lid))["revenue"] if lid else 0.0
+        n_created, n_closed = created.get(lid, 0), closed.get(lid, 0)
+        if not (n_created or n_closed or rev):
+            continue
         rows.append({
             "location_id": lid, "location": locs.get(lid, "—"),
-            "orders_created": c, "orders_closed": k,
-            "close_rate": min(100.0, round(k / c * 100, 1)) if c else 0,
+            "orders_created": n_created, "orders_closed": n_closed,
+            "close_rate": min(100.0, round(n_closed / n_created * 100, 1)) if n_created else 0,
             "revenue": q2(rev),
         })
-    rows.sort(key=lambda r: r["revenue"], reverse=True)
+    rest = q2((await money_rules.net_sales(db, org, start, end))["revenue"] - sum(r["revenue"] for r in rows))
+    if rest:
+        rows.append({"location_id": None, "location": "Not tied to a location", "orders_created": 0,
+                     "orders_closed": 0, "close_rate": 0, "revenue": rest})
+    rows.sort(key=lambda r: (r["location_id"] is None, -r["revenue"]))
     return {"period_days": days, "locations": rows}
 
 

@@ -171,7 +171,7 @@ There's no native Tekly app in Zapier or Make yet. Use their generic HTTP steps:
 | Step | Zapier **Webhooks by Zapier → Custom Request**, or Make **HTTP → Make a request** |
 | Method | `POST` (or `GET` to read) |
 | URL | `{BASE_URL}/contacts`, `{BASE_URL}/orders`, `{BASE_URL}/appointments` or `{BASE_URL}/time-entries` |
-| Headers | `Authorization: Bearer rok_…`, `Content-Type: application/json`, and `Idempotency-Key:` set to a unique value from the trigger, such as its id |
+| Headers | `Authorization: Bearer tk_…`, `Content-Type: application/json`, and `Idempotency-Key:` set to a unique value from the trigger, such as its id |
 | Body | JSON, as in [Resources](04-resources.md) |
 
 Use a dedicated key named after the tool (`Zapier`), with **Read only** unless the workflow writes.
