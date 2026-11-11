@@ -168,7 +168,6 @@ export default function SettingsHub() {
   }
   const [lists, setLists] = useState<Record<string, any[] | null>>({});
   const [roles, setRoles] = useState<any[] | null>(null);
-  const { me: hubMe } = useMe();
   const [toast, setToast] = useState<string | null>(null);
   const flash = (m: string) => { setToast(m); setTimeout(() => setToast(null), 2200); };
 
@@ -261,9 +260,9 @@ export default function SettingsHub() {
       { k: "subject", label: "Email subject", type: "text" }, { k: "body_template", label: "Message body", type: "textarea", req: true, vars: true, counter: true }, { k: "active", label: "Active", type: "checkbox", def: true } ] },
     invites: { create: "/staff/invites", del: (id) => `/staff/invites/${id}`, reload: () => reloadInvites(), fields: [
       { k: "email", label: "Email", type: "text", req: true }, { k: "name", label: "Name", type: "text" },
-      // Only the owner can give unlimited access ("no role"); everyone else picks a role.
-      { k: "role_id", label: "Role", type: "select", req: !hubMe?.is_owner,
-        options: [...(hubMe?.is_owner ? [{ value: "", label: "No role (full access)" }] : [{ value: "", label: "Choose a role…" }]),
+      // Every invitee needs a role: someone with no role can do almost nothing (only the owner has full access).
+      { k: "role_id", label: "Role", type: "select", req: true,
+        options: [{ value: "", label: "Choose a role…" },
           ...(rbacRoles || []).map((r: any) => ({ value: r.id, label: r.name }))] } ] },
     forms: { create: "/forms/types", upd: (id) => `/forms/types/${id}`, del: (id) => `/forms/types/${id}`, reload: () => reloadSec("forms"), fields: [
       { k: "name", label: "Form name", type: "text", req: true }, { k: "color", label: "Colour", type: "color", def: "#4f8ef7" }, { k: "initial_status", label: "Starting status", type: "text", def: "new" }, { k: "is_default", label: "Default", type: "checkbox" },
@@ -1467,7 +1466,7 @@ function EmployeeEditorDrawer({ emp, roles, onClose, onSaved }: { emp: any | nul
           <div className="space-y-4">
             <div className="grid grid-cols-2 gap-3">
               <div><label className={lblc}>Role</label>
-                <select value={f.role_id || ""} onChange={(e) => set("role_id", e.target.value)} className={`${fld} appearance-none`}><option value="">{me?.is_owner ? "— No role (full access) —" : "Choose a role…"}</option>{roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
+                <select value={f.role_id || ""} onChange={(e) => set("role_id", e.target.value)} className={`${fld} appearance-none`}><option value="">{f.role_id ? "Choose a role…" : emp?.id && emp.id === me?.id && me?.is_owner ? "Owner (full access)" : "No role (no access yet)"}</option>{roles.map((r) => <option key={r.id} value={r.id}>{r.name}</option>)}</select></div>
               <div><label className={lblc}>Home location</label>
                 <select value={f.location_id || ""} onChange={(e) => set("location_id", e.target.value)} className={`${fld} appearance-none`}><option value="">All locations</option>{locations.map((l) => <option key={l.id} value={l.id}>{l.name}</option>)}</select></div>
             </div>

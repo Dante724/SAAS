@@ -27,7 +27,7 @@ from backend.models import (
     TimeEntry,
 )
 from backend.services.auth import get_current_employee, record_scope
-from backend.services.dates import now_utc, shop_tzname, today_in
+from backend.services.dates import now_utc, shop_tzname, today_in, wall_now_for
 
 router = APIRouter(prefix="/api/tech", tags=["technician"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -85,8 +85,9 @@ async def dashboard(
     completed_n = (await db.execute(select(func.count()).select_from(Order).where(base, done_cond))).scalar() or 0
 
     today, upcoming, overdue = [], [], []
+    wall_now = await wall_now_for(db, current.org_id)   # due_at is shop wall-clock, not UTC
     for o in open_jobs:
-        if o.due_at and o.due_at < now:
+        if o.due_at and o.due_at < wall_now(o.location_id):
             overdue.append(o)
         sched = o.scheduled_for
         if sched and today_start <= sched < today_end:

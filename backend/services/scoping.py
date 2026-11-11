@@ -5,7 +5,7 @@ may be allowed to open work orders in general, yet only see the ones assigned to
 them; a salesperson may only open the contacts they manage.
 
 Design notes:
-  * **Default-allow.** No role, or scope left at "all", means no filtering. This
+  * **Default-allow.** The owner, or scope left at "all", means no filtering. This
     matches `require_perm`'s semantics and keeps existing installs unchanged.
   * **Filters are applied at the query**, not after fetching, so pagination and
     counts stay correct.
@@ -22,10 +22,27 @@ from backend.models import Client, Employee, Order, Role
 
 
 async def role_for(db, current: Employee) -> Optional[Role]:
+    """The caller's role for record scoping; None means no limits (the owner, an API key).
+    Someone else with no role is not the owner (launch B10): they get the narrowest scope."""
     if not current.role_id:
-        return None
+        if getattr(current, "api_key_id", None):
+            return None
+        from backend.services.auth import is_shop_owner
+        if await is_shop_owner(db, current):
+            return None
+        return _no_role()
     from sqlalchemy import select
     return (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
+
+
+def _no_role() -> Role:
+    """A stand-in (never saved) for a teammate without a role: no permissions, only their own
+    jobs, contacts and pay, no warehouses."""
+    return Role(name="No role", permissions={}, perms_explicit=True,
+                order_scope="own", contact_scope="own", location_scope="all",
+                warehouse_scope="selected", warehouse_ids=[], account_ids=None,
+                payroll_scope="own", payroll_employee_ids=None, payroll_visibility_days=None,
+                hidden_status_keys=None)
 
 
 def _ids(value) -> list:

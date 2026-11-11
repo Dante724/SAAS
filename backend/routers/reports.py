@@ -8,7 +8,7 @@ from sqlalchemy.orm import selectinload
 from backend.db.database import get_db
 from backend.models import Order, Client, Invoice, Part, StockLevel, Task, Employee
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.dates import day_start_utc, now_utc, shop_today, shop_tzname, today_in
+from backend.services.dates import day_start_utc, now_utc, shop_today, shop_tzname, today_in, utc_to_wall
 # The money figures and low stock are defined once, in services/revenue (read its docstring).
 from backend.services import revenue as money_rules, stock_rows
 from backend.services.revenue import low_stock_count_query, low_stock_query, line_net
@@ -1152,6 +1152,7 @@ async def company_dashboard(
     today = today_in(tz)
     today0 = day_start_utc(today, tz)
     month0 = day_start_utc(today.replace(day=1), tz)
+    wall_now = utc_to_wall(now, await shop_tzname(db, oid, location_id))   # due_at is shop wall-clock
 
     # Everything below is aggregated in the database, per status (a shop has a handful): Home
     # used to load every work order the shop ever had, and ten opens on a 30k-order shop took
@@ -1172,7 +1173,7 @@ async def company_dashboard(
         Order.status, func.count(),
         n_if(Order.created_at >= today0),
         n_if(Order.priority >= 1),
-        n_if(Order.due_at < now),
+        n_if(Order.due_at < wall_now),
         n_if(Order.created_at >= month0),
     ).where(*scope).group_by(Order.status))).all()
     open_rows = [r for r in per_status if is_open(r[0])]
@@ -1292,8 +1293,10 @@ async def _scoped_location(db, current, location_id):
 
     from backend.models import Role
     from backend.services.auth import check_location_access, is_shop_owner
-    if not current.role_id or await is_shop_owner(db, current):
+    if await is_shop_owner(db, current):
         return location_id
+    if not current.role_id:      # no role isn't the owner (launch B10): no shop-wide figures
+        raise HTTPException(403, "Your account has no role yet. Ask the owner to give you one")
     if location_id:
         await check_location_access(db, current, location_id)
         return location_id
@@ -1531,7 +1534,9 @@ async def home_feed(
         return (await db.execute(select(func.count()).select_from(Order).where(*conds))).scalar() or 0
 
     mine = [Order.assigned_to_id == current.id] if own else []
-    overdue = await count(*open_conds, Order.due_at != None, Order.due_at < now)  # noqa: E711
+    # due_at is shop wall-clock time, so "overdue" is measured on the shop's clock, not UTC
+    wall_now = utc_to_wall(now, await shop_tzname(db, oid, getattr(current, "location_id", None)))
+    overdue = await count(*open_conds, Order.due_at != None, Order.due_at < wall_now)  # noqa: E711
     unread = await count(Order.org_id == oid, Order.closed_at == None, Order.client_msg_unread > 0, *mine)  # noqa: E711
     urgent = await count(*open_conds, Order.priority >= 1)
     ready = await count(Order.org_id == oid, Order.closed_at == None, Order.status.in_(ready_keys), *mine) if ready_keys else 0  # noqa: E711

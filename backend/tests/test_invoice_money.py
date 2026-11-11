@@ -338,6 +338,9 @@ async def test_payment_received_fires_on_every_payment_path(client, monkeypatch)
     assert o3["id"] in seen, "deposit"
 
     o4 = await _job(client, H, loc, cid, 100)
+    # real credit to pay from: money paid for the other (unbilled) jobs is theirs (B3 recheck)
+    await client.post(f"/api/clients/{cid}/balance", json={"kind": "advance", "amount": 100,
+                                                          "account_id": acc}, headers=H)
     r = await client.post(f"/api/cash/orders/{o4['id']}/pay", json={"method": "balance"}, headers=H)
     assert r.status_code == 200, r.text
     assert o4["id"] in seen, "closed on client balance"

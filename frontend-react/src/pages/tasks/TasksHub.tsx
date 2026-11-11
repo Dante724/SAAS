@@ -9,12 +9,16 @@ import Pager from "../../components/Pager";
 import JobPicker from "../../components/JobPicker";
 import { loadFailed } from "../../lib/notice";
 import { clickableRow } from "../../lib/clickable";
+import { fmtServerTime, wallDate } from "../../lib/serverTime";
 
 type Task = { id: string; title?: string; description?: string; status?: string; priority?: number; assigned_to_id?: string | null; assignee_name?: string; assignee_ids?: string[]; assignee_names?: string[]; due_at?: string | null; completed_at?: string | null; overdue?: boolean; order_id?: string | null; order_number?: string | null; client_name?: string };
 type Emp = { id: string; name: string };
 type Feed = { id: string; body?: string; kind?: string; author_name?: string; created_at?: string };
 
-const fmt = (iso?: string | null) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—");
+// due_at is the shop's wall clock; completed_at and feed times are UTC instants (launch B6)
+const SHORT: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" };
+const fmtDue = (iso?: string | null) => wallDate(iso)?.toLocaleString([], SHORT) || "—";
+const fmt = (iso?: string | null) => fmtServerTime(iso, SHORT) || "—";
 const STATUS_LABEL: Record<string, string> = { todo: "To do", in_progress: "In progress", done: "Done" };
 
 export default function TasksHub() {
@@ -104,7 +108,7 @@ export default function TasksHub() {
                   <td className="py-3 px-3"><span className={`px-2 py-0.5 rounded-full text-[11px] font-bold ${t.completed_at ? "bg-emerald-100 text-emerald-800" : t.status === "in_progress" ? "bg-amber-100 text-amber-800" : "bg-slate-100 text-slate-700"}`}>{t.completed_at ? "Done" : STATUS_LABEL[t.status || "todo"]}</span></td>
                   <td className="py-3 px-3">{t.order_id ? <span className="px-2 py-0.5 rounded-full text-[11px] font-bold bg-blue-100 text-blue-800 inline-flex items-center gap-1"><M n="handyman" c="text-[11px]" />{t.order_number || "WO"}</span> : "—"}</td>
                   <td className="py-3 px-3">{(t.assignee_names && t.assignee_names.length) ? (t.assignee_names.length > 2 ? `${t.assignee_names.slice(0, 2).join(", ")} +${t.assignee_names.length - 2}` : t.assignee_names.join(", ")) : (t.assignee_name || "—")}</td>
-                  <td className={`py-3 px-3 ${t.overdue ? "text-rose-600 font-bold" : ""}`}>{fmt(t.due_at)}</td>
+                  <td className={`py-3 px-3 ${t.overdue ? "text-rose-600 font-bold" : ""}`}>{fmtDue(t.due_at)}</td>
                 </tr>
               ))}
             </tbody>
@@ -120,7 +124,7 @@ export default function TasksHub() {
           <div className="relative h-full w-full max-w-[480px] bg-white shadow-clay-drawer flex flex-col border-l border-slate-200/90 animate-[slideIn_.3s_cubic-bezier(.16,1,.3,1)]">
             <style>{`@keyframes slideIn{from{transform:translateX(100%)}to{transform:translateX(0)}}`}</style>
             <header className="px-6 py-4 border-b border-slate-100 flex items-start justify-between bg-slate-50/70">
-              <div><h3 className="text-base font-bold text-ink-primary pr-4">{sel.title}</h3><p className="text-[11px] text-ink-tertiary mt-0.5">{sel.completed_at ? `Completed ${fmt(sel.completed_at)}` : `Due ${fmt(sel.due_at)}`}</p></div>
+              <div><h3 className="text-base font-bold text-ink-primary pr-4">{sel.title}</h3><p className="text-[11px] text-ink-tertiary mt-0.5">{sel.completed_at ? `Completed ${fmt(sel.completed_at)}` : `Due ${fmtDue(sel.due_at)}`}</p></div>
               <button aria-label="Close" onClick={() => setSel(null)} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary flex-shrink-0"><M n="close" c="text-base" /></button>
             </header>
             <div className="flex-1 overflow-y-auto p-6 space-y-4 text-xs">

@@ -5,6 +5,7 @@ export type Order = {
   invoice_status?: string;
   priority?: number;
   total?: number;
+  tax?: number;            // the tax inside total, as stored on the job (B4)
   is_estimate?: boolean;
   client_msg_unread?: number;
   checklists_pending?: boolean;

@@ -443,13 +443,13 @@ async def list_order_lines(oid: str, db: AsyncSession = Depends(get_db), p: ApiP
 class OrderPatch(_In):
     model_config = ConfigDict(extra="forbid", json_schema_extra={"examples": [{
         "priority": 1, "assigned_to_id": "9d0a6b3e-1c2f-4e5d-8a7b-6c5d4e3f2a10",
-        "scheduled_for": "2026-10-28T10:30:00", "scheduled_to": "2026-10-28T11:30:00", "due_at": "2026-10-29T17:00:00Z"}]})
+        "scheduled_for": "2026-10-28T10:30:00", "scheduled_to": "2026-10-28T11:30:00", "due_at": "2026-10-29T17:00:00"}]})
     complaint: Optional[str] = Field(None, max_length=5000)
     priority: Optional[int] = Field(None, ge=0, le=2, description="0 normal, 1 urgent, 2 VIP.")
     assigned_to_id: Optional[str] = Field(None, min_length=1, max_length=64, description="An employee in this shop, or null to unassign.")
     manager_id: Optional[str] = Field(None, min_length=1, max_length=64, description="An employee in this shop, or null.")
     due_at: Optional[str] = Field(None, min_length=1, max_length=64,
-                                  description="ISO 8601. An offset is converted to UTC; without one it's taken as UTC.")
+                                  description="The shop's wall-clock time, as scheduled_for. With an offset it's converted to the location's clock.")
     scheduled_for: Optional[str] = Field(None, min_length=1, max_length=64,
                                          description="The shop's wall-clock time. With an offset it's converted to the location's clock.")
     scheduled_to: Optional[str] = Field(None, min_length=1, max_length=64, description="As scheduled_for.")
@@ -472,7 +472,7 @@ async def _assignable(db: AsyncSession, org_id: str, emp_id: Optional[str], code
                           "`manager_id`, `due_at`, `scheduled_for` and `scheduled_to` (`priority` and `location_id` "
                           "can't be cleared). Every id must be this shop's (`404`), and an assignee or manager must "
                           "be someone the shop lists there (`422`). `scheduled_for` / `scheduled_to` are the shop's "
-                          "wall-clock time. A closed or locked order can't be edited (`409`): reopen it with "
+                          "wall-clock time, and so is `due_at`. A closed or locked order can't be edited (`409`): reopen it with "
                           "`POST /orders/{id}/status`. To change the status, use that route. Fires `order.updated`. "
                           "Scope: `orders:write` (or `write`).",
               responses=_ok({"data": _ORDER_DETAIL_EX}, {**_WRITE_ERRORS, **_NOT_FOUND}))
@@ -497,11 +497,11 @@ async def update_order(oid: str, data: OrderPatch, db: AsyncSession = Depends(ge
 
     loc = sent.get("location_id") or o.location_id
     when = {}
-    for k in ("scheduled_for", "scheduled_to"):
+    # due_at is the shop's wall clock too (the app's overdue flags compare it with "now" on the
+    # branch's clock), so an offset is converted to the location's clock like scheduled_for.
+    for k in ("scheduled_for", "scheduled_to", "due_at"):
         if k in sent:
             when[k] = await parse_wall_dt(db, p.org_id, loc, sent[k], k) if sent[k] else None
-    if "due_at" in sent:
-        when["due_at"] = _since(sent["due_at"], "due_at") if sent["due_at"] else None
     start = when["scheduled_for"] if "scheduled_for" in when else o.scheduled_for
     end = when["scheduled_to"] if "scheduled_to" in when else o.scheduled_to
     if start and end and end < start:

@@ -18,5 +18,6 @@ async def test_invoice_payment_moves_client_balance(client, tenant):
     assert r.status_code == 200, r.text
     after = (await client.get(f"/api/clients/{cid}", headers=tenant)).json()["balance"]
 
-    # a 100 payment reduces what the client owes by 100
-    assert round(before - after, 2) == 100.0, (before, after)
+    # the payment settles the invoice it pays for: nothing owed, and no client credit appears
+    # out of it (B3 recheck: an invoice's own lines are billed as they are paid)
+    assert before == 0 and after == 0, (before, after)
