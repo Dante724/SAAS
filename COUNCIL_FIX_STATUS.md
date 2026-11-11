@@ -85,3 +85,12 @@ Every open council/hardening PR was dry-run merged against the current base, the
 - **#157 is now redundant:** the base fixed both lint errors with identical changes. Close it as superseded (PM's call).
 - **All other branches** (37) had the current base merged in and pushed, so CI re-checks them against today's code. Every merge was clean, with one alembic head and both lint commands passing.
 - **Stale local worktrees** sharing those branches were removed. The "files changed on disk" notices came from them; no work was lost.
+
+## Merged on 11 Nov (the important set, on the owner's instruction)
+Merged into `roadmap/orderry-parity` in the PM's order, each only when all 18 CI checks were green on the exact commit tested:
+#104, #101, #108, #110, #105, #106, #102, #103, #113, #107, #111 (also carries M22), #109, #127.
+Before merging, the 13 were merged together on today's base and the full suite run: **Postgres 3818 passed, SQLite 3791 passed, 0 failed.**
+
+- **#112 stays closed:** the owner closed it on 6 Nov because card readers are turned off (`CARD_READERS_ENABLED=false`, #171).
+- **Two alembic heads after the merges:** #183 (`sds01`), merged earlier the same day, and #107 (`ot01`) both revise `idg02`. **#185** adds the merge revision `mh01` and a single-head guard test. It needs to merge next.
+- **Still open, for later:** the Medium fixes (#124, #125, #126, #129, #130, #131, #132, #134, #136, #138, #143, #145–#152), the QA PRs (#123, #133, #137) and the infra PRs (#161, #162, #164, #165). #137 must re-chain `nn01` onto the current head before it merges. #157 is redundant and can be closed.
