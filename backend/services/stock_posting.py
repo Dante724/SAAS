@@ -20,7 +20,7 @@ async def apply_receipt_line(
     bin_id: str | None = None, serials: list[str] | None = None,
     create_batch: bool = True, set_last_cost: bool = False, expiry_date=None, lot: str | None = None,
     supplier_id: str | None = None, movement_type: str = "receive", warehouse_id: str | None = None,
-    cost_known: bool = False,
+    cost_known: bool = False, out: dict | None = None,
 ) -> float:
     """Post `qty` of `part` into `location_id` at `unit_cost`. Returns the unit cost used.
 
@@ -35,6 +35,8 @@ async def apply_receipt_line(
       its supplier and supplier-warranty end date (the product's supplier warranty from today).
     - `movement_type` names the audit row (a manual count-in is an `adjust`, not a `receive`);
       `warehouse_id` tags the movement and the cost layer (default: the stock row's warehouse).
+    - `out`, when given, gets `out["batch"]`: the cost layer this receipt created (None without
+      one) — a caller that answers with its id must not go looking for "the newest layer".
     """
     from backend.services import stock_rows
     if bin_id:
@@ -67,6 +69,8 @@ async def apply_receipt_line(
                          warehouse_id=warehouse_id,
                          created_by_id=created_by_id, ref_type=ref_type, ref_id=ref_id))
 
+    if out is not None:
+        out["batch"] = None
     if create_batch:
         from backend.models import SerializedItem, StockItemBatch
         batch = StockItemBatch(org_id=org_id, part_id=part.id, location_id=location_id,
@@ -76,6 +80,8 @@ async def apply_receipt_line(
                                lot_number=(lot or "").strip()[:40] or None)
         db.add(batch)
         await db.flush()
+        if out is not None:
+            out["batch"] = batch
         from datetime import date, timedelta
 
         from backend.models import _uuid
