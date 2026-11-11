@@ -1,4 +1,5 @@
 import logging
+import re
 import secrets
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta
@@ -503,6 +504,10 @@ def _order_search_clause(s: str, org_id: str):
     num = sm.number_match(Order.order_number, s)
     if num is not None:
         conds.append(num)
+    # A short bare number ("12", "#3") is a job number: matching it inside serials, VINs or
+    # phones too would bury the job under every asset that happens to contain those digits.
+    if num is not None and re.fullmatch(r"#?\s*\d{1,3}", s.strip()):
+        return num
     name_ids = select(Client.id).where(Client.org_id == org_id, sm.words_match(Client.name, s))
     client_or = [Client.id.in_(name_ids),
                  Client.payer_id.in_(name_ids)]      # people billed to a matching company
