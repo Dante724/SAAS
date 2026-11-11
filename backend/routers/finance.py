@@ -1032,13 +1032,17 @@ async def open_shift(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_cashbox")),
 ):
+    # M10: the Location row is the per-location mutex for the check-then-insert below — three
+    # concurrent opens all passed the "already open" check and three drawers went live (no unique
+    # index on open shifts). FOR UPDATE is a no-op on SQLite, which serializes writes anyway.
     loc = (await db.execute(select(Location).where(
-        Location.id == data.location_id, Location.org_id == current.org_id))).scalar_one_or_none()
+        Location.id == data.location_id, Location.org_id == current.org_id)
+        .with_for_update())).scalar_one_or_none()
     if not loc:
         raise HTTPException(404, "Location not found")
     # one open drawer per location — you can't open a second while one's live.
     existing = (await db.execute(select(CashShift).where(
-        CashShift.location_id == data.location_id, CashShift.closed_at.is_(None)))).scalar_one_or_none()
+        CashShift.location_id == data.location_id, CashShift.closed_at.is_(None)))).scalars().first()
     if existing:
         raise HTTPException(409, "A cash drawer is already open at this location — close it first.")
     opening = _denoms_total(data.denoms) if data.denoms else data.opening_float
@@ -1061,8 +1065,11 @@ async def current_shift(
         Location.id == location_id, Location.org_id == current.org_id))).scalar_one_or_none()
     if not loc:
         raise HTTPException(404, "Location not found")
+    # Newest open drawer: shops that doubled a drawer before the open lock (M10) still have two
+    # open rows, and scalar_one_or_none answered 500 until both were closed by hand.
     shift = (await db.execute(select(CashShift).options(selectinload(CashShift.opened_by)).where(
-        CashShift.location_id == location_id, CashShift.closed_at.is_(None)))).scalar_one_or_none()
+        CashShift.location_id == location_id, CashShift.closed_at.is_(None))
+        .order_by(CashShift.opened_at.desc()))).scalars().first()
     if not shift:
         return {"open": False}
     moves = (await db.execute(select(CashDrawerMovement).where(
