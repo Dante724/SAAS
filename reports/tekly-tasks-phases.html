@@ -1,0 +1,597 @@
+<title>Tekly Tasks redesign</title>
+<meta name="claude:viewport-fit-sides" content="cover">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="stylesheet" href="https://fonts.googleapis.com/css2?family=Geist:wght@400;500;600;700&family=Geist+Mono:wght@400;500&display=swap">
+<style>
+/* Layout: phase switcher on top; each phase = plain-language summary + a full Tekly screen (sidebar, top bar, page) with numbered callouts. */
+:root{
+  --primary:#0059ba;--primary-ink:#ffffff;--primary-soft:#e8f0fb;--primary-line:#bcd3f2;
+  --ink:#14213f;--ink2:#435577;--ink3:#6c7a99;--ph:#9aa7c4;
+  --page:#f4f6fb;--card:#ffffff;--side:#f8f9fc;--line:#e3e8f1;--line2:#eef1f6;--chip:#eef2f8;
+  --new-bg:rgba(79,142,247,.15);--new:#326fd1;--wait-bg:rgba(251,191,86,.22);--wait:#9a6512;
+  --ready-bg:rgba(74,222,128,.2);--ready:#1e7a3f;--late-bg:rgba(251,113,133,.15);--late:#be123c;
+  --repair-bg:rgba(168,85,247,.14);--repair:#7a26c4;--draft-bg:rgba(108,122,153,.14);
+  --note:#fff7e0;--note-ink:#7a5308;--note-line:#f1d48a;
+  --tv:#0e1630;--tv-ink:#eef2ff;--tv-2:#9fb0d6;
+  --sh:0 1px 2px rgba(20,33,63,.05),0 6px 20px rgba(20,33,63,.06);
+  --f:"Geist","Inter",system-ui,sans-serif;--fm:"Geist Mono",ui-monospace,monospace;
+}
+@media (prefers-color-scheme:dark){:root:not([data-theme="light"]){
+  --primary:#4d8fe6;--primary-ink:#06142b;--primary-soft:#14294a;--primary-line:#28467a;
+  --ink:#e8edf8;--ink2:#b3bfd8;--ink3:#8592b0;--ph:#5f6c8a;
+  --page:#0d1322;--card:#151d30;--side:#111829;--line:#24304a;--line2:#1c2640;--chip:#1e2840;
+  --new:#86b2f5;--wait:#f0c26a;--ready:#7fd99e;--late:#fb8ea3;--repair:#c79af5;
+  --note:#2b2410;--note-ink:#f1d48a;--note-line:#5b4a1c;--tv:#070b17;
+  --sh:0 1px 2px rgba(0,0,0,.3);color-scheme:dark}}
+:root[data-theme="dark"]{
+  --primary:#4d8fe6;--primary-ink:#06142b;--primary-soft:#14294a;--primary-line:#28467a;
+  --ink:#e8edf8;--ink2:#b3bfd8;--ink3:#8592b0;--ph:#5f6c8a;
+  --page:#0d1322;--card:#151d30;--side:#111829;--line:#24304a;--line2:#1c2640;--chip:#1e2840;
+  --new:#86b2f5;--wait:#f0c26a;--ready:#7fd99e;--late:#fb8ea3;--repair:#c79af5;
+  --note:#2b2410;--note-ink:#f1d48a;--note-line:#5b4a1c;--tv:#070b17;
+  --sh:0 1px 2px rgba(0,0,0,.3);color-scheme:dark}
+*{box-sizing:border-box}
+body{background:var(--page);color:var(--ink);font-family:var(--f);font-size:14px;line-height:1.5;padding-left:max(16px,env(safe-area-inset-left,0px));padding-right:max(16px,env(safe-area-inset-right,0px));padding-block:20px 48px}
+.wrap{max-width:1180px;margin:0 auto;display:grid;gap:18px}
+h1{font-size:26px;font-weight:700;letter-spacing:-.02em;margin:0;text-wrap:balance}
+.lede{color:var(--ink2);margin:4px 0 0;max-width:70ch}
+.tabs{display:flex;gap:6px;flex-wrap:wrap;position:sticky;top:env(safe-area-inset-top,0px);background:var(--page);padding:8px 0;z-index:5}
+body::before{content:"";position:fixed;inset:0 0 auto;height:env(safe-area-inset-top,0px);z-index:10;background:var(--page)}
+.tab{font:600 13px var(--f);border:1px solid var(--line);background:var(--card);color:var(--ink2);padding:8px 14px;border-radius:999px;cursor:pointer}
+.tab[aria-selected="true"]{background:var(--primary);border-color:var(--primary);color:var(--primary-ink)}
+.tab:focus-visible,button:focus-visible{outline:2px solid var(--primary);outline-offset:2px}
+.tab small{font-weight:500;opacity:.8;margin-left:4px}
+.intro{display:grid;grid-template-columns:minmax(0,1.3fr) minmax(0,1fr);gap:16px}
+@media (max-width:820px){.intro{grid-template-columns:1fr}}
+.box{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px}
+.box h2{font-size:18px;margin:0 0 6px;letter-spacing:-.01em}
+.box p{margin:0 0 8px;color:var(--ink2)}
+.box ul{margin:0;padding-left:18px;color:var(--ink2)}
+.box li{margin:4px 0}
+.meta{display:flex;gap:8px;flex-wrap:wrap;margin-top:8px}
+.tag{font-size:12px;font-weight:600;padding:3px 10px;border-radius:999px;background:var(--chip);color:var(--ink2)}
+.tag.p{background:var(--primary-soft);color:var(--primary)}
+.callouts{list-style:none;padding:0;margin:0;display:grid;gap:8px}
+.callouts li{display:grid;grid-template-columns:24px minmax(0,1fr);gap:8px;align-items:start;color:var(--ink2);font-size:13px}
+.n{width:22px;height:22px;border-radius:50%;background:var(--note-ink);color:var(--note);font:700 12px var(--f);display:inline-flex;align-items:center;justify-content:center;flex:none}
+.pin{position:absolute;z-index:3;box-shadow:0 0 0 3px var(--card)}
+.scroller{overflow-x:auto;border-radius:16px}
+.app{min-width:960px;display:grid;grid-template-columns:200px minmax(0,1fr);background:var(--page);border:1px solid var(--line);border-radius:16px;overflow:hidden;box-shadow:var(--sh);position:relative}
+.side{background:var(--side);border-right:1px solid var(--line);padding:14px 10px;display:flex;flex-direction:column;gap:2px}
+.logo{display:flex;align-items:center;gap:8px;font-weight:700;font-size:16px;padding:2px 8px 12px}
+.hex{width:22px;height:22px;background:var(--primary);clip-path:polygon(25% 5%,75% 5%,100% 50%,75% 95%,25% 95%,0 50%);color:var(--primary-ink);font-size:12px;display:flex;align-items:center;justify-content:center;font-weight:700}
+.nav{display:flex;align-items:center;gap:9px;padding:6px 10px;border-radius:9px;color:var(--ink2);font-size:13px;font-weight:500}
+.nav.on{background:var(--primary-soft);color:var(--primary);font-weight:600}
+.nav .ic{width:16px;height:16px;border:1.6px solid currentColor;border-radius:5px;opacity:.75;flex:none}
+.nav .ct{margin-left:auto;font-size:11px;font-weight:700;background:var(--primary);color:var(--primary-ink);border-radius:999px;padding:0 6px;line-height:18px}
+.sec{font-size:11px;color:var(--ink3);padding:10px 10px 2px;letter-spacing:.04em;text-transform:uppercase}
+.main{display:flex;flex-direction:column;min-width:0}
+.top{height:54px;display:flex;align-items:center;gap:10px;padding:0 20px;border-bottom:1px solid var(--line);background:var(--card)}
+.top h3{font-size:17px;margin:0;font-weight:700}
+.search{margin-left:auto;width:240px;height:32px;border:1px solid var(--line);border-radius:10px;background:var(--page);color:var(--ph);font-size:12px;display:flex;align-items:center;padding:0 10px;gap:8px}
+.kbd{font:500 11px var(--fm);border:1px solid var(--line);border-radius:5px;padding:0 5px;color:var(--ink3);margin-left:auto}
+.av{width:30px;height:30px;border-radius:50%;background:var(--primary-soft);color:var(--primary);font-weight:700;font-size:12px;display:flex;align-items:center;justify-content:center}
+.body{padding:18px 20px 22px;display:grid;gap:14px;position:relative}
+.bar{display:flex;align-items:center;gap:8px;flex-wrap:wrap}
+.btn{font:600 12px var(--f);height:36px;padding:0 14px;border-radius:12px;border:1px solid var(--line);background:var(--card);color:var(--ink2);display:inline-flex;align-items:center;gap:6px;white-space:nowrap}
+.btn.pri{background:var(--primary);border-color:var(--primary);color:var(--primary-ink);font-weight:700}
+.btn.sm{height:30px;padding:0 10px;border-radius:9px;font-size:12px}
+.pill{font:600 11px var(--f);padding:6px 12px;border-radius:999px;background:var(--chip);color:var(--ink2)}
+.pill.on{background:var(--primary);color:var(--primary-ink)}
+.grow{flex:1}
+.card{background:var(--card);border:1px solid var(--line);border-radius:16px;overflow:hidden}
+table{width:100%;border-collapse:collapse;font-size:12px}
+th{font-size:11px;color:var(--ink3);text-align:left;font-weight:600;padding:10px 12px;background:var(--side);border-bottom:1px solid var(--line);text-transform:uppercase;letter-spacing:.04em}
+td{padding:11px 12px;border-bottom:1px solid var(--line2);color:var(--ink2);font-weight:500;vertical-align:middle}
+tr:last-child td{border-bottom:0}
+td b{color:var(--ink);font-weight:600}
+.chk{width:20px;height:20px;border-radius:6px;border:2px solid var(--line);display:inline-block;vertical-align:middle}
+.chk.done{background:#22a55a;border-color:#22a55a}
+.badge{display:inline-flex;align-items:center;gap:4px;font:600 11px var(--f);padding:3px 8px;border-radius:7px;white-space:nowrap}
+.b-n{background:var(--draft-bg);color:var(--ink2)}.b-w{background:var(--wait-bg);color:var(--wait)}.b-g{background:var(--ready-bg);color:var(--ready)}
+.b-i{background:var(--new-bg);color:var(--new)}.b-r{background:var(--late-bg);color:var(--late)}.b-p{background:var(--repair-bg);color:var(--repair)}
+.blank{display:inline-block;width:46px;height:20px;border-radius:7px;border:1.5px dashed var(--late)}
+.late{color:var(--late);font-weight:700}
+.mono{font-family:var(--fm)}
+.drawer{position:absolute;top:0;right:0;bottom:0;width:390px;background:var(--card);border-left:1px solid var(--line);box-shadow:-12px 0 30px rgba(20,33,63,.10);display:flex;flex-direction:column;z-index:2}
+.dh{padding:14px 18px;border-bottom:1px solid var(--line);background:var(--side)}
+.dh h4{margin:0;font-size:15px}
+.dh p{margin:2px 0 0;font-size:11px;color:var(--ink3)}
+.db{padding:14px 18px;display:grid;gap:12px;font-size:12px}
+.lbl{font-size:11px;color:var(--ink3);font-weight:600;margin-bottom:4px}
+.field{border:1px solid var(--line);border-radius:10px;padding:8px 10px;color:var(--ink);background:var(--page);font-weight:500}
+.row2{display:grid;grid-template-columns:1fr 1fr;gap:8px}
+.chips{display:flex;gap:6px;flex-wrap:wrap}
+.chipb{font:600 11px var(--f);padding:3px 9px;border-radius:999px;background:var(--primary-soft);color:var(--primary);border:1px solid var(--primary-line)}
+.feed{border-top:1px solid var(--line);padding-top:10px;display:grid;gap:6px;color:var(--ink2)}
+.feed span{color:var(--ink3)}
+.dim{position:absolute;inset:0;background:rgba(20,33,63,.25);z-index:1}
+.grid3{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.grid2{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:12px}
+.col{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:12px;display:grid;gap:8px;align-content:start}
+.colh{display:flex;align-items:center;gap:8px;font-weight:700;font-size:13px}
+.colh .s{font-weight:500;color:var(--ink3);font-size:12px}
+.tk{border:1px solid var(--line);border-radius:11px;padding:10px 11px;background:var(--card);display:grid;gap:5px;font-size:12px}
+.tk .t{font-weight:600;color:var(--ink);font-size:13px}
+.tk .s{color:var(--ink3)}
+.tk .r{display:flex;gap:6px;align-items:center;flex-wrap:wrap}
+.tk.hot{border-color:var(--primary-line);background:var(--primary-soft)}
+.money{font-variant-numeric:tabular-nums;font-weight:700;color:var(--ink)}
+.group{display:grid;gap:6px}
+.gh{display:flex;align-items:baseline;gap:8px;font-weight:700;font-size:13px;padding:2px 2px}
+.gh span{font-weight:500;color:var(--ink3);font-size:12px}
+.line{display:grid;grid-template-columns:22px minmax(0,1fr) auto auto;gap:10px;align-items:center;padding:10px 12px;border-bottom:1px solid var(--line2);font-size:12px}
+.line:last-child{border-bottom:0}
+.line .t{color:var(--ink);font-weight:600;font-size:13px}
+.line .s{color:var(--ink3)}
+.line.woke{background:var(--primary-soft)}
+.line.snz .t{color:var(--ink3);font-weight:500}
+.menu{position:absolute;background:var(--card);border:1px solid var(--line);border-radius:12px;box-shadow:0 12px 30px rgba(20,33,63,.14);padding:6px;width:250px;font-size:12px;z-index:3}
+.mi{padding:8px 10px;border-radius:8px;color:var(--ink2);display:flex;justify-content:space-between;gap:8px}
+.mi.on{background:var(--primary-soft);color:var(--primary);font-weight:600}
+.mi small{color:var(--ink3)}
+.recipe{display:grid;grid-template-columns:minmax(0,1fr) auto;gap:10px;padding:14px 16px;border-bottom:1px solid var(--line2);align-items:start}
+.recipe:last-child{border-bottom:0}
+.recipe .t{font-weight:700;font-size:13px;color:var(--ink)}
+.steps{display:flex;gap:6px;flex-wrap:wrap;margin-top:6px}
+.step{font-size:11px;font-weight:600;padding:4px 8px;border-radius:8px;background:var(--chip);color:var(--ink2)}
+.step b{color:var(--primary)}
+.tog{width:36px;height:20px;border-radius:999px;background:var(--primary);position:relative;flex:none}
+.tog::after{content:"";position:absolute;right:2px;top:2px;width:16px;height:16px;border-radius:50%;background:#fff}
+.tog.off{background:var(--line)}.tog.off::after{left:2px;right:auto}
+.mail{background:var(--card);border:1px solid var(--line);border-radius:14px;padding:16px 18px;display:grid;gap:10px;font-size:13px}
+.mail .hd{font-size:11px;color:var(--ink3)}
+.kpis{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:8px}
+.kpi{background:var(--page);border-radius:10px;padding:10px 12px}
+.kpi .v{font-size:20px;font-weight:700;font-variant-numeric:tabular-nums;color:var(--ink)}
+.kpi .l{font-size:11px;color:var(--ink3)}
+.wo{display:grid;grid-template-columns:minmax(0,1fr) 360px;gap:14px}
+.next{border:1.5px solid var(--primary-line);background:var(--primary-soft);border-radius:14px;padding:12px 14px;display:grid;gap:8px}
+.next .t{font-weight:700;color:var(--ink);font-size:14px}
+.tl{display:grid;gap:6px;font-size:12px;color:var(--ink2)}
+.tl div{display:grid;grid-template-columns:14px minmax(0,1fr) auto;gap:8px;align-items:center}
+.dot{width:10px;height:10px;border-radius:50%;background:var(--line)}
+.dot.ok{background:#22a55a}.dot.now{background:var(--primary)}
+.clock{display:flex;align-items:center;gap:10px;padding:10px 12px;border-radius:12px;background:var(--wait-bg);color:var(--wait);font-weight:600;font-size:12px}
+.prog{height:6px;border-radius:99px;background:var(--line);overflow:hidden;flex:1}
+.prog i{display:block;height:100%;background:currentColor}
+.tv{background:var(--tv);color:var(--tv-ink);border-radius:16px;padding:20px 22px;display:grid;gap:14px;min-width:960px}
+.tv .hd{display:flex;justify-content:space-between;align-items:baseline;color:var(--tv-2);font-size:13px}
+.tv .hd b{color:var(--tv-ink);font-size:18px}
+.tvk{display:grid;grid-template-columns:repeat(4,minmax(0,1fr));gap:12px}
+.tvk div{background:rgba(255,255,255,.06);border-radius:12px;padding:14px}
+.tvk .v{font-size:34px;font-weight:700;font-variant-numeric:tabular-nums;line-height:1.1}
+.tvk .l{color:var(--tv-2);font-size:12px}
+.tvl{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:12px}
+.tvl .c{background:rgba(255,255,255,.04);border-radius:12px;padding:12px;display:grid;gap:8px;font-size:13px}
+.tvl .c h5{margin:0;font-size:12px;color:var(--tv-2);font-weight:600;text-transform:uppercase;letter-spacing:.05em}
+.tvl .it{display:flex;justify-content:space-between;gap:8px}
+.tvl .it span:last-child{color:#ffb4c2;font-variant-numeric:tabular-nums}
+.pal{width:600px;margin:30px auto;background:var(--card);border:1px solid var(--line);border-radius:16px;box-shadow:0 20px 50px rgba(20,33,63,.2);overflow:hidden;position:relative;z-index:2}
+.pal .in{padding:14px 16px;border-bottom:1px solid var(--line);font-size:15px;color:var(--ink);display:flex;gap:10px;align-items:center}
+.pal .hl{background:var(--primary-soft);color:var(--primary);border-radius:5px;padding:0 3px}
+.pal .sec2{padding:8px 16px 4px;font-size:11px;color:var(--ink3);text-transform:uppercase;letter-spacing:.05em}
+.pal .opt{padding:9px 16px;display:flex;justify-content:space-between;font-size:13px;color:var(--ink2);gap:12px}
+.pal .opt.on{background:var(--primary-soft);color:var(--ink)}
+.why{font-size:11px;color:var(--ink3)}
+.plain{background:var(--note);border:1px solid var(--note-line);color:var(--note-ink);border-radius:12px;padding:10px 14px;font-size:13px}
+.before{font-size:12px;font-weight:700;color:var(--ink3);text-transform:uppercase;letter-spacing:.06em;margin:4px 0 -6px}
+@media (prefers-reduced-motion:no-preference){.view{animation:fade .2s ease}}
+@keyframes fade{from{opacity:.4}to{opacity:1}}
+</style>
+
+<div class="wrap">
+  <header>
+    <h1>Tekly Tasks: from Orderry copy to “next steps that follow the job”</h1>
+    <p class="lede">Each tab is one phase. The screen shows what staff will actually see in Tekly, drawn in Tekly’s own colours, font and layout. Numbered dots match the notes beside it. All names and numbers are examples.</p>
+  </header>
+
+  <nav class="tabs" role="tablist" aria-label="Phases">
+    <button class="tab" role="tab" data-v="plan">Final plan <small>after council</small></button>
+    <button class="tab" role="tab" data-v="today">Today <small>what we have</small></button>
+    <button class="tab" role="tab" data-v="p0">Phase 0 <small>foundations</small></button>
+    <button class="tab" role="tab" data-v="p1">Phase 1 <small>follow-ups</small></button>
+    <button class="tab" role="tab" data-v="p3">Phase 2 <small>waiting board</small></button>
+    <button class="tab" role="tab" data-v="p2">Phase 3 <small>my day</small></button>
+    <button class="tab" role="tab" data-v="p4">Later <small>after interviews</small></button>
+    <button class="tab" role="tab" data-v="p5">Cut <small>and why</small></button>
+  </nav>
+
+  <!-- PLAN -->
+  <section class="view" id="v-plan" hidden>
+    <div class="intro">
+      <div class="box"><h2>What the council and market research decided</h2>
+        <p>Four reviewers (shop owner, counter and bench staff, architect, product strategist) went through every feature. Then we checked what competitors actually do and what makes shops money.</p>
+        <ul>
+          <li><b>About 40% of the first plan already exists in Tekly.</b> That includes automations, customer text rules, per-status time limits, Sense’s morning brief and quote follow-ups, the orders board, Go Today, ⌘K, checklists, and the tracking page with quote approval and deposits. We build on these and don’t rebuild them.</li>
+          <li><b>Nobody buys repair software for its to-do list.</b> The value has to show up as approved quotes and collected, paid devices.</li>
+          <li><b>No competitor documents these five:</b> a pickup chain that stops by itself, one sequence mixing customer texts and staff calls, a “money recovered” report, turnaround clocks that pause on their own, and money waiting by age.</li>
+          <li><b>Three hidden bugs must be fixed first.</b> Task alerts never reach the bell. Timed automations never run on their own. A delayed text can reach a customer who has already collected.</li>
+        </ul>
+        <div class="meta"><span class="tag p">One line vs Orderry: Tekly chases every stalled repair for you and stops the moment the job moves</span></div></div>
+      <div class="box"><h2>Build order</h2><ol class="callouts">
+        <li><span class="n">0</span><b>Foundations</b>: task bugs, alerts to the bell and push, timed automations, a check before delayed texts send.</li>
+        <li><span class="n">1</span><b>Follow-ups</b>: ready but not collected, and quote not answered. A Next steps card on the job, a preview, and a “money recovered” report.</li>
+        <li><span class="n">2</span><b>Waiting board</b>: money waiting by age, clocks that pause, a wall-screen mode.</li>
+        <li><span class="n">3</span><b>My day</b>: one list per person on web that matches Go Today.</li>
+        <li><span class="n">4</span><b>Later</b>, after talking to beta shops: shift routines, supplier returns, a counter filter.</li>
+      </ol>
+      <p style="margin-top:10px;font-size:13px"><b>Test before Phase 1 screens:</b> check beta shops’ data for money stuck in jobs ready over 3 days and quotes waiting over 2 days. Ask 3 owners to approve a daily reminder list for 2 weeks. Make five short calls about how the counter is staffed.</p></div>
+    </div>
+    <div class="card"><table>
+      <thead><tr><th>Feature from the first plan</th><th style="width:120px">Decision</th><th>Why</th></tr></thead>
+      <tbody>
+        <tr><td><b>Bug fixes, “Mine” and search</b></td><td><span class="badge b-g">Keep · P0</span></td><td>Unpaid commission and hidden auto tasks break trust</td></tr>
+        <tr><td><b>Ready but not collected / quote not answered</b></td><td><span class="badge b-g">Keep · P1</span></td><td>Where the money is. Built as presets on existing automation and text rules, not a new engine</td></tr>
+        <tr><td><b>Next steps card + history on the job</b></td><td><span class="badge b-g">Keep · P1</span></td><td>Staff already live on the job screen; history merges with the job’s activity feed</td></tr>
+        <tr><td><b>Preview before switching on</b></td><td><span class="badge b-g">Keep · P1</span></td><td>Uses the existing dry-run; prevents angry customers on day one</td></tr>
+        <tr><td><b>“Money recovered” report</b></td><td><span class="badge b-i">New · P1</span></td><td>No competitor has it. It proves the subscription pays for itself</td></tr>
+        <tr><td><b>Owner money waiting, pausing clock, shop TV</b></td><td><span class="badge b-g">Keep · P2</span></td><td>One feature on the existing orders board and per-status time limits. TV is a full-screen mode with no money shown</td></tr>
+        <tr><td><b>My day, catch-up, quick-add chips</b></td><td><span class="badge b-g">Keep · P3</span></td><td>Web catches up with Go Today. Counter and bench queues become filters, not new screens</td></tr>
+        <tr><td><b>Morning digest</b></td><td><span class="badge b-p">Merge</span></td><td>Add a tasks section to the Sense morning brief. Owner email only</td></tr>
+        <tr><td><b>Snooze until something happens</b></td><td><span class="badge b-p">Merge</span></td><td>Follow-up steps already wake and close on job events</td></tr>
+        <tr><td><b>Shift checklists, supplier returns</b></td><td><span class="badge b-w">Later</span></td><td>Real needs, but test with beta shops first. Reuse the checklist model</td></tr>
+        <tr><td><b>Rename, AI, voice, Accept button, two-person tick, two date fields</b></td><td><span class="badge b-r">Cut</span></td><td>Noise, extra clicks, or a fixed rule does the job. See the Cut tab</td></tr>
+      </tbody></table></div>
+  </section>
+
+  <!-- TODAY -->
+  <section class="view" id="v-today" hidden>
+    <div class="intro">
+      <div class="box"><h2>What Tasks looks like today</h2>
+        <p>A to-do list, close to Orderry’s. Someone has to type every task by hand, and nothing reminds anyone when a customer goes quiet or a device sits on the shelf.</p>
+        <div class="meta"><span class="tag">Web: Tasks page</span><span class="tag">Same idea as Orderry</span></div></div>
+      <div class="box"><h2>Problems you can see</h2><ol class="callouts">
+        <li><span class="n">1</span>Tasks made by automations have no status, so the badge is empty and they vanish from the filters.</li>
+        <li><span class="n">2</span>No search and no “only mine” filter. Everyone sees every task in the shop.</li>
+        <li><span class="n">3</span>Links only show the work order, not the customer.</li>
+        <li><span class="n">4</span>The side panel can’t change the title, due date or priority, and has no delete.</li>
+      </ol></div>
+    </div>
+    <div class="scroller"><div class="app" data-nav="Tasks">
+      <div class="main">
+        <div class="top"><h3>Tasks</h3><div class="search">Search Tekly <span class="kbd">⌘K</span></div><div class="av">PR</div></div>
+        <div class="body">
+          <div class="bar"><span class="btn pri">+ New task</span><span class="pill on">All</span><span class="pill">To do</span><span class="pill">In progress</span><span class="pill">Done</span><span class="pill">Late</span>
+            <span class="n pin" style="left:420px;top:22px">2</span></div>
+          <div class="card"><table>
+            <thead><tr><th style="width:40px"></th><th>Task</th><th style="width:120px">Status</th><th style="width:140px">Links</th><th style="width:150px">Assigned to</th><th style="width:130px">Due</th></tr></thead>
+            <tbody>
+              <tr><td><span class="chk"></span></td><td><b>Call back: missed call 07700 900412</b></td><td><span class="badge b-n">To do</span></td><td>—</td><td>Priya</td><td class="late">Nov 10, 4:00 PM</td></tr>
+              <tr><td><span class="chk"></span></td><td><b>Follow up: WO-1042 waiting for approval</b></td><td style="position:relative"><span class="blank"></span><span class="n pin" style="left:62px;top:9px">1</span></td><td><span class="badge b-i">WO-1042</span></td><td>—</td><td>—</td></tr>
+              <tr><td><span class="chk"></span></td><td><b>Order battery for iPad Air 4</b></td><td><span class="badge b-w">In progress</span></td><td style="position:relative"><span class="badge b-i">WO-1038</span><span class="n pin" style="left:82px;top:9px">3</span></td><td>Leo</td><td>Nov 12, 10:00 AM</td></tr>
+              <tr><td><span class="chk"></span></td><td><b>Ask Jane Kim to collect her phone</b></td><td><span class="badge b-n">To do</span></td><td><span class="badge b-i">WO-1019</span></td><td>Sam, Priya</td><td>Nov 13, 9:00 AM</td></tr>
+              <tr><td><span class="chk done"></span></td><td><b style="color:var(--ink3);text-decoration:line-through">Clean ultrasonic tank</b></td><td><span class="badge b-g">Done</span></td><td>—</td><td>Leo</td><td>Nov 9, 6:00 PM</td></tr>
+            </tbody></table></div>
+          <div class="dim"></div>
+          <div class="drawer"><div class="dh"><h4>Order battery for iPad Air 4</h4><p>Due Nov 12, 10:00 AM</p></div>
+            <div class="db" style="position:relative"><span class="n pin" style="right:16px;top:10px">4</span>
+              <div class="chips"><span class="pill">To do</span><span class="pill on">In progress</span><span class="pill">Done</span></div>
+              <div><div class="lbl">Assigned technicians</div><div class="chips"><span class="chipb">Leo ×</span></div></div>
+              <div><div class="lbl">Work order</div><div class="field">WO-1038</div></div>
+              <div class="feed"><div><b>Leo</b> <span>· yesterday</span><br>Supplier says Friday.</div></div>
+              <div class="field" style="color:var(--ph)">Write a comment…</div>
+            </div></div>
+        </div>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- PHASE 0 -->
+  <section class="view" id="v-p0" hidden>
+    <div class="intro">
+      <div class="box"><h2>Phase 0: foundations</h2>
+        <p>The same page, with nothing broken or hidden. Staff open Tasks and see their own work first.</p>
+        <p>Behind the scenes it fixes three things the follow-ups need:</p>
+        <ul>
+          <li>Task alerts reach the bell and phone push. Today they only go by email or text.</li>
+          <li>Timed automations run every hour on their own.</li>
+          <li>A delayed customer text is checked again before it sends, so nobody gets a pickup reminder after collecting.</li>
+        </ul>
+        <div class="meta"><span class="tag p">About a week</span><span class="tag">Also removes an old task API that has no permission checks</span></div></div>
+      <div class="box"><h2>What changes</h2><ol class="callouts">
+        <li><span class="n">1</span>“Mine” is the default. Search finds a task by text, job number or customer.</li>
+        <li><span class="n">2</span>Automatic tasks get a real status, and a small “Auto” tag so you know where they came from.</li>
+        <li><span class="n">3</span>Links show the job and the customer together.</li>
+        <li><span class="n">4</span>The panel edits everything: title, due date, priority, notes. Delete goes to a 30-day bin.</li>
+        <li><span class="n">5</span>Every assignee gets the notification and their share of commission.</li>
+      </ol></div>
+    </div>
+    <div class="scroller"><div class="app" data-nav="Tasks">
+      <div class="main">
+        <div class="top"><h3>Tasks</h3><div class="search">Search Tekly <span class="kbd">⌘K</span></div><div class="av">PR</div></div>
+        <div class="body">
+          <div class="bar" style="position:relative"><span class="btn pri">+ New task</span><span class="pill on">Mine</span><span class="pill">Everyone</span><span class="pill">To do</span><span class="pill">In progress</span><span class="pill">Late</span><span class="pill">Done</span>
+            <span class="grow"></span><span class="btn sm" style="width:220px;color:var(--ph)">Search tasks, jobs, customers</span><span class="btn sm">Person ▾</span><span class="btn sm">Priority ▾</span>
+            <span class="n pin" style="left:150px;top:-8px">1</span></div>
+          <div class="card"><table>
+            <thead><tr><th style="width:40px"></th><th>Task</th><th style="width:130px">Status</th><th style="width:200px">Job and customer</th><th style="width:130px">Assigned to</th><th style="width:120px">Due</th></tr></thead>
+            <tbody>
+              <tr><td><span class="chk"></span></td><td><b>Follow up: WO-1042 waiting for approval</b> <span class="badge b-p" style="margin-left:6px">Auto</span></td><td style="position:relative"><span class="badge b-n">To do</span><span class="n pin" style="left:72px;top:9px">2</span></td><td style="position:relative"><span class="badge b-i">WO-1042</span> Jane Kim<span class="n pin" style="left:160px;top:9px">3</span></td><td>Priya</td><td>Today 2:00 PM</td></tr>
+              <tr><td><span class="chk"></span></td><td><b>Call back: missed call 07700 900412</b> <span class="badge b-p" style="margin-left:6px">Auto</span></td><td><span class="badge b-n">To do</span></td><td>New inquiry</td><td>Priya</td><td class="late">Yesterday</td></tr>
+              <tr><td><span class="chk"></span></td><td><b>Ask Jane Kim to collect her phone</b></td><td><span class="badge b-n">To do</span></td><td><span class="badge b-i">WO-1019</span> Jane Kim</td><td>Sam, Priya</td><td>Nov 13, 9:00 AM</td></tr>
+            </tbody></table></div>
+          <div class="dim"></div>
+          <div class="drawer"><div class="dh"><h4>Follow up: WO-1042 waiting for approval</h4><p>Created automatically when the job moved to “Waiting for approval”</p></div>
+            <div class="db" style="position:relative"><span class="n pin" style="right:16px;top:10px">4</span>
+              <div><div class="lbl">Title</div><div class="field">Follow up: WO-1042 waiting for approval</div></div>
+              <div class="row2"><div><div class="lbl">Due</div><div class="field">Today, 2:00 PM</div></div><div><div class="lbl">Priority</div><div class="field">High ▾</div></div></div>
+              <div style="position:relative"><div class="lbl">Assigned</div><div class="chips"><span class="chipb">Priya ×</span><span class="chipb">Sam ×</span><span class="chipb" style="background:transparent">+ Add</span></div><span class="n pin" style="right:0;top:0">5</span></div>
+              <div><div class="lbl">Notes</div><div class="field">Quote £189 for screen + battery. Customer asked to think about it.</div></div>
+              <div class="bar"><span class="btn sm pri">Save</span><span class="btn sm">Start timer</span><span class="grow"></span><span class="btn sm" style="color:var(--late)">Delete</span></div>
+            </div></div>
+        </div>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- PHASE 1 -->
+  <section class="view" id="v-p1" hidden>
+    <div class="intro">
+      <div class="box"><h2>Phase 1: follow-ups that chase waiting jobs</h2>
+        <p>When a job goes into a waiting state, Tekly texts the customer on a schedule and puts a call on the right person’s list. When the job moves on, the follow-up stops by itself. Nobody types these tasks.</p>
+        <p>It’s built from Tekly’s existing automation and text rules, so there’s no second texting engine. The tracking page already lets customers approve quotes and pay deposits, so every text carries that link.</p>
+        <p>New: a “money recovered” report shows what the follow-ups brought back. No competitor shows this.</p>
+        <div class="meta"><span class="tag p">1–2 weeks</span><span class="tag">Off by default · preview first</span><span class="tag">Service texts only, quiet hours respected</span></div></div>
+      <div class="box"><h2>What you’ll see</h2><ol class="callouts">
+        <li><span class="n">1</span>Inside the work order: a “Next step” card shows what Tekly will do and when.</li>
+        <li><span class="n">2</span>A timeline shows what was already sent, so nobody texts the customer twice.</li>
+        <li><span class="n">3</span>Settings → Follow-ups: turn each recipe on or off and change the days.</li>
+        <li><span class="n">4</span>Before switching on, Tekly shows exactly which jobs would be affected today.</li>
+        <li><span class="n">5</span>A report of what the follow-ups recovered, which proves Tekly pays for itself. The morning summary goes into Sense’s existing brief instead of a new email.</li>
+      </ol></div>
+    </div>
+    <div class="before">Inside a work order</div>
+    <div class="scroller"><div class="app" data-nav="Work orders">
+      <div class="main">
+        <div class="top"><h3>WO-1019 · iPhone 13 screen</h3><span class="badge b-g">Ready for pickup</span><div class="search">Search Tekly <span class="kbd">⌘K</span></div><div class="av">PR</div></div>
+        <div class="body">
+          <div class="wo">
+            <div class="grid2" style="align-content:start">
+              <div class="col"><div class="lbl">Customer</div><b style="font-size:14px">Jane Kim</b><span style="color:var(--ink3)">07700 900123 · SMS ok</span></div>
+              <div class="col"><div class="lbl">Balance due</div><span class="money" style="font-size:22px">£180.00</span><span style="color:var(--ink3)">Ready since Nov 5 (6 days)</span></div>
+              <div class="col" style="grid-column:1/-1"><div class="lbl">Work done</div><span>Replaced screen (OEM), tested Face ID, True Tone restored.</span></div>
+            </div>
+            <div class="next" style="position:relative"><span class="n pin" style="right:-8px;top:-8px">1</span>
+              <div class="lbl" style="color:var(--primary);margin:0">NEXT STEP · AUTOMATIC</div>
+              <div class="t">Call Jane about collection</div>
+              <div style="color:var(--ink2);font-size:12px">On Priya’s list today. Closes by itself when the job is paid and collected.</div>
+              <div class="tl" style="position:relative"><span class="n pin" style="right:-4px;top:-2px">2</span>
+                <div><span class="dot ok"></span>Ready text sent<span style="color:var(--ink3)">Nov 5</span></div>
+                <div><span class="dot ok"></span>Reminder text (day 3)<span style="color:var(--ink3)">Nov 8</span></div>
+                <div><span class="dot now"></span><b>Phone call (day 6)</b><span style="color:var(--primary)">Today</span></div>
+                <div><span class="dot"></span>Storage notice (day 30)<span style="color:var(--ink3)">Dec 5</span></div>
+              </div>
+              <div class="bar"><span class="btn sm pri">Log call</span><span class="btn sm">Snooze</span><span class="btn sm">Skip this job</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+    <div class="grid2" style="grid-template-columns:minmax(0,1.4fr) minmax(0,1fr)">
+      <div>
+        <div class="before" style="margin-bottom:10px">Settings → Follow-ups</div>
+        <div class="card" style="position:relative"><span class="n pin" style="left:-6px;top:-6px">3</span>
+          <div class="recipe"><div><div class="t">Ready but not collected</div><div style="color:var(--ink3);font-size:12px">Starts when a job is “Ready for pickup”. Stops when it’s paid and collected.</div>
+            <div class="steps"><span class="step">Day 3 · <b>text</b></span><span class="step">Day 6 · <b>call task</b> for counter</span><span class="step">Day 30 · <b>printable notice</b> (optional, logged)</span></div></div><span class="tog"></span></div>
+          <div class="recipe"><div><div class="t">Quote not answered</div><div style="color:var(--ink3);font-size:12px">Starts when a job is “Waiting for approval”. Stops when the customer approves or declines.</div>
+            <div class="steps"><span class="step">After 24 h · <b>text</b></span><span class="step">After 48 h · <b>call task</b></span><span class="step">Day 7 · <b>ask owner</b></span></div></div><span class="tog"></span></div>
+          <div class="recipe" style="position:relative"><span class="n pin" style="left:-6px;top:12px">4</span><div><div class="t" style="color:var(--primary)">Preview before you switch on</div><div style="color:var(--ink2);font-size:12px">Right now this would affect <b>4 jobs</b> (£1,240 waiting) and <b>2 quotes</b>. No customer gets a message until you press Turn on.</div></div><span class="btn sm pri">Turn on</span></div>
+        </div>
+      </div>
+      <div>
+        <div class="before" style="margin-bottom:10px">Reports → Follow-ups (new)</div>
+        <div class="mail" style="position:relative"><span class="n pin" style="right:-6px;top:-6px">5</span>
+          <div class="hd">This month · both follow-ups</div>
+          <b style="font-size:15px">£2,415 recovered by follow-ups</b>
+          <div class="kpis"><div class="kpi"><div class="v">11</div><div class="l">devices collected after a reminder</div></div><div class="kpi"><div class="v">7</div><div class="l">quotes approved after a nudge</div></div><div class="kpi"><div class="v">2.1 d</div><div class="l">faster average pickup</div></div><div class="kpi"><div class="v">0</div><div class="l">texts after collection</div></div></div>
+          <span class="btn sm" style="justify-self:start">See each job</span>
+        </div>
+      </div>
+    </div>
+  </section>
+
+  <!-- PHASE 2 -->
+  <section class="view" id="v-p2" hidden>
+    <div class="intro">
+      <div class="box"><h2>Phase 3: “My day”, one list per person</h2>
+        <p>The web gets what Tekly Go’s Today screen already does. Each person opens Tasks and sees today. Counter staff see the follow-up calls, and techs see their bench jobs with “part arrived” pinned on top. These are filters on one screen, not separate queues.</p>
+        <p>Follow-up steps wake up by themselves when the customer replies or a part arrives, because Phase 1 already ties them to the job. No separate snooze system is needed.</p>
+        <div class="meta"><span class="tag p">2 weeks</span><span class="tag">Same view on web and Tekly Go</span><span class="tag">Owner gets “Everyone’s day”</span></div></div>
+      <div class="box"><h2>What you’ll see</h2><ol class="callouts">
+        <li><span class="n">1</span>Today / Upcoming / Later instead of one long table.</li>
+        <li><span class="n">2</span>Late items are a calm “Catch up” group with a one-click “Move all to today”, not a red wall.</li>
+        <li><span class="n">3</span>A follow-up came back early because the customer replied.</li>
+        <li><span class="n">4</span>A waiting job hides until its part arrives. That comes from the job, with nothing to set.</li>
+        <li><span class="n">5</span>One due date and a simple repeat. No second date field.</li>
+      </ol></div>
+    </div>
+    <div class="scroller"><div class="app" data-nav="Tasks">
+      <div class="main">
+        <div class="top"><h3>My day</h3><span class="pill on" style="margin-left:10px">Today · 5</span><span class="pill">Upcoming · 8</span><span class="pill">Later · 3</span><span class="n pin" style="left:120px;top:16px">1</span><div class="search">Search Tekly <span class="kbd">⌘K</span></div><div class="av">PR</div></div>
+        <div class="body">
+          <div class="bar"><span class="btn pri">+ Add</span><span class="btn">Everyone’s day</span></div>
+          <div class="group" style="position:relative"><span class="n pin" style="left:-6px;top:-4px">2</span>
+            <div class="gh">Catch up <span>2 from earlier this week</span><span class="grow"></span><span class="btn sm">Move all to today</span></div>
+            <div class="card">
+              <div class="line"><span class="chk"></span><div><div class="t">Chase supplier RMA #A88 (faulty screen)</div><div class="s">WO-0998 · MobileParts UK · claim closes Nov 14</div></div><span class="badge b-w">Waiting supplier</span><span class="s">Mon</span></div>
+              <div class="line"><span class="chk"></span><div><div class="t">Call back: missed call 07700 900412</div><div class="s">New inquiry</div></div><span class="badge b-n">Call</span><span class="s">Tue</span></div>
+            </div></div>
+          <div class="group">
+            <div class="gh">Today <span>Tue Nov 11</span></div>
+            <div class="card" style="position:relative">
+              <div class="line woke" style="position:relative"><span class="chk"></span><div><div class="t">Jane approved the quote: order the screen</div><div class="s">WO-1042 · came back early: customer replied 10 minutes ago</div></div><span class="badge b-i">Woke up</span><span class="s">Now</span><span class="n pin" style="right:6px;top:-8px">3</span></div>
+              <div class="line"><span class="chk"></span><div><div class="t">Call Jane about collection</div><div class="s">WO-1019 · ready 6 days · £180</div></div><span class="badge b-g">Pickup</span><span class="s">11:00</span></div>
+              <div class="line"><span class="chk"></span><div><div class="t">QC check MacBook Air keyboard</div><div class="s">WO-1031 · before customer pickup at 4:00</div></div><span class="badge b-p">Bench</span><span class="s">3:00</span></div>
+              <div class="line snz" style="position:relative"><span class="chk" style="opacity:.4"></span><div><div class="t">Resume iPad Air battery job</div><div class="s">WO-1038 · shows up when the part is received</div></div><span class="badge b-n">Waiting part</span><span class="s">—</span></div>
+            </div>
+<span class="n pin" style="left:-6px;bottom:20px">4</span>
+          </div>
+          <div class="drawer" style="width:330px"><div class="dh"><h4>Chase supplier RMA #A88</h4><p>WO-0998 · faulty OLED from MobileParts UK</p></div>
+            <div class="db" style="position:relative"><span class="n pin" style="right:16px;top:14px">5</span>
+              <div class="row2"><div><div class="lbl">Due</div><div class="field" style="color:var(--late)">Fri Nov 14</div></div><div><div class="lbl">Repeat</div><div class="field">Doesn’t repeat ▾</div></div></div>
+              <div><div class="lbl">Notes</div><div class="field">Photos sent Mon. Waiting for RMA number.</div></div>
+              <div class="bar"><span class="btn sm pri">Done</span><span class="btn sm">Tomorrow</span><span class="btn sm">Hand to…</span></div>
+            </div></div>
+        </div>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- PHASE 3 -->
+  <section class="view" id="v-p3" hidden>
+    <div class="intro">
+      <div class="box"><h2>Phase 2: the waiting board</h2>
+        <p>The owner’s one daily screen. It’s the existing work-order board, grouped by what each job is waiting for, with the money stuck in each group and how long it has been stuck. Turnaround clocks pause by themselves while a job waits on parts or the customer, using Tekly’s existing per-status time limits.</p>
+        <p>No competitor documents money waiting by age or clocks that pause by themselves.</p>
+        <div class="meta"><span class="tag p">2–3 weeks</span><span class="tag">Built on Work orders → Board</span><span class="tag">Wall mode shows no money</span></div></div>
+      <div class="box"><h2>What you’ll see</h2><ol class="callouts">
+        <li><span class="n">1</span>Columns by what the job waits for: customer, parts, bench.</li>
+        <li><span class="n">2</span>Money waiting and age on every card, oldest first.</li>
+        <li><span class="n">3</span>A handoff is marked “New for you”. Opening or starting the job counts as accepting, with no extra button.</li>
+        <li><span class="n">4</span>The turnaround clock pauses while waiting on parts.</li>
+        <li><span class="n">5</span>Wall mode: the same board in big type for a back-room screen, without amounts.</li>
+      </ol></div>
+    </div>
+    <div class="scroller"><div class="app" data-nav="Tasks">
+      <div class="main">
+        <div class="top"><h3>Work orders</h3><span class="pill" style="margin-left:10px">List</span><span class="pill on">Waiting board</span><span class="btn sm" style="margin-left:6px">Wall mode</span><div class="search">Search Tekly <span class="kbd">⌘K</span></div><div class="av">PR</div></div>
+        <div class="body">
+          <div class="kpis" style="grid-template-columns:repeat(4,minmax(0,1fr))"><div class="kpi"><div class="v">£2,860</div><div class="l">waiting on customers</div></div><div class="kpi"><div class="v">7</div><div class="l">past promised time</div></div><div class="kpi"><div class="v">3</div><div class="l">waiting on parts (clocks paused)</div></div><div class="kpi"><div class="v">£2,415</div><div class="l">recovered this month</div></div></div>
+          <div class="grid3">
+            <div class="col" style="position:relative"><span class="n pin" style="left:-6px;top:-6px">1</span>
+              <div class="colh">Waiting on customer <span class="s">· £2,860</span></div>
+              <div class="tk" style="position:relative"><span class="n pin" style="right:-6px;top:-6px">2</span><div class="r"><span class="badge b-r">41 days</span><span class="grow"></span><span class="money">£95</span></div><div class="t">WO-0981 · abandoned?</div><div class="s">Notice printed and logged Oct 31 · sell or keep</div></div>
+              <div class="tk"><div class="r"><span class="badge b-w">6 days</span><span class="grow"></span><span class="money">£180</span></div><div class="t">WO-1019 · ready, not collected</div><div class="s">Jane Kim · call step on Priya’s day</div></div>
+              <div class="tk"><div class="r"><span class="badge b-w">2 days</span><span class="grow"></span><span class="money">£320</span></div><div class="t">WO-1044 · quote not answered</div><div class="s">Tom Reid · text sent, call tomorrow</div></div>
+            </div>
+            <div class="col" style="position:relative">
+              <div class="colh">Waiting on parts <span class="s">· 3</span></div>
+              <div class="tk" style="position:relative"><span class="n pin" style="right:-6px;top:-6px">4</span><div class="t">WO-1038 · iPad Air 4 battery</div><div class="s">PO-221 · due Fri · Leo</div><div class="clock">Paused: waiting for part<div class="prog"><i style="width:45%"></i></div>2d 4h of 5d</div></div>
+              <div class="tk"><div class="t">WO-1033 · Pixel 8 screen</div><div class="s">PO-219 · arrives today</div></div>
+            </div>
+            <div class="col" style="position:relative">
+              <div class="colh">On the bench <span class="s">· Leo, Sam</span></div>
+              <div class="tk hot" style="position:relative"><span class="n pin" style="right:-6px;top:-6px">3</span><div class="r"><span class="badge b-i">New for you</span><span class="s">from Priya · 4 min ago</span></div><div class="t">WO-1047 · iPhone 14 back glass</div><div class="s">Customer waiting until 5 · passcode in notes</div></div>
+              <div class="tk"><div class="r"><span class="badge b-p">In repair</span><span class="grow"></span><span class="s">Leo</span></div><div class="t">WO-1040 · Galaxy S23 charge port</div><div class="s">1 h 10 m in</div></div>
+              <div class="tk"><div class="r"><span class="badge b-r">+1 day</span></div><div class="t">WO-1012 · Switch HDMI port</div><div class="s">Past promised time</div></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+    <div class="before">Wall mode (same board, back-room screen, no amounts)</div>
+    <div class="scroller" style="position:relative"><div class="tv"><span class="n pin" style="left:8px;top:8px">5</span>
+      <div class="hd"><b>Fix Point · Tuesday 2:40 PM</b><span>Updates every minute</span></div>
+      <div class="tvk"><div><div class="v">14</div><div class="l">jobs in the shop</div></div><div><div class="v">5</div><div class="l">due out today</div></div><div><div class="v" style="color:#ffb4c2">2</div><div class="l">past promised time</div></div><div><div class="v">4</div><div class="l">ready, not collected</div></div></div>
+      <div class="tvl">
+        <div class="c"><h5>Due today</h5><div class="it"><span>WO-1047 iPhone 14 glass</span><span>5:00</span></div><div class="it"><span>WO-1031 MacBook keyboard</span><span>4:00</span></div><div class="it"><span>WO-1040 S23 port</span><span>6:00</span></div></div>
+        <div class="c"><h5>Late</h5><div class="it"><span>WO-1012 Switch HDMI</span><span>+1 day</span></div><div class="it"><span>WO-1025 Pixel 7 screen</span><span>+3 h</span></div></div>
+        <div class="c"><h5>Waiting</h5><div class="it"><span style="color:var(--tv-ink)">WO-1038 part due Fri</span><span style="color:var(--tv-2)">paused</span></div><div class="it"><span style="color:var(--tv-ink)">WO-1044 quote sent</span><span style="color:var(--tv-2)">2 days</span></div></div>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- PHASE 4 -->
+  <section class="view" id="v-p4" hidden>
+    <div class="intro">
+      <div class="box"><h2>Later: shift routines, supplier returns, counter filter</h2>
+        <p>These are real needs, but we found no proof yet that shops will move them off the whiteboard. We ask beta shops first (a photo of their whiteboard, and how many supplier returns they do each month), then build on Tekly’s existing checklist model.</p>
+        <p>Already dropped from this: two-person ticks (cash counts belong in the cash module), and steps that repeat what follow-ups already do (missed calls, pickups).</p>
+        <div class="meta"><span class="tag p">After beta interviews</span><span class="tag">Reuses ChecklistTemplate</span></div></div>
+      <div class="box"><h2>What you’ll see</h2><ol class="callouts">
+        <li><span class="n">1</span>Today’s opening checklist inside My day, with progress and who ticked what.</li>
+        <li><span class="n">2</span>Steps are simple ticks. Pickups and missed calls aren’t listed, because follow-ups already handle them.</li>
+        <li><span class="n">3</span>The template: repeat rule, who it’s for, and its steps. Three ready-made examples.</li>
+      </ol></div>
+    </div>
+    <div class="scroller"><div class="app" data-nav="Tasks">
+      <div class="main">
+        <div class="top"><h3>Checklists</h3><div class="search">Search Tekly <span class="kbd">⌘K</span></div><div class="av">SA</div></div>
+        <div class="body">
+          <div class="grid2" style="grid-template-columns:minmax(0,1.1fr) minmax(0,1fr)">
+            <div class="card" style="position:relative"><span class="n pin" style="left:-6px;top:-6px">1</span>
+              <div class="line" style="grid-template-columns:minmax(0,1fr) auto"><div><div class="t">Opening checklist</div><div class="s">Today · started 8:52 by Sam</div></div><span class="badge b-i">3 of 5</span></div>
+              <div class="line" style="position:relative"><span class="chk done"></span><div><div class="t" style="text-decoration:line-through;color:var(--ink3)">Open the till (cash module)</div><div class="s">Sam · 8:55</div></div><span></span><span class="s"></span><span class="n pin" style="right:96px;top:-6px">2</span></div>
+              <div class="line"><span class="chk done"></span><div><div class="t" style="text-decoration:line-through;color:var(--ink3)">Test the card terminal</div><div class="s">Sam · 8:57</div></div><span></span><span></span></div>
+              <div class="line"><span class="chk done"></span><div><div class="t" style="text-decoration:line-through;color:var(--ink3)">Restock the accessories wall</div><div class="s">Sam · 9:04</div></div><span></span><span></span></div>
+              <div class="line"><span class="chk"></span><div><div class="t">Wipe down the bench mats</div><div class="s">Bench</div></div><span></span><span></span></div>
+              <div class="line"><span class="chk"></span><div><div class="t">Check the screen-protector stock</div><div class="s">Counter</div></div><span></span><span></span></div>
+            </div>
+            <div class="card" style="position:relative;padding:14px 16px;display:grid;gap:10px;align-content:start"><span class="n pin" style="left:-6px;top:-6px">3</span>
+              <div class="lbl" style="margin:0">CHECKLIST TEMPLATE</div>
+              <div><div class="lbl">Name</div><div class="field">Opening checklist</div></div>
+              <div class="row2"><div><div class="lbl">Repeats</div><div class="field">Every open day, 9:00</div></div><div><div class="lbl">For</div><div class="field">Whoever opens</div></div></div>
+              <div><div class="lbl">Steps</div><div style="display:grid;gap:6px;font-size:12px;color:var(--ink2)"><span>⋮⋮ Open the till</span><span>⋮⋮ Test the card terminal</span><span>⋮⋮ Restock the accessories wall</span><span>⋮⋮ Wipe down the bench mats</span><span>⋮⋮ Check the screen-protector stock</span></div></div>
+              <div class="lbl" style="margin:4px 0 0">START FROM AN EXAMPLE</div>
+              <div class="chips"><span class="chipb">Closing</span><span class="chipb">Weekly stock count</span><span class="chipb">Monthly supplier returns</span></div>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+  </section>
+
+  <!-- PHASE 5 -->
+  <section class="view" id="v-p5" hidden>
+    <div class="intro">
+      <div class="box"><h2>Cut: what we won’t build, and why</h2>
+        <p>This was the original Phase 5 screen. The council cut most of it because it adds noise, or because Tekly already has it.</p>
+        <ul>
+          <li><b>AI assignee suggestion.</b> In a small shop the answer is always the job’s tech. A fixed rule does that.</li>
+          <li><b>Voice drafts.</b> About 62% accuracy in the best-known product, so checking a draft takes longer than typing it.</li>
+          <li><b>A new ⌘K.</b> Tekly already has one. If it’s nearly free, “Add task” becomes one more command, with no sentence parser.</li>
+          <li><b>Renaming Tasks to “Next steps”.</b> It confuses shops switching from Orderry. Only the card on the job uses that name.</li>
+          <li><b>Handoff Accept button, two-person ticks, a second date field, rotating counter owner, per-task checklists, a separate morning email for techs.</b> Each adds clicks or settings someone has to keep up.</li>
+        </ul>
+        <div class="meta"><span class="tag">Revisit after beta</span></div></div>
+      <div class="box"><h2>What this screen showed</h2><ol class="callouts">
+        <li><span class="n">1</span>A typed sentence picked apart. Cut: quick-add chips in Phase 3 cover it.</li>
+        <li><span class="n">2</span>Removable chips. Kept, as part of Phase 3 quick add.</li>
+        <li><span class="n">3</span>AI suggestion. Cut: a fixed rule does it.</li>
+        <li><span class="n">4</span>Voice draft. Cut for now.</li>
+      </ol></div>
+    </div>
+    <div class="scroller"><div class="app" data-nav="Tasks">
+      <div class="main">
+        <div class="top"><h3>My day</h3><div class="search">Search Tekly <span class="kbd">⌘K</span></div><div class="av">PR</div></div>
+        <div class="body" style="min-height:430px">
+          <div class="dim"></div>
+          <div class="pal">
+            <div class="in" style="position:relative"><span class="kbd" style="margin:0">⌘K</span><span>call jane <span class="hl">tmrw 3pm</span> about <span class="hl">WO-1042</span> quote</span><span class="n pin" style="right:12px;top:12px">1</span></div>
+            <div style="padding:10px 16px;display:flex;gap:6px;flex-wrap:wrap;border-bottom:1px solid var(--line);position:relative"><span class="chipb">Tomorrow 3:00 PM ×</span><span class="chipb">WO-1042 ×</span><span class="chipb">Jane Kim ×</span><span class="chipb">Call ×</span><span class="n pin" style="right:12px;top:8px">2</span></div>
+            <div class="sec2">Create</div>
+            <div class="opt on"><span><b>Add task:</b> Call Jane about WO-1042 quote</span><span class="kbd" style="margin:0">↵</span></div>
+            <div class="sec2">Suggested</div>
+            <div class="opt" style="position:relative"><span>Assign to <b>Leo</b><br><span class="why">Why: Leo diagnosed WO-1042 and wrote the quote.</span></span><span class="btn sm">Use</span><span class="n pin" style="right:70px;top:8px">3</span></div>
+            <div class="opt" style="position:relative"><span>Voice note → draft<br><span class="why">“Remind me to chase the Samsung part Friday”: check, then save</span></span><span class="btn sm">Review</span><span class="n pin" style="right:80px;top:8px">4</span></div>
+            <div class="sec2">Go to</div>
+            <div class="opt"><span>WO-1042 · Jane Kim · MacBook Air screen</span><span class="why">Work order</span></div>
+          </div>
+        </div>
+      </div>
+    </div></div>
+  </section>
+
+  <div class="plain">Nothing here is built yet. Phase 0 fixes real bugs found in today’s code. The plan follows the council and market review added to the research report, “Tekly task manager redesign”.</div>
+</div>
+
+<script>
+(function(){
+  var NAV=[["Inquiries",2],["Appointments"],["Chats"],["Contacts"],["|Work"],["Work orders"],["My work"],["Timesheets"],["Tasks",5],["|Money"],["Sales"],["Invoices"],["Inventory"],["Reports"],["|"],["Settings"]];
+  document.querySelectorAll(".app").forEach(function(app){
+    var on=app.getAttribute("data-nav");var s=document.createElement("aside");s.className="side";
+    var h='<div class="logo"><span class="hex">t</span>tekly</div>';
+    NAV.forEach(function(n){ if(n[0].charAt(0)==="|"){h+='<div class="sec">'+n[0].slice(1)+'</div>';return;}
+      h+='<div class="nav'+(n[0]===on?' on':'')+'"><span class="ic"></span>'+n[0]+(n[1]?'<span class="ct">'+n[1]+'</span>':'')+'</div>';});
+    s.innerHTML=h;app.insertBefore(s,app.firstChild);
+  });
+  var ids=["plan","today","p0","p1","p2","p3","p4","p5"],tabs=document.querySelectorAll(".tab");
+  function show(v){ if(ids.indexOf(v)<0)v="plan";
+    ids.forEach(function(i){document.getElementById("v-"+i).hidden=(i!==v);});
+    tabs.forEach(function(t){t.setAttribute("aria-selected",t.getAttribute("data-v")===v?"true":"false");});}
+  tabs.forEach(function(t){t.addEventListener("click",function(){var v=t.getAttribute("data-v");if(location.hash!=="#"+v)location.hash=v;else show(v);});});
+  window.addEventListener("hashchange",function(){show(location.hash.slice(1));});
+  show(location.hash.slice(1));
+})();
+</script>
