@@ -129,6 +129,39 @@ async def deliver_notifications() -> None:
     await _deliver_exclusively(tick)
 
 
+@job_runner.every(3600, "automation-time-sweep")
+async def sweep_time_automations() -> None:
+    """Tasks phase 0 — fire time-based automations ("work order overdue", "product low on stock")
+    hourly. Until now they only ran when someone pressed POST /api/automations/sweep.
+
+    Only shops with an active time-based rule are visited. Safe to run repeatedly: every rule
+    fires once per order overdue spell / per low-stock dip (automation_fires), and its tasks are
+    de-duplicated by source_ref. Backlog guard: a rule only fires for orders that became overdue
+    AFTER it went live (AutomationRule.activated_at), so switching a rule on doesn't create a task
+    for every order that has been late for months — the manual sweep endpoint is the deliberate
+    way to cover those. Low stock is a current state, so a newly enabled rule fires once for each
+    product that is low right now (at most once until it recovers).
+    """
+    from backend.db.database import AsyncSessionLocal
+    from backend.models import AutomationRule
+    from backend.services import automation as auto
+
+    async with AsyncSessionLocal() as db:
+        org_ids = (await db.execute(select(AutomationRule.org_id).where(
+            AutomationRule.active == True,  # noqa: E712
+            AutomationRule.event.in_(auto.TIME_EVENTS)).distinct())).scalars().all()
+    fired = 0
+    for oid in org_ids:
+        async with AsyncSessionLocal() as db:   # a session per shop: one failure never stalls the rest
+            try:
+                fired += await auto.sweep_time_based(db, oid)
+            except Exception:  # noqa: BLE001
+                log.exception("automation-time-sweep failed for org %s", oid)
+                await db.rollback()
+    if fired:
+        log.info("automation-time-sweep: fired %d rule action(s)", fired)
+
+
 @job_runner.every(3600, "contact-lifecycle-sweep")
 async def sweep_contact_lifecycle() -> None:
     """144ja (N-P4) — fire Contacts-module birthday greetings.

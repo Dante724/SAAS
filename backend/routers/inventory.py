@@ -1097,7 +1097,8 @@ async def part_stock(
     if not part:
         raise HTTPException(404, "Product not found")
     from backend.models import Location, StorageBin
-    unit_cost = float(part.avg_cost or part.cost_price or 0)   # valuation basis
+    from backend.services.valuation import unit_cost as _valuation_cost
+    unit_cost = _valuation_cost(part)   # the one valuation basis (services/valuation)
     loc_ids = {sl.location_id for sl in part.stock_levels}
     bin_ids = {sl.bin_id for sl in part.stock_levels if sl.bin_id}
     locs = dict((await db.execute(select(Location.id, Location.name).where(

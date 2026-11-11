@@ -1,18 +1,24 @@
 import asyncio
-from datetime import date, datetime
+from datetime import date
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel, field_validator, Field
+from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
-from backend.models import Employee, Role, Task
+from backend.models import Employee, Role
 from backend.services import audit
 from backend.services import multi_asset as _ma
-from backend.services.auth import (get_current_employee, hash_password, is_old_default_password, norm_email,
-                                   require_perm, verify_password)
+from backend.services.auth import (
+    get_current_employee,
+    hash_password,
+    is_old_default_password,
+    norm_email,
+    require_perm,
+    verify_password,
+)
 from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/staff", tags=["staff"])
@@ -88,17 +94,6 @@ class RoleIn(BaseModel):
     warehouse_ids: list[str] = []
     payroll_visibility_days: Optional[int] = None
 
-
-class TaskIn(BaseModel):
-    title: str
-    description: Optional[str] = None
-    assigned_to_id: Optional[str] = None
-    order_id: Optional[str] = None
-    priority: str = "normal"
-    due_at: Optional[str] = None
-
-class TaskUpdate(BaseModel):
-    status: str  # todo|in_progress|done
 
 @router.get("/employees")
 async def list_employees(
@@ -357,9 +352,8 @@ async def update_employee(
         raise HTTPException(404, "Employee not found")
     await _assert_can_manage(db, current, emp)
     payload = data.model_dump(exclude_unset=True)
-    from backend.services.auth import has_perm
+    from backend.services.auth import has_perm, is_shop_owner
     from backend.services.payroll_views import in_scope, payroll_scope_ids
-    from backend.services.auth import is_shop_owner
     own_pay = emp.id == current.id and current.role_id and not await is_shop_owner(db, current)
     if own_pay or not await has_perm(db, current, "can_view_payroll") \
             or not in_scope(await payroll_scope_ids(db, current), emp.id):
@@ -681,61 +675,8 @@ async def deactivate_employee(
     return {"ok": True}
 
 # ── Tasks ─────────────────────────────────────
-
-@router.get("/tasks")
-async def list_tasks(
-    status: Optional[str] = None,
-    assigned_to_id: Optional[str] = None,
-    db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
-):
-    q = select(Task).where(Task.org_id == current.org_id).order_by(Task.due_at.asc())
-    if status:
-        q = q.where(Task.status == status)
-    if assigned_to_id:
-        q = q.where(Task.assigned_to_id == assigned_to_id)
-    result = await db.execute(q)
-    tasks = result.scalars().all()
-    return [{"id": t.id, "title": t.title, "status": t.status,
-             "priority": t.priority, "assigned_to_id": t.assigned_to_id,
-             "order_id": t.order_id,
-             "due_at": t.due_at.isoformat() if t.due_at else None,
-             "completed_at": t.completed_at.isoformat() if t.completed_at else None} for t in tasks]
-
-@router.post("/tasks", status_code=201)
-async def create_task(
-    data: TaskIn,
-    db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
-):
-    task = Task(
-        org_id=current.org_id,
-        title=data.title, description=data.description,
-        assigned_to_id=data.assigned_to_id, created_by_id=current.id,
-        order_id=data.order_id, priority=data.priority,
-        due_at=datetime.fromisoformat(data.due_at) if data.due_at else None,
-        status="todo",
-    )
-    db.add(task)
-    await db.commit()
-    await db.refresh(task)
-    return {"id": task.id, "title": task.title}
-
-@router.patch("/tasks/{task_id}")
-async def update_task(
-    task_id: str, data: TaskUpdate,
-    db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
-):
-    result = await db.execute(select(Task).where(Task.id == task_id, Task.org_id == current.org_id))
-    task = result.scalar_one_or_none()
-    if not task:
-        raise HTTPException(404, "Task not found")
-    task.status = data.status
-    if data.status == "done":
-        task.completed_at = now_utc()
-    await db.commit()
-    return {"ok": True}
+# The old /api/staff/tasks endpoints (no permission checks, no feed, no alerts) were removed in
+# tasks phase 0. Tasks live at /api/tasks (routers/tasks.py).
 
 
 def _ser_location(ln) -> dict:

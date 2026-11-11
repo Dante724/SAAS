@@ -35,8 +35,10 @@ from backend.models import (
     NotificationTemplate,
     Order,
 )
-from backend.services.notifications import _adapter_for, channel_consented, notif_creds, try_oauth_email
 from backend.services.dates import now_utc
+from backend.services.notifications import _adapter_for, channel_consented, notif_creds, try_oauth_email
+
+logger = logging.getLogger("tekly.notifications")
 
 log_ = logging.getLogger("tekly.notifications")
 
@@ -239,6 +241,10 @@ async def with_opt_out(db: AsyncSession, org_id: str, client_id: Optional[str], 
     return body if prior else f"{(body or '').rstrip()}\n{OPT_OUT_FOOTER}"
 
 
+# Order events fired by a job ENTERING a status (orders.py: "closed" when the new status closes it).
+STATUS_EVENTS = ("status_changed", "closed")
+
+
 async def evaluate(db: AsyncSession, *, org_id: str, order_id: str, event: str,
                    status_key: Optional[str] = None, now: Optional[datetime] = None,
                    commit: bool = True) -> dict:
@@ -283,6 +289,10 @@ async def evaluate(db: AsyncSession, *, org_id: str, order_id: str, event: str,
             org_id=org_id, scope="client", channel=channel, trigger_event=event,
             template_id=tpl_id, rule_id=rule.id, order_id=order.id, client_id=order.client_id,
             recipient=recipient, subject=subject, body=body, send_at=send_at)
+        if status_key and event in STATUS_EVENTS:
+            # Tasks phase 0: a delayed "your device is ready" must not go out after the job has
+            # moved on (collected, cancelled ...). run_due re-checks this before sending.
+            log.expect_status = order.status
         db.add(log)
 
         if not recipient:
@@ -491,6 +501,16 @@ async def _hold_or_skip(db: AsyncSession, org_id: str, log, now: datetime) -> bo
             return True
         if verdict == "stop":
             log.status, log.error, log.claimed_at = "skipped", why, None
+            return True
+    # Send-time status guard: a message queued because the job entered a status is only
+    # still true while the job is in it.
+    if log.expect_status and log.order_id:
+        cur = (await db.execute(select(Order.status).where(
+            Order.id == log.order_id, Order.org_id == org_id))).scalar_one_or_none()
+        if cur != log.expect_status:
+            log.status, log.claimed_at = "skipped", None
+            log.error = (f"Job left status {log.expect_status!r} before this was sent"
+                         + (f" (now {cur!r})" if cur else " (job no longer on file)"))[:500]
             return True
     # Consent is checked again at send time: a customer who replied STOP after this
     # message was queued must not receive it.
@@ -938,18 +958,86 @@ async def notify_contact_birthdays(db: AsyncSession, *, org_id: str,
 
 
 # ── Build 86: internal task notifications ────────────────────────────────────
+# Tasks phase 0: task alerts land in the staff bell (StaffNotification) + Web Push, like missed
+# calls and job assignments, in addition to any email/SMS rules the shop configured.
+TASK_PUSH_KINDS = {"assigned": "task.assigned", "changed": "task.changed", "completed": "task.completed"}
+_TASK_BELL_TITLES = {"assigned": "New task for you", "changed": "Task updated",
+                     "completed": "Task completed"}
+
+
+def task_people(task) -> set:
+    """Everyone the task is assigned to: the primary owner and every extra assignee."""
+    return {i for i in ([task.assigned_to_id] + list(task.assignee_ids or [])) if i}
+
+
+def _task_targets(task, event: str, actor_id: Optional[str], recipients=None) -> set:
+    """Who hears about `event`. `recipients` narrows "assigned" to the people just added, so an
+    edit never re-announces an assignment. Never the person who acted."""
+    if recipients is not None:
+        targets = {i for i in recipients if i}
+    elif event == "assigned":
+        targets = task_people(task)
+    elif event in ("changed", "completed"):
+        targets = task_people(task) | ({task.created_by_id} if task.created_by_id else set())
+    else:
+        targets = set()
+    targets.discard(actor_id)
+    return targets
+
+
+async def notify_task_bell(db: AsyncSession, *, org_id: str, task, event: str,
+                           actor_id: Optional[str] = None, recipients=None) -> int:
+    """Staff bell + push for a task event. "changed" is collapsed: while someone still has an
+    unread "Task updated" for this task, further edits and comments don't add another."""
+    from backend.models import Employee as _Emp
+    from backend.models import StaffNotification
+    from backend.services.push import notify as push_notify
+    kind = TASK_PUSH_KINDS.get(event)
+    targets = _task_targets(task, event, actor_id, recipients)
+    if not kind or not targets:
+        return 0
+    live = set((await db.execute(select(_Emp.id).where(
+        _Emp.id.in_(targets), _Emp.org_id == org_id, _Emp.active == True))).scalars().all())  # noqa: E712
+    link = f"/tasks?task={task.id}"
+    body = (task.title or "")[:200] + (f" · due {task.due_at:%d %b %H:%M}" if task.due_at else "")
+    sent = 0
+    for emp_id in sorted(live):
+        if event == "changed":
+            pending = (await db.execute(select(StaffNotification.id).where(
+                StaffNotification.employee_id == emp_id, StaffNotification.kind == kind,
+                StaffNotification.deep_link == link, StaffNotification.read_at.is_(None),
+                StaffNotification.dismissed_at.is_(None)).limit(1))).scalar_one_or_none()
+            if pending:
+                continue
+        try:
+            if await push_notify(db, org_id=org_id, employee_id=emp_id, kind=kind,
+                                 title=_TASK_BELL_TITLES[event], body=body, deep_link=link,
+                                 commit=False):
+                sent += 1
+        except Exception:  # noqa: BLE001 — one person's push must not stop the others
+            logger.warning("task bell/push failed (task=%s employee=%s)", task.id, emp_id, exc_info=True)
+    return sent
+
+
 async def notify_task(db: AsyncSession, *, org_id: str, task, event: str,
-                      actor_id: Optional[str] = None) -> int:
-    """Notify the people involved in a task (assignee + author).
+                      actor_id: Optional[str] = None, recipients=None) -> int:
+    """Notify the people involved in a task: every assignee, plus the author on changes and
+    completion.
 
     Orderry's rule, which we follow: **you are never notified about something you did
     yourself.** Create a task for yourself and you get nothing; another employee
     creates one for you and you hear about it.
 
-    Targets employees, not clients — so these rules use `module="task"` and resolve the
-    recipient from the employee record.
+    Always goes to the staff bell + push (notify_task_bell). Shops can add email/SMS on top with
+    `module="task"` rules, which resolve the recipient from the employee record.
     """
     from backend.models import Employee as _Emp
+
+    try:
+        await notify_task_bell(db, org_id=org_id, task=task, event=event, actor_id=actor_id,
+                               recipients=recipients)
+    except Exception:  # noqa: BLE001 — logged; the email/SMS rules still run
+        logger.warning("task bell notification failed (task=%s event=%s)", task.id, event, exc_info=True)
 
     rules = (await db.execute(select(NotificationRule).where(
         NotificationRule.org_id == org_id, NotificationRule.module == "task",
@@ -958,21 +1046,16 @@ async def notify_task(db: AsyncSession, *, org_id: str, task, event: str,
     if not rules:
         return 0
 
-    # who cares about this event
-    targets = set()
-    if event in ("assigned", "changed") and task.assigned_to_id:
-        targets.add(task.assigned_to_id)
-    if event in ("changed", "completed") and task.created_by_id:
-        targets.add(task.created_by_id)
-    targets.discard(actor_id)          # never notify the person who did it
+    targets = _task_targets(task, event, actor_id, recipients)
     if not targets:
         return 0
 
     sent = 0
     now = now_utc()
     for rule in rules:
-        for emp_id in targets:
-            emp = (await db.execute(select(_Emp).where(_Emp.id == emp_id))).scalar_one_or_none()
+        for emp_id in sorted(targets):
+            emp = (await db.execute(select(_Emp).where(
+                _Emp.id == emp_id, _Emp.org_id == org_id))).scalar_one_or_none()
             if not emp:
                 continue
             recipient = emp.email if rule.channel == "email" else getattr(emp, "phone", None)
@@ -985,7 +1068,7 @@ async def notify_task(db: AsyncSession, *, org_id: str, task, event: str,
 
             log = NotificationLog(
                 org_id=org_id, scope="employee", channel=rule.channel,
-                trigger_event=f"task_{event}", rule_id=rule.id,
+                trigger_event=f"task_{event}", rule_id=rule.id, employee_id=emp_id,
                 recipient=recipient, subject=subject, body=body, send_at=send_at)
             db.add(log)
             if not recipient:

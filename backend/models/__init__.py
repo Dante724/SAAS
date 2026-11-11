@@ -1749,8 +1749,49 @@ class Transaction(OrgScoped, Base):
 # TASKS & COMMS
 # ─────────────────────────────────────────────
 
+# Tasks phase 0: the only statuses a task may hold. "open" (written by automations until now) is
+# not one of them; tk01 converted those rows to "todo".
+TASK_STATUSES = ("todo", "in_progress", "done", "cancelled")
+TASK_CLOSED = ("done", "cancelled")
+# Priority is an integer: 0 normal, 1 high, 2 urgent, 3 reserved for a future "critical".
+# The legacy words are still accepted on the way in.
+TASK_PRIORITY_WORDS = {"low": 0, "normal": 0, "": 0, "high": 1, "urgent": 2, "critical": 3}
+TASK_PRIORITY_MAX = 3
+# Where a task came from. Automatic sources carry a source_ref so they can't duplicate.
+TASK_SOURCES = ("manual", "automation", "inquiry", "missed_call", "go_part_request")
+
+
+def normalise_task_priority(value) -> int:
+    """0-3 from an int, a digit string or a legacy word. ValueError for anything else."""
+    if value is None:
+        return 0
+    if isinstance(value, bool):
+        raise ValueError("priority must be 0-3")
+    if isinstance(value, (int, float)) and float(value).is_integer():
+        n = int(value)
+    else:
+        txt = str(value).strip().lower()
+        if txt in TASK_PRIORITY_WORDS:
+            return TASK_PRIORITY_WORDS[txt]
+        if not txt.lstrip("-").isdigit():
+            raise ValueError("priority must be 0-3 or normal/high/urgent")
+        n = int(txt)
+    if not 0 <= n <= TASK_PRIORITY_MAX:
+        raise ValueError("priority must be 0-3")
+    return n
+
+
 class Task(OrgScoped, Base):
     __tablename__ = "tasks"
+    __table_args__ = (
+        # One OPEN automatic task per source_ref per shop: repeated status entries, hourly sweeps and
+        # concurrent requests can never create a second one (ensure_task inserts behind this).
+        Index("uq_tasks_open_source_ref", "org_id", "source_ref", unique=True,
+              sqlite_where=text("source_ref IS NOT NULL AND archived_at IS NULL "
+                                "AND status NOT IN ('done', 'cancelled')"),
+              postgresql_where=text("source_ref IS NOT NULL AND archived_at IS NULL "
+                                    "AND status NOT IN ('done', 'cancelled')")),
+    )
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     title: Mapped[str] = mapped_column(String(500))
@@ -1764,17 +1805,27 @@ class Task(OrgScoped, Base):
     location_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("locations.id"))           # Build 86
     parent_task_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("tasks.id"))            # Build 86: subtasks
     completed_on_time: Mapped[Optional[bool]] = mapped_column(Boolean)  # Build 86: on-time analysis
-    status: Mapped[str] = mapped_column(String(30), default="todo")
-    priority: Mapped[str] = mapped_column(String(20), default="normal")
+    status: Mapped[str] = mapped_column(String(30), default="todo")       # TASK_STATUSES
+    priority: Mapped[int] = mapped_column(Integer, default=0, server_default="0")   # tk01: 0 normal, 1 high, 2 urgent, 3 reserved
+    source: Mapped[str] = mapped_column(String(30), default="manual", server_default="manual")   # TASK_SOURCES
+    source_ref: Mapped[Optional[str]] = mapped_column(String(200))   # e.g. order:<id>:status:<key>:rule:<id>, lead:<id>
 
     @validates("priority")
-    def _priority_text(self, _key, value):
-        # The tasks API sends numbers (0, 1, 2); the column is text. SQLite coerced silently,
-        # Postgres/asyncpg rejected the int — creating any task 500'd in production.
-        return None if value is None else str(value)
+    def _priority_int(self, _key, value):
+        # Every writer goes through here: automation, inquiries, the legacy missed-call setting
+        # ("normal"/"high" in their JSON config) and the API all end up as 0-3.
+        return normalise_task_priority(value)
+
+    @validates("status")
+    def _status_canonical(self, _key, value):
+        if value not in TASK_STATUSES:
+            raise ValueError(f"task status must be one of {TASK_STATUSES}, got {value!r}")
+        return value
     due_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     completed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=_now, onupdate=_now)
+    archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime)   # tk01: soft delete (restore clears it)
     assigned_employee: Mapped[Optional["Employee"]] = relationship(back_populates="tasks", foreign_keys=[assigned_to_id])
     order: Mapped[Optional["Order"]] = relationship(back_populates="tasks")
 
@@ -2405,6 +2456,9 @@ class NotificationLog(OrgScoped, Base):
     status: Mapped[str] = mapped_column(String(20), default="queued")
     rule_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("notification_rules.id", ondelete="SET NULL"))  # Build 80; SET NULL so deleting a rule that already fired keeps its log history
     send_at: Mapped[Optional[datetime]] = mapped_column(DateTime, index=True)  # due time for delayed/reminder sends
+    # tk01: a delayed status message is only still true while the job is in this status; run_due
+    # skips the send when the job has moved on (customer already collected, job cancelled ...).
+    expect_status: Mapped[Optional[str]] = mapped_column(String(60))
     error: Mapped[Optional[str]] = mapped_column(Text)
     # Outbox delivery (services/notification_rules.run_due): tries so far, when the next retry is
     # due (None = send_at decides), the last provider error (short), and when a sweep claimed the
@@ -3614,6 +3668,23 @@ class AutomationRule(OrgScoped, Base):
     last_fired_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     fire_count: Mapped[int] = mapped_column(Integer, default=0)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # tk01: when the rule last went live (created, switched on, or its event changed). The scheduled
+    # sweep only fires time-based rules for things that became due AFTER this, so switching a rule
+    # on never fires it at the shop's whole historical backlog.
+    activated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=_now)
+
+
+class AutomationFire(OrgScoped, Base):
+    """tk01: a time-based rule fired for one subject in one episode (order X overdue since T, part
+    Y low on stock). The hourly sweep checks it first, so repeated runs never re-fire a webhook,
+    task or tag for the same thing."""
+    __tablename__ = "automation_fires"
+    __table_args__ = (UniqueConstraint("rule_id", "subject_ref", name="uq_automation_fires_rule_subject"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    rule_id: Mapped[str] = mapped_column(String, ForeignKey("automation_rules.id", ondelete="CASCADE"))
+    subject_ref: Mapped[str] = mapped_column(String(200))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
 all_models = [
@@ -3641,7 +3712,7 @@ all_models = [
     EmailConnection,
     PriceTypeItem,
     NotificationPreference,
-    AutomationRule,
+    AutomationRule, AutomationFire,
 ]
 
 

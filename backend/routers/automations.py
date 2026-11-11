@@ -9,14 +9,13 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select, func, or_, and_
+from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
 
 from backend.db.database import get_db
-from backend.models import AutomationRule, Employee, Order, Part, StockLevel
-from backend.services.auth import get_current_employee, require_perm
+from backend.models import AutomationRule, Employee, Order
 from backend.services import automation as auto
+from backend.services.auth import get_current_employee, require_perm
 from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/automations", tags=["automations"])
@@ -124,7 +123,7 @@ async def create_rule(data: RuleIn, db: AsyncSession = Depends(get_db),
         conditions=json.dumps(data.conditions) if data.conditions else None,
         action_type=data.action_type,
         action_config=json.dumps(data.action_config) if data.action_config else None,
-        active=data.active, sort_order=data.sort_order)
+        active=data.active, sort_order=data.sort_order, activated_at=now_utc())
     db.add(r)
     await db.flush()
     secret = await _sync_webhook_target(db, current.org_id, r)
@@ -141,6 +140,8 @@ async def update_rule(rule_id: str, data: RuleIn, db: AsyncSession = Depends(get
         AutomationRule.id == rule_id, AutomationRule.org_id == current.org_id))).scalar_one_or_none()
     if not r:
         raise HTTPException(404, "Rule not found")
+    if data.active and (not r.active or data.event != r.event):
+        r.activated_at = now_utc()   # went live (again): time-based sweeps start from here
     r.name = data.name
     r.event = data.event
     r.trigger_status = data.trigger_status
@@ -189,32 +190,8 @@ async def test_rule(rule_id: str, db: AsyncSession = Depends(get_db),
 @router.post("/sweep")
 async def sweep(db: AsyncSession = Depends(get_db),
                 current: Employee = Depends(require_perm("can_manage_settings"))):
-    """Fire time-based automations: overdue work orders and low-stock products.
-    Intended to be called on a schedule (e.g. hourly)."""
-    now = now_utc()
-    fired = 0
-
-    # overdue orders: past their promised time (due_at or scheduled_to) and still open
-    overdue = (await db.execute(select(Order).where(
-        Order.org_id == current.org_id, Order.archived == False,  # noqa: E712
-        Order.closed_at == None,  # noqa: E711
-        or_(and_(Order.due_at != None, Order.due_at < now),          # noqa: E711
-            and_(Order.scheduled_to != None, Order.scheduled_to < now)))  # noqa: E711
-        .options(selectinload(Order.client)).limit(500))).scalars().all()
-    for o in overdue:
-        res = await auto.run(db, current.org_id, "order_overdue", order=o)
-        fired += res["fired"]
-
-    # low stock: available qty at/below a product's min_stock
-    low = (await db.execute(
-        select(Part, func.coalesce(func.sum(StockLevel.qty_available), 0).label("qty"))
-        .join(StockLevel, StockLevel.part_id == Part.id, isouter=True)
-        .where(Part.org_id == current.org_id, Part.active == True)  # noqa: E712
-        .group_by(Part.id))).all()
-    for part, qty in low:
-        if (part.min_stock or 0) > 0 and (qty or 0) <= part.min_stock:
-            res = await auto.run(db, current.org_id, "low_stock", part=part)
-            fired += res["fired"]
-
-    await db.commit()
-    return {"fired": fired}
+    """Fire time-based automations (overdue work orders, low stock) now. The scheduler runs the
+    same sweep hourly (core/scheduled.py); this manual run also covers orders that were already
+    overdue before a rule was switched on. Both are de-duplicated: a rule fires once per order
+    overdue spell / per low-stock dip, however often the sweep runs."""
+    return {"fired": await auto.sweep_time_based(db, current.org_id, backlog=True)}

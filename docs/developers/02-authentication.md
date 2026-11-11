@@ -5,14 +5,14 @@ The Tekly API is authenticated with **API keys**. Each key belongs to one shop, 
 ```http
 GET /api/v1/orders HTTP/1.1
 Host: <your-shop-domain>
-Authorization: Bearer rok_5f2c9a1e_...
+Authorization: Bearer tk_5f2c9a1e_...
 ```
 
 ## API keys
 
 | | |
 |---|---|
-| Format | `rok_<8 hex characters>_<random secret>`. The first part, for example `rok_5f2c9a1e`, is the **prefix**. It's shown in the app so you can tell keys apart. |
+| Format | `tk_<8 hex characters>_<random secret>`. The first part, for example `tk_5f2c9a1e`, is the **prefix**. It's shown in the app so you can tell keys apart. Keys issued before Tekly's rename start with `rok_` instead and keep working; nothing changes for them. |
 | Where to create one | **Settings → Integrations → API keys**. You need the **Manage company settings** permission. |
 | Shown | **Once**, when it's created or rotated. Tekly stores only a SHA-256 hash, so a lost key can't be recovered. Rotate it instead. |
 | Belongs to | One shop. A key can never see another shop's data. |
@@ -80,8 +80,8 @@ Choose **Revoke** to turn a key off at once. A revoked key, and any previous key
 
 | Status | `detail` | Why |
 |---|---|---|
-| `401` | `Missing API key (Authorization: Bearer rok_...)` | No `Authorization` header, or it isn't `Bearer …`. |
-| `401` | `Not a public API key` | The token doesn't start with `rok_`. Staff sign-in tokens don't work here. |
+| `401` | `Missing API key (Authorization: Bearer tk_...)` | No `Authorization` header, or it isn't `Bearer …`. |
+| `401` | `Not a public API key` | The token doesn't start with `tk_` (or `rok_`, for a key issued before the rename). Staff sign-in tokens don't work here. |
 | `401` | `Invalid, expired or revoked API key` | Unknown, expired or revoked. The message is the same in every case, on purpose. |
 | `403` | `API key lacks '<scope>' scope` | The key doesn't have the scope this route needs. On v2 the scope is named with its resource, such as `tags:write`. |
 | `403` | `The Tekly API is only available over HTTPS.` | The request came over plain HTTP. |

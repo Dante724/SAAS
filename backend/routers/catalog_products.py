@@ -31,6 +31,7 @@ from backend.services import product_codes
 from backend.services.money import MAX_MONEY, q2
 from backend.services.owned import get_owned_or_404, require_unique_name
 from backend.services.redact import can_see_costs, drop_cost_fields
+from backend.services import valuation
 from backend.core.spreadsheet import (
     MAX_IMPORT_ROWS, MAX_XLSX_BYTES, open_xlsx, safe_row, too_many_rows, unguard_cell,
 )
@@ -244,6 +245,9 @@ def _ser_product(p: Part, qty=0.0, reserved=0.0, variant_count=0, image=_FULL, h
             "custom_data": p.custom_data or {},
             "compatibility_json": p.compatibility_json or {},
             "margin_pct": margin, "qty_available": qty, "qty_reserved": reserved,
+            # BUG-04: the cost basis and value the Stock tab and stock reports use (services/valuation),
+            # so Details never multiplies a raw avg_cost of 0 for stock that has no average yet.
+            "unit_cost": q2(valuation.unit_cost(p)), "stock_value": valuation.stock_value(p, qty),
             "low_stock": qty <= (p.min_stock or 0), "active": p.active}
 
 

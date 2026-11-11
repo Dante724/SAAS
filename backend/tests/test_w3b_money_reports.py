@@ -302,3 +302,32 @@ async def test_a_deleted_paid_job_never_turns_reports_negative(client, db):
     assert dash["outstanding"] == 0 and comp["kpis"]["receivables"] == 0
     techs = await _run(client, H, "technicians")
     assert all(r[2] == 0 for r in techs), techs
+
+
+@pytest.mark.asyncio
+async def test_business_analytics_location_and_technician_rows_use_the_revenue_rule(client, db):
+    """Design audit BUG-05: Business & analytics showed Revenue 1,200 next to "Main Shop · 1 closed ·
+    9,400". The KPI used the revenue rule; the location (and technician) rows summed job totals with
+    tax inside, by the day the job was *created*, for any finished status (dropped and deleted jobs
+    too). Every figure on the screen now reads the fixture day the way the dashboard, P&L and Total
+    profit do."""
+    H, acc, _ = await _fixture_day(client, db)
+    loc = (await client.get("/api/staff/locations", headers=H)).json()["items"][0]["id"]
+    bi = (await client.get("/api/analytics/business-insights?days=30", headers=H)).json()
+    comp = (await client.get("/api/analytics/location-comparison?days=30", headers=H)).json()
+    techs = (await client.get("/api/analytics/technician-productivity?days=30", headers=H)).json()
+    pnl = (await client.get("/api/finance/pnl", headers=H)).json()
+    dash = (await client.get("/api/reports/dashboard", headers=H)).json()["stats"]
+    tp = await _total_profit(client, H)
+
+    main = next(r for r in comp["locations"] if r["location_id"] == loc)
+    by_loc = {r["location_id"]: r for r in tp["by_location"]}
+    revenue = {"insights": bi["revenue"], "locations": round(sum(r["revenue"] for r in comp["locations"]), 2),
+               "main shop": main["revenue"], "total_profit.main": by_loc[loc]["revenue"],
+               "pnl": pnl["revenue"], "dashboard": dash["revenue"], "total_profit": tp["totals"]["revenue"]}
+    assert revenue == {k: pytest.approx(REVENUE) for k in revenue}, revenue
+    # closed = earned in the window: jobs A and B, not the dropped or the deleted job
+    assert main["orders_closed"] == bi["orders_closed"] == 2, (main, bi)
+    # technicians are credited with what their jobs earned, ex tax: A 150 + B 30 (11 refunded, 10% tax)
+    assert sum(t["jobs_closed"] for t in techs["technicians"]) == 2, techs
+    assert round(sum(t["revenue"] for t in techs["technicians"]), 2) == pytest.approx(180), techs

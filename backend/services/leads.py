@@ -22,6 +22,7 @@ from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import (
+    TASK_CLOSED,
     AutomationSetting,
     Client,
     Device,
@@ -34,6 +35,7 @@ from backend.models import (
     OrderStatusLog,
     Shift,
     Task,
+    normalise_task_priority,
 )
 from backend.services.dates import now_utc
 
@@ -284,7 +286,8 @@ async def convert_lead(db: AsyncSession, org_id: str, lead: Lead, *, actor: Opti
     await _feed(db, org_id, lead.id, f"Converted to {'estimate' if is_estimate else 'job'} {order.order_number}")
     # Any open call-back task for this inquiry is done: the customer is now a job.
     for t in (await db.execute(select(Task).where(Task.org_id == org_id, Task.lead_id == lead.id,
-                                                  Task.status != "done"))).scalars().all():
+                                                  Task.archived_at.is_(None),
+                                                  Task.status.notin_(TASK_CLOSED)))).scalars().all():
         t.order_id = t.order_id or order.id
         t.status, t.completed_at = "done", now_utc()
     await _emit(db, org_id, "inquiry.converted", lead)
@@ -403,23 +406,25 @@ async def on_missed_call(db: AsyncSession, org_id: str, call) -> Optional[dict]:
     legacy_cfg = (legacy.config if legacy and legacy.enabled and isinstance(legacy.config, dict) else {}) or {}
     if legacy_cfg.get("assign_to") and not cfg.get("fallback_employee_id"):
         cfg = {**cfg, "fallback_employee_id": legacy_cfg["assign_to"]}
-    priority = str(legacy_cfg.get("priority") or "high")[:20]
+    try:
+        priority = normalise_task_priority(legacy_cfg.get("priority") or "high")
+    except ValueError:
+        priority = 1
     people, duty = await _recipients(db, org_id, client, cfg)
-    task = (await db.execute(select(Task).where(Task.org_id == org_id, Task.lead_id == lead.id,
-                                                Task.status != "done").limit(1))).scalar_one_or_none()
-    if task is None:
-        assignee = None
-        if client and client.manager_id and any(p.id == client.manager_id for p in people):
-            assignee = client.manager_id
-        elif people:
-            assignee = people[0].id
-        task = Task(org_id=org_id, title=f"Call back {name}"[:500],
-                    description=f"Missed call from {number}. Return the call.",
-                    assigned_to_id=assignee, client_id=lead.client_id, lead_id=lead.id,
-                    location_id=lead.location_id, priority=priority, status="todo",
-                    due_at=lead.sla_due_at)
-        db.add(task)
-    else:
+    assignee = None
+    if client and client.manager_id and any(p.id == client.manager_id for p in people):
+        assignee = client.manager_id
+    elif people:
+        assignee = people[0].id
+    # One open call-back task per inquiry (source_ref lead:<id>); the people on duty are alerted
+    # below with a missed_call push, so the task itself doesn't add a second alert.
+    from backend.services.auto_tasks import ensure_task
+    task, created = await ensure_task(
+        db, org_id=org_id, source="inquiry", source_ref=f"lead:{lead.id}",
+        title=f"Call back {name}", description=f"Missed call from {number}. Return the call.",
+        assigned_to_id=assignee, client_id=lead.client_id, lead_id=lead.id,
+        location_id=lead.location_id, priority=priority, due_at=lead.sla_due_at, notify=False)
+    if not created:
         task.description = f"Missed call from {number} ({lead.call_count} calls). Return the call."
     await db.commit()
     await db.refresh(task)

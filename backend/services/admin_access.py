@@ -20,6 +20,7 @@ from sqlalchemy import or_, select
 
 from backend.db.database import get_db
 from backend.models import AdminRole, Organisation, PlatformAdmin
+from backend.services.dates import platform_today
 from backend.services.platform_auth import get_current_platform_admin
 
 # code -> label, grouped for the role editor.
@@ -296,7 +297,7 @@ def over_discount_limit(ctx: AdminCtx, pct: float, until: date | None) -> str | 
     if months is not None:
         if until is None:
             return "Your discounts need an end date"
-        if until > date.today() + timedelta(days=31 * int(months)):
+        if until > platform_today() + timedelta(days=31 * int(months)):
             return f"Longer than your {months}-month limit"
     return None
 
@@ -313,7 +314,7 @@ def over_trial_limit(ctx: AdminCtx, days: int) -> str | None:
 def effective_discount(org: Organisation, today: date | None = None) -> float:
     """The discount in force today: 0 once its end date has passed."""
     pct = float(org.discount_pct or 0)
-    if org.discount_until and org.discount_until < (today or date.today()):
+    if org.discount_until and org.discount_until < (today or platform_today()):
         return 0.0
     return pct
 

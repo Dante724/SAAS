@@ -19,7 +19,7 @@ Tekly is software for running a repair shop. The Tekly API and webhooks let your
 ## At a glance
 
 - **Base URL:** `{BASE_URL}` is `https://<your-shop-domain>/api/v1`; v2 is at `https://<your-shop-domain>/api/v2`. See [Getting started](01-getting-started.md#base-url).
-- **Auth:** `Authorization: Bearer rok_…`, server-side only. Broad scopes are `read`, `write` and `costs:read`; on v2 a key can instead be limited to `<resource>:read` or `<resource>:write`. Webhook management always needs `webhooks:read` / `webhooks:write`.
+- **Auth:** `Authorization: Bearer tk_…`, server-side only. Broad scopes are `read`, `write` and `costs:read`; on v2 a key can instead be limited to `<resource>:read` or `<resource>:write`. Webhook management always needs `webhooks:read` / `webhooks:write`.
 - **Rate limit:** 120 requests a minute per key by default (1–6,000 per key), reported in `X-RateLimit-*`.
 - **Format:** JSON in and out. Lists are `{"data": [...], "page", "page_size", "total"}`; single records are `{"data": {...}}`; errors are `{"detail": ...}`.
 - **Machine-readable contract:** `GET /api/v1/openapi.json` and `GET /api/v2/openapi.json` (OpenAPI 3.1, public, no key needed).

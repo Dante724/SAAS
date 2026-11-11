@@ -5,9 +5,11 @@ import { M } from "../../components/Shell";
 import EmptyState from "../../components/EmptyState";
 import { Avatar } from "./look";
 import { buttonClass } from "../../components/Button";
+import { Badge } from "../../components/Card";
+import { isAuto, normPriority, PRIORITY_LABEL } from "../tasks/taskModel";
 
 // J4 — the job's tasks, on the job: add one, assign it, tick it off.
-type Task = { id: string; title: string; status?: string; assigned_to_id?: string | null; assignee_name?: string | null; due_at?: string | null; completed_at?: string | null; overdue?: boolean };
+type Task = { id: string; title: string; status?: string; priority?: number | string | null; source?: string | null; created_by?: string | null; assigned_to_id?: string | null; assignee_name?: string | null; due_at?: string | null; completed_at?: string | null; overdue?: boolean };
 type Emp = { id: string; name: string; in_assignees?: boolean };
 
 export default function JobTasks({ orderId, emps, onFlash }: { orderId: string; emps: Emp[]; onFlash: (m: string, tone?: "warn") => void }) {
@@ -68,7 +70,11 @@ export default function JobTasks({ orderId, emps, onFlash }: { orderId: string; 
             {items.map((t) => (
               <li key={t.id} className="flex items-center gap-3 py-2">
                 <input type="checkbox" checked={!!t.completed_at} onChange={() => toggle(t)} aria-label={`Done: ${t.title}`} className="h-4 w-4 accent-[rgb(var(--c-primary))]" />
-                <span className={`flex-1 min-w-0 truncate text-xs ${t.completed_at ? "line-through text-ink-tertiary" : "text-ink-primary font-medium"}`}>{t.title}</span>
+                <span className="flex-1 min-w-0 flex items-center gap-1.5">
+                  <span className={`min-w-0 truncate text-xs ${t.completed_at ? "line-through text-ink-tertiary" : "text-ink-primary font-medium"}`}>{t.title}</span>
+                  {isAuto(t) && <Badge tone="neutral" size="sm">Auto</Badge>}
+                  {!t.completed_at && normPriority(t.priority) > 0 && <Badge tone={normPriority(t.priority) === 2 ? "danger" : "warning"} size="sm">{PRIORITY_LABEL[normPriority(t.priority)]}</Badge>}
+                </span>
                 {t.overdue && !t.completed_at && <span className="text-[11px] font-semibold text-rose-600">Overdue</span>}
                 <span className="flex items-center gap-1.5">
                   {t.assigned_to_id && <Avatar name={t.assignee_name || ""} size={20} />}

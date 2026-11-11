@@ -320,10 +320,10 @@ export default function InventoryDrawer({ kind, id, initial, onClose, onSaved }:
             <div className={`grid ${seeCost ? "grid-cols-4" : "grid-cols-2"} gap-2.5`}>
               {([["Available", (p.qty_available ?? 0), p.low_stock ? "text-rose-600" : "text-ink-primary"],
                 ["Reserved", (p.qty_reserved ?? 0), "text-ink-primary"],
-                // An average cost of 0 means "not worked out yet" (stock added without a receipt), so use
-                // the product's cost like the server's own pricing and the Stock tab do.
-                ...(seeCost ? [["Avg cost", money(Number(p.avg_cost) || Number(p.cost_price) || 0), "text-ink-primary"],
-                  ["Stock value", money((p.qty_available ?? 0) * (Number(p.avg_cost) || Number(p.cost_price) || 0)), "text-ink-primary"]] : [])] as [string, any, string][]).map(([l, v, c]) => (
+                // The server sends the one valuation basis the Stock tab and stock reports use
+                // (services/valuation: moving average, else list cost) as unit_cost / stock_value.
+                ...(seeCost ? [["Avg cost", money(p.unit_cost ?? 0), "text-ink-primary"],
+                  ["Stock value", money(p.stock_value ?? 0), "text-ink-primary"]] : [])] as [string, any, string][]).map(([l, v, c]) => (
                 <div key={l as string} className="bg-white rounded-xl p-3 border border-slate-200/90 shadow-sm">
                   <span className="text-[11px] font-bold text-ink-tertiary block">{l}</span>
                   <p className={`text-lg font-bold tabular-nums truncate ${c}`}>{v}</p>

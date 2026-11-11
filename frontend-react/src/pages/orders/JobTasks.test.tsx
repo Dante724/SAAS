@@ -14,7 +14,7 @@ beforeEach(() => {
   calls = [];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     calls.push({ method: init?.method || "GET", url, body: init?.body ? JSON.parse(String(init.body)) : null });
-    if (!init?.method || init.method === "GET") return reply({ items: [{ id: "t1", title: "Order the screen", status: "todo", completed_at: null }] });
+    if (!init?.method || init.method === "GET") return reply({ items: [{ id: "t1", title: "Order the screen", status: "todo", completed_at: null }, { id: "t2", title: "Chase the deposit", status: "open", priority: "urgent", source: "automation", completed_at: null }] });
     return reply({ ok: true });
   }));
 });
@@ -43,5 +43,13 @@ describe("JobTasks", () => {
     const p = calls.find((c) => c.method === "POST")!;
     expect(p.url).toBe("/api/tasks");
     expect(p.body).toMatchObject({ title: "Call the customer", order_id: "o1", assigned_to_id: "e1" });
+  });
+
+  it("marks automation tasks and shows priority, int or legacy word", async () => {
+    render(<JobTasks orderId="o1" emps={[]} onFlash={vi.fn()} />);
+    const row = (await screen.findByText("Chase the deposit")).closest("li")!;
+    expect(row.textContent).toContain("Auto");
+    expect(row.textContent).toContain("Urgent");
+    expect(screen.getByText("Order the screen").closest("li")!.textContent).not.toContain("Auto");
   });
 });
