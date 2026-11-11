@@ -153,3 +153,29 @@ async def test_shop_webhook_url_takes_only_the_shops_own_secret(monkeypatch, cli
     assert (await client.get(f"/api/public/pay/{i.id}")).json()["status"] != "succeeded"
     assert (await post("whsec_shop")).status_code == 200
     assert (await client.get(f"/api/public/pay/{i.id}")).json()["status"] == "succeeded"
+
+
+@pytest.mark.asyncio
+async def test_shop_webhook_secret_never_falls_back_to_the_operators(monkeypatch, client, tenant, db):
+    # A shop with no keys of its own: effective() would fill the secret from the operator env,
+    # so the shop's own URL must not see it either.
+    from backend.core.webhook_security import provider_secrets
+    monkeypatch.setattr(settings, "STRIPE_WEBHOOK_SECRET", "whsec_operator", raising=False)
+    monkeypatch.setattr(settings, "SQUARE_WEBHOOK_SIGNATURE_KEY", "sq_operator", raising=False)
+    me = await _me(client, tenant)
+    assert await provider_secrets(db, me["org_id"], "stripe", "webhook_secret", None, own_only=True) == []
+    assert await provider_secrets(db, me["org_id"], "square", "webhook_signature_key", None,
+                                  own_only=True) == []
+    # the old, non-shop URLs keep the operator fallback
+    assert await provider_secrets(db, me["org_id"], "stripe", "webhook_secret",
+                                  settings.STRIPE_WEBHOOK_SECRET) == ["whsec_operator"]
+
+
+@pytest.mark.asyncio
+async def test_roleless_invitee_me_spells_out_no_permissions(client, tenant, db):
+    # The UI treats a code missing from /me as allowed, so {} showed every control.
+    nobody = await _roleless(client, tenant, db)
+    perms = (await _me(client, nobody))["permissions"]
+    assert perms and not any(perms.values())
+    owner = (await _me(client, tenant))["permissions"]
+    assert owner and all(owner.values())

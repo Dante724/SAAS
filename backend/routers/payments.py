@@ -261,7 +261,8 @@ async def _require_square_signature(request: Request, raw: bytes, db: AsyncSessi
     the shop's key, since a shop's card money never goes through the operator's account."""
     if org_id:
         secrets = await provider_secrets(db, org_id, "square", "webhook_signature_key",
-                                         None if own_only else settings.SQUARE_WEBHOOK_SIGNATURE_KEY)
+                                         None if own_only else settings.SQUARE_WEBHOOK_SIGNATURE_KEY,
+                                         own_only=own_only)
     else:
         secrets = [s for s in [settings.SQUARE_WEBHOOK_SIGNATURE_KEY] if s]
     _signature_check(secrets, _square_verified(request, raw, secrets), "Square")
@@ -273,7 +274,8 @@ async def _require_stripe_signature(payload: bytes, sig: str, db: AsyncSession, 
     """As _require_square_signature: own_only (the shop's own URL) accepts only the shop's secret."""
     if org_id:
         secrets = await provider_secrets(db, org_id, "stripe", "webhook_secret",
-                                         None if own_only else settings.STRIPE_WEBHOOK_SECRET)
+                                         None if own_only else settings.STRIPE_WEBHOOK_SECRET,
+                                         own_only=own_only)
     else:
         secrets = [s for s in [settings.STRIPE_WEBHOOK_SECRET] if s]
     _signature_check(secrets, any(_verify_stripe_sig(payload, sig, s) for s in secrets), "Stripe")

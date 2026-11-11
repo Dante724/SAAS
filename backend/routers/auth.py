@@ -860,6 +860,11 @@ async def me(current: Employee = Depends(get_current_employee),
             permissions = effective_permissions(role)
             home_route = getattr(role, "home_route", None) or None
     shop_owner = await is_shop_owner(db, current)
+    if not current.role_id and not shop_owner:
+        # No role isn't the owner (launch B10): the UI reads a missing code as allowed, so spell
+        # out that a roleless invitee has none, or every control shows and then 403s.
+        from backend.services.permissions import ALL_CODES
+        permissions = {code: False for code in sorted(ALL_CODES)}
     if shop_owner:
         # The server grants the shop owner every permission (has_perm), including codes added
         # after their role was saved, so the UI must not hide those controls from them.
