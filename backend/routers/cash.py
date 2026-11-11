@@ -959,14 +959,19 @@ async def void_document_legs(db, org_id, ref_type, ref_id, reason, actor_id) -> 
     """Soft-delete the cash legs a document posted (a sale's takings, a refund's payout) when
     the document itself is voided: each leg's amount comes back out of its account balance and
     the row stays, struck through. The document-side caller has already undone everything else."""
+    # In account order: two voids whose documents hit tills A and B in opposite order each took
+    # one till's row lock and waited for the other's (Postgres then failed one with a deadlock).
     legs = (await db.execute(select(Transaction).where(
         Transaction.org_id == org_id, Transaction.ref_type == ref_type, Transaction.ref_id == ref_id,
-        func.coalesce(Transaction.status, "active") != "deleted"))).scalars().all()
+        func.coalesce(Transaction.status, "active") != "deleted")
+        .order_by(Transaction.account_id, Transaction.id))).scalars().all()
     for leg in legs:
         acc = (await db.execute(select(Account).where(
             Account.id == leg.account_id, Account.org_id == org_id))).scalar_one_or_none()
         if acc:
-            acc.balance = q2((acc.balance or 0) - leg.amount)
+            # Atomic like post_transaction: a read-modify-write here lost a sale that posted
+            # into the same till between the read and the commit.
+            await add_to_column(db, acc, "balance", -float(leg.amount or 0))
         leg.status = "deleted"
         leg.void_reason = reason
         leg.voided_by_id = actor_id
