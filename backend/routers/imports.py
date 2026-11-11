@@ -23,7 +23,7 @@ from backend.db.database import get_db
 from backend.models import Employee, ImportBatch, ImportMapping, Supplier
 from backend.services import importer
 from backend.services.auth import get_current_employee, has_perm
-from backend.services.import_cells import read_sheet
+from backend.services.import_cells import encoding_note, read_sheet_ex
 
 router = APIRouter(prefix="/api/imports", tags=["imports"])
 
@@ -81,12 +81,12 @@ async def parse(kind: str = Query(...), supplier_id: Optional[str] = None, file:
     await importer.assert_access(db, current, kind)
     supplier_id = await _supplier(db, current.org_id, supplier_id)
     raw = await file.read(MAX_XLSX_BYTES + 1)
-    headers, rows, numbers = read_sheet(raw, file.filename or "")
+    headers, rows, numbers, enc = read_sheet_ex(raw, file.filename or "")
     remembered = await _mapping_row(db, current.org_id, kind, supplier_id)
     if remembered is None and supplier_id:
         remembered = await _mapping_row(db, current.org_id, kind, None)
     return {"file_name": (file.filename or "")[:255], "headers": headers, "rows": rows, "row_numbers": numbers,
-            "total": len(rows),
+            "total": len(rows), "encoding": enc, "encoding_note": encoding_note(enc),
             "suggested": importer.suggest_mapping(kind, headers, remembered.mapping if remembered else None)}
 
 

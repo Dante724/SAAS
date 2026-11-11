@@ -258,16 +258,29 @@ async def create_return(
 
     total = Decimal("0")
     for ln in data.lines:
-        cost = await _cost(db, ln.part_id, ln.unit_cost)
-        await _take_stock(db, ln.part_id, w, ln.qty, doc="return", bin_id=getattr(ln, "bin_id", None))
-        if ln.serialized_item_id:
+        part = (await db.execute(select(Part).where(
+            Part.id == ln.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
+        if not part:
+            raise HTTPException(404, "Product not found")
+        unit = None
+        if ln.serialized_item_id or part.serialized:
+            # council M8: same rule as a write-off — a serialized product's line names its unit,
+            # which must be in stock here. Before this the aggregate left and the IMEI stayed live.
             unit = (await db.execute(select(SerializedItem).where(
                 SerializedItem.id == ln.serialized_item_id, SerializedItem.org_id == current.org_id,
-                SerializedItem.part_id == ln.part_id))).scalar_one_or_none()
-            if unit:
-                unit.status = "written_off"
-                serial_log.record(db, unit, "written_off", ref_type="purchase_return", ref_id=doc.id,
-                                  label="Returned to the supplier", actor_id=current.id)
+                SerializedItem.part_id == ln.part_id).with_for_update())).scalar_one_or_none() \
+                if ln.serialized_item_id else None
+            if part.serialized and (unit is None or ln.qty != 1):
+                raise HTTPException(422, f"Return “{part.name}” one unit per line, naming its IMEI / serial")
+            if unit is not None and (unit.status != "in_stock" or unit.location_id != w.location_id):
+                raise HTTPException(409, f"{unit.serial_number} isn't in stock here")
+        cost = await _cost(db, ln.part_id, ln.unit_cost)
+        await _take_stock(db, ln.part_id, w, ln.qty, doc="return",
+                          bin_id=getattr(ln, "bin_id", None) or (unit.bin_id if unit else None))
+        if unit is not None:
+            unit.status = "written_off"
+            serial_log.record(db, unit, "returned", ref_type="purchase_return", ref_id=doc.id,
+                              label="Returned to the supplier", actor_id=current.id)
         line_total = cost * Decimal(str(ln.qty))
         total += line_total
         db.add(PurchaseReturnLine(
@@ -517,6 +530,8 @@ async def edit_write_off_line(
             await _take_stock(db, ln.part_id, w, delta, doc="write off", bin_id=getattr(ln, "bin_id", None))
         else:
             await _give_stock(db, ln.part_id, w, -delta, w.location_id if w else None, bin_id=getattr(ln, "bin_id", None))
+            if w:   # council M5: the units go back on the cost layers too, as a revert does
+                await _restore_batches(db, ln.part_id, w, -delta)
         db.add(StockMovement(
             part_id=ln.part_id, location_id=w.location_id if w else None,
             warehouse_id=doc.warehouse_id, movement_type="writeoff_adjust",
