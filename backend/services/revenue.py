@@ -38,7 +38,7 @@ is never an expense, even where a path posts it as one against an order, invoice
 
 **Low stock**: active items with a minimum set (min_stock > 0) and on hand at or below it.
 """
-from datetime import datetime
+from datetime import datetime, timezone
 from typing import Optional
 
 from sqlalchemy import Select, case, func, or_, select, union
@@ -439,17 +439,25 @@ async def receivables(db: AsyncSession, org_id: str, location_id: Optional[str] 
 
 
 async def operating_expenses(db: AsyncSession, org_id: str, df: Optional[datetime] = None,
-                             dt: Optional[datetime] = None) -> float:
-    """Expense records plus expense cash transactions, never a refund to a customer."""
+                             dt: Optional[datetime] = None, tzname: Optional[str] = None) -> float:
+    """Expense records plus expense cash transactions, never a refund to a customer. df/dt are
+    naive-UTC instants; an expense record's date is a shop calendar day, so the window is turned
+    into the shop's dates (tzname) before it is compared with it."""
+    from backend.services.dates import zone
+
+    def shop_date(instant: datetime):
+        if not tzname:
+            return instant.date()
+        return instant.replace(tzinfo=timezone.utc).astimezone(zone(tzname)).date()
     txn_date = func.coalesce(Transaction.actual_date, Transaction.created_at)
     txns = (await db.execute(select(func.coalesce(func.sum(func.abs(Transaction.amount)), 0)).where(
         Transaction.org_id == org_id, Transaction.txn_type == "expense", Transaction.status != "deleted",
         ~is_customer_refund(), *_in(txn_date, df, dt)))).scalar() or 0
     econds = [Expense.org_id == org_id]
     if df is not None:
-        econds.append(Expense.expense_date >= df.date())
+        econds.append(Expense.expense_date >= shop_date(df))
     if dt is not None:
-        econds.append(Expense.expense_date <= dt.date())
+        econds.append(Expense.expense_date <= shop_date(dt))
     recs = (await db.execute(select(func.coalesce(func.sum(Expense.amount), 0)).where(*econds))).scalar() or 0
     return q2(float(txns) + float(recs))
 

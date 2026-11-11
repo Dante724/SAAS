@@ -21,6 +21,7 @@ import pytest
 from sqlalchemy import select
 
 from backend.models import Part
+from backend.tests.shop_day import shop_today_for
 from backend.tests.test_b5_pos_quote import _sales_tax
 from backend.tests.test_report_figures_agree import _product, _setup, _status, _total_profit
 
@@ -189,7 +190,7 @@ async def test_total_profit_csv_matches_the_page_and_dates_the_other_row_in_rang
     assert total[0] == "Total"
     got = {k: float(total[head.index(k)]) for k in ("Sales", "Tax", "Parts cost")}
     assert got == pytest.approx({"Sales": REVENUE, "Tax": TAX, "Parts cost": COGS}), got
-    today = now_utc().date().isoformat()
+    today = (await shop_today_for(client, H)).isoformat()
     for row in rows[1:-1]:
         assert row[2] <= today, row          # QA N17: "Refunds and other" was dated tomorrow
 
