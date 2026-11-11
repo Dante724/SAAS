@@ -1235,8 +1235,7 @@ async def company_dashboard(
                                       Order.status.in_([k for k, g in grp.items() if g == "closed"] or [""]))
     if location_id:
         closed_q = closed_q.where(Order.location_id == location_id)
-    closed_figs = await money_rules.job_figures(db, closed_q)
-    avg_wo = q2(sum(f["revenue"] for f in closed_figs.values()) / len(closed_figs)) if closed_figs else 0
+    avg_wo = q2(await money_rules.average_job_revenue(db, oid, closed_q))
     conversion = round(won_month / wo_month * 100, 0) if wo_month else 0
 
     # Money on Home follows the role: balances need "see balance", takings and amounts owed

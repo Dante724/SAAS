@@ -27,6 +27,11 @@ describe("nextStep (B11: the next-step button)", () => {
   it("only offers a status this role may move to", () => {
     expect(nextStep(S, "diagnosed", ["waiting_parts", "ready"])?.key).toBe("ready");
   });
+  it("never goes back to a status the shop added after Ready", () => {
+    const withQc = [...S, { key: "quoted", status_group: "in_progress", sort_order: 10 }];
+    expect(nextStep(withQc, "ready")).toBeUndefined();
+    expect(nextStep(withQc, "in_repair")?.key).toBe("ready");
+  });
   it("offers Waiting parts when it's the only way forward", () => {
     expect(nextStep(S, "diagnosed", ["waiting_parts"])?.key).toBe("waiting_parts");
   });

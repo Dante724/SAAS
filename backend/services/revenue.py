@@ -41,7 +41,7 @@ is never an expense, even where a path posts it as one against an order, invoice
 from datetime import datetime
 from typing import Optional
 
-from sqlalchemy import Select, case, func, or_, select, union
+from sqlalchemy import Select, case, func, literal_column, or_, select, union
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import (
@@ -208,6 +208,54 @@ async def job_figures(db: AsyncSession, orders, dropped: Optional[set] = None) -
             f["written_off"] = 0.0
         f["tax"] = f["charged"] - f["revenue"]
     return out
+
+
+async def average_job_revenue(db: AsyncSession, org_id: str, orders: Select) -> float:
+    """The average of job_figures' `revenue` over a SELECT of order ids, as one SQL aggregate.
+    Home shows it on every open: building job_figures for every closed job a shop ever had cost
+    seconds and tens of MB at 33k jobs. Same rules: lines ex tax less credit notes and the ex-tax
+    share of refunds that weren't an overpayment; a dropped job counts only the money kept."""
+    dropped = await _dropped_keys(db, org_id)
+    rate = func.coalesce(OrderLine.tax_rate, 0)
+    ln = (select(OrderLine.order_id.label("oid"), func.sum(OrderLine.total).label("gross"),
+                 func.sum(OrderLine.total / (1 + rate / 100.0)).label("net"))
+          .where(OrderLine.order_id.in_(orders), func.coalesce(OrderLine.kind, "") != "refund")
+          .group_by(OrderLine.order_id).subquery())
+    from backend.services.order_money import invoice_job_shares
+    sh = invoice_job_shares()
+    cn = (select(sh.c.order_id.label("oid"), func.sum(CreditNote.subtotal * sh.c.share).label("net"),
+                 func.sum(CreditNote.total * sh.c.share).label("gross"))
+          .join(Invoice, Invoice.id == sh.c.invoice_id)
+          .join(CreditNote, CreditNote.invoice_id == Invoice.id)
+          .where(sh.c.order_id.in_(orders), CreditNote.status == "issued",
+                 Invoice.status.notin_(VOID_STATUSES))
+          .group_by(sh.c.order_id).subquery())
+    pay = (select(Payment.order_id.label("oid"),
+                  func.sum(case((Payment.kind.in_(MONEY_IN), Payment.amount), else_=0)).label("paid"),
+                  func.sum(case((Payment.kind == "refund", func.abs(Payment.amount)), else_=0)).label("back"))
+           .where(Payment.order_id.in_(orders)).group_by(Payment.order_id).subquery())
+
+    zero, one = literal_column("0"), literal_column("1.0")       # inline: a fixed handful of binds
+
+    def pos(x):
+        return case((x > zero, x), else_=zero)
+
+    gross, net = func.coalesce(ln.c.gross, zero), func.coalesce(ln.c.net, zero)
+    paid, back = func.coalesce(pay.c.paid, zero), func.coalesce(pay.c.back, zero)
+    billed = gross - func.coalesce(cn.c.gross, zero)
+    share = case((gross != zero, net * one / gross), else_=one)    # the job's ex-tax share
+    refund = pos(back - pos(paid - pos(billed)))                  # less any overpayment handed back
+    revenue = net - func.coalesce(cn.c.net, zero) - refund * share
+    if dropped:
+        kept = pos(paid - back)
+        kept = case((kept < pos(billed), kept), else_=pos(billed))
+        revenue = case((Order.status.in_(list(dropped)), kept * share), else_=revenue)
+    avg = (await db.execute(
+        select(func.avg(revenue)).select_from(Order)
+        .outerjoin(ln, ln.c.oid == Order.id).outerjoin(cn, cn.c.oid == Order.id)
+        .outerjoin(pay, pay.c.oid == Order.id)
+        .where(Order.id.in_(orders)))).scalar()
+    return float(avg or 0)
 
 
 def _billed_on(org_id):

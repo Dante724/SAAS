@@ -174,6 +174,10 @@ async def roster(db: AsyncSession = Depends(get_db),
 AUTO_STOP_HOURS = 12          # a timer left running longer than this is force-stopped + flagged
 OT_DAILY_THRESHOLD_H = 8      # hours/day beyond which time is overtime
 OT_MULTIPLIER = 1.5
+# How far along a status group is: the next step never goes back a stage. Waiting parts
+# ("pending") is a detour within the work, the same stage as in progress.
+STAGE = {"new": 0, "in_progress": 1, "pending": 1, "ready": 2, "closed": 3, "dropped": 3}
+MY_WORK_CAP = 100             # job cards on My Work; `orders_total` counts the rest
 
 
 # ── helpers ──────────────────────────────────────────────────────────────────
@@ -844,10 +848,26 @@ async def my_work(
     # own lines on open jobs are read, and the follow-up queries join on that set instead of
     # binding an id per order: this used to put every open order in the shop into one IN list,
     # which failed with "too many SQL variables" at 33,208 orders.
-    my_line_q = (select(OrderLine).join(Order, Order.id == OrderLine.order_id).where(
-        OrderLine.technician_id == current.id, Order.org_id == current.org_id,
+    # The bay shows the tech's first MY_WORK_CAP jobs (urgent, then due soonest, then oldest);
+    # `orders_total` still counts them all. Returning every card cost 4 s and 355 MB for a solo
+    # owner with 33,500 imported open jobs, on the event loop every other shop shares.
+    from sqlalchemy.orm import aliased
+    service = func.lower(func.coalesce(func.nullif(OrderLine.kind, ""), OrderLine.line_type, "")) \
+        .in_(("service", "labour", "labor"))
+    all_mine = (select(OrderLine.order_id).join(Order, Order.id == OrderLine.order_id).where(
+        OrderLine.technician_id == current.id, Order.org_id == current.org_id, service,
         Order.is_estimate == False, Order.archived == False,   # noqa: E712
         Order.closed_at.is_(None)))
+    orders_total = (await db.execute(
+        select(func.count()).select_from(all_mine.distinct().subquery()))).scalar() or 0
+    J = aliased(Order)
+    first = (select(J.id).where(J.id.in_(all_mine))
+             .order_by(func.coalesce(J.priority, 0).desc(), J.due_at.is_(None), J.due_at, J.created_at, J.id)
+             .limit(MY_WORK_CAP).subquery())
+    my_line_q = (select(OrderLine).join(Order, Order.id == OrderLine.order_id).where(
+        OrderLine.technician_id == current.id, service, Order.id.in_(select(first.c.id)))
+        .order_by(func.coalesce(Order.priority, 0).desc(), Order.due_at.is_(None), Order.due_at,
+                  Order.created_at, Order.id, OrderLine.id))
     lines = (await db.execute(my_line_q)).scalars().all()
     my_line_ids = select(my_line_q.subquery().c.id)
     open_orders = (await db.execute(select(Order).where(
@@ -867,7 +887,7 @@ async def my_work(
         "actual_hours": q2(line_secs.get(l.id, 0) / 3600),
         "running": any(e.order_line_id == l.id and e.ended_at is None
                        for e in mine),
-    } for l in lines if (l.kind or l.line_type or "").lower() in ("service", "labour", "labor")]
+    } for l in lines]
 
     # 144cr — group my lines into per-order BAY CARDS so a tech can advance status and
     # see checklist progress without opening the drawer. Status/next-status come from the
@@ -914,7 +934,10 @@ async def my_work(
                 if o.status not in next_by_status:
                     # B11: the next step is the next main-path status this role may move to. A
                     # "pending" status (Waiting parts…) is a detour, not the next step for every job.
-                    later = [s for s in wf if s.sort_order > cur.sort_order]
+                    # A status of an earlier stage (an in-progress status the shop added after
+                    # Ready) is a step back, never the next step.
+                    later = [s for s in wf if s.sort_order > cur.sort_order
+                             and STAGE.get(s.status_group, 1) >= STAGE.get(cur.status_group, 1)]
                     ok = [s for s in later if await is_transition_allowed(
                         db, current.org_id, current.role_id, o.status, s.key)]
                     next_by_status[o.status] = \
@@ -937,7 +960,7 @@ async def my_work(
 
     return {"today_seconds": today_s, "week_seconds": week_s,
             "active": _ser(active, await _order_no(db, active.order_id), current.name) if active else None,
-            "lines": my_lines, "orders": orders}
+            "lines": my_lines, "orders": orders, "orders_total": orders_total}
 
 
 # ── timesheet aggregation + approval (payroll bridge) ────────────────────────
