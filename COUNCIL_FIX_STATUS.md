@@ -94,3 +94,15 @@ Before merging, the 13 were merged together on today's base and the full suite r
 - **#112 stays closed:** the owner closed it on 6 Nov because card readers are turned off (`CARD_READERS_ENABLED=false`, #171).
 - **Two alembic heads after the merges:** #183 (`sds01`), merged earlier the same day, and #107 (`ot01`) both revise `idg02`. **#185** (merge revision `mh01` plus a single-head guard test) went green and is **merged**: the base is back to one head (`mh01`).
 - **Still open, for later:** the Medium fixes (#124, #125, #126, #129, #130, #131, #132, #134, #136, #138, #143, #145–#152), the QA PRs (#123, #133, #137) and the infra PRs (#161, #162, #164, #165). #137 must re-chain `nn01` onto the current head before it merges. #157 is redundant and can be closed.
+
+## Second merge pass on 11 Nov (the rest)
+Before merging, all 26 remaining PRs were merged together on that day's base (c38bcd55) and tested: **Postgres 3973 passed, SQLite 3936 passed, 0 failed; `tsc` clean; Vitest 918/918.** The 47 skipped tests (5 Postgres, 42 SQLite) were checked one by one. 37 are Postgres-only race tests that ran and passed in the Postgres run. Deploy readiness needs a React build: built and run, 6/6 pass. The Stripe, Square and Twilio sandbox tests need real test keys. One card-reader check stays off with card readers.
+
+Merged into `roadmap/orderry-parity`, each on the exact commit tested with all 18 checks green (merge commit in brackets):
+#143 (0ad394b5), #124 (1aa4a989), #130 (8698d85f), #134 (14f6706e), #145 (0f1a423c), #146 (1f978d7f), #147 (65a76fbc), #125 (6f4eec57), #129 (46ff32c7), #132 (1bd5a384), #131 (8b673de9), #148 (fc0e62f1), #149 (aa6c627a), #138 (d5e0f5e6), #150 (fcabfb61), #126 (18d6c0f8), #136 (c4b18076), #151 (3fbd25cc), #152 (d5d5d3de), #123 (8aea0ca6), #133 (3d3c7fec), #137 (b2e9220f), #161 (2cdcbbf4), #162 (3f48d438), #164 (e8eeadc2), #191 (e16a42ef).
+
+- **#164:** GitHub reported merge conflicts after the earlier merges, although `git merge-tree` showed a clean merge. The base was merged into its branch (ce1fd143, normal push). Lint and the metrics/cache/integrity tests passed on Postgres, CI went 18/18 green, and it merged.
+- **#191 (new, flaky test):** #165's `test (shard 4)` failed in `test_portal_shows_only_portal_fields`. The test asserted the passcode `"4321"` never appears in the portal response, and a timestamp (`09:11:14.432168`) contained those digits. The test now uses the passcode `pw-Kx#4321`, and the checks are unchanged. Reproduced: `'4321' in str({'at': '2026-11-11T09:11:14.432168'})` is `True`.
+- **#165:** the base, now with #191, was merged into its branch (3eda197b). Lint is clean and 98 related tests pass on Postgres and SQLite. **Waiting for CI, then merge.**
+- **Alembic:** the base has one head (`nn01`), and `test_alembic_single_head` passes at e16a42ef.
+- **#95** (not a council PR) still needs `nob01` re-chained onto `nn01`.
