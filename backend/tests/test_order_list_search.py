@@ -118,3 +118,30 @@ async def test_board_and_q_alias_use_the_same_search(client, shop):
     b = (await client.get("/api/orders/board", params={"search": "+1 415 555 0134"},
                           headers=h)).json()
     assert sum(len(c["cards"]) for c in b["columns"]) == 1
+
+
+@pytest.mark.asyncio
+async def test_asset_serial_vin_or_hin_finds_the_job(client):
+    h = await _shop(client)
+    loc = await _loc(client, h)
+    cid = await _client(client, h, name="Fleet Owner")
+
+    async def job(**asset):
+        r = await client.post("/api/orders", json={"client_id": cid, "location_id": loc,
+                                                   "complaint": "x", **asset}, headers=h)
+        assert r.status_code == 201, r.text
+        return r.json()["order_number"]
+
+    phone = await job(asset_brand="Apple", asset_model="iPhone", asset_serial="F2LX-K0AB-CD12")
+    van = await job(asset_brand="Ford", asset_model="Transit", asset_vin="1FTBW2CM5HKA12345")
+    boat = await job(asset_brand="Boston Whaler", asset_model="Montauk", asset_hin="BWC12345H506")
+    for typed in ("F2LXK0ABCD12", "f2lx k0ab cd12", "ABCD12"):
+        assert await _found(client, h, typed) == {phone}, typed
+    for typed in ("1FTBW2CM5HKA12345", "1ftbw2cm5hka12345", "1FTBW-2CM5-HKA12345", "HKA12345"):
+        assert await _found(client, h, typed) == {van}, typed
+    for typed in ("BWC12345H506", "bwc-12345-h506", "12345H506"):
+        assert await _found(client, h, typed) == {boat}, typed
+    # another shop's search never reaches these assets
+    other = await _shop(client)
+    for typed in ("1FTBW2CM5HKA12345", "BWC12345H506", "F2LXK0ABCD12"):
+        assert await _found(client, other, typed) == set(), typed

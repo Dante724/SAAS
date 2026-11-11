@@ -493,7 +493,7 @@ def _apply_order_filters(q, org_id: str, *, status=None, location_id=None, searc
 def _order_search_clause(s: str, org_id: str):
     """One search box: the job number (with or without its prefix, separators or zero padding),
     the client's name (every word, any order, any case — or the company they're billed to),
-    the client's phone however it's formatted, or the asset (brand, model, serial, IMEI).
+    the client's phone however it's formatted, or the asset (brand, model, serial, IMEI, VIN, HIN).
     Every subquery is pinned to the shop, so another shop's clients or assets never match."""
     from sqlalchemy import or_
 
@@ -511,9 +511,14 @@ def _order_search_clause(s: str, org_id: str):
         client_or.append(phone)
     conds.append(Order.client_id.in_(
         select(Client.id).where(Client.org_id == org_id, or_(*client_or))))
-    conds.append(Order.device_id.in_(select(Device.id).where(Device.org_id == org_id, or_(
-        Device.brand.icontains(s, autoescape=True), Device.model.icontains(s, autoescape=True),
-        Device.serial.icontains(s, autoescape=True), Device.imei.contains(s, autoescape=True)))))
+    # The asset: brand/model, or any of its identifiers (serial, IMEI, VIN, HIN) with spaces,
+    # dashes and case ignored.
+    dev_or = [Device.brand.icontains(s, autoescape=True), Device.model.icontains(s, autoescape=True)]
+    for col in (Device.serial, Device.imei, Device.vin, Device.hin):
+        code = sm.code_match(col, s)
+        if code is not None:
+            dev_or.append(code)
+    conds.append(Order.device_id.in_(select(Device.id).where(Device.org_id == org_id, or_(*dev_or))))
     return or_(*conds)
 
 
