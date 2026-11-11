@@ -1133,6 +1133,9 @@ async def close_shift(
         from backend.services.permissions import role_allows
         role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
         show_expected = role_allows(role, "can_view_finance")
+    else:
+        from backend.services.auth import is_shop_owner
+        show_expected = await is_shop_owner(db, current)   # no role isn't the owner (launch B10)
     resp = {"ok": True, "counted": counted}
     if show_expected:
         resp["expected_cash"] = shift.expected_cash

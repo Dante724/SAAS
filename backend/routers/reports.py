@@ -1509,14 +1509,15 @@ async def home_feed(
     Each item is a group with a count and a deep link to the filtered list behind it.
     Deterministic (no AI); the order is roughly by urgency. Returns ok=True when the
     shop is all caught up."""
-    from backend.models import Lead, Role
+    from backend.models import Lead
     oid = current.org_id
     now = now_utc()
 
     # Role shapes the feed: order_scope="own" limits order/task signals to what's
     # assigned to this person; home_feed_sources (owner-set, in the roles section)
     # limits which signals show at all. Null/empty source list = show all.
-    role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none() if current.role_id else None
+    from backend.services.scoping import role_for
+    role = await role_for(db, current)   # a roleless invitee gets the narrowest scope (launch B10)
     own = bool(role and role.order_scope == "own")
     sources = set(role.home_feed_sources) if role and role.home_feed_sources else None
 

@@ -214,7 +214,7 @@ async def is_shop_owner(db: AsyncSession, employee: Employee) -> bool:
 async def assert_not_self(db: AsyncSession, current: Employee, employee_id: str, what: str) -> None:
     """Separation of duties for pay: nobody approves, rewards or pays themself — except the
     owner, who answers to no one in their own shop."""
-    if employee_id == current.id and current.role_id and not await is_shop_owner(db, current):
+    if employee_id == current.id and not await is_shop_owner(db, current):
         raise HTTPException(403, f"You can't {what}. Ask the owner or another manager.")
 
 

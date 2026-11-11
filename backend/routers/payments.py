@@ -254,21 +254,28 @@ def _square_verified(request: Request, raw: bytes, secrets: list[str]) -> bool:
         for s in secrets)
 
 
-async def _require_square_signature(request: Request, raw: bytes, db: AsyncSession, org_id: Optional[str]) -> None:
+async def _require_square_signature(request: Request, raw: bytes, db: AsyncSession, org_id: Optional[str],
+                                    own_only: bool = False) -> None:
     """Verify with the shop's own signature key (or the operator-wide one). org_id=None (an event
-    that matched nothing) checks the operator-wide key only."""
+    that matched nothing) checks the operator-wide key only. own_only (the shop's own URL): only
+    the shop's key, since a shop's card money never goes through the operator's account."""
     if org_id:
         secrets = await provider_secrets(db, org_id, "square", "webhook_signature_key",
-                                         settings.SQUARE_WEBHOOK_SIGNATURE_KEY)
+                                         None if own_only else settings.SQUARE_WEBHOOK_SIGNATURE_KEY,
+                                         own_only=own_only)
     else:
         secrets = [s for s in [settings.SQUARE_WEBHOOK_SIGNATURE_KEY] if s]
     _signature_check(secrets, _square_verified(request, raw, secrets), "Square")
     set_tenant(db, org_id)   # verified as this shop's event: the rest of the request is scoped to it
 
 
-async def _require_stripe_signature(payload: bytes, sig: str, db: AsyncSession, org_id: Optional[str]) -> None:
+async def _require_stripe_signature(payload: bytes, sig: str, db: AsyncSession, org_id: Optional[str],
+                                    own_only: bool = False) -> None:
+    """As _require_square_signature: own_only (the shop's own URL) accepts only the shop's secret."""
     if org_id:
-        secrets = await provider_secrets(db, org_id, "stripe", "webhook_secret", settings.STRIPE_WEBHOOK_SECRET)
+        secrets = await provider_secrets(db, org_id, "stripe", "webhook_secret",
+                                         None if own_only else settings.STRIPE_WEBHOOK_SECRET,
+                                         own_only=own_only)
     else:
         secrets = [s for s in [settings.STRIPE_WEBHOOK_SECRET] if s]
     _signature_check(secrets, any(_verify_stripe_sig(payload, sig, s) for s in secrets), "Stripe")
@@ -297,10 +304,11 @@ async def square_webhook(request: Request, db: AsyncSession = Depends(get_db)):
 
 @router.post("/square/webhook/{org_id}")
 async def square_webhook_for_shop(org_id: str, request: Request, db: AsyncSession = Depends(get_db)):
-    """Square webhook for one shop: verified with that shop's key before anything is looked up."""
+    """Square webhook for one shop: verified with that shop's own key (never the operator-wide
+    one) before anything is looked up."""
     await _webhook_limit(request)
     raw = await request.body()
-    await _require_square_signature(request, raw, db, org_id)
+    await _require_square_signature(request, raw, db, org_id, own_only=True)
     return await _square_event(request, raw, _parse(raw), db, scope_org=org_id)
 
 
@@ -391,11 +399,12 @@ async def stripe_webhook(request: Request, db: AsyncSession = Depends(get_db)):
 
 @router.post("/stripe/webhook/{org_id}")
 async def stripe_webhook_for_shop(org_id: str, request: Request, db: AsyncSession = Depends(get_db)):
-    """Stripe webhook for one shop: verified with that shop's secret before anything is looked up."""
+    """Stripe webhook for one shop: verified with that shop's own secret (never the operator-wide
+    one) before anything is looked up."""
     await _webhook_limit(request)
     payload = await request.body()
     sig = request.headers.get("stripe-signature", "")
-    await _require_stripe_signature(payload, sig, db, org_id)
+    await _require_stripe_signature(payload, sig, db, org_id, own_only=True)
     return await _stripe_event(payload, sig, _parse(payload), db, scope_org=org_id)
 
 

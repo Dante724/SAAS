@@ -183,6 +183,15 @@ async def _denied_for_role(db: AsyncSession, org_id: str, role_id: Optional[str]
     return {c for c in ALL_CODES if not role_allows(role, c)}
 
 
+async def _my_denied(db: AsyncSession, current: Employee) -> set:
+    """What the (non-owner) editor's own role denies. Having no role isn't the owner (launch
+    B10): it denies everything, so a roleless invitee can't hand out or edit any access."""
+    if not current.role_id:
+        from backend.services.permissions import ALL_CODES
+        return set(ALL_CODES)
+    return await _denied_for_role(db, current.org_id, current.role_id)
+
+
 async def _assert_can_assign_role(db: AsyncSession, current: Employee, role_id: Optional[str]) -> None:
     owner = await _is_owner(db, current)
     # "No role" means no limits at all: every permission and no location, record or payroll scope.
@@ -191,13 +200,13 @@ async def _assert_can_assign_role(db: AsyncSession, current: Employee, role_id: 
     # widen themselves (audit 2026-10-29, H4).
     if not role_id and not owner:
         raise HTTPException(403, "Only the shop owner can give someone unlimited access. Pick a role instead.")
-    mine = set() if owner else await _denied_for_role(db, current.org_id, current.role_id)
+    mine = set() if owner else await _my_denied(db, current)
     theirs = await _denied_for_role(db, current.org_id, role_id)
     if not mine <= theirs:
         raise HTTPException(403, "You can't assign a role with more access than your own")
     # Permissions alone aren't the whole story: a role also limits which locations, orders,
     # contacts and warehouses its holders see. Never hand out wider data scope than you have.
-    if current.role_id and role_id and not await _is_owner(db, current):
+    if current.role_id and role_id and not owner:
         from backend.routers.rbac import _assert_scope_not_wider
         editor = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
         target = (await db.execute(select(Role).where(Role.id == role_id))).scalar_one_or_none()
@@ -235,7 +244,7 @@ async def _assert_can_manage(db: AsyncSession, current: Employee, emp: Employee)
     # an equally-privileged teammate must not be able to take it over.
     if await _is_owner(db, emp):
         raise HTTPException(403, "Only the shop owner can change the owner's account")
-    mine = set() if await _is_owner(db, current) else await _denied_for_role(db, current.org_id, current.role_id)
+    mine = set() if await _is_owner(db, current) else await _my_denied(db, current)
     try:
         theirs = await _denied_for_role(db, current.org_id, emp.role_id)
     except HTTPException:
@@ -342,7 +351,7 @@ async def update_employee(
     from backend.services.auth import has_perm
     from backend.services.payroll_views import in_scope, payroll_scope_ids
     from backend.services.auth import is_shop_owner
-    own_pay = emp.id == current.id and current.role_id and not await is_shop_owner(db, current)
+    own_pay = emp.id == current.id and not await is_shop_owner(db, current)
     if own_pay or not await has_perm(db, current, "can_view_payroll") \
             or not in_scope(await payroll_scope_ids(db, current), emp.id):
         # Pay is hidden from this role in list_employees (no payroll view, or outside its payroll
