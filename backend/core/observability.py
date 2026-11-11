@@ -34,6 +34,11 @@ def render_metrics() -> str:
     lines.append(f'repairos_request_latency_seconds_bucket{{le="+Inf"}} {_LAT_N[0]}')
     lines.append(f"repairos_request_latency_seconds_sum {_LAT_SUM[0]:.4f}")
     lines.append(f"repairos_request_latency_seconds_count {_LAT_N[0]}")
+    from backend.services.reconcile import LAST_COUNTS
+    if LAST_COUNTS:       # set by the nightly integrity sweep, on the worker that ran it
+        lines += ["# HELP repairos_integrity_mismatches Stored totals that disagree with their ledger (last sweep)",
+                  "# TYPE repairos_integrity_mismatches gauge"]
+        lines += [f'repairos_integrity_mismatches{{check="{c}"}} {n}' for c, n in sorted(LAST_COUNTS.items())]
     return "\n".join(lines) + "\n"
 
 
