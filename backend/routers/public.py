@@ -1683,7 +1683,7 @@ async def public_pay_info(intent_id: str, db: AsyncSession = Depends(get_db)):
         "shop_phone": (loc.phone if (loc and loc.phone) else getattr(org, "company_phone", None)),
     }
     # A cancelled request, or one for nothing, must never show a live Pay button.
-    payable = i.status in ("created", "pending", "failed") and (i.amount or 0) > 0
+    payable = i.status in ("created", "viewed", "pending", "failed") and (i.amount or 0) > 0
     # Build 144dv — when the intent bills an invoice, show its line items exactly as
     # the invoice's Order-display mode resolves them, so the client sees the same
     # breakdown (per-line, per-ticket, or a single line) as the printed document.

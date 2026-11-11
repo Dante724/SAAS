@@ -221,6 +221,18 @@ jobs:
           echo "backend-postgres shards: ${{ needs.backend-postgres.result }}"
           test "${{ needs.backend-postgres.result }}" = success
 
+  website-legal:
+    # The Terms and Privacy pages shops agree to at sign-up still carry [[...]] tokens until the
+    # founder supplies the company's legal details. The built pages are committed, so this checks
+    # what would actually be deployed. It only warns for now so it doesn't block every PR into
+    # main; drop --warn-only once the legal details are filled in.
+    runs-on: ubuntu-latest
+    if: github.event_name != 'pull_request' || !github.event.pull_request.draft
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+      - name: No legal placeholders in the served pages
+        run: python3 website/tools/check_legal_placeholders.py --warn-only
+
   frontend:
     runs-on: ubuntu-latest
     timeout-minutes: 15
