@@ -189,7 +189,8 @@ def _gs1_date(v: str) -> Optional[date]:
     yy, mm, dd = int(v[:2]), int(v[2:4]), int(v[4:])
     if not 1 <= mm <= 12:
         return None
-    this = date.today().year
+    from backend.services.dates import now_utc
+    this = now_utc().year
     year = (this // 100) * 100 + yy
     if year - this > 50:
         year -= 100
