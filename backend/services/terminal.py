@@ -325,7 +325,8 @@ async def start_charge(db: AsyncSession, *, org_id: str, actor_id: str, terminal
         o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == org_id))).scalar_one_or_none()
         if not o:
             raise TerminalError(404, "Order not found")
-        from backend.services.order_money import balance_due
+        from backend.services.order_money import balance_due, refuse_archived
+        refuse_archived(o)     # a deleted job takes no money on a reader either (409)
         owed = await balance_due(db, o)
         if amount is None:
             amount = owed
@@ -679,8 +680,8 @@ async def settle_succeeded(db: AsyncSession, ch: TerminalCharge, *, provider_pay
     from backend.routers.feed import log_system_event
     note = ""
     if ch.order_id:
-        o = (await db.execute(select(Order).where(
-            Order.id == ch.order_id, Order.org_id == ch.org_id).with_for_update())).scalar_one()
+        o = (await db.execute(select(Order).where(      # NO KEY UPDATE: see invoice_money.lock_order
+            Order.id == ch.order_id, Order.org_id == ch.org_id).with_for_update(key_share=True))).scalar_one()
         # Review M4b: the card may be approved after the order was paid another way (cash, a pay
         # link, a credit note). The money was taken, so it is recorded, but staff must look.
         from backend.services.order_money import balance_due
