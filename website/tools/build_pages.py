@@ -75,7 +75,7 @@ PAGES = [
         "lead": "Auto repair software with one vehicle template, from a family hatchback to a fleet truck or an RV. Check vehicles in by VIN or plate, draft the estimate with AI, and let customers approve each line from their phone.",
         "fields": [("VIN", "Kept on the vehicle's history"), ("Year, make and model", "e.g. 2019 Honda CR-V"), ("Plate", "Find the vehicle by plate"), ("Mileage or hours", "Logged every visit"), ("Unit number", "For fleet vehicles"), ("Condition photos", "Taken at check-in")],
         "features": [
-            ("AI estimates from the complaint", "“Grinding when braking, pulls left” becomes an inspection, pads and rotors, and a caliper service — at your prices."),
+            ("AI estimates from the complaint", "“Grinding when braking, pulls left” becomes an inspection, pads and rotors, and a caliper service. Lines that match your services and parts take your prices; you price the rest."),
             ("Digital approvals by text", "Customers approve each line from their phone and sign. Declined work is saved for the next visit."),
             ("Parts booked to the job", "Order from the repair order. Received parts are written off to the right vehicle and costed into the margin."),
             ("Fleet-ready", "Unit numbers and account billing for trucks and fleets, with every service on the vehicle's history."),
@@ -85,7 +85,7 @@ PAGES = [
         "who": ["Independent auto repair shops", "Truck and fleet service shops", "RV service centres", "Motorcycle and e-bike workshops", "Tire, brake and quick-service shops", "Multi-bay and multi-location garages"],
         "steps": [
             ("Check in", "Find the vehicle by VIN or plate, log the mileage and take condition photos at the counter. Every visit stays on the vehicle's history."),
-            ("Estimate", "On Pro, Tekly AI turns “grinding when braking, pulls left” into an inspection, pads, rotors and labour at your prices. You review and send."),
+            ("Estimate", "On Pro, Tekly AI turns “grinding when braking, pulls left” into an inspection, pads, rotors and labour, priced from your own services and parts. You price anything else, then send."),
             ("Approval", "The customer approves each line on their phone and signs. Declined work is saved for the next visit."),
             ("Parts", "Order from the repair order. Received parts are charged to the right vehicle and their cost lands in the job's margin."),
             ("Pickup and pay", "Payment at the counter or by link. Technician commission and hours post when the job closes, ready for the pay run."),
@@ -147,7 +147,7 @@ PAGES = [
         "lead": "Marine service software built for boatyards and outboard shops, from winterising to a full repower. Track the hull ID and each engine separately, draft estimates with AI and get approvals before the boat comes out of the water.",
         "fields": [("HIN", "Hull identification number"), ("Engine serial", "Each engine tracked separately"), ("Make, model and year", "e.g. 19 ft centre console"), ("Length", "In feet"), ("Registration", "State or national"), ("Condition photos", "Taken at haul-out")],
         "features": [
-            ("AI estimates from the complaint", "“Won't idle, stalls in gear” becomes a diagnostic, fuel service and parts — at your rates."),
+            ("AI estimates from the complaint", "“Won't idle, stalls in gear” becomes a diagnostic, fuel service and parts. Lines that match your services and parts take your rates; you price the rest."),
             ("Every engine on its own record", "Twin outboards? Each engine keeps its own serial and service history under the vessel."),
             ("Approval before you start", "Owners approve each line from their phone, wherever they are."),
             ("Parts booked to the job", "Impellers, filters and lower-unit parts are written off to the right boat on arrival."),
@@ -157,7 +157,7 @@ PAGES = [
         "who": ["Boatyards and marinas with a service department", "Outboard and inboard engine shops", "Fibreglass and gelcoat repair shops", "Trailer service and repair", "Dealers with a service bench"],
         "steps": [
             ("Check in", "Record the HIN, each engine's serial and the boat's length, with condition photos at haul-out."),
-            ("Estimate", "On Pro, Tekly AI turns “won't idle, stalls in gear” into a diagnostic, fuel service and parts at your rates. You review and send."),
+            ("Estimate", "On Pro, Tekly AI turns “won't idle, stalls in gear” into a diagnostic, fuel service and parts, priced from your own services and parts. You price anything else, then send."),
             ("Approval", "Owners approve each line from their phone, wherever they are, and sign before you start."),
             ("Parts", "Impellers, filters and lower-unit parts are charged to the right boat when they arrive."),
             ("Pickup and pay", "Payment at the dock office or by link. Technician hours and commission post when the job closes."),
