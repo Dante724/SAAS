@@ -78,6 +78,26 @@ uv pip compile requirements-dev.txt --universal --python-version 3.11 --generate
   failed REINDEX (`*_ccnew`, `*_ccold`) are only logged: drop those with `DROP INDEX CONCURRENTLY`.
   To check by hand: `SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;`
 
+### Duplicate open attendance shifts (check before and after deploy)
+
+Before the clock-in lock, a double tap on "Clock in" could leave an employee with two open
+attendance shifts. Run this before and after a deploy; it should return no rows:
+
+```sql
+SELECT e.org_id, s.employee_id, e.name, e.email, COUNT(*) AS open_shifts,
+       MIN(s.started_at) AS oldest_start, MAX(s.started_at) AS newest_start
+FROM shifts s
+JOIN employees e ON e.id = s.employee_id
+WHERE s.ended_at IS NULL
+GROUP BY e.org_id, s.employee_id, e.name, e.email
+HAVING COUNT(*) > 1
+ORDER BY oldest_start;
+```
+
+Any rows are leaks from before the fix. The employee's next clock-out closes all of them: the
+newest gets its worked hours and each older duplicate closes at its own start with 0 hours, so
+payroll pays the time once. Check those employees' hours before running payroll for the period.
+
 ### Connection pooling (PgBouncer)
 
 Periodic background jobs (notification and webhook sweeps) elect one runner across all workers
