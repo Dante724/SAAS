@@ -2,7 +2,8 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { AgentDraftsCard, JobSuggestions, MorningBriefCard, SenseSettingsSection, WatchdogPanel, loadSense } from "./Sense";
+import { AgentDraftsCard, JobSuggestions, MorningBriefCard, SenseSettingsSection, TogetherChips, WatchdogPanel, loadSense } from "./Sense";
+import { NO_CONNECTION } from "../../api/client";
 import { MeProvider } from "../../context/Me";
 
 const reply = (body: unknown) => ({ ok: true, status: 200, headers: new Headers(), json: async () => body, text: async () => JSON.stringify(body) }) as Response;
@@ -112,5 +113,30 @@ describe("Tekly Sense", () => {
     expect(await screen.findByText(/invoice INV-7 is now due/)).toBeTruthy();
     await u.click(screen.getByRole("button", { name: "Send" }));
     expect(calls.find((c) => c.url.includes("/drafts/approve"))?.body).toEqual({ ids: ["d1"] });
+  });
+
+  it("adding a 'Usually added' line sends an Idempotency-Key, the same one when the add is retried (council M13)", async () => {
+    const u = userEvent.setup();
+    const inner = globalThis.fetch as any;
+    const adds: (string | undefined)[] = [];
+    let fail = 1;
+    vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
+      if (url.includes("/sense/orders/o1/together")) return reply({ items: [{ description: "Screen protector", kind: "product", unit_price: 9, why: { with: "Screen", together: 8, of: 10 } }] });
+      if (url.endsWith("/orders/o1/lines") && init?.method === "POST") {
+        adds.push((init.headers as Record<string, string> | undefined)?.["Idempotency-Key"]);
+        if (fail > 0) { fail--; throw new TypeError("Failed to fetch"); }
+        return reply({ ok: true, line_id: "l1" });
+      }
+      return inner(url, init);
+    }));
+    const onFlash = vi.fn();
+    render(<MeProvider><TogetherChips orderId="o1" linesKey="l0" onFlash={onFlash} /></MeProvider>);
+    await u.click(await screen.findByRole("button", { name: /^\+ Screen protector/ }, { timeout: 2000 }));
+    await vi.waitFor(() => expect(onFlash).toHaveBeenCalledWith(NO_CONNECTION));
+    await u.click(await screen.findByRole("button", { name: /^\+ Screen protector/ }));   // the chip is back: retry
+    await vi.waitFor(() => expect(onFlash).toHaveBeenCalledWith("Line added"));
+    expect(adds).toHaveLength(2);
+    expect(adds[0]).toBeTruthy();
+    expect(adds[1]).toBe(adds[0]);
   });
 });
