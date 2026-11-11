@@ -650,6 +650,18 @@ async def refund(db: AsyncSession, ch: TerminalCharge, *, amount: Optional[float
         if amount > kept + 0.005:
             raise TerminalError(422, f"Only {max(kept, 0):.2f} paid for this job hasn't been refunded yet."
                                 if kept > 0 else "Everything paid for this job has already been refunded.")
+    elif ch.sale_id:
+        # The same cap for a counter sale (B3 recheck): items returned at the till already gave the
+        # money back in cash, so the card isn't refunded on top. The sale row is taken so a till
+        # return running at the same moment waits for this one (it takes the same row).
+        s = (await db.execute(select(Sale).where(Sale.id == ch.sale_id))).scalar_one()
+        if not s.voided_at:      # a deleted sale booked nothing: only the card goes back (M6)
+            await db.execute(sa_update(Sale).where(Sale.id == s.id).values(paid=Sale.paid)
+                             .execution_options(synchronize_session=False))
+            kept = await sale_money_kept(db, s)
+            if amount > kept + 0.005:
+                raise TerminalError(422, f"Only {kept:.2f} paid for this sale hasn't been refunded yet."
+                                    if kept > 0 else "Everything paid for this sale has already been refunded.")
     # Claim the refund before calling the provider so two clicks can't both refund.
     claimed = await db.execute(sa_update(TerminalCharge)
         .where(TerminalCharge.id == ch.id, TerminalCharge.refunded_amount == ch.refunded_amount)
@@ -738,6 +750,29 @@ async def unrefunded_sale_card_payment(db: AsyncSession, sale_id: str) -> float:
     rows = (await db.execute(select(TerminalCharge.amount, TerminalCharge.refunded_amount).where(
         TerminalCharge.sale_id == sale_id, TerminalCharge.status == "succeeded"))).all()
     return q2(sum((a or 0) - (r or 0) for a, r in rows))
+
+
+async def sale_money_kept(db: AsyncSession, sale: Sale) -> float:
+    """Money paid for a counter sale (not by gift card) that hasn't gone back to the customer yet.
+
+    One cap for both ways a sale's money goes back (B3 recheck): a return at the till pays cash
+    out of a drawer, a reader refund puts it back on the card. Each checked only itself, so a 100
+    card sale could be returned for 100 cash and refunded 100 on the card as well."""
+    from sqlalchemy import func
+
+    from backend.models import ClientReturn, GiftCardLedger, Refund
+    rows = (await db.execute(select(TerminalCharge.amount, TerminalCharge.refunded_amount).where(
+        TerminalCharge.sale_id == sale.id, TerminalCharge.status == "succeeded"))).all()
+    card_in = q2(sum(float(a or 0) for a, _ in rows))
+    card_back = q2(sum(float(r or 0) for _, r in rows))
+    gift = -float((await db.execute(select(func.coalesce(func.sum(GiftCardLedger.amount), 0.0)).where(
+        GiftCardLedger.ref_type == "sale", GiftCardLedger.ref_id == sale.id))).scalar_one() or 0)
+    # A reader charge can carry a tip above the total; a sale paid at the till took the total.
+    taken = max(q2(float(sale.total or 0) - gift), card_in) if sale.paid else card_in
+    returned = (await db.execute(select(func.coalesce(func.sum(Refund.amount), 0.0))
+                                 .join(ClientReturn, Refund.return_id == ClientReturn.id)
+                                 .where(ClientReturn.sale_id == sale.id, Refund.voided_at.is_(None)))).scalar() or 0
+    return q2(max(taken - float(returned) - card_back, 0.0))
 
 
 # ── Webhooks ─────────────────────────────────────────────────────────────────

@@ -132,15 +132,24 @@ def line_tax(*, qty, unit_price, discount=0.0, discount_type=None, tax_rate=0.0,
 
 
 async def pos_line_tax(db: AsyncSession, org_id: str, *, kind: str, ref_id: str | None,
-                       net_amount: float, location_id: str | None = None) -> dict:
+                       net_amount: float, location_id: str | None = None,
+                       category_id: str | None = None) -> dict:
     """Tax for one POS (counter sale) line: the org's sales stack with product/service exceptions,
     the same rules a work order line uses. Returns {"rate", "mode", "tax_id", "amount"}; for an
     imposed tax `amount` is added on top of net_amount, for an included tax it is the VAT inside it.
 
     Kept public for the POS screen's quote dry-run (stream C): call it per cart line."""
     item_type = "product" if kind == "product" else ("service" if kind == "service" else None)
+    if category_id is None and ref_id and item_type:
+        # The sale's price follows a category tax exception (sales._price_sale), so the line's stored
+        # tax must too, or {Product Tax Amount} and the receipt lines disagree with the total (B5).
+        from backend.models import Part, Service
+        model = Part if item_type == "product" else Service
+        category_id = (await db.execute(select(model.category_id).where(
+            model.id == ref_id, model.org_id == org_id))).scalar()
     res = await resolve_taxes(db, org_id, doc_family="tickets_sales", net_amount=float(net_amount or 0),
-                              item_type=item_type, item_id=ref_id, location_id=location_id)
+                              item_type=item_type, item_id=ref_id, category_id=category_id,
+                              location_id=location_id)
     taxes = res.get("taxes") or []
     if res.get("exempt") or not taxes:
         return {"rate": 0.0, "mode": "imposed", "tax_id": None, "amount": 0.0}
