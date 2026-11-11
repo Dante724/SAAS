@@ -11,6 +11,7 @@ from sqlalchemy import event, select
 
 from backend.models import Order, OrderLine, Part, Sale
 from backend.services.order_money import balance_due
+from backend.tests.shop_day import shop_today_for
 
 
 async def _setup(client):
@@ -333,7 +334,7 @@ async def test_revenue_and_receivables_are_summed_in_the_database(client, db):
 
 async def _total_profit(client, H):
     from backend.services.dates import now_utc
-    day = now_utc().date().isoformat()
+    day = (await shop_today_for(client, H)).isoformat()
     r = await client.get(f"/api/reports/total-profit?date_from=2026-01-01&date_to={day}", headers=H)
     assert r.status_code == 200, r.text
     return r.json()
