@@ -275,6 +275,8 @@ async def create_intent(db: AsyncSession, *, org_id: str, order_id: Optional[str
         if not o:
             from fastapi import HTTPException
             raise HTTPException(404, "Order not found")
+        from backend.services.order_money import refuse_archived
+        refuse_archived(o)
         description = f"Order {o.order_number}"
         from backend.services.order_money import primary_invoice
         inv = await primary_invoice(db, order_id)

@@ -446,6 +446,9 @@ async def create_invoice(
             raise HTTPException(404, "Client not found")
     by_id = {o.id: o for o in (await db.execute(select(Order).where(Order.id.in_(order_ids)))).scalars().all()} \
         if order_ids else {}
+    from backend.services.order_money import refuse_archived
+    for o in by_id.values():
+        refuse_archived(o)
     # A job is billed once. A second click on "Create invoice" gets the job's invoice back (200)
     # while that invoice still follows the job; once it has been sent or paid it froze the lines it
     # bills, and a new invoice bills only the lines added since.
@@ -502,6 +505,8 @@ async def attach_order(
         Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    from backend.services.order_money import refuse_archived
+    refuse_archived(order)
     from backend.services import invoice_money
     if invoice_money.is_locked(inv):
         raise HTTPException(409, "This invoice has been sent or paid. Bill this job on a new invoice.")
@@ -675,6 +680,13 @@ async def _record_payment(invoice_id: str, data: "PaymentIn", db: AsyncSession, 
         raise HTTPException(404, "Invoice not found")
     if inv.status in ("cancelled", "canceled"):
         raise HTTPException(409, "This invoice was deleted and can't take payments")
+    # Archiving cancels a job's own invoice unless money sits on it; one left that bills only
+    # deleted jobs takes no more. (A shared invoice with a live job still does.)
+    from backend.services.invoicing import invoice_orders
+    from backend.services.order_money import refuse_archived
+    jobs = await invoice_orders(db, inv)
+    if jobs and all(getattr(j, "archived", False) for j in jobs):
+        refuse_archived(jobs[0])
     from backend.services.credit_notes import reader_busy
     if await reader_busy(db, inv):          # the card on the reader would collect it a second time
         raise HTTPException(409, "A card reader charge for this invoice is still in progress. "

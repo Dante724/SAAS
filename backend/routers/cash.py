@@ -708,7 +708,8 @@ async def _pay_order(order_id: str, data: OrderPaymentIn, db: AsyncSession, curr
     if not o:
         raise HTTPException(404, "Order not found")
     # remaining = total minus everything already paid, net of refunds and credit notes (shared definition)
-    from backend.services.order_money import balance_due, cancel_open_pay_links, reader_charge_in_flight
+    from backend.services.order_money import balance_due, cancel_open_pay_links, reader_charge_in_flight, refuse_archived
+    refuse_archived(o)
     if await reader_charge_in_flight(db, order_id):
         raise HTTPException(409, "A card reader charge for this order is still in progress. "
                                  "Finish or cancel it on the reader first.")
@@ -807,6 +808,8 @@ async def _prepay_order(order_id: str, data: PrepayIn, db: AsyncSession, current
     from backend.services.invoice_money import lock_order
     await lock_order(db, o.id)
     await db.refresh(o)
+    from backend.services.order_money import refuse_archived
+    refuse_archived(o)
     if data.amount <= 0:
         raise HTTPException(400, "Amount must be positive")
     acc = (await db.execute(select(Account).where(Account.id == data.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
@@ -905,6 +908,8 @@ async def create_sub_invoice(
     o = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
+    from backend.services.order_money import refuse_archived
+    refuse_archived(o)
     lines = (await db.execute(select(OrderLine).where(OrderLine.order_id == order_id))).scalars().all()
     # A line is billed once. No lines picked = bill the rest (every line not on an invoice yet).
     from backend.services.invoice_money import billed_on, lock_order
