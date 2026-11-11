@@ -70,7 +70,7 @@ async def _text_vars(db, org_id: str, o: Order, base_url: str = "") -> dict:
     base = base_url.rstrip("/")
     out = {}
     for k, v in doc.items():
-        if isinstance(v, _Html) or "<" in str(v):
+        if not k.startswith("{") or isinstance(v, _Html) or "<" in str(v):
             continue
         v = str(v)
         if base and v.startswith(("/track/", "/pay/", "/portal/", "/feedback/")):
