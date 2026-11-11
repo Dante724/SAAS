@@ -50,6 +50,9 @@ jobs:
             echo "PUBLIC_BASE_URL=http://localhost:8000"
             echo "SMTP_HOST=smtp.invalid"
             echo "SMTP_FROM=ci@tekly.invalid"
+            # One container hit directly on localhost: no balancer in front and one worker, no Redis.
+            echo "NO_REVERSE_PROXY=true"
+            echo "SINGLE_WORKER=true"
             # Subscription billing is required in production; placeholder test-mode values (never called in CI).
             echo "STRIPE_BILLING_SECRET_KEY=sk_test_ci_placeholder"
             echo "STRIPE_BILLING_WEBHOOK_SECRET=whsec_ci_placeholder"
