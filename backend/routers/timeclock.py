@@ -895,9 +895,15 @@ async def my_work(
         mine = [order_by_id[oid] for oid in my_order_ids if oid in order_by_id]
         clients = await names_by_id(db, Client.id, Client.name, [o.client_id for o in mine],
                                     org_col=Client.org_id, org_id=current.org_id)
-        dev_ids = {o.device_id for o in mine if o.device_id}
+        # devices joined on the same subquery: an IN list of the tech's device ids still hit
+        # "too many SQL variables" for a tech with 33k open jobs (imported, never closed)
         devices = {d.id: d for d in (await db.execute(select(Device).where(
-            Device.org_id == current.org_id, Device.id.in_(dev_ids)))).scalars().all()} if dev_ids else {}
+            Device.org_id == current.org_id,
+            Device.id.in_(select(Order.device_id).where(Order.id.in_(mine_orders)))))).scalars().all()}
+        lines_by_order: dict = {}
+        for ln in my_lines:
+            lines_by_order.setdefault(ln["order_id"], []).append(ln)
+        next_by_status: dict = {}   # the next step depends only on the status: worked out once each
         for oid in my_order_ids:
             o = order_by_id.get(oid)
             if not o:
@@ -905,13 +911,16 @@ async def my_work(
             cur = by_key.get(o.status)
             nxt = None
             if cur and not cur.is_terminal:
-                # B11: the next step is the next main-path status this role may move to. A
-                # "pending" status (Waiting parts…) is a detour, not the next step for every job.
-                later = [s for s in wf if s.sort_order > cur.sort_order]
-                ok = [s for s in later if await is_transition_allowed(
-                    db, current.org_id, current.role_id, o.status, s.key)]
-                nxt = next((s for s in ok if not s.is_terminal and s.status_group != "pending"), None) \
-                    or next((s for s in ok if not s.is_terminal), None) or next(iter(ok), None)
+                if o.status not in next_by_status:
+                    # B11: the next step is the next main-path status this role may move to. A
+                    # "pending" status (Waiting parts…) is a detour, not the next step for every job.
+                    later = [s for s in wf if s.sort_order > cur.sort_order]
+                    ok = [s for s in later if await is_transition_allowed(
+                        db, current.org_id, current.role_id, o.status, s.key)]
+                    next_by_status[o.status] = \
+                        next((s for s in ok if not s.is_terminal and s.status_group != "pending"), None) \
+                        or next((s for s in ok if not s.is_terminal), None) or next(iter(ok), None)
+                nxt = next_by_status[o.status]
             dv = devices.get(o.device_id)
             done, total = prog.get(oid, (0, 0))
             orders.append({
@@ -923,7 +932,7 @@ async def my_work(
                 "checklist_done": done, "checklist_total": total,
                 "client": clients.get(o.client_id),
                 "device": (" ".join(x for x in [dv.brand, dv.model] if x) or dv.serial) if dv else None,
-                "lines": [l for l in my_lines if l["order_id"] == oid],
+                "lines": lines_by_order.get(oid, []),
             })
 
     return {"today_seconds": today_s, "week_seconds": week_s,

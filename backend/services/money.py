@@ -22,8 +22,11 @@ _TT = Decimal("0.0001")
 
 
 def d2(x) -> Decimal:
-    """Quantize to 2dp as an exact Decimal, round-half-up. Accepts float/int/str/Decimal/None (0)."""
-    return dec(x).quantize(_CENT, rounding=ROUND_HALF_UP)
+    """Quantize to 2dp as an exact Decimal, round-half-up. Accepts float/int/str/Decimal/None (0).
+    NaN/Infinity pass through unchanged (Infinity can't be quantized): inputs refuse them, and one
+    stored before B9 goes out as null, so reading it must not fail (core/finite_numbers.py)."""
+    d = dec(x)
+    return d.quantize(_CENT, rounding=ROUND_HALF_UP) if d.is_finite() else d
 
 
 def q2(x) -> float:

@@ -19,6 +19,7 @@ from backend.models import (
     Employee,
     EventFeedItem,
     Invoice,
+    Location,
     NotificationPreference,
     Order,
     OrderComment,
@@ -28,6 +29,8 @@ from backend.models import (
 )
 from backend.services.auth import get_current_employee, record_scope
 from backend.services.dates import now_utc, shop_tzname, today_in, wall_now_for
+
+LIST_CAP = 100   # cards per list on Today; the stats still count every job
 
 router = APIRouter(prefix="/api/tech", tags=["technician"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -69,8 +72,9 @@ async def dashboard(
             OrderStatus.org_id == current.org_id, OrderStatus.is_terminal == True)  # noqa: E712
     )).scalars().all())
 
-    # Open jobs are loaded; finished ones are only counted, plus the 25 shown. A tech with
-    # years of closed jobs used to load every one of them on each open of Today.
+    # Every list is counted in SQL and only its first rows are loaded. A tech with years of
+    # closed jobs, or a solo owner with 33k imported jobs never closed, used to load all of them
+    # (8.5s, 33,500 orders plus their clients and devices) on each open of Today.
     base = and_(Order.org_id == current.org_id, Order.assigned_to_id == current.id,
                 Order.is_estimate == False)  # noqa: E712
     done_cond = Order.closed_at.isnot(None)
@@ -78,24 +82,29 @@ async def dashboard(
         done_cond = or_(done_cond, Order.status.in_(terminal_keys))
     order_by = (Order.scheduled_for.is_(None), Order.scheduled_for, Order.created_at)
     cards = (selectinload(Order.client), selectinload(Order.device))
-    open_jobs = (await db.execute(
-        select(Order).where(base, ~done_cond).options(*cards).order_by(*order_by))).scalars().all()
-    completed = (await db.execute(
-        select(Order).where(base, done_cond).options(*cards).order_by(*order_by).limit(25))).scalars().all()
-    completed_n = (await db.execute(select(func.count()).select_from(Order).where(base, done_cond))).scalar() or 0
-
-    today, upcoming, overdue = [], [], []
-    wall_now = await wall_now_for(db, current.org_id)   # due_at is shop wall-clock, not UTC
-    for o in open_jobs:
-        if o.due_at and o.due_at < wall_now(o.location_id):
-            overdue.append(o)
-        sched = o.scheduled_for
-        if sched and today_start <= sched < today_end:
-            today.append(o)
-        elif sched and sched >= today_end:
-            upcoming.append(o)
-        else:
-            today.append(o)  # unscheduled, or scheduled on an earlier day and still open: carry it over
+    # due_at is shop wall-clock, so "overdue" compares it with now on each branch's own clock.
+    wall_now = await wall_now_for(db, current.org_id)
+    loc_ids = (await db.execute(select(Location.id).where(Location.org_id == current.org_id))).scalars().all()
+    by_now: dict = {}
+    for lid in loc_ids:
+        by_now.setdefault(wall_now(lid), []).append(lid)
+    overdue_cond = or_(and_(Order.location_id.is_(None), Order.due_at < wall_now(None)),
+                       *[and_(Order.location_id.in_(ids), Order.due_at < wn) for wn, ids in by_now.items()])
+    groups = {
+        # unscheduled, or scheduled on an earlier day and still open, carries over to today
+        "today": and_(base, ~done_cond, or_(Order.scheduled_for.is_(None), Order.scheduled_for < today_end)),
+        "upcoming": and_(base, ~done_cond, Order.scheduled_for >= today_end),
+        "overdue": and_(base, ~done_cond, overdue_cond),
+        "completed": and_(base, done_cond),
+    }
+    lists, counts = {}, {}
+    for key, cond in groups.items():
+        cap = 25 if key == "completed" else LIST_CAP
+        lists[key] = (await db.execute(select(Order).where(cond).options(*cards)
+                                       .order_by(*order_by).limit(cap))).scalars().all()
+        counts[key] = (await db.execute(select(func.count()).select_from(Order).where(cond))).scalar() or 0
+    today, upcoming, overdue, completed = lists["today"], lists["upcoming"], lists["overdue"], lists["completed"]
+    completed_n = counts["completed"]
 
     running = (await db.execute(
         select(TimeEntry).where(and_(
@@ -119,9 +128,9 @@ async def dashboard(
         "completed": [_card(o) for o in completed],
         "overdue": [_card(o) for o in overdue],
         "stats": {
-            "today": len(today), "upcoming": len(upcoming),
-            "completed": completed_n, "overdue": len(overdue),
-            "assigned_total": len(open_jobs) + completed_n,
+            "today": counts["today"], "upcoming": counts["upcoming"],
+            "completed": completed_n, "overdue": counts["overdue"],
+            "assigned_total": counts["today"] + counts["upcoming"] + completed_n,
         },
         "clock": {
             "clocked_in": running is not None,

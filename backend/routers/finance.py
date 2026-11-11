@@ -1,3 +1,4 @@
+import math
 from fastapi import APIRouter, Depends, HTTPException, Query, Body, Request, Response
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import select, func
@@ -825,6 +826,8 @@ def _denoms_total(d: Optional[dict]) -> float:
             total += float(k) * float(n)
         except (TypeError, ValueError):
             continue
+    if not math.isfinite(total):    # {"nan": 1} or {"20": "inf"}: refused, not saved as NaN (B9)
+        raise HTTPException(422, "Denominations and counts must be real numbers")
     return q2(total)
 
 
@@ -1100,7 +1103,8 @@ async def drawer_movement(
 @router.post("/shifts/{shift_id}/close")
 async def close_shift(
     shift_id: str,
-    closing_float: Optional[float] = Query(None),   # back-compat; or send a body with denoms
+    # back-compat; or send a body with denoms. B9: ?closing_float=nan saved NaN and broke the shifts list
+    closing_float: Optional[float] = Query(None, allow_inf_nan=False),
     data: Optional[ShiftCloseIn] = Body(None),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_cashbox")),

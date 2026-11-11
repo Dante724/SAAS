@@ -156,11 +156,18 @@ async def lifespan(app: FastAPI):
 _docs_kwargs = {} if not settings.is_deployed else {
     "docs_url": None, "redoc_url": None, "openapi_url": None,
 }
+from backend.core.finite_numbers import (  # noqa: E402
+    FiniteJSONResponse,
+    NonFiniteJsonMiddleware,
+    too_large_number_handler,
+)
+
 app = FastAPI(
     title="Tekly API",
     description="Orderry-style repair shop management",
     version="0.1.0",
     lifespan=lifespan,
+    default_response_class=FiniteJSONResponse,   # B9: a stored NaN goes out as null, not a 500
     **_docs_kwargs,
 )
 
@@ -192,10 +199,11 @@ from backend.core.observability import (  # noqa: E402
 app.add_middleware(SecurityHeadersMiddleware)
 app.add_middleware(MetricsMiddleware)
 app.add_middleware(RateLimitMiddleware, window_s=60)  # limits: settings.RATE_LIMIT_*_PER_MIN
-from backend.core.finite_numbers import NonFiniteJsonMiddleware  # noqa: E402
+from decimal import InvalidOperation  # noqa: E402
 
 # Inside the size cap: a JSON body with a bare NaN / Infinity token is refused (B9).
 app.add_middleware(NonFiniteJsonMiddleware)
+app.add_exception_handler(InvalidOperation, too_large_number_handler)   # 1e307 can't round to cents
 from backend.core.body_limit import BodySizeLimitMiddleware
 
 # Inside CORS so a 413 still carries CORS headers and the browser can show the message.

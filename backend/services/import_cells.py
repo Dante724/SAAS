@@ -15,6 +15,7 @@ same rules:
 """
 import csv
 import io
+import math
 import re
 from datetime import date, datetime, timedelta
 from typing import Optional
@@ -155,7 +156,19 @@ _SCI = re.compile(r"^[+-]?\d+(?:[.,]\d+)?[eE][+-]?\d+$")
 _EXCEL_SCI = re.compile(r"^[+-]?\d+(?:[.,]\d+)?[eE]\+\d+$|^[+-]?\d+[.,]\d+[eE]-?\d+$")
 
 
+# No price, cost or quantity a shop types is near this; 1e999 overflowed to inf and a cell like
+# 1e300 can't round to cents, and either made the whole import a 500 instead of a row error (B9).
+_MAX_NUMBER = 1e15
+
+
 def to_number(s: str, label: str) -> float:
+    n = _parse_number(s, label)
+    if not math.isfinite(n) or abs(n) >= _MAX_NUMBER:
+        raise CellError(f"{label} is too large (got '{s}')")
+    return n
+
+
+def _parse_number(s: str, label: str) -> float:
     raw = (s or "").strip()
     if _SCI.match(raw):
         return float(raw.replace(",", "."))

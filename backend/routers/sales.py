@@ -1,4 +1,5 @@
 """Sales (over-the-counter POS) + Stocktake (count → variance → adjust)."""
+import math
 from datetime import datetime
 from decimal import Decimal
 from typing import Optional
@@ -1844,6 +1845,8 @@ async def import_counts(
         try:
             qty = float(str(q_raw).strip().replace(",", "."))
         except (TypeError, ValueError):
+            qty = math.nan
+        if not math.isfinite(qty):          # "nan" / "inf" parse as floats (B9)
             errors.append({"row": i + 1, "error": "Quantity isn't a number"})
             continue
         if qty < 0:
