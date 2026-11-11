@@ -27,6 +27,7 @@ VALID_KINDS = {
     "estimate.approved", "appointment.cancelled", "payment.received",
     "inventory.reorder", "membership.alert",
     "task.assigned", "task.changed", "task.completed",   # tasks phase 0: tasks reach the bell
+    "task.overdue",                                      # tk02: the overdue sweep
 }
 
 
@@ -52,7 +53,8 @@ async def notify(db: AsyncSession, *, org_id: str, employee_id: str, kind: str,
         await db.refresh(n)
     await _dispatch_push(db, employee_id, {
         "title": title, "body": body, "kind": kind,
-        "deep_link": deep_link or "/tech", "id": n.id,
+        # "url" mirrors deep_link for clients that look for the conventional key
+        "deep_link": deep_link or "/tech", "url": deep_link or "/tech", "id": n.id,
     })
     return n
 

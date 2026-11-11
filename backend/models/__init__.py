@@ -115,6 +115,9 @@ class Organisation(Base):
     # Build 144ah — POs whose total exceeds this need a manager (role with can_manage_settings)
     # to send. 0/None disables the gate.
     po_approval_threshold: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
+    # tk02: how a task_closed commission is paid when a task has several assignees:
+    # split (default; null reads as split) | each_full | first_only (the primary owner, the old way).
+    task_commission_mode: Mapped[Optional[str]] = mapped_column(String(12))
     payment_provider: Mapped[str] = mapped_column(String(20), default="auto")  # auto|stripe|square|sumup|simulated
     loyalty_earn_rate: Mapped[float] = mapped_column(Float, default=0.0)   # points per 1.00 paid; 0 = program off
     loyalty_point_value: Mapped[float] = mapped_column(Numeric(12, 4, asdecimal=False), default=0.0)  # currency value of 1 point at redemption
@@ -1781,6 +1784,10 @@ def normalise_task_priority(value) -> int:
     return n
 
 
+TASK_OVERDUE_PENDING_WHERE = ("archived_at IS NULL AND overdue_alerted_at IS NULL AND due_at IS NOT NULL "
+                              "AND status NOT IN ('done', 'cancelled')")
+
+
 class Task(OrgScoped, Base):
     __tablename__ = "tasks"
     __table_args__ = (
@@ -1791,6 +1798,22 @@ class Task(OrgScoped, Base):
                                 "AND status NOT IN ('done', 'cancelled')"),
               postgresql_where=text("source_ref IS NOT NULL AND archived_at IS NULL "
                                     "AND status NOT IN ('done', 'cancelled')")),
+        # tk02: the list, My day and the counts all filter a shop's live tasks by status and due date.
+        Index("ix_tasks_org_live_due", "org_id", "archived_at", "status", "due_at"),
+        # tk02: My day's "done today".
+        Index("ix_tasks_org_completed", "org_id", "completed_at"),
+        # tk02: the overdue sweep reads only open tasks not yet alerted, across shops, by due time.
+        Index("ix_tasks_overdue_pending", "due_at",
+              sqlite_where=text(TASK_OVERDUE_PENDING_WHERE),
+              postgresql_where=text(TASK_OVERDUE_PENDING_WHERE)),
+        # tk02: "assigned to me / made by me" (My day, staff visibility). The three arms of that OR
+        # each have an index, so Postgres can BitmapOr them instead of filtering the whole shop.
+        Index("ix_tasks_org_assignee", "org_id", "assigned_to_id"),
+        Index("ix_tasks_org_creator", "org_id", "created_by_id"),
+        # assignee_ids is JSON: containment (@>) on its jsonb cast. Postgres only; SQLite matches
+        # the quoted id in the JSON text (services/task_visibility.list_has).
+        Index("ix_tasks_assignee_ids_gin", text("(assignee_ids::jsonb) jsonb_path_ops"),
+              postgresql_using="gin").ddl_if(dialect="postgresql"),
     )
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
@@ -1826,6 +1849,8 @@ class Task(OrgScoped, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=_now, onupdate=_now)
     archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime)   # tk01: soft delete (restore clears it)
+    # tk02: when the assignees were told the task is overdue (once); cleared when due_at moves later.
+    overdue_alerted_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     assigned_employee: Mapped[Optional["Employee"]] = relationship(back_populates="tasks", foreign_keys=[assigned_to_id])
     order: Mapped[Optional["Order"]] = relationship(back_populates="tasks")
 
@@ -3676,6 +3701,21 @@ class AutomationFire(OrgScoped, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
+class TaskOverdueAlert(OrgScoped, Base):
+    """tk02: one assignee was told a task is overdue, for its current due time. The unique pair is
+    the database guard that makes the overdue sweep send at most one alert per person per overdue
+    spell (a second worker or a retried tick inserts nothing and sends nothing). Rows are deleted
+    when the due time moves later, which re-arms the alert; someone added later has no row yet and
+    gets their own alert."""
+    __tablename__ = "task_overdue_alerts"
+    __table_args__ = (UniqueConstraint("task_id", "employee_id", name="uq_task_overdue_alerts_task_employee"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    task_id: Mapped[str] = mapped_column(String, ForeignKey("tasks.id", ondelete="CASCADE"))
+    employee_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id", ondelete="CASCADE"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
 all_models = [
     Organisation, Location, Role, Employee, Shift, WageRecord,
     Client, Device, OrderStatus, Order, OrderLine, OrderItem, OrderStatusLog, OrderComment,
@@ -3701,7 +3741,7 @@ all_models = [
     EmailConnection,
     PriceTypeItem,
     NotificationPreference,
-    AutomationRule, AutomationFire,
+    AutomationRule, AutomationFire, TaskOverdueAlert,
 ]
 
 

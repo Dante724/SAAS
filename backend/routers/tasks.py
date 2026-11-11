@@ -7,11 +7,12 @@ event feed for comments and files. Completion records whether it landed **on tim
 which is what makes tasks payable (build 70's `term_condition` machinery).
 """
 import logging
+from datetime import datetime, time, timedelta, timezone
 from typing import Optional, Union
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator
-from sqlalchemy import String, and_, case, cast, func, or_, select
+from sqlalchemy import and_, case, func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import aliased
 
@@ -27,12 +28,32 @@ from backend.models import (
     normalise_task_priority,
 )
 from backend.services.auth import get_current_employee, has_perm
-from backend.services.dates import now_utc, parse_dt
+from backend.services.dates import (
+    day_end_utc,
+    day_start_utc,
+    now_utc,
+    parse_date,
+    parse_dt,
+    range_edge,
+    shop_tzname,
+    today_in,
+    utc_to_wall,
+    wall_to_utc,
+)
+from backend.services.task_visibility import (
+    assigned_sql,
+    involves_sql,
+    own_day_sql,
+    sees_all,
+    visibility_conds,
+)
 
 router = APIRouter(prefix="/api/tasks", tags=["tasks"])
 log = logging.getLogger("tekly.tasks")
 
 STATUSES = list(TASK_STATUSES)   # todo|in_progress|done|cancelled
+END_OF_DAY = time(23, 59, 59)    # a date-only due date is the end of that shop day (range_edge)
+MY_DAY_CAP = 100                 # rows per My day list; counts are always the true totals
 
 
 def _ser(t: Task, names: dict | None = None) -> dict:
@@ -65,16 +86,48 @@ async def _names(db: AsyncSession, org_id: str) -> dict:
         Employee.org_id == org_id))).scalars().all()}
 
 
-def _involves_sql(emp_id: str):
-    """SQL twin of _involves: primary owner, author, or one of the extra assignees. assignee_ids
-    is a JSON list of ids; matching the quoted id in its text form works on SQLite and Postgres."""
-    return or_(Task.assigned_to_id == emp_id, Task.created_by_id == emp_id,
-               cast(Task.assignee_ids, String).contains(f'"{emp_id}"', autoescape=True))
+async def _items(db: AsyncSession, org_id: str, rows) -> list[dict]:
+    """List items for `rows` with names, job numbers and client names batch-loaded (three queries
+    whatever the row count). The one shape GET /api/tasks and My day both return."""
+    names = await _names(db, org_id)
+    numbers = await _order_numbers(db, org_id, [t.order_id for t in rows])
+    clients = await _client_names(db, org_id, rows)
+    return [{**_ser(t, names), "order_number": numbers.get(t.order_id),
+             "client_name": clients.get(t.id)} for t in rows]
 
 
-def _assigned_sql(emp_id: str):
-    return or_(Task.assigned_to_id == emp_id,
-               cast(Task.assignee_ids, String).contains(f'"{emp_id}"', autoescape=True))
+async def _shop_tz(db: AsyncSession, org_id: str) -> str:
+    """The clock a task's day is counted on: the shop's zone, the same rule the reports use for a
+    date-only day (dates.shop_tzname with no branch filter; Asia/Kolkata for a new shop, UTC when
+    unset or unknown)."""
+    return await shop_tzname(db, org_id)
+
+
+async def _parse_due(db: AsyncSession, current: Employee, value) -> Optional[datetime]:
+    """due_at from a request, as the naive UTC instant tasks store. A date alone (YYYY-MM-DD) is
+    the end of that shop day (23:59:59, dates.range_edge, as the reports read a "To" date); a
+    datetime with an offset is converted to UTC; a datetime without one is taken as given (as
+    before). Empty clears it; anything else is a 400."""
+    if not value:
+        return None
+    v = str(value).strip()
+    if len(v) == 10:
+        parse_date(v, "due_at")   # a clean 400 for a malformed date
+        return range_edge(v, await _shop_tz(db, current.org_id), end=True)
+    dt = parse_dt(v, "due_at")
+    if dt.tzinfo is not None:
+        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return dt
+
+
+def _set_due(t: Task, new_due: Optional[datetime]) -> bool:
+    """Change the due time. Moving it later (or clearing it) re-arms the overdue alert: returns
+    True when the caller must also forget who was told (task_alerts.rearm)."""
+    rearm = new_due is None or t.due_at is None or new_due > t.due_at
+    if rearm:
+        t.overdue_alerted_at = None
+    t.due_at = new_due
+    return rearm
 
 
 @router.get("")
@@ -107,7 +160,8 @@ async def list_tasks(
     With no parameters the response keeps its old shape: every live task, plus `statuses`."""
     oc = aliased(Client)
     cond = [Task.org_id == current.org_id,
-            Task.archived_at.is_not(None) if archived else Task.archived_at.is_(None)]
+            Task.archived_at.is_not(None) if archived else Task.archived_at.is_(None),
+            *await visibility_conds(db, current)]
     if status:
         cond.append(Task.status.in_([x.strip() for x in status.split(",") if x.strip()]))
     if assigned_to_id:
@@ -119,9 +173,9 @@ async def list_tasks(
     if overdue:
         cond += [Task.completed_at.is_(None), Task.status.notin_(TASK_CLOSED), Task.due_at < now_utc()]
     if mine or (assignee or "").strip().lower() == "me":
-        cond.append(_involves_sql(current.id))
+        cond.append(involves_sql(current.id))
     elif assignee and assignee.strip():
-        cond.append(_assigned_sql(assignee.strip()))
+        cond.append(assigned_sql(assignee.strip()))
     if priority not in (None, ""):
         try:
             levels = sorted({normalise_task_priority(x.strip()) for x in priority.split(",") if x.strip()})
@@ -147,13 +201,7 @@ async def list_tasks(
     if offset:
         ordered = ordered.offset(offset)
     rows = (await db.execute(ordered)).scalars().all()
-
-    names = await _names(db, current.org_id)
-    numbers = await _order_numbers(db, current.org_id, [t.order_id for t in rows])
-    clients = await _client_names(db, current.org_id, rows)
-    out = {"items": [{**_ser(t, names), "order_number": numbers.get(t.order_id),
-                      "client_name": clients.get(t.id)} for t in rows],
-           "statuses": STATUSES, "total": total}
+    out = {"items": await _items(db, current.org_id, rows), "statuses": STATUSES, "total": total}
     if limit is not None:
         out.update(limit=clamp(limit), offset=offset)
     return out
@@ -274,7 +322,7 @@ async def _create_task(data: TaskIn, ids: list, primary, db: AsyncSession, curre
         order_id=data.order_id, client_id=data.client_id, lead_id=data.lead_id,
         location_id=data.location_id or current.location_id,
         parent_task_id=data.parent_task_id, priority=data.priority,
-        due_at=parse_dt(data.due_at, "due_at") if data.due_at else None,
+        due_at=await _parse_due(db, current, data.due_at),
         status="todo", source=source)
     db.add(t)
     await db.flush()
@@ -284,6 +332,158 @@ async def _create_task(data: TaskIn, ids: list, primary, db: AsyncSession, curre
     await db.refresh(t)
     return {**_ser(t, await _names(db, current.org_id)),
             "order_number": (await _order_numbers(db, current.org_id, [t.order_id])).get(t.order_id)}
+
+
+# ── My day ───────────────────────────────────────────────────────────────────
+MY_DAY_BUCKETS = ("catch_up", "today", "upcoming", "later", "done_today")
+
+
+@router.get("/my-day")
+async def my_day(
+    assignee: str = Query("me", max_length=64),
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """One person's day on the shop's clock (dates.shop_tzname: the shop's zone, as the reports).
+
+    assignee  "me" (default): tasks assigned to me (primary or extra assignee) plus unassigned
+              tasks I made (my own to-dos). Your own id is the same as "me".
+              "<employee_id>": that person's day, same rule. "all": every live task in the shop.
+              Both need can_assign_staff (403 otherwise); an id that isn't an employee of this
+              shop is a 404 (another shop's employee looks exactly like a missing one).
+    Buckets (open = todo or in_progress, not deleted):
+      catch_up    open, due before today's start           oldest due first, then priority
+      today       open, due today                          by due time, then priority (high first)
+      upcoming    open, due in the 7 days after today      by due time, then priority
+      later       open, no due date or due after that      newest first
+      done_today  status done, completed today             most recent first
+    Each list holds at most 100 items (the GET /api/tasks item shape); `counts` are true totals.
+    One query ranks and counts every bucket (window functions); names, job numbers and clients are
+    then batch-loaded for all rows at once."""
+    tz = await _shop_tz(db, current.org_id)
+    today = today_in(tz)
+    t0, t1 = day_start_utc(today, tz), day_end_utc(today, tz)
+    t8 = day_end_utc(today + timedelta(days=7), tz)
+
+    who = (assignee or "me").strip() or "me"
+    cond = [Task.org_id == current.org_id, Task.archived_at.is_(None)]
+    if who in ("me", current.id):
+        cond.append(own_day_sql(current.id))
+    elif not await sees_all(db, current):
+        raise HTTPException(403, "Only a manager can see someone else's day.")
+    elif who != "all":
+        known = (await db.execute(select(Employee.id).where(
+            Employee.id == who, Employee.org_id == current.org_id))).scalar_one_or_none()
+        if not known:
+            raise HTTPException(404, "Employee not found")
+        cond.append(own_day_sql(who))
+
+    is_open = Task.status.notin_(TASK_CLOSED)
+    done_today = and_(Task.status == "done", Task.completed_at >= t0, Task.completed_at < t1)
+    bucket = case(
+        (and_(is_open, Task.due_at < t0), "catch_up"),
+        (and_(is_open, Task.due_at < t1), "today"),
+        (and_(is_open, Task.due_at < t8), "upcoming"),
+        (is_open, "later"),
+        else_="done_today")
+    dated = bucket.in_(("catch_up", "today", "upcoming"))
+    ranked = (select(
+        Task.id.label("id"), bucket.label("bucket"),
+        func.row_number().over(partition_by=bucket, order_by=(
+            case((dated, Task.due_at)), case((dated, Task.priority), else_=0).desc(),
+            case((bucket == "later", Task.created_at)).desc(),
+            case((bucket == "done_today", Task.completed_at)).desc(), Task.id)).label("rn"),
+        func.count().over(partition_by=bucket).label("total"))
+        .where(*cond, or_(is_open, done_today)).subquery())
+    found = (await db.execute(
+        select(Task, ranked.c.bucket, ranked.c.total).join(ranked, ranked.c.id == Task.id)
+        .where(Task.org_id == current.org_id, ranked.c.rn <= MY_DAY_CAP)
+        .order_by(ranked.c.bucket, ranked.c.rn))).all()
+
+    counts = dict.fromkeys(MY_DAY_BUCKETS, 0)
+    for _t, key, total in found:
+        counts[key] = int(total)
+    items = await _items(db, current.org_id, [t for t, _k, _n in found])
+    out = {"date": today.isoformat(), **{key: [] for key in MY_DAY_BUCKETS}}
+    for (_t, key, _n), item in zip(found, items):
+        out[key].append(item)
+    out["counts"] = counts
+    return out
+
+
+class MoveIn(BaseModel):
+    ids: list[str] = Field(min_length=1, max_length=500)
+
+
+@router.post("/move-to-today")
+async def move_to_today(
+    data: MoveIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """Bring tasks into today (My day's "move all to today"). 1-500 ids (duplicates ignored),
+    else 422.
+
+    Each open task you may change (assigned to you or made by you; any task for a manager) gets
+    today's date on the shop's clock. A task with a time keeps its time of day; one with no due
+    date, or a date-only one (23:59:59), gets the end of today. Moving it later re-arms its overdue
+    alert. Everything else is left alone and listed in `skipped`: ids that are unknown, in another
+    shop, hidden from you, not yours to change, done, cancelled or deleted (one list, so a hidden
+    task looks exactly like a missing one). All in one transaction. One feed line per task; instead
+    of one "Task updated" per task, each other person involved gets a single alert for the move.
+
+    Response: {"moved": n, "skipped": [ids]}"""
+    ids = list(dict.fromkeys(i for i in data.ids if i))
+    cond = [Task.org_id == current.org_id, Task.id.in_(ids), Task.archived_at.is_(None),
+            Task.status.notin_(TASK_CLOSED)]
+    if not await sees_all(db, current):
+        cond.append(involves_sql(current.id))
+    rows = (await db.execute(select(Task).where(*cond).order_by(Task.id))).scalars().all()
+    moved_ids = {t.id for t in rows}
+    skipped = [i for i in ids if i not in moved_ids]
+    if not rows:
+        return {"moved": 0, "skipped": skipped}
+    tz = await _shop_tz(db, current.org_id)
+    today = today_in(tz)
+    from backend.services.notification_rules import task_people
+    from backend.services.task_alerts import rearm
+    told: dict[str, list[Task]] = {}
+    rearmed = []
+    for t in rows:
+        clock = utc_to_wall(t.due_at, tz).time() if t.due_at else END_OF_DAY
+        if _set_due(t, wall_to_utc(datetime.combine(today, clock), tz)):
+            rearmed.append(t.id)
+        await _feed(db, current, t, "Due date moved to today")
+        for person in task_people(t) | ({t.created_by_id} if t.created_by_id else set()):
+            if person != current.id:
+                told.setdefault(person, []).append(t)
+    await rearm(db, current.org_id, rearmed)
+    for person, tasks in told.items():
+        await _notify_moved(db, current, person, tasks)
+    await db.commit()
+    return {"moved": len(rows), "skipped": skipped}
+
+
+async def _notify_moved(db: AsyncSession, current: Employee, person: str, tasks: list) -> None:
+    """One alert per person for a move-to-today batch: the usual "Task updated" when it is one
+    task, else one summary that opens the first of them. Never the person who moved them."""
+    try:
+        if len(tasks) == 1:
+            from backend.services import notification_rules as nr
+            await nr.notify_task_bell(db, org_id=current.org_id, task=tasks[0], event="changed",
+                                      actor_id=current.id, recipients={person})
+            return
+        from backend.models import Employee as _Emp
+        from backend.services.push import notify as push_notify
+        active = (await db.execute(select(_Emp.id).where(
+            _Emp.id == person, _Emp.org_id == current.org_id, _Emp.active == True))).scalar_one_or_none()  # noqa: E712
+        if active:
+            await push_notify(db, org_id=current.org_id, employee_id=person, kind="task.changed",
+                              title="Tasks moved to today",
+                              body=f"{current.name} moved {len(tasks)} tasks to today",
+                              deep_link=f"/tasks?task={tasks[0].id}", commit=False)
+    except Exception:  # noqa: BLE001 — logged; the move still succeeds
+        log.warning("move-to-today notification failed (employee=%s)", person, exc_info=True)
 
 
 @router.get("/{task_id}")
@@ -306,7 +506,7 @@ async def get_task(
         d["client_name"] = c.name if c else None
     d["subtasks"] = [_ser(x) for x in (await db.execute(select(Task).where(
         Task.parent_task_id == t.id, Task.org_id == current.org_id,
-        Task.archived_at.is_(None)))).scalars().all()]
+        Task.archived_at.is_(None), *await visibility_conds(db, current)))).scalars().all()]
     return d
 
 
@@ -363,8 +563,9 @@ async def update_task(
         cur = list(t.assignee_ids or [])
         if data.assigned_to_id and data.assigned_to_id not in cur:
             t.assignee_ids = [data.assigned_to_id] + cur
-    if data.due_at is not None:
-        t.due_at = parse_dt(data.due_at, "due_at") if data.due_at else None
+    if data.due_at is not None and _set_due(t, await _parse_due(db, current, data.due_at)):
+        from backend.services.task_alerts import rearm
+        await rearm(db, current.org_id, [t.id])
     if data.status is not None:
         t.status = data.status
         if data.status == "done" and (prev_status != "done" or not t.completed_at):
@@ -381,12 +582,18 @@ async def update_task(
         elif data.status not in TASK_CLOSED:
             t.completed_at = None
             t.completed_on_time = None
+        if prev_status == "done" and data.status != "done":
+            # reopened or cancelled: take back what closing it paid, per person (closing it again
+            # pays the people assigned then, under <key>@n, so each nets exactly one payout)
+            await _unpay(db, current, t, "reopened" if data.status != "cancelled" else "cancelled")
 
     if data.assigned_to_id is not None and data.assigned_to_id != prev_assignee:
         await _feed(db, current, t, "Assignee changed")
     # Alerts: people who were just added hear "assigned" (once, never again on later edits);
     # other edits are a "changed", which the bell collapses while one is still unread.
     added = task_people(t) - prev_people
+    if added and t.overdue_alerted_at is not None:
+        t.overdue_alerted_at = None   # the overdue sweep alerts the newcomers (only them) next tick
     if added:
         await _notify(db, current, t, "assigned", recipients=added)
     elif data.status is None or data.status == prev_status:
@@ -411,6 +618,8 @@ async def delete_task(
     if t.archived_at is None:
         t.archived_at = now_utc()
         await _feed(db, current, t, "Task deleted")
+        if t.status == "done":
+            await _unpay(db, current, t, "deleted")
         await db.commit()
     return {"ok": True}
 
@@ -430,6 +639,8 @@ async def restore_task(
                 raise HTTPException(409, "An open copy of this automatic task already exists.")
         t.archived_at = None
         await _feed(db, current, t, "Task restored")
+        if t.status == "done":
+            await _pay(db, current, t)   # deleting it took the payout back; restoring pays again
         await db.commit()
         await db.refresh(t)
     return {**_ser(t, await _names(db, current.org_id)),
@@ -491,8 +702,11 @@ async def _check_may_change(db: AsyncSession, current: Employee, t: Task) -> Non
 
 
 async def _load(db: AsyncSession, current: Employee, task_id: str) -> Task:
+    """This shop's task, if the caller may see it (task_visibility); 404 otherwise, never 403,
+    so a hidden task's existence isn't revealed."""
     t = (await db.execute(select(Task).where(
-        Task.id == task_id, Task.org_id == current.org_id))).scalar_one_or_none()
+        Task.id == task_id, Task.org_id == current.org_id,
+        *await visibility_conds(db, current)))).scalar_one_or_none()
     if not t:
         raise HTTPException(404, "Task not found")
     return t
@@ -517,6 +731,16 @@ async def _notify(db: AsyncSession, current: Employee, t: Task, event: str,
                              actor_id=current.id, recipients=recipients)
     except Exception:  # noqa: BLE001
         log.warning("task notification failed (task=%s event=%s)", t.id, event, exc_info=True)
+
+
+async def _unpay(db: AsyncSession, current: Employee, t: Task, reason: str) -> None:
+    """Reverse every person's still-open task_closed commission for this task (reopen, cancel,
+    delete). Failures are logged; the status change still succeeds."""
+    try:
+        from backend.services.payroll import CommissionEngine
+        await CommissionEngine(db, current.org_id).reverse_for_task(t, reason)
+    except Exception:  # noqa: BLE001
+        log.exception("task commission reversal failed (task=%s)", t.id)
 
 
 async def _pay(db: AsyncSession, current: Employee, t: Task) -> None:
