@@ -4,6 +4,7 @@ import { safeHttpsUrl } from "../../lib/safeHtml";
 import { useEffect, useState } from "react";
 import Shell, { M } from "../../components/Shell";
 import { api } from "../../api/client";
+import { fmtServerTime } from "../../lib/serverTime";
 import Pager from "../../components/Pager";
 import { confirmDialog, alertDialog } from "../../lib/dialog";
 import { Link } from "react-router-dom";
@@ -14,7 +15,7 @@ import { PhoneIncoming, PhoneOutgoing } from "lucide-react";
 const CHANNEL: Record<string, string> = { sms: "SMS", email: "Email" };
 const SEGMENT: Record<string, string> = { all: "All clients", loyalty: "Loyalty members", lapsed: "Lapsed clients" };
 const MISSED = ["missed", "no-answer", "no_answer", "failed", "busy", "canceled"];
-const d = (iso?: string) => (iso ? new Date(iso).toLocaleString([], { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }) : "—");
+const d = (iso?: string) => fmtServerTime(iso) || "—";
 
 export default function MarketingHub() {
   const [tab, setTab] = useState<"campaigns" | "calls">("campaigns");

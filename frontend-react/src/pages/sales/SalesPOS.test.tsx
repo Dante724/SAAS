@@ -24,6 +24,7 @@ let products: unknown[] = [CABLE];
 type Call = { method: string; path: string; body: any };
 let calls: Call[] = [];
 let accounts: unknown[] = [];
+let receiptPaid = true;
 // B5: the server prices the cart; by default a plain sum with no tax or rewards.
 const plainQuote = (b: any): Record<string, unknown> => {
   const sub = b.lines.reduce((s: number, l: any) => s + l.unit_price * l.qty, 0);
@@ -44,6 +45,7 @@ beforeEach(() => {
   lookups = [];
   calls = [];
   accounts = [];
+  receiptPaid = true;
   quote = plainQuote;
   products = [CABLE];
   lookupItems = { "0123456789012": [CABLE], "555": [{ ...CABLE, id: "p2", name: "Case red" }, { ...CABLE, id: "p3", name: "Case blue" }] };
@@ -53,13 +55,14 @@ beforeEach(() => {
     const body = init?.body ? JSON.parse(String(init.body)) : null;
     calls.push({ method, path: u.pathname, body });
     if (u.pathname === "/api/sales/quote") return reply(quote(body));
+    if (u.pathname === "/api/cash/accounts" && method === "POST") return reply({ id: "new-till", ...body }, 201);
     if (u.pathname === "/api/cash/accounts") return reply({ items: accounts });
     if (u.pathname === "/api/sales" && method === "POST") {
       const q = quote(body);
       return reply({ id: "s1", sale_number: "S-1", total: q.total, due: q.due, paid: !!body.account_id, redeemed: {}, change_due: q.change_due }, 201);
     }
     if (u.pathname === "/api/sales/s1/pay") return reply({ id: "s1", paid: true, due: 20, change_due: null });
-    if (u.pathname === "/api/sales/s1/receipt") return reply({ sale_number: "S-1", shop_name: "Shop", total: 20, paid: true, lines: [], text: "" });
+    if (u.pathname === "/api/sales/s1/receipt") return reply({ sale_number: "S-1", shop_name: "Shop", total: 20, paid: receiptPaid, lines: [], text: "" });
     if (u.pathname === "/api/sales/lookup") {
       const code = u.searchParams.get("code") || "";
       lookups.push(code);
@@ -385,5 +388,69 @@ describe("SalesPOS charges what the button says (B5)", () => {
     expect(cartLines()).toHaveLength(1);
     await u.click(screen.getByText("Approve card"));
     await waitFor(() => expect(cartLines()).toHaveLength(0));
+  });
+});
+
+// Launch B2: the after-sale dialog says "Sale complete" only when money was taken, and a shop with
+// no cashbox can set one up right in the checkout instead of only parking the sale.
+describe("SalesPOS pay dialog", () => {
+  const chargeNow = () => screen.getByRole("button", { name: /^Charge (?!on reader)/ });
+
+  it("a sale saved to pay later never says Sale complete", async () => {
+    accounts = [{ id: "till", name: "Till", payment_option: "cash" }];
+    receiptPaid = false;
+    const u = userEvent.setup();
+    render(<SalesPOS />);
+    await u.click(await screen.findByText("USB-C cable"));
+    await u.selectOptions(await screen.findByLabelText("Take payment into"), "");
+    await vi.waitFor(() => expect(chargeNow()).toBeEnabled());
+    await u.click(chargeNow());
+    const dlg = await screen.findByRole("dialog", { name: "Receipt" });
+    expect(calls.find((c) => c.path === "/api/sales" && c.method === "POST")!.body.account_id).toBeNull();
+    expect(within(dlg).getByText("Sale saved · not paid")).toBeInTheDocument();
+    expect(within(dlg).queryByText("Sale complete")).not.toBeInTheDocument();
+    expect(within(dlg).getByTestId("receipt-unpaid")).toHaveTextContent("Nothing was charged");
+  });
+
+  it("a paid sale says Sale complete", async () => {
+    accounts = [{ id: "till", name: "Till", payment_option: "cash" }];
+    const u = userEvent.setup();
+    render(<SalesPOS />);
+    await u.click(await screen.findByText("USB-C cable"));
+    await vi.waitFor(() => expect(chargeNow()).toBeEnabled());
+    await u.click(chargeNow());
+    const dlg = await screen.findByRole("dialog", { name: "Receipt" });
+    expect(within(dlg).getByText("Sale complete")).toBeInTheDocument();
+    expect(within(dlg).queryByTestId("receipt-unpaid")).not.toBeInTheDocument();
+  });
+
+  it("with no cashbox, the checkout sets one up inline and charges into it", async () => {
+    const u = userEvent.setup();
+    render(<SalesPOS />);
+    await u.click(await screen.findByText("USB-C cable"));
+    await u.click(await screen.findByRole("button", { name: "Set up a cashbox" }));
+    await vi.waitFor(() => expect(calls.some((c) => c.path === "/api/cash/accounts" && c.method === "POST")).toBe(true));
+    expect(calls.find((c) => c.path === "/api/cash/accounts" && c.method === "POST")!.body).toMatchObject({ name: "Cash drawer", payment_option: "cash" });
+    await vi.waitFor(() => expect(screen.queryByRole("button", { name: "Set up a cashbox" })).not.toBeInTheDocument());
+    expect((screen.getByLabelText("Take payment into") as HTMLSelectElement).value).toBe("new-till");
+    await vi.waitFor(() => expect(chargeNow()).toBeEnabled());
+    await u.click(chargeNow());
+    await vi.waitFor(() => expect(calls.some((c) => c.path === "/api/sales" && c.method === "POST")).toBe(true));
+    expect(calls.find((c) => c.path === "/api/sales" && c.method === "POST")!.body.account_id).toBe("new-till");
+  });
+
+  it("an unpaid sale with no cashbox offers the inline setup instead of a dead end", async () => {
+    const u = userEvent.setup();
+    render(<SalesPOS />);
+    await u.click(await screen.findByText("USB-C cable"));
+    await vi.waitFor(() => expect(chargeNow()).toBeEnabled());
+    await u.click(screen.getByRole("button", { name: /Charge on reader/ }));
+    await u.click(await screen.findByText("Decline card"));
+    const box = await screen.findByTestId("pending-sale");
+    expect(within(box).queryByText("No cashbox set up")).not.toBeInTheDocument();
+    await u.click(within(box).getByRole("button", { name: "Set up a cashbox" }));
+    await u.click(await within(box).findByRole("button", { name: /Take payment/ }));
+    await vi.waitFor(() => expect(calls.some((c) => c.path === "/api/sales/s1/pay")).toBe(true));
+    expect(calls.find((c) => c.path === "/api/sales/s1/pay")!.body).toMatchObject({ account_id: "new-till" });
   });
 });

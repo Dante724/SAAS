@@ -364,9 +364,11 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
     fields = dict(method="online", account_id=account.id if account else None,
                   reference=f"{intent.provider}:{intent.provider_ref}")
     amount = q2(intent.amount)
+    billed: list = []
     if inv:
         take = q2(min(amount, invoice_balance(inv)))
         pays = await im.apply_payment_to_invoice(db, inv, take, **fields) if take > 0 else []
+        billed = list(pays)     # paid against the invoice; anything over (below) is client credit
         if amount > take:
             held_on = order.id if order else inv.order_id
             rest = Payment(invoice_id=None if held_on else inv.id, order_id=held_on, client_id=inv.client_id,
@@ -396,6 +398,9 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
         await post_contact_ledger(db, intent.org_id, _client_id, "income", -abs(intent.amount),
                                   note=f"Online payment ({intent.provider})", ref_type="payment",
                                   ref_id=pay.id)
+        if billed:     # the invoice's own lines are billed as they are paid (B3 recheck)
+            from backend.services.ledger import charge_jobless_invoice_money
+            await charge_jobless_invoice_money(db, intent.org_id, inv, billed)
     job_ids = list(dict.fromkeys(p.order_id for p in pays if p.order_id))
     from backend.services.order_money import cancel_open_pay_links
     for _ord in (await db.execute(select(Order).where(Order.id.in_(job_ids)))).scalars().all() if job_ids else []:

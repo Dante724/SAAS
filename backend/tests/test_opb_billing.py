@@ -106,7 +106,7 @@ async def test_partial_payment_then_rest(client):
     r = await client.post(f"/api/finance/invoices/{iid}/pay", headers=H,
                           json={"amount": 60, "method": "cash", "account_id": acc})
     assert r.json()["status"] == "paid" and r.json()["balance_due"] == 0
-    assert await _balance(client, H, cid) == -100     # invoice-only: payments reduce what's owed
+    assert await _balance(client, H, cid) == 0        # paid in full: owes nothing, no credit (B3 recheck)
 
 
 async def test_payment_date_and_account_checks(client):
@@ -158,7 +158,7 @@ async def test_overpay_kept_as_client_balance(client):
     inv = await _inv(client, H, iid)
     assert inv["amount_paid"] == 100 and inv["balance_due"] == 0       # never paid beyond its total
     assert await _account_balance(client, H, acc) == 150.5             # all the cash is in the till
-    assert await _balance(client, H, cid) == -150.5                   # 50.50 of it is store credit
+    assert await _balance(client, H, cid) == -50.5                    # the 50.50 kept is store credit
     led = (await client.get(f"/api/clients/{cid}/balance", headers=H)).json()["entries"]
     assert any(e["entry_type"] == "advance" and e["amount"] == -50.5 for e in led)
     # the invoice is settled now: more money is refused
@@ -177,7 +177,7 @@ async def test_overpay_refunded(client, db):
     assert r.status_code == 200, r.text
     assert r.json()["refunded"] == 20 and r.json()["status"] == "paid"
     assert await _account_balance(client, H, acc) == 80               # 100 in, 20 change out
-    assert await _balance(client, H, cid) == -80
+    assert await _balance(client, H, cid) == 0
     kinds = sorted((p.kind, float(p.amount)) for p in (await db.execute(
         select(Payment).where(Payment.invoice_id == iid))).scalars().all())
     assert kinds == [("payment", 100.0), ("refund", 20.0)]

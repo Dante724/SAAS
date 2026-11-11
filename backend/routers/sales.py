@@ -842,6 +842,14 @@ async def _return_sale_items(sale_id: str, data: SaleReturnIn, db: AsyncSession,
     gift_paid = await sale_gift_card_paid(db, sale.id)
     gift_back = q2(value * gift_paid / float(sale.total)) if sale.total else 0.0
     money_back = q2(value - gift_back)
+    # B3 recheck: a card reader refund may already have given this money back (and a till return
+    # must not give it back a second time). The items still come back; the money stops at what is
+    # left. The sale row is held above, and a reader refund takes the same row.
+    from backend.services.terminal import sale_money_kept
+    kept = await sale_money_kept(db, sale)
+    capped = money_back > kept + 0.005
+    if capped:
+        money_back = kept
     acc = None
     if money_back > 0:
         if not data.account_id:
@@ -889,10 +897,13 @@ async def _return_sale_items(sale_id: str, data: SaleReturnIn, db: AsyncSession,
                         reason=ret.reason, created_by_id=current.id)
         db.add(refund)
         await db.flush()
-        from backend.routers.cash import post_transaction
-        await post_transaction(db, current.org_id, acc.id, "refund", -money_back,
-                               comment=f"Refund for sale {sale.sale_number}", ref_type="refund",
-                               ref_id=refund.id, employee_id=current.id)
+        from backend.routers.cash import open_drawer_shift, post_transaction
+        txn = await post_transaction(db, current.org_id, acc.id, "refund", -money_back,
+                                     comment=f"Refund for sale {sale.sale_number}", ref_type="refund",
+                                     ref_id=refund.id, employee_id=current.id)
+        # Cash handed back from a till comes out of its open drawer, like the sale's money went in:
+        # without the link the close expected the sale's cash still there and read short (B3 recheck).
+        txn.shift_id = await open_drawer_shift(db, current.org_id, acc)
     if gift_back > 0:
         leg = (await db.execute(select(GiftCardLedger).where(
             GiftCardLedger.ref_type == "sale", GiftCardLedger.ref_id == sale.id))).scalars().first()
@@ -903,7 +914,8 @@ async def _return_sale_items(sale_id: str, data: SaleReturnIn, db: AsyncSession,
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "sale", sale.id,
                            f"Items returned from sale {sale.sale_number}: refunded {money_back:g}"
-                           + (f", {gift_back:g} back on the gift card" if gift_back else ""))
+                           + (f", {gift_back:g} back on the gift card" if gift_back else "")
+                           + (" (the rest was already refunded to the card)" if capped else ""))
     await db.commit()
     return {"return_id": ret.id, "refund_id": refund.id if refund else None,
             "refunded": money_back, "gift_card": gift_back}

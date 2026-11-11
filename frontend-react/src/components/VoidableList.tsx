@@ -5,6 +5,7 @@ import { useMe } from "../context/Me";
 import { promptDialog } from "../lib/dialog";
 import { money } from "../pages/orders/types";
 import { getLocale } from "../i18n";
+import { serverDate } from "../lib/serverTime";
 
 // A short list of recent money documents (counter sales, refunds) with a Delete button for
 // roles allowed to void them. Deleting keeps the row (struck through) and the API puts back
@@ -43,7 +44,7 @@ export default function VoidableList({ load, deletePath, perm, noun, empty, onFl
         <div key={r.id} className="flex items-center gap-3 px-4 py-2.5 text-xs">
           <div className={`flex-1 min-w-0 ${r.voided_at ? "line-through text-ink-tertiary" : ""}`}>
             <div className="font-semibold text-ink-primary truncate">{r.title}</div>
-            <div className="text-[11px] text-ink-tertiary truncate">{[r.sub, r.created_at ? new Date(r.created_at).toLocaleString(getLocale()) : null].filter(Boolean).join(" · ")}</div>
+            <div className="text-[11px] text-ink-tertiary truncate">{[r.sub, serverDate(r.created_at)?.toLocaleString(getLocale()) ?? null].filter(Boolean).join(" · ")}</div>
           </div>
           <span className={`tabular-nums font-bold ${r.voided_at ? "line-through text-ink-tertiary" : "text-ink-primary"}`}>{money(r.amount)}</span>
           {actions?.(r)}

@@ -17,6 +17,7 @@ import { scanBeep, useWedgeScanner } from "../../lib/scanner";
 import { inputCls } from "../invoices/billing";
 import { Avatar, deviceIcon } from "../orders/look";
 import { loadFailed } from "../../lib/notice";
+import { SetUpCashbox, type PayAccount } from "../../components/AccountPicker";
 
 type Product = { id: string; name?: string; sku?: string; sell_price?: number; qty_available?: number; image_data?: string | null; low_stock?: boolean; serialized?: boolean };
 type Service = { id: string; name?: string; price?: number; duration_min?: number };
@@ -108,7 +109,7 @@ export default function SalesPOS() {
   useEffect(() => { loadProducts(); }, []);
   useEffect(() => { api.get<{ items: Service[] }>("/catalog/services").then((r) => setServices(r.items || [])).catch(loadFailed("services")); }, []);
   useEffect(() => { api.get<{ items: Account[] }>("/cash/accounts").then((r) => { setAccounts(r.items || []); setAccountId(defaultAccount(r.items || [])); }).catch(loadFailed("cash accounts")); }, []);
-  const [receiptFor, setReceiptFor] = useState<{ id: string; change: number | null } | null>(null);   // the after-sale receipt choices
+  const [receiptFor, setReceiptFor] = useState<{ id: string; change: number | null; paid: boolean } | null>(null);   // the after-sale receipt choices
   const [returnFor, setReturnFor] = useState<string | null>(null);
   const [cOpen, setCOpen] = useState(false);
   const clientResults = useClientSearch<ClientLite>(clientQ, cOpen && !client, 6);
@@ -225,14 +226,15 @@ export default function SalesPOS() {
     setClient(null); setClientQ(""); setCashGiven("");
     loadProducts();
   }
-  // Paid: clear the cart if the sale came from it, and offer the receipt.
-  function paid(p: { id: string; fromCart: boolean }, msg: string, change: number | null) {
+  // Paid (or saved to pay later): clear the cart if the sale came from it, and offer the receipt.
+  // `isPaid` false = nothing was taken, so the receipt never says "Sale complete".
+  function paid(p: { id: string; fromCart: boolean }, msg: string, change: number | null, isPaid = true) {
     flash(msg);
     setRecentKey((k) => k + 1);
     setPending(null);
     if (p.fromCart) clearSale();
     void autoPrintForSale(p.id);   // whatever is switched on to print when a sale is made
-    setReceiptFor({ id: p.id, change: change && change > 0 ? change : null });
+    setReceiptFor({ id: p.id, change: change && change > 0 ? change : null, paid: isPaid });
   }
 
   const saleKey = useRef(idempotencyKey());   // a double click on Charge makes one sale (server: Idempotency-Key)
@@ -261,8 +263,14 @@ export default function SalesPOS() {
       const red = r.redeemed && Object.keys(r.redeemed).length
         ? " · " + Object.entries(r.redeemed).map(([k, v]) => `${k === "gift_card" ? "gift card" : k} ${cash(v as number)}`).join(", ") : "";
       // No profit here: the customer is usually looking at this screen.
-      paid({ id: r.id, fromCart: true }, r.paid ? `Sale ${r.sale_number} · ${cash(r.total)}${red}` : `Sale ${r.sale_number} saved · ${cash(r.due)} to pay later`, r.change_due);
+      paid({ id: r.id, fromCart: true }, r.paid ? `Sale ${r.sale_number} · ${cash(r.total)}${red}` : `Sale ${r.sale_number} saved · ${cash(r.due)} to pay later`, r.change_due, !!r.paid);
     } catch (e: any) { flash(e.message || "Couldn't make the sale. Try again."); setRequote((n) => n + 1); } finally { setBusy(false); }
+  }
+
+  // A cashbox set up from the inline form joins the list and takes this payment.
+  function cashboxCreated(a: PayAccount, pick: (id: string) => void) {
+    setAccounts((xs) => [...xs, a as Account]);
+    pick(a.id);
   }
 
   const [payAcct, setPayAcct] = useState("");
@@ -434,10 +442,10 @@ export default function SalesPOS() {
                 </div>
                 <div className="flex items-baseline justify-between"><span className="text-sm font-semibold text-ink-primary">To pay</span><span className="text-2xl font-semibold tabular-nums text-ink-primary">{cash(pending.due)}</span></div>
                 <div><label htmlFor="pos-pay-account" className="block text-xs font-semibold text-ink-tertiary mb-1">Take payment into</label>
+                  {accounts.length === 0 ? <SetUpCashbox option="cash" onCreated={(a) => cashboxCreated(a, setPayAcct)} /> : (
                   <select id="pos-pay-account" value={payAccount?.id || ""} onChange={(e) => setPayAcct(e.target.value)} className={inputCls}>
-                    {accounts.length === 0 && <option value="">No cashbox set up</option>}
                     {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
-                  </select>
+                  </select>)}
                 </div>
                 {payAccount?.payment_option === "cash" && <div className="flex items-center justify-between gap-3 text-xs"><label htmlFor="pos-pay-cash" className="text-ink-secondary">Cash received</label><div className="w-28"><input id="pos-pay-cash" type="number" min={0} inputMode="decimal" value={payCash} onChange={(e) => setPayCash(e.target.value)} className={`${inputCls} text-right tabular-nums`} /></div></div>}
                 {payTendered != null && payTendered >= pending.due && row("Change due", cash(payTendered - pending.due), true)}
@@ -476,6 +484,7 @@ export default function SalesPOS() {
                 <option value="">Pay later (save the sale)</option>
                 {accounts.map((a) => <option key={a.id} value={a.id}>{a.name}</option>)}
               </select>
+              {accounts.length === 0 && <div className="mt-2"><SetUpCashbox option="cash" onCreated={(a) => cashboxCreated(a, setAccountId)} /></div>}
             </div>
             {/* B5: cash — what the customer handed over, and the change to give back */}
             {isCash && <div className="flex items-center justify-between gap-3 text-xs"><label htmlFor="pos-cash" className="text-ink-secondary">Cash received</label><div className="w-28"><input id="pos-cash" type="number" min={0} inputMode="decimal" value={cashGiven} onChange={(e) => setCashGiven(e.target.value)} placeholder={cash(due)} className={`${inputCls} text-right tabular-nums`} /></div></div>}
@@ -499,7 +508,7 @@ export default function SalesPOS() {
           if (c?.status === "succeeded") paid(p, `Sale ${p.number} paid by card`, null);
           else { flash(`Sale ${p.number} wasn't paid. Try the card again or take payment another way.`); setRecentKey((k) => k + 1); }
         }} />}
-      {receiptFor && <ReceiptSheet saleId={receiptFor.id} change={receiptFor.change} onClose={() => setReceiptFor(null)} onFlash={flash} />}
+      {receiptFor && <ReceiptSheet saleId={receiptFor.id} change={receiptFor.change} paid={receiptFor.paid} onClose={() => setReceiptFor(null)} onFlash={flash} />}
       {returnFor && <ReturnSheet saleId={returnFor} accounts={accounts} onClose={() => setReturnFor(null)}
         onDone={(m) => { flash(m); setReturnFor(null); setRecentKey((k) => k + 1); loadProducts(); }} />}
       {newClient && <NewClientDrawer prefillName={clientQ.trim()} onClose={() => setNewClient(false)} onCreated={(c) => { setClient(c); setNewClient(false); setClientQ(""); flash(`Client "${c.name}" created & attached`); }} />}
@@ -538,7 +547,7 @@ function MatchPicker({ code, items, onPick, onClose }: { code: string; items: Ma
 }
 
 // After a sale: give the customer a receipt — print it, email it or send it on WhatsApp.
-function ReceiptSheet({ saleId, change, onClose, onFlash }: { saleId: string; change?: number | null; onClose: () => void; onFlash: (m: string) => void }) {
+function ReceiptSheet({ saleId, change, paid = true, onClose, onFlash }: { saleId: string; change?: number | null; paid?: boolean; onClose: () => void; onFlash: (m: string) => void }) {
   const [rc, setRc] = useState<Receipt | null>(null);
   const [err, setErr] = useState<string | null>(null);
   const [email, setEmail] = useState("");
@@ -576,6 +585,8 @@ function ReceiptSheet({ saleId, change, onClose, onFlash }: { saleId: string; ch
     try { const r = await api.post<{ recipient: string }>(`/sales/${saleId}/receipt/email`, { email: email.trim() || null }); onFlash(`Receipt emailed to ${r.recipient}`); onClose(); }
     catch (e: any) { onFlash(e.message || "Couldn't email the receipt"); } finally { setSending(false); }
   }
+  // "Sale complete" only when money was taken: the server's word once the receipt loads.
+  const isPaid = rc ? rc.paid : paid;
   const digits = phone.replace(/[^0-9]/g, "");
   const waHref = rc && digits.length >= 7 ? `https://wa.me/${digits}?text=${encodeURIComponent(rc.text)}` : null;
 
@@ -585,11 +596,12 @@ function ReceiptSheet({ saleId, change, onClose, onFlash }: { saleId: string; ch
       <div className="relative w-full max-w-sm rounded-2xl border border-slate-200 bg-white p-5 shadow-clay-drawer">
         <div className="flex items-start justify-between gap-3">
           <div>
-            <div className="text-sm font-semibold text-ink-primary">Sale complete</div>
+            <div className="text-sm font-semibold text-ink-primary">{isPaid ? "Sale complete" : "Sale saved · not paid"}</div>
             <div className="text-xs text-ink-tertiary tabular-nums">{rc ? `${rc.sale_number} · ${money(rc.total)}` : err || "Loading…"}</div>
           </div>
           <button aria-label="Close" onClick={onClose} className="w-9 h-9 -mr-2 -mt-2 rounded-lg grid place-items-center text-ink-tertiary hover:text-ink-primary hover:bg-slate-100"><M n="close" c="text-lg" /></button>
         </div>
+        {!isPaid && <div data-testid="receipt-unpaid" role="note" className="mt-4 rounded-xl border border-amber-200 bg-amber-50 px-3 py-2.5 text-xs text-amber-900">Nothing was charged. Take the payment from Recent sales when the customer pays.</div>}
         {change ? <div data-testid="receipt-change" className="mt-4 rounded-xl border border-emerald-200 bg-emerald-50 px-3 py-2.5 flex items-baseline justify-between"><span className="text-xs font-semibold text-emerald-900">Give change</span><span className="text-xl font-semibold tabular-nums text-emerald-900">{cash(change)}</span></div> : null}
         <div className="mt-4 text-xs font-semibold text-ink-tertiary">Give the customer a receipt</div>
         <div className="mt-2 space-y-2.5">

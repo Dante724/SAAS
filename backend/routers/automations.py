@@ -17,7 +17,7 @@ from backend.db.database import get_db
 from backend.models import AutomationRule, Employee, Order, Part, StockLevel
 from backend.services.auth import get_current_employee, require_perm
 from backend.services import automation as auto
-from backend.services.dates import now_utc
+from backend.services.dates import local_now, now_utc, shop_tzname
 
 router = APIRouter(prefix="/api/automations", tags=["automations"])
 
@@ -191,7 +191,8 @@ async def sweep(db: AsyncSession = Depends(get_db),
                 current: Employee = Depends(require_perm("can_manage_settings"))):
     """Fire time-based automations: overdue work orders and low-stock products.
     Intended to be called on a schedule (e.g. hourly)."""
-    now = now_utc()
+    # due_at and scheduled_to are shop wall-clock times, so "past" is measured on the shop's clock
+    now = local_now(await shop_tzname(db, current.org_id))
     fired = 0
 
     # overdue orders: past their promised time (due_at or scheduled_to) and still open

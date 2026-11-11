@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { M } from "./Shell";
 import { api } from "../api/client";
+import { fmtDay, serverDate } from "../lib/serverTime";
 
 // Shown under an IMEI / VIN / serial field at intake. As staff type or scan, it checks the value:
 // a likely typo gets a gentle warning, and a device this shop has seen before shows who owns it,
@@ -14,7 +15,7 @@ export type IdMatch = {
 type Res = { kind: string; normalized: string | null; problem: string | null; matches: IdMatch[] };
 
 const KIND_LABEL: Record<string, string> = { imei: "IMEI", vin: "VIN", hin: "HIN", serial: "serial" };
-const fmt = (s?: string) => (s ? new Date(s).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) : "");
+const fmt = (s?: string) => serverDate(s)?.toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" }) || "";
 
 export default function IdentifyHint({ value, kind, clientId, usingId, onUse, onUndo }: {
   value: string; kind?: string; clientId?: string | null; usingId: string | null;
@@ -60,7 +61,7 @@ export default function IdentifyHint({ value, kind, clientId, usingId, onUse, on
                 {m.jobs} previous job{m.jobs === 1 ? "" : "s"}
                 {m.last_order && <> · last {m.last_order.order_number} ({m.last_order.status}, {fmt(m.last_order.created_at)})</>}
               </div>
-              {m.last_order?.under_warranty && <div className="font-semibold text-emerald-700">Under warranty until {fmt(m.last_order.warranty_until)} — consider opening this as a warranty job.</div>}
+              {m.last_order?.under_warranty && <div className="font-semibold text-emerald-700">Under warranty until {fmtDay(m.last_order.warranty_until)} — consider opening this as a warranty job.</div>}
               {clientId && !m.same_client && m.client && <div className="font-semibold text-amber-800">Registered to a different customer{m.client.phone ? ` (${m.client.phone})` : ""} — check before continuing.</div>}
               {m.watch_out && <div className="font-semibold text-rose-700">⚠ {m.watch_out}</div>}
             </div>

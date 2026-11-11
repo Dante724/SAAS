@@ -8,6 +8,7 @@ import { api } from "../../api/client";
 import { useClientSearch } from "../../hooks/useClientSearch";
 import { confirmDialog } from "../../lib/dialog";
 import { money } from "./types";
+import { serverDate } from "../../lib/serverTime";
 import CustomFields from "../../components/CustomFields";
 import { useTerminology, assetNoun } from "../../lib/useTerminology";
 import { identifierFields } from "../../lib/assetIdentifiers";
@@ -25,7 +26,7 @@ type Asset = { id?: string; owner_type?: string; owner_name?: string; client_id?
   asset_type?: string; asset_label?: string; template_key?: string; brand?: string; model?: string; serial?: string; imei?: string; vin?: string; hin?: string; color?: string; condition?: string; asset_status?: string; custom_data?: Record<string, any>; history?: HistOrder[] };
 type Movement = { event_type?: string; from_zone?: string; to_zone?: string; status_key?: string; note?: string; by?: string; at?: string };
 type ClientLite = { id: string; name?: string; phone?: string };
-const fmtDate = (s?: string) => (s ? new Date(s).toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) : "");
+const fmtDate = (s?: string) => serverDate(s)?.toLocaleDateString(undefined, { year: "numeric", month: "short", day: "numeric" }) || "";
 
 // A read-only value: plain label and text, so it doesn't look like a field you can type in.
 function F({ l, children }: { l: string; children: ReactNode }) {

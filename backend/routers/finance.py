@@ -759,6 +759,10 @@ async def _record_payment(invoice_id: str, data: "PaymentIn", db: AsyncSession, 
         change_from.amount = float(d2(change_from.amount) + excess)
     payment = parts[0]
     await db.flush()   # need payment.id for the ledger ref
+    # Money for the invoice's own lines (no job to bill it on close) is billed as it is paid, so
+    # it never reads as client credit and a payment from balance uses the credit up (B3 recheck).
+    from backend.services.ledger import charge_jobless_invoice_money
+    await charge_jobless_invoice_money(db, current.org_id, inv, parts, created_by_id=current.id)
     # 144av: real money (cash/card/transfer) must land in a cashbox account, not just move the
     # client's balance. 'balance' settles on account (no cash moves) → no Transaction.
     if moves_cash:
@@ -788,6 +792,7 @@ async def _record_payment(invoice_id: str, data: "PaymentIn", db: AsyncSession, 
         back = _pay(excess, invoice_id=invoice_id, order_id=change_from.order_id, kind="refund",
                     reference=f"Overpayment on invoice {label} refunded")
         await db.flush()
+        await charge_jobless_invoice_money(db, current.org_id, inv, [back], created_by_id=current.id)
         if moves_cash:
             change = await post_transaction(db, current.org_id, acc.id, "expense", -float(excess),
                                             comment=f"Refund overpayment on invoice {label}", ref_type="invoice",
@@ -845,13 +850,19 @@ async def _expected_cash(db, shift: CashShift) -> dict:
     cash_refunds = (await db.execute(select(func.coalesce(func.sum(Payment.amount), 0.0)).where(
         Payment.shift_id == shift.id, Payment.method.in_(("cash", "refund")),
         Payment.kind == "refund"))).scalar() or 0.0
+    from backend.models import Transaction
+    # Counter-sale returns pay cash out with a refund transaction and no Payment row; the drawer
+    # link is set when the return is made (sales._return_sale_items, B3 recheck).
+    cash_refunds = abs(float(cash_refunds)) + abs(float((await db.execute(
+        select(func.coalesce(func.sum(Transaction.amount), 0.0)).where(
+            Transaction.shift_id == shift.id, Transaction.status == "active", Transaction.txn_type == "refund",
+            Transaction.ref_type == "refund"))).scalar() or 0.0))
     pay_in = (await db.execute(select(func.coalesce(func.sum(CashDrawerMovement.amount), 0.0)).where(
         CashDrawerMovement.shift_id == shift.id, CashDrawerMovement.direction == "in"))).scalar() or 0.0
     pay_out = (await db.execute(select(func.coalesce(func.sum(CashDrawerMovement.amount), 0.0)).where(
         CashDrawerMovement.shift_id == shift.id, CashDrawerMovement.direction == "out"))).scalar() or 0.0
     # 144bh: manual cash income/expense booked on this location's till during the shift (signed:
     # income +, expense −). Linked at post time via Transaction.shift_id.
-    from backend.models import Transaction
     manual_cash = (await db.execute(select(func.coalesce(func.sum(Transaction.amount), 0.0)).where(
         Transaction.shift_id == shift.id, Transaction.status == "active",
         Transaction.txn_type.in_(("income", "expense"))))).scalar() or 0.0

@@ -209,6 +209,9 @@ function NewInvoiceDrawer({ onClose, onCreated }: { onClose: () => void; onCreat
   const [busy, setBusy] = useState(false); const [err, setErr] = useState<string | null>(null);
   useEffect(() => { api.get<{ items: any[] }>("/clients?limit=200").then((r) => setClients(r.items || [])).catch(loadFailed("clients")); }, []);
   useEffect(() => { api.get<any>("/staff/company").then((c) => { if (c?.default_invoice_display) setMode(c.default_invoice_display); }).catch(() => { /* silent: defaults to the standard layout */ }); }, []);
+  // B4: start at the shop's default tax when it is added on top (sales tax). A VAT-inclusive default
+  // stays at 0%: these prices already contain it.
+  useEffect(() => { api.get<{ items: { is_default?: boolean; rate?: number; mode?: string }[] }>("/catalog/taxes").then((r) => { const t = (r.items || []).find((x) => x.is_default); if (t && t.mode !== "included" && t.rate) setTax((cur) => cur || Number(t.rate)); }).catch(() => { /* silent: tax starts at 0% */ }); }, []);
   const setLine = (i: number, k: string, v: any) => setLines(lines.map((l, j) => j === i ? { ...l, [k]: v } : l));
   const subtotal = lines.reduce((s, l) => s + (Number(l.qty) || 0) * (Number(l.unit_price) || 0), 0);
   const discountAmt = +(subtotal * (Number(discount) || 0) / 100).toFixed(2);

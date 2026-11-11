@@ -19,6 +19,7 @@ from backend.models import (
     Employee,
     EventFeedItem,
     Invoice,
+    Location,
     NotificationPreference,
     Order,
     OrderComment,
@@ -27,7 +28,7 @@ from backend.models import (
     TimeEntry,
 )
 from backend.services.auth import get_current_employee, record_scope
-from backend.services.dates import now_utc, shop_tzname, today_in
+from backend.services.dates import now_utc, shop_tzname, today_in, wall_now_for
 
 LIST_CAP = 100   # cards per list on Today; the stats still count every job
 
@@ -81,11 +82,19 @@ async def dashboard(
         done_cond = or_(done_cond, Order.status.in_(terminal_keys))
     order_by = (Order.scheduled_for.is_(None), Order.scheduled_for, Order.created_at)
     cards = (selectinload(Order.client), selectinload(Order.device))
+    # due_at is shop wall-clock, so "overdue" compares it with now on each branch's own clock.
+    wall_now = await wall_now_for(db, current.org_id)
+    loc_ids = (await db.execute(select(Location.id).where(Location.org_id == current.org_id))).scalars().all()
+    by_now: dict = {}
+    for lid in loc_ids:
+        by_now.setdefault(wall_now(lid), []).append(lid)
+    overdue_cond = or_(and_(Order.location_id.is_(None), Order.due_at < wall_now(None)),
+                       *[and_(Order.location_id.in_(ids), Order.due_at < wn) for wn, ids in by_now.items()])
     groups = {
         # unscheduled, or scheduled on an earlier day and still open, carries over to today
         "today": and_(base, ~done_cond, or_(Order.scheduled_for.is_(None), Order.scheduled_for < today_end)),
         "upcoming": and_(base, ~done_cond, Order.scheduled_for >= today_end),
-        "overdue": and_(base, ~done_cond, Order.due_at < now),
+        "overdue": and_(base, ~done_cond, overdue_cond),
         "completed": and_(base, done_cond),
     }
     lists, counts = {}, {}

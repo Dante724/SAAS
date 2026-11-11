@@ -25,7 +25,7 @@ from backend.models import (
     Part,
     Refund,
 )
-from backend.services.dates import now_utc
+from backend.services.dates import local_now, now_utc, shop_tzname
 
 Q = Decimal("0.0001")  # 4-dp quantum
 
@@ -86,7 +86,10 @@ class CommissionEngine:
             ((CommissionRule.employee_id == employee_id) | (CommissionRule.employee_id.is_(None))),
         ))).scalars().all()
         applicable = [r for r in rows if not r.category or (category and r.category.lower() == category.lower())]
-        applicable = [r for r in applicable if self._rule_matches_order(r, order)]
+        wall_now = None
+        if order is not None and order.due_at:   # due_at is shop wall-clock: "overdue" on that clock
+            wall_now = local_now(await shop_tzname(self.db, self.org_id, order.location_id))
+        applicable = [r for r in applicable if self._rule_matches_order(r, order, wall_now)]
         if check_timing:
             applicable = [r for r in applicable if self._rule_fires_now(r, status_key, is_close)]
         specific = [r for r in applicable if r.employee_id == employee_id]
@@ -123,7 +126,7 @@ class CommissionEngine:
         await self.db.commit()
 
     @staticmethod
-    def _rule_matches_order(rule: CommissionRule, order: Optional[Order]) -> bool:
+    def _rule_matches_order(rule: CommissionRule, order: Optional[Order], wall_now=None) -> bool:
         """Build 70 — work-order-type and execution-term conditions."""
         if order is None:
             return True
@@ -133,7 +136,7 @@ class CommissionEngine:
         if term == "any":
             return True
         urgent = (order.priority or 0) >= 1
-        overdue = bool(order.due_at and order.due_at < now_utc())
+        overdue = bool(order.due_at and order.due_at < (wall_now or now_utc()))
         if term == "urgent":
             return urgent
         if term == "overdue":
