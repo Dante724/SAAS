@@ -196,8 +196,8 @@ async def create_refund(
         order_id = ret.order_id if ret else None
     if not order_id:
         raise HTTPException(400, "A refund must reference the order (or a return for an order) it repays")
-    locked = (await db.execute(select(Order).where(
-        Order.id == order_id, Order.org_id == current.org_id).with_for_update())).scalar_one_or_none()
+    locked = (await db.execute(select(Order).where(     # NO KEY UPDATE: see invoice_money.lock_order
+        Order.id == order_id, Order.org_id == current.org_id).with_for_update(key_share=True))).scalar_one_or_none()
     if not locked:
         raise HTTPException(404, "Order not found")
     from backend.services.invoice_money import lock_order
@@ -453,14 +453,22 @@ def _job_tax(lines) -> tuple[float, str]:
 
 
 async def _sync_charge(db, current, order) -> None:
-    """A billed (closed) job's charge on the customer's ledger follows its new total."""
+    """A billed (closed) job's charge on the customer's ledger follows its new total; an open one's
+    stays the client credit spent on it (H6), which a smaller total can lower."""
     if not order.client_id:
         return
-    from backend.services.ledger import order_charge_net, post_contact_ledger
+    from backend.routers.orders import _is_closed
+    from backend.services.ledger import credit_spent_target, order_charge_net, post_contact_ledger
     from backend.services.money import q2
     net = await order_charge_net(db, order.client_id, order.id)
-    if net and q2(float(order.total or 0) - net):
-        await post_contact_ledger(db, current.org_id, order.client_id, "charge", q2(float(order.total or 0) - net),
+    if await _is_closed(db, current.org_id, order):
+        if not net:
+            return
+        target = q2(float(order.total or 0))
+    else:
+        target = await credit_spent_target(db, order)
+    if q2(target - net):
+        await post_contact_ledger(db, current.org_id, order.client_id, "charge", q2(target - net),
                                   note=f"Order {order.order_number} refund", ref_type="order", ref_id=order.id,
                                   created_by_id=current.id)
 
