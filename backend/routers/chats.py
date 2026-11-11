@@ -192,6 +192,8 @@ async def send_message(
     if not data.body.strip():
         raise HTTPException(400, "Message is empty")
     result, simulated = await _transport(db, current.org_id, t, data.body)
+    if result.get("capped"):   # daily cap on the operator's shared Twilio account: refuse, record nothing
+        raise HTTPException(429, result.get("error"))
     m = ChatMessage(thread_id=tid, direction="out", body=data.body,
                     author_id=current.id, status=result.get("status") or "sent")
     db.add(m)
