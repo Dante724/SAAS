@@ -1606,16 +1606,37 @@ async def check_status_change(
         .options(selectinload(Order.lines)))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    from backend.services.order_money import balance_due
+    due_before = q2(await balance_due(db, order))
     try:
         await _apply_status_change(db, current, order, data.status, note=data.note, reason=data.reason,
                                    comment=data.comment, allow_unpaid=data.allow_unpaid,
                                    check_only=True, assume_paid=assume_paid)
+        # The dry run stops (and bills) running timers as the real close would. A close that takes
+        # the payment must not be offered for the old amount while a timer adds to it.
+        if assume_paid:
+            _timers_raise(order, due_before, q2(await balance_due(db, order)), await _org_fmt(db, current.org_id))
     except HTTPException as e:
         await db.rollback()
         d = e.detail if isinstance(e.detail, dict) else {"message": e.detail}
         return {"ok": False, "status_code": e.status_code, "code": d.get("code") or "blocked", **d}
     await db.rollback()
     return {"ok": True}
+
+
+async def _org_fmt(db, org_id):
+    from backend.services.currency import org_money
+    return await org_money(db, org_id)
+
+
+def _timers_raise(order, due_before, due_now, fmt, paying=None) -> None:
+    """Running timers billed on close added to what's owed: refuse a "Finish & take" for the old
+    amount (``paying``: the amount being taken; None = the check, before any amount is chosen)."""
+    if due_now <= due_before + 0.009 or (paying is not None and q2(paying) >= due_now):
+        return
+    raise _gate("timers_running", f"A timer is still running on {order.order_number}. Stopping it bills "
+                f"{fmt(due_now - due_before)} more, so {fmt(due_now)} is owed. Stop the timer first, "
+                "then finish the job.", owed=due_now)
 
 
 def _gate(code: str, message: str, status_code: int = 409, **extra) -> HTTPException:
@@ -1715,8 +1736,9 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     # J6 / B11 — nobody keeps clocking time on a finished job. Before the gates, so time billed as
     # labour is in the total the "fully paid" check sees (and on the auto-drafted invoice), as if
     # each technician pressed Stop. A cancelled job's time is stopped but not billed. A refused
-    # change (or a check-only dry run) rolls back with the request.
-    if is_closing and order.status != data.status and not check_only:
+    # change (or a check-only dry run, which bills them too so its money checks see the real total)
+    # rolls back with the request.
+    if is_closing and order.status != data.status:
         await _stop_job_timers(db, order, bill=not (target and (target.status_group or "") == "dropped"))
 
     # 144gj — Orderry requirement gates on ENTERING the target status.
@@ -2962,8 +2984,13 @@ async def _finish_order(order_id: str, data: FinishIn, db: AsyncSession, current
             raise HTTPException(409, "No finishing status is set up for jobs.")
         target = term.key
     p = data.payment
+    from backend.services.order_money import balance_due as _bd
+    due_before = q2(await _bd(db, order))
     # Every gate first, with the payment counted as taken: a job that can't close takes no money.
+    # (Running timers stop here and are billed, so the amount below is checked against them.)
     await _apply_status_change(db, current, order, target, check_only=True, assume_paid=bool(p))
+    if p:
+        _timers_raise(order, due_before, q2(await _bd(db, order)), await _org_fmt(db, current.org_id), p.amount)
     paid = None
     if p:
         from backend.services.auth import has_perm

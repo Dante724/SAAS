@@ -13,7 +13,8 @@ export async function checkFinish(post: Post, orderId: string, status: string, s
   const code = r.code || "blocked";
   return {
     ok: false, code,
-    title: code === "unpaid" ? "Still to pay" : `Can't move to ${statusName} yet`,
+    // timers_running: a timer bills more when the job closes, so the amount on the button is stale
+    title: code === "unpaid" ? "Still to pay" : code === "timers_running" ? "A timer is still running" : `Can't move to ${statusName} yet`,
     message: r.message || "Something on the job needs finishing first.",
   };
 }

@@ -2,8 +2,8 @@
 (E1 My earnings, E2 payroll drill-down).
 
 Payroll scope is a per-role limit on top of the payroll permissions: `all` (default), `own`
-(only the caller) or `selected` (the employee ids in Role.payroll_employee_ids). The owner and
-people without a role are never limited. Every payroll endpoint filters lists through
+(only the caller) or `selected` (the employee ids in Role.payroll_employee_ids). The owner is
+never limited; someone without a role sees only their own. Every payroll endpoint filters lists through
 `payroll_scope_ids` and refuses single-employee actions through `assert_payroll_scope`.
 
 The breakdown reads the append-only ledger and groups each commission (and every claw-back of
@@ -30,8 +30,10 @@ async def payroll_scope_ids(db: AsyncSession, current: Employee) -> Optional[set
     """Employee ids whose payroll the caller may see, or None for everyone."""
     from backend.services.auth import is_shop_owner
     from backend.services.scoping import _ids, role_for
-    if not current.role_id or await is_shop_owner(db, current):
+    if await is_shop_owner(db, current):
         return None
+    if not current.role_id:
+        return {current.id}           # no role isn't the owner (launch B10): only their own
     role = await role_for(db, current)
     if role is None:
         return set()                  # a dangling role id never fails open
