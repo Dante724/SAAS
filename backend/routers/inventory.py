@@ -115,10 +115,7 @@ async def list_parts(
     q = select(Part).where(Part.org_id == current.org_id, Part.active == True)
     if search:
         # Build 144an — POS findability: match name, SKU, barcode, or internal code.
-        s = search.strip()
-        q = q.where(or_(Part.name.icontains(s), Part.sku.icontains(s),
-                        Part.barcode.icontains(s), Part.code.icontains(s), Part.mpn.icontains(s),
-                        Part.id.in_(product_codes.barcode_part_ids(current.org_id, s))))   # ii144a: extra barcodes
+        q = q.where(product_codes.list_search(current.org_id, search))   # + extra barcodes (ii144a)
     if category_id:
         q = q.where(Part.category_id == category_id)
     if category:

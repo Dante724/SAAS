@@ -241,6 +241,18 @@ export default function InventoryHub() {
   }
   function loadServices() { api.get<{ items: Service[] }>("/catalog/services").then((r) => setServices(r.items || [])).catch(() => setServices([])); }
   useEffect(() => { loadProducts(); }, [cat, wh]); // eslint-disable-line
+  // The products list is filtered here, but the server search also matches what a plain substring
+  // can't ("scrip12" for SCR-IP12, "screen iphone", a barcode's UPC/EAN form) — union its hits in.
+  const dpq = useDebounced(pq.trim());
+  const [pHits, setPHits] = useState<Set<string> | null>(null);
+  useEffect(() => {
+    if (!dpq) { setPHits(null); return; }
+    let live = true;
+    api.get<{ items: Product[] }>(`/catalog/products?search=${encodeURIComponent(dpq)}`)
+      .then((r) => { if (live) setPHits(new Set((r.items || []).map((p) => p.id))); })
+      .catch(() => { if (live) setPHits(null); });
+    return () => { live = false; };
+  }, [dpq]);
   // deep-open from a scan (?open=<part id>): open the product drawer, then clear the param
   const [sp, setSp] = useSearchParams();
   useEffect(() => {
@@ -375,6 +387,7 @@ export default function InventoryHub() {
   const AVAIL_LABEL = { all: "All", in: "In stock", low: "Low stock", out: "Out of stock" } as const;
   const matchesSearch = (p: any) => {
     if (!pq.trim()) return true;
+    if (pHits?.has(p.id)) return true;   // server: SKU without dashes, name words in any order, GTIN forms
     const q = pq.toLowerCase();
     return `${p.name} ${p.sku || ""} ${p.code || ""} ${p.barcode || ""} ${(p.extra_barcodes || []).join(" ")} ${p.mpn || ""}`.toLowerCase().includes(q);
   };

@@ -444,8 +444,6 @@ def _apply_order_filters(q, org_id: str, *, status=None, location_id=None, searc
     """The work-order list filters, shared by the list, its facet counts and the board, so a
     total always counts exactly the rows the filters select. Device/client filters use
     subqueries (not joins) so rows never duplicate and the count stays a plain count."""
-    from sqlalchemy import or_
-
     from backend.models import Device
     if is_estimate is not None:
         q = q.where(Order.is_estimate == is_estimate)
@@ -486,17 +484,37 @@ def _apply_order_filters(q, org_id: str, *, status=None, location_id=None, searc
         q = q.where(Order.created_at >= parse_dt(created_from, "created_from"))
     if created_to:
         q = q.where(Order.created_at <= parse_dt(created_to, "created_to"))
-    s = (search or "").strip()
+    s = " ".join((search or "").split())
     if s:
-        # order number, client name/phone, or the device (brand, model, serial, IMEI)
-        cq = select(Client.id).where(Client.org_id == org_id, or_(
-            Client.name.icontains(s), Client.phone.contains(s)))
-        dq = select(Device.id).where(Device.org_id == org_id, or_(
-            Device.brand.icontains(s), Device.model.icontains(s),
-            Device.serial.icontains(s), Device.imei.contains(s)))
-        q = q.where(or_(Order.order_number.icontains(s),
-                        Order.client_id.in_(cq), Order.device_id.in_(dq)))
+        q = q.where(_order_search_clause(s, org_id))
     return q
+
+
+def _order_search_clause(s: str, org_id: str):
+    """One search box: the job number (with or without its prefix, separators or zero padding),
+    the client's name (every word, any order, any case — or the company they're billed to),
+    the client's phone however it's formatted, or the asset (brand, model, serial, IMEI).
+    Every subquery is pinned to the shop, so another shop's clients or assets never match."""
+    from sqlalchemy import or_
+
+    from backend.models import Device
+    from backend.services import search_match as sm
+    conds = []
+    num = sm.number_match(Order.order_number, s)
+    if num is not None:
+        conds.append(num)
+    name_ids = select(Client.id).where(Client.org_id == org_id, sm.words_match(Client.name, s))
+    client_or = [Client.id.in_(name_ids),
+                 Client.payer_id.in_(name_ids)]      # people billed to a matching company
+    phone = sm.phone_match(Client.phone, s)
+    if phone is not None:
+        client_or.append(phone)
+    conds.append(Order.client_id.in_(
+        select(Client.id).where(Client.org_id == org_id, or_(*client_or))))
+    conds.append(Order.device_id.in_(select(Device.id).where(Device.org_id == org_id, or_(
+        Device.brand.icontains(s, autoescape=True), Device.model.icontains(s, autoescape=True),
+        Device.serial.icontains(s, autoescape=True), Device.imei.contains(s, autoescape=True)))))
+    return or_(*conds)
 
 
 def _device_image_url(device_id: Optional[str], has_image: bool) -> Optional[str]:

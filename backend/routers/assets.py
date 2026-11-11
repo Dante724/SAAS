@@ -44,17 +44,28 @@ def _plate_col(key: str):
 
 def _search_conds(org_id: str, search: str) -> list:
     """21 — one box finds an asset by brand / model / owner or any identifier: serial, IMEI,
-    VIN, HIN or licence plate, typed with or without spaces."""
-    t = search.strip()
+    VIN, HIN or licence plate, typed with or without spaces or dashes. Several words match in
+    any order across brand, model, type and the owner's name ("iphone 12 apple", "smith john").
+    Owner lookups are pinned to the shop."""
+    from backend.services import search_match as sm
+    t = " ".join(search.split())
     pat, comp = _like(t), _compact(t)
     conds = [col.ilike(pat, escape="\\") for col in
              (Device.serial, Device.imei, Device.vin, Device.hin, Device.brand, Device.model, Device.asset_type)]
-    conds.append(Device.client_id.in_(select(Client.id).where(
-        Client.org_id == org_id, Client.name.ilike(pat, escape="\\"))))
+
+    def owner_has(word):
+        return Device.client_id.in_(select(Client.id).where(
+            Client.org_id == org_id, Client.name.icontains(word, autoescape=True)))
+
+    words = sm.words_in_any((Device.brand, Device.model, Device.asset_type), t, extra=owner_has)
+    if words is not None:
+        conds.append(words)
+    for col in (Device.serial, Device.imei, Device.vin, Device.hin):
+        code = sm.code_match(col, t)
+        if code is not None:
+            conds.append(code)
     if comp:
         cpat = _like(comp)
-        if comp != t:
-            conds += [col.ilike(cpat, escape="\\") for col in (Device.serial, Device.imei, Device.vin, Device.hin)]
         conds += [_plate_col(k).like(cpat, escape="\\") for k in PLATE_KEYS]
     return conds
 
