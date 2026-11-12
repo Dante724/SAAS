@@ -17,13 +17,13 @@ services/invoice_money.refund_rows). Downgrade drops the three columns (rows voi
 would then count as live again; delete them first if that matters).
 
 Revision ID: pv01
-Revises: srch01
+Revises: sso01
 """
 import sqlalchemy as sa
 from alembic import op
 
 revision = "pv01"
-down_revision = "srch01"
+down_revision = "sso01"
 branch_labels = None
 depends_on = None
 
