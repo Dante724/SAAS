@@ -8,6 +8,9 @@ import os
 
 os.environ.setdefault("ENVIRONMENT", "test")
 os.environ.setdefault("SEED_DEMO", "false")
+# Home's 30 s figure cache (PERF-07) is off in tests: most tests read Home, change something and
+# read it again. test_p1_reports_perf turns it on where it is the subject.
+os.environ.setdefault("HOME_DASHBOARD_CACHE_S", "0")
 os.environ.setdefault("DATABASE_URL", "sqlite+aiosqlite:///./test.db")
 
 # Every test process gets its OWN database, so runs started at the same time (several sessions on

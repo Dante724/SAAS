@@ -437,11 +437,22 @@ ORDER_PAGE_MAX = 200
 BOARD_COLUMN_MAX = 200
 
 
+def _created_edge(value: str, field: str, tz, *, end: bool):
+    """RPT-07: a date-only created_from/created_to is a whole shop day, as in every report (it was
+    00:00 UTC, so created_to=2026-11-03 returned nothing from the 3rd). A value with a time is
+    taken as given."""
+    from backend.services.dates import report_edge
+    at = parse_dt(value, field)               # validates (422 on a malformed value)
+    if tz is not None and len(str(value).strip()) == 10:
+        return report_edge(str(value).strip(), tz, end=end)
+    return at
+
+
 def _apply_order_filters(q, org_id: str, *, status=None, location_id=None, search=None,
                          type_id=None, assigned_to_id=None, priority=None, priority_min=None,
                          client_id=None, brand=None, model=None, is_estimate=None,
                          created_from=None, created_to=None, include_archived=False,
-                         scheduled=None):
+                         scheduled=None, tz=None):
     """The work-order list filters, shared by the list, its facet counts and the board, so a
     total always counts exactly the rows the filters select. Device/client filters use
     subqueries (not joins) so rows never duplicate and the count stays a plain count."""
@@ -482,9 +493,9 @@ def _apply_order_filters(q, org_id: str, *, status=None, location_id=None, searc
             dq = dq.where(Device.model.icontains(model))
         q = q.where(Order.device_id.in_(dq))
     if created_from:
-        q = q.where(Order.created_at >= parse_dt(created_from, "created_from"))
+        q = q.where(Order.created_at >= _created_edge(created_from, "created_from", tz, end=False))
     if created_to:
-        q = q.where(Order.created_at <= parse_dt(created_to, "created_to"))
+        q = q.where(Order.created_at <= _created_edge(created_to, "created_to", tz, end=True))
     s = " ".join((search or "").split())
     if s:
         q = q.where(_order_search_clause(s, org_id))
@@ -597,6 +608,9 @@ async def list_orders(
                client_id=client_id, brand=brand, model=model, is_estimate=is_estimate,
                created_from=created_from, created_to=created_to,
                include_archived=include_archived, scheduled=scheduled)
+    if created_from or created_to:
+        from backend.services.dates import shop_tzname
+        flt["tz"] = await shop_tzname(db, current.org_id)
 
     def scoped(base):
         return scoping.scope_orders(base.where(Order.org_id == current.org_id), role, current)

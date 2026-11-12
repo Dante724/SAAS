@@ -10,6 +10,8 @@ Conventions every writer follows:
 - Money back is a Payment with kind "refund" and a positive amount (the Refund row is the
   document; the Payment is what the balance math counts).
 """
+from typing import Optional
+
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
@@ -94,17 +96,22 @@ async def resync_write_off(db: AsyncSession, order: Order, actor_id: str | None 
                                       ref_type="order", ref_id=order.id, created_by_id=actor_id)
 
 
-def invoice_job_shares():
+def invoice_job_shares(org_id: Optional[str] = None):
     """Subquery of (invoice_id, order_id, share): each job an invoice bills (its links plus the
     primary order_id) and its share of that invoice — by job total, equal shares when the totals
     are 0, the whole invoice for a single job. The one rule for splitting an invoice's credit
-    notes between its jobs (`credited`, `balances_due`, and the reports in services/revenue)."""
+    notes between its jobs (`credited`, `balances_due`, and the reports in services/revenue).
+    `org_id` keeps both branches to that shop's invoices (PERF-08: `invoice_orders` has no
+    org_id, and the unscoped link branch read every shop's links on every revenue query)."""
     from sqlalchemy import case, union
     from backend.models import InvoiceOrder
-    inv_jobs = union(
-        select(InvoiceOrder.invoice_id.label("invoice_id"), InvoiceOrder.order_id.label("order_id")),
-        select(Invoice.id.label("invoice_id"), Invoice.order_id.label("order_id"))
-        .where(Invoice.order_id.isnot(None))).subquery()
+    links = select(InvoiceOrder.invoice_id.label("invoice_id"), InvoiceOrder.order_id.label("order_id"))
+    primary = (select(Invoice.id.label("invoice_id"), Invoice.order_id.label("order_id"))
+               .where(Invoice.order_id.isnot(None)))
+    if org_id is not None:
+        links = links.join(Invoice, Invoice.id == InvoiceOrder.invoice_id).where(Invoice.org_id == org_id)
+        primary = primary.where(Invoice.org_id == org_id)
+    inv_jobs = union(links, primary).subquery()
     whole = (select(inv_jobs.c.invoice_id, func.sum(func.coalesce(Order.total, 0)).label("whole"),
                     func.count().label("n"))
              .join(Order, Order.id == inv_jobs.c.order_id).group_by(inv_jobs.c.invoice_id).subquery())
@@ -123,7 +130,7 @@ def balances_due(org_id: str):
     below 0), so reports agree with the job screen."""
     from sqlalchemy import case
     void = ("void", "voided", "cancelled", "canceled")
-    sh = invoice_job_shares()
+    sh = invoice_job_shares(org_id=org_id)
     credit = (select(sh.c.order_id, func.sum(Invoice.credited * sh.c.share).label("credited"))
               .join(Invoice, Invoice.id == sh.c.invoice_id)
               .where(Invoice.org_id == org_id, Invoice.credited > 0, Invoice.status.notin_(void))
