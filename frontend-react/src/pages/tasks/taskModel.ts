@@ -249,3 +249,30 @@ export function bucketForDue(due: string | null, today: string): DayBucket {
   if (k <= today) return "today";
   return k <= addDays(today, 7) ? "upcoming" : "later";
 }
+
+// ── whose tasks / team row ────────────────────────────────────────────────────
+
+/** Everyone on a task: the primary owner and the extra assignees, once each. */
+export const assigneesOf = (t: Pick<Task, "assigned_to_id" | "assignee_ids">): string[] =>
+  [...new Set([t.assigned_to_id, ...(t.assignee_ids || [])].filter((x): x is string => !!x))];
+
+/** Keep only some tasks of a day (Up for grabs out of everyone's day). Counts become what is left
+ *  in the lists, so a capped group (100 of more) counts only what the server sent. */
+export function filterDay(day: MyDay, keep: (t: Task) => boolean): MyDay {
+  const next = { ...day, counts: { ...day.counts } } as MyDay;
+  for (const b of DAY_BUCKETS) {
+    next[b] = day[b].filter(keep);
+    next.counts[b] = next[b].length === day[b].length ? day.counts[b] : next[b].length;
+  }
+  return next;
+}
+
+export type PersonLoad = { id: string; name: string; position?: string | null; overdue: number; today: number; done: number };
+/** The team row, from everyone's day: how many open tasks wait in the pool, and per person how
+ *  many are overdue, due today and done today. A task with two people counts for both. */
+export function teamLoad(day: MyDay, people: { id: string; name: string; position?: string | null }[]): { pool: number; people: PersonLoad[] } {
+  const open: DayBucket[] = ["catch_up", "today", "upcoming", "later"];
+  const pool = open.reduce((n, b) => n + day[b].filter(isPool).length, 0);
+  const tally = (b: DayBucket, id: string) => day[b].filter((t) => assigneesOf(t).includes(id)).length;
+  return { pool, people: people.map((p) => ({ id: p.id, name: p.name, position: p.position, overdue: tally("catch_up", p.id), today: tally("today", p.id), done: tally("done_today", p.id) })) };
+}

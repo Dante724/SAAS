@@ -1,6 +1,6 @@
 // My day: regrouping and optimistic moves on the /tasks/my-day reply.
 import { describe, it, expect } from "vitest";
-import { splitPool, normDay, moveTasks, insertTask, replaceTask, dueClock, groupByTime, groupByDay, dayLabel, lateLabel, quickDue, bucketForDue, type Task } from "./taskModel";
+import { splitPool, filterDay, teamLoad, assigneesOf, normDay, moveTasks, insertTask, replaceTask, dueClock, groupByTime, groupByDay, dayLabel, lateLabel, quickDue, bucketForDue, type Task } from "./taskModel";
 
 const T = (id: string, due?: string | null, extra: Partial<Task> = {}): Task => ({ id, title: id, due_at: due ?? null, ...extra });
 
@@ -81,5 +81,38 @@ describe("splitPool (Up for grabs)", () => {
     expect(d.counts.later).toBe(0);
     expect(pool.map((t) => t.id)).toEqual(["pool", "pool2"]);   // dated first
     expect(splitPool(day, null).pool).toEqual([]);              // managers and other views: as sent
+  });
+});
+
+describe("whose tasks: filterDay / teamLoad", () => {
+  const day = normDay({
+    catch_up: [T("a", "2026-11-06", { assigned_to_id: "e1", assignee_ids: ["e1"] }), T("p1", "2026-11-09")],
+    today: [T("b", "2026-11-11T10:00", { assigned_to_id: "e1", assignee_ids: ["e1", "e2"] }), T("c", "2026-11-11", { assignee_ids: ["e2"] }), T("p2", "2026-11-11")],
+    upcoming: [T("p3", "2026-11-13")],
+    later: [T("d", null, { assigned_to_id: "e2" })],
+    done_today: [T("e", null, { assigned_to_id: "e2", status: "done" }), T("f", null, { assignee_ids: ["e2", "e1"], status: "done" })],
+    counts: { catch_up: 2, today: 3, upcoming: 1, later: 1, done_today: 2 },
+  }, "2026-11-11");
+
+  it("assigneesOf joins the primary and the extra assignees once", () => {
+    expect(assigneesOf({ assigned_to_id: "e1", assignee_ids: ["e1", "e2"] })).toEqual(["e1", "e2"]);
+    expect(assigneesOf({})).toEqual([]);
+  });
+
+  it("filterDay keeps the matching tasks and counts what is left", () => {
+    const pool = filterDay(day, (t) => !assigneesOf(t).length);
+    expect(pool.catch_up.map((t) => t.id)).toEqual(["p1"]);
+    expect(pool.today.map((t) => t.id)).toEqual(["p2"]);
+    expect(pool.counts).toEqual({ catch_up: 1, today: 1, upcoming: 1, later: 0, done_today: 0 });
+  });
+
+  it("teamLoad counts overdue / today / done per person (a shared task counts for both) and the open pool", () => {
+    const r = teamLoad(day, [{ id: "e1", name: "Ann" }, { id: "e2", name: "Sam", position: "Technician" }, { id: "e3", name: "Leo" }]);
+    expect(r.pool).toBe(3);
+    expect(r.people).toEqual([
+      { id: "e1", name: "Ann", position: undefined, overdue: 1, today: 1, done: 1 },
+      { id: "e2", name: "Sam", position: "Technician", overdue: 0, today: 2, done: 2 },
+      { id: "e3", name: "Leo", position: undefined, overdue: 0, today: 0, done: 0 },
+    ]);
   });
 });
