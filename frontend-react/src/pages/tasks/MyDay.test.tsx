@@ -998,5 +998,41 @@ describe("server counts + search fix", () => {
     await u.type(screen.getByLabelText("Add a task"), "Order a new screen{Enter}");
     expect(posts("/api/tasks")[0].body).toMatchObject({ assigned_to_id: "e3" });
   });
+
+  it("phones: focus alone never opens or folds the choices (a tab tap can't move the page); typing does", async () => {
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    const row = () => screen.getByRole("group", { name: "When" }).parentElement!.parentElement!;
+    expect(row().className).toContain("max-sm:hidden");
+    await u.click(screen.getByLabelText("Add a task"));
+    expect(row().className).toContain("max-sm:hidden");                         // focus: unchanged
+    await u.type(screen.getByLabelText("Add a task"), "R");
+    expect(row().className).not.toContain("max-sm:hidden");
+    await u.click(screen.getByRole("button", { name: /^Upcoming/ }));
+    expect(row().className).not.toContain("max-sm:hidden");                     // a tab tap: unchanged
+  });
+
+  it("phones: the date panel is a sheet on <body> (never over the chips), and a tap elsewhere or another chip closes it", async () => {
+    const mm = vi.fn((q: string) => ({ matches: q.includes("max-width: 639px"), media: q, addEventListener: vi.fn(), removeEventListener: vi.fn() }));
+    vi.stubGlobal("matchMedia", mm);
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    const when = screen.getByRole("group", { name: "When" });
+    await u.click(within(when).getByRole("button", { name: "Pick date" }));
+    const sheet = screen.getByRole("dialog", { name: "Due date" });
+    expect(sheet.parentElement).toBe(document.body);
+    expect(sheet.className).toContain("bottom-0");
+    await u.click(within(screen.getByRole("group", { name: "Who" })).getByRole("button", { name: "Others" }));   // another chip
+    expect(screen.queryByRole("dialog", { name: "Due date" })).not.toBeInTheDocument();
+    expect(screen.getByRole("dialog", { name: "Choose a person" })).toBeInTheDocument();
+    await u.click(screen.getByRole("button", { name: /^Upcoming/ }));                                            // elsewhere
+    expect(screen.queryByRole("dialog", { name: "Choose a person" })).not.toBeInTheDocument();
+    await u.click(within(when).getByRole("button", { name: "Pick date" }));
+    within(screen.getByRole("dialog", { name: "Due date" })).getByRole("button", { name: "Done" }).focus();
+    await u.keyboard("{Escape}");                                                                                // Escape
+    expect(screen.queryByRole("dialog", { name: "Due date" })).not.toBeInTheDocument();
+  });
 });
 

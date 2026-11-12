@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
 import { Link } from "react-router-dom";
+import { createPortal } from "react-dom";
 import { M } from "../../components/Shell";
 import Button from "../../components/Button";
 import Tabs from "../../components/Tabs";
@@ -608,7 +609,6 @@ function QuickAdd({ today, tz, tzFailed, meId, emps, target, mayAssign, onAdd, f
   const otherName = who === "others" && other ? emps.find((e) => e.id === other)?.name : undefined;
   const [jobOpen, setJobOpen] = useState(false);
   const [busy, setBusy] = useState(false);
-  const [active, setActive] = useState(false);
   const input = useRef<HTMLInputElement>(null);
   // One key per typed task: a retry after a timeout can't create it twice.
   const key = useRef(newKey());
@@ -649,8 +649,7 @@ function QuickAdd({ today, tz, tzFailed, meId, emps, target, mayAssign, onAdd, f
   const onKey = (e: ReactKeyboardEvent<HTMLInputElement>) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); save(); } };
 
   return (
-    <div className="max-sm:sticky max-sm:-top-5 max-sm:z-20 max-sm:-mx-4 max-sm:px-4 max-sm:pt-3 max-sm:pb-2 max-sm:bg-canvas"
-      onFocus={() => setActive(true)} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setActive(false); }}>
+    <div className="max-sm:sticky max-sm:-top-5 max-sm:z-20 max-sm:-mx-4 max-sm:px-4 max-sm:pt-3 max-sm:pb-2 max-sm:bg-canvas">
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-2">
       <div className="flex items-center gap-2">
         <M n="add" c="ml-2 text-base text-ink-tertiary flex-shrink-0" />
@@ -663,8 +662,10 @@ function QuickAdd({ today, tz, tzFailed, meId, emps, target, mayAssign, onAdd, f
           className={`flex-shrink-0 ${ready ? "" : "!bg-slate-100 !text-ink-tertiary cursor-not-allowed"}`}>Add task</Button>
       </div>
       {(hint || (blocked && title.trim())) && <p id="quick-add-why" role="status" className="px-3 pt-1 text-2xs text-ink-secondary">{hint || blocked}</p>}
-      {/* On phones the choices fold away until you start a task, so the sticky box stays small. */}
-      <div className={`flex flex-wrap items-center gap-x-3 gap-y-2 px-2 pt-2 pb-1 border-t border-slate-100 mt-2 ${active || title || who !== "me" || when !== "today" || prio || job || jobOpen ? "" : "max-sm:hidden"}`}>
+      {/* On phones the choices fold away until you start typing a task (or have picked something),
+          so the sticky box stays small. Only what you typed or chose opens them, never focus: tapping
+          a tab elsewhere must not fold them and move the page. */}
+      <div className={`flex flex-wrap items-center gap-x-3 gap-y-2 px-2 pt-2 pb-1 border-t border-slate-100 mt-2 ${title || who !== "me" || when !== "today" || prio || job || jobOpen ? "" : "max-sm:hidden"}`}>
         {/* The date and time open in a small panel under "Pick date", over the page: picking a
             day never pushes the other chips along (switching chips moves nothing). */}
         <div ref={whenBox} className="relative">
@@ -732,11 +733,31 @@ function ChipPanel({ open, box, label, onClose, children }: {
     document.addEventListener("mousedown", away);
     return () => document.removeEventListener("mousedown", away);
   }, [open, box]);
+  const phone = usePhone();
   if (!open) return null;
-  return (
+  const panel = (
     <div role="dialog" aria-label={label} onKeyDown={(e) => { if (e.key === "Escape" && e.currentTarget.contains(e.target as Node)) { e.stopPropagation(); onClose(); } }}
-      className="absolute left-0 top-full mt-2 z-30 w-[min(320px,calc(100vw-32px))] bg-raised rounded-2xl border border-slate-200/90 shadow-clay-card p-3 space-y-2.5">
+      className={phone
+        // A phone: a sheet along the bottom of the screen, so the chips above stay free to tap.
+        ? "fixed inset-x-0 bottom-0 z-[60] bg-raised rounded-t-2xl border-t border-slate-200/90 shadow-clay-card px-4 pt-4 pb-[max(16px,env(safe-area-inset-bottom))] space-y-3"
+        : "absolute left-0 top-full mt-2 z-30 w-[320px] bg-raised rounded-2xl border border-slate-200/90 shadow-clay-card p-3 space-y-2.5"}>
+      {phone && <p className="text-xs font-semibold text-ink-secondary">{label}</p>}
       {children}
     </div>
   );
+  return phone ? createPortal(panel, document.body) : panel;
+}
+
+/** Phone width (the sm breakpoint), following resizes. */
+function usePhone(): boolean {
+  const q = "(max-width: 639px)";
+  const [on, setOn] = useState(() => typeof window !== "undefined" && !!window.matchMedia?.(q).matches);
+  useEffect(() => {
+    const m = window.matchMedia?.(q);
+    if (!m) return;
+    const f = () => setOn(m.matches);
+    m.addEventListener?.("change", f);
+    return () => m.removeEventListener?.("change", f);
+  }, []);
+  return on;
 }
