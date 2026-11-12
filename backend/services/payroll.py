@@ -9,7 +9,8 @@ open, under a per-cycle idempotency key, so re-firing an event can't double-dip 
 reopened-and-re-closed order pays again. Claw-backs post the negative of what is still open
 (or a refunded share of it), so two reversals of the same order can never take it twice.
 """
-from decimal import ROUND_HALF_UP, Decimal
+import logging
+from decimal import ROUND_DOWN, ROUND_HALF_UP, Decimal
 from typing import Optional
 
 from sqlalchemy import case, func, select
@@ -28,6 +29,7 @@ from backend.models import (
 from backend.services.dates import now_utc
 
 Q = Decimal("0.0001")  # 4-dp quantum
+log = logging.getLogger("tekly.payroll")
 
 
 def _money(x) -> Decimal:
@@ -35,6 +37,17 @@ def _money(x) -> Decimal:
     if x is None:
         return Decimal("0")
     return Decimal(str(x)).quantize(Q, rounding=ROUND_HALF_UP)
+
+
+# tk02: how a task_closed commission is paid when the task has several assignees
+TASK_COMMISSION_MODES = ("split", "each_full", "first_only")
+def _task_shares(amount: Decimal, n: int, mode: str) -> list[Decimal]:
+    """Each payee's part of one rule's amount. `split` shares it at the ledger's 4 dp, the first
+    payee (the primary owner) taking what rounding leaves over, so the parts add up to `amount`."""
+    if n <= 1 or mode != "split":
+        return [amount] * n
+    base = (amount / n).quantize(Q, rounding=ROUND_DOWN)
+    return [amount - base * (n - 1)] + [base] * (n - 1)
 
 
 def _line_net(line) -> Decimal:
@@ -97,30 +110,101 @@ class CommissionEngine:
 
         Build 70 already gave rules an execution term (on_time / overdue / any); a task
         records `completed_on_time`, so the same conditions apply unchanged. Idempotent
-        per task+rule, so re-completing a reopened task can't pay twice.
+        per task+employee+rule (`task:<task>:<employee>:<rule>`), so re-completing a reopened task
+        can't pay twice. Only "done" pays; a cancelled task never reaches here.
+
+        Several assignees (tk02): the shop's Organisation.task_commission_mode decides —
+          split       (default) the rule's amount is shared equally; cents left over by rounding go
+                      to the first person, so the shares add up to the rule's amount
+          each_full   every assignee earns the full amount
+          first_only  only the primary owner (assigned_to_id) earns it, the behaviour before tk02
+        A rule tied to one employee pays only that employee, and only if they are among the payees.
         """
-        if not task.assigned_to_id:
+        people = list(dict.fromkeys(p for p in [task.assigned_to_id, *(task.assignee_ids or [])] if p))
+        if not people:
             return
+        mode = await self.task_commission_mode()
+        if mode == "first_only":
+            people = people[:1]
         rules = (await self.db.execute(select(CommissionRule).where(
             CommissionRule.org_id == self.org_id,
             CommissionRule.active == True,  # noqa: E712
             CommissionRule.event == "task_closed",
-            ((CommissionRule.employee_id == task.assigned_to_id)
-             | (CommissionRule.employee_id.is_(None)))))).scalars().all()
+            (CommissionRule.employee_id.in_(people) | CommissionRule.employee_id.is_(None)))
+            .order_by(CommissionRule.id))).scalars().all()
+        on_time = task.completed_on_time is not False
         for r in rules:
             term = r.term_condition or "any"
-            on_time = task.completed_on_time is not False
             if term == "on_time" and not on_time:
                 continue
             if term == "overdue" and on_time:
                 continue
+            payees = [r.employee_id] if r.employee_id else people
             amt = self.compute_amount(r, line_total=_money(0), margin=_money(0))
-            await self._accrue_once(
-                employee_id=task.assigned_to_id, amount=amt,
-                event="task_closed", rule_id=r.id, ref_type="task", ref_id=task.id,
-                base_key=f"task:{task.id}:{r.id}",
-                note=f"Task closed: {task.title}")
+            for emp_id, share in zip(payees, _task_shares(amt, len(payees), mode)):
+                if await self._paid_under_legacy_task_key(task.id, r.id, emp_id):
+                    continue
+                await self._accrue_once(
+                    employee_id=emp_id, amount=share,
+                    event="task_closed", rule_id=r.id, ref_type="task", ref_id=task.id,
+                    base_key=f"task:{task.id}:{emp_id}:{r.id}",
+                    note=f"Task closed: {task.title}")
         await self.db.commit()
+
+    async def reverse_for_task(self, task, reason: str) -> int:
+        """A closed task was reopened, cancelled or deleted: claw back every person's still-open
+        task_closed commission for it (every rule, the pre-tk02 key too), so closing it again
+        nets exactly one payout per person (the next close posts under `<key>@<n>`). A deletion
+        honours the rule's cancel_if_deleted, as for orders. The claw-back key leaves the reason out
+        (task_reversal:<group>@<rows>), so a reopen and a cancel racing each other post it once.
+        Returns the number of claw-backs."""
+        L = EmployeeBalanceLedger
+        rows = (await self.db.execute(select(L).where(
+            L.org_id == self.org_id, L.ref_id == task.id, L.event == "task_closed",
+            L.entry_type.in_(("commission", "clawback")), L.accrual_key.isnot(None))
+            .order_by(L.created_at, L.id))).scalars().all()
+        groups: dict[str, list] = {}
+        for e in rows:
+            groups.setdefault(e.accrual_key, []).append(e)
+        posted = 0
+        for key, entries in groups.items():
+            first = next((e for e in entries if e.entry_type == "commission"), None)
+            if first is None:
+                continue
+            if reason == "deleted" and first.rule_id:
+                flag = (await self.db.execute(select(CommissionRule.cancel_if_deleted).where(
+                    CommissionRule.id == first.rule_id))).scalar_one_or_none()
+                if flag is False:
+                    continue
+            net, _, n_rows = await self._group_state(key)
+            if net <= 0:
+                continue
+            if await self._post(
+                    employee_id=first.employee_id, entry_type="clawback", amount=-net,
+                    event="task_closed", rule_id=first.rule_id, ref_type="task", ref_id=task.id,
+                    idempotency_key=f"task_reversal:{key}@{n_rows}", accrual_key=key,
+                    note=f"Task {reason}: {task.title}"):
+                posted += 1
+        await self.db.commit()
+        return posted
+
+    async def task_commission_mode(self) -> str:
+        from backend.models import Organisation
+        mode = (await self.db.execute(select(Organisation.task_commission_mode).where(
+            Organisation.id == self.org_id))).scalar()
+        if mode is None or mode in TASK_COMMISSION_MODES:
+            return mode or "split"
+        log.warning("unknown task_commission_mode %r for org %s; using split", mode, self.org_id)
+        return "split"
+
+    async def _paid_under_legacy_task_key(self, task_id: str, rule_id: str, employee_id: str) -> bool:
+        """Before tk02 a task paid its primary owner under `task:<task>:<rule>`. If that payment is
+        still standing for this employee, the per-employee key must not pay them a second time."""
+        key = EmployeeBalanceLedger.normalize_key(f"task:{task_id}:{rule_id}")
+        L = EmployeeBalanceLedger
+        net = (await self.db.execute(select(func.coalesce(func.sum(L.amount), 0)).where(
+            L.org_id == self.org_id, L.accrual_key == key, L.employee_id == employee_id))).scalar()
+        return _money(net) > 0
 
     @staticmethod
     def _rule_matches_order(rule: CommissionRule, order: Optional[Order]) -> bool:

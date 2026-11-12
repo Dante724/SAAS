@@ -115,6 +115,9 @@ class Organisation(Base):
     # Build 144ah — POs whose total exceeds this need a manager (role with can_manage_settings)
     # to send. 0/None disables the gate.
     po_approval_threshold: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
+    # tk02: how a task_closed commission is paid when a task has several assignees:
+    # split (default; null reads as split) | each_full | first_only (the primary owner, the old way).
+    task_commission_mode: Mapped[Optional[str]] = mapped_column(String(12))
     payment_provider: Mapped[str] = mapped_column(String(20), default="auto")  # auto|stripe|square|sumup|simulated
     loyalty_earn_rate: Mapped[float] = mapped_column(Float, default=0.0)   # points per 1.00 paid; 0 = program off
     loyalty_point_value: Mapped[float] = mapped_column(Numeric(12, 4, asdecimal=False), default=0.0)  # currency value of 1 point at redemption
@@ -1781,6 +1784,10 @@ def normalise_task_priority(value) -> int:
     return n
 
 
+TASK_OVERDUE_PENDING_WHERE = ("archived_at IS NULL AND overdue_alerted_at IS NULL AND due_at IS NOT NULL "
+                              "AND status NOT IN ('done', 'cancelled')")
+
+
 class Task(OrgScoped, Base):
     __tablename__ = "tasks"
     __table_args__ = (
@@ -1791,6 +1798,22 @@ class Task(OrgScoped, Base):
                                 "AND status NOT IN ('done', 'cancelled')"),
               postgresql_where=text("source_ref IS NOT NULL AND archived_at IS NULL "
                                     "AND status NOT IN ('done', 'cancelled')")),
+        # tk02: the list, My day and the counts all filter a shop's live tasks by status and due date.
+        Index("ix_tasks_org_live_due", "org_id", "archived_at", "status", "due_at"),
+        # tk02: My day's "done today".
+        Index("ix_tasks_org_completed", "org_id", "completed_at"),
+        # tk02: the overdue sweep reads only open tasks not yet alerted, across shops, by due time.
+        Index("ix_tasks_overdue_pending", "due_at",
+              sqlite_where=text(TASK_OVERDUE_PENDING_WHERE),
+              postgresql_where=text(TASK_OVERDUE_PENDING_WHERE)),
+        # tk02: "assigned to me / made by me" (My day, staff visibility). The three arms of that OR
+        # each have an index, so Postgres can BitmapOr them instead of filtering the whole shop.
+        Index("ix_tasks_org_assignee", "org_id", "assigned_to_id"),
+        Index("ix_tasks_org_creator", "org_id", "created_by_id"),
+        # assignee_ids is JSON: containment (@>) on its jsonb cast. Postgres only; SQLite matches
+        # the quoted id in the JSON text (services/task_visibility.list_has).
+        Index("ix_tasks_assignee_ids_gin", text("(assignee_ids::jsonb) jsonb_path_ops"),
+              postgresql_using="gin").ddl_if(dialect="postgresql"),
     )
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
@@ -1826,6 +1849,8 @@ class Task(OrgScoped, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=_now, onupdate=_now)
     archived_at: Mapped[Optional[datetime]] = mapped_column(DateTime)   # tk01: soft delete (restore clears it)
+    # tk02: when the assignees were told the task is overdue (once); cleared when due_at moves later.
+    overdue_alerted_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     assigned_employee: Mapped[Optional["Employee"]] = relationship(back_populates="tasks", foreign_keys=[assigned_to_id])
     order: Mapped[Optional["Order"]] = relationship(back_populates="tasks")
 
@@ -2433,7 +2458,9 @@ class NotificationLog(OrgScoped, Base):
     """Every notification the system rendered + attempted to deliver. This is the
     communication history shown on the order and the client profile."""
     __tablename__ = "notification_logs"
-    __table_args__ = (Index("ix_notification_logs_org_created", "org_id", "created_at"),)   # phase 4 perf: hot lookup path
+    __table_args__ = (Index("ix_notification_logs_org_created", "org_id", "created_at"),   # phase 4 perf: hot lookup path
+                      # the outbox sweep: due "scheduled" rows and stuck "sending" rows
+                      Index("ix_notification_logs_status_send_at", "status", "send_at"))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     scope: Mapped[str] = mapped_column(String(12), default="client")  # client|employee
@@ -2449,13 +2476,22 @@ class NotificationLog(OrgScoped, Base):
     # Whether the body is HTML, fixed from the template when the message is rendered (a later
     # edit to the template mustn't change how an already-filled message is sent).
     is_html: Mapped[Optional[bool]] = mapped_column(Boolean)
-    status: Mapped[str] = mapped_column(String(20), default="queued")  # queued|scheduled|sent|failed|skipped
+    # queued|scheduled|sending|sent|skipped|dead|draft. "dead" = the outbox gave up (permanent error
+    # or out of attempts); "failed" only on rows written before the outbox, and is still read as such.
+    status: Mapped[str] = mapped_column(String(20), default="queued")
     rule_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("notification_rules.id", ondelete="SET NULL"))  # Build 80; SET NULL so deleting a rule that already fired keeps its log history
     send_at: Mapped[Optional[datetime]] = mapped_column(DateTime, index=True)  # due time for delayed/reminder sends
     # tk01: a delayed status message is only still true while the job is in this status; run_due
     # skips the send when the job has moved on (customer already collected, job cancelled ...).
     expect_status: Mapped[Optional[str]] = mapped_column(String(60))
     error: Mapped[Optional[str]] = mapped_column(Text)
+    # Outbox delivery (services/notification_rules.run_due): tries so far, when the next retry is
+    # due (None = send_at decides), the last provider error (short), and when a sweep claimed the
+    # row for sending (a row "sending" for too long is reclaimed).
+    attempts: Mapped[int] = mapped_column(Integer, default=0, server_default="0", nullable=False)
+    next_attempt_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    last_error: Mapped[Optional[str]] = mapped_column(String(255))
+    claimed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
 
 
@@ -3676,6 +3712,21 @@ class AutomationFire(OrgScoped, Base):
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
+class TaskOverdueAlert(OrgScoped, Base):
+    """tk02: one assignee was told a task is overdue, for its current due time. The unique pair is
+    the database guard that makes the overdue sweep send at most one alert per person per overdue
+    spell (a second worker or a retried tick inserts nothing and sends nothing). Rows are deleted
+    when the due time moves later, which re-arms the alert; someone added later has no row yet and
+    gets their own alert."""
+    __tablename__ = "task_overdue_alerts"
+    __table_args__ = (UniqueConstraint("task_id", "employee_id", name="uq_task_overdue_alerts_task_employee"),)
+    id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
+    org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
+    task_id: Mapped[str] = mapped_column(String, ForeignKey("tasks.id", ondelete="CASCADE"))
+    employee_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id", ondelete="CASCADE"))
+    created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+
+
 all_models = [
     Organisation, Location, Role, Employee, Shift, WageRecord,
     Client, Device, OrderStatus, Order, OrderLine, OrderItem, OrderStatusLog, OrderComment,
@@ -3701,7 +3752,7 @@ all_models = [
     EmailConnection,
     PriceTypeItem,
     NotificationPreference,
-    AutomationRule, AutomationFire,
+    AutomationRule, AutomationFire, TaskOverdueAlert,
 ]
 
 

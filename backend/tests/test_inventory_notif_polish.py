@@ -183,6 +183,11 @@ async def test_immediate_rule_sends_now(client, tenant, db):
         "channel": "email", "delay_min": 0}, headers=tenant)
     o = await _order_with_client(client, tenant)
     await client.patch(f"/api/orders/{o['id']}/status", json={"status": "done-nr3"}, headers=tenant)
+    from backend.services import notification_rules as nr
+    org_id = (await client.get("/api/auth/me", headers=tenant)).json()["org_id"]
+    res = await nr.run_due(db, org_id=org_id)        # queued in the request, sent by the outbox
+    assert res["sent"] >= 1
+    db.expire_all()
     log = (await db.execute(select(NotificationLog).where(
         NotificationLog.order_id == o["id"], NotificationLog.rule_id.isnot(None)))).scalars().first()
     assert log.status == "sent"

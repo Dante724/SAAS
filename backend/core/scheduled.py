@@ -29,6 +29,24 @@ async def sweep_status_sla() -> None:
             log.info("status-sla-sweep: flagged %d new SLA breach(es)", written)
 
 
+# Both notification jobs below deliver the outbox. Only one may deliver at a time (in this process
+# and, on Postgres, across processes): while one is sending, the other could otherwise reclaim
+# a row it is still in the middle of sending and send it twice.
+_DELIVERY = {"busy": False}
+
+
+async def _deliver_exclusively(fn) -> bool:
+    """Run fn as THE outbox deliverer, or return False straight away when another job is."""
+    from backend.core.jobs import run_exclusive
+    if _DELIVERY["busy"]:
+        return False
+    _DELIVERY["busy"] = True
+    try:
+        return await run_exclusive("notification-delivery", fn)
+    finally:
+        _DELIVERY["busy"] = False
+
+
 @job_runner.every(120, "notification-sweep")
 async def sweep_notifications() -> None:
     """N-GAP-1 — actually fire scheduled notifications.
@@ -36,12 +54,15 @@ async def sweep_notifications() -> None:
     The rules engine queues appointment reminders and delayed / working-hours
     sends as NotificationLog rows with a future send_at; nothing was flushing
     them. This tick, per active org, (1) queues any reminders now inside their
-    lead window and (2) dispatches every queued send whose time has come.
+    lead window and (2) dispatches every queued send whose time has come — unless
+    the notification-outbox job is delivering right now, in which case it only
+    queues and leaves the sending to that job.
 
     ponytail: per-org loop over active orgs — fine at pilot scale; swap to a
     single cross-org query if the org count ever makes this hot.
     """
     from backend.db.database import AsyncSessionLocal
+    from backend.db.tenancy import set_tenant
     from backend.models import Organisation
     from backend.services import notification_rules as nr
 
@@ -49,24 +70,63 @@ async def sweep_notifications() -> None:
         org_ids = (await db.execute(
             select(Organisation.id).where(Organisation.active == True)  # noqa: E712
         )).scalars().all()
-    queued = sent = 0
-    for oid in org_ids:
-        # A session per org: a DB error leaves its session unusable until rolled back, and with
-        # one shared session every org after the failing one failed too (512 orgs, 510 failed).
-        async with AsyncSessionLocal() as db:
-            try:
-                queued += await nr.queue_reminders(db, org_id=oid)
-                queued += await nr.queue_appointment_reminders(db, org_id=oid)
-                res = await nr.run_due(db, org_id=oid)
-                sent += res.get("sent", 0)
-                await db.commit()
-            except Exception:  # noqa: BLE001 — one bad org never stalls the sweep
-                log.exception("notification-sweep failed for org %s", oid)
-                # R2: a failed statement leaves the shared session needing a rollback; without
-                # it every later shop in this tick failed too.
-                await db.rollback()
+
+    async def tick(deliver: bool) -> None:
+        queued = sent = 0
+        for oid in org_ids:
+            # A session per org: a DB error leaves its session unusable until rolled back, and with
+            # one shared session every org after the failing one failed too (512 orgs, 510 failed).
+            async with AsyncSessionLocal() as db:
+                set_tenant(db, oid)             # this session is this shop's only
+                try:
+                    queued += await nr.queue_reminders(db, org_id=oid)
+                    queued += await nr.queue_appointment_reminders(db, org_id=oid)
+                    if deliver:
+                        res = await nr.run_due(db, org_id=oid)
+                        sent += res.get("sent", 0)
+                    await db.commit()
+                except Exception:  # noqa: BLE001 — one bad org never stalls the sweep
+                    log.exception("notification-sweep failed for org %s", oid)
+                    # R2: a failed statement leaves the shared session needing a rollback; without
+                    # it every later shop in this tick failed too.
+                    await db.rollback()
         if queued or sent:
             log.info("notification-sweep: queued %d, sent %d", queued, sent)
+
+    if not await _deliver_exclusively(lambda: tick(True)):
+        await tick(False)
+
+
+@job_runner.every(30, "notification-outbox")
+async def deliver_notifications() -> None:
+    """Send queued customer/staff messages within ~30 seconds. Rules only queue a message (the
+    request never calls Twilio/SMTP); this delivers it, retries provider failures with backoff and
+    reclaims sends a crashed worker left behind (services/notification_rules.run_due). One query
+    finds the shops with something due, so idle shops cost nothing; each shop then gets its own
+    session, and one shop's error never stops the others. Skips the tick while the slower
+    notification-sweep is delivering (one deliverer at a time)."""
+    from backend.db.database import AsyncSessionLocal
+    from backend.db.tenancy import set_tenant
+    from backend.services import notification_rules as nr
+
+    async def tick() -> None:
+        async with AsyncSessionLocal() as db:
+            org_ids = await nr.orgs_with_due(db)
+        totals = {"sent": 0, "retrying": 0, "dead": 0}
+        for oid in org_ids:
+            async with AsyncSessionLocal() as db:
+                set_tenant(db, oid)             # this session is this shop's only
+                try:
+                    res = await nr.run_due(db, org_id=oid)
+                    for k in totals:
+                        totals[k] += res.get(k, 0)
+                except Exception:  # noqa: BLE001 — one bad org never stalls the sweep
+                    log.exception("notification-outbox failed for org %s", oid)
+                    await db.rollback()
+        if any(totals.values()):
+            log.info("notification-outbox: sent %(sent)d, retrying %(retrying)d, gave up %(dead)d", totals)
+
+    await _deliver_exclusively(tick)
 
 
 @job_runner.every(3600, "automation-time-sweep")
@@ -320,3 +380,28 @@ async def sweep_integrity() -> None:
 
     async with AsyncSessionLocal() as db:
         await sweep(db)
+
+
+@job_runner.every(900, "task-overdue-sweep")
+async def sweep_overdue_tasks() -> None:
+    """tk02: tell every assignee once when an open task passes its due time (bell + push,
+    kind task.overdue). Held outside the branch's working hours until the next opening; see
+    services/task_alerts.py for the rules."""
+    from backend.db.database import AsyncSessionLocal
+    from backend.db.tenancy import set_tenant
+    from backend.services.task_alerts import overdue_org_ids, sweep_overdue
+
+    now = now_utc()
+    async with AsyncSessionLocal() as db:
+        org_ids = await overdue_org_ids(db, now)
+    sent = 0
+    for oid in org_ids:
+        async with AsyncSessionLocal() as db:   # a session per shop: one failure never stalls the rest
+            set_tenant(db, oid)                 # this session is this shop's only
+            try:
+                sent += await sweep_overdue(db, oid, now)
+            except Exception:  # noqa: BLE001
+                log.exception("task-overdue-sweep failed for org %s", oid)
+                await db.rollback()
+    if sent:
+        log.info("task-overdue-sweep: alerted %d overdue task(s)", sent)

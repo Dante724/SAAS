@@ -19,12 +19,24 @@ def now_utc() -> datetime:
     return _clock().replace(tzinfo=None)
 
 
+_BAD_ZONES: set = set()
+
+
+def _unknown_zone(tzname) -> None:
+    """Log an unknown zone name once per process (DUE-8): the shop still works, on UTC."""
+    if tzname not in _BAD_ZONES:
+        _BAD_ZONES.add(tzname)
+        import logging
+        logging.getLogger("tekly.dates").warning("unknown timezone %r; using UTC", tzname)
+
+
 def zone(tzname: str | None):
-    """ZoneInfo for a shop's timezone name; UTC when it is empty or unknown."""
+    """ZoneInfo for a shop's timezone name; UTC when it is empty or unknown (logged once)."""
     try:
         from zoneinfo import ZoneInfo
         return ZoneInfo(tzname or "UTC")
     except Exception:
+        _unknown_zone(tzname)
         return timezone.utc
 
 
@@ -125,12 +137,7 @@ def location_tz(location, org) -> str:
 
 
 def _zone(tzname):
-    from datetime import timezone
-    from zoneinfo import ZoneInfo
-    try:
-        return ZoneInfo(tzname or "UTC")
-    except Exception:
-        return timezone.utc
+    return zone(tzname)
 
 
 def wall_to_utc(dt: datetime, tzname: str | None) -> datetime:
