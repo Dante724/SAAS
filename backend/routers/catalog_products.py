@@ -251,8 +251,11 @@ def _ser_product(p: Part, qty=0.0, reserved=0.0, variant_count=0, image=_FULL, h
             "low_stock": qty <= (p.min_stock or 0), "active": p.active}
 
 
-async def _stock_for(db, part_id, warehouse_id=None, wh_location_id=None):
+async def _stock_for(db, part_id, warehouse_id=None, wh_location_id=None, reach=None):
     q = select(StockLevel).where(StockLevel.part_id == part_id)
+    from backend.services import warehouses as _whs
+    if reach is not None:          # SEC-04: only warehouses the person can reach
+        q = q.where(_whs.reach_clause(reach))
     if warehouse_id:
         # Match the warehouse's own rows, plus location-level rows (warehouse_id NULL) for the
         # same location — postings/sales write location-keyed stock, so a warehouse filter must
@@ -298,6 +301,10 @@ async def list_products(search: Optional[str] = None, category_id: Optional[str]
             if wh_location_id:
                 cond = cond | ((StockLevel.warehouse_id.is_(None)) & (StockLevel.location_id == wh_location_id))
             sq = sq.where(cond)
+        from backend.services import warehouses as _whs
+        _reach = await _whs.reach(db, current)
+        if _reach is not None:     # SEC-04: on-hand only at warehouses the person can reach
+            sq = sq.where(_whs.reach_clause(_reach))
         stock = {pid: (qty, res) for pid, qty, res in (await db.execute(sq.group_by(StockLevel.part_id))).all()}
         variants = dict((await db.execute(select(Part.parent_id, func.count()).where(
             Part.parent_id.in_(ids)).group_by(Part.parent_id))).all())
@@ -775,11 +782,13 @@ async def get_product(pid: str, db: AsyncSession = Depends(get_db), current: Emp
     p = (await db.execute(select(Part).where(Part.id == pid, Part.org_id == current.org_id))).scalar_one_or_none()
     if not p:
         raise HTTPException(404, "Product not found")
-    qty, res = await _stock_for(db, pid)
+    from backend.services import warehouses as _whs
+    _reach = await _whs.reach(db, current)          # SEC-04
+    qty, res = await _stock_for(db, pid, reach=_reach)
     variants = (await db.execute(select(Part).where(Part.parent_id == pid))).scalars().all()
     var_out = []
     for v in variants:
-        vqty, vres = await _stock_for(db, v.id)
+        vqty, vres = await _stock_for(db, v.id, reach=_reach)
         var_out.append(_ser_product(v, vqty, vres))
     serials = []
     if p.serialized:

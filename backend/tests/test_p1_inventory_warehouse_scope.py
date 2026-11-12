@@ -82,6 +82,9 @@ async def test_stock_reads_show_only_reachable_warehouses(client, tenant, db):
     assert (await client.get(f"/api/inventory/parts/{pid}", headers=H)).json()["qty_available"] == 2
     listed = (await client.get("/api/inventory/parts", headers=H)).json()["items"]
     assert next(p for p in listed if p["id"] == pid)["qty_available"] == 2
+    cat = (await client.get("/api/catalog/products", headers=H)).json()["items"]
+    assert next(p for p in cat if p["id"] == pid)["qty_available"] == 2
+    assert (await client.get(f"/api/catalog/products/{pid}", headers=H)).json()["product"]["qty_available"] == 2
     mv = (await client.get(f"/api/inventory/parts/{pid}/movements", headers=H)).json()
     assert [m["location"] for m in mv] == ["Branch B"]
     batches = (await client.get(f"/api/inventory/parts/{pid}/batches", headers=H)).json()["items"]

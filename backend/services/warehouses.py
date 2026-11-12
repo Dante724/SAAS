@@ -195,6 +195,15 @@ def reachable(r: Optional[frozenset], location_id: Optional[str], warehouse_id: 
     return (location_id in r) or (warehouse_id is not None and warehouse_id in r)
 
 
+def reach_clause(r: Optional[frozenset], model=StockLevel):
+    """SQL filter for rows (stock levels, movements, layers, units) at reachable places, or None."""
+    if r is None:
+        return None
+    from sqlalchemy import or_
+    ids = list(r) or [""]
+    return or_(model.location_id.in_(ids), model.warehouse_id.in_(ids))
+
+
 async def require_reach(db: AsyncSession, location_id: Optional[str], warehouse_id: Optional[str] = None,
                         employee: Optional[Employee] = None) -> None:
     """403 unless the person on this request may move stock at this location / warehouse."""
