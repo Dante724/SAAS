@@ -397,6 +397,8 @@ async def update_employee(
         changes["tax_id"] = {"changed": True}   # an identifier: record the change, not the value
     for k, v in payload.items():
         setattr(emp, k, v)
+    if changes.get("active", {}).get("to") is False:
+        await _forget_devices(db, emp)
     await audit.record(db, org_id=current.org_id, actor_id=current.id, action="employee.update",
                        entity_type="employee", entity_id=emp.id,
                        diff={"fields": sorted(payload), **changes})
@@ -655,6 +657,18 @@ async def delete_role(
     await db.commit()
     return {"ok": True}
 
+
+async def _forget_devices(db: AsyncSession, emp: Employee) -> None:
+    """CLI-02: someone who has left gets no more job pushes (order numbers, statuses and the
+    customer's complaint) on their own phone. Their browser subscribes again if they are ever
+    reactivated and sign in."""
+    from sqlalchemy import delete
+
+    from backend.models import PushSubscription
+    await db.execute(delete(PushSubscription).where(
+        PushSubscription.org_id == emp.org_id, PushSubscription.employee_id == emp.id))
+
+
 @router.delete("/employees/{emp_id}")
 async def deactivate_employee(
     emp_id: str,
@@ -667,6 +681,7 @@ async def deactivate_employee(
         raise HTTPException(404, "Employee not found")
     await _assert_can_manage(db, current, emp)
     emp.active = False
+    await _forget_devices(db, emp)
     await audit.record(db, org_id=current.org_id, actor_id=current.id, action="employee.deactivate",
                        entity_type="employee", entity_id=emp.id)
     await db.commit()

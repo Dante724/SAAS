@@ -2,10 +2,10 @@ import logging
 import re
 import secrets
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, timedelta, timezone
 from typing import List, Literal, Optional
 
-from fastapi import APIRouter, Depends, HTTPException, Query, Request
+from fastapi import APIRouter, Depends, Header, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator, model_validator
 from sqlalchemy import func, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -341,6 +341,7 @@ def _serialize_order_scalars(o: Order) -> dict:
         "order_number": o.order_number,
         "location_id": o.location_id,       # ii144c: which location's bins a product line can come from
         "status": o.status,
+        "updated_at": order_version(o),   # WO-03: echo it back in If-Match on header edits
         "cancel_reason": getattr(o, "cancel_reason", None),
         "written_off": float(getattr(o, "written_off", 0) or 0),
         "continued_from_order_id": getattr(o, "continued_from_order_id", None),
@@ -859,13 +860,16 @@ class SystemActor:
         self.name = name
 
 
-async def _new_job_steps(db, current, order, creator_id=None):
+async def _new_job_steps(db, current, order, creator_id=None, *, notify_assignee=None, webhook_extra=None):
     """What happens once a job exists: checklists for its first status, the order.created
     webhook, the creator's commission, the assignee's alert, the "created" notification rules
     and automations. Shared by create_order and estimate conversion (flow check E3), so a job
     made from an approved estimate gets the same treatment as one typed in at the counter.
     Each step is best-effort and commits on its own; a failure is logged and rolled back so the
-    steps after it still work (R1). `current` may be a SystemActor (customer approved online)."""
+    steps after it still work (R1). `current` may be a SystemActor (customer approved online, or
+    the public API: pass notify_assignee=True there, nobody else has told the assignee).
+    WO-05: every way of making a job ends here (create, estimate conversion, duplicate, inquiry and
+    self check-in conversion, booking conversion, API v1/v2)."""
     reload = (current,) if isinstance(current, Employee) else ()
 
     async def checklists():
@@ -879,7 +883,7 @@ async def _new_job_steps(db, current, order, creator_id=None):
         from backend.services.webhooks import emit_event
         await emit_event(db, current.org_id, "order.created", {
             "id": order.id, "order_number": order.order_number,
-            "status": order.status, "total": order.total})
+            "status": order.status, "total": order.total, **(webhook_extra or {})})
 
     # Payroll: order_created commissions to the creator (idempotent per job and rule). For a
     # converted estimate that's whoever wrote the estimate, not whoever converted it.
@@ -925,13 +929,152 @@ async def _new_job_steps(db, current, order, creator_id=None):
         await _order_side_effect(db, order, "creation commissions", commissions, *reload)
     # Notify the assigned technician (in-app + push) on a fresh assignment. Not when the customer
     # approved online: the assignee already got that alert (customer_messages.notify_staff_about_customer).
-    if current.id and order.assigned_to_id and order.assigned_to_id != current.id:
+    if notify_assignee is None:
+        notify_assignee = bool(current.id)
+    if notify_assignee and order.assigned_to_id and order.assigned_to_id != current.id:
         await _order_side_effect(db, order, "technician notification", notify_technician, *reload)
     if not order.is_estimate:
         await _order_side_effect(db, order, "notification rules", notification_rules, *reload)
         if created_matched == 0:
             await _order_side_effect(db, order, "order notifications", legacy_notifications, *reload)
     await _order_side_effect(db, order, "automations", automations, *reload)
+
+
+# ── One pipeline for every new job (WO-05, WO-06 / Orderry Q25, Q27, CLI-02) ──
+async def _default_job_status(db, org_id: str, record_type: str) -> str:
+    """The shop's starting status for a new record of this type. Work orders: the status marked
+    default, else the first New-group one. Estimates: the first New-group one, preferring the
+    default (as create always did). Never seeds (seeding commits, and callers are mid-transaction):
+    a shop with no pipeline yet gets the key the seed will create."""
+    is_new = OrderStatus.status_group == "new"
+    order_by = ((OrderStatus.is_default.desc(), is_new.desc()) if record_type == "work_order"
+                else (is_new.desc(), OrderStatus.is_default.desc()))
+    found = (await db.execute(select(OrderStatus.key).where(
+        OrderStatus.org_id == org_id, OrderStatus.record_type == record_type,
+        OrderStatus.active == True)  # noqa: E712
+        .order_by(*order_by, OrderStatus.sort_order, OrderStatus.id).limit(1))).scalars().first()
+    return found or ("est_draft" if record_type == "estimate" else "new")
+
+
+async def is_job_status(db, org_id: str, record_type: str, key: Optional[str]) -> bool:
+    """Is `key` one of this shop's active statuses in this record type's pipeline?"""
+    if not key:
+        return False
+    return (await db.execute(select(OrderStatus.id).where(
+        OrderStatus.org_id == org_id, OrderStatus.key == key, OrderStatus.active == True,  # noqa: E712
+        OrderStatus.record_type == record_type).limit(1))).first() is not None
+
+
+async def initial_job_status(db, org_id: str, *, is_estimate: bool = False, type_id: Optional[str] = None,
+                             preferred: Optional[str] = None) -> str:
+    """WO-06 / Q25: the status a new job (or estimate) starts in, always one of the shop's own
+    active statuses for its pipeline. `preferred`, else the job type's starting status (work
+    orders only), is used when it is a real status; otherwise the shop's default."""
+    from backend.models import WorkOrderType
+    rt = "estimate" if is_estimate else "work_order"
+    wanted = preferred
+    if wanted is None and type_id and not is_estimate:
+        wanted = (await db.execute(select(WorkOrderType.initial_status).where(
+            WorkOrderType.id == type_id, WorkOrderType.org_id == org_id))).scalar_one_or_none()
+    if wanted and await is_job_status(db, org_id, rt, wanted):
+        return wanted
+    return await _default_job_status(db, org_id, rt)
+
+
+async def assert_asset_free(db, org_id: str, device_id: Optional[str], *,
+                            exclude_order_id: Optional[str] = None) -> None:
+    """Q27: with "one open ticket per asset" on, refuse (409) a job for an asset that is already on
+    an open (non-terminal, not archived) work order. Estimates don't count: they aren't tickets."""
+    if not device_id:
+        return
+    on = (await db.execute(select(Organisation.asset_one_open_ticket).where(
+        Organisation.id == org_id))).scalar_one_or_none()
+    if not on:
+        return
+    q = (select(Order.id).join(
+            OrderStatus,
+            (OrderStatus.key == Order.status) & (OrderStatus.org_id == Order.org_id)
+            & (OrderStatus.record_type == "work_order"),
+            isouter=True)
+         .where(Order.org_id == org_id, Order.device_id == device_id,
+                Order.is_estimate == False, Order.archived_at.is_(None),  # noqa: E712
+                ((OrderStatus.is_terminal == False) | (OrderStatus.id.is_(None)))))  # noqa: E712
+    if exclude_order_id:
+        q = q.where(Order.id != exclude_order_id)
+    if (await db.execute(q.limit(1))).first():
+        raise HTTPException(409, "This asset is already used in an open ticket")
+
+
+async def active_employee_id(db, org_id: str, employee_id: Optional[str]) -> Optional[str]:
+    """CLI-02: `employee_id` if that person still works here (active), else None. Used for
+    defaults (the client's manager, an inquiry's owner, a booking's employee, a copied job's
+    assignee) so a new job never lands on someone who has left."""
+    if not employee_id:
+        return None
+    ok = (await db.execute(select(Employee.id).where(
+        Employee.id == employee_id, Employee.org_id == org_id, Employee.active == True))).first()  # noqa: E712
+    return employee_id if ok else None
+
+
+async def stamp_new_job(db, order: Order) -> None:
+    """The ids every job has from birth: a globally unique scannable code and track link."""
+    if not order.barcode:
+        order.barcode = await unique_order_code(db)
+    if not order.public_token:
+        order.public_token = await unique_public_token(db)
+
+
+async def record_job_created(db, org_id: str, actor_id: Optional[str], order: Order, **diff) -> None:
+    """The `order.create` audit row, in the creating transaction (before its commit)."""
+    from backend.services.audit import record as _audit
+    await _audit(db, org_id=org_id, actor_id=actor_id, action="order.create", entity_type="order",
+                 entity_id=order.id, diff={"order_number": order.order_number,
+                                           "location_id": order.location_id, **diff})
+
+
+# ── WO-03: optimistic concurrency on header edits ────────────────────────────
+def order_version(order: Order) -> Optional[str]:
+    """The version a client echoes back in If-Match: orders.updated_at (no version column yet)."""
+    return order.updated_at.isoformat() if order.updated_at else None
+
+
+def _parse_version(raw: str) -> datetime:
+    v = raw.strip()
+    if v.startswith("W/"):
+        v = v[2:]
+    v = v.strip('"').strip()
+    if v.endswith("Z"):
+        v = v[:-1]
+    try:
+        d = datetime.fromisoformat(v)
+    except ValueError:
+        raise HTTPException(400, "If-Match must be the order's updated_at as read")
+    return d if d.tzinfo is None else d.astimezone(timezone.utc).replace(tzinfo=None)
+
+
+async def _order_for_header_edit(db, current, order_id: str, if_match: Optional[str]) -> Order:
+    """Load a job for a header edit (notes, schedule, assignee, fields, priority, deposit, type,
+    currency) under the job's write lock, and when the client sent If-Match with the version it
+    read, refuse (409 stale_order) if someone saved the job since. Without If-Match nothing is
+    checked (older clients), but the lock still serialises the read-modify-write."""
+    from backend.services.invoice_money import lock_order
+    await lock_order(db, order_id)
+    order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
+                              .execution_options(populate_existing=True))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Order not found")
+    if if_match and if_match.strip() != "*":
+        if order.updated_at is None or _parse_version(if_match) != order.updated_at:
+            raise _gate("stale_order", "Someone else saved this job since you opened it. "
+                                       "Reload it and make your change again.",
+                        updated_at=order_version(order))
+    return order
+
+
+async def _saved_version(db, order: Order) -> Optional[str]:
+    """The job's version after a commit (expired by it), for the client's next If-Match."""
+    await db.refresh(order, ["updated_at"])
+    return order_version(order)
 
 
 @router.post("", status_code=201)
@@ -1044,34 +1187,16 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
         else:  # fee and any other line types count toward labour-side total
             labour_total += total
 
-    # Resolve the work order type's initial status and default asset type
-    initial_status = "draft" if data.is_estimate else "new"
+    # The starting status: the job type's own (E3) when it is one of the shop's active statuses,
+    # else the shop's default (WO-06 / Q25: a free-text type status no longer becomes the job's).
     type_asset_type = None
-    if data.is_estimate:
-        # estimates use the estimate status set; default to its New-group status
-        from backend.models import OrderStatus as _OS
-        # A shop may have several New-group estimate statuses: take the default, then the first.
-        edflt = (await db.execute(select(_OS).where(
-            _OS.org_id == current.org_id, _OS.is_estimate == True, _OS.status_group == "new", _OS.active == True)  # noqa: E712
-            .order_by(_OS.is_default.desc(), _OS.sort_order, _OS.id).limit(1))).scalars().first()
-        if edflt:
-            initial_status = edflt.key
     if data.type_id and not data.is_estimate:
         from backend.models import WorkOrderType
         wot = (await db.execute(select(WorkOrderType).where(WorkOrderType.id == data.type_id, WorkOrderType.org_id == current.org_id))).scalar_one_or_none()
         if wot:
-            initial_status = wot.initial_status or "new"
             type_asset_type = wot.default_asset_type
-    # fall back to the org's default status for the matching document type
-    if initial_status == "new":
-        from backend.models import OrderStatus as _OS
-        dflt = (await db.execute(select(_OS).where(
-            _OS.org_id == current.org_id, _OS.is_default == True, _OS.active == True,  # noqa: E712
-            _OS.record_type == ("estimate" if data.is_estimate else "work_order")))).scalars().first()
-        if dflt:
-            initial_status = dflt.key
-        elif data.is_estimate:
-            initial_status = "est_draft"
+    initial_status = await initial_job_status(db, current.org_id, is_estimate=bool(data.is_estimate),
+                                              type_id=data.type_id)
 
     # Auto-create an asset (device) if asset details given and no device_id
     device_id = data.device_id
@@ -1109,32 +1234,22 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
         if _dev:
             store_passcode(_dev, data.device_passcode)
 
-    # Item 1: optionally forbid an asset being on more than one open ticket.
-    if device_id and not data.is_estimate:
-        from backend.models import Organisation as _Org
-        _org = (await db.execute(select(_Org).where(_Org.id == current.org_id))).scalar_one_or_none()
-        if _org and _org.asset_one_open_ticket:
-            _open = (await db.execute(
-                select(Order.id).join(
-                    OrderStatus,
-                    (OrderStatus.key == Order.status) & (OrderStatus.org_id == Order.org_id),
-                    isouter=True)
-                .where(Order.org_id == current.org_id, Order.device_id == device_id,
-                       ((OrderStatus.is_terminal == False) | (OrderStatus.id.is_(None))))  # noqa: E712
-            )).first()
-            if _open:
-                raise HTTPException(409, "This asset is already used in an open ticket")
+    # Item 1 / Q27: optionally forbid an asset being on more than one open ticket.
+    if not data.is_estimate:
+        await assert_asset_free(db, current.org_id, device_id)
     # order has no one assigned yet.
     assigned_to_id = data.assigned_to_id
     manager_id = data.manager_id
     if (not assigned_to_id or not manager_id) and data.client_id:
         from backend.models import Client as _Client
         cl = (await db.execute(select(_Client).where(_Client.id == data.client_id, _Client.org_id == current.org_id))).scalar_one_or_none()
-        if cl and cl.manager_id:
+        # CLI-02: not if that manager has left (deactivated): the job would land on them.
+        cl_manager = await active_employee_id(db, current.org_id, cl.manager_id) if cl else None
+        if cl_manager:
             if not assigned_to_id:
-                assigned_to_id = cl.manager_id
+                assigned_to_id = cl_manager
             if not manager_id:          # 144cp: default the WO manager to the client's account manager
-                manager_id = cl.manager_id
+                manager_id = cl_manager
 
     # Build 122: resolve the document's display currency (override → client pref → base)
     # and snapshot the rate so later rate changes never alter this document.
@@ -1177,10 +1292,7 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
     )
     db.add(order)
     await db.flush()
-    from backend.services.audit import record as _audit
-    await _audit(db, org_id=current.org_id, actor_id=current.id, action="order.create",
-                 entity_type="order", entity_id=order.id,
-                 diff={"order_number": order.order_number, "location_id": data.location_id})   # assigns order.id before we reference it
+    await record_job_created(db, current.org_id, current.id, order)
     log = OrderStatusLog(order_id=order.id, from_status=None, to_status=initial_status, changed_by_id=current.id)
     db.add(log)
     from backend.services import pilot as _pilot
@@ -1706,6 +1818,11 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         kind = "an estimate" if order.is_estimate else "a job"
         raise HTTPException(422, f"'{data.status}' isn't a status for {kind}. "
                                  "Pick one from the list (Settings > Statuses).")
+    # Q27: an estimate that becomes a job on entering this status brings its asset onto a job, so
+    # the one-open-ticket rule is a gate here, before anything is saved.
+    if order.is_estimate and target and getattr(target, "converts_to_order", False) \
+            and not order.converted_order_id:
+        await assert_asset_free(db, current.org_id, order.device_id, exclude_order_id=order.id)
     is_closing = target.is_terminal if target else (data.status in ("done", "closed", "delivered"))
     # Reopening a closed job counts as editing it. Moving it on between closed statuses
     # (done -> delivered) doesn't: the desk hands the device over without "Edit the closed ticket".
@@ -1909,23 +2026,20 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
                 async with db.begin_nested():     # a failure undoes only the half-made invoice
                     await auto_draft_on_close(db, order)
             except Exception:  # noqa: BLE001
-                import logging
                 logging.getLogger("tekly").exception("auto-draft invoice failed for order %s", order.id)
         # Phase E groundwork: activate warranty on close from the longest line warranty.
         # Not for estimates: closing one (approved → converted, or declined) repairs nothing.
-        try:
-            wdays = max([(getattr(l, "warranty_days", 0) or 0) for l in order.lines] or [0])
-            if wdays and not order.is_estimate and not is_dropping:
-                from datetime import timedelta as _td
-                # Item 4: warranty start honors org policy (closure date vs order creation date)
-                _org = (await db.execute(select(Organisation).where(
-                    Organisation.id == current.org_id))).scalar_one_or_none()
-                _from = order.closed_at
-                if _org and getattr(_org, "warranty_count_from", "closure") == "created" and order.created_at:
-                    _from = order.created_at
-                order.warranty_until = (_from + _td(days=wdays)).date()
-        except Exception:
-            pass
+        wdays = max([(getattr(l, "warranty_days", 0) or 0) for l in order.lines] or [0])
+        if wdays and not order.is_estimate and not is_dropping:
+            # Item 4: warranty start honors org policy (closure date vs order creation date).
+            # Part of the close itself (WO-07: a failure here was swallowed and the job closed
+            # with no warranty and no trace).
+            _org = (await db.execute(select(Organisation).where(
+                Organisation.id == current.org_id))).scalar_one_or_none()
+            _from = order.closed_at
+            if _org and getattr(_org, "warranty_count_from", "closure") == "created" and order.created_at:
+                _from = order.created_at
+            order.warranty_until = (_from + timedelta(days=wdays)).date()
     log = OrderStatusLog(order_id=order.id, from_status=prev, to_status=data.status,
                          changed_by_id=current.id, note=data.note)
     db.add(log)
@@ -1957,13 +2071,14 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
             _inv = await new_invoice(db, org_id=current.org_id, orders=[order])
             await log_system_event(db, current.org_id, "order", order.id, "Invoice auto-created on status change")
             # Build 144z: mirror the new invoice (and its customer) to QuickBooks if connected.
+            await db.flush()
             try:
-                await db.flush()
                 from backend.services import qbo as _qbo
-                await _qbo.autosync(db, current.org_id,
-                                    [("contact", order.client_id), ("invoice", _inv.id)])
-            except Exception:
-                pass
+                async with db.begin_nested():   # a failure undoes only the sync's own writes
+                    await _qbo.autosync(db, current.org_id,
+                                        [("contact", order.client_id), ("invoice", _inv.id)])
+            except Exception:  # noqa: BLE001 — the books catch up on the next sync
+                logging.getLogger("tekly").exception("QuickBooks autosync failed for order %s", order.id)
 
     # Customer status messages come only from the notification rules engine (run after
     # commit, below). OrderStatus.triggers_notification is retired: see
@@ -1972,16 +2087,17 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     # tag / webhook). Order.status is already the new value here.
     try:
         from backend.services import automation as _auto
-        await _auto.run(db, current.org_id, "status_changed", order=order)
+        async with db.begin_nested():   # a failure undoes only the automations' own writes
+            await _auto.run(db, current.org_id, "status_changed", order=order)
     except Exception:  # noqa: BLE001 — never fails the status change, but never silent either
         logging.getLogger("tekly.automation").exception("status_changed automations failed (order %s)", order.id)
     # Build 90: the asset follows the job — check-in → "Pending repair", assignment →
     # the technician's warehouse, ready → "Ready for pickup", close → back to the client.
     try:
         from backend.services import warehouses as _wh
-        await _wh.on_order_status(db, current.org_id, order, data.status, is_closing=is_closing)
+        async with db.begin_nested():
+            await _wh.on_order_status(db, current.org_id, order, data.status, is_closing=is_closing)
     except Exception:  # noqa: BLE001
-        import logging
         logging.getLogger("tekly").exception("asset auto-move failed for order %s", order.id)
 
     # Build 124: unified contact ledger — the receivable tracks the order's closed state.
@@ -2038,7 +2154,6 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     #      second request on the job) its first insert fails with "database is locked".
     #      A rule error rolls back only the queueing and is logged; the status change stands.
     #   3. send staff web pushes, after everything is committed (sending writes and blocks).
-    import logging
     from backend.services import notification_rules as _nr
     from backend.services import push as _push
     _ev = "closed" if is_closing else "status_changed"
@@ -2069,17 +2184,19 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         await db.refresh(order)         # the rollback expired it; the code below reads it
     await _push.dispatch_deferred(db, _pushes)
 
-    # Notify the assigned technician their job's status moved (unless they did it).
-    if order.assigned_to_id and order.assigned_to_id != current.id:
-        try:
-            from backend.services.push import notify
-            await notify(db, org_id=current.org_id, employee_id=order.assigned_to_id,
-                         kind="schedule.changed", title=f"{order.order_number} → {data.status}",
-                         body="Status updated", deep_link=f"/tech#/order/{order.id}")
-        except Exception:
-            pass
+    # After the commit, each side effect runs on its own and commits on its own; a failure is
+    # logged and rolled back so the next one starts clean (WO-07: these were `except: pass`, and a
+    # failed webhook commit left the session broken, so the feedback step 500'd a saved change).
+    reload = (current,) if isinstance(current, Employee) else ()
 
-    try:
+    # Notify the assigned technician their job's status moved (unless they did it).
+    async def tech_push():
+        from backend.services.push import notify
+        await notify(db, org_id=current.org_id, employee_id=order.assigned_to_id,
+                     kind="schedule.changed", title=f"{order.order_number} \u2192 {data.status}",
+                     body="Status updated", deep_link=f"/tech#/order/{order.id}")
+
+    async def webhooks():
         from backend.services.webhooks import emit_event
         await emit_event(db, current.org_id, "order.status_changed", {
             "id": order.id, "order_number": order.order_number,
@@ -2089,23 +2206,24 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
                 "id": order.id, "order_number": order.order_number, "status": data.status,
                 "total": order.total,
                 "closed_at": order.closed_at.replace(microsecond=0).isoformat() + "Z" if order.closed_at else None})
-        await db.commit()
-    except Exception:
-        pass
 
     # Phase E: if this status is the configured feedback trigger, create a
     # pending Feedback row and fire a notification with the rating link.
-    if target:
+    async def feedback():
         from backend.models import Feedback, FeedbackSettings
         fs = (await db.execute(select(FeedbackSettings).where(
             FeedbackSettings.org_id == current.org_id, FeedbackSettings.active == True,  # noqa: E712
             FeedbackSettings.trigger_status_id == target.id))).scalar_one_or_none()
         if fs:
-            fb = Feedback(org_id=current.org_id, order_id=order.id, client_id=order.client_id, system=fs.system)
-            db.add(fb)
+            db.add(Feedback(org_id=current.org_id, order_id=order.id, client_id=order.client_id, system=fs.system))
             from backend.routers.feed import log_system_event
             await log_system_event(db, current.org_id, "order", order.id, "Feedback request sent to customer")
-            await db.commit()
+
+    if order.assigned_to_id and order.assigned_to_id != current.id:
+        await _order_side_effect(db, order, "status push to the technician", tech_push, *reload)
+    await _order_side_effect(db, order, "status webhooks", webhooks, *reload)
+    if target:
+        await _order_side_effect(db, order, "feedback request", feedback, *reload)
 
     # Estimate auto-conversion: entering a status flagged converts_to_order
     # turns the estimate into a work order (Orderry "Order created" status).
@@ -2127,7 +2245,9 @@ async def _convert_estimate(db, current, estimate):
     conditional UPDATE, so only one caller wins and stock / the WO number move once."""
     from sqlalchemy import update as _update
 
-    from backend.models import OrderLine, OrderStatus, WorkOrderType
+    from backend.models import OrderLine
+    # Q27: the new job takes the asset; refuse before anything changes.
+    await assert_asset_free(db, current.org_id, estimate.device_id, exclude_order_id=estimate.id)
     won = await db.execute(_update(Order).where(
         Order.id == estimate.id, Order.is_estimate == True)  # noqa: E712
         .values(is_estimate=False).execution_options(synchronize_session=False))
@@ -2135,20 +2255,9 @@ async def _convert_estimate(db, current, estimate):
         await db.refresh(estimate)
         return None
     old_number = estimate.order_number
-    # initial work-order status: the job type's own starting status (E3), else the org default, else "new"
-    init = "new"
-    dflt = (await db.execute(select(OrderStatus).where(
-        OrderStatus.org_id == current.org_id, OrderStatus.is_default == True,
-        OrderStatus.active == True, OrderStatus.record_type == "work_order"))).scalars().first()  # noqa: E712
-    if dflt:
-        init = dflt.key
-    if estimate.type_id:
-        _type_start = (await db.execute(select(WorkOrderType.initial_status).where(
-            WorkOrderType.id == estimate.type_id, WorkOrderType.org_id == current.org_id))).scalar_one_or_none()
-        if _type_start and (await db.execute(select(OrderStatus.id).where(
-                OrderStatus.org_id == current.org_id, OrderStatus.key == _type_start,
-                OrderStatus.active == True, OrderStatus.record_type == "work_order"))).first():  # noqa: E712
-            init = _type_start
+    # initial work-order status: the job type's own starting status (E3) when it is a real one,
+    # else the org default (WO-06)
+    init = await initial_job_status(db, current.org_id, type_id=estimate.type_id)
     # renumber E -> WO and flip type on the SAME record
     estimate.order_number = await next_number(db, current.org_id, "order")
     estimate.is_estimate = False
@@ -2221,20 +2330,20 @@ async def change_order_currency(
     data: OrderCurrencyIn,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
+    if_match: Optional[str] = Header(None, alias="If-Match"),   # WO-03: the updated_at the client read
 ):
     """Change a document's display currency and re-snapshot the rate. Stored money stays in
     base; only the display currency + rate change."""
-    order = (await db.execute(select(Order).where(
-        Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
-    if not order:
-        raise HTTPException(404, "Order not found")
+    order = await _order_for_header_edit(db, current, order_id, if_match)
+    await _guard_order_access(db, current, order)
     await _guard_editable(db, order, current)   # a closed job changes only with "Edit the closed ticket"
     from backend.services import currency as _cur
     info = await _cur.resolve_for_client(db, current.org_id, order.client_id, data.currency_code)
     order.currency_code = info["code"]
     order.fx_rate = info["rate"]
     await db.commit()
-    return {"ok": True, "currency_code": info["code"], "fx_rate": info["rate"], "symbol": info["symbol"]}
+    return {"ok": True, "currency_code": info["code"], "fx_rate": info["rate"], "symbol": info["symbol"],
+            "updated_at": await _saved_version(db, order)}
 
 
 async def _guard_order_access(db, current, order):
@@ -2394,13 +2503,11 @@ async def set_deposit(
     data: DepositIn,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
+    if_match: Optional[str] = Header(None, alias="If-Match"),   # WO-03: the updated_at the client read
 ):
     """Set the requested deposit on an order/estimate. Pass amount OR percent (of total).
     The client pays it through the normal pay-link (POST /api/payments/checkout with this amount)."""
-    order = (await db.execute(select(Order).where(
-        Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
-    if not order:
-        raise HTTPException(404, "Order not found")
+    order = await _order_for_header_edit(db, current, order_id, if_match)
     await _guard_order_access(db, current, order)
     await _guard_editable(db, order, current)   # a closed job changes only with "Edit the closed ticket"
     if data.percent is not None:
@@ -2419,7 +2526,7 @@ async def set_deposit(
         raise HTTPException(422, f"The deposit can't be more than the job total ({fmt(order.total)}).")
     order.deposit_amount = amount
     await db.commit()
-    return {"ok": True, "deposit_amount": amount}
+    return {"ok": True, "deposit_amount": amount, "updated_at": await _saved_version(db, order)}
 
 
 @router.patch("/{order_id}/type")
@@ -2428,13 +2535,12 @@ async def switch_type(
     data: SwitchTypeIn,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
+    if_match: Optional[str] = Header(None, alias="If-Match"),   # WO-03: the updated_at the client read
 ):
     """Switch a work order's type anytime. If the current status isn't valid for
     the new type's status set, the order is moved to that type's initial status."""
-    from backend.models import OrderStatus, WorkOrderType
-    order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
-    if not order:
-        raise HTTPException(404, "Order not found")
+    from backend.models import WorkOrderType
+    order = await _order_for_header_edit(db, current, order_id, if_match)
     await _guard_order_access(db, current, order)
     await _guard_editable(db, order, current)   # a closed job changes only with "Edit the closed ticket"
     wot = (await db.execute(select(WorkOrderType).where(WorkOrderType.id == data.type_id, WorkOrderType.org_id == current.org_id))).scalar_one_or_none()
@@ -2444,8 +2550,12 @@ async def switch_type(
     remapped = None
     # if the type defines an initial status and the order is still in a 'new' group, align it
     # (not on an estimate: its starting status applies when it becomes a work order)
-    if wot.initial_status and not order.is_estimate:
-        cur = (await db.execute(select(OrderStatus).where(OrderStatus.org_id == current.org_id, OrderStatus.key == order.status))).scalars().first()
+    # WO-06: only to one of the shop's active work-order statuses (a stale type status is ignored)
+    if wot.initial_status and not order.is_estimate \
+            and await is_job_status(db, current.org_id, "work_order", wot.initial_status):
+        cur = (await db.execute(select(OrderStatus).where(
+            OrderStatus.org_id == current.org_id, OrderStatus.key == order.status,
+            OrderStatus.record_type == "work_order"))).scalars().first()
         if cur and cur.status_group == "new" and order.status != wot.initial_status:
             order.status = wot.initial_status
             order.status_entered_at = now_utc()
@@ -2455,7 +2565,8 @@ async def switch_type(
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "order", order.id, f"Type switched to {wot.name}")
     await db.commit()
-    return {"ok": True, "type_id": data.type_id, "status": order.status, "remapped_to": remapped}
+    return {"ok": True, "type_id": data.type_id, "status": order.status, "remapped_to": remapped,
+            "updated_at": await _saved_version(db, order)}
 
 
 class PriorityIn(BaseModel):
@@ -2468,11 +2579,10 @@ async def set_priority(
     data: PriorityIn,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
+    if_match: Optional[str] = Header(None, alias="If-Match"),   # WO-03: the updated_at the client read
 ):
     """J6 — change a job's priority from the job itself (Normal / High / Urgent, same day)."""
-    order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
-    if not order:
-        raise HTTPException(404, "Order not found")
+    order = await _order_for_header_edit(db, current, order_id, if_match)
     await _guard_order_access(db, current, order)
     await _guard_editable(db, order, current)       # a closed job keeps its priority
     if order.priority != data.priority:
@@ -2482,8 +2592,8 @@ async def set_priority(
         names = {0: "Normal", 1: "High", 2: "Urgent, same day"}
         await log_system_event(db, current.org_id, "order", order.id,
                                f"Priority changed: {names.get(prev, prev)} \u2192 {names[data.priority]}")
-        await db.commit()
-    return {"ok": True, "priority": order.priority}
+    await db.commit()   # also ends the job's write lock when nothing changed
+    return {"ok": True, "priority": order.priority, "updated_at": await _saved_version(db, order)}
 
 
 class EstimateTermsIn(BaseModel):
@@ -2609,9 +2719,19 @@ async def list_estimate_revisions(
 async def add_comment(
     order_id: str,
     data: CommentIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
+    """Post a comment on the job (client-visible ones notify the customer). A retry with the same
+    Idempotency-Key gets the first answer instead of a second comment and message (CLI-03)."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "orders.comment",
+                          {"order_id": order_id, "comment": data.model_dump(mode="json")},
+                          lambda: _add_comment(order_id, data, db, current))
+
+
+async def _add_comment(order_id: str, data: CommentIn, db: AsyncSession, current: Employee):
     _co = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not _co:
         raise HTTPException(404, "Order not found")
@@ -2643,8 +2763,13 @@ def _check_signature(v: Optional[str]) -> Optional[str]:
 
 async def notify_comment_added(db: AsyncSession, org_id: str, order_id: str, actor_id: Optional[str]) -> None:
     """comment_added notifications for a client-visible comment (shared by the app and the API).
-    144jc: rules engine first (client + staff), legacy template fallback."""
-    c_matched = 0
+    144jc: rules engine first (client + staff), legacy template fallback.
+
+    The comment is already saved, so nothing here may fail the request (a 500 made the client
+    post the comment again). WO-07: a rules failure is logged and rolled back, and does NOT fall
+    back to the legacy templates (it failed; it didn't find "no rule", so that would double-send);
+    a legacy failure is logged and rolled back too."""
+    log = logging.getLogger("tekly.notifications")
     try:
         from backend.services import notification_rules as _nr
         _cr = await _nr.evaluate(db, org_id=org_id, order_id=order_id, event="comment_added")
@@ -2652,10 +2777,16 @@ async def notify_comment_added(db: AsyncSession, org_id: str, order_id: str, act
         await _nr.notify_staff_order(db, org_id=org_id, order_id=order_id,
                                      event="comment_added", actor_id=actor_id)
     except Exception:  # noqa: BLE001
-        pass
+        await db.rollback()
+        log.exception("comment notification rules failed for org %s order %s; comment kept", org_id, order_id)
+        return
     if c_matched == 0:
-        from backend.services.notifications import dispatch_order_notifications
-        await dispatch_order_notifications(db, org_id=org_id, order_id=order_id, trigger_event="comment_added")
+        try:
+            from backend.services.notifications import dispatch_order_notifications
+            await dispatch_order_notifications(db, org_id=org_id, order_id=order_id, trigger_event="comment_added")
+        except Exception:  # noqa: BLE001
+            await db.rollback()
+            log.exception("comment notification failed for org %s order %s; comment kept", org_id, order_id)
 
 
 class SignatureIn(BaseModel):
@@ -3060,14 +3191,12 @@ async def _finish_order(order_id: str, data: FinishIn, db: AsyncSession, current
     # and rolls the payment back).
     res = await _apply_status_change(db, current, order, target)
     if paid:
-        try:
+        async def payment_rules():
             from backend.services import notification_rules as _nr
             await _nr.evaluate(db, org_id=current.org_id, order_id=order.id, event="payment_received")
             await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
                                          event="payment_received", actor_id=current.id)
-            await db.commit()
-        except Exception:  # noqa: BLE001
-            pass
+        await _order_side_effect(db, order, "payment notification rules", payment_rules, current)
     return {"ok": True, "status": target, "payment": paid,
             "order": res if isinstance(res, dict) else None}
 
@@ -3081,12 +3210,21 @@ class NotifyIn(BaseModel):
 @router.post("/{order_id}/notify")
 async def notify_order_customer(
     order_id: str, data: NotifyIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_send_sms")),
 ):
     """Message button: email/SMS the customer about this order. Delivery goes
     through the configured channel adapter (a real gateway is required to
-    actually send; the simulated adapter records the attempt)."""
+    actually send; the simulated adapter records the attempt). A retry with the same
+    Idempotency-Key gets the first answer instead of a second message (CLI-03)."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "orders.notify",
+                          {"order_id": order_id, "message": data.model_dump(mode="json")},
+                          lambda: _notify_order_customer(order_id, data, db, current))
+
+
+async def _notify_order_customer(order_id: str, data: NotifyIn, db: AsyncSession, current: Employee):
     o = (await db.execute(select(Order).where(
         Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not o:
@@ -3115,9 +3253,12 @@ async def notify_order_customer(
             result = await _adapter_for(data.channel, _creds).send(
                 recipient=recipient, subject=data.subject, body=data.body)
             delivery = "smtp" if (data.channel == "email" and _settings.SMTP_HOST) else "simulated"
-    except Exception:
-        pass   # seam: simulated/absent gateway
-    return {"ok": True, "channel": data.channel, "recipient": recipient, "delivery": delivery}
+    except Exception:  # noqa: BLE001 — a gateway error is the answer, not a 500
+        # WO-07: this used to be swallowed and reported as "simulated", so staff thought it went.
+        logging.getLogger("tekly.notifications").exception(
+            "order %s: %s to the customer failed", o.id, data.channel)
+        delivery = "failed"
+    return {"ok": delivery != "failed", "channel": data.channel, "recipient": recipient, "delivery": delivery}
 
 
 class SendDocIn(BaseModel):
@@ -3197,17 +3338,30 @@ class DuplicateOrderIn(BaseModel):
 @router.post("/{order_id}/duplicate", status_code=201)
 async def duplicate_order(
     order_id: str,
+    request: Request,
     data: DuplicateOrderIn = DuplicateOrderIn(),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
-    """Clone a work order into a new editable draft: same client, asset (device),
+    """Clone a work order into a new editable job: same client, asset (device),
     location, priority, complaint, type, industry template and all service/product
     lines. Payments, invoices, signature and status history are NOT copied — the
     copy starts fresh so it can be re-scheduled and worked. Scheduling is optional:
     pass ``scheduled_for`` / ``scheduled_to`` to book the copy straight onto the
     calendar, or omit them for an unscheduled draft. Stock is not deducted here
-    (that happens when the copy is actually worked)."""
+    (that happens when the copy is actually worked).
+
+    The copy is a new job like any other (WO-05): it starts in the shop's starting status for its
+    type (WO-06), respects one-open-ticket-per-asset (Q27), and gets the create audit row,
+    notifications, commissions, automations and checklists. A double tap with the same
+    Idempotency-Key returns the first copy (CLI-03)."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "orders.duplicate",
+                          {"order_id": order_id, "data": data.model_dump(mode="json")},
+                          lambda: _duplicate_order(order_id, data, db, current))
+
+
+async def _duplicate_order(order_id: str, data: DuplicateOrderIn, db: AsyncSession, current: Employee):
     sched_for = await parse_wall_dt(db, current.org_id, None, data.scheduled_for, "scheduled_for") if data.scheduled_for else None
     sched_to = await parse_wall_dt(db, current.org_id, None, data.scheduled_to, "scheduled_to") if data.scheduled_to else None
     if sched_for and sched_to and sched_to < sched_for:
@@ -3254,30 +3408,38 @@ async def duplicate_order(
         else:
             labour += l.total
 
-    initial_status = "draft" if src.is_estimate else "new"
+    initial_status = await initial_job_status(db, current.org_id, is_estimate=bool(src.is_estimate),
+                                              type_id=src.type_id)
+    if not src.is_estimate:
+        await assert_asset_free(db, current.org_id, src.device_id)
     dup = Order(
         order_number=number, org_id=current.org_id,
         public_token=await unique_public_token(db),   # 144cu — fresh unique track link, never reuse the source's
         client_id=src.client_id, device_id=src.device_id, location_id=src.location_id,
         priority=src.priority, complaint=src.complaint, diagnosis=src.diagnosis,
-        assigned_to_id=src.assigned_to_id, type_id=src.type_id,
+        assigned_to_id=await active_employee_id(db, current.org_id, src.assigned_to_id),   # CLI-02
+        type_id=src.type_id,
         template_key=src.template_key, custom_data=dict(src.custom_data or {}),
         status=initial_status, is_estimate=src.is_estimate,
         scheduled_for=sched_for, scheduled_to=sched_to,
         labour_total=labour, parts_total=parts, total=labour + parts,
         lines=new_lines,
     )
+    await stamp_new_job(db, dup)
     db.add(dup)
     await db.flush()
     db.add(OrderStatusLog(order_id=dup.id, from_status=None, to_status=initial_status, changed_by_id=current.id))
     from backend.routers.feed import log_system_event
     from backend.services.audit import record as _audit
+    await record_job_created(db, current.org_id, current.id, dup, source="duplicate", from_order=src.order_number)
     await _audit(db, org_id=current.org_id, actor_id=current.id, action="order.duplicate",
                  entity_type="order", entity_id=dup.id,
                  diff={"from": src.order_number, "to": dup.order_number})
     await log_system_event(db, current.org_id, "order", dup.id,
                            f"Duplicated from {src.order_number}")
     await db.commit()
+    await db.refresh(dup)
+    await _new_job_steps(db, current, dup)
     return {"ok": True, "id": dup.id, "order_number": dup.order_number,
             "from_order_number": src.order_number, "line_count": len(new_lines),
             "scheduled_for": dup.scheduled_for.isoformat() if dup.scheduled_for else None,
@@ -3470,6 +3632,7 @@ async def reserve_stock_for_order(
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, order)
+    await _guard_editable(db, order, current)   # Q20: a closed or locked job takes no new holds
     hold_days = max(1, min(int(data.hold_days or 7), 180))
 
     # how much is already actively held for this order, per part (don't double-reserve)
@@ -3688,8 +3851,10 @@ async def _archive_order(db, current, order_id, reason, do_refund):
             else:
                 try:
                     await detach_order(db, _inv, order.id)
-                except HTTPException:
-                    pass          # this job's money is on it: it stays, as the refund left it
+                except HTTPException as kept:
+                    # this job's money is on it: it stays, as the refund left it
+                    logging.getLogger("tekly").info("order %s archived; invoice %s kept: %s",
+                                                    order.id, _inv.id, kept.detail)
     # Stock lock order: Order → StockLevel sorted by (part_id, location_id) → holds. Every stock row
     # this archive touches — what its lines drew and what it holds — is locked here, sorted, before
     # the lines are put back and the holds released below; putting a drawn Y back and then
@@ -3858,6 +4023,10 @@ async def transfer_order(
         Location.id == data.location_id, Location.org_id == current.org_id))).scalar_one_or_none()
     if not loc:
         raise HTTPException(404, "Target location not found")
+    # SEC-03: a location-scoped role may move a job only between locations it may act on.
+    await _guard_order_access(db, current, order)
+    from backend.services.auth import check_location_access
+    await check_location_access(db, current, data.location_id)
     prev = order.location_id
     if prev == data.location_id:
         return {"ok": True, "location_id": data.location_id, "unchanged": True}
@@ -4135,14 +4304,13 @@ async def save_custom_data(
     data: CustomDataIn,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
+    if_match: Optional[str] = Header(None, alias="If-Match"),   # WO-03: the updated_at the client read
 ):
     """Edit the work order's own form fields (Passcode, Accessories…) after intake — the job
     card is where "Before closing" fields get filled. Only this type's fields are kept; fields
-    locked after create keep their first value."""
-    order = (await db.execute(select(Order).where(
-        Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
-    if not order:
-        raise HTTPException(404, "Order not found")
+    locked after create keep their first value. The merge reads the saved fields under the job's
+    write lock (WO-03), so two people saving different fields at once both keep theirs."""
+    order = await _order_for_header_edit(db, current, order_id, if_match)
     await _guard_order_access(db, current, order)
     await _guard_editable(db, order, current)   # a closed job changes only with "Edit the closed ticket"
     from backend.models import CustomField
@@ -4160,7 +4328,7 @@ async def save_custom_data(
     from backend.routers.forms import sync_order_field_upsells
     await sync_order_field_upsells(db, current.org_id, order, actor=current)
     await db.commit()
-    return {"ok": True, "custom_data": cur}
+    return {"ok": True, "custom_data": cur, "updated_at": await _saved_version(db, order)}
 
 
 class NotesIn(BaseModel):
@@ -4174,16 +4342,25 @@ async def save_notes(
     data: NotesIn,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
+    if_match: Optional[str] = Header(None, alias="If-Match"),   # WO-03: the updated_at the client read
 ):
-    """144bj — technician's working notes + conclusion / client recommendations."""
-    order = (await db.execute(select(Order).where(
-        Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
-    if not order:
-        raise HTTPException(404, "Order not found")
+    """144bj — technician's working notes + conclusion / client recommendations. A closed job's
+    conclusion changes only with "Edit the closed ticket" and never in a locking status (WO-04 /
+    Q20), and every change is audited."""
+    order = await _order_for_header_edit(db, current, order_id, if_match)
+    await _guard_order_access(db, current, order)
+    await _guard_editable(db, order, current)
+    changes = {}
     for k, v in data.model_dump(exclude_unset=True).items():
-        setattr(order, k, v)
+        if getattr(order, k) != v:
+            changes[k] = {"from": (getattr(order, k) or "")[:500], "to": (v or "")[:500]}
+            setattr(order, k, v)
+    if changes:
+        from backend.services.audit import record as _audit
+        await _audit(db, org_id=current.org_id, actor_id=current.id, action="order.notes",
+                     entity_type="order", entity_id=order.id, diff=changes)
     await db.commit()
-    return {"ok": True}
+    return {"ok": True, "updated_at": await _saved_version(db, order)}
 
 
 @router.patch("/{order_id}/schedule")
@@ -4192,11 +4369,20 @@ async def reschedule(
     data: RescheduleIn,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
+    if_match: Optional[str] = Header(None, alias="If-Match"),   # WO-03: the updated_at the client read
 ):
-    result = await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))
-    order = result.scalar_one_or_none()
-    if not order:
-        raise HTTPException(404, "Order not found")
+    """Move a job on the scheduler (time, length, resource) and, from the board's drag and drop,
+    hand it to someone else. Handing it over takes the same rights as the Assign picker
+    (can_assign_staff, the Assignee list), is audited and alerts the new assignee (WO-04); a
+    closed or locked job doesn't move (Q20)."""
+    order = await _order_for_header_edit(db, current, order_id, if_match)
+    await _guard_order_access(db, current, order)
+    await _guard_editable(db, order, current)
+    new_assignee = (data.assigned_to_id or None) if data.assigned_to_id is not None else order.assigned_to_id
+    reassigned = new_assignee != order.assigned_to_id
+    if reassigned:
+        await assert_perm(db, current, "can_assign_staff")
+        await _assert_listed(db, current.org_id, new_assignee, "display_in_assignees", "Assignee")
     # Build 144ai: distinguish "field omitted" from "field explicitly null" so the
     # reschedule dialog can clear a schedule by sending scheduled_for: null.
     sent = data.model_fields_set
@@ -4212,12 +4398,16 @@ async def reschedule(
         order.scheduled_to = await parse_wall_dt(db, current.org_id, order.location_id, data.scheduled_to, "scheduled_to")
     if data.duration_min is not None:
         order.duration_min = data.duration_min
-    if data.assigned_to_id is not None:
-        order.assigned_to_id = data.assigned_to_id or None
+    prev_assignee = order.assigned_to_id
+    if reassigned:
+        order.assigned_to_id = new_assignee
+        await _audit_assignment(db, current, order, "assigned_to_id", prev_assignee, new_assignee)
     if data.resource_id is not None:
         order.resource_id = data.resource_id or None
     await db.commit()
-    return {"ok": True}
+    if reassigned and new_assignee and new_assignee != current.id:
+        await _alert_new_assignee(db, current, order, new_assignee)
+    return {"ok": True, "updated_at": await _saved_version(db, order)}
 
 
 class AssignIn(BaseModel):
@@ -4231,13 +4421,12 @@ async def assign_people(
     data: AssignIn,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_assign_staff")),
+    if_match: Optional[str] = Header(None, alias="If-Match"),   # WO-03: the updated_at the client read
 ):
     """144cp — set the WO manager and/or assigned specialist. Only the fields
     present in the request are changed; empty string clears the field."""
-    result = await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))
-    order = result.scalar_one_or_none()
-    if not order:
-        raise HTTPException(404, "Order not found")
+    order = await _order_for_header_edit(db, current, order_id, if_match)
+    await _guard_order_access(db, current, order)
     await _guard_editable(db, order, current)   # a closed job changes only with "Edit the closed ticket"
     sent = data.model_fields_set
     if "manager_id" in sent:
@@ -4247,22 +4436,36 @@ async def assign_people(
     notify_id = None
     if "assigned_to_id" in sent:
         new_assignee = data.assigned_to_id or None
-        if new_assignee and new_assignee != order.assigned_to_id:
+        if new_assignee != order.assigned_to_id:
             notify_id = new_assignee
+            await _audit_assignment(db, current, order, "assigned_to_id", order.assigned_to_id, new_assignee)
         order.assigned_to_id = new_assignee
     if "manager_id" in sent:
-        order.manager_id = data.manager_id or None
+        new_manager = data.manager_id or None
+        if new_manager != order.manager_id:
+            await _audit_assignment(db, current, order, "manager_id", order.manager_id, new_manager)
+        order.manager_id = new_manager
     await db.commit()
     if notify_id and notify_id != current.id:
-        try:
-            from backend.services.push import notify   # was never imported: assignees got no alert
-            await notify(db, org_id=current.org_id, employee_id=notify_id,
-                         kind="job.assigned", title=f"New job {order.order_number}",
-                         body=f"You were assigned to {order.order_number}",
-                         deep_link=f"/tech#/order/{order.id}")
-        except Exception:
-            pass
-    return {"ok": True}
+        await _alert_new_assignee(db, current, order, notify_id)
+    return {"ok": True, "updated_at": await _saved_version(db, order)}
+
+
+async def _audit_assignment(db, current, order, field: str, before, after) -> None:
+    from backend.services.audit import record as _audit
+    await _audit(db, org_id=current.org_id, actor_id=current.id, action="order.assign",
+                 entity_type="order", entity_id=order.id, diff={field: {"from": before, "to": after}})
+
+
+async def _alert_new_assignee(db, current, order, employee_id: str) -> None:
+    """Tell the person a job was just handed to (bell + push). Best effort, after the commit."""
+    async def alert():
+        from backend.services.push import notify   # was never imported: assignees got no alert
+        await notify(db, org_id=current.org_id, employee_id=employee_id,
+                     kind="job.assigned", title=f"New job {order.order_number}",
+                     body=f"You were assigned to {order.order_number}",
+                     deep_link=f"/tech#/order/{order.id}")
+    await _order_side_effect(db, order, "assignee alert", alert, current)
 
 
 @router.post("/{order_id}/lines/{line_id}/receive-stock")
@@ -4419,7 +4622,8 @@ async def _guard_editable(db, order, current):
     """Block edits if the order's current status locks edits (e.g. closed). A closed order
     that doesn't lock edits can still only be changed by roles with "Edit the closed ticket"."""
     st = (await db.execute(select(OrderStatus).where(
-        OrderStatus.org_id == current.org_id, OrderStatus.key == order.status))).scalars().first()
+        OrderStatus.org_id == current.org_id, OrderStatus.key == order.status,
+        OrderStatus.record_type == ("estimate" if order.is_estimate else "work_order")))).scalars().first()
     if st and st.locks_edits:
         raise HTTPException(409, "This order is closed/locked and can't be edited. Reopen it to make changes.")
     if await _is_closed(db, current.org_id, order):
@@ -4442,6 +4646,9 @@ async def _assert_listed(db, org_id, employee_id, code, list_name) -> None:
         return
     emp = (await db.execute(select(Employee).where(
         Employee.id == employee_id, Employee.org_id == org_id))).scalar_one_or_none()
+    # CLI-02: someone who has left (deactivated) can't be given jobs.
+    if emp and not emp.active:
+        raise HTTPException(422, f"{emp.name} is no longer active and can't be picked.")
     # Being listed is a display setting, not access: someone with no role is listed, as in the
     # Team screen's pickers (staff._picker_lists), even though they have no permissions.
     if emp and emp.role_id and not await has_perm(db, emp, code):

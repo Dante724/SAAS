@@ -31,7 +31,6 @@ from backend.models import (
     LeadType,
     Location,
     Order,
-    OrderStatus,
     OrderStatusLog,
     Shift,
     Task,
@@ -218,7 +217,14 @@ async def convert_lead(db: AsyncSession, org_id: str, lead: Lead, *, actor: Opti
 
     Self check-in passes `device_for(client) -> device_id` to pick or create the device itself
     (VIN / HIN as well as IMEI / serial) and `extra(order, client)` to fill the job before the
-    commit, so the whole conversion lands at once."""
+    commit, so the whole conversion lands at once.
+
+    WO-05: the job then goes through the same steps as one made at the counter: a valid starting
+    status (WO-06), one open ticket per asset (Q27), the order.create audit row, and after the
+    commit the creation notifications, commissions, automations, checklists and webhook."""
+    from backend.routers.orders import (
+        SystemActor, _new_job_steps, active_employee_id, assert_asset_free, initial_job_status,
+        record_job_created, stamp_new_job)
     from backend.services.call_contacts import find_client
     from backend.services.numbering import next_number
     if lead.converted_order_id:
@@ -259,22 +265,26 @@ async def convert_lead(db: AsyncSession, org_id: str, lead: Lead, *, actor: Opti
             await db.flush()
         device_id = dev.id
 
-    init = (await db.execute(select(OrderStatus).where(
-        OrderStatus.org_id == org_id,
-        OrderStatus.record_type == ("estimate" if is_estimate else "work_order"),
-        OrderStatus.is_default == True, OrderStatus.active == True))).scalars().first()  # noqa: E712
+    if not is_estimate:
+        await assert_asset_free(db, org_id, device_id)
     location_id = lead.location_id or (actor.location_id if actor else None) or await _default_location(db, org_id)
     if not location_id:
         raise HTTPException(409, "Add a location before converting inquiries")
+    # CLI-02: never onto someone who has left
+    assignee = await active_employee_id(db, org_id, lead.manager_id) or (actor.id if actor else None)
     order = Order(org_id=org_id, location_id=location_id, client_id=client.id, device_id=device_id,
                   order_number=await next_number(db, org_id, "order"),
-                  status=(init.key if init else ("est_draft" if is_estimate else "new")), is_estimate=is_estimate,
+                  status=await initial_job_status(db, org_id, is_estimate=is_estimate), is_estimate=is_estimate,
                   complaint=lead.inquiry or f"Inquiry from {lead.name}",
-                  assigned_to_id=lead.manager_id or (actor.id if actor else None))
+                  assigned_to_id=assignee)
+    await stamp_new_job(db, order)
     db.add(order)
     await db.flush()
     if extra is not None:
         await extra(order, client)
+        if order.type_id and not is_estimate:   # self check-in picked a job type: its own start
+            order.status = await initial_job_status(db, org_id, type_id=order.type_id)
+    await record_job_created(db, org_id, actor.id if actor else None, order, source=f"inquiry:{lead.source}")
     db.add(OrderStatusLog(order_id=order.id, from_status=None, to_status=order.status,
                           changed_by_id=actor.id if actor else None,
                           note=f"Created from inquiry ({lead.source})"))
@@ -291,13 +301,13 @@ async def convert_lead(db: AsyncSession, org_id: str, lead: Lead, *, actor: Opti
         t.order_id = t.order_id or order.id
         t.status, t.completed_at = "done", now_utc()
     await _emit(db, org_id, "inquiry.converted", lead)
-    if not is_estimate:   # same as a job made on the work-order screen (estimates don't emit it)
-        from backend.services.webhooks import emit_event
-        await emit_event(db, org_id, "order.created", {"id": order.id, "order_number": order.order_number,
-                                                       "status": order.status, "source": "inquiry"})
     await db.commit()
+    # order.created webhook (work orders only, with "source"), notifications, commissions…
+    client_id = client.id
+    await _new_job_steps(db, actor or SystemActor(org_id, name="API"), order,
+                         notify_assignee=True if actor is None else None, webhook_extra={"source": "inquiry"})
     return {"ok": True, "order_id": order.id, "order_number": order.order_number,
-            "client_id": client.id, "device_id": device_id}
+            "client_id": client_id, "device_id": device_id}
 
 
 # ── Missed call → inquiry ────────────────────────────────────────────────────

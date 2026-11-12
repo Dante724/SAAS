@@ -370,12 +370,27 @@ async def list_types(
     return {"items": out}
 
 
+async def _valid_initial_status(db, org_id: str, key: Optional[str]) -> str:
+    """WO-06 / Q25: a job type starts its jobs in one of the shop's active work-order statuses.
+    The form's untouched default ("new") becomes the shop's default if "new" isn't one of them."""
+    from backend.routers.orders import _default_job_status, is_job_status
+    from backend.routers.statuses import ensure_seeded
+    await ensure_seeded(db, org_id)   # nothing pending yet: safe to seed (it commits)
+    if await is_job_status(db, org_id, "work_order", key):
+        return key
+    if key in (None, "", "new"):
+        return await _default_job_status(db, org_id, "work_order")
+    raise HTTPException(422, f"'{key}' isn't one of your work-order statuses. "
+                             "Pick one from the list (Settings > Statuses).")
+
+
 @router.post("/types", status_code=201)
 async def create_type(
     data: TypeIn,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
+    initial_status = await _valid_initial_status(db, current.org_id, data.initial_status)
     count = (await db.execute(
         select(func.count()).select_from(WorkOrderType).where(WorkOrderType.org_id == current.org_id)
     )).scalar() or 0
@@ -388,7 +403,7 @@ async def create_type(
             e.is_default = False
     t = WorkOrderType(
         org_id=current.org_id, name=data.name, color=data.color,
-        initial_status=data.initial_status, default_asset_type=data.default_asset_type,
+        initial_status=initial_status, default_asset_type=data.default_asset_type,
         is_default=data.is_default, sort_order=count,
         sched_default_duration=data.sched_default_duration, sched_required=data.sched_required,
         requires_signature=bool(data.requires_signature), requires_checklist=bool(data.requires_checklist),
@@ -409,6 +424,7 @@ async def update_type(
     t = result.scalar_one_or_none()
     if not t:
         raise HTTPException(404, "Type not found")
+    initial_status = await _valid_initial_status(db, current.org_id, data.initial_status)
     if data.is_default and not t.is_default:
         existing = (await db.execute(
             select(WorkOrderType).where(WorkOrderType.org_id == current.org_id, WorkOrderType.is_default == True)  # noqa: E712
@@ -417,7 +433,7 @@ async def update_type(
             e.is_default = False
     t.name = data.name
     t.color = data.color
-    t.initial_status = data.initial_status
+    t.initial_status = initial_status
     t.default_asset_type = data.default_asset_type
     t.is_default = data.is_default
     t.sched_default_duration = data.sched_default_duration

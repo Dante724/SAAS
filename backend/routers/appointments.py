@@ -287,11 +287,16 @@ async def appointment_to_order(
     current: Employee = Depends(get_current_employee),
 ):
     """Turn an appointment into a work order or estimate — the client, the time and
-    the service all carry across, and the appointment is marked done and linked to the job."""
-    from backend.models import Order, OrderStatus
+    the service all carry across, and the appointment is marked done and linked to the job.
+    WO-05: the job gets the same treatment as one made at the counter (valid starting status,
+    order.create audit row, then notifications, commissions, automations, checklists, webhook)."""
+    from backend.models import Order
+    from backend.routers.orders import (
+        _new_job_steps, active_employee_id, initial_job_status, record_job_created, stamp_new_job)
+    from backend.services.auth import assert_perm
     from backend.services.numbering import next_number
+    await assert_perm(db, current, "can_create_estimates" if record == "estimate" else "can_create_tickets")
     is_estimate = record == "estimate"
-    rec_type = "estimate" if is_estimate else "work_order"
     if not is_estimate:
         from backend.services.billing import assert_can_add_job
         await assert_can_add_job(db, current.org_id)
@@ -320,23 +325,28 @@ async def appointment_to_order(
             client_id = c.id
         b.client_id = client_id
 
-    initial = (await db.execute(select(OrderStatus).where(
-        OrderStatus.org_id == current.org_id, OrderStatus.record_type == rec_type,
-        OrderStatus.is_default == True, OrderStatus.active == True))).scalars().first()  # noqa: E712
-
     order = Order(
         org_id=current.org_id, location_id=b.location_id or current.location_id,
         order_number=await next_number(db, current.org_id, "order"),
-        client_id=client_id, assigned_to_id=b.employee_id or current.id,
-        status=initial.key if initial else ("est_draft" if is_estimate else "new"),
+        client_id=client_id,
+        assigned_to_id=await active_employee_id(db, current.org_id, b.employee_id) or current.id,   # CLI-02
+        status=await initial_job_status(db, current.org_id, is_estimate=is_estimate),
         is_estimate=is_estimate,
         complaint=b.note or "Booked appointment",
         scheduled_for=b.scheduled_for,
         scheduled_to=b.scheduled_for + timedelta(minutes=b.duration_min or 60),
     )
+    await stamp_new_job(db, order)
     db.add(order)
     await db.flush()
+    from backend.models import OrderStatusLog
+    db.add(OrderStatusLog(order_id=order.id, from_status=None, to_status=order.status,
+                          changed_by_id=current.id, note="Created from appointment"))
+    await record_job_created(db, current.org_id, current.id, order, source="appointment")
     b.order_id = order.id
     b.status = "done"
     await db.commit()
-    return {"order_id": order.id, "order_number": order.order_number, "client_id": client_id, "is_estimate": is_estimate}
+    result = {"order_id": order.id, "order_number": order.order_number, "client_id": client_id,
+              "is_estimate": is_estimate}
+    await _new_job_steps(db, current, order)
+    return result

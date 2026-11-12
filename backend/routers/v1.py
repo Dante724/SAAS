@@ -570,11 +570,8 @@ async def get_order(oid: str, db: AsyncSession = Depends(get_db), principal: Api
 
 async def _initial_status(db: AsyncSession, org_id: str) -> str:
     """The shop's default work-order status, the same rule the app's own create uses."""
-    from backend.models import OrderStatus
-    dflt = (await db.execute(select(OrderStatus).where(
-        OrderStatus.org_id == org_id, OrderStatus.is_default == True, OrderStatus.active == True,  # noqa: E712
-        OrderStatus.record_type == "work_order"))).scalars().first()
-    return dflt.key if dflt else "new"
+    from backend.routers.orders import initial_job_status
+    return await initial_job_status(db, org_id)
 
 
 @router.post("/orders", status_code=201, summary="Create a work order",
@@ -593,6 +590,9 @@ async def create_order(data: OrderIn, db: AsyncSession = Depends(get_db), princi
         await _must_exist(db, Location, org, data.location_id, "Location")
         await _must_exist(db, Client, org, data.client_id, "Contact")
         await _must_exist(db, Employee, org, data.assigned_to_id, "Employee")
+        from backend.routers.orders import active_employee_id
+        if data.assigned_to_id and not await active_employee_id(db, org, data.assigned_to_id):
+            raise HTTPException(422, "That employee is no longer active")   # CLI-02
         status = await _initial_status(db, org)
         cinfo = await _cur.resolve_for_client(db, org, data.client_id, None)
         o = Order(org_id=org, order_number=await next_number(db, org, "order"),
@@ -608,21 +608,12 @@ async def create_order(data: OrderIn, db: AsyncSession = Depends(get_db), princi
         await log_system_event(db, org, "order", o.id, "Work order created through the API")
         await _commit(db)
         await db.refresh(o)
-        try:
-            from backend.routers.checklists import auto_attach_for_status
-            await auto_attach_for_status(db, o, o.status, author_id=None)
-            await db.commit()
-        except Exception:  # noqa: BLE001 — never block creation on a checklist
-            await db.rollback()
-        try:
-            from backend.services.webhooks import emit_event
-            # Same payload as an order made in the app; "number" kept for existing receivers.
-            await emit_event(db, org, "order.created", {"id": o.id, "number": o.order_number,
-                                                        "order_number": o.order_number,
-                                                        "status": o.status, "total": o.total})
-            await db.commit()   # the delivery row is written after the record's own commit
-        except Exception:  # noqa: BLE001
-            pass
+        # WO-05: the app's own create steps (checklists, the order.created webhook, "created"
+        # notifications, automations, the assignee's alert), each best-effort and logged.
+        # Same webhook payload as an order made in the app; "number" kept for existing receivers.
+        from backend.routers.orders import SystemActor, _new_job_steps
+        await _new_job_steps(db, SystemActor(org, name="API"), o, notify_assignee=True,
+                             webhook_extra={"number": o.order_number})
         await db.refresh(o)
         return {"data": _order(o)}
     return await _idempotent(db, principal, idempotency_key, "POST /orders", data, run)
