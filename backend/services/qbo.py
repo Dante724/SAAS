@@ -286,8 +286,9 @@ async def _build_payload(db, org_id, entity_type, local_id) -> Optional[dict]:
         return payload
 
     if entity_type == "payment":
-        p = (await db.execute(select(Payment).where(Payment.id == local_id))).scalar_one_or_none()
-        # payments carry no org_id: only push one whose invoice, order or client is this org's
+        p = (await db.execute(select(Payment).where(
+            Payment.id == local_id, Payment.org_id == org_id))).scalar_one_or_none()
+        # only push this org's payment
         if not p or not await _payment_in_org(db, org_id, p):
             return None
         payload = {"TotalAmt": p.amount, "PaymentRefNum": p.reference or p.id[:8]}
@@ -343,11 +344,8 @@ async def _invoice_rows(db: AsyncSession, inv: Invoice) -> list[tuple]:
 
 
 async def _payment_in_org(db: AsyncSession, org_id: str, p: Payment) -> bool:
-    from backend.models import Order
-    for model, ref in ((Invoice, p.invoice_id), (Order, p.order_id), (Client, p.client_id)):
-        if ref:
-            return (await db.execute(select(model.org_id).where(model.id == ref))).scalar_one_or_none() == org_id
-    return False
+    """Every payment carries its own shop (audit DB-01); no guessing from its links."""
+    return p.org_id == org_id
 
 
 async def _push(conn: QboConnection, entity_type: str, payload: dict, remote_id: Optional[str]) -> str:

@@ -33,7 +33,7 @@ from backend.services.invoicing import VOID_STATUSES, balance_due, invoice_order
 from backend.services.money import add_to_column, q2
 
 MONEY_IN = ("payment", "prepayment")
-_COPY = ("client_id", "method", "kind", "order_id", "account_id", "received_by_id", "shift_id",
+_COPY = ("org_id", "client_id", "method", "kind", "order_id", "account_id", "received_by_id", "shift_id",
          "reference", "provider_ref", "paid_at")
 
 
