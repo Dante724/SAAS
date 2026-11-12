@@ -107,3 +107,32 @@ async def test_unchanged_dangling_soft_id_does_not_block_other_edits(client, ten
     r = await client.put(f"/api/staff/locations/{me['location_id']}", json={"name": "Renamed"},
                          headers=tenant)
     assert r.status_code == 200, r.text
+
+
+@pytest.mark.asyncio
+async def test_form_layout_type_must_be_this_shops(client, tenant):
+    other = await _shop(client)
+    theirs = (await client.post("/api/forms/types", json={"name": "Their type"}, headers=other)).json()["id"]
+    body = {"form": "order", "items": [{"ref": "complaint", "visible": True}]}
+    r = await client.put("/api/forms/layout", json={**body, "type_id": theirs}, headers=tenant)
+    assert _is_unknown_ref(r), r.text
+    mine = (await client.post("/api/forms/types", json={"name": "My type"}, headers=tenant)).json()["id"]
+    r = await client.put("/api/forms/layout", json={**body, "type_id": mine}, headers=tenant)
+    assert r.status_code == 200, r.text
+
+
+@pytest.mark.asyncio
+async def test_message_handoff_template_must_be_this_shops(client, tenant):
+    other = await _shop(client)
+    theirs = (await client.post("/api/clients/message-templates/all", json={
+        "name": "T", "body": "Hi"}, headers=other)).json()["id"]
+    me = (await client.get("/api/auth/me", headers=tenant)).json()
+    cid = (await client.post("/api/clients", json={"name": "Pat", "phone": "+15550003333"},
+                             headers=tenant)).json()["id"]
+    oid = (await client.post("/api/orders", json={"client_id": cid, "location_id": me["location_id"],
+                                                  "complaint": "x"}, headers=tenant)).json()["id"]
+    msg = {"order_id": oid, "channel": "sms", "body": "Ready"}
+    r = await client.post("/api/mobile/messages", json={**msg, "template_id": theirs}, headers=tenant)
+    assert _is_unknown_ref(r), r.text
+    r = await client.post("/api/mobile/messages", json=msg, headers=tenant)
+    assert r.status_code == 201, r.text

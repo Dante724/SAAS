@@ -51,6 +51,9 @@ def _registry() -> dict:
         "taggables": {"entity_id": (_by("entity_type", {
             "contact": m.Client, "order": m.Order, "chat": (m.ChatThread, m.InboxThread)}), "record")},
         "directory_items": {"parent_id": (m.DirectoryItem, "list value")},
+        "form_layouts": {"type_id": (m.WorkOrderType, "work-order type")},
+        "invoice_lines": {"source_id": (_by("kind", catalog), "catalog item")},
+        "message_handoffs": {"template_id": (m.MessageTemplate, "message template")},
     }
 
 

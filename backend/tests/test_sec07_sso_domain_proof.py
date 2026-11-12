@@ -102,21 +102,54 @@ async def test_verify_is_shop_scoped_and_needs_settings_permission(client, tenan
 
 
 @pytest.mark.asyncio
-async def test_lookup_txt_reads_dns_over_https_answers(monkeypatch):
-    """The real lookup: TXT strings come back quoted, long ones split into chunks."""
-    import httpx
+async def test_lookup_txt_joins_chunks_and_survives_dns_errors(monkeypatch):
+    """The real lookup: a long TXT record comes back as several strings; DNS failures read as
+    "no record" (the shop is told to try again), never a 500."""
+    import dns.asyncresolver
+    import dns.resolver
 
-    def answer(request):
-        assert request.url.params["name"] == "victim.test" and request.url.params["type"] == "TXT"
-        return httpx.Response(200, json={"Status": 0, "Answer": [
-            {"type": 16, "data": '"tekly-sso-verification=abc"'},
-            {"type": 16, "data": '"v=spf1 " "-all"'},
-            {"type": 5, "data": "cname.example."}]})
-    real = httpx.AsyncClient
-    monkeypatch.setattr(httpx, "AsyncClient",
-                        lambda **kw: real(transport=httpx.MockTransport(answer), **kw))
+    class Rec:
+        def __init__(self, *parts):
+            self.strings = parts
+
+    async def ok(name, rdtype, lifetime=None):
+        assert (name, rdtype) == ("victim.test", "TXT")
+        return [Rec(b"tekly-sso-verification=", b"abc"), Rec(b"v=spf1 -all")]
+    monkeypatch.setattr(dns.asyncresolver, "resolve", ok)
     assert await sso.lookup_txt("victim.test") == ["tekly-sso-verification=abc", "v=spf1 -all"]
 
-    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real(
-        transport=httpx.MockTransport(lambda r: httpx.Response(503)), **kw))
+    async def nx(name, rdtype, lifetime=None):
+        raise dns.resolver.NXDOMAIN()
+    monkeypatch.setattr(dns.asyncresolver, "resolve", nx)
     assert await sso.lookup_txt("victim.test") == []
+
+
+@pytest.mark.asyncio
+async def test_platform_admin_can_find_and_release_a_proven_domain(client, tenant, monkeypatch):
+    """A domain proven by the wrong shop (a lapsed DNS record, a dispute) can be handed back:
+    platform support releases it, with a reason, and the real owner can then claim and prove it."""
+    from backend.tests.admin_helpers import admin_headers
+    squatter = await _shop(client)
+    sq = await _claim(client, squatter, issuer="https://evil.example")
+    _dns(monkeypatch, {"victim.test": [sq["domain_verification"]["value"]]})
+    assert (await client.post(f"/api/sso/config/{sq['id']}/verify-domain", headers=squatter)).status_code == 200
+
+    sales, _ = await admin_headers(client, role="sales")          # no change_owner permission
+    r = await client.post("/api/admin/sso/domains/victim.test/release", json={"reason": "dispute #12"},
+                          headers=sales)
+    assert r.status_code == 403, r.text
+
+    ops, _ = await admin_headers(client, role="support")
+    got = (await client.get("/api/admin/sso/domains/Victim.TEST", headers=ops)).json()
+    assert [c["id"] for c in got["items"]] == [sq["id"]] and got["items"][0]["verified"] is True
+    r = await client.post("/api/admin/sso/domains/victim.test/release", json={"reason": "x"}, headers=ops)
+    assert r.status_code == 422                                     # a reason is required
+    r = await client.post("/api/admin/sso/domains/victim.test/release", json={"reason": "dispute #12"},
+                          headers=ops)
+    assert r.status_code == 200 and r.json()["released"] == 1, r.text
+    assert (await client.get("/api/sso/discover?email=ceo@victim.test")).json() == {"sso": False}
+
+    owner = await _claim(client, tenant)
+    _dns(monkeypatch, {"victim.test": [owner["domain_verification"]["value"]]})
+    r = await client.post(f"/api/sso/config/{owner['id']}/verify-domain", headers=tenant)
+    assert r.status_code == 200, r.text

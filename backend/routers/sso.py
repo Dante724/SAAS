@@ -10,7 +10,6 @@ domain and calls `/config/{id}/verify-domain`. Until then `discover` ignores the
 `authorize` refuses it. An unproven claim blocks nobody, so a squatter can't lock the real owner
 out; once one shop proves a domain, no other shop can claim or prove it.
 """
-import os
 import secrets
 from typing import Optional
 
@@ -64,28 +63,18 @@ def _allowed_redirect(uri: str) -> bool:
 
 
 TXT_PREFIX = "tekly-sso-verification="
-# DNS-over-HTTPS JSON endpoint used to read TXT records (no system resolver library needed).
-DOH_URL = os.environ.get("SSO_DOH_URL", "https://cloudflare-dns.com/dns-query")
 
 
 async def lookup_txt(domain: str) -> list[str]:
-    """The domain's TXT records as plain strings ([] when there are none or DNS can't answer)."""
-    import httpx
+    """The domain's TXT records as plain strings ([] when there are none or DNS can't answer).
+    A long record arrives as several <=255-byte strings; they are joined back into one."""
+    import dns.asyncresolver
+    import dns.exception
     try:
-        async with httpx.AsyncClient(timeout=8) as http:
-            r = await http.get(DOH_URL, params={"name": domain, "type": "TXT"},
-                               headers={"accept": "application/dns-json"})
-        r.raise_for_status()
-        answers = r.json().get("Answer") or []
-    except Exception:
+        answer = await dns.asyncresolver.resolve(domain, "TXT", lifetime=8)
+    except (dns.exception.DNSException, OSError):
         return []
-    # A TXT answer is one or more quoted strings; a long value is split into 255-byte chunks.
-    out = []
-    for a in answers:
-        if a.get("type") == 16:
-            data = a.get("data") or ""
-            out.append("".join(p for p in data.split('"') if p.strip()) if '"' in data else data)
-    return out
+    return [b"".join(r.strings).decode("utf-8", "replace") for r in answer]
 
 
 def _verification(s: SsoConnection) -> Optional[dict]:
