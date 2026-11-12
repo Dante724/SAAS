@@ -69,6 +69,56 @@ async def _shop_days(db, org_id: str, ps, pe) -> tuple:
             EmployeeBalanceLedger.created_at < day_end_utc(pe, tz))
 
 
+# ── tk02: shop-wide payroll settings ─────────────────────────────────────────
+class PayrollSettingsIn(BaseModel):
+    task_commission_mode: Optional[str] = None   # split | each_full | first_only
+
+
+async def _payroll_settings(db, org_id: str) -> dict:
+    from backend.services.payroll import TASK_COMMISSION_MODES
+    return {"task_commission_mode": await CommissionEngine(db, org_id).task_commission_mode(),
+            "task_commission_modes": list(TASK_COMMISSION_MODES)}
+
+
+@router.get("/settings")
+async def get_payroll_settings(
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_manage_payroll")),
+):
+    """Shop-wide payroll settings, next to the commission rules (Settings > Payroll).
+
+    task_commission_mode  how a "task closed" commission is paid when a task has several assignees:
+                          split (default: shared equally, to the cent), each_full (everyone earns
+                          the full amount), first_only (only the primary owner).
+    task_commission_modes the accepted values, for the picker."""
+    return await _payroll_settings(db, current.org_id)
+
+
+@router.put("/settings")
+async def update_payroll_settings(
+    data: PayrollSettingsIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_manage_payroll")),
+):
+    """Change shop-wide payroll settings; send only the fields to change. Applies to tasks
+    closed from now on (what was already paid stays as it is)."""
+    from backend.models import Organisation
+    from backend.services.payroll import TASK_COMMISSION_MODES
+    payload = data.model_dump(exclude_unset=True)
+    mode = payload.get("task_commission_mode")
+    if "task_commission_mode" in payload:
+        if mode not in TASK_COMMISSION_MODES:
+            raise HTTPException(422, f"task_commission_mode must be one of {list(TASK_COMMISSION_MODES)}")
+        org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one()
+        old = await CommissionEngine(db, current.org_id).task_commission_mode()
+        org.task_commission_mode = mode
+        if old != mode:
+            await _audit(db, current, "payroll.settings_update", "organisation", current.org_id,
+                         {"task_commission_mode": [old, mode]})
+        await db.commit()
+    return await _payroll_settings(db, current.org_id)
+
+
 @router.get("/rules")
 async def list_rules(
     db: AsyncSession = Depends(get_db),

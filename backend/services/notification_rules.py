@@ -960,9 +960,11 @@ async def notify_contact_birthdays(db: AsyncSession, *, org_id: str,
 # ── Build 86: internal task notifications ────────────────────────────────────
 # Tasks phase 0: task alerts land in the staff bell (StaffNotification) + Web Push, like missed
 # calls and job assignments, in addition to any email/SMS rules the shop configured.
-TASK_PUSH_KINDS = {"assigned": "task.assigned", "changed": "task.changed", "completed": "task.completed"}
+TASK_PUSH_KINDS = {"assigned": "task.assigned", "changed": "task.changed", "completed": "task.completed",
+                   "overdue": "task.overdue"}
 _TASK_BELL_TITLES = {"assigned": "New task for you", "changed": "Task updated",
-                     "completed": "Task completed"}
+                     "completed": "Task completed", "overdue": "Task overdue"}
+TASK_LINK = "/tasks?task={id}"   # every task alert opens the task (bell row and push payload)
 
 
 def task_people(task) -> set:
@@ -975,7 +977,7 @@ def _task_targets(task, event: str, actor_id: Optional[str], recipients=None) ->
     edit never re-announces an assignment. Never the person who acted."""
     if recipients is not None:
         targets = {i for i in recipients if i}
-    elif event == "assigned":
+    elif event in ("assigned", "overdue"):
         targets = task_people(task)
     elif event in ("changed", "completed"):
         targets = task_people(task) | ({task.created_by_id} if task.created_by_id else set())
@@ -985,10 +987,24 @@ def _task_targets(task, event: str, actor_id: Optional[str], recipients=None) ->
     return targets
 
 
+def task_due_label(due_at, tzname: Optional[str]) -> str:
+    """A task's due time as staff read it, on the shop's clock: "today 14:30", "12 Nov 14:30";
+    a date-only due (23:59:59 shop time) has no time: "today", "12 Nov"."""
+    from backend.services.dates import today_in, utc_to_wall
+    wall = utc_to_wall(due_at, tzname)
+    day = "today" if wall.date() == today_in(tzname) else f"{wall:%d %b}".lstrip("0")
+    if (wall.hour, wall.minute, wall.second) == (23, 59, 59):
+        return day
+    return f"{day} {wall:%H:%M}"
+
+
 async def notify_task_bell(db: AsyncSession, *, org_id: str, task, event: str,
-                           actor_id: Optional[str] = None, recipients=None) -> int:
+                           actor_id: Optional[str] = None, recipients=None,
+                           deferred: Optional[list] = None, tz: Optional[str] = None) -> int:
     """Staff bell + push for a task event. "changed" is collapsed: while someone still has an
-    unread "Task updated" for this task, further edits and comments don't add another."""
+    unread "Task updated" for this task, further edits and comments don't add another.
+    `deferred`: collect the pushes there (push.notify) for the caller to send after its commit.
+    `tz`: the shop's zone when the caller already has it (the overdue sweep)."""
     from backend.models import Employee as _Emp
     from backend.models import StaffNotification
     from backend.services.push import notify as push_notify
@@ -998,8 +1014,11 @@ async def notify_task_bell(db: AsyncSession, *, org_id: str, task, event: str,
         return 0
     live = set((await db.execute(select(_Emp.id).where(
         _Emp.id.in_(targets), _Emp.org_id == org_id, _Emp.active == True))).scalars().all())  # noqa: E712
-    link = f"/tasks?task={task.id}"
-    body = (task.title or "")[:200] + (f" · due {task.due_at:%d %b %H:%M}" if task.due_at else "")
+    link = TASK_LINK.format(id=task.id)
+    if task.due_at and tz is None:
+        from backend.services.dates import shop_tzname
+        tz = await shop_tzname(db, org_id)
+    body = (task.title or "")[:200] + (f" · due {task_due_label(task.due_at, tz)}" if task.due_at else "")
     sent = 0
     for emp_id in sorted(live):
         if event == "changed":
@@ -1012,7 +1031,7 @@ async def notify_task_bell(db: AsyncSession, *, org_id: str, task, event: str,
         try:
             if await push_notify(db, org_id=org_id, employee_id=emp_id, kind=kind,
                                  title=_TASK_BELL_TITLES[event], body=body, deep_link=link,
-                                 commit=False):
+                                 commit=False, deferred=deferred):
                 sent += 1
         except Exception:  # noqa: BLE001 — one person's push must not stop the others
             logger.warning("task bell/push failed (task=%s employee=%s)", task.id, emp_id, exc_info=True)
@@ -1020,7 +1039,8 @@ async def notify_task_bell(db: AsyncSession, *, org_id: str, task, event: str,
 
 
 async def notify_task(db: AsyncSession, *, org_id: str, task, event: str,
-                      actor_id: Optional[str] = None, recipients=None) -> int:
+                      actor_id: Optional[str] = None, recipients=None,
+                      deferred: Optional[list] = None, tz: Optional[str] = None) -> int:
     """Notify the people involved in a task: every assignee, plus the author on changes and
     completion.
 
@@ -1035,7 +1055,7 @@ async def notify_task(db: AsyncSession, *, org_id: str, task, event: str,
 
     try:
         await notify_task_bell(db, org_id=org_id, task=task, event=event, actor_id=actor_id,
-                               recipients=recipients)
+                               recipients=recipients, deferred=deferred, tz=tz)
     except Exception:  # noqa: BLE001 — logged; the email/SMS rules still run
         logger.warning("task bell notification failed (task=%s event=%s)", task.id, event, exc_info=True)
 
@@ -1052,6 +1072,10 @@ async def notify_task(db: AsyncSession, *, org_id: str, task, event: str,
 
     sent = 0
     now = now_utc()
+    if task.due_at and tz is None:
+        from backend.services.dates import shop_tzname
+        tz = await shop_tzname(db, org_id)
+    due = f" Due {task_due_label(task.due_at, tz)}." if task.due_at else ""
     for rule in rules:
         for emp_id in sorted(targets):
             emp = (await db.execute(select(_Emp).where(
@@ -1060,8 +1084,7 @@ async def notify_task(db: AsyncSession, *, org_id: str, task, event: str,
                 continue
             recipient = emp.email if rule.channel == "email" else getattr(emp, "phone", None)
             subject = f"Task {event}: {task.title}"
-            body = (f"Task “{task.title}” was {event}."
-                    + (f" Due {task.due_at:%Y-%m-%d %H:%M}." if task.due_at else ""))
+            body = f"Task “{task.title}” was {event}." + due
             send_at = now + timedelta(minutes=rule.delay_min or 0)
             if rule.working_hours_only:
                 send_at = shift_into_working_hours(send_at)

@@ -12,6 +12,7 @@ from backend.services.dates import day_start_utc, now_utc, range_edge, shop_toda
 # The money figures and low stock are defined once, in services/revenue (read its docstring).
 from backend.services import revenue as money_rules, stock_rows
 from backend.services.revenue import low_stock_count_query, low_stock_query, line_net
+from backend.services.task_visibility import assigned_sql, visibility_conds
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -63,11 +64,18 @@ async def dashboard(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_reports")),
 ):
-    hit = await _dash_get(current.org_id)
-    if hit is not None:
-        return hit
-    out = await _dashboard(db, current.org_id)
-    await _dash_put(current.org_id, out)
+    out = await _dash_get(current.org_id)
+    if out is None:
+        out = await _dashboard(db, current.org_id)
+        await _dash_put(current.org_id, out)
+    # tk02: the cached tile counts the whole shop's tasks; someone who only sees their own tasks
+    # gets their own count (computed per request, never cached).
+    vis = await visibility_conds(db, current)
+    if vis:
+        mine = (await db.execute(select(func.count()).select_from(Task).where(
+            Task.org_id == current.org_id, Task.status.notin_(("done", "cancelled")),
+            Task.archived_at.is_(None), *vis))).scalar() or 0
+        out = {**out, "stats": {**out["stats"], "pending_tasks": mine}}
     return out
 
 
@@ -1580,7 +1588,9 @@ async def home_feed(
 
     task_conds = [Task.org_id == oid, Task.status.notin_(("done", "cancelled")), Task.archived_at.is_(None)]
     if own:
-        task_conds.append(Task.assigned_to_id == current.id)
+        task_conds.append(assigned_sql(current.id))
+    else:   # tk02: staff who don't assign work count only the tasks they can see
+        task_conds += await visibility_conds(db, current)
     open_tasks = (await db.execute(select(func.count()).select_from(Task).where(*task_conds))).scalar() or 0
     inquiries = (await db.execute(select(func.count()).select_from(Lead).where(
         Lead.org_id == oid, Lead.status.in_(["new", "in_progress"]))) ).scalar() or 0
