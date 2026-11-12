@@ -310,7 +310,7 @@ def _insert(con, table, **vals):
 
 def test_migration_repairs_duplicates_and_bad_values_before_adding_the_rules(tmp_path):
     path = tmp_path / "w2.db"
-    r = _alembic(path, "srch01")
+    r = _alembic(path, "sso01")
     assert r.returncode == 0, r.stderr[-3000:]
     con = sqlite3.connect(path)       # foreign keys off: rows for ids without parent rows
     t0 = "2026-11-01 09:00:00"
@@ -422,7 +422,7 @@ def test_migration_repairs_duplicates_and_bad_values_before_adding_the_rules(tmp
 
 def test_migration_stops_with_a_list_when_a_value_has_no_safe_repair(tmp_path):
     path = tmp_path / "w2-refuse.db"
-    assert _alembic(path, "srch01").returncode == 0
+    assert _alembic(path, "sso01").returncode == 0
     con = sqlite3.connect(path)
     _insert(con, "stock_transfers", id="t1", org_id="O1", transfer_number="T-1", status="lost_in_post")
     _insert(con, "coupons", id="c1", org_id="O1", code="A", kind="pct", value=1)
@@ -434,5 +434,5 @@ def test_migration_stops_with_a_list_when_a_value_has_no_safe_repair(tmp_path):
     assert "stock_transfers.status = 'lost_in_post' on 1 row(s)" in r.stderr
     con = sqlite3.connect(path)          # nothing was changed
     assert con.execute("SELECT code FROM coupons ORDER BY id").fetchall() == [("A",), ("A",)]
-    assert con.execute("SELECT version_num FROM alembic_version").fetchall() == [("srch01",)]
+    assert con.execute("SELECT version_num FROM alembic_version").fetchall() == [("sso01",)]
     con.close()

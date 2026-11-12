@@ -39,7 +39,7 @@ VALIDATE split would hold the same lock). SQLite can't add a CHECK in place: the
 are not reflected faithfully) is recreated from its saved SQL.
 
 Revision ID: w2b01
-Revises: srch01
+Revises: sso01
 """
 import logging
 from collections import defaultdict
@@ -49,7 +49,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "w2b01"
-down_revision = "srch01"
+down_revision = "sso01"
 branch_labels = None
 depends_on = None
 
