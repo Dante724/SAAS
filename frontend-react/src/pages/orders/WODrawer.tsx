@@ -55,6 +55,7 @@ import { clickable } from "../../lib/clickable";
 import { jobTypeLabel, type WOTypeRef } from "./jobType";
 import { Badge } from "../../components/Card";
 import { theadRowClass } from "../../components/Table";
+import { rememberJob } from "../../lib/recentJob";
 
 type Emp = { id: string; name: string; in_managers?: boolean; in_assignees?: boolean };
 type Line = { id: string; kind?: string; line_type?: string; description?: string; qty?: number; unit_price?: number; discount?: number; discount_type?: string; technician_id?: string | null; work_share?: number; booked_hours?: number; co_technicians?: { employee_id: string; share: number }[]; total?: number; in_stock?: boolean; order_item_id?: string | null;
@@ -98,6 +99,11 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   const [tab, setTab] = useState<Tab>("general");
   const [sub, setSub] = useState<null | "client" | "asset">(null);
   const [d, setD] = useState<Detail>(order as Detail);
+  // Quick add (Tasks) offers the job you just looked at as a one-tap link: remember it here.
+  const devName = [d.device?.brand, d.device?.model].filter(Boolean).join(" ") || null;
+  useEffect(() => {
+    rememberJob(me?.id, { id: d.id, number: d.order_number || null, client: d.client?.name || null, device: devName });
+  }, [me?.id, d.id, d.order_number, d.client?.name, devName]);
   const [statuses, setStatuses] = useState<FullStatus[]>([]);
   // Edits that only save on an explicit button (notes, watch-outs) register here while
   // unsaved, so "Save and close" can save them and a plain close can warn first.

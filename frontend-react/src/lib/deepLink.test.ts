@@ -8,6 +8,11 @@ describe("toAppPath", () => {
     expect(toAppPath("/tech#/dashboard")).toBe("/my-work");
     expect(toAppPath("/tech")).toBe("/my-work");
   });
+  it("opens a task's panel for task bells, old and new", () => {
+    expect(toAppPath("/tasks?task=t-9")).toBe("/tasks?task=t-9");
+    expect(toAppPath("/tech#/task/t-9")).toBe("/tasks?task=t-9");
+    expect(toAppPath("/go/tasks/t-9")).toBe("/tasks?task=t-9");
+  });
   it("leaves main-app links alone", () => {
     expect(toAppPath("/orders?open=1")).toBe("/orders?open=1");
     expect(toAppPath("inventory")).toBe("/inventory");

@@ -115,8 +115,18 @@ function goPath(link) {
     const lead = p.match(/[?&]lead=([^&#]+)/);
     return lead ? '/go/inquiries?lead=' + lead[1] : '/go/inquiries';
   }
+  // Task alerts link to the web app's /tasks?task=<id>: open the task on Go's Tasks screen instead.
+  const task = p.match(/^\/tasks\/?\?(?:.*&)?task=([^&#]+)/);
+  if (task) return '/go/tasks?task=' + task[1];
+  if (/^\/tasks\/?(?:[?#]|$)/.test(p)) return '/go/tasks';
   if (!p || /^\/tech\/?(#.*)?$/.test(p)) return '/go/today';
   return p.startsWith('/') ? p : '/go/today';
+}
+
+// Keep in step with pushTag() in src/go/lib/push.ts: one notification per task.
+function pushTag(kind, link) {
+  const task = (link || '').replace(/^https?:\/\/[^/]+/, '').match(/^\/tasks\/?\?(?:.*&)?task=([^&#]+)/);
+  return task ? (kind || 'task') + ':' + task[1] : (kind || 'tekly-go');
 }
 
 self.addEventListener('push', (e) => {
@@ -126,7 +136,7 @@ self.addEventListener('push', (e) => {
     body: data.body || '',
     icon: '/static/icons/icon-192.png',
     badge: '/static/icons/icon-192.png',
-    tag: data.kind || 'tekly-go',
+    tag: pushTag(data.kind, data.deep_link),
     data: { to: goPath(data.deep_link) },
   }));
 });

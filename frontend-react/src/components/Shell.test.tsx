@@ -4,7 +4,7 @@
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, within } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
-import { MemoryRouter } from "react-router-dom";
+import { MemoryRouter, useLocation } from "react-router-dom";
 
 vi.mock("../context/Me", async (orig) => {
   const real: any = await orig();
@@ -49,6 +49,21 @@ describe("Shell — narrow-screen navigation", () => {
     await u.click(screen.getByRole("button", { name: "Open menu" }));
     await u.click(within(drawer()).getByRole("button", { name: "Close menu" }));
     expect(drawer().closest("[aria-hidden]")).toHaveAttribute("aria-hidden", "true");
+  });
+});
+
+describe("Shell — bell", () => {
+  it("opens a task notification on the task's panel", async () => {
+    vi.stubGlobal("fetch", vi.fn(async (url: string) => reply(String(url).includes("/tech/notifications")
+      ? { items: [{ id: "n1", title: "New task for you", body: "Chase supplier RMA", deep_link: "/tasks?task=t-77", read: true, created_at: "2026-11-11T09:00:00Z" }] }
+      : { items: [] })));
+    const u = userEvent.setup();
+    let at = "";
+    const Where = () => { at = useLocation().pathname + useLocation().search; return null; };
+    render(<MemoryRouter><Shell title="Home"><Where /></Shell></MemoryRouter>);
+    await u.click(screen.getByRole("button", { name: "Notifications" }));
+    await u.click(await screen.findByText("New task for you"));
+    expect(at).toBe("/tasks?task=t-77");
   });
 });
 

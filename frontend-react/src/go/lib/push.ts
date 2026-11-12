@@ -15,8 +15,19 @@ export function goPath(link?: string | null): string {
     const lead = p.match(/[?&]lead=([^&#]+)/);
     return lead ? `/go/inquiries?lead=${lead[1]}` : "/go/inquiries";
   }
+  // Task alerts link to the web app's /tasks?task=<id>: open the task on Go's Tasks screen instead.
+  const task = p.match(/^\/tasks\/?\?(?:.*&)?task=([^&#]+)/);
+  if (task) return `/go/tasks?task=${task[1]}`;
+  if (/^\/tasks\/?(?:[?#]|$)/.test(p)) return "/go/tasks";
   if (!p || /^\/tech\/?(#.*)?$/.test(p)) return "/go/today";
   return p.startsWith("/") ? p : "/go/today";
+}
+
+/** The notification's tag: one per task for task alerts (five overdue tasks stay five
+ *  notifications, and a newer alert for the same task replaces the old one), else the kind. */
+export function pushTag(kind?: string | null, link?: string | null): string {
+  const task = (link || "").replace(/^https?:\/\/[^/]+/, "").match(/^\/tasks\/?\?(?:.*&)?task=([^&#]+)/);
+  return task ? `${kind || "task"}:${task[1]}` : (kind || "tekly-go");
 }
 
 function b64ToBytes(b64: string): Uint8Array {

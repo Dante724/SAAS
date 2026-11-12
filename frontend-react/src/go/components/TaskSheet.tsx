@@ -7,18 +7,19 @@ import { PrimaryButton, Sheet, goField } from "./ui";
 import Chip from "./Chip";
 import { announceChange, useStaff, useToast } from "../lib/useGo";
 import { newKey } from "../lib/photos";
-import { isoDateTimeLocal } from "../../lib/localDate";
+import { fromShopWall, shopToday, useShopClock } from "../../lib/shopTime";
+import { addDays } from "../../pages/tasks/taskModel";
 
 type When = "none" | "today" | "tomorrow" | "pick";
 
-/** Due date for a quick choice: end of the working day (18:00 local). */
-export function dueFor(when: When, picked: string, now = new Date()): string | null {
+/** Due date for a quick choice, on the SHOP's clock. Today / Tomorrow send the shop date alone
+ *  (the server makes it the end of that shop day, the same as the web's quick add); a picked
+ *  time goes with the shop's UTC offset so the server stores the right instant. */
+export function dueFor(when: When, picked: string, now = new Date(), tz = "UTC"): string | null {
   if (when === "none") return null;
-  if (when === "pick") return picked || null;
-  const d = new Date(now);
-  if (when === "tomorrow") d.setDate(d.getDate() + 1);
-  d.setHours(18, 0, 0, 0);
-  return isoDateTimeLocal(d);
+  if (when === "pick") return fromShopWall(picked || null, tz);
+  const today = shopToday(tz, now);
+  return when === "tomorrow" ? addDays(today, 1) : today;
 }
 
 export default function TaskSheet({ open, onClose, orderId, orderLabel }: { open: boolean; onClose: () => void; orderId?: string; orderLabel?: string }) {
@@ -33,6 +34,8 @@ export default function TaskSheet({ open, onClose, orderId, orderLabel }: { open
   const key = useRef(newKey());
   const input = useRef<HTMLInputElement>(null);
   const mayAssign = can("can_assign_staff");
+  // Dates are on the shop's clock. If it can't be reached, say so and don't save (never guess UTC).
+  const { tz, failed: tzFailed, retry: retryTz } = useShopClock();
 
   useEffect(() => {
     if (!open) return;
@@ -46,11 +49,11 @@ export default function TaskSheet({ open, onClose, orderId, orderLabel }: { open
   }, [staff, me?.id, mayAssign]);
 
   async function save() {
-    if (!title.trim() || busy) return;
+    if (!title.trim() || busy || !tz) return;   // wait for the shop's clock
     setBusy(true);
     try {
       await api.postOnce("/tasks", {
-        title: title.trim(), assigned_to_id: who || me?.id, due_at: dueFor(when, picked), order_id: orderId || null,
+        title: title.trim(), assigned_to_id: who || me?.id, due_at: dueFor(when, picked, new Date(), tz || "UTC"), order_id: orderId || null,
       }, key.current);
       toast({ title: "Task added" });
       announceChange("tasks");
@@ -89,7 +92,8 @@ export default function TaskSheet({ open, onClose, orderId, orderLabel }: { open
             ))}
           </div>
         </div>
-        <PrimaryButton onClick={save} disabled={!title.trim() || busy}>{busy ? "Adding…" : "Add task"}</PrimaryButton>
+        {tzFailed && <p role="status" className="text-go-sub text-ink-secondary">Can't save until your shop's clock loads. <button type="button" onClick={retryTz} className="font-semibold text-primary underline">Try again</button></p>}
+        <PrimaryButton onClick={save} disabled={!title.trim() || busy || !tz}>{busy ? "Adding…" : "Add task"}</PrimaryButton>
       </div>
     </Sheet>
   );
