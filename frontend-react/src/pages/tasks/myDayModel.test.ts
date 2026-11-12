@@ -1,6 +1,6 @@
 // My day: regrouping and optimistic moves on the /tasks/my-day reply.
 import { describe, it, expect } from "vitest";
-import { splitPool, filterDay, teamLoad, assigneesOf, normDay, moveTasks, insertTask, replaceTask, dueClock, groupByTime, groupByDay, dayLabel, lateLabel, quickDue, bucketForDue, type Task } from "./taskModel";
+import { splitPool, filterDay, teamLoad, ownLoad, fmtTally, isCapped, assigneesOf, normDay, moveTasks, insertTask, replaceTask, dueClock, groupByTime, groupByDay, dayLabel, lateLabel, quickDue, bucketForDue, type Task } from "./taskModel";
 
 const T = (id: string, due?: string | null, extra: Partial<Task> = {}): Task => ({ id, title: id, due_at: due ?? null, ...extra });
 
@@ -104,15 +104,38 @@ describe("whose tasks: filterDay / teamLoad", () => {
     expect(pool.catch_up.map((t) => t.id)).toEqual(["p1"]);
     expect(pool.today.map((t) => t.id)).toEqual(["p2"]);
     expect(pool.counts).toEqual({ catch_up: 1, today: 1, upcoming: 1, later: 0, done_today: 0 });
+    expect(pool.capped).toEqual({});
+  });
+
+  it("filterDay never mixes server totals with filtered lengths, and marks groups cut from a capped list", () => {
+    const big = normDay({ today: [T("x", "2026-11-11"), T("y", "2026-11-11", { assignee_ids: ["e1"] })], later: [T("z")], counts: { catch_up: 0, today: 140, upcoming: 0, later: 1, done_today: 0 } }, "2026-11-11");
+    const keepAll = filterDay(big, () => true);
+    expect(keepAll.counts.today).toBe(2);                 // what is on screen, not the server's 140
+    expect(keepAll.capped).toEqual({ today: true });
+    expect(isCapped(keepAll, "today")).toBe(true);
+    expect(isCapped(keepAll, "later")).toBe(false);
+    expect(isCapped(big, "today")).toBe(true);            // the server counted more than it sent
   });
 
   it("teamLoad counts overdue / today / done per person (a shared task counts for both) and the open pool", () => {
     const r = teamLoad(day, [{ id: "e1", name: "Ann" }, { id: "e2", name: "Sam", position: "Technician" }, { id: "e3", name: "Leo" }]);
-    expect(r.pool).toBe(3);
+    const c = (n: number) => ({ n, more: false });
+    expect(r.pool).toEqual(c(3));
     expect(r.people).toEqual([
-      { id: "e1", name: "Ann", position: undefined, overdue: 1, today: 1, done: 1 },
-      { id: "e2", name: "Sam", position: "Technician", overdue: 0, today: 2, done: 2 },
-      { id: "e3", name: "Leo", position: undefined, overdue: 0, today: 0, done: 0 },
+      { id: "e1", name: "Ann", position: undefined, overdue: c(1), today: c(1), done: c(1) },
+      { id: "e2", name: "Sam", position: "Technician", overdue: c(0), today: c(2), done: c(2) },
+      { id: "e3", name: "Leo", position: undefined, overdue: c(0), today: c(0), done: c(0) },
     ]);
+  });
+
+  it("teamLoad marks numbers from a capped group as lower bounds ('100+'); ownLoad uses the person's exact counts", () => {
+    const capped = { ...day, counts: { ...day.counts, today: 250 } };
+    const r = teamLoad(capped, [{ id: "e2", name: "Sam" }]);
+    expect(r.people[0].today).toEqual({ n: 2, more: true });
+    expect(fmtTally(r.people[0].today)).toBe("2+");
+    expect(r.people[0].overdue).toEqual({ n: 0, more: false });
+    expect(r.pool.more).toBe(true);                       // the pool counts every open group
+    expect(fmtTally(r.people[0].overdue)).toBe("0");
+    expect(ownLoad(capped)).toEqual({ overdue: { n: 2, more: false }, today: { n: 250, more: false }, done: { n: 2, more: false } });
   });
 });
