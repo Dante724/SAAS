@@ -101,6 +101,41 @@ def may_use_account(role: Optional[Role], account_id: Optional[str]) -> bool:
     return account_id in allowed
 
 
+# Audit SEC-02 / FIN-05: the cashbox restriction used to hide accounts from one list only; every
+# other read and every posting took any account id the caller sent. get_current_employee binds the
+# caller's allowed accounts to the request's session, post_transaction (the one choke point every
+# money movement goes through) refuses the others, and the cash reads filter by it. Sessions with
+# no bound scope (webhooks, background jobs, public pay links, API keys) are unrestricted.
+_ACCOUNT_SCOPE = "allowed_accounts"
+ACCOUNT_FORBIDDEN = "Your role can't use this cashbox."
+
+
+def bind_account_scope(db, allowed: Optional[list]) -> None:
+    db.info[_ACCOUNT_SCOPE] = frozenset(allowed) if allowed is not None else None
+
+
+def session_allowed_accounts(db) -> Optional[frozenset]:
+    """The accounts the acting employee may use on this request, or None for all."""
+    return db.info.get(_ACCOUNT_SCOPE)
+
+
+def account_allowed(db, account_id: Optional[str]) -> bool:
+    allowed = session_allowed_accounts(db)
+    return allowed is None or account_id is None or account_id in allowed
+
+
+def assert_account_allowed(db, account_id: Optional[str]) -> None:
+    if not account_allowed(db, account_id):
+        from fastapi import HTTPException
+        raise HTTPException(403, ACCOUNT_FORBIDDEN)
+
+
+def scope_accounts(q, db, column):
+    """Restrict a query to rows whose `column` is an account this employee may use."""
+    allowed = session_allowed_accounts(db)
+    return q if allowed is None else q.where(column.in_(sorted(allowed)))
+
+
 def payroll_cutoff(role: Optional[Role], today):
     """Earliest date an employee may see their own compensation, or None for no limit.
     `today` is the shop's calendar day (services.dates.shop_today)."""

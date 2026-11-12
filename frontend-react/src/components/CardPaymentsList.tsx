@@ -1,6 +1,6 @@
 import { useEffect, useState } from "react";
 import { M } from "./Shell";
-import { api } from "../api/client";
+import { api, idempotencyKey } from "../api/client";
 import { useMe } from "../context/Me";
 import { money } from "../pages/orders/types";
 import { promptDialog } from "../lib/dialog";
@@ -43,9 +43,12 @@ export default function CardPaymentsList({ orderId, sales, reloadKey, onChanged 
     if (v == null) return;
     const amt = parseFloat(v);
     if (!(amt > 0)) { setMsg("Enter an amount above zero"); return; }
+    const key = idempotencyKey();
     setBusy(r.id); setMsg(null);
     try {
-      await api.post(`/payments/terminal/charges/${r.id}/refund`, { amount: amt });
+      // One key per refund dialog: a retried or double-sent request refunds once, while the next
+      // dialog (a genuine second refund) gets a new key and isn't refused as a repeat.
+      await api.postOnce(`/payments/terminal/charges/${r.id}/refund`, { amount: amt }, key);
       setMsg(`Refunded ${money(amt)}`); load(); onChanged?.();
     } catch (e: any) { setMsg(e.message || "Refund failed"); } finally { setBusy(null); }
   }

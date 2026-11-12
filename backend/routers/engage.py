@@ -57,13 +57,113 @@ async def _order_or_404(db, org_id, order_id, *, lock: bool = False) -> Order:
     return o
 
 
-async def _add_discount_line(db, order: Order, description: str, amount: float):
+async def _add_discount_line(db, order: Order, description: str, amount: float, *, ref_id=None):
     from backend.routers.orders import _recalc_order
-    db.add(OrderLine(order_id=order.id, line_type="fee", kind="custom",
+    db.add(OrderLine(order_id=order.id, line_type="fee", kind="custom", ref_id=ref_id,
                      description=description, qty=1, unit_price=-q2(amount),
                      total=-q2(amount)))
     await db.flush()
     await _recalc_order(db, order)
+
+
+# ── Audit FIN-03: removing a redemption line gives back what it spent ───────────────────────────
+# A gift card, coupon or loyalty redemption is a negative fee line on the job plus a ledger row
+# (or a coupon use). Deleting the line put the job's price back but the card stayed spent, the
+# coupon stayed used and the points stayed burned; editing its price made the discount and the
+# ledger disagree. The lines are recognised by their description (all existing rows carry it; no
+# migration in this wave) and, for points, by ref_id = the ledger row on lines made from now on.
+GIFT_PREFIX, COUPON_PREFIX, LOYALTY_PREFIX = "Gift card ", "Coupon ", "Loyalty points ("
+
+
+def redemption_kind(line: OrderLine) -> Optional[str]:
+    """'giftcard' | 'coupon' | 'loyalty' for a redemption line, else None."""
+    if (line.line_type or "") != "fee" or (line.kind or "custom") != "custom":
+        return None
+    if float(line.total or 0) >= 0 and float(line.unit_price or 0) >= 0:
+        return None
+    d = line.description or ""
+    if d.startswith(GIFT_PREFIX):
+        return "giftcard"
+    if d.startswith(COUPON_PREFIX):
+        return "coupon"
+    if d.startswith(LOYALTY_PREFIX):
+        return "loyalty"
+    return None
+
+
+REDEMPTION_LOCKED = ("This line is a {what} redemption. Its amount can't be edited; delete the line to "
+                     "give the {back} back, then redeem again.")
+_WHAT = {"giftcard": ("gift card", "card balance"), "coupon": ("coupon", "coupon use"),
+         "loyalty": ("loyalty points", "points")}
+
+
+def refuse_redemption_edit(line: OrderLine) -> None:
+    kind = redemption_kind(line)
+    if kind:
+        what, back = _WHAT[kind]
+        raise HTTPException(409, REDEMPTION_LOCKED.format(what=what, back=back))
+
+
+async def give_back_redemption(db, org_id: str, order: Order, line: OrderLine,
+                               actor_id: Optional[str] = None) -> list[OrderLine]:
+    """Undo what a redemption line spent, under a row lock on the card, coupon or client. Called
+    by the job's line delete (which holds the job's lock) before the line goes. Returns every line
+    to remove: a coupon split across tax groups goes as a whole, so it is applied or not. Never
+    gives back more than this job actually redeemed from that card / client."""
+    kind = redemption_kind(line)
+    if not kind:
+        return [line]
+    desc = line.description or ""
+    label = f"Removed from {order.order_number}"
+    if kind == "giftcard":
+        code = desc[len(GIFT_PREFIX):].strip().upper()
+        g = (await db.execute(select(GiftCard).where(GiftCard.org_id == org_id, GiftCard.code == code)
+                              .with_for_update())).scalar_one_or_none()
+        if g is not None:
+            redeemed = -dec((await db.execute(select(func.coalesce(func.sum(GiftCardLedger.amount), 0)).where(
+                GiftCardLedger.org_id == org_id, GiftCardLedger.gift_card_id == g.id,
+                GiftCardLedger.ref_type == "order", GiftCardLedger.ref_id == order.id))).scalar())
+            back = d2(min(-dec(line.total), redeemed))
+            if back > 0:
+                await db.execute(sa_update(GiftCard).where(GiftCard.id == g.id)
+                                 .values(balance=GiftCard.balance + back)
+                                 .execution_options(synchronize_session=False))
+                db.add(GiftCardLedger(org_id=org_id, gift_card_id=g.id, amount=back, ref_type="order",
+                                      ref_id=order.id, note=f"Returned: {label}"[:200]))
+        return [line]
+    if kind == "coupon":
+        code = desc[len(COUPON_PREFIX):].strip().upper()
+        siblings = (await db.execute(select(OrderLine).where(
+            OrderLine.order_id == order.id, OrderLine.description == desc,
+            OrderLine.line_type == "fee"))).scalars().all()
+        siblings = [s for s in siblings if redemption_kind(s) == "coupon"] or [line]
+        c = (await db.execute(select(Coupon).where(Coupon.org_id == org_id, Coupon.code == code)
+                              .with_for_update())).scalar_one_or_none()
+        if c is not None:
+            await db.execute(sa_update(Coupon).where(Coupon.id == c.id, Coupon.uses > 0)
+                             .values(uses=Coupon.uses - 1).execution_options(synchronize_session=False))
+        return siblings
+    # loyalty
+    if order.client_id:
+        await db.execute(select(Client.id).where(Client.id == order.client_id).with_for_update())
+        burned = -float((await db.execute(select(func.coalesce(func.sum(LoyaltyLedger.points), 0.0)).where(
+            LoyaltyLedger.org_id == org_id, LoyaltyLedger.client_id == order.client_id,
+            LoyaltyLedger.ref_type == "order", LoyaltyLedger.ref_id == order.id))).scalar() or 0)
+        points = None
+        if line.ref_id:
+            row = (await db.execute(select(LoyaltyLedger.points).where(
+                LoyaltyLedger.id == line.ref_id, LoyaltyLedger.org_id == org_id))).scalar_one_or_none()
+            points = -float(row) if row is not None else None
+        if points is None:   # a line from before ref_id was set: the points its description shows
+            try:
+                points = float(desc[len(LOYALTY_PREFIX):].split(")")[0])
+            except ValueError:
+                points = 0.0
+        back = q2(min(points, burned))
+        if back > 0:
+            db.add(LoyaltyLedger(org_id=org_id, client_id=order.client_id, points=back, ref_type="order",
+                                 ref_id=order.id, note=f"Returned: {label}"[:200]))
+    return [line]
 
 
 # ── Gift cards ───────────────────────────────────────────────────────────────
@@ -72,6 +172,9 @@ class GiftCardIn(BaseModel):
     client_id: str                       # gift cards are always linked to a client
     expires_at: Optional[datetime] = None   # optional validity date; null = never expires
     # code is always server-generated & unique — not accepted from the caller.
+    # Audit FIN-09: a card sold for money takes that money into a cashbox here. Without an account
+    # the card is a gift from the shop (a promotion), as before: no money moves.
+    account_id: Optional[str] = None
 
 
 def _gc(g: GiftCard) -> dict:
@@ -109,7 +212,15 @@ async def issue_giftcard(
     db.add(g)
     await db.flush()
     db.add(GiftCardLedger(org_id=current.org_id, gift_card_id=g.id, amount=d2(data.value),
-                          ref_type="manual", note="Issued"))
+                          ref_type="manual", note="Issued" if not data.account_id else "Issued (sold)"))
+    if data.account_id:
+        # Money in for a liability, not a sale: revenue is earned when the card is spent. The leg
+        # is an "income" movement of the till (so the drawer counts the cash), tagged
+        # ref_type="gift_card"; the P&L takes revenue from documents, so it isn't counted twice.
+        from backend.routers.cash import post_transaction
+        await post_transaction(db, current.org_id, data.account_id, "income", q2(data.value),
+                               comment=f"Gift card {code} sold", ref_type="gift_card", ref_id=g.id,
+                               employee_id=current.id)
     await db.commit()
     await db.refresh(g)
     return _gc(g)
@@ -123,6 +234,27 @@ async def list_giftcards(
     rows = (await db.execute(select(GiftCard).where(GiftCard.org_id == current.org_id)
                              .order_by(GiftCard.created_at.desc()).limit(200))).scalars().all()
     return {"items": [_gc(g) for g in rows]}
+
+
+@router.get("/giftcards/liability")
+async def giftcard_liability(
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_view_finance")),
+):
+    """Audit FIN-09: what the shop still owes on gift cards (unspent, live balances), the deferred
+    revenue a balance sheet carries. Expired or deactivated balances are listed apart."""
+    now = now_utc()
+    live = (GiftCard.active == True) & ((GiftCard.expires_at.is_(None)) | (GiftCard.expires_at >= now))  # noqa: E712
+    rows = (await db.execute(select(live, func.count(), func.coalesce(func.sum(GiftCard.balance), 0))
+                             .where(GiftCard.org_id == current.org_id, GiftCard.balance > 0)
+                             .group_by(live))).all()
+    out = {"outstanding": 0.0, "cards": 0, "lapsed": 0.0, "lapsed_cards": 0}
+    for is_live, n, total in rows:
+        if is_live:
+            out["outstanding"], out["cards"] = q2(total), n
+        else:
+            out["lapsed"], out["lapsed_cards"] = q2(total), n
+    return out
 
 
 @router.get("/giftcards/{code}")
@@ -429,8 +561,11 @@ async def redeem_loyalty(
         used_points = q2(amount / org.loyalty_point_value) if org.loyalty_point_value else 0
     if used_points <= 0:
         raise HTTPException(400, "Nothing to redeem — order is already covered")
-    db.add(LoyaltyLedger(org_id=current.org_id, client_id=order.client_id, points=-used_points,
-                         ref_type="order", ref_id=order.id, note=f"Redeemed on {order.order_number}"))
-    await _add_discount_line(db, order, f"Loyalty points ({used_points:.0f})", amount)
+    burn = LoyaltyLedger(org_id=current.org_id, client_id=order.client_id, points=-used_points,
+                         ref_type="order", ref_id=order.id, note=f"Redeemed on {order.order_number}")
+    db.add(burn)
+    await db.flush()
+    # ref_id: the ledger row, so removing the line gives back exactly these points (FIN-03)
+    await _add_discount_line(db, order, f"Loyalty points ({used_points:.0f})", amount, ref_id=burn.id)
     await db.commit()
     return {"ok": True, "discount": amount, "points_left": q2(bal - used_points)}
