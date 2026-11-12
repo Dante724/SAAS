@@ -14,7 +14,7 @@ import { useShopClock, toShopWall, fromShopWall, shopToday, fmtShop, shopLocale 
 import {
   type Task, type MyDay as Day, type DayBucket, type QuickWhen, type TaskGroup,
   normDay, moveTasks, insertTask, replaceTask, groupByTime, groupByDay, dueClock, fmtClock, lateLabel,
-  quickDue, bucketForDue, dayLabel, normPriority, normStatus, PRIORITY_LABEL, isAuto, dueOf, withShopTimes, splitPool, filterDay, isPool, teamLoad, AUTO_LABEL, AUTO_HINT,
+  quickDue, bucketForDue, dayLabel, normPriority, normStatus, PRIORITY_LABEL, isAuto, dueOf, withShopTimes, splitPool, filterDay, isPool, teamLoad, ownLoad, isCapped, fmtTally, AUTO_LABEL, AUTO_HINT,
 } from "./taskModel";
 import type { Emp } from "./TaskPanel";
 import TaskResults from "./TaskResults";
@@ -28,7 +28,10 @@ type View = "today" | "upcoming" | "later" | "done";
 const reducedMotion = () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
 const DONE_DELAY = 420;   // long enough to see the tick land before the row moves to Done
 const newKey = () => { try { return crypto.randomUUID(); } catch { return `${Date.now()}-${Math.random().toString(36).slice(2)}`; } };
+const PRIO_TINT = ["text-ink-secondary", "text-amber-700", "text-rose-700"] as const;
 const MISSING_NOTE = "My day isn't ready yet. Here's the full list for now.";
+// The list API can't ask for unassigned tasks, so without My day there is no Up for grabs list.
+const MISSING_POOL_NOTE = "Up for grabs needs My day, which isn't ready yet. Here's the full list for now.";
 
 /** Who quick add gives a task to by default: whoever the page shows (Me and Everyone: me). */
 export type AddTarget = { id: string | null; label: string; name: string | null };
@@ -66,8 +69,15 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
   const pool = split?.pool ?? [];
   // The team row (managers, any view but Me) is counted from everyone's day.
   const needTeam = isManager && person !== "me" && !missing;
+  // Everyone and Up for grabs already load everyone's day; one person picked needs its own copy.
+  const ownTeam = needTeam && src !== "all";
   const [teamRaw, setTeamRaw] = useState<Day | null>(null);
-  const teamDay = !needTeam ? null : src === "all" ? raw : teamRaw;
+  const [teamFailed, setTeamFailed] = useState(false);
+  const [teamTry, setTeamTry] = useState(0);
+  // Picking a card from Everyone keeps everyone's day already on screen until the fresh copy lands.
+  const lastAll = useRef<Day | null>(null);
+  if (src === "all" && raw) lastAll.current = raw;
+  const teamDay = !needTeam ? null : src === "all" ? raw : teamFailed ? null : (teamRaw ?? lastAll.current);
   const [failed, setFailed] = useState(false);
   const [view, setView] = useState<View>("today");
   const [q, setQ] = useState("");
@@ -109,12 +119,23 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
       if (e instanceof ApiError && e.status === 404) { onUnavailable(); return; }
       if (!quiet || !dayRef.current) setFailed(true);
     });
-    // One person picked: the team row above still counts everyone.
-    if (isManager && person !== "me" && src !== "all") {
-      api.get<Partial<Day>>("/tasks/my-day?assignee=all").then((r) => { if (id === req.current) setTeamRaw(normDay(r, "")); }).catch(() => undefined);
-    }
-  }, [dayUrl, src, person, isManager, missing, onUnavailable]);
+  }, [dayUrl, src, person, missing, onUnavailable]);
   useEffect(() => { load(); }, [load]);
+  // One person picked: the team row still counts everyone. Fetched when the pick changes (or the
+  // panel changed something, or Try again), debounced so clicking through cards asks once; not on
+  // the quiet reloads after a tick, an add or a take (the picked person's own card follows their day).
+  const teamReq = useRef(0);
+  useEffect(() => {
+    const id = ++teamReq.current;
+    if (!ownTeam) { setTeamRaw(null); setTeamFailed(false); return; }
+    const h = setTimeout(() => {
+      api.get<Partial<Day>>("/tasks/my-day?assignee=all")
+        .then((r) => { if (id === teamReq.current) { setTeamRaw(normDay(r, "")); setTeamFailed(false); } })
+        // Never keep counts we couldn't refresh: drop them and say so.
+        .catch(() => { if (id === teamReq.current) { setTeamRaw(null); setTeamFailed(true); } });
+    }, 250);
+    return () => clearTimeout(h);
+  }, [ownTeam, person, reloadKey, teamTry]);
   const first = useRef(true);
   useEffect(() => { if (first.current) { first.current = false; return; } load(true); }, [reloadKey, load]);
   // "Today" moves on at the shop's midnight, and a tab left in the background may be stale: check
@@ -260,8 +281,10 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
     if (!teamDay) return null;
     const active = emps.filter((e) => e.active !== false);
     const ordered = [...active.filter((e) => e.id === meId), ...active.filter((e) => e.id !== meId)];
-    return teamLoad(teamDay, ordered);
-  }, [teamDay, emps, meId]);
+    const t = teamLoad(teamDay, ordered);
+    // The picked person's card uses their own day: exact server counts, moved optimistically.
+    return raw && ownTeam ? { ...t, people: t.people.map((p) => (p.id === person ? { ...p, ...ownLoad(raw) } : p)) } : t;
+  }, [teamDay, emps, meId, raw, ownTeam, person]);
 
   const row = (t: Task, from: DayBucket) => (pooled && !isManager
     ? <TaskRow key={t.id} t={t} from={from} today={today} tz={tz || "UTC"} showWho={false} ticking={false} onOpen={() => onOpen(t)} onToggle={() => undefined} onTake={() => take(t)} />
@@ -271,9 +294,12 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
   );
   const focusSearch = () => searchBox.current?.focus();
   // The server sends at most 100 rows a group but counts them all: say so, and point at search.
-  const capped = (b: DayBucket) => day && day.counts[b] > day[b].length
+  // A group cut from a capped one (Up for grabs) has no true total: it says only that there may be more.
+  const capped = (b: DayBucket) => day && isCapped(day, b)
     ? <div className="px-4 py-3 border-t border-slate-100 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-ink-tertiary">
-        Showing {day[b].length} of {day.counts[b]}. <Button variant="link" onClick={focusSearch}>Search</Button> finds any of them.
+        {day.counts[b] > day[b].length
+          ? <>Showing {day[b].length} of {day.counts[b]}. <Button variant="link" onClick={focusSearch}>Search</Button> finds any of them.</>
+          : <>Showing {day[b].length}, there may be more. <Button variant="link" onClick={focusSearch}>Search</Button> finds the rest.</>}
       </div>
     : null;
   const clearSearch = () => { setQ(""); setQDeb(""); };
@@ -309,10 +335,15 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
       </div>
 
       {team && !searching && <TeamRow team={team} meId={meId} person={person} onPick={(p) => onPerson(p === person ? "all" : p)} />}
+      {ownTeam && teamFailed && !searching && (
+        <p role="status" className="flex flex-wrap items-center gap-x-1.5 text-xs text-ink-secondary">
+          <M n="error" c="text-sm text-rose-600" />Couldn't update the team counts · <Button variant="link" onClick={() => setTeamTry((n) => n + 1)}>Try again</Button>
+        </p>
+      )}
 
       {(searching || missing) ? (
-        <TaskResults q={qDeb} whose={person} meId={meId} tz={tz} onOpen={onOpen} onClear={clearSearch} flash={flash}
-          onChanged={() => { load(true); onChanged?.(); }} onPaged={onListPaged} reloadKey={reloadKey} note={missing ? MISSING_NOTE : undefined} />
+        <TaskResults q={qDeb} whose={pooled ? "all" : person} meId={meId} tz={tz} onOpen={onOpen} onClear={clearSearch} flash={flash}
+          onChanged={() => { load(true); onChanged?.(); }} onPaged={onListPaged} reloadKey={reloadKey} note={missing ? (pooled ? MISSING_POOL_NOTE : MISSING_NOTE) : undefined} />
       ) : (<>
       {tzFailed && !tz && (
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card">
@@ -415,19 +446,19 @@ function TeamRow({ team, meId, person, onPick }: { team: ReturnType<typeof teamL
   return (
     <div role="group" aria-label="Team" className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-2.5">
       <button type="button" onClick={() => onPick("pool")} aria-pressed={person === "pool"}
-        aria-label={`Up for grabs: ${team.pool} waiting`}
+        aria-label={`Up for grabs: ${fmtTally(team.pool)} waiting`}
         className={`${card} bg-amber-50/70 ${person === "pool" ? "border-primary ring-2 ring-primary/15" : "border-amber-200/80 hover:border-amber-300"}`}>
         <span className="flex items-center gap-2.5 min-w-0">
           <span className="w-7 h-7 rounded-full bg-white text-amber-700 grid place-items-center flex-shrink-0 border border-amber-200/80"><M n="group" c="text-sm" /></span>
           <span className="min-w-0"><span className="block text-sm font-semibold text-ink-primary truncate">Up for grabs</span><span className="block text-2xs text-ink-secondary truncate">Nobody has these yet</span></span>
         </span>
-        <span className="text-xs text-ink-secondary"><b className="font-semibold text-amber-700 tabular-nums mr-1">{team.pool}</b>waiting</span>
+        <span className="text-xs text-ink-secondary"><b className="font-semibold text-amber-700 tabular-nums mr-1">{fmtTally(team.pool)}</b>waiting</span>
       </button>
       {team.people.map((p) => {
-        const total = p.overdue + p.today + p.done;
+        const total = p.overdue.n + p.today.n + p.done.n;
         return (
           <button key={p.id} type="button" onClick={() => onPick(p.id)} aria-pressed={person === p.id}
-            aria-label={`${p.name}${p.id === meId ? " (you)" : ""}: ${p.overdue} overdue, ${p.today} today, ${p.done} done today`}
+            aria-label={`${p.name}${p.id === meId ? " (you)" : ""}: ${fmtTally(p.overdue)} overdue, ${fmtTally(p.today)} today, ${fmtTally(p.done)} done today`}
             className={`${card} bg-white ${person === p.id ? "border-primary ring-2 ring-primary/15" : "border-slate-200/90 hover:border-slate-300"}`}>
             <span className="flex items-center gap-2.5 min-w-0">
               <Avatar name={p.name} size={28} />
@@ -437,13 +468,13 @@ function TeamRow({ team, meId, person, onPick }: { team: ReturnType<typeof teamL
               </span>
             </span>
             <span className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-ink-secondary tabular-nums" aria-hidden="true">
-              <span><b className={`font-semibold mr-1 ${p.overdue ? "text-amber-700" : "text-ink-primary"}`}>{p.overdue}</b>overdue</span>
-              <span><b className="font-semibold text-ink-primary mr-1">{p.today}</b>today</span>
-              <span><b className="font-semibold text-emerald-700 mr-1">{p.done}</b>done</span>
+              <span><b className={`font-semibold mr-1 ${p.overdue.n ? "text-amber-700" : "text-ink-primary"}`}>{fmtTally(p.overdue)}</b>overdue</span>
+              <span><b className="font-semibold text-ink-primary mr-1">{fmtTally(p.today)}</b>today</span>
+              <span><b className="font-semibold text-emerald-700 mr-1">{fmtTally(p.done)}</b>done</span>
             </span>
             <span className="flex h-1 rounded-full bg-slate-100 overflow-hidden" aria-hidden="true">
-              {total > 0 && <span className="bg-emerald-500" style={{ width: `${(p.done / total) * 100}%` }} />}
-              {total > 0 && <span className="bg-amber-500" style={{ width: `${(p.overdue / total) * 100}%` }} />}
+              {total > 0 && <span className="bg-emerald-500" style={{ width: `${(p.done.n / total) * 100}%` }} />}
+              {total > 0 && <span className="bg-amber-500" style={{ width: `${(p.overdue.n / total) * 100}%` }} />}
             </span>
           </button>
         );
@@ -554,6 +585,7 @@ function QuickAdd({ today, tz, tzFailed, meId, emps, target, mayAssign, onAdd, f
   // Picking someone else in the person menu points quick add at them.
   useEffect(() => { setWho("me"); setOther(""); }, [target.id]);
   const [job, setJob] = useState<PickedJob | null>(null);
+  const [prio, setPrio] = useState<0 | 1 | 2>(0);   // Normal unless picked
   const [jobOpen, setJobOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState(false);
@@ -578,10 +610,10 @@ function QuickAdd({ today, tz, tzFailed, meId, emps, target, mayAssign, onAdd, f
     // A picked time is on the shop's clock: send it with the shop's offset. A date alone means the
     // end of that shop day (the server decides that).
     const due = fromShopWall(quickDue(when, picked && pickedTime ? `${picked}T${pickedTime}` : picked, today), tz);
-    const body = { title: text, due_at: due, assigned_to_id: assignee, assignee_ids: assignee ? [assignee] : [], order_id: job?.id || null };
+    const body = { title: text, due_at: due, assigned_to_id: assignee, assignee_ids: assignee ? [assignee] : [], order_id: job?.id || null, priority: prio };
     const forName = who === "others" ? emps.find((e) => e.id === other)?.name || null : target.name;
     const preview: Task = {
-      id: `tmp-${Date.now()}`, title: text, status: "todo", due_at: due, source: "manual", assigned_to_id: assignee,
+      id: `tmp-${Date.now()}`, title: text, status: "todo", due_at: due, source: "manual", assigned_to_id: assignee, priority: prio,
       assignee_ids: body.assignee_ids, assignee_names: forName ? [forName] : [],
       order_id: job?.id || null, order_number: job?.order_number || null,
     };
@@ -590,7 +622,7 @@ function QuickAdd({ today, tz, tzFailed, meId, emps, target, mayAssign, onAdd, f
     const ok = await onAdd(body, preview, forName, key.current);
     setBusy(false);
     if (!ok) setTitle((cur) => cur || text);     // give the words back so nothing is lost
-    else { setJob(null); setJobOpen(false); key.current = newKey(); }
+    else { setJob(null); setJobOpen(false); setPrio(0); key.current = newKey(); }
     input.current?.focus();
   }
   const ready = !!title.trim() && !blocked;
@@ -612,7 +644,7 @@ function QuickAdd({ today, tz, tzFailed, meId, emps, target, mayAssign, onAdd, f
       </div>
       {(hint || (blocked && title.trim())) && <p id="quick-add-why" role="status" className="px-3 pt-1 text-2xs text-ink-secondary">{hint || blocked}</p>}
       {/* On phones the choices fold away until you start a task, so the sticky box stays small. */}
-      <div className={`flex flex-wrap items-center gap-x-3 gap-y-2 px-2 pt-2 pb-1 border-t border-slate-100 mt-2 ${active || title || who !== "me" || when !== "today" || job || jobOpen ? "" : "max-sm:hidden"}`}>
+      <div className={`flex flex-wrap items-center gap-x-3 gap-y-2 px-2 pt-2 pb-1 border-t border-slate-100 mt-2 ${active || title || who !== "me" || when !== "today" || prio || job || jobOpen ? "" : "max-sm:hidden"}`}>
         <Tabs look="chips" label="When" value={when} onChange={setWhen} className="!gap-1.5"
           tabs={[{ id: "today", label: "Today" }, { id: "tomorrow", label: "Tomorrow" }, { id: "pick", label: "Pick date", icon: <M n="calendar_today" c="text-xs" /> }]} />
         {when === "pick" && (<>
@@ -629,6 +661,15 @@ function QuickAdd({ today, tz, tzFailed, meId, emps, target, mayAssign, onAdd, f
             {emps.filter((e) => e.id !== target.id).map((e) => <option key={e.id} value={e.id}>{e.id === meId ? `${e.name} (me)` : e.name}</option>)}
           </TeklySelect>
         )}
+        <span className="hidden sm:block w-px h-5 bg-slate-200" aria-hidden="true" />
+        {/* Priority: one small chip (Normal by default), tinted like the row's badge once raised. */}
+        <div className="relative">
+          <M n="flag" c={`absolute left-2.5 top-1/2 -translate-y-1/2 text-xs pointer-events-none ${PRIO_TINT[prio]}`} />
+          <TeklySelect value={prio} onChange={(e) => setPrio(Number(e.target.value) as 0 | 1 | 2)} aria-label="Task priority"
+            className={`glass-input h-8 py-1.5 pl-7 pr-8 text-xs font-semibold rounded-full min-w-[112px] ${PRIO_TINT[prio]}`}>
+            <option value={0}>Normal</option><option value={1}>High</option><option value={2}>Urgent</option>
+          </TeklySelect>
+        </div>
         <span className="hidden sm:block w-px h-5 bg-slate-200" aria-hidden="true" />
         {jobOpen || job ? (
           <div className="w-56"><JobPicker value={job} onChange={(j) => { setJob(j); if (!j) setJobOpen(false); }} /></div>
