@@ -2648,7 +2648,31 @@ async def merge_parts(
             raise HTTPException(
                 400, "Serialized products can only be merged with serialized products")
 
-    moved = {"stock": 0, "movements": 0, "units": 0, "batches": 0}
+    # Audit INV-04: lock every product in the merge (id order, as receipts do) and their stock rows,
+    # so a sale or receipt can't change them between the read below and the fold.
+    from backend.models import BundleComponent, Order, OrderLine, PurchaseOrder
+    from backend.services import stock_posting, valuation
+    all_ids = [target.id] + [s.id for s in sources]
+    await stock_posting.lock_parts(db, all_ids)
+    for p in [target, *sources]:
+        await db.refresh(p)
+    await db.execute(select(StockLevel.id).where(StockLevel.part_id.in_(all_ids))
+                     .order_by(StockLevel.id).with_for_update())
+
+    # The merged product's average is the qty-weighted mean of everything on hand (the source's
+    # units used to be revalued at the target's average).
+    async def _on_hand(pid):
+        return max(float((await db.execute(select(func.coalesce(func.sum(StockLevel.qty_available), 0))
+                                           .where(StockLevel.part_id == pid))).scalar_one() or 0), 0.0)
+    qty_sum, value = 0.0, 0.0
+    for p in [target, *sources]:
+        q = await _on_hand(p.id)
+        qty_sum += q
+        value += q * valuation.unit_cost(p)
+    new_avg = round(value / qty_sum, 4) if qty_sum > 1e-9 else None
+
+    moved = {"stock": 0, "movements": 0, "units": 0, "batches": 0, "reservations": 0,
+             "po_lines": 0, "kit_components": 0, "job_lines": 0}
     for s in sources:
         # ii144a: archive the source first, so its SKU / barcodes are free before the target takes them
         s.active = False
@@ -2670,10 +2694,12 @@ async def merge_parts(
             tgt_sl = await stock_rows.row_for(db, target.id, sl.location_id, sl.bin_id,
                                               warehouse_id=sl.warehouse_id)
             if tgt_sl:
-                await _atomic_add(db, tgt_sl, "qty_available", sl.qty_available, round_to=None)   # atomic
-                await _atomic_add(db, tgt_sl, "qty_reserved", sl.qty_reserved or 0, round_to=None)
-                sl.qty_available = 0
-                sl.qty_reserved = 0
+                # both rows are locked: move exactly what the source row holds, atomically
+                qa, qr = float(sl.qty_available or 0), float(sl.qty_reserved or 0)
+                await _atomic_add(db, tgt_sl, "qty_available", qa, round_to=None)
+                await _atomic_add(db, tgt_sl, "qty_reserved", qr, round_to=None)
+                await _atomic_add(db, sl, "qty_available", -qa, round_to=None)
+                await _atomic_add(db, sl, "qty_reserved", -qr, round_to=None)
             else:
                 sl.part_id = target.id
                 await db.flush()
@@ -2699,9 +2725,47 @@ async def merge_parts(
                 StockItemBatch.part_id == s.id))).scalars().all():
             b.part_id = target.id
             moved["batches"] += 1
+        # INV-04: everything else that names the source follows it — holds (their qty_reserved moved
+        # with the stock rows above), open PO lines, kit components and job lines (so removing a line
+        # gives the unit back to the target, where its "use" movement now is).
+        for r in (await db.execute(select(StockReservation).where(
+                StockReservation.org_id == current.org_id, StockReservation.part_id == s.id))).scalars().all():
+            r.part_id = target.id
+            moved["reservations"] += 1
+        open_pos = select(PurchaseOrder.id).where(PurchaseOrder.org_id == current.org_id,
+                                                  PurchaseOrder.status.not_in(("received", "cancelled")))
+        moved["po_lines"] += (await db.execute(_upd(POLine).where(
+            POLine.part_id == s.id, POLine.po_id.in_(open_pos)).values(part_id=target.id)
+            .execution_options(synchronize_session=False))).rowcount or 0
+        from backend.models import Bundle
+        org_bundles = select(Bundle.id).where(Bundle.org_id == current.org_id)
+        moved["kit_components"] += (await db.execute(_upd(BundleComponent).where(
+            BundleComponent.ref_type == "product", BundleComponent.ref_id == s.id,
+            BundleComponent.bundle_id.in_(org_bundles)).values(ref_id=target.id)
+            .execution_options(synchronize_session=False))).rowcount or 0
+        org_orders = select(Order.id).where(Order.org_id == current.org_id)
+        moved["job_lines"] += (await db.execute(_upd(OrderLine).where(
+            OrderLine.kind == "product", OrderLine.ref_id == s.id, OrderLine.order_id.in_(org_orders))
+            .values(ref_id=target.id).execution_options(synchronize_session=False))).rowcount or 0
+        # Q1: the merge itself is on the target's movement history (no qty: the stock moved with
+        # the source's own movements, re-pointed above)
+        db.add(StockMovement(part_id=target.id, location_id=(await _first_location(db, target.id, current.org_id)),
+                             movement_type="merge", qty=0, ref_type="part_merge", ref_id=s.id,
+                             created_by_id=current.id))
 
+    if new_avg is not None:
+        target.avg_cost = new_avg
     await db.commit()
     return {"ok": True, "target_id": target.id, "merged": len(sources), "moved": moved}
+
+
+async def _first_location(db, part_id: str, org_id: str):
+    """A location for a zero-qty audit movement: where the product has stock rows, else the shop's first."""
+    from backend.models import Location
+    loc = (await db.execute(select(StockLevel.location_id).where(StockLevel.part_id == part_id)
+                            .order_by(StockLevel.qty_available.desc()).limit(1))).scalar_one_or_none()
+    return loc or (await db.execute(select(Location.id).where(Location.org_id == org_id)
+                                    .order_by(Location.created_at).limit(1))).scalar_one_or_none()
 
 
 # ── Build 79: markup-based auto-pricing ──────────────────────────────────────

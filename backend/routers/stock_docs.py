@@ -255,7 +255,8 @@ async def create_return(
             qty=ln.qty, unit_cost=cost, total=line_total))
         db.add(StockMovement(
             part_id=ln.part_id, location_id=w.location_id, warehouse_id=w.id,
-            movement_type="return_to_supplier", qty=-ln.qty, created_by_id=current.id))
+            movement_type="return_to_supplier", qty=-ln.qty, created_by_id=current.id,
+            ref_type="purchase_return", ref_id=doc.id))
 
     doc.total = total
     # settlement: credit the supplier's balance, or take cash back from an account
@@ -308,21 +309,23 @@ async def delete_return(
     lines = (await db.execute(select(PurchaseReturnLine).where(
         PurchaseReturnLine.return_id == doc.id))).scalars().all()
     for ln in lines:
+        if ln.serialized_item_id:
+            # INV-05: a unit that is back in stock some other way (a stocktake found it) isn't restored twice
+            unit = (await db.execute(select(SerializedItem).where(
+                SerializedItem.id == ln.serialized_item_id, SerializedItem.org_id == current.org_id,
+                SerializedItem.part_id == ln.part_id).with_for_update())).scalar_one_or_none()
+            if unit is None or unit.status != "written_off":
+                continue
+            unit.status = "in_stock"
+            serial_log.record(db, unit, "restored", ref_type="purchase_return", ref_id=doc.id,
+                              label="Supplier return deleted", actor_id=current.id)
         await _give_stock(db, ln.part_id, w, ln.qty, w.location_id if w else None, bin_id=getattr(ln, "bin_id", None))
         if w:
             await _restore_batches(db, ln.part_id, w, ln.qty)
-        if ln.serialized_item_id:
-            unit = (await db.execute(select(SerializedItem).where(
-                SerializedItem.id == ln.serialized_item_id, SerializedItem.org_id == current.org_id,
-                SerializedItem.part_id == ln.part_id))).scalar_one_or_none()
-            if unit:
-                unit.status = "in_stock"
-                serial_log.record(db, unit, "restored", ref_type="purchase_return", ref_id=doc.id,
-                                  label="Supplier return deleted", actor_id=current.id)
         db.add(StockMovement(
             part_id=ln.part_id, location_id=w.location_id if w else None,
             warehouse_id=doc.warehouse_id, movement_type="return_reverted",
-            qty=ln.qty, created_by_id=current.id))
+            qty=ln.qty, created_by_id=current.id, ref_type="purchase_return", ref_id=doc.id))
     # 144ax: only a BALANCE-settled return ever moved the AP balance on create, so only that
     # reverses it here. (Previously the column was bumped unconditionally — a cash-settled return,
     # which is paid from the cashbox, had its deletion wrongly inflate the AP balance with no
@@ -446,7 +449,8 @@ async def create_write_off(
             comment=ln.comment, comment_public=ln.comment_public))
         db.add(StockMovement(
             part_id=ln.part_id, location_id=w.location_id, warehouse_id=w.id,
-            movement_type="writeoff", qty=-ln.qty, created_by_id=current.id))
+            movement_type="writeoff", qty=-ln.qty, created_by_id=current.id,
+            ref_type="write_off", ref_id=doc.id))
 
     doc.total_cost = total
     await db.commit()
@@ -476,17 +480,30 @@ async def edit_write_off_line(
     current: Employee = Depends(require_perm("can_manage_inventory")),
 ):
     """Correct a write-off after the fact. Changing the quantity settles the difference
-    against stock, so the books stay true rather than needing a compensating entry."""
+    against stock, so the books stay true rather than needing a compensating entry.
+
+    Audit INV-05: the document and the line are locked (FOR UPDATE) and re-read, so two edits can't
+    both take the same delta and an edit can't land on a write-off a concurrent revert just undid
+    (the revert's conditional status UPDATE waits for this lock). A line that names a serial unit,
+    or any line of a serialized product, keeps its qty: each unit is its own line."""
     doc = (await db.execute(select(WriteOff).where(
-        WriteOff.id == doc_id, WriteOff.org_id == current.org_id))).scalar_one_or_none()
+        WriteOff.id == doc_id, WriteOff.org_id == current.org_id)
+        .with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
     if not doc:
         raise HTTPException(404, "Write-off not found")
     if doc.status == "reverted":
         raise HTTPException(409, "This write-off has been reverted")
     ln = (await db.execute(select(WriteOffLine).where(
-        WriteOffLine.id == line_id, WriteOffLine.write_off_id == doc_id))).scalar_one_or_none()
+        WriteOffLine.id == line_id, WriteOffLine.write_off_id == doc_id)
+        .with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
     if not ln:
         raise HTTPException(404, "Line not found")
+    if data.qty is not None and data.qty != ln.qty:
+        serialized = ln.serialized_item_id or (await db.execute(select(Part.serialized).where(
+            Part.id == ln.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
+        if serialized:
+            raise HTTPException(422, "This line is one serialized unit — its quantity can't change. "
+                                     "Add or remove a line naming each IMEI / serial instead.")
 
     w = await wh.resolve(db, current.org_id, warehouse_id=doc.warehouse_id)
     if data.qty is not None and data.qty != ln.qty:
@@ -502,7 +519,7 @@ async def edit_write_off_line(
         db.add(StockMovement(
             part_id=ln.part_id, location_id=w.location_id if w else None,
             warehouse_id=doc.warehouse_id, movement_type="writeoff_adjust",
-            qty=-delta, created_by_id=current.id))
+            qty=-delta, created_by_id=current.id, ref_type="write_off", ref_id=doc.id))
         ln.qty = data.qty
     if data.comment is not None:
         ln.comment = data.comment
@@ -538,21 +555,24 @@ async def delete_write_off(
     lines = (await db.execute(select(WriteOffLine).where(
         WriteOffLine.write_off_id == doc.id))).scalars().all()
     for ln in lines:
+        if ln.serialized_item_id:
+            # INV-05: only a unit still written off comes back. One a stocktake already found is on
+            # the shelf (with its stock) — restoring it again counted the same phone twice.
+            unit = (await db.execute(select(SerializedItem).where(
+                SerializedItem.id == ln.serialized_item_id, SerializedItem.org_id == current.org_id,
+                SerializedItem.part_id == ln.part_id).with_for_update())).scalar_one_or_none()
+            if unit is None or unit.status != "written_off":
+                continue
+            unit.status = "in_stock"
+            serial_log.record(db, unit, "restored", ref_type="write_off", ref_id=doc.id,
+                              label="Write-off reverted", actor_id=current.id)
         await _give_stock(db, ln.part_id, w, ln.qty, w.location_id if w else None, bin_id=getattr(ln, "bin_id", None))
         if w:
             await _restore_batches(db, ln.part_id, w, ln.qty)
-        if ln.serialized_item_id:
-            unit = (await db.execute(select(SerializedItem).where(
-                SerializedItem.id == ln.serialized_item_id, SerializedItem.org_id == current.org_id,
-                SerializedItem.part_id == ln.part_id))).scalar_one_or_none()
-            if unit:
-                unit.status = "in_stock"
-                serial_log.record(db, unit, "restored", ref_type="write_off", ref_id=doc.id,
-                                  label="Write-off reverted", actor_id=current.id)
         db.add(StockMovement(
             part_id=ln.part_id, location_id=w.location_id if w else None,
             warehouse_id=doc.warehouse_id, movement_type="writeoff_reverted",
-            qty=ln.qty, created_by_id=current.id))
+            qty=ln.qty, created_by_id=current.id, ref_type="write_off", ref_id=doc.id))
     await db.commit()
     return {"ok": True, "stock_restored": True}
 

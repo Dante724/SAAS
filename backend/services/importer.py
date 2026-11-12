@@ -1211,7 +1211,7 @@ async def undo(db, current, batch: ImportBatch) -> dict:
             kept_categories += 1
             continue
         if t == "parts":
-            for m in (StockLevel, StockMovement, StockItemBatch, SerializedItem):
+            for m in (SerializedItem, StockLevel, StockMovement, StockItemBatch):   # units before their layers
                 await db.execute(delete(m).where(m.part_id == i))
         await db.execute(delete(models[t]).where(models[t].id == i))
     from backend.services import audit
