@@ -12,8 +12,12 @@ async def _pay_invoice_cash(client, h, sid, amount):
     cid = (await client.post("/api/clients", json={"name": "C", "phone": "+1"}, headers=h)).json()["id"]
     oid = (await client.post("/api/orders", json={"client_id": cid}, headers=h)).json()["id"]
     inv = (await client.post("/api/finance/invoices", json={"order_id": oid, "subtotal": amount}, headers=h)).json()
-    await client.post(f"/api/finance/invoices/{inv['id']}/pay",
-                      json={"method": "cash", "amount": amount, "shift_id": sid}, headers=h)
+    # cash lands in a till (audit FIN-04: a cash payment with no account is refused)
+    till = (await client.post("/api/cash/accounts", json={"name": "Till", "payment_option": "cash"},
+                              headers=h)).json()["id"]
+    r = await client.post(f"/api/finance/invoices/{inv['id']}/pay",
+                          json={"method": "cash", "amount": amount, "shift_id": sid, "account_id": till}, headers=h)
+    assert r.status_code == 200, r.text
 
 
 @pytest.mark.asyncio

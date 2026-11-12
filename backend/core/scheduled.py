@@ -14,6 +14,30 @@ from backend.services.org_live import live_org_clause
 
 log = logging.getLogger("tekly.jobs")
 
+
+async def _per_shop(label: str, org_ids, fn) -> int:
+    """Run ``fn(db, org_id)`` for each shop in a session of its own, scoped to that shop.
+
+    Audit SEC-05: with no tenant set the ORM guards are off (reads aren't filtered and child rows
+    with no org_id get no cross-shop check), and one session shared by every shop keeps shop 1's
+    rows in its identity map while shop 2 runs. Here every shop gets a fresh session with
+    ``set_tenant``, its work is committed on its own, and a failure is rolled back and logged
+    without touching the shops after it. ``fn`` returns a count (or None). Platform-wide sweeps
+    (SLA, chat autocomplete, retention, reconcile) don't use this: they are explicit opt-outs."""
+    from backend.db.database import AsyncSessionLocal
+    from backend.db.tenancy import set_tenant
+    total = 0
+    for oid in org_ids:
+        async with AsyncSessionLocal() as db:
+            set_tenant(db, oid)             # this session is this shop's only
+            try:
+                total += (await fn(db, oid)) or 0
+                await db.commit()
+            except Exception:  # noqa: BLE001 — one bad shop never stalls the sweep
+                log.exception("%s failed for org %s", label, oid)
+                await db.rollback()
+    return total
+
 @job_runner.every(600, "status-sla-sweep")
 async def sweep_status_sla() -> None:
     """Flag work orders that have exceeded their status time limit.
@@ -152,14 +176,7 @@ async def sweep_time_automations() -> None:
                                     .join(Organisation, Organisation.id == AutomationRule.org_id).where(
             AutomationRule.active == True,  # noqa: E712
             AutomationRule.event.in_(auto.TIME_EVENTS), live_org_clause()).distinct())).scalars().all()
-    fired = 0
-    for oid in org_ids:
-        async with AsyncSessionLocal() as db:   # a session per shop: one failure never stalls the rest
-            try:
-                fired += await auto.sweep_time_based(db, oid)
-            except Exception:  # noqa: BLE001
-                log.exception("automation-time-sweep failed for org %s", oid)
-                await db.rollback()
+    fired = await _per_shop("automation-time-sweep", org_ids, auto.sweep_time_based)
     if fired:
         log.info("automation-time-sweep: fired %d rule action(s)", fired)
 
@@ -179,17 +196,10 @@ async def sweep_contact_lifecycle() -> None:
         org_ids = (await db.execute(
             select(Organisation.id).where(live_org_clause())   # suspended shops send nothing
         )).scalars().all()
-    sent = 0
-    for oid in org_ids:
-        async with AsyncSessionLocal() as db:   # per org, as in notification-sweep
-            try:
-                sent += await nr.notify_contact_birthdays(db, org_id=oid)
-                await db.commit()
-            except Exception:  # noqa: BLE001
-                log.exception("contact-lifecycle-sweep failed for org %s", oid)
-                await db.rollback()   # R2: same as the notification sweep
-        if sent:
-            log.info("contact-lifecycle-sweep: sent %d birthday message(s)", sent)
+    sent = await _per_shop("contact-lifecycle-sweep", org_ids,
+                           lambda db, oid: nr.notify_contact_birthdays(db, org_id=oid))
+    if sent:
+        log.info("contact-lifecycle-sweep: sent %d birthday message(s)", sent)
 
 
 @job_runner.every(3600, "membership-sweep")
@@ -201,19 +211,22 @@ async def sweep_memberships() -> None:
     from backend.services import memberships as mb
 
     async with AsyncSessionLocal() as db:
-        org_ids = (await db.execute(select(Membership.org_id).distinct())).scalars().all()
-        for oid in org_ids:
-            try:
-                org = (await db.execute(select(Organisation).where(
-                    Organisation.id == oid, live_org_clause()))).scalar_one_or_none()   # suspended: no billing
-                if org:
-                    stats = await mb.sweep(db, org)
-                    await db.commit()
-                    if any(stats.values()):
-                        log.info("membership-sweep %s: %s", oid, stats)
-            except Exception:  # noqa: BLE001 — one bad org never stalls the sweep
-                await db.rollback()
-                log.exception("membership-sweep failed for org %s", oid)
+        org_ids = (await db.execute(select(Membership.org_id).distinct()
+                                    .join(Organisation, Organisation.id == Membership.org_id)
+                                    .where(live_org_clause()))).scalars().all()   # suspended: no billing
+
+    async def one(db, oid) -> int:
+        org = (await db.execute(select(Organisation).where(
+            Organisation.id == oid, live_org_clause()))).scalar_one_or_none()
+        if org is None:
+            return 0
+        stats = await mb.sweep(db, org)
+        await db.commit()
+        if any((stats or {}).values()):
+            log.info("membership-sweep %s: %s", oid, stats)
+        return 1
+
+    await _per_shop("membership-sweep", org_ids, one)
 
 
 @job_runner.every(60, "webhook-retry-sweep")
@@ -331,15 +344,9 @@ async def sweep_morning_briefs() -> None:
             .join(Organisation, Organisation.id == AutomationSetting.org_id)
             .where(AutomationSetting.key == sense.SETTING_KEY, AutomationSetting.enabled == True,  # noqa: E712
                    live_org_clause()))).scalars().all()
-        sent = 0
-        for oid in org_ids:
-            try:
-                sent += await sense.send_briefs(db, oid)
-            except Exception:  # noqa: BLE001 — one bad org never stalls the sweep
-                await db.rollback()
-                log.exception("sense-brief-sweep failed for org %s", oid)
-        if sent:
-            log.info("sense-brief-sweep: sent %d brief(s)", sent)
+    sent = await _per_shop("sense-brief-sweep", org_ids, sense.send_briefs)
+    if sent:
+        log.info("sense-brief-sweep: sent %d brief(s)", sent)
 
 
 
@@ -360,15 +367,9 @@ async def sweep_sense_agents() -> None:
             .join(Organisation, Organisation.id == AutomationSetting.org_id)
             .where(AutomationSetting.key == sense.SETTING_KEY, AutomationSetting.enabled == True,  # noqa: E712
                    live_org_clause()))).scalars().all()
-        made = 0
-        for oid in org_ids:
-            try:
-                made += await sense_agents.run_agents(db, oid)
-            except Exception:  # noqa: BLE001 — one bad org never stalls the sweep
-                await db.rollback()
-                log.exception("sense-agents-sweep failed for org %s", oid)
-        if made:
-            log.info("sense-agents-sweep: %d message(s) drafted or scheduled", made)
+    made = await _per_shop("sense-agents-sweep", org_ids, sense_agents.run_agents)
+    if made:
+        log.info("sense-agents-sweep: %d message(s) drafted or scheduled", made)
 
 
 @job_runner.every(24 * 3600, "integrity-sweep", delay_first=True)

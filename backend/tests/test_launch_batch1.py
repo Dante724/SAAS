@@ -161,8 +161,9 @@ async def test_till_close_counts_invoice_cash_and_archive_refunds(client, tenant
 async def test_invoice_payment_rejects_another_shops_shift(client, tenant):
     _cid, oid = await _order_with_total(client, tenant, 10)
     iid = (await client.post("/api/finance/invoices", headers=tenant, json={"order_id": oid})).json()["id"]
+    aid = await _account(client, tenant)   # audit FIN-04: a cash payment names its till
     r = await client.post(f"/api/finance/invoices/{iid}/pay", headers=tenant,
-                          json={"method": "cash", "amount": 10, "shift_id": str(uuid.uuid4())})
+                          json={"method": "cash", "amount": 10, "account_id": aid, "shift_id": str(uuid.uuid4())})
     assert r.status_code == 404, r.text
 
 

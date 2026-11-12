@@ -53,6 +53,17 @@ describe("RecordPaymentDrawer", () => {
     expect(posted("/finance/invoices/i1/pay")[0].body).toMatchObject({ amount: 25, method: "cash", account_id: "a1", overpay: null, paid_at: null });
   });
 
+  it("won't record money that lands in no account (audit FIN-04)", async () => {
+    const u = userEvent.setup(); const onPaid = vi.fn();
+    routes["POST /api/finance/invoices/i1/pay"] = () => ({ ok: true });
+    render(<RecordPaymentDrawer invoice={inv()} onClose={() => {}} onPaid={onPaid} />);
+    await screen.findByRole("option", { name: "Front till" });
+    await u.click(screen.getByRole("radio", { name: "Bank transfer" }));   // no cashless account set up
+    expect(screen.getByText("Set up an account for this method first.")).toBeTruthy();
+    expect((screen.getByRole("button", { name: /Record/ }) as HTMLButtonElement).disabled).toBe(true);
+    expect(posted("/finance/invoices/i1/pay")).toHaveLength(0);
+  });
+
   it("asks what to do with an overpayment and sends the choice", async () => {
     const u = userEvent.setup(); const onPaid = vi.fn();
     routes["POST /api/finance/invoices/i1/pay"] = () => ({ ok: true });

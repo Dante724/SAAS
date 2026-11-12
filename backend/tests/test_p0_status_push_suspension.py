@@ -122,8 +122,10 @@ async def test_ntf01_real_push_with_commit_false_never_commits_the_callers_work(
     db.add(Client(org_id=org_id, name="SHOULD-ROLL-BACK"))     # the caller's unfinished work
     await push.notify(db, org_id=org_id, employee_id=emp_id, kind="inventory.reorder",
                       title="Low stock", body="x", commit=False)
-    assert len(sent) == 1                                       # the push really went out
+    assert sent == []                                           # P1 follow-up: waits for the caller's commit
     await db.rollback()                                         # the caller then fails (e.g. a 409)
+    await push.wait_pending()
+    assert sent == []                                           # so nothing announced rolled-back work
     left = (await db.execute(select(Client).where(Client.name == "SHOULD-ROLL-BACK"))).scalars().all()
     bell = (await db.execute(select(StaffNotification).where(
         StaffNotification.employee_id == emp_id, StaffNotification.title == "Low stock"))).scalars().all()

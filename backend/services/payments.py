@@ -305,6 +305,29 @@ async def create_intent(db: AsyncSession, *, org_id: str, order_id: Optional[str
     return intent
 
 
+ONLINE_ACCOUNT_NAME = "Online payments"
+
+
+async def online_account(db: AsyncSession, org_id: str) -> Account:
+    """Where card money taken online lands when the link names no account. Audit FIN-15: this was
+    "the first active account", often the cash till, whose balance then held card money that was
+    never in the drawer. Now: a card or cashless account (company-wide first); with none, an
+    "Online payments" card account is made for it, never a cash till."""
+    from sqlalchemy import case
+    acc = (await db.execute(select(Account).where(
+        Account.org_id == org_id, Account.active == True,  # noqa: E712
+        Account.payment_option.in_(("card", "cashless")))
+        .order_by(case((Account.name == ONLINE_ACCOUNT_NAME, 0), else_=1),
+                  case((Account.payment_option == "card", 0), else_=1),
+                  Account.is_company.desc(), Account.created_at, Account.id))).scalars().first()
+    if acc is None:
+        acc = Account(org_id=org_id, name=ONLINE_ACCOUNT_NAME, icon="card", payment_option="card",
+                      is_company=True)
+        db.add(acc)
+        await db.flush()
+    return acc
+
+
 # ── Reconciliation (shared by Stripe webhook + simulated confirm) ────────────
 async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentIntent:
     """Idempotently reconcile a succeeded intent into the cash system."""
@@ -329,9 +352,7 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
         account = (await db.execute(select(Account).where(
             Account.id == intent.account_id, Account.org_id == intent.org_id))).scalar_one_or_none()
     if not account:
-        account = (await db.execute(select(Account).where(
-            Account.org_id == intent.org_id, Account.active == True)  # noqa: E712
-            .order_by(Account.is_company.desc()))).scalars().first()
+        account = await online_account(db, intent.org_id)
 
     # Order -> Invoice -> Client, taken before the cashbox posting below (M22): a link settling
     # on a job held the till and the job, then wrote the shared invoice that Record payment was

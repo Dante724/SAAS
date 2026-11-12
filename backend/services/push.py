@@ -14,14 +14,19 @@ import json
 import logging
 from typing import Optional
 
-from sqlalchemy import select
+from sqlalchemy import event, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import Session
 
 from backend.config import settings
 from backend.models import PushSubscription, StaffNotification
 from backend.services.dates import now_utc
 
 log = logging.getLogger("tekly.push")
+
+# A Web Push service that doesn't answer must not hold a request (or a sweep) open: pywebpush passes
+# this on to requests (audit NTF-06; its default is to wait forever).
+PUSH_TIMEOUT_S = 10
 
 VALID_KINDS = {
     "job.assigned", "schedule.changed", "chat.message",
@@ -49,8 +54,9 @@ async def notify(db: AsyncSession, *, org_id: str, employee_id: str, kind: str,
     with dispatch_deferred() after its own commit. Prefer it inside a transaction or savepoint:
     the push then goes out only for work that was actually saved.
 
-    `commit=False` never commits the caller's session (the push is sent now, and the
-    subscription bookkeeping it causes is saved with the caller's own commit).
+    `commit=False` never commits the caller's session, and the push waits for the caller's
+    commit: it is sent once that commit succeeds and dropped if the caller rolls back, so a push
+    never announces work that wasn't saved (audit NTF-01 follow-up).
     """
     if respect_prefs and not await _kind_enabled(db, employee_id, kind):
         return None
@@ -69,11 +75,63 @@ async def notify(db: AsyncSession, *, org_id: str, employee_id: str, kind: str,
     }
     if deferred is not None:
         deferred.append((employee_id, payload))
+    elif commit:
+        await _dispatch_push(db, employee_id, payload, commit=True)
     else:
-        # commit=False: the caller owns the transaction (it may still fail and roll back), so the
-        # subscription bookkeeping rides the caller's own commit and is never committed here.
-        await _dispatch_push(db, employee_id, payload, commit=commit)
+        # The caller owns the transaction and may still fail and roll back: send after its commit.
+        _after_commit(db, org_id, employee_id, payload)
     return n
+
+
+# ── commit=False: send once the caller's transaction commits ────────────────────────────────────
+_AFTER_COMMIT = "tekly_push_after_commit"
+_SENDING: set = set()          # tasks sending pushes after a commit, kept referenced until done
+
+
+def _after_commit(db: AsyncSession, org_id: str, employee_id: str, payload: dict) -> None:
+    sync = getattr(db, "sync_session", db)
+    sync.info.setdefault(_AFTER_COMMIT, []).append((db.bind, org_id, employee_id, payload))
+
+
+@event.listens_for(Session, "after_commit")
+def _send_committed(session) -> None:
+    items = session.info.pop(_AFTER_COMMIT, None)
+    if not items:
+        return
+    try:
+        loop = asyncio.get_running_loop()
+    except RuntimeError:            # a sync session outside the app's loop: nothing can send
+        log.warning("%d push(es) not sent: no event loop after commit", len(items))
+        return
+    task = loop.create_task(_send_items(items))
+    _SENDING.add(task)
+    task.add_done_callback(_SENDING.discard)
+
+
+@event.listens_for(Session, "after_rollback")
+def _drop_rolled_back(session) -> None:
+    session.info.pop(_AFTER_COMMIT, None)     # their bell items were rolled back too
+
+
+async def _send_items(items: list) -> None:
+    """Send pushes queued in a committed transaction, in a session of their own (the caller's
+    session is still in use by the request that committed)."""
+    from sqlalchemy.ext.asyncio import AsyncSession as _AS
+
+    from backend.db.tenancy import set_tenant
+    for bind, org_id, employee_id, payload in items:
+        try:
+            async with _AS(bind=bind, expire_on_commit=False) as s:
+                set_tenant(s, org_id)
+                await _dispatch_push(s, employee_id, payload, commit=True)
+        except Exception:  # noqa: BLE001 — a push is best-effort, never anyone's failure
+            log.exception("push after commit failed (employee=%s)", employee_id)
+
+
+async def wait_pending() -> None:
+    """Wait for pushes being sent after a commit (tests, and a clean shutdown)."""
+    while _SENDING:
+        await asyncio.gather(*list(_SENDING), return_exceptions=True)
 
 
 async def dispatch_deferred(db: AsyncSession, items: list) -> None:
@@ -97,10 +155,9 @@ async def _kind_enabled(db: AsyncSession, employee_id: str, kind: str) -> bool:
 async def _dispatch_push(db: AsyncSession, employee_id: str, payload: dict, *, commit: bool) -> None:
     """Send to every device of the employee. Sending touches (last_used_at) or prunes (gone
     endpoints) subscriptions. ``commit`` saves that bookkeeping straight away, and only callers
-    that own the transaction pass True: notify(commit=True), and dispatch_deferred() after the
-    caller's commit. With False the changes stay pending in the caller's session and are saved
-    (or rolled back, harmlessly) with the caller's own work: committing here used to save a
-    caller's half-done transaction (audit NTF-01)."""
+    that own the transaction pass True: notify(commit=True), dispatch_deferred() and the
+    after-commit sender. Committing a caller's session here used to save its half-done
+    transaction (audit NTF-01)."""
     subs = (await db.execute(
         select(PushSubscription).where(PushSubscription.employee_id == employee_id)
     )).scalars().all()
@@ -126,6 +183,7 @@ async def _dispatch_push(db: AsyncSession, employee_id: str, payload: dict, *, c
                 data=json.dumps(payload),
                 vapid_private_key=settings.VAPID_PRIVATE_KEY,
                 vapid_claims=dict(claims),
+                timeout=PUSH_TIMEOUT_S,
             )
             s.last_used_at = now_utc()
         except Exception as e:  # pragma: no cover - needs live endpoint

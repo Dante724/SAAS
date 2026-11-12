@@ -9,7 +9,7 @@ from backend.db.database import get_db
 from backend.models import Invoice, Payment, CashShift, CashDrawerMovement, Expense, Order, Employee, Location
 from backend.services.auth import assert_perm, get_current_employee, require_perm, record_scope
 from backend.core import paging as _paging
-from backend.services.money import d2, dec, msum, q2, q4  # noqa: F401 — money quantizers used module-wide
+from backend.services.money import MAX_MONEY, check_money, d2, dec, msum, q2, q4  # noqa: F401 — money quantizers used module-wide
 from backend.core.spreadsheet import safe_row
 from backend.services.invoicing import DISPLAY_MODES, balance_due as _balance_due
 from backend.services.dates import day_end_utc, day_start_utc, now_utc, range_edge, shop_today, shop_tzname, today_in
@@ -84,10 +84,24 @@ class PaymentIn(BaseModel):
     # Without a choice an amount above the balance is refused, as before.
     overpay: Optional[str] = None      # keep_balance | refund
 
+    @field_validator("amount")
+    @classmethod
+    def _amount(cls, v):   # audit FIN-11: finite and below the cap (> 0 is a clear 400 below)
+        return check_money(v, allow_negative=True)
+
+
+# Audit FIN-11: a negative opening float or counted cash, or a negative expense (which raised the
+# P&L's profit), was accepted. Money typed into these forms is finite, not negative, 2 dp.
+def _non_negative(v):
+    return None if v is None else q2(check_money(v))
+
+
 class ShiftOpen(BaseModel):
     location_id: str
     opening_float: float = 0.0
     denoms: Optional[dict] = None          # 144bc: optional {"100": 2, "20": 5, ...} count
+
+    _float = field_validator("opening_float")(classmethod(lambda cls, v: _non_negative(v)))
 
 
 class DrawerMoveIn(BaseModel):
@@ -95,10 +109,17 @@ class DrawerMoveIn(BaseModel):
     amount: float
     note: str
 
+    @field_validator("amount")
+    @classmethod
+    def _amount(cls, v):
+        return check_money(v, allow_negative=True)   # sign checked with a clear 422 below
+
 
 class ShiftCloseIn(BaseModel):
     closing_float: Optional[float] = None   # or derive from denoms
     denoms: Optional[dict] = None
+
+    _float = field_validator("closing_float")(classmethod(lambda cls, v: _non_negative(v)))
 
 class ExpenseIn(BaseModel):
     description: str
@@ -106,6 +127,14 @@ class ExpenseIn(BaseModel):
     category: Optional[str] = None
     location_id: Optional[str] = None
     expense_date: Optional[str] = None
+
+    @field_validator("amount")
+    @classmethod
+    def _amount(cls, v):
+        v = _non_negative(v)
+        if not v:
+            raise ValueError("An expense must be more than zero")
+        return v
 
 def _ser_invoice(inv: Invoice) -> dict:
     return {
@@ -474,6 +503,9 @@ async def create_invoice(
                                          f"{inv.invoice_number}. Open that invoice instead.")
     # One way to make an invoice (services/invoice_money): links every job, subtotal from what it
     # bills (an explicit subtotal still wins), discount/tax stored as amounts, deposits applied.
+    # Audit FIN-06: a typed date is held to the "prevent backdating" rule like every other invoice.
+    from backend.routers.cash import _check_backdating
+    await _check_backdating(db, current.org_id, _pdate(data.issued_at))
     from backend.services.invoice_money import new_invoice
     inv = await new_invoice(
         db, org_id=current.org_id, orders=[by_id[o] for o in order_ids], lines=rest,
@@ -667,13 +699,25 @@ async def record_payment(
 async def _record_payment(invoice_id: str, data: "PaymentIn", db: AsyncSession, current: Employee):
     from decimal import Decimal
 
-    from backend.models import Account
+    from backend.models import Account, InvoiceOrder
     from backend.services.money import d2
-    # Lock the invoice row so concurrent payments serialize (Postgres) — prevents a double-click /
-    # retry from double-posting. No-op on SQLite, which serializes writes anyway.
+    # Audit FIN-07: lock every job the invoice bills BEFORE the invoice (Order -> Invoice, the order
+    # every money-in path takes). Take payment on the job locks the job and reads its balance from
+    # payments; locking only the invoice here let both see the same 100 owing and both collect it.
+    head = (await db.execute(select(Invoice.order_id).where(
+        Invoice.id == invoice_id, Invoice.org_id == current.org_id))).first()
+    if head is None:
+        raise HTTPException(404, "Invoice not found")
+    job_ids = set((await db.execute(select(InvoiceOrder.order_id).where(
+        InvoiceOrder.invoice_id == invoice_id))).scalars().all()) | ({head[0]} if head[0] else set())
+    from backend.services.invoice_money import lock_order
+    for oid in sorted(job_ids):
+        await lock_order(db, oid)
+    # Then the invoice row, read fresh under the job locks, so concurrent payments serialize.
     result = await db.execute(
         select(Invoice).where(Invoice.id == invoice_id, Invoice.org_id == current.org_id)
         .options(selectinload(Invoice.payments)).with_for_update(of=Invoice)
+        .execution_options(populate_existing=True)
     )
     inv = result.scalar_one_or_none()
     if not inv:
@@ -732,16 +776,26 @@ async def _record_payment(invoice_id: str, data: "PaymentIn", db: AsyncSession, 
             await assert_perm(db, current, "can_retroactive_cash")
             paid_at, retro = day, True
     acc = None
+    # Audit FIN-04: money that changes hands lands in a cashbox, as on Take payment. A cash
+    # payment with no account wrote no till leg, so the invoice showed paid while no drawer or cash
+    # report ever saw the money. Only a payment from client balance moves no money.
+    if data.method != "balance" and not data.account_id:
+        raise HTTPException(400, "Select the cashbox/account the money goes into")
     if data.account_id:
         acc = (await db.execute(select(Account).where(
             Account.id == data.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
         if not acc:
             raise HTTPException(404, "Account not found")
+        from backend.services import scoping
+        scoping.assert_account_allowed(db, acc.id)
     # B10: cash taken against an invoice belongs to the open drawer shift, like order payments,
     # or the till close never counts it. A shift sent by the client must be this shop's.
     shift_id = data.shift_id
     if shift_id:
-        await _shift_or_404(db, current.org_id, shift_id)
+        sh = await _shift_or_404(db, current.org_id, shift_id)
+        if sh.closed_at is not None:
+            # FIN-04: its expected cash was frozen at close, so the money would be counted nowhere.
+            raise HTTPException(409, "That drawer shift is closed. Record the payment on the open drawer.")
     elif data.method == "cash" and acc is not None:
         from backend.routers.cash import open_drawer_shift
         shift_id = await open_drawer_shift(db, current.org_id, acc)
@@ -1105,6 +1159,12 @@ async def drawer_movement(
 ):
     """Record a manual cash pay-in / pay-out on the open drawer (note required)."""
     shift = await _shift_or_404(db, current.org_id, shift_id)
+    # Audit FIN-12: take the shift row's lock (a write on SQLite) and re-read it, so a close running
+    # now either counts this movement or has already closed the drawer and refuses it here.
+    from sqlalchemy import update as _update
+    await db.execute(_update(CashShift).where(CashShift.id == shift.id)
+                     .values(closed_at=CashShift.closed_at).execution_options(synchronize_session=False))
+    await db.refresh(shift, attribute_names=["closed_at"])
     if shift.closed_at is not None:
         raise HTTPException(409, "This drawer is closed")
     if data.direction not in ("in", "out"):
@@ -1142,12 +1202,20 @@ async def close_shift(
     counted = _denoms_total(denoms) if denoms else (
         (data.closing_float if data and data.closing_float is not None else closing_float) or 0.0)
     counted = q2(counted)
+    if counted < 0 or abs(counted) >= MAX_MONEY:
+        raise HTTPException(422, "The counted cash can't be negative")
 
+    # Audit FIN-12: claim the close first (UPDATE … WHERE closed_at IS NULL). A second close finds
+    # it taken and changes nothing (it used to overwrite the count and the expected snapshot), and
+    # a drawer movement waits on this row, then sees the drawer closed.
+    from backend.services.money import claim_status
+    if not await claim_status(db, shift, None, now_utc(), attr="closed_at"):
+        await db.rollback()
+        raise HTTPException(409, "This drawer is already closed")
     parts = await _expected_cash(db, shift)
     shift.expected_cash = parts["expected_cash"]
     shift.closing_float = counted
     shift.close_denoms = denoms
-    shift.closed_at = now_utc()
     await db.commit()
 
     discrepancy = q2(dec(counted) - dec(shift.expected_cash))

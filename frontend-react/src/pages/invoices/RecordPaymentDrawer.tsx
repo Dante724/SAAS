@@ -52,7 +52,9 @@ export default function RecordPaymentDrawer({ invoice, onClose, onPaid }: { invo
     amt <= 0 ? "Enter an amount above zero."
     : over && method === "balance" ? "A payment from client balance can't be more than the balance due."
     : over && !overpay ? "Choose what to do with the difference."
-    : method !== "balance" && hasAccount && !accountId ? "Pick the account the money goes into."
+    // Money that changes hands lands in a cashbox (the server refuses it otherwise); with none
+    // for this method yet, the picker below offers to set one up.
+    : method !== "balance" && !accountId ? (hasAccount ? "Pick the account the money goes into." : "Set up an account for this method first.")
     : paidAt > todayIso() ? "The payment date can't be in the future."
     : null;
 
@@ -62,7 +64,7 @@ export default function RecordPaymentDrawer({ invoice, onClose, onPaid }: { invo
     try {
       await api.postOnce(`/finance/invoices/${invoice.id}/pay`, {
         amount: amt, method,
-        account_id: method === "balance" || !hasAccount ? null : accountId || null,
+        account_id: method === "balance" ? null : accountId || null,
         reference: reference.trim() || null,
         paid_at: paidAt && paidAt !== todayIso() ? paidAt : null,
         overpay: over ? overpay : null,
