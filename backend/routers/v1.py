@@ -606,13 +606,16 @@ async def create_order(data: OrderIn, db: AsyncSession = Depends(get_db), princi
         await _audit(db, principal, "order.create", "order", o.id, order_number=o.order_number)
         from backend.routers.feed import log_system_event
         await log_system_event(db, org, "order", o.id, "Work order created through the API")
+        # WO-05 / WO-08: the app's own create steps. The "created" messages are queued with the
+        # job; then checklists, the order.created webhook, automations and the assignee's alert,
+        # each best-effort and logged. Same webhook payload as an order made in the app;
+        # "number" kept for existing receivers.
+        from backend.routers.orders import SystemActor, _new_job_steps, _queue_created_messages
+        api_actor = SystemActor(org, name="API")
+        pushes = await _queue_created_messages(db, api_actor, o)
         await _commit(db)
         await db.refresh(o)
-        # WO-05: the app's own create steps (checklists, the order.created webhook, "created"
-        # notifications, automations, the assignee's alert), each best-effort and logged.
-        # Same webhook payload as an order made in the app; "number" kept for existing receivers.
-        from backend.routers.orders import SystemActor, _new_job_steps
-        await _new_job_steps(db, SystemActor(org, name="API"), o, notify_assignee=True,
+        await _new_job_steps(db, api_actor, o, pushes=pushes, notify_assignee=True,
                              webhook_extra={"number": o.order_number})
         await db.refresh(o)
         return {"data": _order(o)}

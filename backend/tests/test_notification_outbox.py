@@ -237,26 +237,38 @@ async def test_a_rule_evaluation_error_is_logged_not_swallowed(client, tenant, d
 
 
 async def test_a_concurrent_writer_does_not_lose_the_queued_message(client, tenant, db, monkeypatch, caplog):
-    """CI #95: another connection commits while the status request is queueing its messages
+    """CI #95: another connection writes while the status request is queueing its messages
     (the webhook outbox delivering, or a second request on the same job). The queueing must not
     run in a transaction that took its read snapshot before that commit: on SQLite the first
-    insert then fails at once with "database is locked" and the message is lost."""
+    insert then fails at once with "database is locked" and the message is lost.
+
+    Since audit WO-08 the messages are queued inside the status change's own transaction, which
+    has already written the status (it holds the write lock), so the other writer waits for that
+    commit instead of slipping in between: both commit, and the message is queued."""
+    import asyncio
+
     from sqlalchemy import text
     from sqlalchemy.ext.asyncio import async_sessionmaker
     org, oid, key = await _status_setup(client, tenant, db)
     Other = async_sessionmaker(db.bind, expire_on_commit=False)
     real = nr.evaluate
+    writers: list = []
+
+    async def other_writer():
+        async with Other() as other:                                    # someone else writes
+            await other.execute(text("UPDATE organisations SET name = name WHERE id = :o"), {"o": org})
+            await other.commit()
 
     async def evaluate_with_a_writer_in_between(session, **kw):
         await session.execute(select(NotificationLog.id).limit(1))     # the rule's first reads
-        async with Other() as other:                                    # someone else commits
-            await other.execute(text("UPDATE organisations SET name = name WHERE id = :o"), {"o": org})
-            await other.commit()
+        writers.append(asyncio.create_task(other_writer()))
+        await asyncio.sleep(0.05)                                       # it tries to commit meanwhile
         return await real(session, **kw)
     monkeypatch.setattr(nr, "evaluate", evaluate_with_a_writer_in_between)
     with caplog.at_level(logging.ERROR, logger="tekly.notifications"):
         r = await client.patch(f"/api/orders/{oid}/status", json={"status": key}, headers=tenant)
     assert r.status_code == 200, r.text
+    await asyncio.gather(*writers)                                      # the other writer committed too
     assert not [rec for rec in caplog.records if rec.name == "tekly.notifications"], caplog.text
     db.expire_all()
     logs = (await db.execute(select(NotificationLog).where(

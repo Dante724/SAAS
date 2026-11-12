@@ -118,13 +118,16 @@ async def _refresh(provider: str, conn) -> None:
 
 
 async def send_via_connection(conn, *, recipient: str, subject: Optional[str], body: str,
-                              attachment: Optional[tuple] = None, html: bool = False) -> dict:
+                              attachment: Optional[tuple] = None, html: bool = False,
+                              message_id: Optional[str] = None) -> dict:
     """Send one message using a connected account. Returns the standard
     {status, error} contract. Guarded: no tokens → 'failed', never raises.
 
     ``attachment`` is an optional (filename, bytes, mimetype) tuple — used to send
     documents like the invoice PDF (build 144dw). ``html`` sends the body as HTML (only for bodies
-    filled from an HTML template, whose values were escaped)."""
+    filled from an HTML template, whose values were escaped). ``message_id`` sets the Message-ID
+    header on Gmail (the outbox passes one per message, so a resend after a timeout is the same
+    message, not a new one; audit NTF-05). Microsoft Graph sets its own and can't take one."""
     if not conn or not conn.connected or not conn.access_token:
         return {"status": "failed", "error": "Email account not connected"}
     if conn.token_expires_at and conn.token_expires_at <= now_utc():
@@ -150,6 +153,8 @@ async def send_via_connection(conn, *, recipient: str, subject: Optional[str], b
             msg["Subject"] = one_line(subject)
             if conn.email_address:
                 msg["From"] = f"{conn.sender_name} <{conn.email_address}>" if conn.sender_name else conn.email_address
+            if message_id:
+                msg["Message-ID"] = message_id
             raw = base64.urlsafe_b64encode(msg.as_bytes()).decode()
             async with httpx.AsyncClient(timeout=20) as c:
                 r = await c.post(GMAIL_SEND, json={"raw": raw},

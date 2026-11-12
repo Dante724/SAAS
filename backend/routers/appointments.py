@@ -292,7 +292,7 @@ async def appointment_to_order(
     order.create audit row, then notifications, commissions, automations, checklists, webhook)."""
     from backend.models import Order
     from backend.routers.orders import (
-        _new_job_steps, active_employee_id, initial_job_status, record_job_created, stamp_new_job)
+        _new_job_steps, _queue_created_messages, active_employee_id, initial_job_status, record_job_created, stamp_new_job)
     from backend.services.auth import assert_perm
     from backend.services.numbering import next_number
     await assert_perm(db, current, "can_create_estimates" if record == "estimate" else "can_create_tickets")
@@ -345,8 +345,9 @@ async def appointment_to_order(
     await record_job_created(db, current.org_id, current.id, order, source="appointment")
     b.order_id = order.id
     b.status = "done"
+    _pushes = await _queue_created_messages(db, current, order)   # WO-08: saved with the job
     await db.commit()
     result = {"order_id": order.id, "order_number": order.order_number, "client_id": client_id,
               "is_estimate": is_estimate}
-    await _new_job_steps(db, current, order)
+    await _new_job_steps(db, current, order, pushes=_pushes)
     return result

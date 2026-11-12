@@ -24,7 +24,7 @@ async def test_notifications_prefer_connected_gmail(monkeypatch, db, client, ten
 
     sent = []
 
-    async def fake_send(conn, *, recipient, subject, body, html=False):
+    async def fake_send(conn, *, recipient, subject, body, html=False, **kw):   # kw: message_id (NTF-05)
         sent.append({"to": recipient, "subject": subject})
         return {"status": "sent", "error": None}
 
@@ -47,6 +47,9 @@ async def test_notifications_prefer_connected_gmail(monkeypatch, db, client, ten
         "name": "Welcome", "channel": "email", "trigger_event": "order_created",
         "body_template": "Hi {client_name}, order {order_number} received."}, headers=tenant)
     await client.post("/api/orders", json={"client_id": cid, "location_id": loc, "complaint": "x"}, headers=tenant)
+    assert sent == []           # audit NTF-02: queued in the outbox, never sent inside the request
+    from backend.services import notification_rules as nr
+    await nr.run_due(db, org_id=org_id)
 
     assert sent and sent[0]["to"] == "mia@x.com", "email was not sent through the connected Gmail account"
 

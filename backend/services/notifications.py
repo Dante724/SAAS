@@ -373,11 +373,19 @@ async def send_direct_email(recipient: str, subject: str, body: str) -> dict:
 
 # ── Engine ───────────────────────────────────────────────────────────────────
 async def dispatch_order_notifications(db: AsyncSession, *, org_id: str, order_id: str,
-                                       trigger_event: str, status_key: Optional[str] = None):
-    """Find + send every template that matches this event for this order.
+                                       trigger_event: str, status_key: Optional[str] = None,
+                                       commit: bool = True) -> int:
+    """Queue every active template that matches this event for this order (the "legacy" path,
+    the only one on plans without notification rules, e.g. Solo).
 
     trigger_event is one of: 'order_created', 'status_change', 'comment_added'.
     For status changes we also match templates targeting the specific status_key.
+
+    Audit NTF-02: this used to call Twilio/SMTP inside the request, before the caller's commit,
+    with no retry. It now writes outbox rows (status 'scheduled', due now) exactly like the rules
+    engine, and the outbox sweep delivers them: retries with backoff, send-time consent and STOP
+    re-check, crash reclaim. Nothing here calls a provider. commit=False leaves the rows in the
+    caller's transaction (audit WO-08). Returns how many messages were queued.
     """
     templates = (await db.execute(select(NotificationTemplate).where(
         NotificationTemplate.org_id == org_id,
@@ -409,25 +417,28 @@ async def dispatch_order_notifications(db: AsyncSession, *, org_id: str, order_i
 
     # Reuse the document variable resolver so notification + document variables match.
     from backend.routers.documents import _resolve
+    from backend.routers.feed import log_system_event
     from backend.services import message_vars
+    from backend.services.dates import now_utc
+    from backend.services.notification_rules import with_opt_out
     variables = await _resolve(db, org_id, order)
     if isinstance(variables, tuple):   # build 144s made _resolve return (doc_map, rows)
         variables = variables[0]
     client = order.client
+    now = now_utc()
 
-    sent = 0
+    queued = 0
     for t in matched:
         subject, body = await message_vars.render_for_order(
             db, org_id, order, t.subject or None, t.body_template or "", doc_vars=variables)
         recipient = None
         if client:
             recipient = client.email if t.channel == "email" else client.phone
+        body = await with_opt_out(db, org_id, order.client_id, t.channel, body)
         log = NotificationLog(
             org_id=org_id, scope="client", channel=t.channel, trigger_event=trigger_event,
             template_id=t.id, order_id=order.id, client_id=order.client_id,
-            recipient=recipient, subject=subject, body=body, status="queued")
-        db.add(log)
-
+            recipient=recipient, subject=subject, body=body, send_at=now)
         if not recipient:
             log.status = "skipped"
             log.error = f"Client has no {t.channel} on file"
@@ -435,36 +446,23 @@ async def dispatch_order_notifications(db: AsyncSession, *, org_id: str, order_i
             log.status = "skipped"
             log.error = f"No client consent for {t.channel}"
         else:
-            # Build 144ae: for email, prefer the shop's own connected Gmail/Outlook
-            # account (sends *from* their address, threaded) and fall back to SMTP /
-            # simulated only when no account is connected.
-            result = None
-            if t.channel == "email":
-                result = await try_oauth_email(db, org_id, recipient=recipient, subject=subject, body=body,
-                                               html=message_vars.is_html(t.body_template))
-            if result is None:
-                _creds = await notif_creds(db, org_id, t.channel, transactional=True)
-                result = await _adapter_for(t.channel, _creds).send(
-                    recipient=recipient, subject=subject, body=body,
-                    html=message_vars.is_html(t.body_template))
-            log.status = result["status"]
-            log.error = result.get("error")
-            if log.status == "sent":
-                sent += 1
-
+            log.status = "scheduled"      # the outbox sweep sends it (services/notification_rules.run_due)
+            queued += 1
+        db.add(log)
         # Mirror into the order event feed (the communication history trail).
-        from backend.routers.feed import log_system_event
-        verb = {"sent": "sent", "skipped": "skipped (no contact)", "failed": "failed"}.get(log.status, log.status)
+        verb = "queued" if log.status == "scheduled" else "skipped (no contact or consent)"
         await log_system_event(db, org_id, "order", order.id,
                                f"{t.channel.upper()} notification {verb} to client")
 
-    await db.commit()
-    return sent
+    await (db.commit() if commit else db.flush())
+    return queued
 
-async def try_oauth_email(db, org_id, *, recipient, subject, body, html: bool = False):
+async def try_oauth_email(db, org_id, *, recipient, subject, body, html: bool = False,
+                          message_id: Optional[str] = None):
     """A6 seam: if the org has a connected Gmail/Outlook account, send through it
     and return the result; otherwise return None so the caller falls back to SMTP
-    or the simulated adapter."""
+    or the simulated adapter. ``message_id`` (outbox sends, audit NTF-05) is passed on so a
+    resend of the same message carries the same Message-ID."""
     try:
         from sqlalchemy import select
 
@@ -478,6 +476,9 @@ async def try_oauth_email(db, org_id, *, recipient, subject, body, html: bool = 
         conns = (await db.execute(select(EmailConnection).where(
             EmailConnection.org_id == org_id, EmailConnection.connected == True))).scalars().all()  # noqa: E712
         conn = next((c for c in conns if c.is_default), conn)
+        if message_id:
+            return await send_via_connection(conn, recipient=recipient, subject=subject, body=body,
+                                             html=html, message_id=message_id)
         return await send_via_connection(conn, recipient=recipient, subject=subject, body=body, html=html)
     except Exception:
         return None

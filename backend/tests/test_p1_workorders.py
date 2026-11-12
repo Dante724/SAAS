@@ -437,7 +437,7 @@ async def test_deactivated_employee_is_not_auto_assigned_or_pushed(client, tenan
 
 # ── CLI-03: idempotency on double-submit-prone POSTs ─────────────────────────
 @pytest.mark.asyncio
-async def test_comment_duplicate_and_notify_replay_on_the_same_key(client, tenant, db, monkeypatch):
+async def test_comment_duplicate_and_notify_replay_on_the_same_key(client, tenant, db):
     from backend.models import OrderComment
     o = await _order(client, tenant)
     H = {**tenant, "Idempotency-Key": str(uuid.uuid4())}
@@ -454,19 +454,16 @@ async def test_comment_duplicate_and_notify_replay_on_the_same_key(client, tenan
         ids.add(r.json()["id"])
     assert len(ids) == 1
 
-    from backend.services import notifications
-    sends = []
-
-    class Adapter:
-        async def send(self, **kw):
-            sends.append(kw)
-            return {"ok": True}
-
-    monkeypatch.setattr(notifications, "_adapter_for", lambda channel, creds=None: Adapter())
+    from backend.models import NotificationLog
     c = await client.post("/api/clients", json={"name": "Mail", "email": "m@example.com"}, headers=tenant)
     o2 = await _order(client, tenant, client_id=c.json()["id"])
     H = {**tenant, "Idempotency-Key": str(uuid.uuid4())}
+    answers = []
     for _ in range(2):
         r = await client.post(f"/api/orders/{o2['id']}/notify", json={"channel": "email", "body": "Ready"}, headers=H)
         assert r.status_code == 200, r.text
-    assert len(sends) == 1
+        answers.append(r.json().get("message_id"))
+    assert answers[0] == answers[1]
+    msgs = (await db.execute(select(NotificationLog).where(
+        NotificationLog.order_id == o2["id"], NotificationLog.trigger_event == "manual"))).scalars().all()
+    assert len(msgs) == 1

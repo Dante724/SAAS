@@ -223,7 +223,7 @@ async def convert_lead(db: AsyncSession, org_id: str, lead: Lead, *, actor: Opti
     status (WO-06), one open ticket per asset (Q27), the order.create audit row, and after the
     commit the creation notifications, commissions, automations, checklists and webhook."""
     from backend.routers.orders import (
-        SystemActor, _new_job_steps, active_employee_id, assert_asset_free, initial_job_status,
+        SystemActor, _new_job_steps, _queue_created_messages, active_employee_id, assert_asset_free, initial_job_status,
         record_job_created, stamp_new_job)
     from backend.services.call_contacts import find_client
     from backend.services.numbering import next_number
@@ -301,10 +301,12 @@ async def convert_lead(db: AsyncSession, org_id: str, lead: Lead, *, actor: Opti
         t.order_id = t.order_id or order.id
         t.status, t.completed_at = "done", now_utc()
     await _emit(db, org_id, "inquiry.converted", lead)
+    actor_or_api = actor or SystemActor(org_id, name="API")
+    _pushes = await _queue_created_messages(db, actor_or_api, order)   # WO-08: saved with the job
     await db.commit()
     # order.created webhook (work orders only, with "source"), notifications, commissions…
     client_id = client.id
-    await _new_job_steps(db, actor or SystemActor(org_id, name="API"), order,
+    await _new_job_steps(db, actor_or_api, order, pushes=_pushes,
                          notify_assignee=True if actor is None else None, webhook_extra={"source": "inquiry"})
     return {"ok": True, "order_id": order.id, "order_number": order.order_number,
             "client_id": client_id, "device_id": device_id}
