@@ -501,9 +501,12 @@ async def delete_refund(
     out = {"ok": True, "id": refund.id, "voided_at": refund.voided_at.isoformat()}
     voided_ids = [p.id for p in pays]
     await db.commit()
-    # a refund Payment already pushed to QuickBooks is voided there too (logged; never undoes this)
-    from backend.services import qbo
-    await qbo.void_payments(db, current.org_id, voided_ids)
+    # a refund Payment already pushed to QuickBooks is voided there too, off the request (logged;
+    # never undoes this void; void_payments never raises, so no retries)
+    if voided_ids:
+        from backend.core.jobs import job_runner
+        from backend.services import qbo
+        job_runner.enqueue(qbo.void_payments_job, current.org_id, voided_ids, retries=0, name="qbo-void")
     return out
 
 

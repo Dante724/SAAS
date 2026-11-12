@@ -22,7 +22,7 @@ Audit DB-09 widened the sweep to the other stored totals that summarise somethin
 
 - ``giftcard``: ``GiftCard.balance`` = Σ ``GiftCardLedger.amount`` (every load +, every spend −).
 - ``supplier``: what we owe a supplier, ``Supplier.balance``, = minus Σ the linked contact's
-  ``ClientLedgerEntry.amount`` (the same debt seen from the contact side, services/ledger
+  supplier-side ``ClientLedgerEntry.amount`` (the same debt seen from the contact side, services/ledger
   .adjust_supplier_ap; GET /api/suppliers/{id}/ledger's "discrepancy"). A supplier with no linked
   contact has nothing to derive it from and is skipped.
 - ``order``: ``Order.total`` = max(Σ ``OrderLine.total``, 0) (routers/orders._recalc_order). A shop
@@ -231,10 +231,17 @@ async def _gift_cards(db: AsyncSession, org_id: str | None) -> list[Mismatch]:
     return [Mismatch("giftcard", o, i, float(s), float(d)) for o, i, s, d in rows]
 
 
+# The contact-ledger rows that are the supplier debt (services/ledger.adjust_supplier_ap callers,
+# routers/suppliers.pay_supplier, the posting/return backfill). A contact that is also a customer
+# has its customer money (payments, refunds, advances) in the same ledger: that isn't AP.
+SUPPLIER_LEDGER_REFS = ("po", "purchase_return", "posting", "supplier", "supplier_payment")
+
+
 async def _suppliers(db: AsyncSession, org_id: str | None) -> list[Mismatch]:
     # + = we owe the supplier on the column; the contact ledger holds the same debt as a negative
     ledger = (select(ClientLedgerEntry.client_id.label("cid"), func.sum(ClientLedgerEntry.amount).label("s"))
-              .where(*_org_filter(ClientLedgerEntry.org_id, org_id))
+              .where(ClientLedgerEntry.ref_type.in_(SUPPLIER_LEDGER_REFS),
+                     *_org_filter(ClientLedgerEntry.org_id, org_id))
               .group_by(ClientLedgerEntry.client_id).subquery())
     derived = -func.coalesce(ledger.c.s, 0)
     rows = (await db.execute(
@@ -304,16 +311,21 @@ async def _purchase_orders(db: AsyncSession, org_id: str | None) -> list[Mismatc
     lines = (select(POLine.po_id.label("pid"),
                     func.sum(func.coalesce(POLine.qty_ordered, 0) * func.coalesce(POLine.unit_cost, 0)).label("s"))
              .where(*mine).group_by(POLine.po_id).subquery())
+    # Only a PO whose total isn't its line subtotal can be off: one with no charges matching its
+    # lines is fine without reading the charges, so most rows never leave the database.
+    sub = func.coalesce(lines.c.s, 0)
     rows = (await db.execute(
         select(PurchaseOrder.org_id, PurchaseOrder.id, func.coalesce(PurchaseOrder.total, 0),
-               func.coalesce(lines.c.s, 0), PurchaseOrder.charges)
+               sub, PurchaseOrder.charges)
         .outerjoin(lines, lines.c.pid == PurchaseOrder.id)
-        .where(*_org_filter(PurchaseOrder.org_id, org_id))
+        .where(func.abs(func.coalesce(PurchaseOrder.total, 0) - sub) > _MONEY_EPS,
+               *_org_filter(PurchaseOrder.org_id, org_id))
         .execution_options(skip_tenant_filter=True))).all()   # cross-shop by design: a platform sweep
+    from backend.services.money import q2
+    from backend.services.po_charges import charges_total
     out = []
-    for o, i, stored, sub, charges in rows:
-        extra = sum(float(c.get("amount") or 0) for c in (charges or []) if isinstance(c, dict))
-        derived = round(float(sub) + extra, 2)
+    for o, i, stored, sub_v, charges in rows:
+        derived = q2(float(sub_v) + charges_total(charges))
         if abs(float(stored) - derived) > _MONEY_EPS:
             out.append(Mismatch("po", o, i, float(stored), derived))
     return out
@@ -450,16 +462,16 @@ async def _payroll_runs(db: AsyncSession, org_id: str | None) -> list[Mismatch]:
         .execution_options(skip_tenant_filter=True))).scalars().all()   # cross-shop: a platform sweep
     if not runs:
         return []
-    legs: dict = {}
+    legs: dict = {}            # run id -> {(ref_type, entry_type): Σ amount}
     for ref_id, ref_type, kind, amount in (await db.execute(
             select(L.ref_id, L.ref_type, L.entry_type, func.sum(L.amount))
             .where(L.ref_type.in_(("payroll_run", "payroll_run_void")), *_org_filter(L.org_id, org_id))
             .group_by(L.ref_id, L.ref_type, L.entry_type)
             .execution_options(skip_tenant_filter=True))).all():
-        legs[(ref_id, ref_type, kind)] = float(amount or 0)
+        legs.setdefault(ref_id, {})[(ref_type, kind)] = float(amount or 0)
 
     def leg(rid, ref_type, kind=None):
-        return sum(v for (r, t, k), v in legs.items() if r == rid and t == ref_type and (kind is None or k == kind))
+        return sum(v for (t, k), v in legs.get(rid, {}).items() if t == ref_type and (kind is None or k == kind))
 
     out = []
     for r in runs:

@@ -420,6 +420,16 @@ async def void_payments(db: AsyncSession, org_id: str, payment_ids) -> None:
             logging.getLogger("tekly.qbo").exception("could not void QBO payment for %s", pid)
 
 
+async def void_payments_job(org_id: str, payment_ids: list) -> None:
+    """void_payments in its own session, for the job runner: the refund void answers at once and
+    QuickBooks (two calls per payment, possibly a token refresh) is reached after."""
+    from backend.db.database import AsyncSessionLocal
+    from backend.db.tenancy import set_tenant
+    async with AsyncSessionLocal() as db:
+        set_tenant(db, org_id)
+        await void_payments(db, org_id, payment_ids)
+
+
 async def _query(conn: QboConnection, sql: str) -> list[dict]:
     """Run a QBO SQL-like query and return the entity records. Best-effort: []."""
     import httpx

@@ -150,3 +150,56 @@ async def test_a_late_freight_bill_on_credit_is_owed_to_the_supplier(client, ten
         "charges": [{"label": "Freight", "amount": 6}], "charges_to_cost": to_cost})
     assert await _supplier_balance(db, s["supplier"]) == pytest.approx(before + 2)
     assert await reconcile.find_mismatches(db, org_id=s["org"]) == []
+
+
+@pytest.mark.asyncio
+async def test_a_supplier_contact_that_is_also_a_customer_is_not_drift(client, tenant, db):
+    """The contact ledger also holds the contact's customer money (an advance here); only the
+    supplier-side rows are the same debt as Supplier.balance."""
+    s = await _shop(client, tenant, db)
+    vendor = (await db.execute(select(Supplier.client_id).where(Supplier.id == s["supplier"]))).scalar_one()
+    till = (await client.post("/api/cash/accounts", json={"name": "Till", "payment_option": "cash"},
+                              headers=tenant)).json()["id"]
+    r = await client.post(f"/api/clients/{vendor}/balance", headers=tenant,
+                          json={"kind": "advance", "amount": 30, "account_id": till})
+    assert r.status_code == 201, r.text
+    db.expire_all()
+    assert await reconcile.find_mismatches(db, org_id=s["org"]) == []
+
+
+@pytest.mark.asyncio
+async def test_removing_a_capitalised_bill_takes_it_off_what_we_owe(client, tenant, db):
+    s = await _shop(client, tenant, db)
+    before = await _supplier_balance(db, s["supplier"])
+    r = await client.post(f"/api/inventory/po/{s['po']}/recost", headers=tenant, json={
+        "charges": [{"label": "Freight", "amount": 9}], "charges_to_cost": True})
+    assert r.status_code == 200, r.text
+    assert await _supplier_balance(db, s["supplier"]) == pytest.approx(before + 5)
+    r = await client.post(f"/api/inventory/po/{s['po']}/recost", headers=tenant, json={"charges": []})
+    assert r.status_code == 200, r.text
+    # the 4 shipping was owed before; the supplier now bills nothing for freight
+    assert await _supplier_balance(db, s["supplier"]) == pytest.approx(before - 4)
+    assert await reconcile.find_mismatches(db, org_id=s["org"]) == []
+
+
+@pytest.mark.asyncio
+async def test_removing_a_capitalised_bill_takes_the_freight_back_out_of_stock(client, tenant, db):
+    from backend.models import Part
+    s = await _shop(client, tenant, db)
+    part = (await db.execute(select(PurchaseOrder.id).where(PurchaseOrder.id == s["po"]))).scalar_one()
+    assert part
+    pid = (await db.execute(select(Part.id).where(Part.sku == "RC-PAD"))).scalar_one()
+
+    async def avg():
+        db.expire_all()
+        return float((await db.execute(select(Part.avg_cost).where(Part.id == pid))).scalar_one() or 0)
+    base = await avg()
+    await client.post(f"/api/inventory/po/{s['po']}/recost", headers=tenant, json={
+        "charges": [{"label": "Freight", "amount": 9}], "charges_to_cost": True})
+    assert await avg() == pytest.approx(base + 3, abs=0.01)      # 9 over 3 units
+    r = await client.post(f"/api/inventory/po/{s['po']}/recost", headers=tenant, json={"charges": []})
+    assert r.status_code == 200, r.text
+    assert await avg() == pytest.approx(base, abs=0.01)
+    db.expire_all()
+    assert float((await db.execute(select(PurchaseOrder.freight_capitalised)
+                                   .where(PurchaseOrder.id == s["po"]))).scalar_one() or 0) == 0

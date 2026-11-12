@@ -1303,11 +1303,13 @@ class POIn(BaseModel):
 
 
 def _po_charges(po: PurchaseOrder) -> list:
-    return [c for c in (po.charges or []) if isinstance(c, dict)]
+    from backend.services.po_charges import charge_rows
+    return charge_rows(po.charges)
 
 
 def _po_charges_total(po: PurchaseOrder) -> float:
-    return q2(sum(float(c.get("amount") or 0) for c in _po_charges(po)))
+    from backend.services.po_charges import charges_total
+    return charges_total(po.charges)
 
 
 def _po_charges_owed(po: PurchaseOrder, lines) -> float:
@@ -2017,7 +2019,9 @@ async def recost_po(
     _po_retotal(po, po_lines)            # new charges change what the PO is worth (it went stale)
 
     charges_total = _po_charges_total(po)
-    if not (po.charges_to_cost and charges_total > 0):
+    # A capitalised bill that is lowered to nothing still has freight sitting in stock (and in what
+    # we owe): it goes on to the recost below, which takes it back out (a negative delta).
+    if not (po.charges_to_cost and (charges_total > 0 or abs(float(po.freight_capitalised or 0)) >= 0.005)):
         await _post_charges_owed(db, current, po, po_lines, owed_before)
         await db.commit()
         return {"ok": True, "applied": 0.0, "note": "No capitalised charges to recost"}
@@ -2049,6 +2053,15 @@ async def recost_po(
     # QA fix D: the freight belongs to this PO's units only. What lands on stock is the share of its
     # units still on hand; the share of units already sold / used is sunk COGS (`expensed`). Both
     # count as accounted for, so the same bill recosted again applies nothing.
+    if not target:
+        # The bill went to nothing: take the capitalised freight back out of the same units, spread
+        # by the same basis (a unit charge stands in for the bill to get each part's share).
+        ref = _freight_per_unit(po_lines, 1.0, basis, weights)
+        per_part_target = {}
+        for pl in po_lines:
+            if (pl.qty_received or 0) > 0:
+                per_part_target[pl.part_id] = per_part_target.get(pl.part_id, 0.0) + ref.get(pl.id, 0.0) * pl.qty_received
+        target = sum(per_part_target.values())
     applied = expensed = 0.0
     scale = (delta_total / target) if target else 0
     for part_id, tpart in sorted(per_part_target.items()):      # products locked above

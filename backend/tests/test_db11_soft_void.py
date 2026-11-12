@@ -239,7 +239,11 @@ async def _synced_refund(client, db, monkeypatch, *, connected=True):
 
 
 async def _sync_logs(db, local_id):
+    import asyncio
+
+    from backend.core.jobs import job_runner
     from backend.models import IntegrationSyncLog
+    await asyncio.gather(*list(job_runner._tasks))     # the QBO void runs after the response
     db.expire_all()
     return (await db.execute(select(IntegrationSyncLog).where(
         IntegrationSyncLog.local_id == local_id))).scalars().all()
@@ -255,8 +259,8 @@ async def test_voiding_a_synced_refund_voids_it_in_quickbooks(client, db, monkey
         voided.append(remote_id)
     monkeypatch.setattr(qbo, "_void_remote_payment", fake_void)
     assert (await client.delete(f"/api/returns/refunds/{rid}", headers=H)).status_code == 200
-    assert voided == ["QB-PAY-7"]
     logs = await _sync_logs(db, pid)
+    assert voided == ["QB-PAY-7"]
     assert [(lg.status, lg.remote_id) for lg in logs] == [("voided", "QB-PAY-7")]
 
 

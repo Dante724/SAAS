@@ -14,6 +14,17 @@ alone, so an object that was just voided can still be read and flushed.
 from sqlalchemy import event
 from sqlalchemy.orm import ORMExecuteState, Session, with_loader_criteria
 
+_OPTION = None
+
+
+def _live_payments_only():
+    """The criteria option, built once (models import this package, so not at import time)."""
+    global _OPTION
+    if _OPTION is None:
+        from backend.models import Payment
+        _OPTION = with_loader_criteria(Payment, Payment.voided_at.is_(None), include_aliases=True)
+    return _OPTION
+
 
 @event.listens_for(Session, "do_orm_execute")
 def _hide_voided_payments(state: ORMExecuteState) -> None:
@@ -21,6 +32,4 @@ def _hide_voided_payments(state: ORMExecuteState) -> None:
         return
     if state.execution_options.get("include_voided"):
         return
-    from backend.models import Payment
-    state.statement = state.statement.options(
-        with_loader_criteria(Payment, Payment.voided_at.is_(None), include_aliases=True))
+    state.statement = state.statement.options(_live_payments_only())

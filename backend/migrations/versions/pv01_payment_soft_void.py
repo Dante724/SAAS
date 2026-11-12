@@ -10,7 +10,8 @@ payments.voided_at     when the row was voided; NULL = live. Every ORM read leav
 payments.voided_by_id  who voided it (employees.id).
 
 All three are nullable with no default, so on Postgres the ADD COLUMNs are catalogue-only; the
-index is built CONCURRENTLY (IF NOT EXISTS, so a half-finished run is safe to retry). Existing
+FK is added NOT VALID and validated separately (no scan under the ALTER's lock); the index is
+built CONCURRENTLY (IF NOT EXISTS, so a half-finished run is safe to retry). Existing
 rows keep refund_id NULL: a refund voided later falls back to its own payment_id (see
 services/invoice_money.refund_rows). Downgrade drops the three columns (rows voided meanwhile
 would then count as live again; delete them first if that matters).
@@ -36,9 +37,16 @@ def upgrade() -> None:
         b.add_column(sa.Column("refund_id", sa.String(), nullable=True))
         b.add_column(sa.Column("voided_at", sa.DateTime(), nullable=True))
         b.add_column(sa.Column("voided_by_id", sa.String(), nullable=True))
-        b.create_foreign_key(FK, "employees", ["voided_by_id"], ["id"])
+        if not pg:
+            b.create_foreign_key(FK, "employees", ["voided_by_id"], ["id"])
     if pg:
+        # NOT VALID: adding the FK doesn't scan payments under the ALTER's lock. VALIDATE then
+        # checks existing rows (all NULL here) in its own transaction, taking only SHARE UPDATE
+        # EXCLUSIVE, so payment writes go on while it runs.
+        op.execute(f"ALTER TABLE payments ADD CONSTRAINT {FK} FOREIGN KEY (voided_by_id) "
+                   f"REFERENCES employees (id) NOT VALID")
         with op.get_context().autocommit_block():
+            op.execute(f"ALTER TABLE payments VALIDATE CONSTRAINT {FK}")
             op.execute(f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {IX} ON payments (refund_id)")
     else:
         op.execute(f"CREATE INDEX IF NOT EXISTS {IX} ON payments (refund_id)")
