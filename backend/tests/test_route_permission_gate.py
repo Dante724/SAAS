@@ -8,7 +8,8 @@ It also fails when a listed route has since been gated, so the list only ever sh
 
 To fix a failure: add `Depends(require_perm("<code>"))` (codes live in
 backend/services/permissions.py CATALOG), or — if the action genuinely belongs to every
-employee — add the printed line to ungated_write_routes.txt.
+employee — add the printed line to ungated_write_routes.txt with `# <reason>` (staff routes must
+say why they are safe open: the inline check that guards them, or why every employee may do it).
 """
 from pathlib import Path
 
@@ -59,6 +60,16 @@ def test_no_new_ungated_write_routes():
     new = sorted(_ungated_write_routes() - _allowlisted())
     assert not new, ("Write routes without a role permission (gate them with require_perm, or "
                      "allowlist with a reason in ungated_write_routes.txt):\n  " + "\n  ".join(new))
+
+
+def test_every_staff_exception_says_why():
+    """Audit SEC-06: a signed-in staff write left open needs the reason it is open (the inline
+    check that guards it, or why every employee may do it). A bare line was how 130 routes ended
+    up default-allow for any active employee, roleless invitees included."""
+    bare = sorted(ln.strip() for ln in ALLOWLIST.read_text().splitlines()
+                  if "[staff]" in ln.split("#", 1)[0] and not ln.partition("#")[2].strip())
+    assert not bare, ("Staff write routes allowlisted without a reason. Gate them with "
+                      "require_perm, or add `# <why it is safe open>` to each line:\n  " + "\n  ".join(bare))
 
 
 def test_allowlist_has_no_stale_entries():

@@ -394,7 +394,7 @@ async def _guard_standing_discount(db, current: Employee, client: Optional[Clien
 async def update_client(
     client_id: str, data: ClientIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_clients")),
 ):
     result = await db.execute(select(Client).where(Client.id == client_id, Client.org_id == current.org_id))
     client = result.scalar_one_or_none()
@@ -460,7 +460,7 @@ class ClientPatch(BaseModel):
 async def patch_client(
     client_id: str, data: ClientPatch,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_clients")),
 ):
     """Partial update — unlike PUT, only the fields sent are touched. Powers the
     client drawer's inline edits (custom data + the Orderry-style discount matrix)."""
@@ -549,7 +549,7 @@ async def delete_client(
 async def add_device(
     client_id: str, data: DeviceIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_clients")),
 ):
     result = await db.execute(select(Client).where(Client.id == client_id, Client.org_id == current.org_id))
     if not result.scalar_one_or_none():
@@ -826,7 +826,7 @@ _MOVE_LABELS = {"Device.client_id": "devices", "Order.client_id": "orders",
 async def merge_clients_preview(
     data: MergeClientsIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_delete_clients")),
 ):
     """Dry-run a merge: report exactly what *would* move and which blank target fields would be
     filled, without changing anything. The UI shows this before the irreversible merge runs."""
@@ -1231,7 +1231,7 @@ class MessageIn(BaseModel):
 async def send_client_message(
     client_id: str, data: MessageIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_reply_customer")),
 ):
     """Log an outbound message to the contact, reusing an open thread on that channel or
     opening one. Delivery via the external provider is stubbed at the transport boundary
@@ -1267,7 +1267,7 @@ async def send_client_message(
 async def suggest_client_reply(
     client_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_reply_customer")),
 ):
     """Build 143 (Phase 8) — AI-drafted reply for the contact. Uses the last inbound
     message as context; degrades to a deterministic stub when no model is configured. The
