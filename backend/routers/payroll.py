@@ -975,9 +975,14 @@ async def post_attendance_wages(
     """Post hourly wages from the **shop-attendance** clock (clock-in/out shifts)
     for a period, as opposed to the **labour-hours** clock (time on work orders,
     posted by timesheet approval). Both post an `hourly_wage` ledger entry that the
-    payroll calculation sums. Idempotent per employee + window."""
+    payroll calculation sums.
+
+    Paid per shift (LAB-02): each shift's wage has its own key (`attendance:<shift>`), so windows
+    that overlap (1-15, then 1-31) never pay a shift twice. The window is the shop's days (RPT-04),
+    and each shift's wage is dated to the shop day it started on."""
     await assert_perm(db, current, "can_accrue_payroll")
     from backend.models import Shift
+    from backend.services.dates import day_end_utc, day_start_utc, shop_timezone, utc_to_wall
     start = parse_date(data.date_from, "date_from")
     end = parse_date(data.date_to, "date_to")
     emp = (await db.execute(select(Employee).where(
@@ -991,32 +996,51 @@ async def post_attendance_wages(
         raise HTTPException(409, f"{emp.name} is paid from labour hours (timesheet approval). "
                                  "Switch their hourly pay to shop attendance to pay from shifts.")
     await assert_not_self(db, current, emp.id, "post your own attendance wages")
+    # Two postings for one person queue up here, so both can't see a shift as unpaid.
+    await db.execute(select(Employee.id).where(Employee.id == emp.id).with_for_update(key_share=True))
+    tz = await shop_timezone(db, emp)
     shifts = (await db.execute(select(Shift).where(
         Shift.employee_id == data.employee_id, Shift.ended_at.isnot(None),
-        func.date(Shift.started_at) >= start,
-        func.date(Shift.started_at) <= end))).scalars().all()
-    hours = q2(sum(s.hours_worked or 0 for s in shifts))
+        Shift.started_at >= day_start_utc(start, tz),
+        Shift.started_at < day_end_utc(end, tz)).order_by(Shift.started_at))).scalars().all()
+    L = EmployeeBalanceLedger
+    keys = {s.id: L.normalize_key(f"attendance:{s.id}") for s in shifts}
+    paid = set((await db.execute(select(L.accrual_key).where(
+        L.org_id == current.org_id, L.accrual_key.in_(list(keys.values()))))).scalars().all()) if keys else set()
+    # Windows posted before wages were kept per shift (one row per window, no accrual key, the
+    # window in UTC days): their shifts are already paid.
+    legacy = []
+    for ref in (await db.execute(select(L.ref_id).where(
+            L.org_id == current.org_id, L.employee_id == emp.id, L.entry_type == "hourly_wage",
+            L.ref_type == "attendance", L.accrual_key.is_(None)))).scalars().all():
+        try:
+            legacy.append((date.fromisoformat(ref.split(":")[-2]), date.fromisoformat(ref.split(":")[-1])))
+        except (AttributeError, IndexError, ValueError):
+            continue
     rate = emp.hourly_cost_rate or (emp.wage_value if emp.wage_type == "hourly" else 0.0) or 0.0
-    wage = _money(q2(hours * rate))
-    idem = f"attendance:{data.employee_id}:{data.date_from}:{data.date_to}"
-    already = (await db.execute(select(EmployeeBalanceLedger).where(
-        EmployeeBalanceLedger.idempotency_key == EmployeeBalanceLedger.normalize_key(idem)))).scalar_one_or_none()
-    posted = False
-    if wage > 0 and not already:
-        # attribute the wage to the period worked (end of the window), not "now",
-        # so it lands in that month's payroll calculation.
-        when = datetime(end.year, end.month, end.day, 12, 0, 0)
-        db.add(EmployeeBalanceLedger(
-            org_id=current.org_id, employee_id=data.employee_id, entry_type="hourly_wage",
-            amount=wage, ref_type="attendance", ref_id=f"{data.employee_id}:{data.date_from}:{data.date_to}",
-            idempotency_key=idem, created_at=when,
-            note=f"Shop attendance wages {data.date_from}–{data.date_to} ({hours}h)"))
-        posted = True
+    hours, wage, posted = 0.0, Decimal("0"), 0
+    for s in shifts:
+        if keys[s.id] in paid or any(a <= s.started_at.date() <= b for a, b in legacy):
+            continue
+        amount = _money(q2((s.hours_worked or 0) * rate))
+        if amount <= 0:
+            continue
+        day = utc_to_wall(s.started_at, tz).date()
+        # attribute the wage to the shop day worked, not "now", so it lands in that month's payroll
+        db.add(L(org_id=current.org_id, employee_id=emp.id, entry_type="hourly_wage", amount=amount,
+                 ref_type="attendance", ref_id=f"{s.id}:{day}:{day}", idempotency_key=keys[s.id],
+                 accrual_key=keys[s.id], created_at=datetime(day.year, day.month, day.day, 12, 0, 0),
+                 note=f"Shop attendance wages {day} ({q2(s.hours_worked or 0)}h)"))
+        hours += float(s.hours_worked or 0)
+        wage += amount
+        posted += 1
+    if posted:
         await _audit(db, current, "payroll.attendance_wages", "employee", emp.id,
-                     {"window": [data.date_from, data.date_to], "hours": float(hours), "amount": float(wage)})
+                     {"window": [data.date_from, data.date_to], "shifts": posted,
+                      "hours": float(q2(hours)), "amount": float(wage)})
     await db.commit()
-    return {"ok": True, "hours": hours, "rate": float(rate),
-            "wage_posted": float(wage), "ledger_posted": posted}
+    return {"ok": True, "hours": q2(hours), "rate": float(rate), "shifts_paid": posted,
+            "wage_posted": float(wage), "ledger_posted": posted > 0}
 
 
 @router.get("/runs")
