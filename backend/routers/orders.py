@@ -5302,6 +5302,8 @@ async def update_line(
     if line.kind == "membership":
         # The plan's own price: removing it would make the plan free. Cancel the membership instead.
         raise HTTPException(409, "This is a membership plan. Cancel it from the customer's membership instead.")
+    from backend.routers.engage import refuse_redemption_edit
+    refuse_redemption_edit(line)   # audit FIN-03: a gift card/coupon/points line matches its ledger
     payload = data.model_dump(exclude_unset=True)
     if payload.keys() & {"qty", "unit_price", "discount", "discount_type", "tax_rate", "tax_mode"}:
         from backend.services.invoice_money import assert_line_editable
@@ -5436,6 +5438,13 @@ async def delete_line(
     _kit = line.bundle_group_id
     from backend.services.invoice_money import release_line
     await release_line(db, line.id)   # refused on a sent/paid invoice; off any draft that lists it
+    # Audit FIN-03: a gift card / coupon / points line gives back what it spent (row-locked); a
+    # coupon split over tax groups goes as a whole.
+    from backend.routers.engage import give_back_redemption
+    for other in await give_back_redemption(db, current.org_id, order, line, current.id):
+        if other.id != line.id:
+            await release_line(db, other.id)
+            await db.delete(other)
     await _audit_line(db, current, order_id, line, "order.line_delete")
     await db.delete(line)
     await db.flush()

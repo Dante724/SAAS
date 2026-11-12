@@ -379,6 +379,24 @@ async def allowance(db: AsyncSession, m: Membership, item: MembershipPlanItem) -
     return total
 
 
+async def lock_memberships(db: AsyncSession, ids) -> None:
+    """Audit FIN-08: serialise use of a plan's allowance across jobs. Each job only held its own
+    lock, so two jobs on one member both read "1 left" and both got the covered line. Called with
+    the job's lock held (Order -> Membership), ids sorted so two jobs lock plans in one order.
+    Postgres: FOR UPDATE on the memberships rows. SQLite ignores FOR UPDATE, so a no-op UPDATE
+    takes the write lock (as invoice_money.lock_order does)."""
+    ids = sorted({i for i in ids if i})
+    if not ids:
+        return
+    if db.get_bind().dialect.name == "sqlite":
+        from sqlalchemy import update
+        await db.execute(update(Membership).where(Membership.id.in_(ids))
+                         .values(status=Membership.status).execution_options(synchronize_session=False))
+    else:
+        await db.execute(select(Membership.id).where(Membership.id.in_(ids))
+                         .order_by(Membership.id).with_for_update())
+
+
 async def remaining(db: AsyncSession, m: Membership, item: MembershipPlanItem,
                     exclude_line: Optional[str] = None) -> float:
     return max(0.0, await allowance(db, m, item) - await used_in_term(db, m, item)
@@ -397,6 +415,7 @@ async def coverage_for_line(db: AsyncSession, memberships: list[Membership],
     """The plan item that would cover (or discount) this line, if any."""
     if line.kind == "membership" or line.membership_id:
         return None
+    await lock_memberships(db, [m.id for m in memberships if m.status == "active"])
     best = None
     for m in memberships:
         if m.status != "active":
@@ -468,6 +487,7 @@ async def check_order_lines(db: AsyncSession, order: Order) -> list[OrderLine]:
     lines = (await db.execute(select(OrderLine).where(
         OrderLine.order_id == order.id, OrderLine.membership_id.isnot(None),
         OrderLine.kind != "membership"))).scalars().all()
+    await lock_memberships(db, [l.membership_id for l in lines])
     dropped = []
     for line in lines:
         if (await db.execute(select(MembershipUsage.id).where(
@@ -505,6 +525,7 @@ async def record_usage(db: AsyncSession, order: Order) -> int:
     lines = (await db.execute(select(OrderLine).where(
         OrderLine.order_id == order.id, OrderLine.membership_id.isnot(None),
         OrderLine.kind != "membership"))).scalars().all()
+    await lock_memberships(db, [l.membership_id for l in lines])
     n = 0
     tz = None
     for line in lines:

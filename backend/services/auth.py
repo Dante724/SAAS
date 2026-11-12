@@ -199,6 +199,13 @@ async def get_current_employee(
     # Who is acting on this request's session: backend/db/actors.py stamps it on discounts,
     # refunds and drawer closes, whichever route makes them.
     db.info["actor_id"] = employee.id
+    # Audit SEC-02: the role's cashbox restriction rides on the session, so post_transaction and
+    # the cash reads enforce it on every route (services/scoping). The owner is never restricted.
+    from backend.services import scoping
+    allowed = scoping.allowed_accounts(role) if role is not None else None
+    if allowed is not None and await is_shop_owner(db, employee):
+        allowed = None
+    scoping.bind_account_scope(db, allowed)
     return employee
 
 
