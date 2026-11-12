@@ -26,6 +26,19 @@ class _Crash(BaseException):
     """The process dying between two statements (not an error the code could handle)."""
 
 
+class _crashes:
+    """Expect the request to die with _Crash (the ASGI stack may wrap it in an exception group)."""
+
+    def __enter__(self):
+        return self
+
+    def __exit__(self, typ, exc, tb):
+        def has(e):
+            return isinstance(e, _Crash) or any(has(x) for x in getattr(e, "exceptions", ()))
+        assert exc is not None and has(exc), f"expected the request to crash, got {exc!r}"
+        return True
+
+
 async def _me(client, h):
     return (await client.get("/api/auth/me", headers=h)).json()
 
@@ -77,7 +90,7 @@ async def test_wo08_status_change_and_its_message_commit_together(client, tenant
     await db.commit()
 
     _crash_after(monkeypatch, "status_changed")
-    with pytest.raises(_Crash):
+    with _crashes():
         await client.patch(f"/api/orders/{order_id}/status", json={"status": "ready"}, headers=tenant)
 
     status = (await db.execute(select(Order.status).where(Order.id == order_id)
@@ -97,7 +110,7 @@ async def test_wo08_new_job_and_its_created_message_commit_together(client, tena
     await db.commit()
 
     _crash_after(monkeypatch, "created")
-    with pytest.raises(_Crash):
+    with _crashes():
         await client.post("/api/orders", json={"complaint": "crash", "client_id": cid}, headers=tenant)
 
     jobs = (await db.execute(select(Order.id).where(Order.org_id == oid, Order.client_id == cid))).scalars().all()
@@ -115,7 +128,7 @@ async def test_wo08_comment_and_its_message_commit_together(client, tenant, db, 
     await db.commit()
 
     _crash_after(monkeypatch, "comment_added")
-    with pytest.raises(_Crash):
+    with _crashes():
         await client.post(f"/api/orders/{order_id}/comments",
                           json={"body": "Your part arrived", "visible_to_client": True}, headers=tenant)
     comments = (await db.execute(select(OrderComment.id).where(OrderComment.order_id == order_id))).scalars().all()

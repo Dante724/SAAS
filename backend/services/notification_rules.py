@@ -61,8 +61,7 @@ def outbox_message_id(log) -> str:
     return f"<notif.{log.id}@{host}>"
 
 
-async def _send(db, org_id, channel, *, recipient, subject, body, log=None, headers=None, transactional=None,
-                message_id=None):
+async def _send(db, org_id, channel, *, recipient, subject, body, log=None, headers=None, transactional=None):
     """144jn: send through THIS shop's own provider credentials (per-tenant).
     An email is HTML only when its template was when the message was filled (log.is_html, fixed
     when the log row is first saved); built-in and template-less messages are plain text.
@@ -73,6 +72,8 @@ async def _send(db, org_id, channel, *, recipient, subject, body, log=None, head
     SMTP, since the mailbox send can't set them."""
     from backend.services.notifications import log_is_html
     html = await log_is_html(db, log) if log is not None else False
+    # NTF-05: an outbox email is the same message on every try (see outbox_message_id).
+    message_id = outbox_message_id(log) if channel == "email" and log is not None and log.id else None
     if channel == "email" and not headers:
         if message_id:
             result = await try_oauth_email(db, org_id, recipient=recipient, subject=subject, body=body,
@@ -707,8 +708,6 @@ async def _deliver_one(db: AsyncSession, org_id: str, log_id: str, now: datetime
         # Win-back / birthday: the marketing part of the operator's daily text budget. (Agent
         # texts carry no log here, so _send can't tell from it; everything else is transactional.)
         extra["transactional"] = False
-    if log.channel == "email":
-        extra["message_id"] = outbox_message_id(log)  # NTF-05: the same on every try
     try:
         result = await asyncio.wait_for(_send(db, org_id, log.channel,
             recipient=log.recipient, subject=log.subject, body=log.body, **extra), SEND_TIMEOUT_S)

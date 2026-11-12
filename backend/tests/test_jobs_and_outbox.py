@@ -107,7 +107,10 @@ async def test_webhooks_are_sent_only_after_commit(client, tenant, db, capture_p
 
 
 @pytest.mark.asyncio
-async def test_status_notifications_fire_after_the_change_is_committed(client, tenant, db, monkeypatch):
+async def test_status_notifications_are_queued_in_the_changes_own_transaction(client, tenant, db, monkeypatch):
+    """Audit WO-08: the rules run inside the status change's transaction (transactional outbox),
+    so an independent reader still sees the old status while they queue: the change and its
+    messages commit together. (They used to run after a separate commit, and could be lost.)"""
     _cid, oid = await _order_with_total(client, tenant, 10)
     seen = []
     probe = async_sessionmaker(db.bind, expire_on_commit=False)
@@ -119,4 +122,5 @@ async def test_status_notifications_fire_after_the_change_is_committed(client, t
     monkeypatch.setattr(nr, "evaluate", fake_evaluate)
     r = await client.patch(f"/api/orders/{oid}/status", json={"status": "done"}, headers=tenant)
     assert r.status_code in (200, 201), r.text
-    assert seen == ["done"], seen
+    assert seen == ["new"], seen                     # not committed yet: same transaction
+    assert (await client.get(f"/api/orders/{oid}", headers=tenant)).json()["status"] == "done"
