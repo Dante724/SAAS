@@ -809,6 +809,8 @@ async def create_time_entry(data: TimeEntryIn, db: AsyncSession = Depends(get_db
             from datetime import timezone
             start = start.astimezone(timezone.utc).replace(tzinfo=None)
         end = start + timedelta(minutes=data.duration_min)
+        from backend.routers.timeclock import _assert_no_overlap
+        await _assert_no_overlap(db, org, emp.id, start, end)   # overlapping hours are paid twice (LAB-04)
         cost = emp.hourly_cost_rate or (emp.wage_value if emp.wage_type == "hourly" else 0.0) or 0.0
         e = TimeEntry(org_id=org, employee_id=emp.id, order_id=data.order_id,
                       location_id=emp.location_id, category="job" if data.order_id else "other",

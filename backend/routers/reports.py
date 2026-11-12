@@ -669,11 +669,13 @@ async def _rep_labor_cost(db, org, df, dt, **kw):
     billable = sum(e.duration_sec for e in rows if e.billable)
     cost = sum(e.duration_sec / 3600 * (e.cost_rate or 0) for e in rows)
     bill = sum(e.duration_sec / 3600 * (e.billable_rate or 0) for e in rows if e.billable)
-    by_day = {}
+    # Overtime is per person per shop day (RPT-01), the same rule the timesheet pays by.
+    from backend.routers.timeclock import _overtime_split
+    tz = await shop_tzname(db, org, kw.get("location_id"))
+    per_emp: dict = {}
     for e in rows:
-        if e.duration_sec:
-            by_day[e.started_at.date()] = by_day.get(e.started_at.date(), 0) + e.duration_sec / 3600
-    ot = sum(max(0.0, h - 8) for h in by_day.values())
+        per_emp.setdefault(e.employee_id, []).append(e)
+    ot = sum(_overtime_split(es, tz)[1] for es in per_emp.values())
     cols = ["Metric", "Value"]
     out = [["Total hours", q2(total / 3600)], ["Billable hours", q2(billable / 3600)],
            ["Overtime hours (>8h/day)", q2(ot)], ["Labor cost", q2(cost)],
