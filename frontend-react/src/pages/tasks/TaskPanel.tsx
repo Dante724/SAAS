@@ -162,8 +162,9 @@ export default function TaskPanel({ taskId, seed, emps, onClose, onUnavailable, 
             <div className="grid grid-cols-2 gap-3">
               <div><label className="block font-semibold text-ink-tertiary mb-1">Due</label>
                 <DateField mode="datetime" value={(toShopWall(sel.due_at, tz) || "").slice(0, 16)} onChange={(v) => patch(sel.id, { due_at: v ? fromShopWall(v, tz) : "" }, v ? "Due date saved" : "Due date cleared")} /></div>
+              {/* A critical task (3) shows as Urgent and keeps its 3: only a real change is sent. */}
               <div><label htmlFor="task-prio" className="block font-semibold text-ink-tertiary mb-1">Priority</label>
-                <TeklySelect id="task-prio" aria-label="Priority" value={normPriority(sel.priority)} onChange={(e) => patch(sel.id, { priority: Number(e.target.value) }, "Priority saved")} className={inp}>
+                <TeklySelect id="task-prio" aria-label="Priority" value={normPriority(sel.priority)} onChange={(e) => { const v = Number(e.target.value); if (v !== normPriority(sel.priority)) patch(sel.id, { priority: v }, "Priority saved"); }} className={inp}>
                   <option value={0}>Normal</option><option value={1}>High</option><option value={2}>Urgent</option>
                 </TeklySelect></div>
             </div>

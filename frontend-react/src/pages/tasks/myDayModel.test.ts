@@ -138,4 +138,20 @@ describe("whose tasks: filterDay / teamLoad", () => {
     expect(fmtTally(r.people[0].overdue)).toBe("0");
     expect(ownLoad(capped)).toEqual({ overdue: { n: 2, more: false }, today: { n: 250, more: false }, done: { n: 2, more: false } });
   });
+
+  it("teamLoad uses the server's exact team / pool counts when sent (no lower bounds), and normDay keeps them", () => {
+    const sent = normDay({ ...day, counts: { ...day.counts, today: 250 },
+      team: [{ employee_id: "e2", overdue: 4, today: 180, done_today: 9 }], pool: { overdue: 1, today: 120, upcoming: 3, later: 2 } }, "2026-11-11");
+    expect(sent.team).toHaveLength(1);
+    expect(sent.pool).toEqual({ overdue: 1, today: 120, upcoming: 3, later: 2 });
+    const r = teamLoad(sent, [{ id: "e2", name: "Sam" }, { id: "e9", name: "New hire" }]);
+    const c = (n: number) => ({ n, more: false });
+    expect(r.pool).toEqual(c(126));
+    expect(r.people).toEqual([
+      { id: "e2", name: "Sam", position: undefined, overdue: c(4), today: c(180), done: c(9) },
+      { id: "e9", name: "New hire", position: undefined, overdue: c(0), today: c(0), done: c(0) },
+    ]);
+    expect(fmtTally(r.people[0].today)).toBe("180");
+    expect(normDay({ counts: { catch_up: 0, today: 0, upcoming: 0, later: 0, done_today: 0 } }, "2026-11-11").team).toBeUndefined();
+  });
 });

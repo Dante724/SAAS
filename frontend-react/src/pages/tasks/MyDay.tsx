@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type ReactNode, type RefObject } from "react";
 import { Link } from "react-router-dom";
 import { M } from "../../components/Shell";
 import Button from "../../components/Button";
@@ -57,14 +57,19 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
   // Staff also see the shop's unassigned tasks ("Up for grabs") under their own day and can take one.
   const poolMode = !isManager && person === "me";
   const pooled = person === "pool";
-  // Up for grabs is everyone's day (managers) or my day with the pool (staff), cut down to the pool.
-  const src = pooled ? (isManager ? "all" : "me") : person;
-  const dayUrl = `/tasks/my-day?assignee=${encodeURIComponent(src)}${poolMode || (pooled && !isManager) ? "&include_pool=true" : ""}`;
+  // Up for grabs: a newer server answers assignee=pool itself (exact counts, any number of tasks).
+  // An older one doesn't know "pool" (400/422, or 403/404 as an unknown person): then it is
+  // everyone's day (managers) or my day with the pool (staff), cut down to the pool here.
+  const [poolApi, setPoolApi] = useState(true);
+  const serverPool = pooled && poolApi;
+  const src = pooled ? (serverPool ? "pool" : isManager ? "all" : "me") : person;
+  const dayUrl = `/tasks/my-day?assignee=${encodeURIComponent(src)}${poolMode || (pooled && !serverPool && !isManager) ? "&include_pool=true" : ""}`;
   const split = useMemo(() => {
     if (!raw || !tz) return null;
     const wall = withShopTimes(raw, (iso) => toShopWall(iso, tz));
+    if (serverPool) return { day: wall, pool: [] as Task[] };
     return pooled ? { day: filterDay(wall, isPool), pool: [] as Task[] } : splitPool(wall, poolMode ? meId : null);
-  }, [raw, tz, pooled, poolMode, meId]);
+  }, [raw, tz, pooled, serverPool, poolMode, meId]);
   const day = split?.day ?? null;
   const pool = split?.pool ?? [];
   // The team row (managers, any view but Me) is counted from everyone's day.
@@ -111,6 +116,8 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
       if (!quiet && person === "me" && !d.catch_up.length && !d.today.length) setFocusAdd((n) => n + 1);   // an empty day: ready to type
     }).catch((e) => {
       if (id !== req.current) return;
+      // A server without assignee=pool: fall back to cutting the pool out of a whole day.
+      if (src === "pool" && e instanceof ApiError && [400, 403, 404, 422].includes(e.status)) { setPoolApi(false); return; }
       if (e instanceof ApiError && (e.status === 403 || e.status === 404) && src !== "me") {
         // Not allowed to see that day, or that person isn't in the shop any more: back to mine.
         onPersonRef.current("me"); if (e.status === 404) flashRef.current("That person's day isn't available"); return;
@@ -192,7 +199,7 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
     let ids = day.catch_up.map((t) => t.id);
     let moved = 0, skipped = new Set<string>();
     // Up for grabs only moves the pool's tasks, never everyone's.
-    const scoped = (d: Day) => (pooled ? filterDay(d, isPool) : d);
+    const scoped = (d: Day) => (pooled && !serverPool ? filterDay(d, isPool) : d);
     try {
       for (let round = 0; round < 50 && ids.length; round++) {
         let roundMoved = 0;
@@ -227,7 +234,8 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
     if (!meId) return;
     const before = raw;
     const mine = { assigned_to_id: meId, assignee_ids: [meId], assignee_names: ["Me"] };
-    setDay((d) => d && replaceTask(d, t.id, { ...t, ...mine, due_wall: undefined }));   // it leaves the pool and joins my day
+    // It leaves the pool and joins my day (the server's pool list simply loses it).
+    setDay((d) => d && replaceTask(d, t.id, serverPool ? null : { ...t, ...mine, due_wall: undefined }));
     try {
       await api.patch(`/tasks/${t.id}`, { assignee_ids: [meId] });
       flash(`It's yours: ${t.title}`);
@@ -583,9 +591,21 @@ function QuickAdd({ today, tz, tzFailed, meId, emps, target, mayAssign, onAdd, f
   const [who, setWho] = useState<"me" | "others">("me");   // "me" = the target chip
   const [other, setOther] = useState("");
   // Picking someone else in the person menu points quick add at them.
-  useEffect(() => { setWho("me"); setOther(""); }, [target.id]);
+  useEffect(() => { setWho("me"); setOther(""); setOtherOpen(false); }, [target.id]);
   const [job, setJob] = useState<PickedJob | null>(null);
   const [prio, setPrio] = useState<0 | 1 | 2>(0);   // Normal unless picked
+  // "Pick date" and "Others" open a small panel under the chip, over the page (ChipPanel), so
+  // choosing never pushes the other chips along. Clicked again, the chip closes it.
+  const [pickOpen, setPickOpen] = useState(false);
+  const [otherOpen, setOtherOpen] = useState(false);
+  const whenBox = useRef<HTMLDivElement>(null);
+  const whoBox = useRef<HTMLDivElement>(null);
+  const chooseWhen = (w: QuickWhen) => { setPickOpen(w === "pick" ? !(when === "pick" && pickOpen) : false); setWhen(w); };
+  const chooseWho = (w: "me" | "others") => { setOtherOpen(w === "others" ? !(who === "others" && otherOpen) : false); setWho(w); };
+  const pickLabel = when === "pick" && picked
+    ? `${dayLabel(picked, today)}${pickedTime ? `, ${fmtClock(pickedTime)}` : ""}`
+    : "Pick date";
+  const otherName = who === "others" && other ? emps.find((e) => e.id === other)?.name : undefined;
   const [jobOpen, setJobOpen] = useState(false);
   const [busy, setBusy] = useState(false);
   const [active, setActive] = useState(false);
@@ -603,8 +623,8 @@ function QuickAdd({ today, tz, tzFailed, meId, emps, target, mayAssign, onAdd, f
     if (!text) { setHint("Type what needs doing first."); input.current?.focus(); return; }
     if (blocked) { setHint(blocked); return; }
     setHint("");
-    if (when === "pick" && !picked) { flash("Pick a date first"); return; }
-    if (who === "others" && !other) { flash("Choose who it's for"); return; }
+    if (when === "pick" && !picked) { flash("Pick a date first"); setPickOpen(true); return; }
+    if (who === "others" && !other) { flash("Choose who it's for"); setOtherOpen(true); return; }
     const assignee = who === "others" ? other : target.id;
     if (!tz || !today) return;                     // the shop's clock isn't known yet
     // A picked time is on the shop's clock: send it with the shop's offset. A date alone means the
@@ -622,7 +642,7 @@ function QuickAdd({ today, tz, tzFailed, meId, emps, target, mayAssign, onAdd, f
     const ok = await onAdd(body, preview, forName, key.current);
     setBusy(false);
     if (!ok) setTitle((cur) => cur || text);     // give the words back so nothing is lost
-    else { setJob(null); setJobOpen(false); setPrio(0); key.current = newKey(); }
+    else { setJob(null); setJobOpen(false); setPrio(0); setPickOpen(false); key.current = newKey(); }
     input.current?.focus();
   }
   const ready = !!title.trim() && !blocked;
@@ -645,22 +665,34 @@ function QuickAdd({ today, tz, tzFailed, meId, emps, target, mayAssign, onAdd, f
       {(hint || (blocked && title.trim())) && <p id="quick-add-why" role="status" className="px-3 pt-1 text-2xs text-ink-secondary">{hint || blocked}</p>}
       {/* On phones the choices fold away until you start a task, so the sticky box stays small. */}
       <div className={`flex flex-wrap items-center gap-x-3 gap-y-2 px-2 pt-2 pb-1 border-t border-slate-100 mt-2 ${active || title || who !== "me" || when !== "today" || prio || job || jobOpen ? "" : "max-sm:hidden"}`}>
-        <Tabs look="chips" label="When" value={when} onChange={setWhen} className="!gap-1.5"
-          tabs={[{ id: "today", label: "Today" }, { id: "tomorrow", label: "Tomorrow" }, { id: "pick", label: "Pick date", icon: <M n="calendar_today" c="text-xs" /> }]} />
-        {when === "pick" && (<>
-          <div className="w-40"><DateField mode="date" value={picked} onChange={setPicked} /></div>
-          <div className="w-28" title="Optional: leave empty for any time that day"><DateField mode="time" value={pickedTime} onChange={setPickedTime} /></div>
-        </>)}
+        {/* The date and time open in a small panel under "Pick date", over the page: picking a
+            day never pushes the other chips along (switching chips moves nothing). */}
+        <div ref={whenBox} className="relative">
+          <Tabs look="chips" label="When" value={when} onChange={chooseWhen} className="!gap-1.5"
+            tabs={[{ id: "today", label: "Today" }, { id: "tomorrow", label: "Tomorrow" }, { id: "pick", label: pickLabel, icon: <M n="calendar_today" c="text-xs" /> }]} />
+          <ChipPanel open={when === "pick" && pickOpen} box={whenBox} label="Due date" onClose={() => setPickOpen(false)}>
+              <div className="flex items-center gap-2">
+                <div className="flex-1 min-w-0"><DateField mode="date" value={picked} onChange={setPicked} label="Due date" /></div>
+                <div className="w-[118px]" title="Optional: leave empty for any time that day"><DateField mode="time" value={pickedTime} onChange={setPickedTime} label="Time" placeholder="Any time" /></div>
+              </div>
+              <div className="flex items-center gap-2">
+                <Button size="sm" onClick={() => setPickOpen(false)}>Done</Button>
+                <p className="text-2xs text-ink-tertiary">Time is optional.</p>
+              </div>
+          </ChipPanel>
+        </div>
         <span className="hidden sm:block w-px h-5 bg-slate-200" aria-hidden="true" />
-        <Tabs look="chips" label="Who" value={who} onChange={setWho} className="!gap-1.5"
-          tabs={[{ id: "me", label: target.label }, { id: "others", label: "Others", disabled: !mayAssign, title: mayAssign ? undefined : "Only managers can give tasks to other people" }]} />
+        <div ref={whoBox} className="relative">
+          <Tabs look="chips" label="Who" value={who} onChange={chooseWho} className="!gap-1.5"
+            tabs={[{ id: "me", label: target.label }, { id: "others", label: otherName ? otherName.split(/\s+/)[0] : "Others", disabled: !mayAssign, title: mayAssign ? undefined : "Only managers can give tasks to other people" }]} />
+          <ChipPanel open={who === "others" && otherOpen} box={whoBox} label="Choose a person" onClose={() => setOtherOpen(false)}>
+            <TeklySelect value={other} onChange={(e) => { setOther(e.target.value); if (e.target.value) setOtherOpen(false); }} aria-label="Who it's for" className="glass-input w-full h-9 py-2 px-3 text-sm rounded-xl">
+              <option value="">Choose a person…</option>
+              {emps.filter((e) => e.id !== target.id).map((e) => <option key={e.id} value={e.id}>{e.id === meId ? `${e.name} (me)` : e.name}</option>)}
+            </TeklySelect>
+          </ChipPanel>
+        </div>
         {!mayAssign && <span className="text-2xs text-ink-tertiary">Only managers can give tasks to others.</span>}
-        {who === "others" && (
-          <TeklySelect value={other} onChange={(e) => setOther(e.target.value)} aria-label="Who it's for" className="glass-input h-8 py-1.5 px-3 text-xs rounded-full min-w-[140px]">
-            <option value="">Choose a person…</option>
-            {emps.filter((e) => e.id !== target.id).map((e) => <option key={e.id} value={e.id}>{e.id === meId ? `${e.name} (me)` : e.name}</option>)}
-          </TeklySelect>
-        )}
         <span className="hidden sm:block w-px h-5 bg-slate-200" aria-hidden="true" />
         {/* Priority: one small chip (Normal by default), tinted like the row's badge once raised. */}
         <div className="relative">
@@ -678,6 +710,33 @@ function QuickAdd({ today, tz, tzFailed, meId, emps, target, mayAssign, onAdd, f
         )}
       </div>
     </div>
+    </div>
+  );
+}
+
+/** A small panel under a quick-add chip, drawn over the page (absolute), so opening it never moves
+ *  the chips around it. Closes on Escape, on a click outside the chip group, or from inside.
+ *  Popovers the fields draw on <body> (the calendar) count as inside. */
+function ChipPanel({ open, box, label, onClose, children }: {
+  open: boolean; box: RefObject<HTMLDivElement>; label: string; onClose: () => void; children: ReactNode;
+}) {
+  const closeRef = useRef(onClose);
+  closeRef.current = onClose;
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: MouseEvent) => {
+      const t = e.target as Element | null;
+      if (!t || box.current?.contains(t) || t.closest?.('[role="dialog"]')) return;
+      closeRef.current();
+    };
+    document.addEventListener("mousedown", away);
+    return () => document.removeEventListener("mousedown", away);
+  }, [open, box]);
+  if (!open) return null;
+  return (
+    <div role="dialog" aria-label={label} onKeyDown={(e) => { if (e.key === "Escape" && e.currentTarget.contains(e.target as Node)) { e.stopPropagation(); onClose(); } }}
+      className="absolute left-0 top-full mt-2 z-30 w-[min(320px,calc(100vw-32px))] bg-raised rounded-2xl border border-slate-200/90 shadow-clay-card p-3 space-y-2.5">
+      {children}
     </div>
   );
 }

@@ -70,9 +70,12 @@ export default function TaskResults({ q, whose, meId, tz, onOpen, onClear, flash
     return () => { live = false; };
   }, [q, reloadKey]);
 
-  // The older API sends the whole list: narrow it here (a no-op when the server already did).
+  // The paged API filtered on the server, which matches more than this screen can (a job's client,
+  // say): its page is shown as sent, so the rows and the total agree. Only the older API, which
+  // sends the whole list, is narrowed here.
   const paged = total !== null;
-  const narrowed = applyFilters(items || [], { me: meId, scope: scope === "me" ? "mine" : "everyone", status: "all", q, assignee: scope === "me" || scope === "all" ? "" : scope });
+  const narrowed = paged ? (items || [])
+    : applyFilters(items || [], { me: meId, scope: scope === "me" ? "mine" : "everyone", status: "all", q, assignee: scope === "me" || scope === "all" ? "" : scope });
   const count = paged ? (total as number) : narrowed.length;
   const shown = paged ? narrowed : narrowed.slice((page - 1) * PAGE, page * PAGE);
   const closed = (t: Task) => !!t.completed_at || ["done", "cancelled"].includes(normStatus(t.status));
