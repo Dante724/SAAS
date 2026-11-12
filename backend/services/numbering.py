@@ -154,10 +154,25 @@ async def next_number(
 
 
 async def _number_taken(db: AsyncSession, org_id: str, doc_type: str, number: str) -> bool:
-    from backend.models import CreditNote, Invoice, Order, PurchaseOrder
+    from backend.models import (
+        CreditNote,
+        Invoice,
+        Order,
+        Posting,
+        PurchaseOrder,
+        PurchaseReturn,
+        Sale,
+        StockTransfer,
+        WriteOff,
+    )
+    # Audit DB-05 / FIN-17: every numbered document, not just four — a re-pointed counter
+    # (Settings › Numbering) re-rendered a sale or transfer number already issued.
     col = {"invoice": (Invoice, Invoice.invoice_number), "po": (PurchaseOrder, PurchaseOrder.po_number),
            "credit_note": (CreditNote, CreditNote.number),
-           "estimate": (Order, Order.order_number)}.get(doc_type)
+           "estimate": (Order, Order.order_number),
+           "sale": (Sale, Sale.sale_number), "transfer": (StockTransfer, StockTransfer.transfer_number),
+           "write_off": (WriteOff, WriteOff.number), "purchase_return": (PurchaseReturn, PurchaseReturn.number),
+           "posting": (Posting, Posting.number)}.get(doc_type)
     if col is None:
         return False
     model, number_col = col

@@ -194,8 +194,9 @@ async def test_draw_after_another_writer_plans_on_fresh_numbers(db):
     taken = await stock_rows.draw(db, part.id, loc.id, 8)
     assert sum(t for _, t in taken) == 8
     assert (await stock_rows.totals(db, part.id, loc.id))[0] == 1
-    taken = await stock_rows.draw(db, part.id, loc.id, 3, allow_short=True)   # 1 on hand: short 2, no error
-    assert sum(t for _, t in taken) == 3
+    with pytest.raises(stock_rows.NotEnoughStock):      # 1 on hand: never booked as negative stock (DB-07)
+        await stock_rows.draw(db, part.id, loc.id, 3)
+    assert (await stock_rows.totals(db, part.id, loc.id))[0] == 1
 
 
 @pytest.mark.asyncio

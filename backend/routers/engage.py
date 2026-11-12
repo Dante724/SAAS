@@ -404,6 +404,8 @@ async def generate_client_coupon(
     check_coupon_value(data.kind, data.value)
     if not 1 <= data.max_uses <= 100:
         raise HTTPException(422, "A returning-customer coupon can be used 1 to 100 times")
+    if data.min_total < 0:     # audit DB-07: the coupons CHECK refuses it (a 500) — say why instead
+        raise HTTPException(422, "Minimum order can't be negative")
     import random
     import string
     # unique short code for this org
