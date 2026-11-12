@@ -51,7 +51,10 @@ class AcceptIn(BaseModel):
     skip_line_ids: list[Annotated[str, Field(max_length=64)]] = Field(default_factory=list, max_length=200)   # E5: lines left out on accept
 
 
-async def _load(db: AsyncSession, token: str) -> Order:
+async def _load(db: AsyncSession, token: str, *, action: bool = False) -> Order:
+    """The order behind a tracking link. ``action``: the customer is doing something (approving,
+    messaging, paying a deposit, asking for new work), which a suspended shop doesn't take. Just
+    looking stays open: the customer's device may still be in the shop (services/org_live)."""
     if not token:
         raise HTTPException(404, "Not found")
     row = await db.execute(select(Order).where(Order.public_token == token))
@@ -59,6 +62,9 @@ async def _load(db: AsyncSession, token: str) -> Order:
     if not order:
         raise HTTPException(404, "Order not found")
     set_tenant(db, order.org_id)   # the rest of this request only sees this order's shop
+    if action:
+        from backend.services.org_live import assert_public_live
+        await assert_public_live(db, order.org_id)
     return order
 
 
@@ -497,7 +503,7 @@ async def _track_payload(db: AsyncSession, order: "Order") -> dict:
 
 @router.post("/track/{token}/respond")
 async def respond(token: str, data: AcceptIn, request: Request, db: AsyncSession = Depends(get_db)):
-    order = await _load(db, token)
+    order = await _load(db, token, action=True)
     # E2 — lock the row so two clicks (or two tabs) can't both decide
     order = (await db.execute(select(Order).where(Order.id == order.id).with_for_update())).scalar_one()
     who = data.name or (
@@ -667,7 +673,7 @@ async def track_deposit_link(token: str, request: Request, db: AsyncSession = De
     (the same link again while it still asks for that amount)."""
     from backend.services.ratelimit import aenforce as _rate, client_ip as _ip
     await _rate("track_deposit", f"{_ip(request)}:{token}", limit=10, window_sec=600)
-    order = await _load(db, token)
+    order = await _load(db, token, action=True)
     order = (await db.execute(select(Order).where(Order.id == order.id).with_for_update())).scalar_one()
     block = await _deposit_block(db, order, 1)
     if not block or not block["can_pay"]:
@@ -749,7 +755,8 @@ async def _paid_fields(db: AsyncSession, order: "Order", fx) -> dict:
     }
 
 
-async def _client_by_portal(db: AsyncSession, token: str) -> Client:
+async def _client_by_portal(db: AsyncSession, token: str, *, action: bool = False) -> Client:
+    """The customer behind a portal link; ``action`` as in _load (reading stays open)."""
     if not token:
         raise HTTPException(404, "Not found")
     from backend.services import portal_links
@@ -757,6 +764,9 @@ async def _client_by_portal(db: AsyncSession, token: str) -> Client:
     if not client:
         raise HTTPException(404, "Portal not found")
     set_tenant(db, client.org_id)   # the rest of this request only sees this client's shop
+    if action:
+        from backend.services.org_live import assert_public_live
+        await assert_public_live(db, client.org_id)
     return client
 
 
@@ -862,7 +872,7 @@ async def portal_order(token: str, order_id: str, db: AsyncSession = Depends(get
 
 @router.post("/portal/{token}/order/{order_id}/respond")
 async def portal_respond(token: str, order_id: str, data: AcceptIn, request: Request, db: AsyncSession = Depends(get_db)):
-    client = await _client_by_portal(db, token)
+    client = await _client_by_portal(db, token, action=True)
     if data.decision not in ("accept", "decline"):
         raise HTTPException(400, "Invalid decision")
     order = (await db.execute(
@@ -1129,7 +1139,7 @@ async def track_message(token: str, data: MessageIn, request: Request,
     from backend.services.ratelimit import client_ip as _ip
     await aenforce("track_msg", f"{_ip(request)}:{token}", limit=10, window_sec=600)
     await aenforce("track_msg_ip", client_ip(request), 30, 600)
-    order = await _load(db, token)
+    order = await _load(db, token, action=True)
     await aenforce("track_msg", order.id, 10, 600)   # no flooding a shop's inbox from one link
     who = data.name
     if not who and order.client_id:
@@ -1159,7 +1169,7 @@ async def track_new_request(token: str, data: NewRequestIn, request: Request, db
     from backend.services.ratelimit import client_ip as _ip
     from backend.services.ratelimit import aenforce as _rate
     await _rate("track_new_req", f"{_ip(request)}:{token}", limit=3, window_sec=3600)
-    order = await _load(db, token)
+    order = await _load(db, token, action=True)
     st = await messaging_state(db, order, await _org(db, order.org_id))
     if st["reason"] not in ("status", "expired"):
         raise HTTPException(409, "Send a message on this order instead")
@@ -1194,7 +1204,7 @@ async def track_submit_feedback(token: str, data: TrackFeedbackIn, db: AsyncSess
     order's feedback row (created by the status trigger) or creates one on the fly
     so the review ask works even without a configured trigger. Returns the band
     message + the shop's public-review link for high raters."""
-    order = await _load(db, token)
+    order = await _load(db, token, action=True)
     fset = (await db.execute(select(FeedbackSettings).where(
         FeedbackSettings.org_id == order.org_id))).scalar_one_or_none()
     if not fset or not fset.active:
@@ -1226,7 +1236,7 @@ async def portal_message(token: str, order_id: str, data: MessageIn, request: Re
                          db: AsyncSession = Depends(get_db)):
     from backend.services.ratelimit import aenforce as _rate, client_ip as _ip
     await _rate("track_msg", f"{_ip(request)}:{token}", limit=10, window_sec=600)
-    client = await _client_by_portal(db, token)
+    client = await _client_by_portal(db, token, action=True)
     order = (await db.execute(select(Order).where(Order.id == order_id, Order.client_id == client.id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
@@ -1237,7 +1247,7 @@ async def portal_message(token: str, order_id: str, data: MessageIn, request: Re
 
 @router.post("/track/{token}/recommendations/decide")
 async def track_decide_recs(token: str, data: RecDecideIn, request: Request, db: AsyncSession = Depends(get_db)):
-    order = await _load(db, token)
+    order = await _load(db, token, action=True)
     # lock the job: the decision may move its status, which must not race a second tap
     order = (await db.execute(select(Order).where(Order.id == order.id).with_for_update())).scalar_one()
     result = await _decide_recommendations(db, order, data, request)
@@ -1248,7 +1258,7 @@ async def track_decide_recs(token: str, data: RecDecideIn, request: Request, db:
 @router.post("/portal/{token}/order/{order_id}/recommendations/decide")
 async def portal_decide_recs(token: str, order_id: str, data: RecDecideIn, request: Request,
                              db: AsyncSession = Depends(get_db)):
-    client = await _client_by_portal(db, token)
+    client = await _client_by_portal(db, token, action=True)
     order = (await db.execute(select(Order).where(
         Order.id == order_id, Order.client_id == client.id).with_for_update())).scalar_one_or_none()
     if not order:
@@ -1277,6 +1287,9 @@ async def _org_by_slug(db: AsyncSession, slug: str) -> _Org:
     if not org:
         raise HTTPException(404, "Appointment page not found")
     set_tenant(db, org.id)   # the rest of this request only sees this shop
+    from backend.services.org_live import PUBLIC_OFF_MESSAGE, org_is_live
+    if not org_is_live(org):     # suspended: no online booking (services/org_live)
+        raise HTTPException(403, PUBLIC_OFF_MESSAGE)
     return org
 
 

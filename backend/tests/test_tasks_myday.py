@@ -269,7 +269,7 @@ async def test_every_task_notification_links_to_the_task(client, tenant, db, mon
     from backend.services import push
     sent = []
 
-    async def capture(_db, employee_id, payload):
+    async def capture(_db, employee_id, payload, **_kw):
         sent.append(payload)
     monkeypatch.setattr(push, "_dispatch_push", capture)
     me = await _me(client, tenant)
@@ -527,7 +527,7 @@ async def test_move_to_today(client, tenant, db, monkeypatch):
     from backend.services import push
     sent = []
 
-    async def capture(_db, employee_id, payload):
+    async def capture(_db, employee_id, payload, **_kw):
         sent.append((employee_id, payload))
     monkeypatch.setattr(push, "_dispatch_push", capture)
     me = await _me(client, tenant)

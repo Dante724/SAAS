@@ -75,6 +75,8 @@ async def point_by_token(db: AsyncSession, token: str) -> CheckinPoint:
     if not p or not p.active:
         raise HTTPException(410, "This code isn't used any more. Please ask at the counter.")
     set_tenant(db, p.org_id)   # the rest of this public request only sees this point's shop
+    from backend.services.org_live import assert_public_live
+    await assert_public_live(db, p.org_id)   # a suspended shop takes no check-ins
     return p
 
 

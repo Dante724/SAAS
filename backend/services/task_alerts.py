@@ -64,11 +64,12 @@ async def _held(db: AsyncSession, location_id: Optional[str], now: datetime, tz:
 
 
 async def overdue_org_ids(db: AsyncSession, now: Optional[datetime] = None) -> list[str]:
-    """Active shops with at least one task waiting for its overdue alert."""
+    """Live shops with at least one task waiting for its overdue alert."""
+    from backend.services.org_live import live_org_clause
     now = now or now_utc()
     return list((await db.execute(
         select(Task.org_id).join(Organisation, Organisation.id == Task.org_id)
-        .where(*_pending(now), Organisation.active == True)  # noqa: E712
+        .where(*_pending(now), live_org_clause())
         .distinct())).scalars().all())
 
 
