@@ -15,7 +15,7 @@ import { useShopClock, toShopWall, fromShopWall, shopToday, fmtShop, shopLocale 
 import {
   type Task, type MyDay as Day, type DayBucket, type QuickWhen, type TaskGroup,
   normDay, moveTasks, insertTask, replaceTask, groupByTime, groupByDay, dueClock, fmtClock, lateLabel,
-  quickDue, bucketForDue, dayLabel, normPriority, normStatus, PRIORITY_LABEL, isAuto, dueOf, withShopTimes, splitPool, filterDay, isPool, isCapped, AUTO_LABEL, AUTO_HINT,
+  quickDue, bucketForDue, dayLabel, normPriority, normStatus, PRIORITY_LABEL, isAuto, dueOf, withShopTimes, splitPool, filterDay, isPool, isCapped, assigneesOf, groupByPerson, POOL_ID, FORMER_ID, type PersonGroup, type DayView, AUTO_LABEL, AUTO_HINT,
 } from "./taskModel";
 import type { Emp } from "./TaskPanel";
 import TaskResults from "./TaskResults";
@@ -260,9 +260,15 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
     { id: "done" as View, label: "Done", count: counts?.done_today ?? null, disabled: off },
   ];
   const nameOfPerson = person === "me" ? "you" : person === "all" ? "anyone" : pooled ? "Up for grabs" : (picked?.name || "this person");
-  const row = (t: Task, from: DayBucket) => (pooled && !isManager
+  // Everyone is grouped by person (EveryoneDay); the other views list the day as it comes.
+  const everyone = person === "all";
+  const staffOrder = useMemo(() => {
+    const active = emps.filter((e) => e.active !== false);
+    return [...active.filter((e) => e.id === meId), ...active.filter((e) => e.id !== meId)];
+  }, [emps, meId]);
+  const row = (t: Task, from: DayBucket, who = showWho) => (pooled && !isManager
     ? <TaskRow key={t.id} t={t} from={from} today={today} tz={tz || "UTC"} showWho={false} ticking={false} onOpen={() => onOpen(t)} onToggle={() => undefined} onTake={() => take(t)} />
-    : <TaskRow key={t.id} t={t} from={from} today={today} tz={tz || "UTC"} showWho={showWho} ticking={ticking.includes(t.id)}
+    : <TaskRow key={t.id} t={t} from={from} today={today} tz={tz || "UTC"} showWho={who} ticking={ticking.includes(t.id)}
       onOpen={() => onOpen(t)} onToggle={(done) => setDone(t, from, done)}
       onUndo={from === "done_today" && justDone[t.id] ? () => setDone(t, "done_today", false, justDone[t.id].from, justDone[t.id].status) : undefined} />
   );
@@ -320,7 +326,12 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
       {!tzFailed && failed && !day && <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card"><ErrorState title="Couldn't load your day" onRetry={() => load()} /></div>}
       {!day && !failed && !tzFailed && <DaySkeleton />}
 
-      {day && view === "today" && (<>
+      {day && everyone && (
+        <EveryoneDay day={day} view={view} people={staffOrder} meId={meId} busyMove={busyMove} onMoveAll={moveAll}
+          row={(t, from) => row(t, from, assigneesOf(t).length > 1)} capped={capped} onSearch={focusSearch} />
+      )}
+
+      {day && !everyone && view === "today" && (<>
         {day.catch_up.length > 0 && (
           <section aria-labelledby="catchup-h" className="bg-white rounded-2xl border border-amber-200/80 shadow-clay-card overflow-hidden">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 bg-amber-50/60 border-b border-amber-100">
@@ -380,7 +391,7 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
         )}
       </>)}
 
-      {day && (view === "upcoming" || view === "later") && (
+      {day && !everyone && (view === "upcoming" || view === "later") && (
         <section className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
           {day[view].length === 0
             ? (view === "upcoming" ? <EmptyState icon={<M n="calendar_today" c="text-lg" />} title="Nothing coming up this week" body="Tasks due in the next seven days show here, a day at a time." />
@@ -390,7 +401,7 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
         </section>
       )}
 
-      {day && view === "done" && (
+      {day && !everyone && view === "done" && (
         <section aria-labelledby="done-h" className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
           <h2 id="done-h" className="sr-only">Done today</h2>
           {day.done_today.length === 0
@@ -403,6 +414,99 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
         </section>
       )}
       </>)}
+    </div>
+  );
+}
+
+// ── Everyone, by person (managers) ───────────────────────────────────────────
+// One list surface: a header line per person (who, and how their day stands), then their tasks.
+// Overdue tasks lead each person's list in the late tone, so one person's load is in one place;
+// "Move all to today" sits on one quiet line on top. People with nothing here fold to their header.
+const EMPTY_SAID: Record<DayView, string> = { today: "All clear", upcoming: "Nothing coming up", later: "Nothing later", done: "Nothing done yet" };
+const SEGMENT_SAID: Record<Exclude<DayView, "today">, string> = { upcoming: "coming up", later: "later", done: "done today" };
+
+function EveryoneDay({ day, view, people, meId, busyMove, onMoveAll, row, capped, onSearch }: {
+  day: Day; view: DayView; people: Emp[]; meId?: string; busyMove: boolean; onMoveAll: () => void;
+  row: (t: Task, from: DayBucket) => JSX.Element; capped: (b: DayBucket) => JSX.Element | null; onSearch: () => void;
+}) {
+  const groups = groupByPerson(day, view, people);
+  const [shut, setShut] = useState<Set<string>>(() => new Set());
+  const toggle = (id: string) => setShut((s) => { const n = new Set(s); if (n.has(id)) n.delete(id); else n.add(id); return n; });
+  const late = day.counts.catch_up;
+  const buckets: DayBucket[] = view === "today" ? ["catch_up", "today"] : view === "done" ? ["done_today"] : [view];
+  return (
+    <section aria-label="Everyone's tasks, by person" className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
+      {view === "today" && late > 0 && (
+        <div className="flex flex-wrap items-center gap-x-3 gap-y-2 px-4 py-2.5 border-b border-slate-100">
+          <Button size="sm" onClick={onMoveAll} busy={busyMove} icon={<M n="event_available" c="text-sm" />}>Move all to today</Button>
+          <p className="text-xs text-ink-secondary"><b className="font-semibold text-amber-700 tabular-nums">{late}</b> overdue across the team<span className="hidden sm:inline">, listed first under each person</span></p>
+        </div>
+      )}
+      {groups.map((g, i) => <PersonBlock key={g.id} g={g} first={i === 0} view={view} me={g.id === meId} open={!shut.has(g.id)} onToggle={() => toggle(g.id)} row={row} />)}
+      {buckets.map((b) => <div key={b}>{capped(b)}</div>)}
+      {view === "done" && (
+        <p className="px-4 py-3 border-t border-slate-100 bg-slate-50/60 text-xs text-ink-tertiary">
+          Older tasks: <Button variant="link" onClick={onSearch}>use search</Button>
+        </p>
+      )}
+    </section>
+  );
+}
+
+function PersonBlock({ g, first, view, me, open, onToggle, row }: {
+  g: PersonGroup; first: boolean; view: DayView; me: boolean; open: boolean; onToggle: () => void;
+  row: (t: Task, from: DayBucket) => JSX.Element;
+}) {
+  const pool = g.id === POOL_ID;
+  const has = g.items.length > 0;
+  const shown = has && open;
+  const body = `everyone-${g.id}`;
+  // A folded list keeps its rows out of the Tab order and away from screen readers.
+  const fold = useRef<HTMLDivElement>(null);
+  useEffect(() => { if (fold.current) (fold.current as HTMLDivElement & { inert: boolean }).inert = !shown; }, [shown]);
+  // A zero stays readable but quiet; a number that matters takes its tone.
+  const num = (n: number, tone = "text-ink-primary") => <b className={`font-semibold tabular-nums ${n ? tone : "text-ink-tertiary"}`}>{n}</b>;
+  // How this person's day stands: the day's numbers on Today, this segment's count elsewhere.
+  const summary = !has
+    ? <span className="text-ink-tertiary">{EMPTY_SAID[view]}{view === "today" && g.done > 0 ? <> · {num(g.done, "text-emerald-700")} done</> : null}</span>
+    : pool
+      ? <>{g.overdue > 0 && <>{num(g.overdue, "text-amber-700")} overdue · </>}{num(view === "today" ? g.waiting : g.items.length, "text-amber-700")} {view === "today" ? "waiting" : SEGMENT_SAID[view as Exclude<DayView, "today">]}</>
+      : view === "today"
+        ? <>{num(g.overdue, "text-amber-700")} overdue · {num(g.today)} today · {num(g.done, "text-emerald-700")} done</>
+        : <>{num(g.items.length)} {SEGMENT_SAID[view as Exclude<DayView, "today">]}</>;
+  const head = (<>
+    <M n="expand_more" c={`text-base text-ink-tertiary flex-shrink-0 transition-transform duration-200 motion-reduce:transition-none ${has ? "" : "invisible"} ${shown ? "" : "-rotate-90"}`} />
+    <span aria-hidden="true" className="flex-shrink-0">{pool
+      ? <span className="w-7 h-7 rounded-full bg-white text-amber-700 border border-amber-200/80 grid place-items-center"><M n="group" c="text-sm" /></span>
+      : g.id === FORMER_ID
+        ? <span className="w-7 h-7 rounded-full bg-slate-100 text-ink-tertiary grid place-items-center"><M n="person_off" c="text-sm" /></span>
+        : <Avatar name={g.name} size={28} />}</span>
+    <span className="min-w-0 flex-1 sm:flex-none flex items-baseline gap-x-2">
+      <span className="text-sm font-semibold text-ink-primary truncate">{g.name}{me && <span className="font-normal text-ink-tertiary"> (you)</span>}</span>
+      {pool ? <span className="hidden sm:inline text-xs text-ink-tertiary truncate"><span className="sr-only">, </span>Nobody has these yet</span>
+        : g.position ? <span className="text-xs text-ink-tertiary truncate"><span className="sr-only">, </span>{g.position}</span> : null}
+    </span>
+    <span className="basis-full sm:basis-auto sm:ml-auto pl-[68px] sm:pl-0 text-xs text-ink-secondary tabular-nums"><span className="sr-only">: </span>{summary}</span>
+  </>);
+  const headCls = `flex flex-wrap items-center gap-x-3 gap-y-0.5 w-full min-h-[52px] px-4 py-2 text-left ${pool ? "bg-amber-50/60" : "bg-slate-50/50"}`;
+  return (
+    <div className={first ? "" : "border-t border-slate-100"}>
+      <h3 className="m-0">
+        {has ? (
+          <button type="button" onClick={onToggle} aria-expanded={shown} aria-controls={body}
+            className={`${headCls} transition-colors ${pool ? "hover:bg-amber-50" : "hover:bg-slate-100/70"} focus:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-primary/40`}>
+            {head}
+          </button>
+        ) : <div className={headCls}>{head}</div>}
+      </h3>
+      {has && (
+        <div id={body} className={`grid transition-[grid-template-rows] duration-200 ease-out motion-reduce:transition-none ${shown ? "grid-rows-[1fr]" : "grid-rows-[0fr]"}`}>
+          <div ref={fold} className="overflow-hidden">
+            {/* Rows sit under the avatar column (sm and up), so each list reads as that person's. */}
+            <ul className="divide-y divide-slate-100 border-t border-slate-100 sm:pl-9">{g.items.map(({ t, from }) => row(t, from))}</ul>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

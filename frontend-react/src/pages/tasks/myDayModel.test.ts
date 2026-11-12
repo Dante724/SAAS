@@ -1,6 +1,6 @@
 // My day: regrouping and optimistic moves on the /tasks/my-day reply.
 import { describe, it, expect } from "vitest";
-import { splitPool, filterDay, isCapped, isPool, normDay, moveTasks, insertTask, replaceTask, dueClock, groupByTime, groupByDay, dayLabel, lateLabel, quickDue, bucketForDue, type Task } from "./taskModel";
+import { splitPool, filterDay, isCapped, isPool, groupByPerson, normDay, moveTasks, insertTask, replaceTask, dueClock, groupByTime, groupByDay, dayLabel, lateLabel, quickDue, bucketForDue, type Task } from "./taskModel";
 
 const T = (id: string, due?: string | null, extra: Partial<Task> = {}): Task => ({ id, title: id, due_at: due ?? null, ...extra });
 
@@ -112,3 +112,52 @@ describe("whose tasks: filterDay", () => {
     expect(isCapped(big, "today")).toBe(true);            // the server counted more than it sent
   });
 });
+
+describe("Everyone, by person: groupByPerson", () => {
+  const people = [{ id: "e1", name: "Ann" }, { id: "e2", name: "Sam", position: "Technician" }, { id: "e3", name: "Leo" }];
+  const day = normDay({
+    catch_up: [T("a", "2026-11-06", { assigned_to_id: "e1", assignee_ids: ["e1"] }), T("p1", "2026-11-09")],
+    today: [T("b", "2026-11-11T10:00", { assigned_to_id: "e1", assignee_ids: ["e1", "e2"] }), T("p2", "2026-11-11"), T("x", "2026-11-11", { assigned_to_id: "gone" })],
+    upcoming: [T("u", "2026-11-13", { assigned_to_id: "e2" })],
+    later: [],
+    done_today: [T("d", null, { assigned_to_id: "e2", status: "done" })],
+    counts: { catch_up: 2, today: 3, upcoming: 1, later: 0, done_today: 1 },
+  }, "2026-11-11");
+  const ids = (g: { items: { t: { id: string } }[] }) => g.items.map((x) => x.t.id);
+
+  it("Today: Up for grabs first, then people with tasks, then the all-clear ones; overdue rows first in each group", () => {
+    const g = groupByPerson(day, "today", people);
+    expect(g.map((x) => x.id)).toEqual(["pool", "e1", "e2", "former", "e3"]);
+    expect(ids(g[0])).toEqual(["p1", "p2"]);
+    expect(g[1].items.map((x) => `${x.t.id}:${x.from}`)).toEqual(["a:catch_up", "b:today"]);
+    expect(ids(g[2])).toEqual(["b"]);                                   // shared: listed under both
+    expect(g[3]).toMatchObject({ name: "Former staff" });
+    expect(ids(g[3])).toEqual(["x"]);
+    expect(g[4].items).toEqual([]);                                      // Leo: all clear, last
+  });
+
+  it("header numbers are counted from the lists without server counts", () => {
+    const g = groupByPerson(day, "today", people);
+    expect(g[0]).toMatchObject({ overdue: 1, today: 1, waiting: 2 });
+    expect(g[1]).toMatchObject({ overdue: 1, today: 1, done: 0 });
+    expect(g[2]).toMatchObject({ overdue: 0, today: 1, done: 1 });
+  });
+
+  it("header numbers are the server's exact team / pool counts when sent", () => {
+    const exact = normDay({ ...day, team: [{ employee_id: "e1", overdue: 4, today: 180, done_today: 9 }],
+      pool: { overdue: 2, today: 120, upcoming: 3, later: 1 } }, "2026-11-11");
+    const g = groupByPerson(exact, "today", people);
+    expect(g[0]).toMatchObject({ overdue: 2, today: 120, waiting: 126 });
+    expect(g.find((x) => x.id === "e1")).toMatchObject({ overdue: 4, today: 180, done: 9 });
+    expect(g.find((x) => x.id === "e3")).toMatchObject({ overdue: 0, today: 0, done: 0 });   // not in the reply
+  });
+
+  it("other segments group their own lists; an empty pool still comes first", () => {
+    const g = groupByPerson(day, "upcoming", people);
+    expect(g.map((x) => x.id)).toEqual(["pool", "e2", "e1", "e3"]);
+    expect(g[0].items).toEqual([]);
+    expect(ids(g[1])).toEqual(["u"]);
+    expect(ids(groupByPerson(day, "done", people).find((x) => x.id === "e2")!)).toEqual(["d"]);
+  });
+});
+

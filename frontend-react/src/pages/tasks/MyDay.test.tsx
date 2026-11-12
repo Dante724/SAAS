@@ -442,13 +442,14 @@ describe("My day: the rest of the acceptance list", () => {
     expect(calls.filter((c) => c.url.startsWith("/api/tasks/my-day")).every((c) => c.url.startsWith("/api/tasks/my-day?assignee=me"))).toBe(true);
   });
 
-  it("Everyone shows who each task is for; Me doesn't", async () => {
+  it("Everyone groups the day by person; Me is the plain list", async () => {
     const u = userEvent.setup();
     renderAt();
     await screen.findByText("QC check MacBook Air keyboard");
-    expect(screen.queryByRole("img", { name: /Assigned to/ })).not.toBeInTheDocument();
+    expect(screen.queryByRole("region", { name: "Everyone's tasks, by person" })).not.toBeInTheDocument();
     await u.selectOptions(screen.getByLabelText("Whose tasks"), "all");
-    expect(await screen.findByRole("img", { name: "Assigned to Me" })).toBeInTheDocument();
+    const list = await screen.findByRole("region", { name: "Everyone's tasks, by person" });
+    expect(within(list).getByRole("heading", { name: /^Me ?\(you\)/ })).toBeInTheDocument();
   });
 
   it("a ticked task offers Undo in its row too, and Undo puts back In progress", async () => {
@@ -666,21 +667,84 @@ describe("one-page Tasks (v2)", () => {
   });
   const myDayCalls = () => calls.filter((c) => c.url.startsWith("/api/tasks/my-day")).map((c) => c.url);
 
-  it("Everyone (managers): the normal list with who each task is for; no team cards; the menu picks a person or Up for grabs", async () => {
+  const region = () => screen.getByRole("region", { name: "Everyone's tasks, by person" });
+  // What a screen reader says for each header (avatars and icons are hidden from it).
+  const heads = () => within(region()).getAllByRole("heading", { level: 3 }).map((h) => {
+    const c = h.cloneNode(true) as HTMLElement;
+    c.querySelectorAll('[aria-hidden="true"], i').forEach((x) => x.remove());
+    return c.textContent!.replace(/\s+/g, " ").trim();
+  });
+  const groupOf = (name: RegExp) => {
+    const btn = within(region()).getByRole("button", { name });
+    return document.getElementById(btn.getAttribute("aria-controls")!)!;
+  };
+
+  it("Everyone (managers): one list grouped by person, Up for grabs first, overdue first in each group; no team cards", async () => {
     dayBody = TEAM();
     const u = userEvent.setup();
     renderAt("/tasks?assignee=all");
     await screen.findByText("Ring Ana about the iPad");
-    expect(screen.queryByRole("group", { name: "Team" })).not.toBeInTheDocument();       // removed (owner)
-    expect(screen.getByRole("img", { name: "Assigned to Jane Kim" })).toBeInTheDocument();
-    expect(screen.getByRole("img", { name: "Assigned to Me, Tom Reed" })).toBeInTheDocument();
-    await u.selectOptions(screen.getByLabelText("Whose tasks"), "e3");
-    expect(at).toBe("/tasks?assignee=e3");
+    expect(screen.queryByRole("group", { name: "Team" })).not.toBeInTheDocument();       // the cards are gone (owner)
+    expect(heads()).toEqual([
+      "Up for grabs, Nobody has these yet: 2 waiting",
+      "Me (you): 0 overdue · 1 today · 0 done",
+      "Jane Kim: 0 overdue · 1 today · 0 done",
+      "Tom Reed: 1 overdue · 1 today · 1 done",
+    ]);
+    const tom = within(groupOf(/^Tom Reed/)).getAllByRole("listitem").map((li) => li.textContent);
+    expect(tom[0]).toContain("Chase supplier RMA");                                     // overdue leads
+    expect(tom[1]).toContain("QC check MacBook Air keyboard");                         // shared: under Me and Tom
+    expect(within(groupOf(/^Me ?\(you\)/)).getByText("QC check MacBook Air keyboard")).toBeInTheDocument();
+    expect(within(groupOf(/^Up for grabs/)).getByText("Test the new charge port stock")).toBeInTheDocument();
+    expect(within(region()).getByText(/overdue across the team/)).toBeInTheDocument();
+    expect(within(region()).getByRole("button", { name: "Move all to today" })).toBeInTheDocument();
+    // the menu still picks a person or Up for grabs
     await u.selectOptions(screen.getByLabelText("Whose tasks"), "pool");
     expect(at).toBe("/tasks?assignee=pool");
     await screen.findByText("Test the new charge port stock");
-    expect(screen.queryByText("Ring Ana about the iPad")).not.toBeInTheDocument();  // only the pool
-    expect(screen.getByRole("button", { name: /^Today\s*1$/ })).toBeInTheDocument();
+    expect(screen.queryByText("Ring Ana about the iPad")).not.toBeInTheDocument();
+  });
+
+  it("Everyone: header numbers are the server's exact counts; someone with nothing today folds to 'All clear'", async () => {
+    dayBody = { ...TEAM(), team: [{ employee_id: "me", overdue: 0, today: 140, done_today: 2 }, { employee_id: "e3", overdue: 3, today: 41, done_today: 7 }],
+      pool: { overdue: 1, today: 120, upcoming: 4, later: 2 } };
+    dayBody.today = dayBody.today.filter((t: any) => t.id !== "t2");                    // Jane: nothing today
+    renderAt("/tasks?assignee=all");
+    await screen.findByText("Chase supplier RMA");
+    expect(heads()).toEqual([
+      "Up for grabs, Nobody has these yet: 1 overdue · 127 waiting",
+      "Me (you): 0 overdue · 140 today · 2 done",
+      "Tom Reed: 3 overdue · 41 today · 7 done",
+      "Jane Kim: All clear",                                                              // folded, last
+    ]);
+    expect(within(region()).queryByRole("button", { name: /^Jane Kim/ })).not.toBeInTheDocument();   // nothing to open
+  });
+
+  it("Everyone: a person's list folds and opens from their header", async () => {
+    dayBody = TEAM();
+    const u = userEvent.setup();
+    renderAt("/tasks?assignee=all");
+    await screen.findByText("Ring Ana about the iPad");
+    const jane = within(region()).getByRole("button", { name: /^Jane Kim/ });
+    expect(jane).toHaveAttribute("aria-expanded", "true");
+    await u.click(jane);
+    expect(jane).toHaveAttribute("aria-expanded", "false");
+    expect(groupOf(/^Jane Kim/).className).toContain("grid-rows-[0fr]");
+    await u.click(jane);
+    expect(groupOf(/^Jane Kim/).className).toContain("grid-rows-[1fr]");
+  });
+
+  it("Everyone, other segments: each person's count for that segment; Done keeps the search hint", async () => {
+    dayBody = TEAM();
+    const u = userEvent.setup();
+    renderAt("/tasks?assignee=all");
+    await screen.findByText("Ring Ana about the iPad");
+    await u.click(screen.getByRole("button", { name: /^Upcoming/ }));
+    expect(heads()[0]).toBe("Up for grabs, Nobody has these yet: 1 coming up");
+    expect(heads()).toContain("Tom Reed: Nothing coming up");
+    await u.click(screen.getByRole("button", { name: /^Done/ }));
+    expect(heads()).toContain("Tom Reed: 1 done today");
+    expect(within(region()).getByText(/Older tasks/)).toBeInTheDocument();
   });
 
   it("one person picked loads only that person's day (no second fetch of everyone's)", async () => {

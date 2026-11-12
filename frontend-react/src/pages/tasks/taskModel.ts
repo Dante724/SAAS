@@ -92,7 +92,14 @@ export type MyDay = Record<DayBucket, Task[]> & {
   /** Set by filterDay: the group it was cut from held more than the server sent (100 a group), so
    *  this group's count covers only what was on screen. */
   capped?: Partial<Record<DayBucket, boolean>>;
+  /** Newer servers, with assignee=all: every active person's exact counts, and the pool's. */
+  team?: TeamCount[];
+  pool?: PoolCount;
 };
+/** One person's exact counts from the server (a task with two people counts for both). */
+export type TeamCount = { employee_id: string; overdue: number; today: number; done_today: number };
+/** The shop's open unassigned tasks, by group, counted by the server. */
+export type PoolCount = { overdue: number; today: number; upcoming: number; later: number };
 /** The server sent fewer rows than it counted for this group (it lists at most 100). */
 export const isCapped = (day: MyDay, b: DayBucket): boolean => day.counts[b] > day[b].length || !!day.capped?.[b];
 
@@ -102,6 +109,8 @@ export function normDay(r: Partial<MyDay> | null | undefined, fallbackDate: stri
   for (const b of DAY_BUCKETS) d[b] = Array.isArray(r?.[b]) ? (r![b] as Task[]) : [];
   d.counts = {} as MyDay["counts"];
   for (const b of DAY_BUCKETS) d.counts[b] = typeof r?.counts?.[b] === "number" ? r!.counts![b] : d[b].length;
+  if (Array.isArray(r?.team)) d.team = r!.team;
+  if (r?.pool && typeof r.pool === "object") d.pool = r.pool;
   return d;
 }
 
@@ -271,3 +280,56 @@ export function filterDay(day: MyDay, keep: (t: Task) => boolean): MyDay {
   }
   return next;
 }
+
+// ── Everyone, by person ───────────────────────────────────────────────────────
+
+/** Everyone on a task: the primary owner and the extra assignees, once each. */
+export const assigneesOf = (t: Pick<Task, "assigned_to_id" | "assignee_ids">): string[] =>
+  [...new Set([t.assigned_to_id, ...(t.assignee_ids || [])].filter((x): x is string => !!x))];
+
+export type DayView = "today" | "upcoming" | "later" | "done";
+const VIEW_BUCKETS: Record<DayView, DayBucket[]> = { today: ["catch_up", "today"], upcoming: ["upcoming"], later: ["later"], done: ["done_today"] };
+export const POOL_ID = "pool";
+export const FORMER_ID = "former";
+export type PersonGroup = {
+  id: string; name: string; position?: string | null;
+  items: { t: Task; from: DayBucket }[];
+  /** The person's day (not just this segment): overdue, due today, done today; for the pool,
+   *  `waiting` is every open unassigned task. Exact when the server counted them. */
+  overdue: number; today: number; done: number; waiting: number;
+};
+
+/** One segment of everyone's day, grouped by person: Up for grabs first, then the people with
+ *  tasks here (in the order given), then the people with none. A task with two people is listed
+ *  under both. Tasks for someone who isn't in `people` (left the shop) go under "Former staff".
+ *  Header numbers come from the server's `team` / `pool` when sent, else from the lists. */
+export function groupByPerson(day: MyDay, view: DayView, people: { id: string; name: string; position?: string | null }[]): PersonGroup[] {
+  const known = new Set(people.map((p) => p.id));
+  const rows = VIEW_BUCKETS[view].flatMap((b) => day[b].map((t) => ({ t, from: b })));
+  const of = (id: string) => rows.filter(({ t }) => (id === POOL_ID ? isPool(t)
+    : id === FORMER_ID ? assigneesOf(t).some((x) => !known.has(x)) : assigneesOf(t).includes(id)));
+  const listCount = (b: DayBucket, id: string) => day[b].filter((t) => assigneesOf(t).includes(id)).length;
+  const team = new Map((day.team || []).map((c) => [c.employee_id, c]));
+  const person = (p: { id: string; name: string; position?: string | null }): PersonGroup => {
+    const c = day.team ? team.get(p.id) : undefined;
+    return {
+      id: p.id, name: p.name, position: p.position, items: of(p.id), waiting: 0,
+      overdue: day.team ? c?.overdue ?? 0 : listCount("catch_up", p.id),
+      today: day.team ? c?.today ?? 0 : listCount("today", p.id),
+      done: day.team ? c?.done_today ?? 0 : listCount("done_today", p.id),
+    };
+  };
+  const open: DayBucket[] = ["catch_up", "today", "upcoming", "later"];
+  const poolList = (b: DayBucket) => day[b].filter(isPool).length;
+  const p = day.pool;
+  const pool: PersonGroup = {
+    id: POOL_ID, name: "Up for grabs", items: of(POOL_ID), done: 0,
+    overdue: p ? p.overdue : poolList("catch_up"), today: p ? p.today : poolList("today"),
+    waiting: p ? p.overdue + p.today + p.upcoming + p.later : open.reduce((n, b) => n + poolList(b), 0),
+  };
+  const groups = people.map(person);
+  const former = of(FORMER_ID);
+  if (former.length) groups.push({ id: FORMER_ID, name: "Former staff", items: former, overdue: 0, today: 0, done: 0, waiting: 0 });
+  return [pool, ...groups.filter((g) => g.items.length), ...groups.filter((g) => !g.items.length)];
+}
+
