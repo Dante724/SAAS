@@ -86,6 +86,26 @@ def _date_window(q, ps: date, pe: date, tzname: str | None):
     return q.where(L.created_at >= day_start_utc(ps, tzname), L.created_at < day_end_utc(pe, tzname))
 
 
+_REVERSAL = "manual-reversal:"
+
+
+def reversal_key(entry_id: str) -> str:
+    """Idempotency key of the counter-entry that cancels a manual bonus/penalty (audit DB-11)."""
+    return f"{_REVERSAL}{entry_id}"
+
+
+def is_reversal(e) -> bool:
+    return (e.idempotency_key or "").startswith(_REVERSAL)
+
+
+def live_adjustments(rows) -> list:
+    """Manual bonus/penalty rows still in force: a removed one and the counter-entry that cancels
+    it are both left out (their amounts net to zero in every sum)."""
+    rows = list(rows)
+    gone = {e.ref_id for e in rows if is_reversal(e)}
+    return [e for e in rows if not is_reversal(e) and e.id not in gone]
+
+
 async def adjustments(db: AsyncSession, org_id: str, employee_id: str, ps: date, pe: date) -> dict:
     """Manual bonuses and penalties dated in the period (penalties shown positive)."""
     from backend.services.dates import shop_tzname
@@ -93,6 +113,8 @@ async def adjustments(db: AsyncSession, org_id: str, employee_id: str, ps: date,
     rows = (await db.execute(_date_window(select(L).where(
         L.org_id == org_id, L.employee_id == employee_id, L.ref_type == "manual",
         L.entry_type.in_(("bonus", "penalty"))), ps, pe, await shop_tzname(db, org_id)).order_by(L.created_at))).scalars().all()
+
+    rows = live_adjustments(rows)
 
     def _row(e):
         return {"id": e.id, "date": e.created_at.isoformat(), "amount": float(abs(_money(e.amount))),

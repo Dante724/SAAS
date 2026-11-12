@@ -76,7 +76,8 @@ async def gdpr_export(
         Order.org_id == current.org_id, Order.client_id == client_id))).scalars().all()
 
     async def rows(model, *conds, order=None):
-        q = select(model).where(*conds)
+        # an export is every row held about them: voided payments included (DB-11, flagged below)
+        q = select(model).where(*conds).execution_options(include_voided=True)
         return (await db.execute(q.order_by(order) if order is not None else q)).scalars().all()
 
     def iso(v):
@@ -122,7 +123,8 @@ async def gdpr_export(
                           "consent_phone": cl.consent_phone},
         "invoices": [{"number": i.invoice_number, "status": i.status, "total": i.total,
                       "amount_paid": i.amount_paid, "issued_at": iso(i.issued_at)} for i in invoices],
-        "payments": [{"amount": p.amount, "method": p.method, "kind": p.kind, "paid_at": iso(p.paid_at)}
+        "payments": [{"amount": p.amount, "method": p.method, "kind": p.kind, "paid_at": iso(p.paid_at),
+                      "voided_at": iso(p.voided_at)}
                      for p in payments],
         "messages_sent": [{"channel": m.channel, "recipient": m.recipient, "subject": m.subject,
                            "body": m.body, "status": m.status, "created_at": iso(m.created_at)} for m in messages],

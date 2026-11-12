@@ -1310,6 +1310,13 @@ def _po_charges_total(po: PurchaseOrder) -> float:
     return q2(sum(float(c.get("amount") or 0) for c in _po_charges(po)))
 
 
+def _po_retotal(po: PurchaseOrder, lines) -> None:
+    """A PO's total is its line subtotal plus its charges; every path that changes either calls
+    this (the nightly reconcile's ``po`` check re-derives the same sum)."""
+    subtotal = sum((l.qty_ordered or 0) * (l.unit_cost or 0) for l in lines)
+    po.total = q2(subtotal + _po_charges_total(po))
+
+
 # ── 144ar — landed-cost allocation basis ────────────────────────────────────
 # How a lump of charges (freight/customs) is spread across PO lines when capitalised
 # into unit cost. "value" (cost-weighted, the default and what everyone expects for
@@ -1688,8 +1695,7 @@ async def edit_po(
 
     # recompute total = line subtotal + charges
     lines = (await db.execute(select(POLine).where(POLine.po_id == po.id))).scalars().all()
-    subtotal = sum((l.qty_ordered or 0) * (l.unit_cost or 0) for l in lines)
-    po.total = q2(subtotal + _po_charges_total(po))
+    _po_retotal(po, lines)
     await db.commit()
 
     supplier = (await db.execute(select(Supplier).where(Supplier.id == po.supplier_id))).scalar_one_or_none()
@@ -1980,6 +1986,7 @@ async def recost_po(
         po.charges_to_cost = data.charges_to_cost
     if data.alloc_basis is not None:
         po.alloc_basis = data.alloc_basis if data.alloc_basis in _ALLOC_BASES else "value"
+    _po_retotal(po, po_lines)            # new charges change what the PO is worth (it went stale)
 
     charges_total = _po_charges_total(po)
     if not (po.charges_to_cost and charges_total > 0):

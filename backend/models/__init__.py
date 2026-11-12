@@ -1614,6 +1614,13 @@ class Payment(Base):
     reference: Mapped[Optional[str]] = mapped_column(String(200))
     provider_ref: Mapped[Optional[str]] = mapped_column(String(120))   # F2: card-reader charge id (pi_… / Square checkout)
     paid_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # Audit DB-11: money rows are voided, never deleted. The refund a kind='refund' row was written
+    # for (so a void finds exactly its own rows), and when/who voided it. A voided row stays on
+    # record; reads leave it out unless they ask for it (db/soft_void.py). refund_id has no FK:
+    # refunds.payment_id already points here, and a cycle can't be created on SQLite.
+    refund_id: Mapped[Optional[str]] = mapped_column(String, index=True)
+    voided_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
+    voided_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     invoice: Mapped["Invoice"] = relationship(back_populates="payments")
 
 class CashShift(Base):

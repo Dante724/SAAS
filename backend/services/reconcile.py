@@ -18,6 +18,21 @@ Invariants (each is one grouped query; nothing is locked or written):
   it is reported (``entity_id`` is the transaction; stored = what the till holds of it, derived =
   what the contact side still counts). Restoring a deleted leg clears it.
 
+Audit DB-09 widened the sweep to the other stored totals that summarise something:
+
+- ``giftcard``: ``GiftCard.balance`` = Σ ``GiftCardLedger.amount`` (every load +, every spend −).
+- ``supplier``: what we owe a supplier, ``Supplier.balance``, = minus Σ the linked contact's
+  ``ClientLedgerEntry.amount`` (the same debt seen from the contact side, services/ledger
+  .adjust_supplier_ap; GET /api/suppliers/{id}/ledger's "discrepancy"). A supplier with no linked
+  contact has nothing to derive it from and is skipped.
+- ``order``: ``Order.total`` = max(Σ ``OrderLine.total``, 0) (routers/orders._recalc_order). A shop
+  with whole-document rounding on may differ by up to half its 0.05 step.
+- ``sale``: a live (not voided) POS sale's ``Sale.total`` = max(Σ ``SaleLine.total`` −
+  ``Sale.discount``, 0), plus ``Sale.tax`` when that tax was added on top (routers/sales
+  ._price_sale). A sale whose lines mix tax added on top with tax included in the price can't be
+  re-derived from what is stored and is skipped.
+- ``po``: ``PurchaseOrder.total`` = Σ ``qty_ordered × unit_cost`` over its lines + its charges.
+
 A mismatch is reported, never "fixed": which side is wrong needs a person. Amounts compare at
 cent precision (quantities at 1e-6), so float/Numeric rounding is not reported as drift.
 """
@@ -33,17 +48,28 @@ from backend.models import (
     Account,
     Client,
     ClientLedgerEntry,
+    GiftCard,
+    GiftCardLedger,
     Invoice,
     Location,
+    Order,
+    OrderLine,
+    Organisation,
     Payment,
+    POLine,
+    PurchaseOrder,
+    Sale,
+    SaleLine,
     StockLevel,
     StockMovement,
+    Supplier,
     Transaction,
 )
 
 log = logging.getLogger("tekly.reconcile")
 
-CHECKS = ("account", "client", "invoice", "stock", "split_leg")
+CHECKS = ("account", "client", "invoice", "stock", "split_leg",
+          "giftcard", "supplier", "order", "sale", "po")
 _MONEY_EPS = 0.005
 _QTY_EPS = 1e-6
 
@@ -155,8 +181,111 @@ async def _split_legs(db: AsyncSession, org_id: str | None) -> list[Mismatch]:
             for o, i, a, v in rows]
 
 
+async def _gift_cards(db: AsyncSession, org_id: str | None) -> list[Mismatch]:
+    ledger = (select(GiftCardLedger.gift_card_id.label("gid"), func.sum(GiftCardLedger.amount).label("s"))
+              .where(*_org_filter(GiftCardLedger.org_id, org_id))
+              .group_by(GiftCardLedger.gift_card_id).subquery())
+    derived = func.coalesce(ledger.c.s, 0)
+    rows = (await db.execute(
+        select(GiftCard.org_id, GiftCard.id, func.coalesce(GiftCard.balance, 0), derived)
+        .outerjoin(ledger, ledger.c.gid == GiftCard.id)
+        .where(func.abs(func.coalesce(GiftCard.balance, 0) - derived) > _MONEY_EPS,
+               *_org_filter(GiftCard.org_id, org_id))
+        .execution_options(skip_tenant_filter=True))).all()   # cross-shop by design: a platform sweep
+    return [Mismatch("giftcard", o, i, float(s), float(d)) for o, i, s, d in rows]
+
+
+async def _suppliers(db: AsyncSession, org_id: str | None) -> list[Mismatch]:
+    # + = we owe the supplier on the column; the contact ledger holds the same debt as a negative
+    ledger = (select(ClientLedgerEntry.client_id.label("cid"), func.sum(ClientLedgerEntry.amount).label("s"))
+              .where(*_org_filter(ClientLedgerEntry.org_id, org_id))
+              .group_by(ClientLedgerEntry.client_id).subquery())
+    derived = -func.coalesce(ledger.c.s, 0)
+    rows = (await db.execute(
+        select(Supplier.org_id, Supplier.id, func.coalesce(Supplier.balance, 0), derived)
+        .outerjoin(ledger, ledger.c.cid == Supplier.client_id)
+        .where(Supplier.client_id.isnot(None),
+               func.abs(func.coalesce(Supplier.balance, 0) - derived) > _MONEY_EPS,
+               *_org_filter(Supplier.org_id, org_id))
+        .execution_options(skip_tenant_filter=True))).all()   # cross-shop by design: a platform sweep
+    return [Mismatch("supplier", o, i, float(s), float(d)) for o, i, s, d in rows]
+
+
+# Whole-document rounding (nearest 0.05) moves a total by at most half a step.
+_ROUNDING_EPS = 0.025 + _MONEY_EPS
+
+
+async def _orders(db: AsyncSession, org_id: str | None) -> list[Mismatch]:
+    # order_lines carry no org_id: for one shop, only its orders' lines are summed
+    mine = [OrderLine.order_id.in_(select(Order.id).where(Order.org_id == org_id))] if org_id else []
+    lines = (select(OrderLine.order_id.label("oid"), func.sum(OrderLine.total).label("s"))
+             .where(*mine).group_by(OrderLine.order_id).subquery())
+    s = func.coalesce(lines.c.s, 0)
+    derived = case((s > 0, s), else_=0)
+    eps = case((func.coalesce(Organisation.rounding_enabled, False).is_(True), _ROUNDING_EPS),
+               else_=_MONEY_EPS)
+    rows = (await db.execute(
+        select(Order.org_id, Order.id, func.coalesce(Order.total, 0), derived)
+        .outerjoin(lines, lines.c.oid == Order.id)
+        .join(Organisation, Organisation.id == Order.org_id)
+        .where(func.abs(func.coalesce(Order.total, 0) - derived) > eps,
+               *_org_filter(Order.org_id, org_id))
+        .execution_options(skip_tenant_filter=True))).all()   # cross-shop by design: a platform sweep
+    return [Mismatch("order", o, i, float(st), float(d)) for o, i, st, d in rows]
+
+
+# Sale.total and Sale.tax are each rounded to the cent separately.
+_SALE_EPS = 0.01 + _MONEY_EPS
+
+
+async def _sales(db: AsyncSession, org_id: str | None) -> list[Mismatch]:
+    included = SaleLine.tax_mode == "included"
+    taxed = func.abs(func.coalesce(SaleLine.tax, 0)) > _MONEY_EPS
+    mine = [SaleLine.sale_id.in_(select(Sale.id).where(Sale.org_id == org_id))] if org_id else []
+    lines = (select(SaleLine.sale_id.label("sid"),
+                    func.sum(func.coalesce(SaleLine.total, 0)).label("s"),
+                    func.sum(case((included & taxed, 1), else_=0)).label("inc"),
+                    func.sum(case((~included & taxed, 1), else_=0)).label("imp"))
+             .where(*mine).group_by(SaleLine.sale_id).subquery())
+    net = func.coalesce(lines.c.s, 0) - func.coalesce(Sale.discount, 0)
+    net = case((net > 0, net), else_=0)
+    inc, imp = func.coalesce(lines.c.inc, 0), func.coalesce(lines.c.imp, 0)
+    # tax added on top is in the total; tax included in the price already is
+    derived = case((inc == 0, net + func.coalesce(Sale.tax, 0)), else_=net)
+    rows = (await db.execute(
+        select(Sale.org_id, Sale.id, func.coalesce(Sale.total, 0), derived)
+        .outerjoin(lines, lines.c.sid == Sale.id)
+        .where(Sale.voided_at.is_(None), (inc == 0) | (imp == 0),
+               func.abs(func.coalesce(Sale.total, 0) - derived) > _SALE_EPS,
+               *_org_filter(Sale.org_id, org_id))
+        .execution_options(skip_tenant_filter=True))).all()   # cross-shop by design: a platform sweep
+    return [Mismatch("sale", o, i, float(st), float(d)) for o, i, st, d in rows]
+
+
+async def _purchase_orders(db: AsyncSession, org_id: str | None) -> list[Mismatch]:
+    # charges are a JSON list on the PO, so the comparison finishes in Python (one row per PO)
+    mine = [POLine.po_id.in_(select(PurchaseOrder.id).where(PurchaseOrder.org_id == org_id))] if org_id else []
+    lines = (select(POLine.po_id.label("pid"),
+                    func.sum(func.coalesce(POLine.qty_ordered, 0) * func.coalesce(POLine.unit_cost, 0)).label("s"))
+             .where(*mine).group_by(POLine.po_id).subquery())
+    rows = (await db.execute(
+        select(PurchaseOrder.org_id, PurchaseOrder.id, func.coalesce(PurchaseOrder.total, 0),
+               func.coalesce(lines.c.s, 0), PurchaseOrder.charges)
+        .outerjoin(lines, lines.c.pid == PurchaseOrder.id)
+        .where(*_org_filter(PurchaseOrder.org_id, org_id))
+        .execution_options(skip_tenant_filter=True))).all()   # cross-shop by design: a platform sweep
+    out = []
+    for o, i, stored, sub, charges in rows:
+        extra = sum(float(c.get("amount") or 0) for c in (charges or []) if isinstance(c, dict))
+        derived = round(float(sub) + extra, 2)
+        if abs(float(stored) - derived) > _MONEY_EPS:
+            out.append(Mismatch("po", o, i, float(stored), derived))
+    return out
+
+
 _RUNNERS = {"account": _accounts, "client": _clients, "invoice": _invoices, "stock": _stock,
-            "split_leg": _split_legs}
+            "split_leg": _split_legs, "giftcard": _gift_cards, "supplier": _suppliers,
+            "order": _orders, "sale": _sales, "po": _purchase_orders}
 
 
 async def find_mismatches(db: AsyncSession, *, org_id: str | None = None,

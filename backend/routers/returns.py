@@ -350,6 +350,7 @@ async def book_refund(db, current, order, acct, amount: float, *, reason=None, r
     pays = await refund_payments(db, order, amount, method="cash" if _shift else "refund",
                                  account_id=acct.id, received_by_id=current.id,
                                  shift_id=_shift,   # cash handed back from a drawer reduces that drawer's expected cash
+                                 refund_id=refund.id,   # a void finds exactly these rows (DB-11)
                                  reference=(reference or f"Refund: {reason or ''}")[:200])
     refund.payment_id = pays[0].id
     await post_transaction(db, current.org_id, acct.id, "refund", -amount,
@@ -424,7 +425,7 @@ async def _refund_payment(db, refund):
         return (await db.execute(select(Payment).where(Payment.id == refund.payment_id))).scalar_one_or_none()
     cands = (await db.execute(select(Payment).where(
         Payment.order_id == refund.order_id, Payment.kind == "refund", Payment.amount == refund.amount,
-        Payment.account_id == refund.account_id))).scalars().all()
+        Payment.account_id == refund.account_id, Payment.refund_id.is_(None)))).scalars().all()
     if not cands:
         return None
     at = refund.created_at or now_utc()
@@ -439,8 +440,8 @@ async def delete_refund(
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
     """Void a refund that shouldn't have happened. The refund stays on record (struck through)
-    and is undone: its payout leaves the cashbox ledger, its refund Payment goes (so the order
-    counts as paid again), the client's ledger entry is reversed and the commission it clawed
+    and is undone: its payout leaves the cashbox ledger, its refund Payments are voided (kept on
+    record, out of every total, so the order counts as paid again), the client's ledger entry is reversed and the commission it clawed
     back is given back in the same accrual group."""
     await assert_perm(db, current, "can_delete_refunds")
     from backend.models import CashShift, ClientLedgerEntry
@@ -458,19 +459,19 @@ async def delete_refund(
         .options(selectinload(Order.lines)))).scalar_one_or_none() if refund.order_id else None
     if order is not None and order.archived:
         raise HTTPException(409, "This refund was made when the order was archived. Restore the order instead.")
-    pay = await _refund_payment(db, refund)
-    if pay is not None and pay.shift_id:
-        closed = (await db.execute(select(CashShift.closed_at).where(CashShift.id == pay.shift_id))).scalar_one_or_none()
-        if closed:
-            raise HTTPException(409, "The cash for this refund came out of a drawer shift that is already closed.")
+    # DB-11: the refund's own Payment rows (by refund id), which are voided below, not deleted
+    from backend.services.invoice_money import refund_rows, void_refund_payment
+    pays = await refund_rows(db, refund, await _refund_payment(db, refund))
+    pay = pays[0] if pays else None
+    shifts = {p.shift_id for p in pays if p.shift_id}
+    if shifts and (await db.execute(select(CashShift.id).where(
+            CashShift.id.in_(shifts), CashShift.closed_at.isnot(None)).limit(1))).first():
+        raise HTTPException(409, "The cash for this refund came out of a drawer shift that is already closed.")
     reason = (reason or "Deleted").strip()[:300]
 
-    if pay is not None:
-        refund.payment_id = None             # the rows go; the audit entry below keeps the first id
-        await db.flush()
-        from backend.services.invoice_money import refund_siblings, unrefund_payment
-        for p in await refund_siblings(db, pay):
-            await unrefund_payment(db, p)    # its invoice counts the money again
+    # they stay on record, every total leaves them out and their invoices count the money again
+    for p in pays:
+        await void_refund_payment(db, p, current.id)
     from backend.routers.cash import void_document_legs
     await void_document_legs(db, current.org_id, "refund", refund.id, reason, current.id)
     entries = (await db.execute(select(ClientLedgerEntry).where(
