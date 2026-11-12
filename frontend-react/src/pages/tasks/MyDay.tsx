@@ -19,6 +19,7 @@ import {
 } from "./taskModel";
 import type { Emp } from "./TaskPanel";
 import TaskResults from "./TaskResults";
+import { useJobSuggest, useRecentJob, SuggestStrip, type JobHit } from "./QuickAddLink";
 
 // Tasks, on one page: quick add on top; then the day as Today / Upcoming / Later / Done, for Me,
 // Everyone, Up for grabs or one person; and one search that reaches every task in the shop
@@ -665,21 +666,40 @@ function QuickAdd({ today, tz, tzFailed, meId, emps, target, mayAssign, onAdd, f
     input.current?.focus();
   }
   const ready = !!title.trim() && !blocked;
-  const onKey = (e: ReactKeyboardEvent<HTMLInputElement>) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); save(); } };
+  // Smart link: what is typed may name a job; offer it, never link it on its own.
+  const sug = useJobSuggest(title, !!job);
+  const recent = useRecentJob(meId);
+  const [said, setSaid] = useState("");
+  const [typing, setTyping] = useState(false);          // the strip shows only while the box has focus
+  const showSug = sug.open && typing;
+  const linkHit = (j: JobHit) => { setJob({ id: j.id, order_number: j.order_number }); setJobOpen(false); setSaid(`Linked ${j.order_number || "the work order"}`); };
+  const onKey = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (showSug) {
+      if (e.key === "ArrowDown" || e.key === "ArrowUp") { e.preventDefault(); sug.setActive((sug.active + (e.key === "ArrowDown" ? 1 : sug.items.length - 1)) % sug.items.length); return; }
+      if (e.key === "Tab" && !e.shiftKey) { e.preventDefault(); linkHit(sug.items[sug.active]); return; }
+      if (e.key === "Escape") { e.preventDefault(); sug.dismiss(); return; }
+    }
+    if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); save(); }
+  };
 
   return (
     <div className="max-sm:sticky max-sm:-top-5 max-sm:z-20 max-sm:-mx-4 max-sm:px-4 max-sm:pt-3 max-sm:pb-2 max-sm:bg-canvas">
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-2">
-      <div className="flex items-center gap-2">
+      <div className="relative flex items-center gap-2">
         <M n="add" c="ml-2 text-base text-ink-tertiary flex-shrink-0" />
         <input ref={input} value={title} onChange={(e) => { setTitle(e.target.value); setHint(""); }} onKeyDown={onKey} aria-label="Add a task" placeholder="Add a task…" enterKeyHint="done"
+          role="combobox" aria-autocomplete="list" aria-expanded={showSug} aria-controls={showSug ? "quick-add-jobs" : undefined}
+          aria-activedescendant={showSug ? `quick-add-jobs-${sug.active}` : undefined}
+          onFocus={() => setTyping(true)} onBlur={() => setTyping(false)}
           aria-describedby={hint || blocked ? "quick-add-why" : undefined}
           className="flex-1 min-w-0 h-10 bg-transparent text-sm text-ink-primary placeholder:text-ink-placeholder outline-none focus-visible:outline-none" />
         {/* Greyed (the app's chip grey, same size and place), not disabled: a tap still says why
             (on screen, below), on a phone too. */}
         <Button variant={ready ? "primary" : "ghost"} onClick={save} busy={busy} aria-disabled={!ready}
           className={`flex-shrink-0 ${ready ? "" : "!bg-slate-100 !text-ink-tertiary cursor-not-allowed"}`}>Add task</Button>
+        {showSug && <SuggestStrip id="quick-add-jobs" items={sug.items} active={sug.active} onHover={sug.setActive} onPick={(j) => { linkHit(j); input.current?.focus(); }} />}
       </div>
+      <p className="sr-only" role="status">{showSug ? `${sug.items.length === 1 ? "1 work order matches" : `${sug.items.length} work orders match`}. Tab links the highlighted one.` : said}</p>
       {(hint || (blocked && title.trim())) && <p id="quick-add-why" role="status" className="px-3 pt-1 text-2xs text-ink-secondary">{hint || blocked}</p>}
       {/* On phones the choices fold away until you start typing a task (or have picked something),
           so the sticky box stays small. Only what you typed or chose opens them, never focus: tapping
@@ -725,9 +745,18 @@ function QuickAdd({ today, tz, tzFailed, meId, emps, target, mayAssign, onAdd, f
         <span className="hidden sm:block w-px h-5 bg-slate-200" aria-hidden="true" />
         {jobOpen || job ? (
           <div className="w-56"><JobPicker value={job} onChange={(j) => { setJob(j); if (!j) setJobOpen(false); }} /></div>
-        ) : (
+        ) : (<>
           <Button variant="ghost" size="sm" onClick={() => setJobOpen(true)} icon={<M n="link" c="text-xs" />}>Link a work order</Button>
-        )}
+          {/* The job you just looked at (last ten minutes, this browser): one tap links it. */}
+          {recent.job && (
+            <Button variant="ghost" size="sm" onClick={() => { recent.link(setJob); setSaid(`Linked ${recent.job?.number || "the work order"}`); }}
+              icon={<M n="undo" c="text-xs" />} title="The work order you just looked at"
+              aria-label={`Link the work order you just looked at: ${[recent.job.number, recent.job.client].filter(Boolean).join(", ")}`}
+              className="max-w-[240px] !text-ink-secondary hover:!text-ink-primary">
+              <span className="truncate"><span className="tabular-nums">{recent.job.number || "Work order"}</span>{recent.job.client && <span className="hidden sm:inline"> · {recent.job.client}</span>}</span>
+            </Button>
+          )}
+        </>)}
       </div>
     </div>
     </div>

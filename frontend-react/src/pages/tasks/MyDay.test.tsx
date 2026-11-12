@@ -7,7 +7,9 @@ import userEvent from "@testing-library/user-event";
 import { MemoryRouter, useLocation, useNavigate } from "react-router-dom";
 
 vi.mock("../../components/Shell", () => ({ M: ({ n }: { n: string }) => <i data-icon={n} />, default: ({ children }: any) => <div>{children}</div> }));
-vi.mock("../../components/JobPicker", () => ({ default: ({ onChange }: any) => <button onClick={() => onChange({ id: "o9", order_number: "WO-1042" })}>pick job</button> }));
+vi.mock("../../components/JobPicker", () => ({ default: ({ value, onChange }: any) => (value
+  ? <span data-testid="linked-job">{value.order_number}</span>
+  : <button onClick={() => onChange({ id: "o9", order_number: "WO-1042" })}>pick job</button>) }));
 let manager = true;
 vi.mock("../../context/Me", () => ({
   useMe: () => ({ me: { id: "me" }, can: (c?: string) => c !== "can_assign_staff" || manager }),
@@ -57,11 +59,14 @@ let closedTotal = 0;       // its count of done + cancelled matches
 // A server with assignee=pool (null = the #203 server: "pool" reads as an unknown person, 404 for
 // managers and 403 for staff).
 let poolServer: null | { pool: any } = null;
+// GET /orders?q= (the work-order search) and GET /orders/{id}: what quick add's smart link sees.
+let orderSearch: (q: string) => { items: any[]; delay?: number } = () => ({ items: [] });
+let orderGet: (id: string) => number = () => 200;
 
 beforeEach(() => {
   calls = []; manager = true; dayBody = DAY(); dayStatus = 200; failPost = false; failMove = false;
   try { localStorage.clear(); } catch { /* storage may be off */ }
-  shopTz = null; shopCountry = null; tzFail = false; patchFail = false; goneId = null; moveReply = { moved: 2 }; listItems = LIST(); listPaged = false; closedTotal = 0; poolServer = null; resetShopTz();
+  shopTz = null; shopCountry = null; tzFail = false; patchFail = false; goneId = null; moveReply = { moved: 2 }; listItems = LIST(); listPaged = false; closedTotal = 0; poolServer = null; orderSearch = () => ({ items: [] }); orderGet = () => 200; resetShopTz();
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method || "GET";
     calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : null });
@@ -107,6 +112,12 @@ beforeEach(() => {
       return reply({ id, title: id === "t2" ? "Call Jane about collection" : "Chase supplier RMA #A88", description: "", due_at: "2026-11-06T11:30:00" });
     }
     if (method === "GET" && url.endsWith("/feed")) return reply({ items: [] });
+    if (method === "GET" && url.startsWith("/api/orders?")) {
+      const r = orderSearch(new URL(url, "http://x").searchParams.get("q") || "");
+      if (r.delay) await new Promise((res) => setTimeout(res, r.delay));
+      return reply({ items: r.items, total: r.items.length });
+    }
+    if (method === "GET" && /^\/api\/orders\/[^/?]+$/.test(url)) { const st = orderGet(url.split("/").pop()!); return st === 200 ? reply({ id: url.split("/").pop() }) : reply({ detail: "Not found" }, st); }
     if (method === "GET" && url.startsWith("/api/staff/employees")) return reply({ items: [{ id: "me", name: "Me" }, { id: "e2", name: "Jane Kim" }, { id: "e3", name: "Tom Reed" }] });
     return reply({ ok: true });
   }));
@@ -1015,6 +1026,145 @@ describe("server pool + search fix", () => {
     within(screen.getByRole("dialog", { name: "Due date" })).getByRole("button", { name: "Done" }).focus();
     await u.keyboard("{Escape}");                                                                                // Escape
     expect(screen.queryByRole("dialog", { name: "Due date" })).not.toBeInTheDocument();
+  });
+});
+
+describe("quick add: smart link and the job you just looked at", () => {
+  const WO = (id: string, n: string, client: string, extra: any = {}) => ({ id, order_number: n, status: "in_repair", closed_at: null,
+    client: { name: client }, device: { brand: "Apple", model: "iPhone 14 Pro" }, ...extra });
+  const box = () => screen.getByLabelText("Add a task");
+  const searches = () => calls.filter((c) => c.url.startsWith("/api/orders?")).map((c) => c.url);
+
+  it("a job number offers up to three matches, open first; Tab links the highlighted one and the words stay", async () => {
+    orderSearch = () => ({ items: [
+      WO("o0", "WO-1042-B", "Jane Kim", { closed_at: "2026-11-01T10:00:00Z", status: "done" }),
+      WO("o1", "WO-1042", "Jane Kim"), WO("o2", "WO-10420", "Tom Reed"), WO("o3", "WO-10421", "Ana Lee"),
+    ] });
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    await u.type(box(), "Chase parts for WO-1042");
+    const list = await screen.findByRole("listbox", { name: "Work orders that match" });
+    const opts = within(list).getAllByRole("option");
+    expect(opts.map((o) => o.textContent)).toEqual([
+      "WO-1042Jane Kim · Apple iPhone 14 ProIn repair", "WO-10420Tom Reed · Apple iPhone 14 ProIn repair", "WO-10421Ana Lee · Apple iPhone 14 ProIn repair"]);
+    expect(searches().pop()).toBe("/api/orders?q=1042&limit=5");
+    expect(box()).toHaveAttribute("aria-activedescendant", "quick-add-jobs-0");
+    expect(opts[0]).toHaveAttribute("aria-selected", "true");
+    await u.keyboard("{ArrowDown}");
+    expect(box()).toHaveAttribute("aria-activedescendant", "quick-add-jobs-1");
+    await u.keyboard("{ArrowUp}{Tab}");                                         // never on its own: Tab picks
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    expect(screen.getByTestId("linked-job")).toHaveTextContent("WO-1042");     // the Link a work order chip shows it
+    expect(box()).toHaveValue("Chase parts for WO-1042");
+    await u.keyboard("{Enter}");
+    expect(posts("/api/tasks")[0].body).toMatchObject({ title: "Chase parts for WO-1042", order_id: "o1" });
+  });
+
+  it("nothing is linked unless picked: Enter saves without a job", async () => {
+    orderSearch = () => ({ items: [WO("o1", "WO-1042", "Jane Kim")] });
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    await u.type(box(), "Chase 1042");
+    await screen.findByRole("listbox");
+    await u.keyboard("{Enter}");
+    expect(posts("/api/tasks")[0].body).toMatchObject({ title: "Chase 1042", order_id: null });
+  });
+
+  it("Esc dismisses it for this clue; a new clue brings suggestions back; a click links", async () => {
+    orderSearch = (q) => ({ items: q === "1042" ? [WO("o1", "WO-1042", "Jane Kim")] : [WO("o7", "WO-2001", "Tom Reed")] });
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    await u.type(box(), "Chase 1042");
+    await screen.findByRole("listbox");
+    await u.keyboard("{Escape}");
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();
+    await u.type(box(), " today");
+    await new Promise((r) => setTimeout(r, 400));
+    expect(screen.queryByRole("listbox")).not.toBeInTheDocument();             // same clue: still dismissed
+    await u.clear(box()); await u.type(box(), "Chase 2001");
+    const opt = await screen.findByRole("option", { name: /WO-2001/ });
+    await u.click(opt);
+    expect(screen.getByTestId("linked-job")).toHaveTextContent("WO-2001");
+  });
+
+  it("a slow, stale answer never replaces the newer one", async () => {
+    orderSearch = (q) => (q === "1042" ? { items: [WO("o1", "WO-1042", "Jane Kim")], delay: 600 } : { items: [WO("o7", "WO-2001", "Tom Reed")] });
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    await u.type(box(), "Chase 1042");
+    await new Promise((r) => setTimeout(r, 300));                                // the 1042 search has gone out
+    await u.clear(box()); await u.type(box(), "Chase 2001");
+    await screen.findByRole("option", { name: /WO-2001/ });
+    await new Promise((r) => setTimeout(r, 700));                                // the 1042 answer lands late
+    expect(screen.queryByRole("option", { name: /WO-1042/ })).not.toBeInTheDocument();
+    expect(within(screen.getByRole("listbox")).getAllByRole("option")).toHaveLength(1);
+  });
+
+  it("a name clue only offers jobs for that customer; plain task words ask nothing", async () => {
+    orderSearch = () => ({ items: [WO("o1", "WO-1042", "Jane Kim"), WO("o2", "WO-1043", "Tom Reed")] });   // Tom: matched on the device
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    await u.type(box(), "Call at 3pm");
+    await new Promise((r) => setTimeout(r, 400));
+    expect(searches()).toEqual([]);
+    await u.clear(box()); await u.type(box(), "Ring Jane about pickup");
+    await screen.findByRole("option", { name: /WO-1042/ });
+    expect(within(screen.getByRole("listbox")).getAllByRole("option")).toHaveLength(1);
+    expect(searches().pop()).toBe("/api/orders?q=Jane&limit=5");
+  });
+
+  const remember = (ago: number, id = "r1") => localStorage.setItem("tekly.recentJob.me", JSON.stringify({ id, number: "WO-1042", client: "Jane Kim", device: "iPhone 14 Pro", at: Date.now() - ago }));
+  const chip = () => screen.queryByRole("button", { name: /Link the work order you just looked at/ });
+
+  it("the job you just looked at: a one-tap chip that links it, hidden once a job is linked", async () => {
+    remember(60_000);
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    await waitFor(() => expect(chip()).toBeInTheDocument());
+    expect(chip()).toHaveAccessibleName("Link the work order you just looked at: WO-1042, Jane Kim");
+    expect(chip()!.textContent).toContain("WO-1042 · Jane Kim");
+    await u.click(chip()!);
+    expect(chip()).not.toBeInTheDocument();
+    expect(screen.getByTestId("linked-job")).toHaveTextContent("WO-1042");
+    await u.type(box(), "Order the screen{Enter}");
+    expect(posts("/api/tasks")[0].body).toMatchObject({ order_id: "r1" });
+  });
+
+  it("older than ten minutes: no chip, and it is forgotten", async () => {
+    remember(11 * 60_000);
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    await new Promise((r) => setTimeout(r, 100));
+    expect(chip()).not.toBeInTheDocument();
+    expect(localStorage.getItem("tekly.recentJob.me")).toBeNull();
+    expect(calls.some((c) => c.url.startsWith("/api/orders/"))).toBe(false);
+  });
+
+  it("a job this person can no longer open is never offered, and is dropped quietly", async () => {
+    remember(60_000); orderGet = () => 404;
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    await waitFor(() => expect(localStorage.getItem("tekly.recentJob.me")).toBeNull());
+    expect(chip()).not.toBeInTheDocument();
+  });
+
+  it("if the job became off-limits since it was offered, the tap unlinks it and drops it quietly", async () => {
+    remember(60_000);
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    await waitFor(() => expect(chip()).toBeInTheDocument());
+    orderGet = () => 403;
+    await u.click(chip()!);
+    await waitFor(() => expect(screen.getByRole("button", { name: "Link a work order" })).toBeInTheDocument());
+    expect(chip()).not.toBeInTheDocument();
+    expect(localStorage.getItem("tekly.recentJob.me")).toBeNull();
   });
 });
 
