@@ -16,13 +16,13 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Employee, Order, OrderLine, Organisation, Recommendation
 from backend.services.auth import get_current_employee, require_perm, record_scope
+from backend.services import media as _media
 from backend.services.money import q2
 from backend.services.dates import now_utc
 
 router = APIRouter(prefix="/api/orders", tags=["recommendations"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
-MAX_MEDIA_CHARS = 8_000_000
 VALID_KIND = {"service", "product", "custom"}
 VALID_URGENCY = {"now", "soon"}     # None = no urgency label
 URGENCY_ALIASES = {"later": "soon"}  # "later" reads the same as "can wait until next visit"
@@ -132,7 +132,7 @@ async def add_recommendation(
         raise HTTPException(400, "Title is required")
     if data.kind not in VALID_KIND:
         raise HTTPException(422, "kind must be service|product|custom")
-    if data.media_data and len(data.media_data) > MAX_MEDIA_CHARS:
+    if data.media_data and _media.too_large(data.media_data):
         raise HTTPException(413, "Photo too large")
     data.urgency = URGENCY_ALIASES.get(data.urgency, data.urgency)
     if data.urgency and data.urgency not in VALID_URGENCY:
@@ -164,7 +164,7 @@ async def update_recommendation(
     fields = data.model_dump(exclude_unset=True)
     if "kind" in fields and fields["kind"] not in VALID_KIND:
         raise HTTPException(422, "kind must be service|product|custom")
-    if fields.get("media_data") and len(fields["media_data"]) > MAX_MEDIA_CHARS:
+    if fields.get("media_data") and _media.too_large(fields["media_data"]):
         raise HTTPException(413, "Photo too large")
     if "urgency" in fields:
         fields["urgency"] = URGENCY_ALIASES.get(fields["urgency"], fields["urgency"]) or None
