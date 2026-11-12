@@ -338,10 +338,30 @@ _DOCUMENT_LEGS = {"order": "work order payment", "invoice": "invoice payment", "
 _CHANGED = "Someone else just changed this transaction. Refresh and try again."
 
 
+# Audit FIN-02: cash legs with a twin on a contact's books. A client advance or payout (and an
+# invoice overpayment kept as credit) also moved the client's balance; a supplier payment also
+# lowered what we owe them. Voiding or correcting only the cash row reversed the till while the
+# client kept the credit (and could spend it) or the supplier stayed paid, and each side still
+# matched its own ledger. Like the document legs above, they're changed from the contact side.
+# Restore stays allowed: since this guard, such a leg can't be deleted, so a deleted one was
+# voided on its own before it, and restoring it puts the till back in line with the contact
+# (reconcile reports these as "split_leg").
+_CONTACT_LEGS = {
+    "client": "This transaction is the cash side of a client balance movement (an advance, a payout or "
+              "an overpayment kept as credit). Undo it from the client's Balance tab with the opposite "
+              "movement, so the till and their credit stay in sync.",
+    "supplier_payment": "This transaction is the cash side of a supplier payment, which also lowered what "
+                        "you owe that supplier. It can't be undone from Cash on its own, or the supplier "
+                        "would still show as paid.",
+}
+
+
 def _guard_document_leg(t) -> None:
     if t.ref_type in _DOCUMENT_LEGS:
         raise HTTPException(409, f"This transaction is the cash side of a {_DOCUMENT_LEGS[t.ref_type]}. "
                                  "Refund or void it from that document so everything stays in sync.")
+    if t.ref_type in _CONTACT_LEGS:
+        raise HTTPException(409, _CONTACT_LEGS[t.ref_type])
 
 
 @router.post("/transactions/{txn_id}/correct", status_code=201)
@@ -864,9 +884,19 @@ async def _prepay_order(order_id: str, data: PrepayIn, db: AsyncSession, current
 async def refund_overpayment(
     order_id: str,
     data: PrepayIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
+    """Audit FIN-01: a retry with the same Idempotency-Key gets the first answer back instead of
+    paying out again; without a key, the same refund again within a few seconds is refused."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "cash.refund_overpayment",
+                          {"order_id": order_id, "body": data},
+                          lambda: _refund_overpayment(order_id, data, db, current, keyed=_keyed(request)))
+
+
+async def _refund_overpayment(order_id: str, data: PrepayIn, db: AsyncSession, current: Employee, *, keyed: bool):
     """Give money back on a job without changing its price, from a cashbox: an overpayment
     (prepayments exceeded the order total) or (W3-C) a deposit on a job that isn't closed yet —
     the customer pays at pickup instead. The job's total stays; only what was paid goes down. It's
@@ -896,6 +926,9 @@ async def refund_overpayment(
     if data.amount > room + 0.005:
         raise HTTPException(400, f"Only the overpayment can be refunded here ({excess:g})" if room <= excess + 0.005
                                  else f"Only the deposit still held can be refunded here ({room:g})")
+    if not keyed:
+        from backend.routers.returns import refuse_double_refund
+        await refuse_double_refund(db, current.org_id, o.id, acc.id, data.amount)
     what = "Overpayment refund" if data.amount <= excess + 0.005 else "Deposit refund"
     refund = await book_refund(db, current, o, acc, data.amount, reason=what, reference=what)
     from backend.routers.feed import log_system_event

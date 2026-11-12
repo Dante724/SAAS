@@ -12,6 +12,11 @@ Invariants (each is one grouped query; nothing is locked or written):
 - ``client``: ``Client.balance`` = Σ ``ClientLedgerEntry.amount``.
 - ``invoice``: ``Invoice.amount_paid`` = Σ payments on the invoice − Σ refunds on it.
 - ``stock``: Σ ``StockLevel.qty_available`` per (product, location) = Σ ``StockMovement.qty``.
+- ``split_leg`` (audit FIN-02): the cash leg of a client balance movement or a supplier payment
+  must move with its contact side, which nothing voids or corrects from Cash. A leg voided on its
+  own (``deleted``), or a correction delta posted on one, moved the till but not the contact, so
+  it is reported (``entity_id`` is the transaction; stored = what the till holds of it, derived =
+  what the contact side still counts). Restoring a deleted leg clears it.
 
 A mismatch is reported, never "fixed": which side is wrong needs a person. Amounts compare at
 cent precision (quantities at 1e-6), so float/Numeric rounding is not reported as drift.
@@ -38,7 +43,7 @@ from backend.models import (
 
 log = logging.getLogger("tekly.reconcile")
 
-CHECKS = ("account", "client", "invoice", "stock")
+CHECKS = ("account", "client", "invoice", "stock", "split_leg")
 _MONEY_EPS = 0.005
 _QTY_EPS = 1e-6
 
@@ -124,7 +129,26 @@ async def _stock(db: AsyncSession, org_id: str | None) -> list[Mismatch]:
     return [Mismatch("stock", o, f"{part}@{loc}", float(lv), float(mv)) for o, part, loc, lv, mv in rows]
 
 
-_RUNNERS = {"account": _accounts, "client": _clients, "invoice": _invoices, "stock": _stock}
+_CONTACT_LEG_TYPES = ("client", "supplier_payment")   # routers/cash._CONTACT_LEGS
+
+
+async def _split_legs(db: AsyncSession, org_id: str | None) -> list[Mismatch]:
+    voided = (Transaction.status == "deleted") & Transaction.reverses_txn_id.is_(None)
+    delta = (Transaction.status != "deleted") & Transaction.reverses_txn_id.isnot(None)
+    rows = (await db.execute(
+        select(Transaction.org_id, Transaction.id, Transaction.amount, voided)
+        .where(Transaction.ref_type.in_(_CONTACT_LEG_TYPES), voided | delta,
+               func.abs(func.coalesce(Transaction.amount, 0)) > _MONEY_EPS,
+               *_org_filter(Transaction.org_id, org_id))
+        .execution_options(skip_tenant_filter=True))).all()   # cross-shop by design: a platform sweep
+    # a voided leg: the till holds 0 of what the contact counts; a correction delta: the till holds
+    # an amount the contact never saw
+    return [Mismatch("split_leg", o, i, 0.0 if v else float(a), float(a) if v else 0.0)
+            for o, i, a, v in rows]
+
+
+_RUNNERS = {"account": _accounts, "client": _clients, "invoice": _invoices, "stock": _stock,
+            "split_leg": _split_legs}
 
 
 async def find_mismatches(db: AsyncSession, *, org_id: str | None = None,
