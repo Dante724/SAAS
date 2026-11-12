@@ -40,7 +40,7 @@ class AIResultIn(BaseModel):
 async def attach_ai(
     call_id: str, data: AIResultIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_make_calls")),
 ):
     """Attach AI results (transcript, summary, sentiment) to a call.
 
@@ -192,7 +192,7 @@ class SyncOrderIn(BaseModel):
 async def sync_order(
     integration_id: str, data: SyncOrderIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_tickets")),
 ):
     """Ingest (or update) one store order. Idempotent on external_order_id via the
     order map, so a store that re-sends the same order updates the existing Tekly

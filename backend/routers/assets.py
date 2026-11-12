@@ -623,13 +623,17 @@ class TransferIn(BaseModel):
 async def transfer_asset(
     asset_id: str, data: TransferIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_inventory")),
 ):
     """Move an asset between owners/locations, logging the transfer."""
     d = (await db.execute(select(Device).where(
         Device.id == asset_id, Device.org_id == current.org_id))).scalar_one_or_none()
     if not d:
         raise HTTPException(404, "Asset not found")
+    # Audit SEC-06: a location-scoped role moves only assets at, and to, its own locations.
+    from backend.services.auth import check_location_access
+    await check_location_access(db, current, d.location_id)
+    await check_location_access(db, current, data.to_location_id)
     before = "Company" if d.owner_type == "company" else "Client"
     if data.to_client_id:
         d.owner_type = "client"

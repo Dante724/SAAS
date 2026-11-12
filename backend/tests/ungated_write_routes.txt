@@ -95,172 +95,144 @@ DELETE /api/conversions/{conversion_id} [public]
 ## Not yet mapped to a catalog permission; candidates for finer-grained codes later.
 
 # ai
-POST /api/ai/chat/{thread_id}/suggest [staff]
-POST /api/ai/estimate/draft [staff]
-POST /api/ai/orders/{order_id}/summary [staff]
-POST /api/ai/product-description [staff]
-POST /api/ai/recognize-items [staff]
-POST /api/ai/remove-background [staff]
-POST /api/ai/transcribe [staff]
+POST /api/ai/chat/{thread_id}/suggest [staff]  # AI draft only, never sent; ai_quota + record_scope deps; writes only the quota counter
+POST /api/ai/estimate/draft [staff]  # AI draft only, returned for review; ai_quota dep; writes only the quota counter
+POST /api/ai/orders/{order_id}/summary [staff]  # AI summary of a job the caller may open (record_scope dep); writes only the quota counter
+POST /api/ai/product-description [staff]  # AI text suggestion, nothing saved; ai_quota dep
+POST /api/ai/recognize-items [staff]  # AI photo-to-items suggestion, nothing saved; ai_quota dep
+POST /api/ai/remove-background [staff]  # AI image edit returned to the caller, nothing saved; ai_quota dep
+POST /api/ai/transcribe [staff]  # speech-to-text returned to the caller, nothing saved; ai_quota dep
 # appointments
-POST /api/appointments [staff]
-PATCH /api/appointments/{bid} [staff]
-POST /api/appointments/{bid}/to-order [staff]
+POST /api/appointments/{bid}/to-order [staff]  # inline assert_perm can_create_tickets / can_create_estimates (by record type)
 # approvals
-POST /api/approvals [staff]
+POST /api/approvals [staff]  # asking for approval is open to all staff; auto-approval capped by the role's refund_ceiling, deciding is gated
 # assets
-POST /api/assets [staff]
-POST /api/assets/scan-resolve [staff]
-POST /api/assets/{asset_id}/transfer [staff]
+POST /api/assets [staff]  # inline: cost needs can_see_asset_cost; client-owned intake by any staff (company assets: write-off/transfer are gated)
+POST /api/assets/scan-resolve [staff]  # read-only scan lookup in the caller's shop, writes nothing
 # auth
-POST /api/auth/email/resend [staff]
-POST /api/auth/logout [staff]
-POST /api/auth/logout-all-devices [staff]
-POST /api/auth/sessions/sign-out-others [staff]
-POST /api/auth/sessions/{session_id}/sign-out [staff]
-POST /api/auth/pin [staff]
-POST /api/auth/pin/verify [staff]
-POST /api/auth/refresh [staff]
+POST /api/auth/email/resend [staff]  # self-service: resends the caller's own verification email
+POST /api/auth/logout [staff]  # self-service: signs the caller out
+POST /api/auth/logout-all-devices [staff]  # self-service: signs the caller out everywhere
+POST /api/auth/sessions/sign-out-others [staff]  # self-service: the caller's own devices only
+POST /api/auth/sessions/{session_id}/sign-out [staff]  # self-service: one of the caller's own devices only
+POST /api/auth/pin [staff]  # self-service: sets the caller's own PIN
+POST /api/auth/pin/verify [staff]  # self-service: checks the caller's own PIN
+POST /api/auth/refresh [staff]  # self-service: refreshes the caller's own token
 # chats
-POST /api/chats/threads [staff]
-POST /api/chats/threads/{tid}/inbound [staff]
-POST /api/chats/threads/{tid}/send [staff]
-POST /api/chats/threads/{tid}/to-lead [staff]
-POST /api/chats/threads/{tid}/to-order [staff]
+POST /api/chats/threads/{tid}/to-order [staff]  # inline assert_perm can_create_tickets / can_create_estimates (by is_estimate)
 # clients
-POST /api/clients/merge/preview [staff]
-PATCH /api/clients/{client_id} [staff]
-PUT /api/clients/{client_id} [staff]
-POST /api/clients/{client_id}/communication [staff]
-POST /api/clients/{client_id}/communication/suggest [staff]
-POST /api/clients/{client_id}/devices [staff]
 # comms
-POST /api/comms/calls/{call_id}/ai [staff]
 # documents
-POST /api/documents/ai-generate [staff]
-POST /api/documents/preview [staff]
-POST /api/documents/print-view [staff]
-POST /api/documents/auto-print/{order_id} [staff]
-POST /api/documents/render-asset-labels [staff]
-POST /api/documents/render-bin-labels [staff]
-POST /api/documents/render-client-labels [staff]
-POST /api/documents/render-labels [staff]
-POST /api/documents/render-serial-labels [staff]
+POST /api/documents/ai-generate [staff]  # AI template draft returned for review, nothing saved; record_scope dep
+POST /api/documents/preview [staff]  # inline: guard_order/guard_invoices + per-sample assert_perm; renders only, saves nothing
+POST /api/documents/print-view [staff]  # inline: guard_order/guard_invoices + per-sample assert_perm; renders only, saves nothing
+POST /api/documents/auto-print/{order_id} [staff]  # inline has_perm per document; record_scope dep; renders only
+POST /api/documents/render-bin-labels [staff]  # renders printable labels for this shop's bins; saves nothing
+POST /api/documents/render-labels [staff]  # renders printable product labels for this shop's parts; saves nothing
+POST /api/documents/render-serial-labels [staff]  # renders printable serial labels for this shop's units; saves nothing
 # ecommerce
-POST /api/ecommerce/integrations/{integration_id}/sync-order [staff]
 # feed
-DELETE /api/feed/item/{item_id} [staff]
-PATCH /api/feed/item/{item_id} [staff]
-POST /api/feed/{entity_type}/{entity_id} [staff]
+DELETE /api/feed/item/{item_id} [staff]  # inline: the author, else has_perm can_delete_orders; system items protected
+PATCH /api/feed/item/{item_id} [staff]  # inline: the author, else has_perm can_delete_orders (same rule as delete)
+POST /api/feed/{entity_type}/{entity_id} [staff]  # comment/photo on a record the caller may open (_verify_entity: shop + role record scope)
 # finance
 # forms
 # inventory
-POST /api/inventory/reorder-digest [staff]
 # leads
-POST /api/leads [staff]
-PATCH /api/leads/{lead_id} [staff]
-POST /api/leads/{lead_id}/convert [staff]
+POST /api/leads/{lead_id}/convert [staff]  # inline assert_perm can_create_tickets / can_create_estimates (by record type)
 # self check-in queue: calling someone to the counter is front-desk work, like answering an inquiry
-POST /api/checkins/{cid}/call [staff]
-POST /api/checkins/{cid}/no-show [staff]
 # media
-POST /api/media [staff]
+POST /api/media [staff]  # uploads a blob to the caller's own shop (size-capped); attaching it is gated by the record's route
 # mfa
-POST /api/mfa/activate [staff]
-POST /api/mfa/disable [staff]
-POST /api/mfa/enroll [staff]
+POST /api/mfa/activate [staff]  # self-service: the caller's own two-factor setup
+POST /api/mfa/disable [staff]  # self-service: the caller's own two-factor (re-auth checked in the handler)
+POST /api/mfa/enroll [staff]  # self-service: the caller's own two-factor setup
 # notifications
 # orders
-POST /api/orders/bulk [staff]
-POST /api/orders/filters/saved [staff]
-DELETE /api/orders/filters/saved/{filter_id} [staff]
-POST /api/orders/{order_id}/checklist [staff]
-DELETE /api/orders/{order_id}/checklist/{item_id} [staff]
-PATCH /api/orders/{order_id}/checklist/{item_id} [staff]
-PATCH /api/orders/{order_id}/code [staff]
-POST /api/orders/{order_id}/comments [staff]
-POST /api/orders/{order_id}/complete [staff]
-PATCH /api/orders/{order_id}/currency [staff]
-PATCH /api/orders/{order_id}/custom-data [staff]
-PATCH /api/orders/{order_id}/deposit [staff]
-POST /api/orders/{order_id}/duplicate [staff]
-POST /api/orders/{order_id}/finish [staff]
-PATCH /api/orders/{order_id}/intake-markups [staff]
-PATCH /api/orders/{order_id}/intake-photos [staff]
+POST /api/orders/bulk [staff]  # inline assert_perm per bulk action (status, assign, delete...) + guard_editable per job
+POST /api/orders/filters/saved [staff]  # personal filter; a shared one needs inline assert_perm can_manage_shared_filters
+DELETE /api/orders/filters/saved/{filter_id} [staff]  # own filter; a shared one needs inline assert_perm can_manage_shared_filters
+PATCH /api/orders/{order_id}/code [staff]  # inline _guard_order_access + _guard_editable (closed job needs can_edit_closed_ticket)
+POST /api/orders/{order_id}/comments [staff]  # commenting on a job the caller may act on (record_scope + _guard_order_access)
+POST /api/orders/{order_id}/complete [staff]  # status change runs _apply_status_change: _guard_order_access + can_close_tickets for closing
+PATCH /api/orders/{order_id}/currency [staff]  # inline _guard_order_access + _guard_editable
+PATCH /api/orders/{order_id}/custom-data [staff]  # inline _guard_order_access + _guard_editable
+PATCH /api/orders/{order_id}/deposit [staff]  # inline _guard_order_access + _guard_editable
+POST /api/orders/{order_id}/duplicate [staff]  # inline assert_perm can_create_tickets / can_create_estimates (by source type)
+POST /api/orders/{order_id}/finish [staff]  # _apply_status_change gates (access, can_close_tickets) + has_perm can_take_payments for the payment
+PATCH /api/orders/{order_id}/intake-markups [staff]  # intake photos on a job the caller may act on (_guard_order_access)
+PATCH /api/orders/{order_id}/intake-photos [staff]  # intake photos on a job the caller may act on (_guard_order_access)
 # kits: checked per field in the handler — can_change_kit_print / can_change_kit_price
-PATCH /api/orders/{order_id}/kits/{group_id} [staff]
-POST /api/orders/{order_id}/intake-photos/add [staff]
-PATCH /api/orders/{order_id}/intake-photos/{blob_id}/label [staff]
-DELETE /api/orders/{order_id}/kits/{group_id} [staff]
-POST /api/orders/{order_id}/lines [staff]
-DELETE /api/orders/{order_id}/lines/{line_id} [staff]
-PATCH /api/orders/{order_id}/lines/{line_id} [staff]
-POST /api/orders/{order_id}/lines/{line_id}/receive-stock [staff]
-PATCH /api/orders/{order_id}/notes [staff]
-POST /api/orders/{order_id}/public-link [staff]
-POST /api/orders/{order_id}/public-link/revoke [staff]
-POST /api/orders/{order_id}/public-link/rotate [staff]
-POST /api/orders/{order_id}/recommendations/seen [staff]
-PATCH /api/orders/{order_id}/schedule [staff]
-POST /api/orders/{order_id}/signature [staff]
-PATCH /api/orders/{order_id}/priority [staff]
-PATCH /api/orders/{order_id}/status [staff]
-POST /api/orders/{order_id}/status/check [staff]
-PATCH /api/orders/{order_id}/type [staff]
+PATCH /api/orders/{order_id}/kits/{group_id} [staff]  # inline _guard_editable + _guard_kit_change + assert_perm can_change_kit_price/print
+POST /api/orders/{order_id}/intake-photos/add [staff]  # intake photos on a job the caller may act on (_guard_order_access)
+PATCH /api/orders/{order_id}/intake-photos/{blob_id}/label [staff]  # intake photos on a job the caller may act on (_guard_order_access)
+DELETE /api/orders/{order_id}/kits/{group_id} [staff]  # inline _guard_editable + _guard_kit_change (can_add_products/services per line)
+POST /api/orders/{order_id}/lines [staff]  # inline: can_add_services/can_add_products by kind, custom items + discounts asserted, _guard_editable
+DELETE /api/orders/{order_id}/lines/{line_id} [staff]  # inline _guard_editable + _guard_kit_change + can_add_services/products by kind
+PATCH /api/orders/{order_id}/lines/{line_id} [staff]  # inline assert_line_editable + per-field assert_perm (price, discount, cost) + _guard_editable
+POST /api/orders/{order_id}/lines/{line_id}/receive-stock [staff]  # inline _guard_order_access + _guard_editable
+PATCH /api/orders/{order_id}/notes [staff]  # inline _guard_order_access + _guard_editable
+POST /api/orders/{order_id}/public-link [staff]  # inline _guard_order_access: the tracking link of a job the caller may act on
+POST /api/orders/{order_id}/public-link/revoke [staff]  # inline _guard_order_access: the tracking link of a job the caller may act on
+POST /api/orders/{order_id}/public-link/rotate [staff]  # inline _guard_order_access: the tracking link of a job the caller may act on
+POST /api/orders/{order_id}/recommendations/seen [staff]  # clears the caller's own unread marker; record_scope dep
+PATCH /api/orders/{order_id}/schedule [staff]  # inline _guard_order_access + _guard_editable + assert_perm can_assign_staff for others
+POST /api/orders/{order_id}/signature [staff]  # customer signature on a job the caller may act on (_guard_order_access)
+PATCH /api/orders/{order_id}/priority [staff]  # inline _guard_order_access + _guard_editable
+PATCH /api/orders/{order_id}/status [staff]  # _apply_status_change: _guard_order_access, can_edit_closed_ticket, can_close_tickets
+POST /api/orders/{order_id}/status/check [staff]  # dry run of the status gates, saves nothing
+PATCH /api/orders/{order_id}/type [staff]  # inline _guard_order_access + _guard_editable
 # prefs
-PUT /api/prefs/{pref_key} [staff]
+PUT /api/prefs/{pref_key} [staff]  # self-service: the caller's own UI preference
 # pricing
-POST /api/pricing/margin-check [staff]
+POST /api/pricing/margin-check [staff]  # read-only margin preview, saves nothing
 # push
-POST /api/push/subscribe [staff]
-POST /api/push/unsubscribe [staff]
+POST /api/push/subscribe [staff]  # self-service: the caller's own browser push subscription
+POST /api/push/unsubscribe [staff]  # self-service: the caller's own browser push subscription
 # reports
-POST /api/reports/insights/cards [staff]
-PATCH /api/reports/insights/cards/reorder [staff]
-DELETE /api/reports/insights/cards/{cid} [staff]
 # scan — read-only: read a scanned code and look it up in the caller's shop, nothing is written
-POST /api/scan/parse [staff]
-POST /api/scan/resolve [staff]
+POST /api/scan/parse [staff]  # read-only barcode parse, saves nothing
+POST /api/scan/resolve [staff]  # read-only barcode lookup in the caller's shop, saves nothing
 # settings
-POST /api/settings/numbering/preview [staff]
+POST /api/settings/numbering/preview [staff]  # read-only number-format preview, saves nothing
 # tags
-POST /api/tags/attach [staff]
-POST /api/tags/detach [staff]
+POST /api/tags/attach [staff]  # labelling a record of this shop (target checked by the soft-ref guard); tag CRUD is can_manage_settings
+POST /api/tags/detach [staff]  # removing a label from a record of this shop; tag CRUD is can_manage_settings
 # tasks
-POST /api/tasks [staff]
-POST /api/tasks/part-request [staff]
+POST /api/tasks [staff]  # inline _check_assign (can_assign_staff to give it to others) + _check_order_link (job access)
+POST /api/tasks/part-request [staff]  # a part request on a job the caller may act on (_guard_order_access)
 POST /api/tasks/move-to-today [staff]  # moves only tasks the caller may change (assignee/author, or a manager)
-DELETE /api/tasks/{task_id} [staff]
-PATCH /api/tasks/{task_id} [staff]
-POST /api/tasks/{task_id}/comments [staff]
+DELETE /api/tasks/{task_id} [staff]  # inline _check_may_change: assignee/author, or a manager
+PATCH /api/tasks/{task_id} [staff]  # inline _check_may_change + _check_assign + _check_order_link
+POST /api/tasks/{task_id}/comments [staff]  # commenting on a task the caller can see (_load applies task visibility)
 POST /api/tasks/{task_id}/restore [staff]  # same creator/assignee/manager check as delete
 # tech
-POST /api/tech/notifications/dismiss-all [staff]
-POST /api/tech/notifications/read-all [staff]
-POST /api/tech/notifications/{nid}/dismiss [staff]
-POST /api/tech/notifications/{nid}/read [staff]
-PUT /api/tech/preferences [staff]
+POST /api/tech/notifications/dismiss-all [staff]  # self-service: the caller's own notifications
+POST /api/tech/notifications/read-all [staff]  # self-service: the caller's own notifications
+POST /api/tech/notifications/{nid}/dismiss [staff]  # self-service: the caller's own notifications
+POST /api/tech/notifications/{nid}/read [staff]  # self-service: the caller's own notifications
+PUT /api/tech/preferences [staff]  # self-service: the caller's own preferences
 # timeclock
-POST /api/timeclock/entries [staff]
-DELETE /api/timeclock/entries/{eid} [staff]
-PATCH /api/timeclock/entries/{eid} [staff]
-POST /api/timeclock/entries/{eid}/dispute [staff]
-POST /api/timeclock/entries/{entry_id}/stop [staff]
-POST /api/timeclock/order/{order_id}/bill [staff]
-POST /api/timeclock/shift/clock-in [staff]
-POST /api/timeclock/shift/clock-out [staff]
-POST /api/timeclock/start [staff]
-POST /api/timeclock/stop [staff]
-POST /api/timeclock/switch [staff]
+POST /api/timeclock/entries [staff]  # own time; inline _can_manage_emp for another person's + overlap check
+DELETE /api/timeclock/entries/{eid} [staff]  # own entry; inline _can_manage_emp for another person's
+PATCH /api/timeclock/entries/{eid} [staff]  # own entry; inline _can_manage/_can_manage_emp for another person's
+POST /api/timeclock/entries/{eid}/dispute [staff]  # own entry; inline _can_manage_emp for another person's
+POST /api/timeclock/entries/{entry_id}/stop [staff]  # own timer; inline _can_manage_emp for another person's
+POST /api/timeclock/order/{order_id}/bill [staff]  # inline _assert_line_rights (can_add_services) + _guard_editable; record_scope dep
+POST /api/timeclock/shift/clock-in [staff]  # self-service: the caller's own shift
+POST /api/timeclock/shift/clock-out [staff]  # self-service: the caller's own shift
+POST /api/timeclock/start [staff]  # self-service: the caller's own timer (record_scope dep for the job)
+POST /api/timeclock/stop [staff]  # self-service: the caller's own timer
+POST /api/timeclock/switch [staff]  # self-service: the caller's own timer (record_scope dep for the job)
 
 ## Staff — inline "+ Add option" in a directory-backed dropdown (lead source, custom fields).
 ## Adds one value to an existing list only (no rename/merge/delete); the front desk can't stop
 ## for an admin. Managing lists stays behind can_manage_settings.
-POST /api/directories/by-key/{key}/items [staff]
+POST /api/directories/by-key/{key}/items [staff]  # by design (Orderry): any staff may add a value inline from a form; editing lists is can_manage_settings
 
 ## Staff — intake lookup: POST only to carry the typed/scanned value in a body; it reads and
 ## writes nothing (tidy + checksum + "seen before" within the shop).
-POST /api/assets/identify [staff]
+POST /api/assets/identify [staff]  # read-only IMEI/VIN/serial lookup in the caller's shop, writes nothing
 POST /api/imports/parse [staff]  # import centre: the list's own permission is checked in the handler (importer.assert_access)
 POST /api/imports/{kind}/preview [staff]  # import centre: per-list permission checked in importer.run (any of Kind.access)
 POST /api/imports/{kind}/commit [staff]  # import centre: per-list permission checked in importer.run; per-row create/edit perms too
