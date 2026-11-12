@@ -291,7 +291,7 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
         <div className="flex items-center gap-2 w-full sm:w-auto sm:ml-auto">
           {/* Staff see every choice; the ones that need a manager are greyed, never hidden. */}
           <TeklySelect value={person} onChange={(e) => onPerson(e.target.value)} aria-label="Whose tasks"
-            className="glass-input h-9 py-2 px-3 text-xs rounded-xl min-w-[150px] max-sm:flex-1">
+            className="glass-input h-9 py-2 px-3 text-xs rounded-xl min-w-[136px] sm:min-w-[150px]">
             <option value="me">Me</option>
             <option value="all" disabled={!isManager}>{isManager ? "Everyone" : "Everyone (managers only)"}</option>
             <option value="pool">Up for grabs</option>
@@ -302,7 +302,7 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
           <div className="relative flex-1 sm:w-64 sm:flex-none">
             <M n="search" c="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" />
             <input ref={searchBox} type="search" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape" && q) { e.preventDefault(); clearSearch(); } }}
-              aria-label="Search all tasks" placeholder="Search all tasks, incl. done…"
+              aria-label="Search all tasks" placeholder="Search all tasks…"
               className="glass-input w-full h-9 rounded-xl pl-8 pr-3 py-2 text-xs text-ink-primary" />
           </div>
         </div>
