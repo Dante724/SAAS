@@ -1,5 +1,6 @@
-// Tasks screen (phase 0): Mine by default, search and filters, links, Auto badge, edit/delete/undo
-// in the panel, subtasks — against the current API (full list) and the paged one (`total`).
+// Tasks page: one page (no tabs), the flat list a server without My day falls back to, search
+// across the shop, links, Auto badge, edit/delete/undo in the panel, subtasks — against the
+// current API (full list) and the paged one (`total`).
 import { describe, it, expect, vi, beforeEach, afterEach } from "vitest";
 import { render, screen, within, waitFor } from "@testing-library/react";
 import userEvent from "@testing-library/user-event";
@@ -40,66 +41,54 @@ beforeEach(() => {
 });
 afterEach(() => vi.unstubAllGlobals());
 
-const rows = () => screen.getAllByRole("row").slice(1);
-
 describe("TasksHub", () => {
-  it("defaults to Mine and asks the server for my tasks", async () => {
+  it("is one page: no My day | List tabs, no second New task button", async () => {
+    render(<MemoryRouter><TasksHub /></MemoryRouter>);
+    await screen.findByText("Order the screen");
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();
+    expect(screen.queryByRole("button", { name: "New task" })).not.toBeInTheDocument();
+    expect(screen.queryByLabelText("Filter by priority")).not.toBeInTheDocument();
+    expect(screen.getAllByLabelText(/Search/)).toHaveLength(1);                   // one search box
+    expect(screen.getAllByLabelText("Whose tasks")).toHaveLength(1);              // one person menu
+  });
+
+  it("without My day on the server: the flat list of my tasks, asked of the server and narrowed here", async () => {
     render(<MemoryRouter><TasksHub /></MemoryRouter>);
     expect(await screen.findByText("Order the screen")).toBeInTheDocument();
     expect(screen.getByText("Call the supplier")).toBeInTheDocument();          // I made it
-    expect(screen.queryByText("Clean the bench")).not.toBeInTheDocument();      // someone else's
-    expect(screen.getByRole("button", { name: "Mine" })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.queryByText("Clean the bench")).not.toBeInTheDocument();      // someone else's (older API sends all)
     const list = calls.find((c) => c.url.startsWith("/api/tasks?"))!;
     expect(list.url).toContain("assignee=me");
     expect(list.url).toContain("mine=true");
   });
 
-  it("Everyone shows all tasks for a manager and is greyed out for others", async () => {
-    const u = userEvent.setup();
-    const { unmount } = render(<MemoryRouter><TasksHub /></MemoryRouter>);
-    await screen.findByText("Order the screen");
-    await u.click(screen.getByRole("button", { name: "Everyone" }));
-    expect(await screen.findByText("Clean the bench")).toBeInTheDocument();
-    unmount();
-    manager = false;
+  it("the flat list shows links, Auto, priority and who it's for", async () => {
     render(<MemoryRouter><TasksHub /></MemoryRouter>);
-    await screen.findByText("Order the screen");
-    expect(screen.getByRole("button", { name: "Everyone" })).toBeDisabled();
-  });
-
-  it("reads unknown statuses as To do, shows links, Auto and priority", async () => {
-    render(<MemoryRouter><TasksHub /></MemoryRouter>);
-    await screen.findByText("Order the screen");
-    const r1 = rows().find((r) => within(r).queryByText("Order the screen"))!;
-    expect(within(r1).getByText("To do")).toBeInTheDocument();
+    const r1 = (await screen.findByText("Order the screen")).closest("li")!;
     expect(within(r1).getByText("WO-12")).toBeInTheDocument();
-    expect(within(r1).getByText("Ann Lee")).toBeInTheDocument();
+    expect(within(r1).getByText(/Ann Lee/)).toBeInTheDocument();
     expect(within(r1).getByText(/Made by Tekly/)).toBeInTheDocument();
     expect(within(r1).getByText("Urgent")).toBeInTheDocument();
-    const r2 = rows().find((r) => within(r).queryByText("Call the supplier"))!;
-    expect(within(r2).getByText("To do")).toBeInTheDocument();                // legacy "open"
+    expect(within(r1).getByRole("img", { name: "Assigned to Me" })).toBeInTheDocument();
+    const r2 = screen.getByText("Call the supplier").closest("li")!;
     expect(within(r2).getByText("High")).toBeInTheDocument();                 // legacy string priority
     expect(within(r2).queryByText(/Made by Tekly/)).not.toBeInTheDocument();
+    expect(within(r2).getByText("Up for grabs")).toBeInTheDocument();         // nobody on it
   });
 
-  it("searches by client and filters by priority and person", async () => {
+  it("search reaches the whole shop and Clear search goes back", async () => {
     const u = userEvent.setup();
     render(<MemoryRouter><TasksHub /></MemoryRouter>);
     await screen.findByText("Order the screen");
-    await u.click(screen.getByRole("button", { name: "Everyone" }));
-    await screen.findByText("Clean the bench");
-    await u.type(screen.getByLabelText("Search tasks"), "ann lee");
-    await waitFor(() => expect(screen.queryByText("Call the supplier")).not.toBeInTheDocument());
-    expect(screen.getByText("Order the screen")).toBeInTheDocument();
-    expect(calls.filter((c) => c.url.startsWith("/api/tasks?")).pop()!.url).toContain("q=ann+lee");
-    await u.clear(screen.getByLabelText("Search tasks"));
-    await u.selectOptions(screen.getByLabelText("Filter by priority"), "1");
-    await waitFor(() => expect(screen.queryByText("Order the screen")).not.toBeInTheDocument());
-    expect(await screen.findByText("Call the supplier")).toBeInTheDocument();   // after the search debounce clears
-    await u.selectOptions(screen.getByLabelText("Filter by priority"), "");
-    await u.selectOptions(screen.getByLabelText("Filter by person"), "e2");
-    await waitFor(() => expect(screen.queryByText("Order the screen")).not.toBeInTheDocument());
-    expect(screen.getByText("Clean the bench")).toBeInTheDocument();
+    await u.type(screen.getByLabelText("Search all tasks"), "bench");
+    expect(await screen.findByText("Clean the bench")).toBeInTheDocument();     // someone else's: search covers everyone
+    expect(screen.queryByText("Order the screen")).not.toBeInTheDocument();
+    const url = calls.filter((c) => c.url.startsWith("/api/tasks?")).pop()!.url;
+    expect(url).toContain("q=bench");
+    expect(url).not.toContain("assignee=");
+    await u.click(screen.getByRole("button", { name: "Clear search" }));
+    expect(await screen.findByText("Order the screen")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByText("Clean the bench")).not.toBeInTheDocument());
   });
 
   it("edits title, description and priority in the panel, shows subtasks, labels remove buttons", async () => {
@@ -133,15 +122,5 @@ describe("TasksHub", () => {
     expect(confirm).not.toHaveBeenCalled();
     await u.click(await screen.findByRole("button", { name: "Undo" }));
     expect(calls.find((c) => c.method === "POST")!.url).toBe("/api/tasks/t1/restore");
-  });
-
-  it("uses server status filtering and paging once the API reports a total", async () => {
-    paged = true;
-    const u = userEvent.setup();
-    render(<MemoryRouter><TasksHub /></MemoryRouter>);
-    await screen.findByText("Order the screen");
-    await u.click(screen.getByRole("button", { name: "In progress" }));
-    await waitFor(() => expect(calls.filter((c) => c.url.startsWith("/api/tasks?")).pop()!.url).toContain("status=in_progress"));
-    expect(calls.filter((c) => c.url.startsWith("/api/tasks?")).pop()!.url).toContain("limit=50");
   });
 });

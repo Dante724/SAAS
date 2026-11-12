@@ -50,18 +50,20 @@ let patchFail = false;
 // Like the server: each list holds at most 100, counts are the true totals.
 const capDay = (d: any) => ({ ...d, catch_up: d.catch_up.slice(0, 100), counts: { ...d.counts, catch_up: Math.max(d.counts.catch_up, d.catch_up.length) } });
 let moveReply: any = { moved: 2 };
+const LIST = () => [{ id: "x1", title: "A task in the list", assignee_ids: ["me"], due_at: "2026-11-11T04:00:00" }];
+let listItems: any[] = LIST();
 
 beforeEach(() => {
   calls = []; manager = true; dayBody = DAY(); dayStatus = 200; failPost = false; failMove = false;
   try { localStorage.clear(); } catch { /* storage may be off */ }
-  shopTz = null; shopCountry = null; tzFail = false; patchFail = false; goneId = null; moveReply = { moved: 2 }; resetShopTz();
+  shopTz = null; shopCountry = null; tzFail = false; patchFail = false; goneId = null; moveReply = { moved: 2 }; listItems = LIST(); resetShopTz();
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method || "GET";
     calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : null });
     if (method === "GET" && url.startsWith("/api/tasks/my-day") && goneId && url.includes(`assignee=${goneId}`)) return reply({ detail: "Employee not found" }, 404);
     if (method === "GET" && url.startsWith("/api/tasks/my-day")) return dayStatus === 200 ? reply(capDay(dayBody)) : reply({ detail: dayStatus === 404 && !url.includes("assignee=me") ? "Employee not found" : "Not Found" }, dayStatus);
     if (method === "GET" && url.startsWith("/api/staff/company")) return tzFail ? reply({ detail: "boom" }, 500) : reply({ name: "Fix Point", timezone: shopTz, country: shopCountry });
-    if (method === "GET" && url.startsWith("/api/tasks?")) return reply({ items: [{ id: "x1", title: "A task in the list", assignee_ids: ["me"], due_at: "2026-11-11T04:00:00" }] });
+    if (method === "GET" && url.startsWith("/api/tasks?")) return reply({ items: listItems });
     if (method === "POST" && url === "/api/tasks/move-to-today") {
       if (failMove) return reply({ detail: "no" }, 500);
       const ids: string[] = calls[calls.length - 1].body.ids; const skip = new Set(moveReply.skipped || []);
@@ -164,21 +166,38 @@ describe("My day", () => {
     await screen.findByText("QC check MacBook Air keyboard");
     await u.click(screen.getByRole("button", { name: 'Mark "Call Jane about collection" done' }));
     expect(calls.filter((c) => c.method === "PATCH").pop()).toMatchObject({ url: "/api/tasks/t2", body: { status: "done" } });
-    await waitFor(() => expect(screen.getByRole("button", { name: /Done today\s*2/ })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Done\s*2$/ })).toBeInTheDocument());
     await u.click(await screen.findByRole("button", { name: "Undo" }));
     expect(calls.filter((c) => c.method === "PATCH").pop()).toMatchObject({ url: "/api/tasks/t2", body: { status: "todo" } });
-    await waitFor(() => expect(screen.getByRole("button", { name: /Done today\s*1/ })).toBeInTheDocument());
+    await waitFor(() => expect(screen.getByRole("button", { name: /^Done\s*1$/ })).toBeInTheDocument());
   });
 
-  it("shows Done today folded, and opens it", async () => {
+  it("Done is the fourth segment: today's done tasks, and older ones are a search away", async () => {
     const u = userEvent.setup();
     renderAt();
     await screen.findByText("QC check MacBook Air keyboard");
-    const toggle = screen.getByRole("button", { name: /Done today/ });
-    expect(toggle).toHaveAttribute("aria-expanded", "false");
-    expect(screen.queryByText("Open the till")).not.toBeInTheDocument();
-    await u.click(toggle);
+    expect(screen.queryByText("Open the till")).not.toBeInTheDocument();       // no folded "Done today" bar any more
+    expect(screen.queryByRole("button", { name: /Done today/ })).not.toBeInTheDocument();
+    const segs = within(screen.getByRole("group", { name: "Which days" })).getAllByRole("button").map((b) => b.textContent);
+    expect(segs).toEqual(["Today5", "Upcoming1", "Later1", "Done1"]);
+    await u.click(screen.getByRole("button", { name: /^Done\s*1$/ }));
     expect(screen.getByText("Open the till")).toBeInTheDocument();
+    expect(screen.queryByText("QC check MacBook Air keyboard")).not.toBeInTheDocument();
+    expect(screen.getByText(/Older tasks:/)).toBeInTheDocument();
+    await u.click(screen.getByRole("button", { name: "use search" }));
+    expect(screen.getByLabelText("Search all tasks")).toHaveFocus();
+  });
+
+  it("an empty Today with something coming up is one short line that leads to Upcoming", async () => {
+    dayBody = { date: DATE, catch_up: [], today: [], upcoming: [{ id: "u1", title: "Order iPad Air battery", due_at: "2026-11-12", assigned_to_id: "me" }], later: [], done_today: [], counts: { catch_up: 0, today: 0, upcoming: 1, later: 0, done_today: 0 } };
+    const u = userEvent.setup();
+    renderAt();
+    expect(await screen.findByText("Nothing due today")).toBeInTheDocument();
+    expect(screen.getByText(/1 coming up/)).toBeInTheDocument();
+    expect(screen.queryByText(/Your day is clear/)).not.toBeInTheDocument();      // not the big empty box
+    await u.click(screen.getByRole("button", { name: "Show upcoming" }));
+    expect(screen.getByRole("button", { name: /^Upcoming\s*1$/ })).toHaveAttribute("aria-pressed", "true");
+    expect(screen.getByText("Order iPad Air battery")).toBeInTheDocument();
   });
 
   it("quick add: Enter saves for today with a date-only due, shows it at once", async () => {
@@ -219,35 +238,54 @@ describe("My day", () => {
     expect(screen.getByLabelText("Add a task")).toHaveValue("Test the charge port");
   });
 
-  it("whose day: managers pick a person or Everyone; others see it greyed with a reason", async () => {
+  it("whose tasks: managers pick Everyone, Up for grabs or a person; staff see the same menu greyed", async () => {
     const u = userEvent.setup();
     const { unmount } = renderAt();
     await screen.findByText("QC check MacBook Air keyboard");
-    await u.selectOptions(screen.getByLabelText("Whose day"), "all");
+    const opts = () => [...(screen.getByLabelText("Whose tasks") as HTMLSelectElement).options].map((o) => [o.value, o.textContent, o.disabled]);
+    expect(opts()).toEqual([["me", "Me", false], ["all", "Everyone", false], ["pool", "Up for grabs", false], ["e2", "Jane Kim", false], ["e3", "Tom Reed", false]]);
+    await u.selectOptions(screen.getByLabelText("Whose tasks"), "all");
     await waitFor(() => expect(calls.filter((c) => c.url.startsWith("/api/tasks/my-day")).pop()!.url).toBe("/api/tasks/my-day?assignee=all"));
-    await u.selectOptions(screen.getByLabelText("Whose day"), "e3");
-    await waitFor(() => expect(calls.filter((c) => c.url.startsWith("/api/tasks/my-day")).pop()!.url).toBe("/api/tasks/my-day?assignee=e3"));
+    await u.selectOptions(screen.getByLabelText("Whose tasks"), "e3");
+    await waitFor(() => expect(calls.some((c) => c.url === "/api/tasks/my-day?assignee=e3")).toBe(true));
     unmount();
     manager = false;
     renderAt();
     await screen.findByText("QC check MacBook Air keyboard");
-    const sel = screen.getByLabelText("Whose day");
-    expect(sel).toBeDisabled();
-    expect(screen.getByText("Only managers can see other people's day.")).toBeVisible();   // on screen, not hover-only
+    expect(screen.getByLabelText("Whose tasks")).not.toBeDisabled();
+    // greyed, never hidden: Everyone and the people are there but can't be picked; Up for grabs can
+    expect(opts()).toEqual([["me", "Me", false], ["all", "Everyone (managers only)", true], ["pool", "Up for grabs", false], ["e2", "Jane Kim", true], ["e3", "Tom Reed", true]]);
+    expect(screen.getByRole("group", { name: "People (managers only)" })).toBeInTheDocument();
     expect(within(screen.getByRole("group", { name: "Who" })).getByRole("button", { name: "Others" })).toBeDisabled();
   });
 
-  it("search narrows the day and offers to clear", async () => {
+  it("search finds every task in the shop, history too; Clear search goes back to the day", async () => {
+    listItems = [
+      { id: "s1", title: "Call Jane about collection", status: "todo", assignee_ids: ["me"], assignee_names: ["Me"], due_at: "2026-11-11T11:00:00" },
+      { id: "s2", title: "Order screen for Jane", status: "done", completed_at: "2026-11-03T10:00:00Z", assignee_ids: ["e2"], assignee_names: ["Jane Kim"] },
+      { id: "s3", title: "Call Jane: second quote", status: "cancelled", assignee_ids: ["e2"], assignee_names: ["Jane Kim"] },
+    ];
     const u = userEvent.setup();
     renderAt();
     await screen.findByText("QC check MacBook Air keyboard");
-    await u.type(screen.getByLabelText("Search tasks"), "jane kim");
+    await u.type(screen.getByLabelText("Search all tasks"), "jane");
+    expect(await screen.findByText("Order screen for Jane")).toBeInTheDocument();
+    const list = calls.filter((c) => c.url.startsWith("/api/tasks?")).pop()!.url;
+    expect(list).toContain("q=jane");
+    expect(list).not.toContain("assignee=");                       // the whole shop, not only mine
+    expect(list).not.toContain("status=");                         // done and cancelled too
     expect(screen.queryByText("QC check MacBook Air keyboard")).not.toBeInTheDocument();
-    expect(screen.getByText("Call Jane about collection")).toBeInTheDocument();
-    await u.clear(screen.getByLabelText("Search tasks"));
-    await u.type(screen.getByLabelText("Search tasks"), "zzz");
+    expect(screen.getByText(/across the shop, 2 from history/)).toBeInTheDocument();
+    const done = screen.getByText("Order screen for Jane").closest("li")!;
+    expect(within(done).getByText("Done Nov 3")).toBeInTheDocument();
+    expect(within(done).getByRole("img", { name: "Assigned to Jane Kim" })).toBeInTheDocument();
+    expect(within(screen.getByText("Call Jane: second quote").closest("li")!).getByText("Cancelled")).toBeInTheDocument();
+    for (const b of within(screen.getByRole("group", { name: "Which days" })).getAllByRole("button")) expect(b).toBeDisabled();
+    await u.click(screen.getByText("Order screen for Jane"));
+    await waitFor(() => expect(at).toBe("/tasks?task=s2"));             // a result opens the same panel
     await u.click(screen.getByRole("button", { name: "Clear search" }));
-    expect(screen.getByText("QC check MacBook Air keyboard")).toBeInTheDocument();
+    expect(await screen.findByText("QC check MacBook Air keyboard")).toBeInTheDocument();
+    expect(screen.getByLabelText("Search all tasks")).toHaveValue("");
   });
 
   it("an empty day invites a task instead of apologising", async () => {
@@ -268,13 +306,15 @@ describe("My day", () => {
     expect(await screen.findByText("QC check MacBook Air keyboard")).toBeInTheDocument();
   });
 
-  it("falls back to the list when the server has no My day yet, with the tab greyed and explained", async () => {
+  it("falls back to the flat list when the server has no My day yet, explained, segments greyed", async () => {
     dayStatus = 404;
     renderAt();
     expect(await screen.findByText("A task in the list")).toBeInTheDocument();
-    const tab = screen.getByRole("tab", { name: "My day" });
-    expect(tab).toBeDisabled();
-    expect(tab).toHaveAttribute("title", expect.stringContaining("isn't ready yet"));
+    expect(screen.queryByRole("tab")).not.toBeInTheDocument();                 // no My day | List tabs
+    expect(screen.getByText("My day isn't ready yet. Here's the full list for now.")).toBeInTheDocument();
+    for (const b of within(screen.getByRole("group", { name: "Which days" })).getAllByRole("button")) expect(b).toBeDisabled();
+    expect(calls.filter((c) => c.url.startsWith("/api/tasks?")).pop()!.url).toContain("assignee=me");
+    expect(screen.getByLabelText("Add a task")).toBeInTheDocument();             // quick add still works
   });
 });
 
@@ -382,7 +422,7 @@ describe("My day: the rest of the acceptance list", () => {
     const u = userEvent.setup();
     const { unmount } = renderAt();
     await screen.findByText("QC check MacBook Air keyboard");
-    await u.selectOptions(screen.getByLabelText("Whose day"), "e2");
+    await u.selectOptions(screen.getByLabelText("Whose tasks"), "e2");
     expect(at).toBe("/tasks?assignee=e2");
     unmount();
     manager = false;
@@ -397,7 +437,7 @@ describe("My day: the rest of the acceptance list", () => {
     renderAt();
     await screen.findByText("QC check MacBook Air keyboard");
     expect(screen.queryByRole("img", { name: /Assigned to/ })).not.toBeInTheDocument();
-    await u.selectOptions(screen.getByLabelText("Whose day"), "all");
+    await u.selectOptions(screen.getByLabelText("Whose tasks"), "all");
     expect(await screen.findByRole("img", { name: "Assigned to Me" })).toBeInTheDocument();
   });
 
@@ -407,7 +447,7 @@ describe("My day: the rest of the acceptance list", () => {
     renderAt();
     await screen.findByText("QC check MacBook Air keyboard");
     await u.click(screen.getByRole("button", { name: 'Mark "Call Jane about collection" done' }));
-    await u.click(screen.getByRole("button", { name: /Done today/ }));
+    await u.click(await screen.findByRole("button", { name: /^Done\s*2$/ }));
     await u.click(await screen.findByRole("button", { name: 'Undo: mark "Call Jane about collection" not done' }));
     expect(calls.filter((c) => c.method === "PATCH").pop()).toMatchObject({ url: "/api/tasks/t2", body: { status: "in_progress" } });
   });
@@ -419,8 +459,8 @@ describe("My day: the rest of the acceptance list", () => {
     expect(screen.getByRole("heading", { name: "Catch up, 137 tasks" })).toBeInTheDocument();
     expect(screen.getByText(/Showing 2 of 137/)).toBeInTheDocument();
     const u = userEvent.setup();
-    await u.click(screen.getByRole("button", { name: "See all 137 in the List view" }));
-    expect(await screen.findByText("A task in the list")).toBeInTheDocument();
+    await u.click(screen.getByRole("button", { name: "Search" }));                 // no List view any more: search finds any of them
+    expect(screen.getByLabelText("Search all tasks")).toHaveFocus();
   });
 
   it("an empty day puts the cursor in quick add", async () => {
@@ -456,7 +496,7 @@ describe("the shop's clock (due times are UTC instants)", () => {
     expect(timeOf("Call Jane about pickup")).toMatch(/6:00\s?PM/);
     expect(timeOf("Count iPhone screens")).not.toMatch(/PM|AM/);
     const u = userEvent.setup();
-    await u.click(screen.getByRole("button", { name: /Done today/ }));
+    await u.click(screen.getByRole("button", { name: /^Done/ }));
     expect(timeOf("Open the till")).toMatch(/2:25\s?PM/);
   });
 
@@ -529,10 +569,11 @@ describe("review fixes", () => {
     renderAt();
     await screen.findByText("QC check MacBook Air keyboard");
     goneId = "e3";
-    await u.selectOptions(screen.getByLabelText("Whose day"), "e3");
+    await u.selectOptions(screen.getByLabelText("Whose tasks"), "e3");
     expect(await screen.findByText("That person's day isn't available")).toBeInTheDocument();
     await waitFor(() => expect(at).toBe("/tasks"));
-    expect(screen.getByRole("tab", { name: "My day" })).not.toBeDisabled();
+    expect(screen.queryByText("My day isn't ready yet. Here's the full list for now.")).not.toBeInTheDocument();
+    expect(within(screen.getByRole("group", { name: "Which days" })).getByRole("button", { name: /^Today/ })).not.toBeDisabled();
   });
 
   it("Move all to today moves ALL of them, page after page, not only the 100 on screen", async () => {
@@ -594,7 +635,108 @@ describe("review fixes", () => {
     manager = false;
     renderAt();
     await screen.findByText("QC check MacBook Air keyboard");
-    expect(screen.getByText("Only managers can see other people's day.")).toBeVisible();
+    expect(screen.getByRole("option", { name: "Everyone (managers only)" })).toBeDisabled();
     expect(screen.getByText("Only managers can give tasks to others.")).toBeVisible();
+  });
+});
+
+describe("one-page Tasks (v2)", () => {
+  const TEAM = () => ({
+    date: DATE,
+    catch_up: [{ id: "c1", title: "Chase supplier RMA", due_at: "2026-11-06T17:00:00", overdue: true, assigned_to_id: "e3", assignee_ids: ["e3"], assignee_names: ["Tom Reed"] }],
+    today: [
+      { id: "t1", title: "QC check MacBook Air keyboard", due_at: `${DATE}T15:00:00`, assigned_to_id: "me", assignee_ids: ["me", "e3"], assignee_names: ["Me", "Tom Reed"] },
+      { id: "t2", title: "Ring Ana about the iPad", due_at: `${DATE}T11:00:00`, assigned_to_id: "e2", assignee_ids: ["e2"], assignee_names: ["Jane Kim"] },
+      { id: "p1", title: "Test the new charge port stock", due_at: `${DATE}T13:00:00`, assigned_to_id: null, assignee_ids: [], created_by_id: "e2" },
+    ],
+    upcoming: [{ id: "p2", title: "Restock screen protectors", due_at: "2026-11-13", assigned_to_id: null, assignee_ids: [] }],
+    later: [],
+    done_today: [{ id: "d1", title: "Open the till", status: "done", completed_at: `${DATE}T08:55:00Z`, assigned_to_id: "e3", assignee_ids: ["e3"], assignee_names: ["Tom Reed"] }],
+    counts: { catch_up: 1, today: 3, upcoming: 1, later: 0, done_today: 1 },
+  });
+  const card = (name: RegExp) => within(screen.getByRole("group", { name: "Team" })).getByRole("button", { name });
+
+  it("Everyone (managers): a team row with Up for grabs first, then each person's overdue / today / done", async () => {
+    dayBody = TEAM();
+    const u = userEvent.setup();
+    renderAt("/tasks?assignee=all");
+    await screen.findByText("Ring Ana about the iPad");
+    const cards = within(screen.getByRole("group", { name: "Team" })).getAllByRole("button");
+    expect(cards.map((c) => c.getAttribute("aria-label"))).toEqual([
+      "Up for grabs: 2 waiting",
+      "Me (you): 0 overdue, 1 today, 0 done today",
+      "Jane Kim: 0 overdue, 1 today, 0 done today",
+      "Tom Reed: 1 overdue, 1 today, 1 done today",
+    ]);
+    // a card picks that person; clicking it again goes back to Everyone
+    await u.click(card(/^Tom Reed/));
+    expect(at).toBe("/tasks?assignee=e3");
+    await waitFor(() => expect(calls.some((c) => c.url === "/api/tasks/my-day?assignee=e3")).toBe(true));
+    expect(card(/^Tom Reed/)).toHaveAttribute("aria-pressed", "true");             // the row stays, counted from everyone
+    await u.click(card(/^Tom Reed/));
+    expect(at).toBe("/tasks?assignee=all");
+    await u.click(card(/^Up for grabs/));
+    expect(at).toBe("/tasks?assignee=pool");
+    await screen.findByText("Test the new charge port stock");
+    expect(screen.queryByText("Ring Ana about the iPad")).not.toBeInTheDocument();  // only the pool
+    expect(screen.getByRole("button", { name: /^Today\s*1$/ })).toBeInTheDocument();
+  });
+
+  it("no team row for Me, nor for staff, nor while searching", async () => {
+    dayBody = TEAM();
+    const u = userEvent.setup();
+    const { unmount } = renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    expect(screen.queryByRole("group", { name: "Team" })).not.toBeInTheDocument();
+    unmount();
+    renderAt("/tasks?assignee=all");
+    await screen.findByRole("group", { name: "Team" });
+    await u.type(screen.getByLabelText("Search all tasks"), "jane");
+    await waitFor(() => expect(screen.queryByRole("group", { name: "Team" })).not.toBeInTheDocument());
+  });
+
+  it("quick add gives the task to whoever is shown: a person, or nobody for Up for grabs", async () => {
+    const u = userEvent.setup();
+    const { unmount } = renderAt("/tasks?assignee=e3");
+    await screen.findByLabelText("Add a task");
+    await waitFor(() => expect(within(screen.getByRole("group", { name: "Who" })).getByRole("button", { name: "Tom" })).toHaveAttribute("aria-pressed", "true"));
+    await u.type(screen.getByLabelText("Add a task"), "Label the returned Galaxy{Enter}");
+    expect(posts("/api/tasks")[0].body).toMatchObject({ assigned_to_id: "e3", assignee_ids: ["e3"] });
+    expect(await screen.findByText("Task added for Tom Reed, due today")).toBeInTheDocument();
+    unmount();
+    calls = [];
+    renderAt("/tasks?assignee=pool");
+    await screen.findByLabelText("Add a task");
+    expect(within(screen.getByRole("group", { name: "Who" })).getByRole("button", { name: "Up for grabs" })).toHaveAttribute("aria-pressed", "true");
+    await u.type(screen.getByLabelText("Add a task"), "Clean the ultrasonic bath{Enter}");
+    expect(posts("/api/tasks")[0].body).toMatchObject({ assigned_to_id: null, assignee_ids: [] });
+    expect(await screen.findByText("Added to Up for grabs, due today")).toBeInTheDocument();
+  });
+
+  it("staff can open Up for grabs and take a task from it", async () => {
+    manager = false; dayBody = TEAM();
+    const u = userEvent.setup();
+    renderAt("/tasks?assignee=pool");
+    await screen.findByText("Test the new charge port stock");
+    expect(calls.filter((c) => c.url.startsWith("/api/tasks/my-day")).pop()!.url).toBe("/api/tasks/my-day?assignee=me&include_pool=true");
+    expect(screen.queryByRole("group", { name: "Team" })).not.toBeInTheDocument();
+    await u.click(screen.getByRole("button", { name: "Take it: Test the new charge port stock" }));
+    expect(calls.filter((c) => c.method === "PATCH").pop()).toMatchObject({ url: "/api/tasks/p1", body: { assignee_ids: ["me"] } });
+  });
+
+  it("Add task with nothing typed is greyed in place (chip grey, not faded sapphire) and says why when tapped", async () => {
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    const add = screen.getByRole("button", { name: "Add task" });
+    expect(add).toHaveAttribute("aria-disabled", "true");
+    expect(add.className).toContain("!bg-slate-100");
+    expect(add.className).not.toContain("bg-primary");
+    expect(add.className).not.toContain("opacity-50 cursor");
+    await u.click(add);
+    expect(screen.getByText("Type what needs doing first.")).toBeInTheDocument();
+    await u.type(screen.getByLabelText("Add a task"), "Ring Jane");
+    expect(add).toHaveAttribute("aria-disabled", "false");
+    expect(add.className).toContain("bg-primary");
   });
 });

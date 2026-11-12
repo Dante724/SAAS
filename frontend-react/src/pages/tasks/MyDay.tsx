@@ -14,44 +14,65 @@ import { useShopClock, toShopWall, fromShopWall, shopToday, fmtShop, shopLocale 
 import {
   type Task, type MyDay as Day, type DayBucket, type QuickWhen, type TaskGroup,
   normDay, moveTasks, insertTask, replaceTask, groupByTime, groupByDay, dueClock, fmtClock, lateLabel,
-  quickDue, bucketForDue, dayLabel, matchesQuery, normPriority, normStatus, PRIORITY_LABEL, isAuto, dueOf, withShopTimes, splitPool, AUTO_LABEL, AUTO_HINT,
+  quickDue, bucketForDue, dayLabel, normPriority, normStatus, PRIORITY_LABEL, isAuto, dueOf, withShopTimes, splitPool, filterDay, isPool, teamLoad, AUTO_LABEL, AUTO_HINT,
 } from "./taskModel";
 import type { Emp } from "./TaskPanel";
+import TaskResults from "./TaskResults";
 
-// My day: one person's tasks as Catch up / Today / Upcoming / Later, with a quick add on top.
-// GET /tasks/my-day does the sorting (it knows the shop's today); this screen only shows it,
-// moves rows optimistically and puts them back if the server says no.
+// Tasks, on one page: quick add on top; then the day as Today / Upcoming / Later / Done, for Me,
+// Everyone, Up for grabs or one person; and one search that reaches every task in the shop
+// (done and cancelled too). GET /tasks/my-day does the sorting (it knows the shop's today); this
+// screen only shows it, moves rows optimistically and puts them back if the server says no.
 
-type View = "today" | "upcoming" | "later";
+type View = "today" | "upcoming" | "later" | "done";
 const reducedMotion = () => typeof window !== "undefined" && !!window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
-const DONE_DELAY = 420;   // long enough to see the tick land before the row moves to Done today
+const DONE_DELAY = 420;   // long enough to see the tick land before the row moves to Done
 const newKey = () => { try { return crypto.randomUUID(); } catch { return `${Date.now()}-${Math.random().toString(36).slice(2)}`; } };
+const MISSING_NOTE = "My day isn't ready yet. Here's the full list for now.";
 
-export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen, flash, onUnavailable, onShowAll, reloadKey }: {
+/** Who quick add gives a task to by default: whoever the page shows (Me and Everyone: me). */
+export type AddTarget = { id: string | null; label: string; name: string | null };
+
+export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen, flash, missing, onUnavailable, reloadKey, onChanged, onListPaged }: {
   meId?: string;
   emps: Emp[];
   isManager: boolean;
-  person: string;                       // "me", "all" or an employee id (managers only; the page clamps it)
+  person: string;                       // "me", "all", "pool" or an employee id (the page clamps it for staff)
   onPerson: (p: string) => void;
   onOpen: (t: Task) => void;
   flash: (msg: string, action?: () => void, label?: string) => void;
-  onUnavailable: () => void;            // the server has no /tasks/my-day yet: show the list instead
-  onShowAll: () => void;                // a group has more than the server sent: open the List view
+  missing: boolean;                     // the server has no /tasks/my-day yet: show the flat list
+  onUnavailable: () => void;
   reloadKey: number;                    // bumped by the page when the panel changed something
+  onChanged?: () => void;               // something changed here that the page should know about
+  onListPaged?: (paged: boolean) => void; // the flat list's server pages (and so soft-deletes)
 }) {
   const [raw, setDay] = useState<Day | null>(null);
   // Due times arrive as UTC instants: put them on the shop's clock before grouping (and wait for
   // the zone, so nothing is grouped by the browser's clock first).
   const { tz, failed: tzFailed, retry: retryTz } = useShopClock();
-  // Staff also see the shop's unassigned tasks ("Up for grabs") and can take one.
+  // Staff also see the shop's unassigned tasks ("Up for grabs") under their own day and can take one.
   const poolMode = !isManager && person === "me";
-  const split = useMemo(() => (raw && tz ? splitPool(withShopTimes(raw, (iso) => toShopWall(iso, tz)), poolMode ? meId : null) : null), [raw, tz, poolMode, meId]);
+  const pooled = person === "pool";
+  // Up for grabs is everyone's day (managers) or my day with the pool (staff), cut down to the pool.
+  const src = pooled ? (isManager ? "all" : "me") : person;
+  const dayUrl = `/tasks/my-day?assignee=${encodeURIComponent(src)}${poolMode || (pooled && !isManager) ? "&include_pool=true" : ""}`;
+  const split = useMemo(() => {
+    if (!raw || !tz) return null;
+    const wall = withShopTimes(raw, (iso) => toShopWall(iso, tz));
+    return pooled ? { day: filterDay(wall, isPool), pool: [] as Task[] } : splitPool(wall, poolMode ? meId : null);
+  }, [raw, tz, pooled, poolMode, meId]);
   const day = split?.day ?? null;
   const pool = split?.pool ?? [];
+  // The team row (managers, any view but Me) is counted from everyone's day.
+  const needTeam = isManager && person !== "me" && !missing;
+  const [teamRaw, setTeamRaw] = useState<Day | null>(null);
+  const teamDay = !needTeam ? null : src === "all" ? raw : teamRaw;
   const [failed, setFailed] = useState(false);
   const [view, setView] = useState<View>("today");
   const [q, setQ] = useState("");
-  const [showDone, setShowDone] = useState(false);
+  const [qDeb, setQDeb] = useState("");
+  const searchBox = useRef<HTMLInputElement>(null);
   const [showPool, setShowPool] = useState(false);
   const [ticking, setTicking] = useState<string[]>([]);
   const [justDone, setJustDone] = useState<Record<string, { from: DayBucket; status?: string | null }>>({});   // ticked here: offer Undo in the row
@@ -66,18 +87,21 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
   onPersonRef.current = onPerson;
   const flashRef = useRef(flash);
   flashRef.current = flash;
+  useEffect(() => { const h = setTimeout(() => setQDeb(q.trim()), 250); return () => clearTimeout(h); }, [q]);
+  const searching = !!qDeb;
 
   const load = useCallback((quiet = false) => {
+    if (missing) return;
     const id = ++req.current;
     if (!quiet) { setDay(null); setFailed(false); }
-    api.get<Partial<Day>>(`/tasks/my-day?assignee=${encodeURIComponent(person)}${poolMode ? "&include_pool=true" : ""}`).then((r) => {
+    api.get<Partial<Day>>(dayUrl).then((r) => {
       if (id !== req.current) return;
       const d = normDay(r, "");
       setDay(d); setFailed(false);
-      if (!quiet && !d.catch_up.length && !d.today.length) setFocusAdd((n) => n + 1);   // an empty day: ready to type
+      if (!quiet && person === "me" && !d.catch_up.length && !d.today.length) setFocusAdd((n) => n + 1);   // an empty day: ready to type
     }).catch((e) => {
       if (id !== req.current) return;
-      if (e instanceof ApiError && (e.status === 403 || e.status === 404) && person !== "me") {
+      if (e instanceof ApiError && (e.status === 403 || e.status === 404) && src !== "me") {
         // Not allowed to see that day, or that person isn't in the shop any more: back to mine.
         onPersonRef.current("me"); if (e.status === 404) flashRef.current("That person's day isn't available"); return;
       }
@@ -85,7 +109,11 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
       if (e instanceof ApiError && e.status === 404) { onUnavailable(); return; }
       if (!quiet || !dayRef.current) setFailed(true);
     });
-  }, [person, poolMode, onUnavailable]);
+    // One person picked: the team row above still counts everyone.
+    if (isManager && person !== "me" && src !== "all") {
+      api.get<Partial<Day>>("/tasks/my-day?assignee=all").then((r) => { if (id === req.current) setTeamRaw(normDay(r, "")); }).catch(() => undefined);
+    }
+  }, [dayUrl, src, person, isManager, missing, onUnavailable]);
   useEffect(() => { load(); }, [load]);
   const first = useRef(true);
   useEffect(() => { if (first.current) { first.current = false; return; } load(true); }, [reloadKey, load]);
@@ -101,8 +129,6 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
   }, [tz, shownDate, load]);
 
   const today = day?.date || (tz ? shopToday(tz) : "");
-  const qx = q.trim();
-  const pick = (ts: Task[]) => (qx ? ts.filter((t) => matchesQuery(t, qx)) : ts);
   const showWho = person !== "me";
 
   // ── done / undo ──
@@ -141,9 +167,11 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
     if (!day || !day.catch_up.length) return;
     const prev = raw;
     setBusyMove(true);
-    setDay((d) => d && moveTasks(d, d.catch_up.map((t) => t.id), "today", { overdue: false, due_at: today }));
+    setDay((d) => d && moveTasks(d, day.catch_up.map((t) => t.id), "today", { overdue: false, due_at: today }));
     let ids = day.catch_up.map((t) => t.id);
     let moved = 0, skipped = new Set<string>();
+    // Up for grabs only moves the pool's tasks, never everyone's.
+    const scoped = (d: Day) => (pooled ? filterDay(d, isPool) : d);
     try {
       for (let round = 0; round < 50 && ids.length; round++) {
         let roundMoved = 0;
@@ -157,9 +185,10 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
         }
         moved += roundMoved;
         if (!roundMoved) break;
-        const next = normDay(await api.get<Partial<Day>>(`/tasks/my-day?assignee=${encodeURIComponent(person)}${poolMode ? "&include_pool=true" : ""}`), "");
+        const next = normDay(await api.get<Partial<Day>>(dayUrl), "");
         setDay(next);
-        ids = next.counts.catch_up > 0 ? next.catch_up.map((t) => t.id).filter((x) => !skipped.has(x)) : [];
+        const left = scoped(next);
+        ids = left.counts.catch_up > 0 ? left.catch_up.map((t) => t.id).filter((x) => !skipped.has(x)) : [];
       }
       const said = moved === 1 ? "Moved 1 task to today" : `Moved ${moved} tasks to today`;
       flash(!skipped.size ? said : `${moved ? `${said}. ` : ""}${skipped.size === 1 ? "1 couldn't be moved" : `${skipped.size} couldn't be moved`}`);
@@ -190,19 +219,26 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
   }
 
   // ── quick add ──
+  // A task goes to whoever the page shows: a person → them, Up for grabs → nobody, Me and Everyone → me.
+  const people = emps.filter((e) => e.id !== meId);
+  const picked = ["me", "all", "pool", meId].includes(person) ? undefined : emps.find((e) => e.id === person);
+  const target: AddTarget = pooled ? { id: null, label: "Up for grabs", name: null }
+    : picked ? { id: picked.id, label: picked.name.split(/\s+/)[0], name: picked.name }
+    : { id: meId || null, label: "Me", name: null };
   async function add(body: Record<string, any>, preview: Task, forName: string | null, key: string): Promise<boolean> {
     const to = bucketForDue(body.due_at ?? null, today);
     // It shows at once only where it belongs: a task for someone else isn't in my day.
     const assignee = body.assigned_to_id as string | null;
-    const belongs = person === "all" || (person === "me" ? assignee === meId : assignee === person);
+    const belongs = person === "all" || (pooled ? !assignee : person === "me" ? assignee === meId : assignee === person);
     if (belongs) setDay((d) => d && insertTask(d, preview, to));
     try {
       const saved = await api.postOnce<Task>("/tasks", body, key);
       if (belongs) setDay((d) => d && replaceTask(d, preview.id, saved && saved.id ? { ...preview, ...saved } : preview));
       const label = body.due_at ? dayLabel(String(body.due_at).slice(0, 10), today) : "";
       const when = !label ? "later" : label === "Today" || label === "Tomorrow" ? label.toLowerCase() : label;
-      flash(forName ? `Task added for ${forName}, due ${when}` : `Task added for ${when}`);
+      flash(!assignee ? `Added to Up for grabs, due ${when}` : forName ? `Task added for ${forName}, due ${when}` : `Task added for ${when}`);
       load(true);
+      onChanged?.();
       return true;
     } catch {
       if (belongs) setDay((d) => d && replaceTask(d, preview.id, null));
@@ -212,57 +248,72 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
   }
 
   const counts = day?.counts;
+  const off = searching || missing;      // a search (or no My day) shows one flat list instead
   const tabs = [
-    { id: "today" as View, label: "Today", count: counts ? counts.today + counts.catch_up : null },
-    { id: "upcoming" as View, label: "Upcoming", count: counts?.upcoming ?? null },
-    { id: "later" as View, label: "Later", count: counts?.later ?? null },
+    { id: "today" as View, label: "Today", count: counts ? counts.today + counts.catch_up : null, disabled: off },
+    { id: "upcoming" as View, label: "Upcoming", count: counts?.upcoming ?? null, disabled: off },
+    { id: "later" as View, label: "Later", count: counts?.later ?? null, disabled: off },
+    { id: "done" as View, label: "Done", count: counts?.done_today ?? null, disabled: off },
   ];
-  const people = emps.filter((e) => e.id !== meId);
-  const nameOfPerson = person === "me" ? "you" : person === "all" ? "anyone" : (emps.find((e) => e.id === person)?.name || "this person");
+  const nameOfPerson = person === "me" ? "you" : person === "all" ? "anyone" : pooled ? "Up for grabs" : (picked?.name || "this person");
+  const team = useMemo(() => {
+    if (!teamDay) return null;
+    const active = emps.filter((e) => e.active !== false);
+    const ordered = [...active.filter((e) => e.id === meId), ...active.filter((e) => e.id !== meId)];
+    return teamLoad(teamDay, ordered);
+  }, [teamDay, emps, meId]);
 
-  const row = (t: Task, from: DayBucket) => (
-    <TaskRow key={t.id} t={t} from={from} today={today} tz={tz || "UTC"} showWho={showWho} ticking={ticking.includes(t.id)}
+  const row = (t: Task, from: DayBucket) => (pooled && !isManager
+    ? <TaskRow key={t.id} t={t} from={from} today={today} tz={tz || "UTC"} showWho={false} ticking={false} onOpen={() => onOpen(t)} onToggle={() => undefined} onTake={() => take(t)} />
+    : <TaskRow key={t.id} t={t} from={from} today={today} tz={tz || "UTC"} showWho={showWho} ticking={ticking.includes(t.id)}
       onOpen={() => onOpen(t)} onToggle={(done) => setDone(t, from, done)}
       onUndo={from === "done_today" && justDone[t.id] ? () => setDone(t, "done_today", false, justDone[t.id].from, justDone[t.id].status) : undefined} />
   );
-  // The server sends at most 100 rows a group but counts them all: say so, and offer the List.
-  const capped = (b: DayBucket) => !qx && day && day.counts[b] > day[b].length
-    ? <div className="px-4 py-3 border-t border-slate-100 flex flex-wrap items-center gap-x-3 gap-y-1 text-xs text-ink-tertiary">
-        Showing {day[b].length} of {day.counts[b]}.
-        <Button variant="link" onClick={onShowAll}>See all {day.counts[b]} in the List view</Button>
+  const focusSearch = () => searchBox.current?.focus();
+  // The server sends at most 100 rows a group but counts them all: say so, and point at search.
+  const capped = (b: DayBucket) => day && day.counts[b] > day[b].length
+    ? <div className="px-4 py-3 border-t border-slate-100 flex flex-wrap items-center gap-x-1.5 gap-y-1 text-xs text-ink-tertiary">
+        Showing {day[b].length} of {day.counts[b]}. <Button variant="link" onClick={focusSearch}>Search</Button> finds any of them.
       </div>
     : null;
+  const clearSearch = () => { setQ(""); setQDeb(""); };
+  const shopDate = today ? new Date(`${today}T00:00`).toLocaleDateString(shopLocale() ?? [], { weekday: "long", month: "long", day: "numeric" }) : "";
 
   return (
-    <div className="space-y-5 max-w-[1120px]">
-      {/* Main action on the left, whose day and search on the right. */}
-      {/* On phones the toolbar box steps aside (display: contents) so quick add can stick to the top on its own. */}
-      <div className="max-sm:contents flex flex-col lg:flex-row lg:items-start gap-3">
-        <QuickAdd today={today} tz={tz} tzFailed={tzFailed} meId={meId} emps={people} mayAssign={isManager} onAdd={add} flash={flash} focusKey={focusAdd} />
-        <div className="lg:ml-auto lg:pt-1.5 max-sm:mt-3">
-          <div className="flex items-center gap-2">
-            <TeklySelect value={person} onChange={(e) => onPerson(e.target.value)} disabled={!isManager} aria-label="Whose day"
-              aria-describedby={isManager ? undefined : "whose-day-why"} className="glass-input h-9 py-2 px-3 text-xs rounded-xl min-w-[150px]">
-              <option value="me">Me</option>
-              <option value="all">Everyone</option>
-              {people.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
-            </TeklySelect>
-            <div className="relative flex-1 lg:w-60 lg:flex-none">
-              <M n="search" c="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" />
-              <input value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search tasks" placeholder="Search task, work order or client…"
-                className="glass-input w-full h-9 rounded-xl pl-8 pr-3 py-2 text-xs text-ink-primary" />
-            </div>
+    <div className="space-y-4 max-w-[1120px]">
+      {/* Row 1: the main action, full width. */}
+      <QuickAdd today={today} tz={tz} tzFailed={tzFailed} meId={meId} emps={emps} target={target} mayAssign={isManager} onAdd={add} flash={flash} focusKey={focusAdd} />
+
+      {/* Row 2: which days on the left; whose tasks and one search on the right. */}
+      <div className="flex flex-wrap items-center gap-x-3 gap-y-2">
+        <Tabs look="segmented" label="Which days" value={view} onChange={setView} tabs={tabs} className="!p-0.5" itemClassName="!h-8" />
+        {shopDate && <p className="hidden xl:block text-xs text-ink-tertiary">{person === "all" ? "Everyone · " : person !== "me" ? `${nameOfPerson} · ` : ""}{shopDate}</p>}
+        <div className="flex items-center gap-2 w-full sm:w-auto sm:ml-auto">
+          {/* Staff see every choice; the ones that need a manager are greyed, never hidden. */}
+          <TeklySelect value={person} onChange={(e) => onPerson(e.target.value)} aria-label="Whose tasks"
+            className="glass-input h-9 py-2 px-3 text-xs rounded-xl min-w-[150px] max-sm:flex-1">
+            <option value="me">Me</option>
+            <option value="all" disabled={!isManager}>{isManager ? "Everyone" : "Everyone (managers only)"}</option>
+            <option value="pool">Up for grabs</option>
+            <optgroup label={isManager ? "People" : "People (managers only)"}>
+              {people.map((e) => <option key={e.id} value={e.id} disabled={!isManager}>{e.name}</option>)}
+            </optgroup>
+          </TeklySelect>
+          <div className="relative flex-1 sm:w-64 sm:flex-none">
+            <M n="search" c="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" />
+            <input ref={searchBox} type="search" value={q} onChange={(e) => setQ(e.target.value)} onKeyDown={(e) => { if (e.key === "Escape" && q) { e.preventDefault(); clearSearch(); } }}
+              aria-label="Search all tasks" placeholder="Search all tasks, incl. done…"
+              className="glass-input w-full h-9 rounded-xl pl-8 pr-3 py-2 text-xs text-ink-primary" />
           </div>
-          {/* The reason is on screen, not in a tooltip: a phone has no hover. */}
-          {!isManager && <p id="whose-day-why" className="mt-1.5 text-2xs text-ink-tertiary">Only managers can see other people's day.</p>}
         </div>
       </div>
 
-      <div className="flex items-center gap-3 flex-wrap">
-        <Tabs look="segmented" label="Which days" value={view} onChange={setView} tabs={tabs} />
-        {today && <p className="hidden sm:block ml-auto text-xs text-ink-tertiary">{person === "all" ? "Everyone · " : person !== "me" ? `${nameOfPerson} · ` : ""}{new Date(`${today}T00:00`).toLocaleDateString(shopLocale() ?? [], { weekday: "long", month: "long", day: "numeric" })}</p>}
-      </div>
+      {team && !searching && <TeamRow team={team} meId={meId} person={person} onPick={(p) => onPerson(p === person ? "all" : p)} />}
 
+      {(searching || missing) ? (
+        <TaskResults q={qDeb} whose={person} meId={meId} tz={tz} onOpen={onOpen} onClear={clearSearch} flash={flash}
+          onChanged={() => { load(true); onChanged?.(); }} onPaged={onListPaged} reloadKey={reloadKey} note={missing ? MISSING_NOTE : undefined} />
+      ) : (<>
       {tzFailed && !tz && (
         <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card">
           <ErrorState title="Couldn't reach your shop's clock" body="Times can't be shown or saved until it loads. Check your connection and try again." onRetry={retryTz} />
@@ -272,7 +323,7 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
       {!day && !failed && !tzFailed && <DaySkeleton />}
 
       {day && view === "today" && (<>
-        {pick(day.catch_up).length > 0 && (
+        {day.catch_up.length > 0 && (
           <section aria-labelledby="catchup-h" className="bg-white rounded-2xl border border-amber-200/80 shadow-clay-card overflow-hidden">
             <div className="flex flex-wrap items-center gap-x-4 gap-y-2 px-4 py-3 bg-amber-50/60 border-b border-amber-100">
               <div className="flex items-center gap-3 min-w-0">
@@ -284,23 +335,30 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
               </div>
               <Button size="sm" onClick={moveAll} busy={busyMove} icon={<M n="event_available" c="text-sm" />}>Move all to today</Button>
             </div>
-            <ul className="divide-y divide-slate-100">{pick(day.catch_up).map((t) => row(t, "catch_up"))}</ul>
+            <ul className="divide-y divide-slate-100">{day.catch_up.map((t) => row(t, "catch_up"))}</ul>
             {capped("catch_up")}
           </section>
         )}
 
         <section aria-labelledby="today-h" className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
           <h2 id="today-h" className="sr-only">Today</h2>
-          {pick(day.today).length === 0 ? (
-            qx ? <NoMatch q={qx} onClear={() => setQ("")} />
-              : day.catch_up.length ? <EmptyState icon={<M n="check" c="text-lg" />} title="Nothing else due today" body="Clear the catch-up list above and you're set." />
+          {day.today.length === 0 ? (
+            day.catch_up.length ? <EmptyState icon={<M n="check" c="text-lg" />} title="Nothing else due today" body="Clear the catch-up list above and you're set." />
+              // Nothing today but something soon: a small line that leads there, not a big empty box.
+              : day.counts.upcoming > 0 ? (
+                <div className="flex flex-wrap items-center gap-x-3 gap-y-1 px-4 py-3">
+                  <span className="w-7 h-7 rounded-full bg-emerald-50 text-emerald-700 grid place-items-center flex-shrink-0"><M n="task_alt" c="text-sm" /></span>
+                  <p className="text-sm text-ink-secondary"><span className="font-semibold text-ink-primary">{person === "me" ? "Nothing due today" : `Nothing due today for ${nameOfPerson}`}</span> · {day.counts.upcoming} coming up</p>
+                  <Button variant="link" onClick={() => setView("upcoming")}>Show upcoming</Button>
+                </div>
+              )
               : <EmptyState icon={<M n="task_alt" c="text-lg" />} title={person === "me" ? "Nothing due today" : `Nothing due today for ${nameOfPerson}`}
                   body={person === "me" ? "Your day is clear. Add a task above when something comes up, and tasks other people give you land here too." : "Tasks due today show here as they're added."} />
-          ) : <Groups groups={groupByTime(pick(day.today))} render={(t) => row(t, "today")} />}
+          ) : <Groups groups={groupByTime(day.today)} render={(t) => row(t, "today")} />}
           {capped("today")}
         </section>
 
-        {poolMode && pick(pool).length > 0 && (
+        {poolMode && pool.length > 0 && (
           <section aria-labelledby="pool-h" className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
             <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-100">
               <span className="w-7 h-7 rounded-full bg-blue-50 text-primary grid place-items-center flex-shrink-0"><M n="group" c="text-sm" /></span>
@@ -310,43 +368,86 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
               </div>
             </div>
             <ul className="divide-y divide-slate-100">
-              {pick(pool).slice(0, showPool ? undefined : 5).map((t) => (
+              {pool.slice(0, showPool ? undefined : 5).map((t) => (
                 <TaskRow key={t.id} t={t} from={bucketForDue(dueOf(t) || null, today)} today={today} tz={tz || "UTC"} showWho={false} ticking={false}
                   onOpen={() => onOpen(t)} onToggle={() => undefined} onTake={() => take(t)} />
               ))}
             </ul>
-            {pick(pool).length > 5 && (
+            {pool.length > 5 && (
               <div className="px-4 py-2.5 border-t border-slate-100">
-                <Button variant="link" onClick={() => setShowPool((v) => !v)}>{showPool ? "Show fewer" : `Show all ${pick(pool).length}`}</Button>
+                <Button variant="link" onClick={() => setShowPool((v) => !v)}>{showPool ? "Show fewer" : `Show all ${pool.length}`}</Button>
               </div>
             )}
           </section>
         )}
-
-        {day.done_today.length > 0 && (
-          <section className="rounded-2xl border border-slate-200/90 bg-white/60 overflow-hidden">
-            <button onClick={() => setShowDone((v) => !v)} aria-expanded={showDone} aria-controls="done-today"
-              className="w-full flex items-center gap-2 px-4 py-3 text-left text-xs font-semibold text-ink-secondary hover:bg-slate-50">
-              <span className="w-5 h-5 rounded-full bg-emerald-50 text-emerald-600 grid place-items-center"><M n="check" c="text-xs" /></span>
-              Done today <span className="font-medium text-ink-tertiary tabular-nums">{day.counts.done_today}</span>
-              <M n="expand_more" c={`ml-auto text-sm text-ink-tertiary transition-transform ${showDone ? "rotate-180" : ""}`} />
-            </button>
-            {showDone && <ul id="done-today" className="divide-y divide-slate-100 border-t border-slate-100">{pick(day.done_today).map((t) => row(t, "done_today"))}</ul>}
-            {showDone && capped("done_today")}
-          </section>
-        )}
       </>)}
 
-      {day && view !== "today" && (
+      {day && (view === "upcoming" || view === "later") && (
         <section className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
-          {pick(day[view]).length === 0
-            ? (qx ? <NoMatch q={qx} onClear={() => setQ("")} />
-              : view === "upcoming" ? <EmptyState icon={<M n="calendar_today" c="text-lg" />} title="Nothing coming up this week" body="Tasks due in the next seven days show here, a day at a time." />
+          {day[view].length === 0
+            ? (view === "upcoming" ? <EmptyState icon={<M n="calendar_today" c="text-lg" />} title="Nothing coming up this week" body="Tasks due in the next seven days show here, a day at a time." />
               : <EmptyState icon={<M n="calendar_today" c="text-lg" />} title="Nothing planned for later" body="Tasks with a later date, or no date yet, wait here." />)
-            : <Groups groups={groupByDay(pick(day[view]), today)} render={(t) => row(t, view)} />}
+            : <Groups groups={groupByDay(day[view], today)} render={(t) => row(t, view)} />}
           {capped(view)}
         </section>
       )}
+
+      {day && view === "done" && (
+        <section aria-labelledby="done-h" className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
+          <h2 id="done-h" className="sr-only">Done today</h2>
+          {day.done_today.length === 0
+            ? <EmptyState icon={<M n="check" c="text-lg" />} title="Nothing done yet today" body="Tasks ticked off today show here." />
+            : <ul className="divide-y divide-slate-100">{day.done_today.map((t) => row(t, "done_today"))}</ul>}
+          {capped("done_today")}
+          <p className="px-4 py-3 border-t border-slate-100 bg-slate-50/60 text-xs text-ink-tertiary">
+            Older tasks: <Button variant="link" onClick={focusSearch}>use search</Button>
+          </p>
+        </section>
+      )}
+      </>)}
+    </div>
+  );
+}
+
+// ── team row (managers, Everyone) ────────────────────────────────────────────
+function TeamRow({ team, meId, person, onPick }: { team: ReturnType<typeof teamLoad>; meId?: string; person: string; onPick: (p: string) => void }) {
+  const card = "hit44 text-left rounded-2xl border p-3 flex flex-col gap-2 min-w-0 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
+  return (
+    <div role="group" aria-label="Team" className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-2.5">
+      <button type="button" onClick={() => onPick("pool")} aria-pressed={person === "pool"}
+        aria-label={`Up for grabs: ${team.pool} waiting`}
+        className={`${card} bg-amber-50/70 ${person === "pool" ? "border-primary ring-2 ring-primary/15" : "border-amber-200/80 hover:border-amber-300"}`}>
+        <span className="flex items-center gap-2.5 min-w-0">
+          <span className="w-7 h-7 rounded-full bg-white text-amber-700 grid place-items-center flex-shrink-0 border border-amber-200/80"><M n="group" c="text-sm" /></span>
+          <span className="min-w-0"><span className="block text-sm font-semibold text-ink-primary truncate">Up for grabs</span><span className="block text-2xs text-ink-secondary truncate">Nobody has these yet</span></span>
+        </span>
+        <span className="text-xs text-ink-secondary"><b className="font-semibold text-amber-700 tabular-nums mr-1">{team.pool}</b>waiting</span>
+      </button>
+      {team.people.map((p) => {
+        const total = p.overdue + p.today + p.done;
+        return (
+          <button key={p.id} type="button" onClick={() => onPick(p.id)} aria-pressed={person === p.id}
+            aria-label={`${p.name}${p.id === meId ? " (you)" : ""}: ${p.overdue} overdue, ${p.today} today, ${p.done} done today`}
+            className={`${card} bg-white ${person === p.id ? "border-primary ring-2 ring-primary/15" : "border-slate-200/90 hover:border-slate-300"}`}>
+            <span className="flex items-center gap-2.5 min-w-0">
+              <Avatar name={p.name} size={28} />
+              <span className="min-w-0">
+                <span className="block text-sm font-semibold text-ink-primary truncate">{p.name}{p.id === meId && <span className="font-normal text-ink-tertiary"> (you)</span>}</span>
+                <span className="block text-2xs text-ink-secondary truncate">{p.position || " "}</span>
+              </span>
+            </span>
+            <span className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-ink-secondary tabular-nums" aria-hidden="true">
+              <span><b className={`font-semibold mr-1 ${p.overdue ? "text-amber-700" : "text-ink-primary"}`}>{p.overdue}</b>overdue</span>
+              <span><b className="font-semibold text-ink-primary mr-1">{p.today}</b>today</span>
+              <span><b className="font-semibold text-emerald-700 mr-1">{p.done}</b>done</span>
+            </span>
+            <span className="flex h-1 rounded-full bg-slate-100 overflow-hidden" aria-hidden="true">
+              {total > 0 && <span className="bg-emerald-500" style={{ width: `${(p.done / total) * 100}%` }} />}
+              {total > 0 && <span className="bg-amber-500" style={{ width: `${(p.overdue / total) * 100}%` }} />}
+            </span>
+          </button>
+        );
+      })}
     </div>
   );
 }
@@ -360,10 +461,6 @@ function Groups({ groups, render }: { groups: TaskGroup[]; render: (t: Task) => 
       </div>
     ))}
   </>);
-}
-
-function NoMatch({ q, onClear }: { q: string; onClear: () => void }) {
-  return <EmptyState icon={<M n="search" c="text-lg" />} title={`No tasks match "${q}"`} body="Try a work order number, a client's name or another word from the task." action={<Button onClick={onClear}>Clear search</Button>} />;
 }
 
 function DaySkeleton() {
@@ -441,8 +538,9 @@ function TaskRow({ t, from, today, tz, showWho, ticking, onOpen, onToggle, onUnd
 }
 
 // ── quick add ────────────────────────────────────────────────────────────────
-function QuickAdd({ today, tz, tzFailed, meId, emps, mayAssign, onAdd, flash, focusKey }: {
+function QuickAdd({ today, tz, tzFailed, meId, emps, target, mayAssign, onAdd, flash, focusKey }: {
   today: string; tz: string | null; tzFailed: boolean; meId?: string; emps: Emp[]; mayAssign: boolean;
+  target: AddTarget;                    // the first "Who" chip: whoever the page shows
   onAdd: (body: Record<string, any>, preview: Task, forName: string | null, key: string) => Promise<boolean>;
   flash: (msg: string) => void;
   focusKey: number;                     // bumped when the day loads empty: put the cursor here
@@ -451,8 +549,10 @@ function QuickAdd({ today, tz, tzFailed, meId, emps, mayAssign, onAdd, flash, fo
   const [when, setWhen] = useState<QuickWhen>("today");
   const [picked, setPicked] = useState("");
   const [pickedTime, setPickedTime] = useState("");
-  const [who, setWho] = useState<"me" | "others">("me");
+  const [who, setWho] = useState<"me" | "others">("me");   // "me" = the target chip
   const [other, setOther] = useState("");
+  // Picking someone else in the person menu points quick add at them.
+  useEffect(() => { setWho("me"); setOther(""); }, [target.id]);
   const [job, setJob] = useState<PickedJob | null>(null);
   const [jobOpen, setJobOpen] = useState(false);
   const [busy, setBusy] = useState(false);
@@ -473,13 +573,13 @@ function QuickAdd({ today, tz, tzFailed, meId, emps, mayAssign, onAdd, flash, fo
     setHint("");
     if (when === "pick" && !picked) { flash("Pick a date first"); return; }
     if (who === "others" && !other) { flash("Choose who it's for"); return; }
-    const assignee = who === "others" ? other : meId || null;
+    const assignee = who === "others" ? other : target.id;
     if (!tz || !today) return;                     // the shop's clock isn't known yet
     // A picked time is on the shop's clock: send it with the shop's offset. A date alone means the
     // end of that shop day (the server decides that).
     const due = fromShopWall(quickDue(when, picked && pickedTime ? `${picked}T${pickedTime}` : picked, today), tz);
     const body = { title: text, due_at: due, assigned_to_id: assignee, assignee_ids: assignee ? [assignee] : [], order_id: job?.id || null };
-    const forName = who === "others" ? emps.find((e) => e.id === other)?.name || null : null;
+    const forName = who === "others" ? emps.find((e) => e.id === other)?.name || null : target.name;
     const preview: Task = {
       id: `tmp-${Date.now()}`, title: text, status: "todo", due_at: due, source: "manual", assigned_to_id: assignee,
       assignee_ids: body.assignee_ids, assignee_names: forName ? [forName] : [],
@@ -493,10 +593,11 @@ function QuickAdd({ today, tz, tzFailed, meId, emps, mayAssign, onAdd, flash, fo
     else { setJob(null); setJobOpen(false); key.current = newKey(); }
     input.current?.focus();
   }
+  const ready = !!title.trim() && !blocked;
   const onKey = (e: ReactKeyboardEvent<HTMLInputElement>) => { if (e.key === "Enter" && !e.nativeEvent.isComposing) { e.preventDefault(); save(); } };
 
   return (
-    <div className="flex-1 lg:max-w-[640px] max-sm:sticky max-sm:-top-5 max-sm:z-20 max-sm:-mx-4 max-sm:px-4 max-sm:pt-3 max-sm:pb-2 max-sm:bg-canvas"
+    <div className="max-sm:sticky max-sm:-top-5 max-sm:z-20 max-sm:-mx-4 max-sm:px-4 max-sm:pt-3 max-sm:pb-2 max-sm:bg-canvas"
       onFocus={() => setActive(true)} onBlur={(e) => { if (!e.currentTarget.contains(e.relatedTarget as Node)) setActive(false); }}>
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-2">
       <div className="flex items-center gap-2">
@@ -504,9 +605,10 @@ function QuickAdd({ today, tz, tzFailed, meId, emps, mayAssign, onAdd, flash, fo
         <input ref={input} value={title} onChange={(e) => { setTitle(e.target.value); setHint(""); }} onKeyDown={onKey} aria-label="Add a task" placeholder="Add a task…" enterKeyHint="done"
           aria-describedby={hint || blocked ? "quick-add-why" : undefined}
           className="flex-1 min-w-0 h-10 bg-transparent text-sm text-ink-primary placeholder:text-ink-placeholder outline-none focus-visible:outline-none" />
-        {/* Greyed, not disabled: a tap still says why (on screen, below), on a phone too. */}
-        <Button variant="primary" onClick={save} busy={busy} aria-disabled={!title.trim() || !!blocked}
-          className={`flex-shrink-0 ${!title.trim() || blocked ? "opacity-50 cursor-not-allowed hover:bg-primary" : ""}`}>Add task</Button>
+        {/* Greyed (the app's chip grey, same size and place), not disabled: a tap still says why
+            (on screen, below), on a phone too. */}
+        <Button variant={ready ? "primary" : "ghost"} onClick={save} busy={busy} aria-disabled={!ready}
+          className={`flex-shrink-0 ${ready ? "" : "!bg-slate-100 !text-ink-tertiary cursor-not-allowed"}`}>Add task</Button>
       </div>
       {(hint || (blocked && title.trim())) && <p id="quick-add-why" role="status" className="px-3 pt-1 text-2xs text-ink-secondary">{hint || blocked}</p>}
       {/* On phones the choices fold away until you start a task, so the sticky box stays small. */}
@@ -519,12 +621,12 @@ function QuickAdd({ today, tz, tzFailed, meId, emps, mayAssign, onAdd, flash, fo
         </>)}
         <span className="hidden sm:block w-px h-5 bg-slate-200" aria-hidden="true" />
         <Tabs look="chips" label="Who" value={who} onChange={setWho} className="!gap-1.5"
-          tabs={[{ id: "me", label: "Me" }, { id: "others", label: "Others", disabled: !mayAssign, title: mayAssign ? undefined : "Only managers can give tasks to other people" }]} />
+          tabs={[{ id: "me", label: target.label }, { id: "others", label: "Others", disabled: !mayAssign, title: mayAssign ? undefined : "Only managers can give tasks to other people" }]} />
         {!mayAssign && <span className="text-2xs text-ink-tertiary">Only managers can give tasks to others.</span>}
         {who === "others" && (
           <TeklySelect value={other} onChange={(e) => setOther(e.target.value)} aria-label="Who it's for" className="glass-input h-8 py-1.5 px-3 text-xs rounded-full min-w-[140px]">
             <option value="">Choose a person…</option>
-            {emps.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
+            {emps.filter((e) => e.id !== target.id).map((e) => <option key={e.id} value={e.id}>{e.id === meId ? `${e.name} (me)` : e.name}</option>)}
           </TeklySelect>
         )}
         <span className="hidden sm:block w-px h-5 bg-slate-200" aria-hidden="true" />

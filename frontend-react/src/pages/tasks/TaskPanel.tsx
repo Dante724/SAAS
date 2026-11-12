@@ -14,7 +14,7 @@ import { type Task, STATUS_LABEL, normStatus, statusLabel, normPriority, isAuto,
 // The task panel (a right-hand drawer), shared by My day and the List view. It loads the task by
 // id, so `/tasks?task=<id>` can open it straight from a link or a bell notification.
 
-export type Emp = { id: string; name: string };
+export type Emp = { id: string; name: string; position?: string | null; active?: boolean };
 type Feed = { id: string; body?: string; kind?: string; author_name?: string; created_at?: string };
 
 // Due dates are shop wall-clock times; feed/completion stamps are instants.
