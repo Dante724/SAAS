@@ -56,7 +56,8 @@ async def test_real_money_and_stock_flows_reconcile(client, tenant, db):
 
 
 @pytest.mark.asyncio
-@pytest.mark.parametrize("check", reconcile.CHECKS)
+# the DB-09 checks (gift card, supplier, order, sale, PO) are in test_db09_reconcile_wider.py
+@pytest.mark.parametrize("check", ("account", "client", "invoice", "stock", "split_leg"))
 async def test_each_kind_of_drift_is_reported(client, tenant, db, check):
     s = await _shop(client, tenant)
     if check == "account":

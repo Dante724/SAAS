@@ -6,6 +6,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, field_validator
 from sqlalchemy import func, select
+from sqlalchemy.exc import IntegrityError
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
@@ -25,7 +26,10 @@ from backend.services.payroll_views import (
     commission_breakdown,
     expected_base,
     in_scope,
+    is_reversal,
+    live_adjustments,
     payroll_scope_ids,
+    reversal_key,
 )
 from backend.services.money import q2
 from backend.services.commission_input import check_commission_basis, check_commission_calc_type
@@ -838,10 +842,27 @@ async def remove_adjustment(
         raise HTTPException(404, "Adjustment not found")
     if e.ref_type != "manual" or e.entry_type not in ("penalty", "bonus"):
         raise HTTPException(400, "Only manual penalties/bonuses can be removed here")
+    if is_reversal(e):
+        raise HTTPException(409, "This entry reverses a removed adjustment and can't be removed")
     await assert_payroll_scope(db, current, e.employee_id)
+    # Audit DB-11: the ledger is append-only. The entry stays; a counter-entry of the same kind,
+    # dated the same day (so it nets out in the same period), cancels it. Its idempotency key
+    # (one per original) makes a second removal, or two at once, a 409 instead of a double reversal.
+    key = reversal_key(e.id)
+    if (await db.execute(select(EmployeeBalanceLedger.id).where(
+            EmployeeBalanceLedger.idempotency_key == key))).first():
+        raise HTTPException(409, "This adjustment was already removed")
+    db.add(EmployeeBalanceLedger(
+        org_id=e.org_id, employee_id=e.employee_id, entry_type=e.entry_type,
+        amount=-(e.amount or 0), ref_type="manual", ref_id=e.id, idempotency_key=key,
+        note=f"Removed: {e.note or e.entry_type}"[:500], created_at=e.created_at))
+    try:
+        await db.flush()
+    except IntegrityError:
+        await db.rollback()
+        raise HTTPException(409, "This adjustment was already removed")
     await _audit(db, current, f"payroll.{e.entry_type}_remove", "employee", e.employee_id,
                  {"entry_id": e.id, "amount": float(e.amount or 0), "note": e.note})
-    await db.delete(e)
     await db.commit()
     return {"ok": True}
 
@@ -875,8 +896,9 @@ async def calculation_detail(
                 "note": e.note or "", "ref_type": e.ref_type, "ref_id": e.ref_id}
 
     commissions = [_row(e) for e in rows if e.entry_type in ("commission", "clawback")]
-    penalties = [_row(e) for e in rows if e.entry_type == "penalty" and e.ref_type == "manual"]
-    bonuses = [_row(e) for e in rows if e.entry_type == "bonus" and e.ref_type == "manual"]
+    manual = live_adjustments([e for e in rows if e.ref_type == "manual"])   # removed ones net out
+    penalties = [_row(e) for e in manual if e.entry_type == "penalty"]
+    bonuses = [_row(e) for e in manual if e.entry_type == "bonus"]
     bonuses_total, penalties_total = await _manual_adjust_totals(db, current.org_id, employee_id, ps, pe)
     hourly = await _hourly_for_period(db, current.org_id, employee_id, ps, pe)
     base = _money(emp.wage_value) if emp.wage_type == "fixed" else _money(0)

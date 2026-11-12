@@ -22,6 +22,7 @@ The rules:
 Callers commit; notify_payment_received() runs after the commit.
 """
 from datetime import datetime
+from typing import Optional
 
 from fastapi import HTTPException
 from sqlalchemy import case, select
@@ -535,8 +536,8 @@ async def refund_payments(db: AsyncSession, order: Order, amount: float, **field
     """Money handed back on a job (a refund, a deposit given back, a deleted job), W3-C. It comes
     off money held on the job first, then off the job's invoices, newest first, each lowered by
     what it gives back — so an invoice never stays "paid" for money the customer has back. One
-    refund Payment per invoice it touches (invoice_id None = held money), all with one paid_at so
-    deleting the refund finds them together (refund_siblings). Caller commits."""
+    refund Payment per invoice it touches (invoice_id None = held money). Pass refund_id so voiding
+    the refund finds exactly these rows (refund_rows). Caller commits."""
     from sqlalchemy import func
     await lock_order(db, order.id)
     held_in, held_out = (float(x or 0) for x in (await db.execute(select(
@@ -571,21 +572,48 @@ async def refund_payments(db: AsyncSession, order: Order, amount: float, **field
     return out
 
 
-async def refund_siblings(db: AsyncSession, pay: Payment) -> list[Payment]:
-    """Every Payment one refund_payments() call wrote, given one of them."""
-    return list((await db.execute(select(Payment).where(
-        Payment.order_id == pay.order_id, Payment.kind == "refund", Payment.paid_at == pay.paid_at,
-        Payment.account_id == pay.account_id))).scalars().all()) if pay.order_id else [pay]
+async def refund_rows(db: AsyncSession, refund, first: Optional[Payment] = None) -> list[Payment]:
+    """The live refund Payment rows a Refund wrote (audit DB-11): every row carrying its id. Rows
+    written before payments carried refund_id are found from ``first`` (the refund's own row, by
+    its payment_id or the caller's legacy match), plus the unlinked rows refund_payments() wrote
+    with it (same job, cashbox and paid_at) — matched only among unlinked rows, so another
+    refund's linked rows are never taken."""
+    linked = list((await db.execute(select(Payment).where(
+        Payment.refund_id == refund.id, Payment.kind == "refund"))).scalars().all())
+    if linked:
+        return linked
+    if first is None and refund.payment_id:
+        first = (await db.execute(select(Payment).where(
+            Payment.id == refund.payment_id))).scalar_one_or_none()
+    if first is None or first.kind != "refund" or first.refund_id is not None:
+        return []
+    if not first.order_id:
+        return [first]
+    rows = list((await db.execute(select(Payment).where(
+        Payment.order_id == first.order_id, Payment.kind == "refund", Payment.refund_id.is_(None),
+        Payment.paid_at == first.paid_at, Payment.account_id == first.account_id))).scalars().all())
+    # two legacy refunds written in the same second match each other's rows: unless the matches
+    # add up to exactly this refund, take only its own row rather than void someone else's money
+    if abs(sum(float(p.amount or 0) for p in rows) - float(refund.amount or 0)) > 0.005:
+        return [first]
+    return rows
 
 
-async def unrefund_payment(db: AsyncSession, pay: Payment) -> None:
-    """A refund Payment is deleted (the refund was voided): its invoice counts the money again."""
+async def void_refund_payment(db: AsyncSession, pay: Payment, voided_by_id: Optional[str]) -> None:
+    """A refund Payment is voided (its refund was voided), never deleted (audit DB-11): the row
+    stays on record with who and when, every read leaves it out (db/soft_void.py), and its
+    invoice counts the money again."""
+    if pay.voided_at is not None:
+        return
     if pay.invoice_id:
         inv = (await db.execute(select(Invoice).where(Invoice.id == pay.invoice_id))).scalar_one_or_none()
         if inv is not None and (inv.status or "") not in VOID_STATUSES:
             await add_to_column(db, inv, "amount_paid", float(pay.amount or 0))
             settle_status(inv)
-    await db.delete(pay)
+    from backend.services.dates import now_utc
+    pay.voided_at = now_utc()
+    pay.voided_by_id = voided_by_id
+    await db.flush()
 
 
 async def notify_payment_received(db: AsyncSession, org_id: str, order_ids, actor_id: str | None = None) -> None:
