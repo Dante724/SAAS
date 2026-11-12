@@ -4,7 +4,7 @@ Configuration lives in InsightCard rows; the data is aggregated live from
 orders, sales and payments on each read. v1 subjects: closed orders, sales,
 payments. Metrics: quantity, amount, gross profit (sales), average.
 """
-from datetime import datetime, timedelta
+from datetime import date, datetime, timedelta
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
@@ -14,11 +14,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
 from backend.models import (
-    Employee, Order, OrderStatus, Sale, Payment, WorkOrderType, Location, Account, InsightCard,
+    Employee, Order, OrderStatus, Sale, Payment, WorkOrderType, Location, InsightCard,
 )
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.money import q2
-from backend.services.dates import now_utc
+from backend.services.dates import day_start_utc, now_utc, shop_tzname, utc_to_wall
 
 router = APIRouter(prefix="/api/reports/insights", tags=["insights"])
 
@@ -55,39 +55,56 @@ async def meta(db: AsyncSession = Depends(get_db), current: Employee = Depends(g
 
 
 # ── aggregation helpers ──────────────────────────────────────────
-def _range_start(period: str, now: datetime) -> datetime:
-    return {
-        "7d": now - timedelta(days=7), "30d": now - timedelta(days=30),
-        "90d": now - timedelta(days=90), "12m": now - timedelta(days=365),
-        "24w": now - timedelta(weeks=24), "24m": now - timedelta(days=730),
-    }.get(period, now - timedelta(days=30))
+# RPT-02: periods and buckets are shop days (the shop's clock, services/dates), like every other
+# report since PR #200; they used to be UTC days, so a sale at 01:30 in Kolkata landed on the
+# previous day, or month.
+_PERIOD_DAYS = {"7d": 7, "30d": 30, "90d": 90, "12m": 365, "24w": 24 * 7, "24m": 730}
 
 
-async def _records(db, org_id, subject, start, location_id):
-    """Return [{ts, amount, profit, groups:{...}}] for the subject in range."""
+def _range_start(period: str, now: datetime, tz: Optional[str] = None) -> datetime:
+    """Naive-UTC start of the period: the shop midnight `days` days before the shop's today
+    (the trend's first bucket starts there)."""
+    days = _PERIOD_DAYS.get(period, 30)
+    today = utc_to_wall(now, tz).date()
+    if period == "24w":
+        today = today - timedelta(days=today.weekday())     # weeks start on Monday
+        return day_start_utc(today - timedelta(weeks=23), tz)
+    if period == "24m":
+        y, m = today.year, today.month - 23
+        while m <= 0:
+            m += 12
+            y -= 1
+        return day_start_utc(date(y, m, 1), tz)
+    return day_start_utc(today - timedelta(days=days - 1), tz)
+
+
+def _quarter(ts: datetime) -> str:
+    return f"{ts.year} Q{(ts.month - 1) // 3 + 1}"
+
+
+async def _records(db, org_id, subject, start, location_id, tz: Optional[str] = None):
+    """Return [{ts, amount, profit, groups:{...}}] for the subject in range. `ts` is on the shop's
+    clock (wall time), so buckets and month groups are shop days."""
     out = []
     if subject == "closed_orders":
+        # RPT-02: jobs finished in the period (earned: closed or first billed, the rule every report
+        # uses), on the day they were finished; it counted jobs *created* in the period that are
+        # closed now. Dropped jobs stay in, as before, with only the money they kept.
+        from backend.services.revenue import earned_jobs_query, job_figures
         statuses = (await db.execute(select(OrderStatus).where(OrderStatus.org_id == org_id))).scalars().all()
         grp = {s.key: s.status_group for s in statuses}
-        closed = {"closed", "dropped"}
         types = {t.id: t.name for t in (await db.execute(select(WorkOrderType).where(WorkOrderType.org_id == org_id))).scalars().all()}
         locs = {l.id: l.name for l in (await db.execute(select(Location).where(Location.org_id == org_id))).scalars().all()}
-        q = select(Order).where(Order.org_id == org_id, Order.is_estimate == False,  # noqa: E712
-                                Order.archived == False, Order.created_at >= start,  # noqa: E712
-                                Order.status.in_([k for k, g in grp.items() if g in closed] or [""]))
-        if location_id:
-            q = q.where(Order.location_id == location_id)
-        orders = (await db.execute(q)).scalars().all()
-        # what each job earned, by the rule every report uses (services/revenue): ex tax, after
-        # refunds and credit notes; a dropped job only the money it kept, never what was written off
-        from backend.services.revenue import job_figures
-        figs = await job_figures(db, q.with_only_columns(Order.id)) if orders else {}
-        for o in orders:
+        q = await earned_jobs_query(db, org_id, start, None, location_id, include_dropped=True, with_date=True)
+        rows = (await db.execute(q)).all()
+        figs = await job_figures(db, q.with_only_columns(Order.id)) if rows else {}
+        for o, at in rows:
+            ts = utc_to_wall(at, tz)
             amount = q2(figs[o.id]["revenue"]) if o.id in figs else 0.0
-            out.append({"ts": o.created_at, "amount": amount, "profit": 0, "groups": {
+            out.append({"ts": ts, "amount": amount, "profit": 0, "groups": {
                 "type": types.get(o.type_id, "No type"), "location": locs.get(o.location_id, "—"),
                 "status_group": grp.get(o.status, "closed"),
-                "month": o.created_at.strftime("%Y-%m"), "quarter": f"{o.created_at.year} Q{(o.created_at.month - 1) // 3 + 1}"}})
+                "month": ts.strftime("%Y-%m"), "quarter": _quarter(ts)}})
     elif subject == "sales":
         sellers = {e.id: e.name for e in (await db.execute(select(Employee).where(Employee.org_id == org_id))).scalars().all()}
         locs = {l.id: l.name for l in (await db.execute(select(Location).where(Location.org_id == org_id))).scalars().all()}
@@ -105,21 +122,25 @@ async def _records(db, org_id, subject, start, location_id):
         for s in (await db.execute(q)).scalars().all():
             amt, tax, cost = back.get(s.id, (0.0, 0.0, 0.0))
             amount = q2(float(s.total or 0) - float(s.tax or 0) - (amt - tax))
-            out.append({"ts": s.created_at, "amount": amount,
+            ts = utc_to_wall(s.created_at, tz)
+            out.append({"ts": ts, "amount": amount,
                         "profit": q2(amount - (float(s.total_cost or 0) - cost)), "groups": {
                 "seller": sellers.get(s.seller_id, "—"), "location": locs.get(s.location_id, "—"),
-                "month": s.created_at.strftime("%Y-%m"), "quarter": f"{s.created_at.year} Q{(s.created_at.month - 1) // 3 + 1}"}})
+                "month": ts.strftime("%Y-%m"), "quarter": _quarter(ts)}})
     elif subject == "payments":
-        acct_ids = [a.id for a in (await db.execute(select(Account).where(Account.org_id == org_id))).scalars().all()]
-        if not acct_ids:
-            return out
-        q = select(Payment).where(Payment.account_id.in_(acct_ids), Payment.kind != "refund")
-        for p in (await db.execute(q)).scalars().all():
-            if p.paid_at < start:
-                continue
-            out.append({"ts": p.paid_at, "amount": p.amount or 0, "profit": 0, "groups": {
-                "method": (p.method or "other").title(),
-                "month": p.paid_at.strftime("%Y-%m"), "quarter": f"{p.paid_at.year} Q{(p.paid_at.month - 1) // 3 + 1}"}})
+        # PERF-13: the period is filtered in SQL and only three columns come back (it read every
+        # payment the shop ever took, as full rows). RPT-02: the shop's payments by the same rule
+        # as "Paid" on Home and Finance (services/revenue.cash_collected): attributed by job,
+        # invoice or account, and paying from a client's balance is not money in.
+        from backend.services.revenue import money_in_payment, shop_payments
+        q = select(Payment.paid_at, Payment.amount, Payment.method).where(
+            shop_payments(org_id, location_id), money_in_payment(),
+            func.coalesce(Payment.kind, "payment") != "refund", Payment.paid_at >= start)
+        for paid_at, amount, method in (await db.execute(q)).all():
+            ts = utc_to_wall(paid_at, tz)
+            out.append({"ts": ts, "amount": amount or 0, "profit": 0, "groups": {
+                "method": (method or "other").title(),
+                "month": ts.strftime("%Y-%m"), "quarter": _quarter(ts)}})
     return out
 
 
@@ -181,12 +202,13 @@ async def data(kind: str = "diagram", subject: str = "closed_orders", metric: st
         from backend.services.auth import has_perm
         if not await has_perm(db, current, "can_see_profit"):
             raise HTTPException(403, "You don't have permission to see profit")
+    tz = await shop_tzname(db, current.org_id, location_id)
     now = now_utc()
-    start = _range_start(period, now)
-    records = await _records(db, current.org_id, subject, start, location_id)
+    start = _range_start(period, now, tz)
+    records = await _records(db, current.org_id, subject, start, location_id, tz)
 
     if kind == "trend":
-        buckets = _bucket_labels(period, now)
+        buckets = _bucket_labels(period, utc_to_wall(now, tz))
         by_key = {k: [] for k, _ in buckets}
         for r in records:
             bk = _bucket_key(r["ts"], period)

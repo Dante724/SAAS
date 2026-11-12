@@ -98,8 +98,11 @@ async def _clients(db: AsyncSession, org_id: str | None) -> list[Mismatch]:
 
 async def _invoices(db: AsyncSession, org_id: str | None) -> list[Mismatch]:
     signed = func.sum(func.coalesce(Payment.amount, 0) * case((Payment.kind == "refund", -1), else_=1))
+    # payments carry no org_id: for one shop, only its invoices' payments are summed (PERF-17)
+    mine = ([Payment.invoice_id.in_(select(Invoice.id).where(Invoice.org_id == org_id))]
+            if org_id else [])
     ledger = (select(Payment.invoice_id.label("iid"), signed.label("s"))
-              .where(Payment.invoice_id.isnot(None))
+              .where(Payment.invoice_id.isnot(None), *mine)
               .group_by(Payment.invoice_id).subquery())
     derived = func.coalesce(ledger.c.s, 0)
     rows = (await db.execute(
@@ -117,6 +120,11 @@ async def _stock(db: AsyncSession, org_id: str | None) -> list[Mismatch]:
                     StockLevel.qty_available.label("lv"), literal(0.0).label("mv"))
     moves = select(StockMovement.part_id.label("p"), StockMovement.location_id.label("l"),
                    literal(0.0).label("lv"), StockMovement.qty.label("mv"))
+    if org_id:
+        # cut both sides to the shop's locations before anything is summed (PERF-17: the whole
+        # platform's movement history was aggregated, then filtered)
+        levels = levels.join(Location, Location.id == StockLevel.location_id).where(Location.org_id == org_id)
+        moves = moves.join(Location, Location.id == StockMovement.location_id).where(Location.org_id == org_id)
     both = union_all(levels, moves).subquery()
     sums = (select(both.c.p, both.c.l, func.sum(func.coalesce(both.c.lv, 0)).label("lv"),
                    func.sum(func.coalesce(both.c.mv, 0)).label("mv"))
@@ -162,25 +170,62 @@ async def find_mismatches(db: AsyncSession, *, org_id: str | None = None,
 
 # Last sweep's counts per check, for /metrics (this process's view; the sweep runs on one worker).
 LAST_COUNTS: dict[str, int] = {}
+# Shops the last sweep could not check (a statement failed or timed out): a sweep that silently
+# stops checking is the failure PERF-17 is about, so it is counted and logged at ERROR.
+LAST_FAILED: int = 0
+# Shops read per page of the shop list.
+ORG_PAGE = 200
+
+
+async def _org_ids(db: AsyncSession):
+    """Every shop id, a page at a time (keyset on id, so the list is never held whole)."""
+    from backend.models import Organisation
+    after = ""
+    while True:
+        page = list((await db.execute(select(Organisation.id).where(Organisation.id > after)
+                                      .order_by(Organisation.id).limit(ORG_PAGE)
+                                      .execution_options(skip_tenant_filter=True))).scalars().all())
+        if not page:
+            return
+        for oid in page:
+            yield oid
+        after = page[-1]
 
 
 async def sweep(db: AsyncSession) -> list[Mismatch]:
-    """Run every check across all shops and log what disagrees. Returns the mismatches."""
-    found = await find_mismatches(db)
+    """Run every check, shop by shop, and log what disagrees. Returns the mismatches.
+
+    PERF-17: each statement reads one shop's rows (they were platform-wide aggregates, which at
+    scale outrun the 15 s statement timeout and would be cancelled every night). A shop that
+    can't be checked is logged at ERROR and counted (LAST_FAILED); the others are still checked."""
+    global LAST_FAILED
+    found: list[Mismatch] = []
+    failed = 0
+    async for org_id in _org_ids(db):
+        try:
+            async with db.begin_nested():     # a failed statement must not end the whole sweep
+                found.extend(await find_mismatches(db, org_id=org_id))
+        except Exception:  # noqa: BLE001 — one shop's failure is reported, the sweep goes on
+            failed += 1
+            log.exception("integrity sweep: could not check shop %s", org_id)
+    await db.rollback()                        # read-only: end the transaction
     counts = {c: 0 for c in CHECKS}
     for m in found:
         counts[m.check] += 1
     LAST_COUNTS.clear()
     LAST_COUNTS.update(counts)
+    LAST_FAILED = failed
     if found:
         # ERROR so it pages: ids and amounts only (no names, no PII). One line per mismatch, capped.
         log.error("integrity sweep: %d mismatch(es) %s", len(found), counts)
         for m in found[:200]:
             log.error("integrity mismatch check=%s org=%s id=%s stored=%.6f derived=%.6f diff=%.6f",
                       m.check, m.org_id, m.entity_id, m.stored, m.derived, m.diff)
-    else:
+    elif not failed:
         log.info("integrity sweep: all totals match their ledgers")
+    if failed:
+        log.error("integrity sweep: %d shop(s) could not be checked", failed)
     return found
 
 
-__all__ = ["CHECKS", "Mismatch", "find_mismatches", "sweep", "LAST_COUNTS"]
+__all__ = ["CHECKS", "Mismatch", "find_mismatches", "sweep", "LAST_COUNTS", "LAST_FAILED"]

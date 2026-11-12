@@ -11,9 +11,11 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Employee, MediaBlob
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.media import active_backend, load, store
+from backend.services.media import _decode_payload, active_backend, load, store
 
 router = APIRouter(prefix="/api/media", tags=["media"])
+
+PUBLIC_MEDIA_ITEMS = ("photo", "signature", "file")
 
 
 @router.get("/status")
@@ -63,7 +65,104 @@ async def get_media(
     if not blob:
         raise HTTPException(404, "Media not found")
     raw, mime = await load(blob)
-    return Response(content=raw, **safe_media_response(raw, mime, blob.name))
+    kw = safe_media_response(raw, mime, blob.name)
+    # A blob's bytes never change under its id (PERF-02): let the signed-in browser keep it for
+    # a while instead of re-downloading every thumbnail. Never a shared cache.
+    kw["headers"]["Cache-Control"] = MEDIA_CACHE
+    return Response(content=raw, **kw)
+
+
+MEDIA_CACHE = "private, max-age=3600"
+
+
+# ── Customer-facing media (PERF-01) ─────────────────────────────────────────────────────────
+# The track page and the portal's job view used to carry every photo inline as base64 in a JSON
+# polled every 20 s. They now carry these URLs. The link's own token is the key: the job behind
+# it must own the item, and the item must be one the customer is shown. Nothing else opens.
+
+async def _feed_media(db: AsyncSession, order, item_id: str) -> Response:
+    from backend.models import EventFeedItem
+    it = (await db.execute(select(EventFeedItem).where(
+        EventFeedItem.id == item_id,
+        EventFeedItem.org_id == order.org_id,
+        EventFeedItem.entity_type == "order",
+        EventFeedItem.entity_id == order.id,
+        EventFeedItem.visibility == "client",
+        EventFeedItem.item_type.in_(PUBLIC_MEDIA_ITEMS)))).scalar_one_or_none()
+    if not it:
+        raise HTTPException(404, "Media not found")
+    if it.media_blob_id:
+        blob = (await db.execute(select(MediaBlob).where(
+            MediaBlob.id == it.media_blob_id, MediaBlob.org_id == order.org_id))).scalar_one_or_none()
+        if not blob:
+            raise HTTPException(404, "Media not found")
+        raw, mime = await load(blob)
+        mime = it.media_mime or mime
+    elif it.media_data:
+        raw, sniffed = _decode_payload(it.media_data)
+        mime = it.media_mime or sniffed or "application/octet-stream"
+    else:
+        raise HTTPException(404, "Media not found")
+    return _public_media(raw, mime, it.media_name)
+
+
+async def _rec_media(db: AsyncSession, order, rec_id: str) -> Response:
+    from backend.models import Recommendation
+    from backend.routers.public import _recommend_enabled
+    r = (await db.execute(select(Recommendation).where(
+        Recommendation.id == rec_id,
+        Recommendation.org_id == order.org_id,
+        Recommendation.order_id == order.id,
+        Recommendation.status.in_(("sent", "approved", "declined"))))).scalar_one_or_none()
+    if not r or not r.media_data or not await _recommend_enabled(db, order.org_id):
+        raise HTTPException(404, "Media not found")
+    raw, sniffed = _decode_payload(r.media_data)
+    return _public_media(raw, sniffed or "application/octet-stream", None)
+
+
+def _public_media(raw: bytes, mime: str, name) -> Response:
+    kw = safe_media_response(raw, mime, name)
+    kw["headers"]["Cache-Control"] = MEDIA_CACHE
+    kw["headers"]["Referrer-Policy"] = "no-referrer"     # the token is in this URL
+    kw["headers"]["X-Robots-Tag"] = "noindex"
+    return Response(content=raw, **kw)
+
+
+async def _track_order(db: AsyncSession, token: str):
+    from backend.routers.public import _load
+    return await _load(db, token)
+
+
+async def _portal_order(db: AsyncSession, ptoken: str, order_id: str):
+    from backend.models import Order
+    from backend.routers.public import _client_by_portal
+    client = await _client_by_portal(db, ptoken)
+    order = (await db.execute(select(Order).where(
+        Order.id == order_id, Order.client_id == client.id,
+        Order.org_id == client.org_id))).scalar_one_or_none()
+    if not order:
+        raise HTTPException(404, "Media not found")
+    return order
+
+
+@router.get("/track/{token}/feed/{item_id}")
+async def track_feed_media(token: str, item_id: str, db: AsyncSession = Depends(get_db)):
+    return await _feed_media(db, await _track_order(db, token), item_id)
+
+
+@router.get("/track/{token}/rec/{rec_id}")
+async def track_rec_media(token: str, rec_id: str, db: AsyncSession = Depends(get_db)):
+    return await _rec_media(db, await _track_order(db, token), rec_id)
+
+
+@router.get("/portal/{ptoken}/{order_id}/feed/{item_id}")
+async def portal_feed_media(ptoken: str, order_id: str, item_id: str, db: AsyncSession = Depends(get_db)):
+    return await _feed_media(db, await _portal_order(db, ptoken, order_id), item_id)
+
+
+@router.get("/portal/{ptoken}/{order_id}/rec/{rec_id}")
+async def portal_rec_media(ptoken: str, order_id: str, rec_id: str, db: AsyncSession = Depends(get_db)):
+    return await _rec_media(db, await _portal_order(db, ptoken, order_id), rec_id)
 
 
 # Types a browser may render inline without running script. Everything else — HTML, SVG,

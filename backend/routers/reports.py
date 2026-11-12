@@ -4,15 +4,21 @@ from typing import Optional
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import case, select, func
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import defer, selectinload
 from backend.db.database import get_db
 from backend.models import Order, Client, Invoice, Part, StockLevel, Task, Employee
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.dates import day_start_utc, now_utc, range_edge, shop_today, shop_tzname, today_in
+from backend.services.dates import (
+    day_start_utc, now_utc, range_edge, report_edge, shop_today, shop_tzname, today_in, utc_to_wall,
+)
 # The money figures and low stock are defined once, in services/revenue (read its docstring).
 from backend.services import revenue as money_rules, stock_rows
 from backend.services.revenue import low_stock_count_query, low_stock_query, line_net
 from backend.services.task_visibility import assigned_sql, visibility_conds
+
+# Product photos (parts.image_data, up to 400 KB each) are never needed to print a report row
+# (PERF-03): every report that reads Part rows defers the column.
+_NO_PHOTO = defer(Part.image_data)
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -26,7 +32,7 @@ _DASH_TTL_S = 30
 _dash_cache: dict = {}   # org_id -> (expires_at, payload)
 
 
-async def _dash_get(oid: str):
+async def _dash_get(oid: str, *, key=None, redis_key=None):
     import json
     import time
 
@@ -34,15 +40,15 @@ async def _dash_get(oid: str):
     r = await ratelimit.get_aredis()
     if r is not None:
         try:
-            raw = await r.get(f"dash:{oid}")
+            raw = await r.get(redis_key or f"dash:{oid}")
             return json.loads(raw) if raw else None
         except Exception:   # noqa: BLE001 — Redis down or bad entry: fall back in-process
             ratelimit.aredis_failed()
-    hit = _dash_cache.get(oid)
+    hit = _dash_cache.get(key or oid)
     return hit[1] if hit and hit[0] > time.monotonic() else None
 
 
-async def _dash_put(oid: str, out: dict) -> None:
+async def _dash_put(oid: str, out: dict, *, key=None, redis_key=None, ttl: int = _DASH_TTL_S) -> None:
     import time
 
     from backend.services import ratelimit
@@ -50,13 +56,13 @@ async def _dash_put(oid: str, out: dict) -> None:
     r = await ratelimit.get_aredis()
     if r is not None:
         try:
-            await r.set(f"dash:{oid}", json_dumps(out), ex=_DASH_TTL_S)
+            await r.set(redis_key or f"dash:{oid}", json_dumps(out), ex=ttl)
             return
         except Exception:   # noqa: BLE001 — fall back in-process
             ratelimit.aredis_failed()
     if len(_dash_cache) > 5000:
         _dash_cache.clear()
-    _dash_cache[oid] = (time.monotonic() + _DASH_TTL_S, out)
+    _dash_cache[key or oid] = (time.monotonic() + ttl, out)
 
 
 @router.get("/dashboard")
@@ -194,9 +200,38 @@ _range_edge = range_edge
 
 
 def _parse_range(date_from, date_to, tz: str | None = None):
-    df = _range_edge(date_from, tz, end=False) if date_from else now_utc() - timedelta(days=30)
-    dt = _range_edge(date_to, tz, end=True) if date_to else now_utc() + timedelta(days=1)
+    df = report_edge(date_from, tz, end=False) if date_from else now_utc() - timedelta(days=30)
+    dt = report_edge(date_to, tz, end=True) if date_to else now_utc() + timedelta(days=1)
     return df, dt
+
+
+# PERF-12: a report reads, builds and exports every row of its window in one request; the window
+# is capped like total-profit's, so one run can't pull a shop's whole history into a worker.
+MAX_REPORT_DAYS = 731
+
+
+def _report_window(date_from, date_to, tz: str | None):
+    """The window of a built-in report: date-only values are whole shop days, and a date-only
+    "To" now runs to the very end of that day (RPT-06: it stopped a second early, so a row stamped
+    in the last second of the day was in neither that day nor the next)."""
+    from fastapi import HTTPException
+    try:
+        df, dt = _parse_range(date_from, date_to, tz)
+    except ValueError:
+        raise HTTPException(422, "Use dates like 2026-10-24")
+    # the span is history read: an open "To" far in the future (…&date_to=2100-01-01) reads no
+    # more than up to now, so it is measured to tomorrow; the window itself is left as asked
+    if min(dt, now_utc() + timedelta(days=1)) - df > timedelta(days=MAX_REPORT_DAYS):
+        raise HTTPException(422, "Pick a period of two years or less")
+    return df, dt
+
+
+def _local(ts, kw, fmt: str = "%Y-%m-%d %H:%M") -> str:
+    """A stored instant (naive UTC) printed on the shop's clock (RPT-05: report cells printed UTC
+    as if it were local)."""
+    if ts is None:
+        return "—"
+    return utc_to_wall(ts, kw.get("tz")).strftime(fmt)
 
 
 async def _closed_ready_keys(db, org_id):
@@ -222,7 +257,7 @@ async def _rep_work_orders_created(db, org, df, dt, **kw):
         .options(selectinload(Order.client), selectinload(Order.assigned_to))
         .order_by(Order.created_at.desc()))).scalars().all()
     cols = ["Order #", "Created", "Client", "Status", "Technician", "Total"]
-    data = [[o.order_number, o.created_at.strftime("%Y-%m-%d %H:%M"),
+    data = [[o.order_number, _local(o.created_at, kw),
              o.client.name if o.client else "—", o.status,
              o.assigned_to.name if o.assigned_to else "—", q2(o.total or 0)] for o in rows]
     return cols, data
@@ -237,7 +272,7 @@ async def _rep_work_orders_closed(db, org, df, dt, **kw):
         .options(selectinload(Order.client), selectinload(Order.assigned_to))
         .order_by(Order.closed_at.desc()))).scalars().all()
     cols = ["Order #", "Closed", "Client", "Technician", "Total"]
-    data = [[o.order_number, o.closed_at.strftime("%Y-%m-%d %H:%M"),
+    data = [[o.order_number, _local(o.closed_at, kw),
              o.client.name if o.client else "—",
              o.assigned_to.name if o.assigned_to else "—", q2(o.total or 0)] for o in rows]
     return cols, data
@@ -319,7 +354,7 @@ async def _rep_dropped_jobs(db, org, df, dt, **kw):
     data = []
     for o in orders:
         f = figs[o.id]
-        data.append([o.order_number, o.closed_at.strftime("%Y-%m-%d"), o.client.name if o.client else "—",
+        data.append([o.order_number, _local(o.closed_at, kw, "%Y-%m-%d"), o.client.name if o.client else "—",
                      o.assigned_to.name if o.assigned_to else "—", tname.get(o.type_id, "—"),
                      sname.get(o.status, o.status), o.cancel_reason or "No reason given", f["total"],
                      f["charged"], f["written_off"], f["tax"], f["cogs"], f["labour_cost"],
@@ -403,7 +438,9 @@ async def _line_sales(db, org, df, dt, kind: str) -> dict:
         back = (await db.execute(
             select(ClientReturn.order_id, ClientReturnLine.part_id, func.sum(ClientReturnLine.qty))
             .join(ClientReturnLine, ClientReturnLine.return_id == ClientReturn.id)
-            .where(ClientReturn.order_id.in_({k[0] for k in by_part}), ClientReturnLine.restock == True)  # noqa: E712
+            .where(ClientReturn.order_id.in_(select(Order.id).where(
+                       Order.org_id == org, Order.created_at >= df, Order.created_at <= dt)),
+                   ClientReturnLine.restock == True)  # noqa: E712
             .group_by(ClientReturn.order_id, ClientReturnLine.part_id))).all()
         for oid, part_id, qty in back:
             hit = by_part.get((oid, part_id))
@@ -417,7 +454,9 @@ async def _line_sales(db, org, df, dt, kind: str) -> dict:
     sales = (await db.execute(select(Sale).where(
         Sale.org_id == org, Sale.voided_at.is_(None), Sale.created_at >= df, Sale.created_at <= dt))).scalars().all()
     if sales:
-        slines = (await db.execute(select(SaleLine).where(SaleLine.sale_id.in_([x.id for x in sales])))).scalars().all()
+        # the period's sales as a SELECT, not a Python list (PERF-15: asyncpg takes ≤ 32,767 binds)
+        slines = (await db.execute(select(SaleLine).where(SaleLine.sale_id.in_(select(Sale.id).where(
+            Sale.org_id == org, Sale.voided_at.is_(None), Sale.created_at >= df, Sale.created_at <= dt))))).scalars().all()
         gross = {}
         for sl in slines:
             gross[sl.sale_id] = gross.get(sl.sale_id, 0) + float(sl.total or 0)
@@ -504,7 +543,7 @@ async def _rep_product_turnover(db, org, df, dt, **kw):
     it; "all" both."""
     movement = kw.get("movement") or "with"
     rows = (await db.execute(
-        select(StockMovement, Part).join(Part, StockMovement.part_id == Part.id)
+        select(StockMovement, Part).options(_NO_PHOTO).join(Part, StockMovement.part_id == Part.id)
         .where(Part.org_id == org, StockMovement.movement_type.in_(("use", "return")),
                StockMovement.created_at >= df, StockMovement.created_at <= dt))).all()
     agg: dict = {}
@@ -527,17 +566,17 @@ async def _rep_product_turnover(db, org, df, dt, **kw):
 async def _rep_inventory_writeoffs(db, org, df, dt, **kw):
     """Manual write-offs (movement_type=writeoff) — separate report from turnover."""
     rows = (await db.execute(
-        select(StockMovement, Part).join(Part, StockMovement.part_id == Part.id)
+        select(StockMovement, Part).options(_NO_PHOTO).join(Part, StockMovement.part_id == Part.id)
         .where(Part.org_id == org, StockMovement.movement_type == "writeoff",
                StockMovement.created_at >= df, StockMovement.created_at <= dt))).all()
     cols = ["Product", "Qty", "Date"]
-    data = [[part.name, abs(mv.qty), mv.created_at.strftime("%Y-%m-%d")] for mv, part in rows]
+    data = [[part.name, abs(mv.qty), _local(mv.created_at, kw, "%Y-%m-%d")] for mv, part in rows]
     return cols, data
 
 
 async def _rep_stock_levels(db, org, df, dt, **kw):
     parts = (await db.execute(select(Part).where(Part.org_id == org, Part.active == True)  # noqa: E712
-        .options(selectinload(Part.stock_levels)))).scalars().all()
+        .options(selectinload(Part.stock_levels), _NO_PHOTO))).scalars().all()
     cols = ["Product", "SKU", "Available", "Reserved", "Min", "Value (cost)"]
     data = []
     for p in parts:
@@ -550,12 +589,13 @@ async def _rep_stock_levels(db, org, df, dt, **kw):
 
 
 async def _rep_activity_log(db, org, df, dt, **kw):
-    rows = (await db.execute(select(EventFeedItem).where(
+    # Text only: the row's photo or file never leaves the database for this report (PERF-05).
+    rows = (await db.execute(select(
+        EventFeedItem.created_at, EventFeedItem.entity_type, EventFeedItem.body).where(
         EventFeedItem.org_id == org, EventFeedItem.created_at >= df, EventFeedItem.created_at <= dt)
-        .order_by(EventFeedItem.created_at.desc()).limit(500))).scalars().all()
+        .order_by(EventFeedItem.created_at.desc()).limit(500))).all()
     cols = ["When", "Entity", "Event"]
-    data = [[r.created_at.strftime("%Y-%m-%d %H:%M"), getattr(r, "entity_type", "—") or "—",
-             (getattr(r, "body", "") or getattr(r, "message", "") or "")] for r in rows]
+    data = [[_local(r.created_at, kw), r.entity_type or "—", r.body or ""] for r in rows]
     return cols, data
 
 
@@ -605,8 +645,8 @@ async def _rep_labor_by_job(db, org, df, dt, **kw):
         a["cost"] += e.duration_sec / 3600 * (e.cost_rate or 0)
         if e.billable:
             a["bill"] += e.duration_sec / 3600 * (e.billable_rate or 0)
-    order_rows = (await db.execute(select(Order).where(
-        Order.id.in_(list(by_order.keys()))))).scalars().all() if by_order else []
+    order_rows = [o for part in money_rules.chunks(by_order) for o in (await db.execute(select(Order).where(
+        Order.org_id == org, Order.id.in_(part)))).scalars().all()]      # PERF-15: chunked
     onum = {o.id: (o.order_number, o.duration_min or 0, o.labour_total or 0) for o in order_rows}
     cols = ["Order", "Scheduled min", "Tracked h", "Labor cost", "Billable value", "Billed labor"]
     out = []
@@ -695,7 +735,7 @@ async def _rep_assortment(db, org, df, dt, **kw):
     whs = {w.id: w for w in (await db.execute(select(Warehouse).where(
         Warehouse.org_id == org, Warehouse.kind == "product",
         Warehouse.deleted_at.is_(None)))).scalars().all()}
-    rows = (await db.execute(select(StockLevel, Part)
+    rows = (await db.execute(select(StockLevel, Part).options(_NO_PHOTO)
         .join(Part, StockLevel.part_id == Part.id)
         .where(Part.org_id == org, Part.active == True))).all()  # noqa: E712
 
@@ -715,29 +755,34 @@ async def _rep_assortment(db, org, df, dt, **kw):
     return cols, data
 
 
+async def _on_order(db, org) -> dict:
+    """{part id: units still to arrive} over the shop's open purchase orders, in one grouped
+    query (PERF-11: it used to be one query per open PO). Only lines with something still
+    outstanding count, as before."""
+    from backend.models import POLine, PurchaseOrder
+    out = func.coalesce(POLine.qty_ordered, 0) - func.coalesce(POLine.qty_received, 0)
+    open_pos = (select(PurchaseOrder.id)
+                .join(Supplier, PurchaseOrder.supplier_id == Supplier.id)
+                .where(Supplier.org_id == org,
+                       PurchaseOrder.status.notin_(["received", "canceled", "cancelled"])))
+    return {pid: float(q or 0) for pid, q in (await db.execute(
+        select(POLine.part_id, func.sum(out))
+        .where(POLine.po_id.in_(open_pos), out > 0)
+        .group_by(POLine.part_id))).all()}
+
+
 async def _rep_purchase_list(db, org, df, dt, **kw):
     """What to buy. A product is short when what's on the shelf, minus what's already
     promised to a customer, falls below its minimum — reserved stock isn't really yours
     to sell. Anything already on order is netted off, so the same part isn't ordered
     twice while the first delivery is still in transit."""
-    from backend.models import POLine, PurchaseOrder
 
     parts = (await db.execute(select(Part).where(
         Part.org_id == org, Part.active == True)  # noqa: E712
-        .options(selectinload(Part.stock_levels)))).scalars().all()
+        .options(selectinload(Part.stock_levels), _NO_PHOTO))).scalars().all()
 
     # what's already coming
-    incoming: dict = {}
-    open_pos = (await db.execute(select(PurchaseOrder)
-        .join(Supplier, PurchaseOrder.supplier_id == Supplier.id)
-        .where(Supplier.org_id == org,
-               PurchaseOrder.status.notin_(["received", "canceled", "cancelled"])))).scalars().all()
-    for po in open_pos:
-        for ln in (await db.execute(select(POLine).where(
-                POLine.po_id == po.id))).scalars().all():
-            outstanding = (ln.qty_ordered or 0) - (ln.qty_received or 0)
-            if outstanding > 0:
-                incoming[ln.part_id] = incoming.get(ln.part_id, 0) + outstanding
+    incoming = await _on_order(db, org)
 
     cols = ["Product", "SKU", "Available", "Reserved", "Free", "Min", "On order",
             "Suggest order", "Est. cost"]
@@ -766,7 +811,7 @@ async def _rep_expiration(db, org, df, dt, **kw):
     from backend.models import StockItemBatch, Warehouse
     whs = {w.id: w.name for w in (await db.execute(select(Warehouse).where(
         Warehouse.org_id == org))).scalars().all()}
-    rows = (await db.execute(select(StockItemBatch, Part)
+    rows = (await db.execute(select(StockItemBatch, Part).options(_NO_PHOTO)
         .join(Part, StockItemBatch.part_id == Part.id)
         .where(StockItemBatch.org_id == org,
                StockItemBatch.expiry_date.isnot(None),
@@ -846,7 +891,7 @@ async def _rep_stock_valuation(db, org, df, dt, **kw):
     whs = {w.id: w.name for w in (await db.execute(select(Warehouse).where(
         Warehouse.org_id == org, Warehouse.kind == "product",
         Warehouse.deleted_at.is_(None)))).scalars().all()}
-    rows = (await db.execute(select(StockLevel, Part)
+    rows = (await db.execute(select(StockLevel, Part).options(_NO_PHOTO)
         .join(Part, StockLevel.part_id == Part.id)
         .where(Part.org_id == org, Part.active == True))).all()  # noqa: E712
     agg = {}
@@ -873,7 +918,7 @@ async def _rep_dead_stock(db, org, df, dt, **kw):
     the tied-up cash you could free by clearing them. The inverse of the reorder list."""
     parts = (await db.execute(select(Part).where(
         Part.org_id == org, Part.active == True)  # noqa: E712
-        .options(selectinload(Part.stock_levels)))).scalars().all()
+        .options(selectinload(Part.stock_levels), _NO_PHOTO))).scalars().all()
     last = {}
     mv_rows = (await db.execute(
         select(StockMovement.part_id, func.max(StockMovement.created_at))
@@ -894,7 +939,7 @@ async def _rep_dead_stock(db, org, df, dt, **kw):
         if days is not None and days < 90:
             continue
         cost = _unit_cost(p)
-        data.append([p.name, p.sku or "—", q2(avail), q2(cost), q2(avail * cost), ts.strftime("%Y-%m-%d") if ts else "never",
+        data.append([p.name, p.sku or "—", q2(avail), q2(cost), q2(avail * cost), _local(ts, kw, "%Y-%m-%d") if ts else "never",
                      days if days is not None else "—"])
     data.sort(key=lambda r: -r[4])
     return cols, data
@@ -905,7 +950,6 @@ async def _rep_reorder_forecast(db, org, df, dt, **kw):
     days-of-cover and stockout date, then suggests an order quantity that covers the
     supplier's lead time plus a 14-day buffer — netting off what's already on order.
     Unlike the min-stock purchase list, this reacts to how fast things actually move."""
-    from backend.models import POLine, PurchaseOrder
     WINDOW, COVER = 28, 14
     since = now_utc() - timedelta(days=WINDOW)
     vel = {pid: float(q or 0) for pid, q in (await db.execute(
@@ -914,21 +958,12 @@ async def _rep_reorder_forecast(db, org, df, dt, **kw):
         .where(Part.org_id == org, StockMovement.movement_type == "use",
                StockMovement.created_at >= since)
         .group_by(StockMovement.part_id))).all()}
-    incoming = {}
-    open_pos = (await db.execute(select(PurchaseOrder)
-        .join(Supplier, PurchaseOrder.supplier_id == Supplier.id)
-        .where(Supplier.org_id == org,
-               PurchaseOrder.status.notin_(["received", "canceled", "cancelled"])))).scalars().all()
-    for po in open_pos:
-        for ln in (await db.execute(select(POLine).where(POLine.po_id == po.id))).scalars().all():
-            out = (ln.qty_ordered or 0) - (ln.qty_received or 0)
-            if out > 0:
-                incoming[ln.part_id] = incoming.get(ln.part_id, 0) + out
+    incoming = await _on_order(db, org)
     lead = {s.id: (s.lead_days or 0) for s in (await db.execute(
         select(Supplier).where(Supplier.org_id == org))).scalars().all()}
     parts = (await db.execute(select(Part).where(
         Part.org_id == org, Part.active == True)  # noqa: E712
-        .options(selectinload(Part.stock_levels)))).scalars().all()
+        .options(selectinload(Part.stock_levels), _NO_PHOTO))).scalars().all()
     cols = ["Product", "SKU", "Free", "Daily use", "Days left", "Stockout ~", "Lead days",
             "On order", "Suggest order", "Est. cost"]
     data = []
@@ -1078,9 +1113,10 @@ async def run_report(
         raise HTTPException(404, "Unknown report")
     tab, title, builder = REPORTS[report_key]
     location_id = await _scoped_location(db, current, location_id)
-    df, dt = _parse_range(date_from, date_to, await shop_tzname(db, current.org_id, location_id))
+    tz = await shop_tzname(db, current.org_id, location_id)
+    df, dt = _report_window(date_from, date_to, tz)
     df = await _report_from(db, current, report_key, df)
-    cols, rows = await builder(db, current.org_id, df, dt,
+    cols, rows = await builder(db, current.org_id, df, dt, tz=tz,
                                **await _builder_kw(db, current, report_key, location_id, role_id, employee_id, filters))
     # totals row for numeric columns
     return {"key": report_key, "title": title, "tab": tab,
@@ -1108,9 +1144,10 @@ async def export_report(
     from openpyxl.styles import Font, PatternFill, Alignment
     tab, title, builder = REPORTS[report_key]
     location_id = await _scoped_location(db, current, location_id)
-    df, dt = _parse_range(date_from, date_to, await shop_tzname(db, current.org_id, location_id))
+    tz = await shop_tzname(db, current.org_id, location_id)
+    df, dt = _report_window(date_from, date_to, tz)
     df = await _report_from(db, current, report_key, df)
-    cols, rows = await builder(db, current.org_id, df, dt,
+    cols, rows = await builder(db, current.org_id, df, dt, tz=tz,
                                **await _builder_kw(db, current, report_key, location_id, role_id, employee_id, filters))
 
     wb = openpyxl.Workbook()
@@ -1161,9 +1198,10 @@ async def export_report_csv(
     import csv
     _tab, _title, builder = REPORTS[report_key]
     location_id = await _scoped_location(db, current, location_id)
-    df, dt = _parse_range(date_from, date_to, await shop_tzname(db, current.org_id, location_id))
+    tz = await shop_tzname(db, current.org_id, location_id)
+    df, dt = _report_window(date_from, date_to, tz)
     df = await _report_from(db, current, report_key, df)
-    cols, rows = await builder(db, current.org_id, df, dt,
+    cols, rows = await builder(db, current.org_id, df, dt, tz=tz,
                                **await _builder_kw(db, current, report_key, location_id, role_id, employee_id, filters))
     buf = io.StringIO()
     w = csv.writer(buf)
@@ -1184,10 +1222,38 @@ async def company_dashboard(
 ):
     """Rich 'My company' dashboard matching Orderry: today metrics, status mix,
     orders-by-assignee, account balances, and monthly KPIs. Optionally scoped to a
-    single location via ?location_id=."""
-    from backend.models import Account, OrderStatus
+    single location via ?location_id=.
+
+    PERF-07: the figures are the same for everyone who opens Home in this shop (and branch), so
+    they are kept for HOME_DASHBOARD_CACHE_S seconds (Redis when set, so every worker shares
+    them); what money a caller may see is decided per request, after the cache."""
+    from backend.config import settings
     oid = current.org_id
     location_id = await _scoped_location(db, current, location_id)
+    ttl = int(getattr(settings, "HOME_DASHBOARD_CACHE_S", 0) or 0)
+    ckey, rkey = ("home", oid, location_id or ""), f"home:{oid}:{location_id or ''}"
+    out = await _dash_get(oid, key=ckey, redis_key=rkey) if ttl > 0 else None
+    if out is None:
+        out = await _company_figures(db, oid, location_id)
+        if ttl > 0:
+            await _dash_put(oid, out, key=ckey, redis_key=rkey, ttl=ttl)
+
+    # Money on Home follows the role: balances need "see balance", takings and amounts owed
+    # need finance access. Counts stay visible to everyone.
+    from backend.services.auth import has_perm
+    see_bal = await has_perm(db, current, "can_view_balance")
+    see_fin = await has_perm(db, current, "can_view_finance")
+    hide = {"today": ("revenue", "paid", "refunds", "cash_collected", "net_sales") if not see_fin else (),
+            "kpis": (("receivables", "outstanding", "ar", "ap") if not see_fin else ())
+                    + (("total_money", "cash", "cashless") if not see_bal else ()),
+            "monthly": ("revenue", "paid", "cash_collected", "net_sales", "avg_work_order") if not see_fin else ()}
+    return {k: ({f: (None if f in hide.get(k, ()) else v) for f, v in val.items()} if isinstance(val, dict) else val)
+            for k, val in out.items()}
+
+
+async def _company_figures(db, oid: str, location_id: Optional[str]) -> dict:
+    """Home's figures for the whole shop (or one branch), before any role hides money."""
+    from backend.models import Account, OrderStatus
     now = now_utc()
     tz = await shop_tzname(db, oid)   # today/this month start on the shop's clock, not UTC's
     today = today_in(tz)
@@ -1204,6 +1270,8 @@ async def company_dashboard(
     statuses = (await db.execute(select(OrderStatus).where(OrderStatus.org_id == oid, OrderStatus.record_type == "work_order"))).scalars().all()
     grp = {s.key: s.status_group for s in statuses}
     closed_groups = {"closed", "dropped"}
+    # the shop's dropped keys (revenue.dropped_keys), read once here for every figure below
+    dropped = {k for k, g in grp.items() if g == "dropped"}
 
     def is_open(status): return grp.get(status) not in closed_groups
 
@@ -1223,27 +1291,29 @@ async def company_dashboard(
     # Two different measures, both labelled (services/revenue): "revenue" is net sales (ex tax,
     # after returns — the same figure as the dashboard, finance summary and P&L); "paid" is the
     # money that came in ("Paid today"), with refunds and cash_collected beside it.
-    cash_today = await money_rules.cash_collected(db, oid, today0, None, location_id)
-    sales_today = (await money_rules.net_sales(db, oid, today0, None, location_id))["revenue"]
+    cash_today, cash_month = await money_rules.cash_collected_windows(
+        db, oid, [(today0, None), (month0, None)], location_id)
+    sales_today = (await money_rules.net_sales(db, oid, today0, None, location_id, dropped=dropped))["revenue"]
 
     new_count = sum(r[1] for r in per_status if grp.get(r[0]) == "new")
     urgent = sum(r[3] for r in open_rows)
     overdue = sum(r[4] for r in open_rows)
-    receivables = await money_rules.receivables(db, oid, location_id)
+    receivables = await money_rules.receivables(db, oid, location_id, dropped=dropped)
 
-    # accounts (cash vs cashless)
-    accounts = (await db.execute(select(Account).where(Account.org_id == oid, Account.active == True))).scalars().all()  # noqa: E712
-    cash_bal = sum(a.balance for a in accounts if a.payment_option == "cash")
-    cashless_bal = sum(a.balance for a in accounts if a.payment_option != "cash")
-
-    # Build 124: true A/R and A/P from the unified ledger's running balances.
-    #   ar = what clients owe us  (sum of positive contact balances)
-    #   ap = what we owe suppliers (sum of positive supplier balances)
+    # accounts (cash vs cashless), and Build 124's true A/R and A/P from the unified ledger's
+    # running balances (ar = what clients owe us, the positive contact balances; ap = what we owe
+    # suppliers), summed in the database in one statement
     from backend.models import Client, Supplier
-    ar = (await db.execute(select(func.coalesce(func.sum(Client.balance), 0))
-        .where(Client.org_id == oid, Client.balance > 0))).scalar() or 0
-    ap = (await db.execute(select(func.coalesce(func.sum(Supplier.balance), 0))
-        .where(Supplier.org_id == oid, Supplier.balance > 0))).scalar() or 0
+    acct = [Account.org_id == oid, Account.active == True]  # noqa: E712
+    cash_bal, cashless_bal, ar, ap = (float(x or 0) for x in (await db.execute(select(
+        select(func.coalesce(func.sum(Account.balance), 0)).where(
+            *acct, Account.payment_option == "cash").scalar_subquery(),
+        select(func.coalesce(func.sum(Account.balance), 0)).where(
+            *acct, func.coalesce(Account.payment_option, "") != "cash").scalar_subquery(),
+        select(func.coalesce(func.sum(Client.balance), 0)).where(
+            Client.org_id == oid, Client.balance > 0).scalar_subquery(),
+        select(func.coalesce(func.sum(Supplier.balance), 0)).where(
+            Supplier.org_id == oid, Supplier.balance > 0).scalar_subquery()))).one())
 
     # status mix (open orders only, by group)
     mix = {}
@@ -1268,51 +1338,45 @@ async def company_dashboard(
     # monthly KPIs
     wo_month = sum(r[5] for r in per_status)
     won_month = sum(r[5] for r in closed_rows)
-    cash_month = await money_rules.cash_collected(db, oid, month0, None, location_id)
-    sales_month = (await money_rules.net_sales(db, oid, month0, None, location_id))["revenue"]
-    # average finished job, ex tax after refunds and credit notes (services/revenue)
-    closed_q = select(Order.id).where(Order.org_id == oid, Order.is_estimate == False,  # noqa: E712
-                                      Order.status.in_([k for k, g in grp.items() if g == "closed"] or [""]))
-    if location_id:
-        closed_q = closed_q.where(Order.location_id == location_id)
-    closed_figs = await money_rules.job_figures(db, closed_q)
-    avg_wo = q2(sum(f["revenue"] for f in closed_figs.values()) / len(closed_figs)) if closed_figs else 0
+    month_jobs: dict = {}
+    sales_month = (await money_rules.net_sales(db, oid, month0, None, location_id, dropped=dropped,
+                                               jobs=month_jobs))["revenue"]
+    # RPT-08: the average job finished THIS MONTH (it averaged every closed job ever): the jobs
+    # earned this month, ex tax after refunds and credit notes, dropped jobs left out — the same
+    # jobs and figures as this month's revenue above (services/revenue)
+    finished = [f["revenue"] for f in month_jobs.values() if not f["dropped"]]
+    avg_wo = q2(sum(finished) / len(finished)) if finished else 0
     conversion = round(won_month / wo_month * 100, 0) if wo_month else 0
 
-    # Money on Home follows the role: balances need "see balance", takings and amounts owed
-    # need finance access. Counts stay visible to everyone.
-    from backend.services.auth import has_perm
-    see_bal = await has_perm(db, current, "can_view_balance")
-    see_fin = await has_perm(db, current, "can_view_finance")
     return {
         "today": {
             "work_orders": wo_today,
-            "revenue": sales_today if see_fin else None,                # net sales, ex tax
-            "paid": cash_today["in"] if see_fin else None,              # money in ("Paid today")
-            "refunds": cash_today["refunds"] if see_fin else None,
-            "cash_collected": cash_today["net"] if see_fin else None,   # in − refunds
-            "net_sales": sales_today if see_fin else None,              # revenue, ex tax
+            "revenue": sales_today,                     # net sales, ex tax
+            "paid": cash_today["in"],                   # money in ("Paid today")
+            "refunds": cash_today["refunds"],
+            "cash_collected": cash_today["net"],        # in − refunds
+            "net_sales": sales_today,                   # revenue, ex tax
         },
         "kpis": {
             "new": new_count, "urgent": urgent, "overdue": overdue,
-            "receivables": receivables if see_fin else None,
-            "outstanding": receivables if see_fin else None,           # same figure as Reports/Finance
+            "receivables": receivables,
+            "outstanding": receivables,                 # same figure as Reports/Finance
             # client balances from the contact ledger — a different measure from receivables
-            "ar": q2(float(ar)) if see_fin else None, "ap": q2(float(ap)) if see_fin else None,
-            "total_money": q2(cash_bal + cashless_bal) if see_bal else None,
-            "cash": q2(cash_bal) if see_bal else None, "cashless": q2(cashless_bal) if see_bal else None,
+            "ar": q2(float(ar)), "ap": q2(float(ap)),
+            "total_money": q2(cash_bal + cashless_bal),
+            "cash": q2(cash_bal), "cashless": q2(cashless_bal),
         },
         "status_mix": [{"group": g, "count": c} for g, c in mix.items()],
         "by_assignee": assignee_rows,
         "monthly": {
             "work_orders_created": wo_month,
             "work_orders_won": won_month,
-            "revenue": sales_month if see_fin else None,                # net sales, ex tax
-            "paid": cash_month["in"] if see_fin else None,              # money in ("Paid")
-            "cash_collected": cash_month["net"] if see_fin else None,
-            "net_sales": sales_month if see_fin else None,
+            "revenue": sales_month,                     # net sales, ex tax
+            "paid": cash_month["in"],                   # money in ("Paid")
+            "cash_collected": cash_month["net"],
+            "net_sales": sales_month,
             "conversion": conversion,
-            "avg_work_order": avg_wo if see_fin else None,
+            "avg_work_order": avg_wo,
         },
     }
 
