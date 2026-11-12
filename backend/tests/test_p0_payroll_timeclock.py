@@ -160,6 +160,27 @@ async def test_lab01_reopen_of_a_day_paid_before_per_entry_wages(client, db):
     assert await _wages(db, org, emp) == 190          # 8h + 1h overtime, once
 
 
+async def test_lab01_reopening_a_never_paid_entry_takes_nothing_from_the_days_pay(client, db):
+    """Before LAB-03 was fixed, an entry approved on its own was never paid, while a timesheet
+    approval the same day paid the other entries. Reopening it must not take its share off their
+    pay; approving it again pays it (fixing the old underpay)."""
+    from backend.models import EmployeeBalanceLedger as L
+    from backend.models import TimeEntryAudit
+    H, org, owner = await _register(client)
+    emp, _ = await _teammate(client, H, await _role(db, org))
+    await _entry(db, org, emp, "2026-08-03T09:00:00", 8, state="approved")      # paid by the timesheet row
+    single = await _entry(db, org, emp, "2026-08-03T18:00:00", 2, state="approved")
+    db.add(TimeEntryAudit(org_id=org, time_entry_id=single, action="approve", field="state",
+                          old_value="stopped", new_value="approved", actor_id=owner))
+    db.add(L(org_id=org, employee_id=emp, entry_type="hourly_wage", amount=160, ref_type="timesheet",
+             ref_id=f"{emp}:2026-08-03:2026-08-03", idempotency_key=f"hourly:{emp}:2026-08-03:abc"))
+    await db.commit()
+    assert (await client.post(f"/api/timeclock/entries/{single}/reopen", headers=H)).status_code == 200
+    assert await _wages(db, org, emp) == 160                # was 100: 60 taken off the other entry
+    assert (await client.post(f"/api/timeclock/entries/{single}/approve", headers=H)).status_code == 200
+    assert await _wages(db, org, emp) == 160 + 2 * 30       # the 2h after 8h, at overtime, paid once
+
+
 async def test_lab01_reopened_wage_lands_in_the_payroll_run(client, db):
     H, org, _ = await _register(client)
     emp, _ = await _teammate(client, H, await _role(db, org))
@@ -258,6 +279,28 @@ async def test_lab02_window_posted_before_per_shift_wages_is_not_paid_again(clie
     assert await _wages(db, org, emp) == 160
 
 
+async def test_lab02_shift_that_ended_after_a_legacy_window_was_posted_is_still_paid(client, db):
+    """A window posted before per-shift wages only paid the shifts that had ended by then."""
+    from backend.models import AuditLog
+    from backend.models import EmployeeBalanceLedger as L
+    H, org, owner = await _register(client)
+    emp = await _attendance_emp(client, H, db, org)
+    await _shift(db, org, emp, "2026-08-03T09:00:00", 8)
+    db.add(L(org_id=org, employee_id=emp, entry_type="hourly_wage", amount=160, ref_type="attendance",
+             ref_id=f"{emp}:2026-08-01:2026-08-31", idempotency_key=f"attendance:{emp}:2026-08-01:2026-08-31",
+             created_at=datetime(2026, 8, 31, 12)))
+    db.add(AuditLog(org_id=org, actor_id=owner, action="payroll.attendance_wages", entity_type="employee",
+                    entity_id=emp, diff={"window": ["2026-08-01", "2026-08-31"], "hours": 8.0, "amount": 160.0},
+                    created_at=datetime(2026, 8, 10, 12)))
+    await db.commit()
+    await _shift(db, org, emp, "2026-08-20T09:00:00", 4)       # worked after that window was posted
+    r = await client.post("/api/payroll/attendance-wages", json={
+        "employee_id": emp, "date_from": "2026-08-01", "date_to": "2026-08-31"}, headers=H)
+    assert r.status_code == 201, r.text
+    assert r.json()["wage_posted"] == 80                       # was 0: the legacy window swallowed it
+    assert await _wages(db, org, emp) == 240
+
+
 async def test_rpt04_attendance_window_is_the_shops_month(client, db):
     """New York shop: a shift at 21:00 local on 31 Aug (01:00 UTC on 1 Sep) is August's."""
     H, org, _ = await _register(client)
@@ -308,6 +351,23 @@ async def test_lab04_v1_api_refuses_overlapping_time(client, db):
     r = await client.post("/api/v1/time-entries", headers=A, json={
         "employee_id": me, "started_at": "2026-10-20T10:00:00", "duration_min": 30})
     assert r.status_code == 409, r.text
+
+
+async def test_timesheet_window_with_a_time_ends_at_that_time(client, tenant):
+    me = (await client.get("/api/auth/me", headers=tenant)).json()
+    for s, e in (("2026-08-03T09:00:00", "2026-08-03T11:00:00"), ("2026-08-03T14:00:00", "2026-08-03T16:00:00")):
+        r = await client.post("/api/timeclock/entries", headers=tenant,
+                              json={"started_at": s, "ended_at": e, "category": "admin"})
+        assert r.status_code == 201, r.text
+    ts = await client.get(f"/api/timeclock/timesheet?employee_id={me['id']}"
+                          "&date_from=2026-08-03T00:00:00&date_to=2026-08-03T12:00:00", headers=tenant)
+    assert ts.status_code == 200 and ts.json()["entry_count"] == 1, ts.text   # was 2 (+1 day added)
+
+
+async def test_timesheet_approval_of_an_unknown_employee_is_404(client, tenant):
+    r = await client.post("/api/timeclock/timesheet/approve", json={
+        "employee_id": "nobody", "date_from": "2026-08-01", "date_to": "2026-08-31"}, headers=tenant)
+    assert r.status_code == 404 and r.json()["detail"] == "Employee not found", r.text
 
 
 # ── RPT-01 / LAB-06 ─────────────────────────────────────────────────────────────────────────────
@@ -412,3 +472,17 @@ async def test_wo02_billing_needs_the_custom_service_right(client, tenant, db):
     r = await client.post(f"/api/timeclock/order/{oid}/bill", json={}, headers=TH)
     assert r.status_code == 403, r.text
     assert await _lines(db, oid) == []
+
+
+async def test_wo02_too_little_time_bills_nothing(client, tenant, db):
+    from backend.models import TimeEntry
+    oid, _ = await _job_with_time(client, tenant, db)
+    db.expire_all()
+    e = (await db.execute(select(TimeEntry).where(TimeEntry.order_id == oid))).scalar_one()
+    e.duration_sec = 10                        # rounds to 0.00 h
+    await db.commit()
+    r = await client.post(f"/api/timeclock/order/{oid}/bill", json={}, headers=tenant)
+    assert r.status_code == 409 and r.json()["detail"] == "Not enough tracked time to bill yet", r.text
+    assert await _lines(db, oid) == []
+    db.expire_all()
+    assert (await db.execute(select(TimeEntry).where(TimeEntry.order_id == oid))).scalar_one().order_line_id is None

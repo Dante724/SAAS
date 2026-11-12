@@ -1008,19 +1008,33 @@ async def post_attendance_wages(
     paid = set((await db.execute(select(L.accrual_key).where(
         L.org_id == current.org_id, L.accrual_key.in_(list(keys.values()))))).scalars().all()) if keys else set()
     # Windows posted before wages were kept per shift (one row per window, no accrual key, the
-    # window in UTC days): their shifts are already paid.
+    # window in UTC days) paid the shifts that had started in the window AND ended by the time it
+    # was posted; a shift that ended later is still unpaid. The posting time is the audit entry
+    # written with the row (payroll.attendance_wages, same window). Rows older than that audit have
+    # only their created_at, which the old code set to noon on the window's last day: a shift that
+    # ended before then counts as paid, so an unprovable case errs towards not paying twice.
+    posted_at: dict = {}
+    from backend.models import AuditLog
+    for when_, diff in (await db.execute(select(AuditLog.created_at, AuditLog.diff).where(
+            AuditLog.org_id == current.org_id, AuditLog.action == "payroll.attendance_wages",
+            AuditLog.entity_id == emp.id))).all():
+        win = (diff or {}).get("window") if isinstance(diff, dict) else None
+        if isinstance(win, list) and len(win) == 2:
+            key = (str(win[0])[:10], str(win[1])[:10])
+            posted_at[key] = min(when_, posted_at.get(key, when_))
     legacy = []
-    for ref in (await db.execute(select(L.ref_id).where(
+    for ref, created in (await db.execute(select(L.ref_id, L.created_at).where(
             L.org_id == current.org_id, L.employee_id == emp.id, L.entry_type == "hourly_wage",
-            L.ref_type == "attendance", L.accrual_key.is_(None)))).scalars().all():
+            L.ref_type == "attendance", L.accrual_key.is_(None)))).all():
         try:
-            legacy.append((date.fromisoformat(ref.split(":")[-2]), date.fromisoformat(ref.split(":")[-1])))
+            a, b = ref.split(":")[-2], ref.split(":")[-1]
+            legacy.append((date.fromisoformat(a), date.fromisoformat(b), posted_at.get((a, b), created)))
         except (AttributeError, IndexError, ValueError):
             continue
     rate = emp.hourly_cost_rate or (emp.wage_value if emp.wage_type == "hourly" else 0.0) or 0.0
     hours, wage, posted = 0.0, Decimal("0"), 0
     for s in shifts:
-        if keys[s.id] in paid or any(a <= s.started_at.date() <= b for a, b in legacy):
+        if keys[s.id] in paid or any(a <= s.started_at.date() <= b and s.ended_at <= at for a, b, at in legacy):
             continue
         amount = _money(q2((s.hours_worked or 0) * rate))
         if amount <= 0:

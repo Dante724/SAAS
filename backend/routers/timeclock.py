@@ -1025,7 +1025,8 @@ def _window(date_from: str, date_to: str, tz: Optional[str]) -> tuple[datetime, 
     start, end = _udt(date_from, "date_from"), _udt(date_to, "date_to")
     if len(date_from.strip()) == 10:
         start = day_start_utc(start.date(), tz)
-    end = day_end_utc(end.date(), tz) if len(date_to.strip()) == 10 else end + timedelta(days=1)
+    if len(date_to.strip()) == 10:
+        end = day_end_utc(end.date(), tz)
     return start, end
 
 
@@ -1121,9 +1122,16 @@ async def _sync_day_wages(db: AsyncSession, org_id: str, employee_id: str, day: 
 
 async def _reverse_legacy_wage(db: AsyncSession, e: TimeEntry, tz: Optional[str]) -> Decimal:
     """Before wages were kept per entry, a timesheet approval paid one row per employee and UTC day
-    (ref_id `<employee>:<day>:<day>`, no accrual key). Reopening an entry approved back then takes its
-    share off that day's pay, so approving it again pays the corrected wage once, not on top. Never
-    takes more than is still standing for that day. Returns the amount reversed (positive)."""
+    (ref_id `<employee>:<day>:<day>`, no accrual key). Reopening an entry that such a row paid takes
+    its share off that day's pay, so approving it again pays the corrected wage once, not on top.
+    Never takes more than is still standing for that day. Returns the amount reversed (positive).
+
+    Only an entry the row actually paid is reversed. Under the old code the two ways to approve left
+    different traces: approve_entry wrote an "approve" row to the entry's audit trail (144ay) and
+    paid nothing (LAB-03), while a timesheet approval wrote no per-entry audit row and paid the day.
+    So an "approve" audit row since the entry's last reopen means it was approved on its own and the
+    day's row paid only the other entries: nothing is reversed, and approving it again pays it for
+    the first time (which also fixes that old underpay)."""
     from sqlalchemy import and_, or_
 
     from backend.models import EmployeeBalanceLedger as L
@@ -1131,6 +1139,13 @@ async def _reverse_legacy_wage(db: AsyncSession, e: TimeEntry, tz: Optional[str]
     if (await db.execute(select(L.id).where(
             L.org_id == e.org_id, L.accrual_key == _wage_key(e.id)).limit(1))).first():
         return Decimal("0")          # paid per entry: _sync_day_wages reverses it
+    trail = (await db.execute(select(TimeEntryAudit.action).where(
+        TimeEntryAudit.org_id == e.org_id, TimeEntryAudit.time_entry_id == e.id,
+        TimeEntryAudit.action.in_(("approve", "reopen")))
+        .order_by(TimeEntryAudit.at, TimeEntryAudit.id))).scalars().all()
+    since_reopen = trail[len(trail) - trail[::-1].index("reopen"):] if "reopen" in trail else trail
+    if "approve" in since_reopen:
+        return Decimal("0")          # approved on its own: no timesheet row paid it
     uday = e.started_at.date()
     lkey = L.normalize_key(f"hourly-legacy:{e.employee_id}:{uday}")
     standing = _money((await db.execute(select(func.coalesce(func.sum(L.amount), 0)).where(
@@ -1213,7 +1228,9 @@ async def approve_timesheet(
     emp = (await db.execute(select(Employee).where(
         Employee.id == data.employee_id, Employee.org_id == current.org_id))).scalar_one_or_none()
     if not emp:
-        raise HTTPException(404, "No stopped entries to approve in that window")
+        raise HTTPException(404, "Employee not found")
+    await assert_not_self(db, current, data.employee_id, "approve your own timesheet")
+    await _assert_manage_emp(db, current, data.employee_id)
     tz = await shop_timezone(db, emp)
     start, end = _window(data.date_from, data.date_to, tz)
     await _lock_employee(db, emp.id)
@@ -1223,8 +1240,6 @@ async def approve_timesheet(
         TimeEntry.started_at < end))).scalars().all()
     if not rows:
         raise HTTPException(404, "No stopped entries to approve in that window")
-    await assert_not_self(db, current, data.employee_id, "approve your own timesheet")
-    await _assert_manage_emp(db, current, data.employee_id)
     days = sorted({_shop_day(e, tz) for e in rows})
     already = (await db.execute(select(TimeEntry).where(
         TimeEntry.org_id == current.org_id, TimeEntry.employee_id == data.employee_id,
@@ -1346,6 +1361,9 @@ async def bill_tracked(
         import math
         minutes = math.ceil(minutes / data.round_to_min) * data.round_to_min
     hours = q2(minutes / 60)
+    if hours <= 0:
+        # nothing is billed and the entries stay unbilled, so their time counts once there is more
+        raise HTTPException(409, "Not enough tracked time to bill yet")
     # one line for every entry: the time-weighted average of their own billable and cost rates
     rate = q2(sum(e.duration_sec * float(e.billable_rate or 0) for e in rows) / total_sec)
     cost = q2(sum(e.duration_sec * float(e.cost_rate or 0) for e in rows) / total_sec)
