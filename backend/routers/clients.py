@@ -1158,7 +1158,8 @@ async def client_payments(
         Client.id == client_id, Client.org_id == current.org_id))).scalar_one_or_none()
     if not c:
         raise HTTPException(404, "Contact not found")
-    rows = (await db.execute(select(Payment).where(Payment.client_id == client_id)
+    rows = (await db.execute(select(Payment).where(Payment.client_id == client_id,
+                                                  Payment.org_id == current.org_id)
             .order_by(Payment.paid_at.desc()).limit(200))).scalars().all()
     from backend.services.batching import names_by_id
     onum = await names_by_id(db, Order.id, Order.order_number, [p.order_id for p in rows],

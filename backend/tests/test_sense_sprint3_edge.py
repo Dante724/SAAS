@@ -36,15 +36,24 @@ def _kinds(res, kind):
     return {f["employee_id"]: f for f in res["flags"] if f["kind"] == kind}
 
 
-async def _line(db, org_id, *, by, qty=1, price=100, disc=30, dtype="pct", days=1, archived=False, estimate=False):
+async def _line(db, org_id, *, by, qty=1, price=100, disc=30, dtype="pct", days=1, archived=False, estimate=False,
+                legacy=False):
+    """``legacy``: write the line with a Core INSERT, as data from before the flush guard: an order
+    line carries its shop (DB-02), so the ORM refuses one naming another shop's employee."""
+    from sqlalchemy import insert
+
     from backend.models import Order, OrderLine
     o = Order(org_id=org_id, order_number=f"Q-{uuid.uuid4().hex[:6]}", location_id=await _loc(db, org_id),
               complaint="x", status="new", created_at=datetime.utcnow() - timedelta(days=days),
               archived=archived, is_estimate=estimate)
     db.add(o)
     await db.flush()
-    db.add(OrderLine(order_id=o.id, line_type="labour", kind="service", description="L", qty=qty,
-                     unit_price=price, discount=disc, discount_type=dtype, discount_by_id=by, total=0))
+    values = dict(order_id=o.id, line_type="labour", kind="service", description="L", qty=qty,
+                  unit_price=price, discount=disc, discount_type=dtype, discount_by_id=by, total=0)
+    if legacy:
+        await db.execute(insert(OrderLine.__table__).values(id=str(uuid.uuid4()), org_id=org_id, **values))
+    else:
+        db.add(OrderLine(**values))
     return o
 
 
@@ -257,7 +266,7 @@ async def test_tenant_isolation_with_shared_employee_ids_in_events(client, db):
     for _ in range(4):
         await _line(db, org_a, by=ana, disc=30)
     for _ in range(4):
-        await _line(db, org_b, by=ben, disc=30)          # junk row: ben's id under another shop
+        await _line(db, org_b, by=ben, disc=30, legacy=True)   # junk row: ben's id under another shop
     await db.commit()
     res = await _wd(db, org_a)
     f = _kinds(res, "big_discounts")

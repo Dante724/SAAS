@@ -393,7 +393,8 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
     # on the invoice when there's no job) rather than refused.
     from backend.services import invoice_money as im
     from backend.services.invoicing import balance_due as invoice_balance
-    fields = dict(method="online", account_id=account.id if account else None,
+    # The intent knows its shop: a link paid with no job, invoice or cash box still belongs to it (DB-01).
+    fields = dict(org_id=intent.org_id, method="online", account_id=account.id if account else None,
                   reference=f"{intent.provider}:{intent.provider_ref}")
     amount = q2(intent.amount)
     if inv:
