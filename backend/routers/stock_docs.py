@@ -67,6 +67,17 @@ class DocLine(BaseModel):
     comment_public: bool = False
 
 
+async def _reachable_docs(db: AsyncSession, current, docs: list) -> list:
+    """Audit SEC-04: documents of warehouses this person can reach (all for an unrestricted role)."""
+    r = await wh.reach(db, current)
+    if r is None:
+        return list(docs)
+    from backend.models import Warehouse
+    loc_of = dict((await db.execute(select(Warehouse.id, Warehouse.location_id).where(
+        Warehouse.org_id == current.org_id))).all())
+    return [d for d in docs if wh.reachable(r, loc_of.get(d.warehouse_id), d.warehouse_id)]
+
+
 async def _stock_rows(db: AsyncSession, part_id: str, warehouse) -> list[StockLevel]:
     # Prefer warehouse-keyed rows; fall back to the location-level rows that postings, sales
     # and PO receipts actually write (they key StockLevel by location_id, warehouse_id NULL).
@@ -185,6 +196,7 @@ async def list_returns(
     if warehouse_id:
         q = q.where(PurchaseReturn.warehouse_id == warehouse_id)
     rows = (await db.execute(q.order_by(PurchaseReturn.created_at.desc()).limit(200))).scalars().all()
+    rows = await _reachable_docs(db, current, rows)      # SEC-04
     lines = await rows_by(db, PurchaseReturnLine, PurchaseReturnLine.return_id, [r.id for r in rows])
     return {"items": [_ser_return(r, lines.get(r.id, [])) for r in rows]}
 
@@ -373,6 +385,7 @@ async def list_write_offs(
     if warehouse_id:
         q = q.where(WriteOff.warehouse_id == warehouse_id)
     rows = (await db.execute(q.order_by(WriteOff.created_at.desc()).limit(200))).scalars().all()
+    rows = await _reachable_docs(db, current, rows)      # SEC-04
     by_doc = await rows_by(db, WriteOffLine, WriteOffLine.write_off_id, [d.id for d in rows])
     # 144bg — resolve part names once so the list view can show a readable summary row.
     pname = await names_by_id(db, Part.id, Part.name,

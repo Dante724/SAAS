@@ -99,7 +99,7 @@ async def draw(db, *, org_id, part_id, location_id, order_id, own_qty=0.0, other
             rem -= t
 
     if released > 0:      # ii144a: reserved lives on the location's rows (one per bin)
-        await stock_rows.reserve(db, part_id, location_id, -released)
+        await stock_rows.reserve(db, part_id, location_id, -released, ref_type="order", ref_id=order_id)
     if overrides:
         # Audit trail: a zero-qty movement records the override (who + which job it was taken for).
         db.add(StockMovement(part_id=part_id, location_id=location_id, qty=0,

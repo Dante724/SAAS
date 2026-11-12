@@ -137,8 +137,10 @@ async def product_to_asset(db: AsyncSession, org_id: str, employee_id: str, *,
                     db, part=part, location_id=unit.location_id, qty=1, created_by_id=employee_id,
                     movement_type="convert_to_asset", ref_type="asset", ref_id=device.id,
                     bin_id=unit.bin_id, batch_id=unit.batch_id)
-            except HTTPException:
-                pass      # taken concurrently — never below zero, as before
+            except HTTPException as e:
+                if e.status_code != 409:      # e.g. 403 out of the person's warehouses (SEC-04)
+                    raise
+                # 409: taken concurrently — never below zero, as before
     unit.status = "converted_to_asset"
     unit.converted_asset_id = device.id
     from backend.services import serial_log

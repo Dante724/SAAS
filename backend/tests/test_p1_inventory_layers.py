@@ -95,3 +95,25 @@ async def test_write_off_document_drains_the_locations_untagged_layers(client, t
     assert r.status_code == 201, r.text
     assert await _layers(db, pid) == {here: 1}
     assert org
+
+
+@pytest.mark.asyncio
+async def test_reserving_and_releasing_stock_leaves_a_movement(client, tenant, db):
+    """Audit Q1: every stock_levels change writes a stock_movements row in the same transaction.
+    A hold changes qty_reserved, not on-hand, so it is logged at qty 0 (the ledger still sums to the
+    shelf) naming the job / reservation behind it."""
+    from backend.models import StockMovement
+    here = await K.loc(client, tenant)
+    pid = await K.part(client, tenant, here, "Lens", 30, 10, qty=3)
+    oid, _ = await K.job(client, tenant, here)
+    r = await client.post("/api/inventory/reserve", headers=tenant, json={
+        "part_id": pid, "location_id": here, "qty": 2, "order_id": oid})
+    assert r.status_code == 201, r.text
+    hold = r.json()["reservation_id"]
+    assert (await client.post(f"/api/inventory/reservations/{hold}/release", headers=tenant)).status_code == 200
+    db.expire_all()
+    mv = (await db.execute(select(StockMovement).where(
+        StockMovement.part_id == pid, StockMovement.movement_type.in_(("reserve", "unreserve"))))).scalars().all()
+    assert sorted((m.movement_type, m.qty, m.ref_type, m.ref_id) for m in mv) == \
+        [("reserve", 0, "order", oid), ("unreserve", 0, "reservation", hold)]
+    await _ledger_matches(db, pid)

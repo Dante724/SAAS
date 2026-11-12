@@ -82,6 +82,16 @@ def _guard_qty(*vals) -> None:
             raise HTTPException(422, f"Quantity {v} is out of range (max {MAX_STOCK_QTY:,}). "
                                      "This looks like a barcode or serial, not a count.")
 
+async def _reachable_rows(db, current, rows):
+    """Audit SEC-04: the stock rows / movements / layers / holds at warehouses this person may
+    reach (all of them for an unrestricted role)."""
+    from backend.services import warehouses as _whs
+    r = await _whs.reach(db, current)
+    if r is None:
+        return list(rows)
+    return [x for x in rows if _whs.reachable(r, getattr(x, "location_id", None), getattr(x, "warehouse_id", None))]
+
+
 def _ser_part(p: Part, stock: list[StockLevel]) -> dict:
     total_qty = sum(s.qty_available for s in stock if s.part_id == p.id)
     total_res = sum(s.qty_reserved for s in stock if s.part_id == p.id)
@@ -128,7 +138,7 @@ async def list_parts(
     if location_id:
         _sq = _sq.where(StockLevel.location_id == location_id)
     stock_result = await db.execute(_sq)
-    stocks = stock_result.scalars().all()
+    stocks = await _reachable_rows(db, current, stock_result.scalars().all())   # SEC-04
 
     items = [_ser_part(p, stocks) for p in parts]
     if device_id:
@@ -225,7 +235,7 @@ async def get_part(
     if not part:
         raise HTTPException(404, "Part not found")
     stock_result = await db.execute(select(StockLevel).where(StockLevel.part_id == part_id))
-    stocks = stock_result.scalars().all()
+    stocks = await _reachable_rows(db, current, stock_result.scalars().all())   # SEC-04
     return _ser_part(part, stocks)
 
 @router.put("/parts/{part_id}")
@@ -1003,7 +1013,7 @@ async def part_movements(
         .order_by(StockMovement.created_at.desc())
         .limit(200)
     )
-    movements = result.scalars().all()
+    movements = await _reachable_rows(db, current, result.scalars().all())   # SEC-04
     # resolve location, bin and people names in one pass each
     from backend.models import Employee as _Emp
     from backend.models import Location, StorageBin
@@ -1042,6 +1052,7 @@ async def part_batches(
         select(StockItemBatch).where(
             StockItemBatch.org_id == current.org_id, StockItemBatch.part_id == part_id)
         .order_by(StockItemBatch.received_at.desc()).limit(300))).scalars().all()
+    rows = await _reachable_rows(db, current, rows)   # SEC-04
     po_ids = {r.po_id for r in rows if r.po_id}
     loc_ids = {r.location_id for r in rows if r.location_id}
     wh_ids = {r.warehouse_id for r in rows if r.warehouse_id}
@@ -1099,14 +1110,15 @@ async def part_stock(
     from backend.models import Location, StorageBin
     from backend.services.valuation import unit_cost as _valuation_cost
     unit_cost = _valuation_cost(part)   # the one valuation basis (services/valuation)
-    loc_ids = {sl.location_id for sl in part.stock_levels}
-    bin_ids = {sl.bin_id for sl in part.stock_levels if sl.bin_id}
+    levels = await _reachable_rows(db, current, part.stock_levels)   # SEC-04: only reachable warehouses
+    loc_ids = {sl.location_id for sl in levels}
+    bin_ids = {sl.bin_id for sl in levels if sl.bin_id}
     locs = dict((await db.execute(select(Location.id, Location.name).where(
         Location.id.in_(loc_ids), Location.org_id == current.org_id))).all()) if loc_ids else {}
     bins = dict((await db.execute(select(StorageBin.id, StorageBin.name).where(
         StorageBin.id.in_(bin_ids), StorageBin.org_id == current.org_id))).all()) if bin_ids else {}
     rows = []
-    for sl in sorted(part.stock_levels, key=lambda r: (locs.get(r.location_id) or "", r.bin_id is None,
+    for sl in sorted(levels, key=lambda r: (locs.get(r.location_id) or "", r.bin_id is None,
                                                        bins.get(r.bin_id) or "")):
         avail = sl.qty_available or 0
         rows.append({"location": locs.get(sl.location_id) or "—", "location_id": sl.location_id,
@@ -1165,7 +1177,7 @@ async def _release_expired(db: AsyncSession, org_id: str):
     for r in rows:
         if r.released:
             continue
-        await stock_rows.reserve(db, r.part_id, r.location_id, -r.qty)
+        await stock_rows.reserve(db, r.part_id, r.location_id, -r.qty, ref_type="reservation", ref_id=r.id)
         r.released = True
     await db.commit()
 
@@ -1209,7 +1221,8 @@ async def reserve_stock(
         raise HTTPException(409, f"Only {free:g} available to reserve")
     if avail <= 0:
         raise HTTPException(404, "No stock at this location")
-    await stock_rows.reserve(db, data.part_id, data.location_id, data.qty)
+    await stock_rows.reserve(db, data.part_id, data.location_id, data.qty,
+                             ref_type="order" if data.order_id else None, ref_id=data.order_id)
     r = StockReservation(org_id=current.org_id, part_id=data.part_id, location_id=data.location_id,
                          order_id=data.order_id, qty=data.qty,
                          expires_at=now_utc() + timedelta(days=hold_days))
@@ -1237,7 +1250,7 @@ async def release_reservation(
                           .with_for_update().execution_options(populate_existing=True))).scalar_one()
     if r.released:
         raise HTTPException(404, "Reservation not found or already released")
-    await stock_rows.reserve(db, r.part_id, r.location_id, -r.qty)
+    await stock_rows.reserve(db, r.part_id, r.location_id, -r.qty, ref_type="reservation", ref_id=r.id)
     r.released = True
     await db.commit()
     return {"ok": True}
@@ -1252,6 +1265,7 @@ async def list_reservations(
     rows = (await db.execute(select(StockReservation).where(
         StockReservation.org_id == current.org_id, StockReservation.released == False  # noqa: E712
     ))).scalars().all()
+    rows = await _reachable_rows(db, current, rows)   # SEC-04
     parts = await names_by_id(db, Part.id, Part.name, [r.part_id for r in rows],
                               org_col=Part.org_id, org_id=current.org_id)
     return {"items": [{"id": r.id, "part_id": r.part_id, "part": parts.get(r.part_id), "qty": r.qty,
@@ -2186,7 +2200,8 @@ async def receive_po(
         to_reserve = recv - await apply_receipt_to_orders(db, current.org_id, po, pl, recv)
         if pl.reserved_order_id and to_reserve > 0:
             from backend.models import StockReservation
-            await stock_rows.reserve(db, pl.part_id, po.location_id, to_reserve)   # ii144a: on the location
+            await stock_rows.reserve(db, pl.part_id, po.location_id, to_reserve,   # ii144a: on the location
+                                     ref_type="po", ref_id=po.id)
             db.add(StockReservation(org_id=current.org_id, part_id=pl.part_id,
                                     location_id=po.location_id, order_id=pl.reserved_order_id,
                                     qty=to_reserve, released=False))
@@ -2557,6 +2572,7 @@ async def list_movements(
         .join(Part, StockMovement.part_id == Part.id)
         .where(Part.org_id == current.org_id, StockMovement.movement_type.in_(types))
         .order_by(StockMovement.created_at.desc()).limit(300))).scalars().all()
+    rows = await _reachable_rows(db, current, rows)   # SEC-04
     parts = await names_by_id(db, Part.id, Part.name, [m.part_id for m in rows],
                               org_col=Part.org_id, org_id=current.org_id)
     locs = {l.id: l.name for l in (await db.execute(

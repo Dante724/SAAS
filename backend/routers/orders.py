@@ -3508,7 +3508,7 @@ async def reserve_stock_for_order(
         if take <= 0:
             short.append({"part": part_names.get(part_id, part_id), "needed": want, "free": max(free, 0)})
             continue
-        await stock_rows.reserve(db, part_id, order.location_id, take)
+        await stock_rows.reserve(db, part_id, order.location_id, take, ref_type="order", ref_id=order.id)
         db.add(StockReservation(org_id=current.org_id, part_id=part_id, location_id=order.location_id,
                                 order_id=order_id, qty=take,
                                 expires_at=now + timedelta(days=hold_days)))
@@ -3735,7 +3735,8 @@ async def _archive_order(db, current, order_id, reason, do_refund):
     for _h in _holds:
         if _h.released:
             continue
-        await stock_rows.reserve(db, _h.part_id, _h.location_id, -float(_h.qty or 0))
+        await stock_rows.reserve(db, _h.part_id, _h.location_id, -float(_h.qty or 0),
+                                 ref_type="reservation", ref_id=_h.id)
         _h.released = True
     if not order.is_estimate:
         from backend.services.payroll import CommissionEngine

@@ -141,6 +141,67 @@ async def guard_action(db: AsyncSession, current: Employee, action: str,
     return w
 
 
+# ── Audit SEC-04: warehouse reach on every stock path ────────────────────────────────────────
+# `guard_action` checked the role's warehouse scope on 6 endpoints only; jobs, transfers, stocktakes,
+# reservations, returns and sales moved stock anywhere. `require_reach` is called by the stock-row
+# service itself (services/stock_rows add/draw/reserve), which every stock change goes through, for
+# the person on this request (`db.info["actor_id"]`, set by get_current_employee). Background jobs,
+# public pages and API keys have no person and are not limited. Readers filter with `reach`.
+_REACH_KEY = "warehouse_reach"
+
+
+async def reach(db: AsyncSession, employee: Optional[Employee] = None) -> Optional[frozenset]:
+    """Location and warehouse ids this person may work with in inventory; None = all of them.
+
+    A location listed on the role reaches every warehouse there; a warehouse listed reaches its
+    location's stock rows (stock is still addressed by location). A per-employee warehouse access
+    row (Build 89) with any action grants reach to that warehouse too."""
+    actor_id = employee.id if employee is not None else db.info.get("actor_id")
+    if not actor_id:
+        return None
+    cache = db.info.setdefault(_REACH_KEY, {})
+    if actor_id in cache:
+        return cache[actor_id]
+    from backend.services import scoping
+    emp = employee or (await db.execute(select(Employee).where(Employee.id == actor_id))).scalar_one_or_none()
+    role = await scoping.role_for(db, emp) if emp is not None else None
+    allowed = scoping.allowed_warehouses(role)
+    if allowed is None or emp is None:
+        cache[actor_id] = None
+        return None
+    ids = set(allowed)
+    from sqlalchemy import or_
+    for wid, lid in (await db.execute(select(Warehouse.id, Warehouse.location_id).where(
+            Warehouse.org_id == emp.org_id,
+            or_(Warehouse.id.in_(allowed or [""]), Warehouse.location_id.in_(allowed or [""]))))).all():
+        ids.add(wid)
+        if lid:
+            ids.add(lid)
+    for wid, lid, acts in (await db.execute(select(Warehouse.id, Warehouse.location_id, WarehouseAccess.actions)
+                                            .join(WarehouseAccess, WarehouseAccess.warehouse_id == Warehouse.id)
+                                            .where(WarehouseAccess.employee_id == emp.id))).all():
+        if isinstance(acts, list) and acts:
+            ids.add(wid)
+            if lid:
+                ids.add(lid)
+    cache[actor_id] = frozenset(ids)
+    return cache[actor_id]
+
+
+def reachable(r: Optional[frozenset], location_id: Optional[str], warehouse_id: Optional[str] = None) -> bool:
+    """Is stock at this place visible/usable under `r` (from `reach`)?"""
+    if r is None or (location_id is None and warehouse_id is None):
+        return True
+    return (location_id in r) or (warehouse_id is not None and warehouse_id in r)
+
+
+async def require_reach(db: AsyncSession, location_id: Optional[str], warehouse_id: Optional[str] = None,
+                        employee: Optional[Employee] = None) -> None:
+    """403 unless the person on this request may move stock at this location / warehouse."""
+    if not reachable(await reach(db, employee), location_id, warehouse_id):
+        raise HTTPException(403, "You don't have access to this warehouse")
+
+
 async def balance(db: AsyncSession, warehouse: Warehouse) -> float:
     """Total units held — a warehouse can only be deleted at zero balance."""
     if warehouse.kind == "asset":

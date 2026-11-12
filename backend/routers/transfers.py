@@ -45,6 +45,13 @@ router = APIRouter(prefix="/api/transfers", tags=["transfers"])
 ORDERED = ["draft", "ready", "in_transit", "received", "completed"]
 
 
+def _visible(r, t) -> bool:
+    """SEC-04: a transfer is visible when either end is a warehouse the person can reach."""
+    from backend.services import warehouses as _whs
+    return _whs.reachable(r, t.from_location_id, getattr(t, "from_warehouse_id", None)) or \
+        _whs.reachable(r, t.to_location_id, getattr(t, "to_warehouse_id", None))
+
+
 async def _lines(db, tid):
     return (await db.execute(select(StockTransferLine).where(
         StockTransferLine.transfer_id == tid))).scalars().all()
@@ -239,6 +246,9 @@ async def list_transfers(
 ):
     rows = (await db.execute(select(StockTransfer).where(StockTransfer.org_id == current.org_id)
         .order_by(StockTransfer.created_at.desc()).limit(100))).scalars().all()
+    from backend.services import warehouses as _whs
+    r = await _whs.reach(db, current)          # SEC-04: transfers touching a warehouse they can reach
+    rows = [t for t in rows if _visible(r, t)]
     loc_names = {l.id: l.name for l in (await db.execute(
         select(Location).where(Location.org_id == current.org_id))).scalars().all()}
     lines_by = await rows_by(db, StockTransferLine, StockTransferLine.transfer_id, [t.id for t in rows])
@@ -267,6 +277,9 @@ async def transfer_detail(
         StockTransfer.id == tid, StockTransfer.org_id == current.org_id))).scalar_one_or_none()
     if not t:
         raise HTTPException(404, "Transfer not found")
+    from backend.services import warehouses as _whs
+    if not _visible(await _whs.reach(db, current), t):      # SEC-04
+        raise HTTPException(403, "You don't have access to this transfer's warehouses")
     loc_names = {l.id: l.name for l in (await db.execute(
         select(Location).where(Location.org_id == current.org_id))).scalars().all()}
     ls = await _lines(db, tid)
@@ -410,7 +423,8 @@ async def change_status(
             for l in lines:
                 await stock_rows.add(db, l.part_id, t.from_location_id, l.qty)
                 if legacy_ready:
-                    await stock_rows.reserve(db, l.part_id, t.from_location_id, -l.qty)
+                    await stock_rows.reserve(db, l.part_id, t.from_location_id, -l.qty,
+                                             ref_type="transfer", ref_id=t.id)
                 else:
                     db.add(StockMovement(part_id=l.part_id, location_id=t.from_location_id,
                                          movement_type="transfer_cancel", qty=l.qty,
@@ -491,7 +505,8 @@ async def change_status(
         # leave the source: already off the shelf (and logged) since "ready"
         if legacy_ready:
             for l in lines:
-                await stock_rows.reserve(db, l.part_id, t.from_location_id, -l.qty)
+                await stock_rows.reserve(db, l.part_id, t.from_location_id, -l.qty,
+                                         ref_type="transfer", ref_id=t.id)
                 db.add(StockMovement(part_id=l.part_id, location_id=t.from_location_id,
                                      movement_type="transfer_out", qty=-l.qty,
                                      ref_type="transfer", ref_id=t.id))

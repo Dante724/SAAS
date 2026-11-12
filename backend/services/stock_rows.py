@@ -128,6 +128,7 @@ async def warehouse_for(db, location_id: str, bin_id: Optional[str] = None) -> O
 async def add(db, part_id: str, location_id: str, qty: float, *, bin_id: Optional[str] = None,
               warehouse_id: Optional[str] = None) -> StockLevel:
     """Add `qty` (may be negative for a correction the caller has checked) to the exact row."""
+    await _check_reach(db, location_id, warehouse_id)
     row = await row_for(db, part_id, location_id, bin_id, create=True, warehouse_id=warehouse_id)
     await _bump(db, row, "qty_available", qty)
     return row
@@ -144,6 +145,7 @@ async def draw(db, part_id: str, location_id: str, qty: float, *, bin_id: Option
     `only` limits the draw to the given rows (a warehouse's rows, for stock documents)."""
     if qty <= _EPS:
         return []
+    await _check_reach(db, location_id)
     for _attempt in range(5):
         candidates = only if only is not None else await rows(db, part_id, location_id)
         if only is not None:
@@ -192,18 +194,26 @@ async def draw(db, part_id: str, location_id: str, qty: float, *, bin_id: Option
     raise NotEnoughStock(0, qty)
 
 
-async def reserve(db, part_id: str, location_id: str, delta: float) -> None:
+async def reserve(db, part_id: str, location_id: str, delta: float, *,
+                  ref_type: Optional[str] = None, ref_id: Optional[str] = None) -> None:
     """Hold (`delta` > 0) or release (`delta` < 0) stock at the location. A release never takes
-    reserved below zero."""
-    if delta > 0:
+    reserved below zero. Audit Q1: the change is logged as a zero-qty `reserve` / `unreserve`
+    movement (on-hand doesn't move, so the movement ledger still sums to the shelf), naming the
+    document behind it when the caller gives one."""
+    from backend.models import StockMovement
+    if delta > 0:     # a release is always allowed: it only frees what someone else held
+        await _check_reach(db, location_id)
         main = await row_for(db, part_id, location_id, None, create=True)
         await _bump(db, main, "qty_reserved", delta)
+        db.add(StockMovement(part_id=part_id, location_id=location_id, warehouse_id=main.warehouse_id,
+                             movement_type="reserve", qty=0, ref_type=ref_type, ref_id=ref_id,
+                             created_by_id=db.info.get("actor_id")))
         return
-    left = -delta
+    want = left = -delta
     for _attempt in range(5):
         for r in await rows(db, part_id, location_id):
             if left <= _EPS:
-                return
+                break
             await db.refresh(r, attribute_names=["qty_reserved"])
             take = min(max(r.qty_reserved or 0, 0), left)
             if take <= _EPS:
@@ -217,7 +227,10 @@ async def reserve(db, part_id: str, location_id: str, delta: float) -> None:
                 await db.refresh(r, attribute_names=["qty_reserved"])
                 left -= take
         if left <= _EPS:
-            return
+            break
+    if want - max(left, 0) > _EPS:
+        db.add(StockMovement(part_id=part_id, location_id=location_id, movement_type="unreserve", qty=0,
+                             ref_type=ref_type, ref_id=ref_id, created_by_id=db.info.get("actor_id")))
 
 
 async def check_bin(db, org_id: str, location_id: str, bin_id: str):
@@ -242,6 +255,13 @@ async def default_bin(db, org_id: str, location_id: str) -> Optional[str]:
         Warehouse.org_id == org_id, Warehouse.location_id == location_id, Warehouse.kind == "product",
         Warehouse.deleted_at.is_(None), StorageBin.active == True,  # noqa: E712
         StorageBin.location_id == location_id).order_by(Warehouse.is_default.desc()))).scalars().first()
+
+
+async def _check_reach(db, location_id: Optional[str], warehouse_id: Optional[str] = None) -> None:
+    """Audit SEC-04: every stock change checks the warehouse scope of the person on the request
+    (none for background jobs), here rather than in each of the many routes that move stock."""
+    from backend.services import warehouses as _wh
+    await _wh.require_reach(db, location_id, warehouse_id)
 
 
 async def _bump(db, row: StockLevel, attr: str, delta: float) -> None:
