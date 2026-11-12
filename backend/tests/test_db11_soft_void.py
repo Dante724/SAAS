@@ -214,3 +214,92 @@ async def test_own_earnings_leave_out_reversed_adjustments(client, tenant, db):
     assert (await client.delete(f"/api/payroll/adjustment/{b['id']}", headers=tenant)).status_code == 200
     adj = await adjustments(db, org, eid, date(2026, 6, 1), date(2026, 6, 30))
     assert [x["amount"] for x in adj["bonuses"]] == [15]
+
+
+# ── accounting sync: a voided payment already pushed to QuickBooks ──
+
+async def _synced_refund(client, db, monkeypatch, *, connected=True):
+    from backend.models import IntegrationMapping, QboConnection
+    from backend.services import qbo
+    H, org, _ = await _register(client)
+    oid, _iid, till = await _paid_job(client, H)
+    rid = await _refund(client, H, oid, till, 100)
+    pay = (await _refund_rows(db, oid))[0]
+    monkeypatch.setattr(qbo, "is_configured", lambda: True)
+    db.add(QboConnection(org_id=org, realm_id="r1", environment="sandbox", connected=connected,
+                         access_token="enc"))
+    db.add(IntegrationMapping(org_id=org, integration="qbo", entity_type="payment",
+                              local_id=pay.id, remote_id="QB-PAY-7"))
+    await db.commit()
+
+    async def _no_refresh(db_, conn):
+        return None
+    monkeypatch.setattr(qbo, "_ensure_fresh", _no_refresh)
+    return H, org, rid, pay.id
+
+
+async def _sync_logs(db, local_id):
+    from backend.models import IntegrationSyncLog
+    db.expire_all()
+    return (await db.execute(select(IntegrationSyncLog).where(
+        IntegrationSyncLog.local_id == local_id))).scalars().all()
+
+
+@pytest.mark.asyncio
+async def test_voiding_a_synced_refund_voids_it_in_quickbooks(client, db, monkeypatch):
+    from backend.services import qbo
+    H, org, rid, pid = await _synced_refund(client, db, monkeypatch)
+    voided = []
+
+    async def fake_void(conn, remote_id):
+        voided.append(remote_id)
+    monkeypatch.setattr(qbo, "_void_remote_payment", fake_void)
+    assert (await client.delete(f"/api/returns/refunds/{rid}", headers=H)).status_code == 200
+    assert voided == ["QB-PAY-7"]
+    logs = await _sync_logs(db, pid)
+    assert [(lg.status, lg.remote_id) for lg in logs] == [("voided", "QB-PAY-7")]
+
+
+@pytest.mark.asyncio
+async def test_a_failed_or_unconnected_remote_void_is_logged_for_a_person(client, db, monkeypatch):
+    from backend.services import qbo
+    H, org, rid, pid = await _synced_refund(client, db, monkeypatch, connected=False)
+    assert (await client.delete(f"/api/returns/refunds/{rid}", headers=H)).status_code == 200
+    logs = await _sync_logs(db, pid)
+    assert len(logs) == 1 and logs[0].status == "failed"
+    assert "QB-PAY-7" in logs[0].error and "void" in logs[0].error.lower()
+
+
+@pytest.mark.asyncio
+async def test_a_voided_payment_is_not_pushed_again(client, db, monkeypatch):
+    from backend.services import qbo
+    H, org, rid, pid = await _synced_refund(client, db, monkeypatch, connected=False)
+    assert (await client.delete(f"/api/returns/refunds/{rid}", headers=H)).status_code == 200
+    assert await qbo._build_payload(db, org, "payment", pid) is None
+
+
+@pytest.mark.asyncio
+async def test_the_quickbooks_void_reads_the_sync_token_then_sends_a_sparse_void(monkeypatch):
+    import json
+
+    import httpx
+
+    from backend.models import QboConnection
+    from backend.services import qbo
+    seen = []
+
+    def handler(request):
+        seen.append(request)
+        if request.method == "GET":
+            return httpx.Response(200, json={"Payment": {"Id": "QB-PAY-7", "SyncToken": "3"}})
+        return httpx.Response(200, json={"Payment": {"Id": "QB-PAY-7", "SyncToken": "4"}})
+    real = httpx.AsyncClient
+    monkeypatch.setattr(httpx, "AsyncClient", lambda **kw: real(transport=httpx.MockTransport(handler)))
+    monkeypatch.setattr(qbo, "_dec", lambda v: "tok")
+    await qbo._void_remote_payment(QboConnection(realm_id="r1", environment="sandbox", access_token="x"), "QB-PAY-7")
+    get, post = seen
+    assert get.url.path == "/v3/company/r1/payment/QB-PAY-7"
+    assert post.url.path == "/v3/company/r1/payment"
+    assert dict(post.url.params) == {"operation": "update", "include": "void"}
+    assert json.loads(post.content) == {"Id": "QB-PAY-7", "SyncToken": "3", "sparse": True}
+    assert post.headers["Authorization"] == "Bearer tok"

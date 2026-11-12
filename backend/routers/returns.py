@@ -498,8 +498,13 @@ async def delete_refund(
                              "payment_id": pay.id if pay is not None else None})
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "refund", refund.id, f"Refund {float(refund.amount or 0):g} deleted: {reason}")
+    out = {"ok": True, "id": refund.id, "voided_at": refund.voided_at.isoformat()}
+    voided_ids = [p.id for p in pays]
     await db.commit()
-    return {"ok": True, "id": refund.id, "voided_at": refund.voided_at.isoformat()}
+    # a refund Payment already pushed to QuickBooks is voided there too (logged; never undoes this)
+    from backend.services import qbo
+    await qbo.void_payments(db, current.org_id, voided_ids)
+    return out
 
 
 # A job line a refund put there: it belongs to the refund (delete the refund to undo it), so the

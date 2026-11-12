@@ -68,9 +68,15 @@ async def test_integrity_sweep_reads_only_one_shops_ledgers_per_statement(client
     assert stock
     # both branches of the stock union are cut to the shop's locations before they are summed
     assert all(s.count("locations.org_id") >= 2 for s in stock), stock[0]
-    # the invoice check sums only the shop's invoices' payments
+    # every payments sum (invoice paid, job prepayments) reads only the shop's invoices' or jobs' payments
     inv = [s for s in c.sql if "FROM payments" in s]
-    assert inv and all("invoices.org_id" in s.split("GROUP BY")[0] for s in inv), inv[0]
+    assert inv and all(any(k in s.split("GROUP BY")[0] for k in ("invoices.org_id", "orders.org_id"))
+                       for s in inv), inv[0]
+    # and every other line table is cut to the shop's documents before it is summed
+    for table in ("order_lines", "sale_lines", "po_lines", "credit_note_lines", "write_off_lines",
+                  "purchase_return_lines", "posting_lines"):
+        stmts = [s for s in c.sql if f"FROM {table}" in s]
+        assert stmts and all(".org_id" in s.split("GROUP BY")[0] for s in stmts), (table, stmts[:1])
 
 
 async def test_integrity_sweep_logs_a_shop_it_could_not_check_and_goes_on(client, db, monkeypatch, caplog):

@@ -367,6 +367,59 @@ async def _push(conn: QboConnection, entity_type: str, payload: dict, remote_id:
     return str(obj.get("Id") or "unknown")
 
 
+async def _void_remote_payment(conn: QboConnection, remote_id: str) -> None:
+    """Void a QBO Payment: a sparse update with include=void (QBO keeps the record, zeroes its
+    amounts and notes it "Voided"). The current SyncToken is read first: QBO refuses a stale one."""
+    import httpx
+    host = ("https://sandbox-quickbooks.api.intuit.com" if conn.environment == "sandbox"
+            else "https://quickbooks.api.intuit.com")
+    base = f"{host}/v3/company/{conn.realm_id}/payment"
+    headers = {"Authorization": f"Bearer {_dec(conn.access_token)}",
+               "Accept": "application/json", "Content-Type": "application/json"}
+    async with httpx.AsyncClient(timeout=15.0) as client:
+        got = await client.get(f"{base}/{remote_id}", headers=headers)
+        if got.status_code != 200:
+            raise RuntimeError(f"QBO payment read {got.status_code}: {got.text[:160]}")
+        token = (got.json().get("Payment") or {}).get("SyncToken")
+        resp = await client.post(base, params={"operation": "update", "include": "void"},
+                                 json={"Id": remote_id, "SyncToken": token, "sparse": True},
+                                 headers=headers)
+    if resp.status_code not in (200, 201):
+        raise RuntimeError(f"QBO payment void {resp.status_code}: {resp.text[:160]}")
+
+
+async def void_payments(db: AsyncSession, org_id: str, payment_ids) -> None:
+    """Audit DB-11: a payment voided in Tekly that was already pushed to QBO is voided there too,
+    so the books don't keep money Tekly no longer counts. Each attempt is logged; when QBO isn't
+    reachable (not connected, token or network failure) a 'failed' log names the QBO payment to void
+    by hand. The mapping is kept: it still says which QBO record this was. Best effort, called after
+    the void is committed; commits its own log rows and never raises."""
+    for pid in dict.fromkeys(i for i in payment_ids if i):
+        try:
+            m = await _existing_mapping(db, org_id, "payment", pid)
+            if m is None or not m.remote_id:
+                continue
+            conn = await get_connection(db, org_id)
+            if not is_configured() or not conn or not conn.connected:
+                await _log(db, org_id, "payment", pid, "failed", remote_id=m.remote_id,
+                           error=f"Voided in Tekly; QuickBooks is not connected, so void payment "
+                                 f"{m.remote_id} there by hand")
+            else:
+                try:
+                    await _ensure_fresh(db, conn)
+                    await _void_remote_payment(conn, m.remote_id)
+                    await _log(db, org_id, "payment", pid, "voided", remote_id=m.remote_id)
+                except Exception as exc:  # noqa: BLE001 — recorded for a person, never raised
+                    await _log(db, org_id, "payment", pid, "failed", remote_id=m.remote_id,
+                               error=f"Voided in Tekly; voiding QuickBooks payment {m.remote_id} "
+                                     f"failed: {str(exc)[:200]}")
+            await db.commit()
+        except Exception:  # noqa: BLE001 — the local void already stands
+            await db.rollback()
+            import logging
+            logging.getLogger("tekly.qbo").exception("could not void QBO payment for %s", pid)
+
+
 async def _query(conn: QboConnection, sql: str) -> list[dict]:
     """Run a QBO SQL-like query and return the entity records. Best-effort: []."""
     import httpx

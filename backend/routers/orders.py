@@ -3397,9 +3397,15 @@ async def _duplicate_order(order_id: str, data: DuplicateOrderIn, db: AsyncSessi
     labour = parts = 0.0
     import uuid as _uuid
     _groups: dict = {}   # each kit on the copy gets its own group id
+    from backend.routers.engage import redemption_kind
     for l in src.lines:
         if l.kind == "refund":
             continue            # money given back on the old job isn't a discount on the copy
+        if redemption_kind(l):
+            # a gift card / coupon / points the customer spent on the old job: the copy took none
+            # of it, so it gets no discount, and deleting such a line there would hand back value
+            # it never took
+            continue
         _gid = (_groups.setdefault(l.bundle_group_id, str(_uuid.uuid4())) if l.bundle_group_id else None)
         nl = OrderLine(
             bundle_group_id=_gid, bundle_name=l.bundle_name, bundle_print_mode=l.bundle_print_mode,

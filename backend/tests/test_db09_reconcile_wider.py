@@ -121,3 +121,32 @@ async def test_recost_keeps_the_po_total_in_step_with_its_charges(client, tenant
     total = float((await db.execute(select(PurchaseOrder.total).where(PurchaseOrder.id == s["po"]))).scalar_one())
     assert total == pytest.approx(3 * 7.5 + 9)
     assert await reconcile.find_mismatches(db, org_id=s["org"], checks=("po",)) == []
+
+
+async def _supplier_balance(db, sid):
+    db.expire_all()
+    return float((await db.execute(select(Supplier.balance).where(Supplier.id == sid))).scalar_one())
+
+
+@pytest.mark.asyncio
+@pytest.mark.parametrize("to_cost", (True, False))
+async def test_a_late_freight_bill_on_credit_is_owed_to_the_supplier(client, tenant, db, to_cost):
+    """On a PO bought on credit the supplier bills its charges. Receiving posts them to what we owe
+    (capitalised: inside the received cost; not capitalised: once fully received), but a late bill
+    entered through recost never reached the supplier balance."""
+    s = await _shop(client, tenant, db)
+    before = await _supplier_balance(db, s["supplier"])
+    r = await client.post(f"/api/inventory/po/{s['po']}/recost", headers=tenant, json={
+        "charges": [{"label": "Freight", "amount": 9}], "charges_to_cost": to_cost})
+    assert r.status_code == 200, r.text
+    # the PO was received with a 4 charge already owed; the bill is now 9
+    assert await _supplier_balance(db, s["supplier"]) == pytest.approx(before + 5)
+    r = await client.post(f"/api/inventory/po/{s['po']}/recost", headers=tenant, json={
+        "charges": [{"label": "Freight", "amount": 6}], "charges_to_cost": to_cost})
+    assert r.status_code == 200, r.text
+    assert await _supplier_balance(db, s["supplier"]) == pytest.approx(before + 2)
+    # same bill again: nothing moves
+    await client.post(f"/api/inventory/po/{s['po']}/recost", headers=tenant, json={
+        "charges": [{"label": "Freight", "amount": 6}], "charges_to_cost": to_cost})
+    assert await _supplier_balance(db, s["supplier"]) == pytest.approx(before + 2)
+    assert await reconcile.find_mismatches(db, org_id=s["org"]) == []
