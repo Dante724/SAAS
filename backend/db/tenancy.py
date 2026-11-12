@@ -19,9 +19,10 @@ the rule above:
 
 - a new or changed row that carries an ``org_id`` must belong to that shop (loading another
   shop's Part by id and editing its cost or stock is refused);
-- rows with **no** ``org_id`` of their own (order/PO/transfer/return/write-off lines, stock
-  levels, stock movements) are checked through their foreign keys: every org-owned row they
-  point at must belong to the signed-in shop;
+- a row with **no** ``org_id`` column is checked through its foreign keys: every org-owned row
+  it points at must belong to the signed-in shop. Since audit 2026-11-12 (DB-01/DB-02) every
+  tenant table has its own org_id (payments, lines, shifts, stock levels and movements included),
+  filled from its parent before flush (``ORG_PARENTS``), so this path is only a fallback;
 - the plain-string catalog references on job and sale lines (``ref_id``) are checked the same
   way against products, services and bundles.
 
@@ -37,7 +38,8 @@ None, ``update(Client).where(Client.id == other_shops_id)`` changes 0 rows, and 
 forgets its ``org_id`` filter returns only this shop's rows. The hand-written filters stay: this
 is the safety net under them, not a replacement. A row whose org_id is NULL (devices and POs
 still allow it, from an old backfill: migration trg01 fills what it can) is visible to no shop,
-so a new device or PO saved without one takes its shop from its links before flush.
+so a new device or PO saved without one takes its shop from its links before flush, like
+every child row (``ORG_PARENTS``).
 
 - Not filtered: sessions with no tenant; refreshes of rows already loaded; and statements that
   opt out with ``.execution_options(skip_tenant_filter=True)``. Each such call site says why
@@ -61,6 +63,7 @@ Known gaps (the guard only sees ORM entities, through SQL it actually runs):
 """
 import logging
 from functools import cache
+from types import SimpleNamespace
 
 from fastapi import HTTPException
 from sqlalchemy import column as sa_column
@@ -201,33 +204,149 @@ def _soft_targets(obj, attr: str = "ref_id") -> tuple:
     return (t["part"], t["service"], t["bundle"])
 
 
-# Tables whose org_id is still nullable (old backfill): a new row written without one takes its
-# shop from these links, in this order (the same rules as migration trg01), so no new row is ever
-# org-less, and so invisible to every shop. Falls back to the request's shop.
-_ORG_FROM_LINKS = {
+# Where a new row's shop comes from when it is written without one: its parent links, tried in
+# this order (audit 2026-11-12 DB-01/DB-02). The child tables (payments, lines, shifts, stock
+# levels and movements, …) carry their own org_id, NOT NULL, so every one of them is OrgScoped;
+# nothing in the routers has to set it, this fills it centrally before every flush. Migration corg01
+# backfilled existing rows from the same links. Devices and POs keep their nullable org_id from an
+# old backfill (trg01). A row none of whose links name a shop takes the request's shop; with no
+# request shop either, the NOT NULL column refuses it (a payment linked to nothing belongs to no one).
+ORG_PARENTS: dict[str, tuple[str, ...]] = {
     "devices": ("client_id", "location_id", "warehouse_id"),
     "purchase_orders": ("location_id", "supplier_id"),
+    # money: a payment is its job's, else its invoice's, cash box's, client's, drawer shift's
+    "payments": ("order_id", "invoice_id", "account_id", "client_id", "shift_id"),
+    "cash_shifts": ("location_id", "opened_by_id"),
+    "invoice_lines": ("invoice_id",),
+    "invoice_orders": ("invoice_id", "order_id"),
+    "credit_note_lines": ("credit_note_id",),
+    "sale_lines": ("sale_id",),
+    # jobs
+    "order_lines": ("order_id",),
+    "order_comments": ("order_id",),
+    "order_status_logs": ("order_id",),
+    # people and messaging
+    "shifts": ("employee_id", "location_id"),
+    "wage_records": ("employee_id",),
+    "chat_messages": ("thread_id",),
+    # stock
+    "stock_levels": ("location_id", "part_id"),
+    "stock_movements": ("location_id", "part_id"),
+    "stock_transfer_lines": ("transfer_id", "part_id"),
+    "stocktake_lines": ("stocktake_id", "part_id"),
+    "stocktake_serials": ("stocktake_id",),
+    "po_lines": ("po_id", "part_id"),
+    "posting_lines": ("posting_id", "part_id"),
+    "purchase_return_lines": ("return_id", "part_id"),
+    "write_off_lines": ("write_off_id", "part_id"),
+    "client_return_lines": ("return_id", "part_id"),
+    "bundle_components": ("bundle_id",),
 }
 
 
-def _fill_missing_org(session: Session, tenant) -> None:
-    for obj in session.new:
-        links = _ORG_FROM_LINKS.get(getattr(getattr(obj, "__table__", None), "name", None))
-        if not links or getattr(obj, "org_id", None):
-            continue
+def _table_of(obj):
+    return getattr(getattr(obj, "__table__", None), "name", None)
+
+
+@cache
+def _link_relationship(mapper: Mapper, attr: str):
+    """The many-to-one relationship that sets ``attr`` (``OrderLine.order`` for ``order_id``), if
+    the model has one: a parent attached that way has no id yet at before_flush."""
+    for rel in mapper.relationships:
+        if rel.direction.name == "MANYTOONE" and [c.key for c in rel.local_columns] == [attr]:
+            return rel.key
+    return None
+
+
+@cache
+def _child_collections(mapper: Mapper) -> tuple:
+    """One-to-many collections of this model whose rows take their shop from it (``Invoice.lines``,
+    ``CashShift.payments``): some have no backref, so the child can't name its parent itself."""
+    return tuple(rel.key for rel in mapper.relationships
+                 if rel.direction.name == "ONETOMANY" and rel.mapper.local_table.name in ORG_PARENTS)
+
+
+def org_for_new_row(session: Session, table: str, values: dict, tenant=None):
+    """The shop a new ``table`` row with these column values belongs to: the first parent link
+    that names one (``ORG_PARENTS``), else ``tenant``. For Core inserts (``insert_ignore``)."""
+    row = SimpleNamespace(**values)
+    return _org_from_links(session, row, table, {}, tenant)
+
+
+def _org_from_links(session: Session, obj, table: str, owners: dict, tenant, depth: int = 0):
+    parents = _parent_tables(table)
+    mapper = getattr(inspect(obj, raiseerr=False), "mapper", None)
+    for attr in ORG_PARENTS[table]:
+        val = obj.__dict__.get(attr)
         org = None
-        for attr in links:
-            val = getattr(obj, attr, None)
-            if not val:
-                continue
-            col = obj.__table__.c[attr]
-            target = next(iter(col.foreign_keys)).column.table
-            # Plain table columns, explicit opt-out: only the linked row's shop id is read.
-            with session.no_autoflush:
-                org = session.execute(select(target.c.org_id).where(target.c.id == val)
-                                      .execution_options(skip_tenant_filter=True)).scalar()
-            if org:
-                break
+        if val:
+            target = parents[attr]
+            key = (target.name, val)
+            if key not in owners:
+                parent = owners.get(("obj", target.name, val))
+                if parent is not None and not parent.__dict__.get("org_id") and target.name in ORG_PARENTS \
+                        and depth < 3:
+                    owners[key] = _org_from_links(session, parent, target.name, owners, None, depth + 1)
+                elif parent is not None and parent.__dict__.get("org_id"):
+                    owners[key] = parent.__dict__["org_id"]
+                else:
+                    # Plain table columns, explicit opt-out: only the linked row's shop id is read.
+                    with session.no_autoflush:
+                        owners[key] = session.execute(
+                            select(target.c.org_id).where(target.c.id == val)
+                            .execution_options(skip_tenant_filter=True)).scalar()
+            org = owners[key]
+        elif mapper is not None and (rel := _link_relationship(mapper, attr)):
+            parent = obj.__dict__.get(rel)
+            if parent is not None:
+                org = parent.__dict__.get("org_id")
+                ptable = _table_of(parent)
+                if not org and ptable in ORG_PARENTS and depth < 3:
+                    org = _org_from_links(session, parent, ptable, owners, None, depth + 1)
+                    if org:
+                        parent.org_id = org
+        if org:
+            return org
+    return tenant
+
+
+@cache
+def _parent_tables(table: str) -> dict:
+    """{link column: parent Table} for ORG_PARENTS[table]."""
+    from backend.db.database import Base
+    t = Base.metadata.tables[table]
+    return {attr: next(iter(t.c[attr].foreign_keys)).column.table for attr in ORG_PARENTS[table]}
+
+
+def _fill_missing_org(session: Session, tenant) -> None:
+    todo = [o for o in session.new if _table_of(o) in ORG_PARENTS and not o.__dict__.get("org_id")]
+    if not todo:
+        return
+    # Rows already in this session, by (table, id): a parent flushed earlier, or a new one with
+    # an explicit id, answers without a query.
+    owners: dict = {}
+    for o in list(session.identity_map.values()) + list(session.new):
+        oid = o.__dict__.get("id")
+        if oid:
+            owners[("obj", _table_of(o), oid)] = o
+    # Children reachable only from a parent's collection (no backref): they take the parent's shop.
+    from_collection: dict = {}
+    for o in list(session.identity_map.values()) + list(session.new):
+        mapper = getattr(inspect(o, raiseerr=False), "mapper", None)
+        if mapper is None:
+            continue
+        for key in _child_collections(mapper):
+            for child in o.__dict__.get(key) or ():
+                from_collection.setdefault(id(child), o)
+    for obj in todo:
+        if obj.__dict__.get("org_id"):
+            continue      # filled while resolving a child of it
+        table = _table_of(obj)
+        org = _org_from_links(session, obj, table, owners, None)
+        if not org and (parent := from_collection.get(id(obj))) is not None:
+            org = parent.__dict__.get("org_id")
+            if not org and _table_of(parent) in ORG_PARENTS:
+                org = _org_from_links(session, parent, _table_of(parent), owners, None)
         obj.org_id = org or tenant
 
 

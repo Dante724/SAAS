@@ -41,7 +41,7 @@ is never an expense, even where a path posts it as one against an order, invoice
 from datetime import datetime, timezone
 from typing import Optional
 
-from sqlalchemy import Select, case, func, or_, select, union
+from sqlalchemy import Select, case, func, select, union
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import (
@@ -500,15 +500,13 @@ async def net_sales_by_location(db: AsyncSession, org_id: str, df: Optional[date
 
 
 def shop_payments(org_id: str, location_id: Optional[str] = None):
-    """SQL condition: a payment of this shop (of this branch). Payments carry no org_id: they
-    belong to the shop through their job, invoice or account; a branch's are its jobs'."""
-    from backend.models import Account
+    """SQL condition: a payment of this shop (of this branch). Every payment carries its shop
+    (audit DB-01: filled from its job, invoice, cash box, client or drawer shift when written);
+    a branch's are its jobs'."""
     if location_id:
-        return Payment.order_id.in_(select(Order.id).where(
+        return (Payment.org_id == org_id) & Payment.order_id.in_(select(Order.id).where(
             Order.org_id == org_id, Order.location_id == location_id))
-    return or_(Payment.order_id.in_(select(Order.id).where(Order.org_id == org_id)),
-               Payment.invoice_id.in_(select(Invoice.id).where(Invoice.org_id == org_id)),
-               Payment.account_id.in_(select(Account.id).where(Account.org_id == org_id)))
+    return Payment.org_id == org_id
 
 
 def money_in_payment():

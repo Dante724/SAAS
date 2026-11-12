@@ -663,10 +663,11 @@ async def list_invoices(status: Optional[str] = Query(None, min_length=1, max_le
     if (s := _since(issued_since, "issued_since")) is not None:
         conds.append(Invoice.issued_at >= s)
     if (u := _since(updated_since, "updated_since")) is not None:
-        paid = select(Payment.invoice_id).where(Payment.invoice_id.isnot(None), Payment.paid_at >= u)
+        paid = select(Payment.invoice_id).where(Payment.org_id == p.org_id, Payment.invoice_id.isnot(None),
+                                                Payment.paid_at >= u)
         # refunds are often recorded on the job rather than the invoice
-        refunded = select(Payment.order_id).where(Payment.invoice_id.is_(None), Payment.kind == "refund",
-                                                  Payment.paid_at >= u)
+        refunded = select(Payment.order_id).where(Payment.org_id == p.org_id, Payment.invoice_id.is_(None),
+                                                  Payment.kind == "refund", Payment.paid_at >= u)
         linked = select(InvoiceOrder.invoice_id).where(InvoiceOrder.order_id.in_(refunded))
         conds.append(or_(Invoice.created_at >= u, Invoice.issued_at >= u, Invoice.id.in_(paid),
                          Invoice.order_id.in_(refunded), Invoice.id.in_(linked)))
@@ -702,7 +703,7 @@ async def list_invoice_payments(iid: str, db: AsyncSession = Depends(get_db), p:
     cond = Payment.invoice_id == i.id
     if oids:
         cond = or_(cond, (Payment.invoice_id.is_(None)) & (Payment.kind == "refund") & Payment.order_id.in_(oids))
-    rows = (await db.execute(select(Payment).where(cond).order_by(Payment.paid_at, Payment.id).limit(1000))).scalars().all()
+    rows = (await db.execute(select(Payment).where(cond, Payment.org_id == p.org_id).order_by(Payment.paid_at, Payment.id).limit(1000))).scalars().all()
     # Cash accounts, shifts, who took it and card-reader charge ids stay in the app.
     return {"data": [{"id": x.id, "kind": x.kind, "method": x.method, "amount": abs(float(x.amount or 0)),
                       "reference": x.reference, "paid_at": _iso(x.paid_at), "invoice_id": x.invoice_id,

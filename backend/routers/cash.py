@@ -1085,12 +1085,13 @@ async def list_order_invoices(
     await assert_perm(db, current, "can_view_invoices_tab")   # the work order's Invoices and payments tab
     if not (await db.execute(select(Order.id).where(
             Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none():
-        raise HTTPException(404, "Order not found")   # payments below aren't org-filtered
+        raise HTTPException(404, "Order not found")
     linked = select(InvoiceOrder.invoice_id).where(InvoiceOrder.order_id == order_id)   # shared invoices too
     invs = (await db.execute(select(Invoice).where(
         (Invoice.order_id == order_id) | Invoice.id.in_(linked), Invoice.org_id == current.org_id)
         .order_by(Invoice.created_at))).scalars().all()
-    pays = (await db.execute(select(Payment).where(Payment.order_id == order_id))).scalars().all()
+    pays = (await db.execute(select(Payment).where(
+        Payment.order_id == order_id, Payment.org_id == current.org_id))).scalars().all()
     return {
         "invoices": [{"id": i.id, "invoice_number": i.invoice_number, "total": i.total,
                       "amount_paid": i.amount_paid, "status": i.status} for i in invs],

@@ -130,8 +130,8 @@ async def _records(db, org_id, subject, start, location_id, tz: Optional[str] = 
     elif subject == "payments":
         # PERF-13: the period is filtered in SQL and only three columns come back (it read every
         # payment the shop ever took, as full rows). RPT-02: the shop's payments by the same rule
-        # as "Paid" on Home and Finance (services/revenue.cash_collected): attributed by job,
-        # invoice or account, and paying from a client's balance is not money in.
+        # as "Paid" on Home and Finance (services/revenue.cash_collected): the shop's own payments
+        # (payments.org_id, DB-01), and paying from a client's balance is not money in.
         from backend.services.revenue import money_in_payment, shop_payments
         q = select(Payment.paid_at, Payment.amount, Payment.method).where(
             shop_payments(org_id, location_id), money_in_payment(),
