@@ -142,7 +142,7 @@ async def by_code(code: str, db: AsyncSession = Depends(get_db),
 
 @router.post("/{cid}/call")
 async def call_next(cid: str, db: AsyncSession = Depends(get_db),
-                    current: Employee = Depends(get_current_employee)):
+                    current: Employee = Depends(require_perm("can_create_tickets"))):
     """Text the customer that it's their turn and move them to Being served. Never creates a
     job: staff convert after talking to them."""
     c = await _own(db, current, cid)
@@ -164,7 +164,7 @@ async def call_next(cid: str, db: AsyncSession = Depends(get_db),
 
 @router.post("/{cid}/no-show")
 async def no_show(cid: str, db: AsyncSession = Depends(get_db),
-                  current: Employee = Depends(get_current_employee)):
+                  current: Employee = Depends(require_perm("can_create_tickets"))):
     c = await _own(db, current, cid)
     # Only someone still in the queue can fail to turn up. Conditional, so it can't overwrite a
     # convert or a customer's cancel that lands at the same moment.

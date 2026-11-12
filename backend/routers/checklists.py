@@ -695,7 +695,7 @@ async def add_checklist(
     order_id: str,
     data: AddItemIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_checklist")),
 ):
     await _order_or_404(db, current.org_id, order_id)
     existing = await _items(db, order_id)
@@ -729,7 +729,7 @@ async def toggle_item(
     item_id: str,
     data: ToggleIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_edit_checklist")),
 ):
     c = (await db.execute(select(OrderChecklistItem).where(
         OrderChecklistItem.id == item_id, OrderChecklistItem.order_id == order_id,
@@ -749,7 +749,7 @@ async def delete_item(
     order_id: str,
     item_id: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_delete_checklist")),
 ):
     c = (await db.execute(select(OrderChecklistItem).where(
         OrderChecklistItem.id == item_id, OrderChecklistItem.order_id == order_id,

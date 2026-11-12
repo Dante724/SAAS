@@ -3,7 +3,15 @@
 Config + email-domain routing are real and testable. The actual assertion/token
 exchange is a gated seam (needs a live IdP), so `/authorize` returns the provider
 redirect a real flow would use rather than completing sign-in here.
+
+Audit SEC-07: a shop claiming an email domain must prove it owns it before that domain routes
+anyone anywhere. The connection carries a token; the shop publishes it as a DNS TXT record on the
+domain and calls `/config/{id}/verify-domain`. Until then `discover` ignores the connection and
+`authorize` refuses it. An unproven claim blocks nobody, so a squatter can't lock the real owner
+out; once one shop proves a domain, no other shop can claim or prove it.
 """
+import os
+import secrets
 from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query
@@ -55,12 +63,59 @@ def _allowed_redirect(uri: str) -> bool:
     return False
 
 
+TXT_PREFIX = "tekly-sso-verification="
+# DNS-over-HTTPS JSON endpoint used to read TXT records (no system resolver library needed).
+DOH_URL = os.environ.get("SSO_DOH_URL", "https://cloudflare-dns.com/dns-query")
+
+
+async def lookup_txt(domain: str) -> list[str]:
+    """The domain's TXT records as plain strings ([] when there are none or DNS can't answer)."""
+    import httpx
+    try:
+        async with httpx.AsyncClient(timeout=8) as http:
+            r = await http.get(DOH_URL, params={"name": domain, "type": "TXT"},
+                               headers={"accept": "application/dns-json"})
+        r.raise_for_status()
+        answers = r.json().get("Answer") or []
+    except Exception:
+        return []
+    # A TXT answer is one or more quoted strings; a long value is split into 255-byte chunks.
+    out = []
+    for a in answers:
+        if a.get("type") == 16:
+            data = a.get("data") or ""
+            out.append("".join(p for p in data.split('"') if p.strip()) if '"' in data else data)
+    return out
+
+
+def _verification(s: SsoConnection) -> Optional[dict]:
+    if not s.email_domain:
+        return None
+    return {"record_type": "TXT", "host": s.email_domain, "value": f"{TXT_PREFIX}{s.domain_token}",
+            "verified": s.domain_verified_at is not None,
+            "verified_at": s.domain_verified_at.isoformat() if s.domain_verified_at else None}
+
+
+def _active():
+    """Connections allowed to route sign-ins: enabled, with a proven email domain."""
+    return (SsoConnection.enabled == True, SsoConnection.domain_verified_at.isnot(None))  # noqa: E712
+
+
 def _ser(s: SsoConnection, *, redact=True) -> dict:
     return {"id": s.id, "protocol": s.protocol, "display_name": s.display_name,
             "issuer": s.issuer, "client_id": s.client_id,
             "client_secret": ("***" if s.client_secret and redact else s.client_secret),
             "metadata_url": s.metadata_url, "email_domain": s.email_domain,
-            "enabled": s.enabled}
+            "enabled": s.enabled, "domain_verification": _verification(s)}
+
+
+async def _proven_elsewhere(db: AsyncSession, domain: str, org_id: str) -> bool:
+    """Has another shop already proven this domain? skip_tenant_filter: the question is about
+    OTHER shops' connections; only an id is read."""
+    return (await db.execute(select(SsoConnection.id).where(
+        SsoConnection.email_domain == domain, SsoConnection.org_id != org_id,
+        SsoConnection.domain_verified_at.isnot(None))
+        .execution_options(skip_tenant_filter=True))).first() is not None
 
 
 @router.get("/config")
@@ -70,6 +125,11 @@ async def get_config(
 ):
     rows = (await db.execute(select(SsoConnection).where(
         SsoConnection.org_id == current.org_id))).scalars().all()
+    fill = [s for s in rows if s.email_domain and not s.domain_token]
+    for s in fill:           # connections from before SEC-07 get their token on first view
+        s.domain_token = secrets.token_urlsafe(24)
+    if fill:
+        await db.commit()
     return {"items": [_ser(s) for s in rows]}
 
 
@@ -88,17 +148,15 @@ async def create_config(
     if domain:
         if domain in _PUBLIC_DOMAINS:
             raise HTTPException(422, f"{domain} is a public mail provider and can't be routed to SSO")
-        # One shop per domain: otherwise a second shop could claim yours and intercept the
-        # "Sign in with SSO" routing for your staff (and discover() would 500 on duplicates).
-        # skip_tenant_filter: the check is about OTHER shops' connections; only an id is read.
-        taken = (await db.execute(select(SsoConnection.id).where(
-            SsoConnection.email_domain == domain, SsoConnection.org_id != current.org_id)
-            .execution_options(skip_tenant_filter=True))).first()
-        if taken:
+        # One shop per domain, decided by proof: a domain another shop has verified can't be
+        # claimed. An unverified claim blocks nobody (SEC-07: "first come wins" let a squatter
+        # lock the real owner out), and routes nothing until it is verified.
+        if await _proven_elsewhere(db, domain, current.org_id):
             raise HTTPException(409, f"{domain} is already linked to another account")
     from backend.services.crypto import encrypt
     conn = SsoConnection(org_id=current.org_id, **{**data.model_dump(), "email_domain": domain,
-                                                     "client_secret": encrypt(data.client_secret)})
+                                                     "client_secret": encrypt(data.client_secret)},
+                         domain_token=secrets.token_urlsafe(24) if domain else None)
     db.add(conn)
     await db.flush()
     await audit_record(db, org_id=current.org_id, actor_id=current.id, action="sso.create",
@@ -106,6 +164,40 @@ async def create_config(
                        diff={"fields": sorted(k for k, v in data.model_dump().items() if v not in (None, ""))})
     await db.commit()
     await db.refresh(conn)
+    return _ser(conn)
+
+
+@router.post("/config/{conn_id}/verify-domain")
+async def verify_domain(
+    conn_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_manage_settings")),
+):
+    """Check the domain's DNS for this connection's TXT record; when it's there the domain is
+    proven and the connection starts routing sign-ins (if enabled)."""
+    conn = (await db.execute(select(SsoConnection).where(
+        SsoConnection.id == conn_id, SsoConnection.org_id == current.org_id))).scalar_one_or_none()
+    if not conn:
+        raise HTTPException(404, "SSO config not found")
+    if not conn.email_domain:
+        raise HTTPException(422, "This connection has no email domain to verify")
+    if await _proven_elsewhere(db, conn.email_domain, current.org_id):
+        raise HTTPException(409, f"{conn.email_domain} is already linked to another account")
+    if conn.domain_verified_at is None:
+        if not conn.domain_token:
+            conn.domain_token = secrets.token_urlsafe(24)
+            await db.commit()
+        want = f"{TXT_PREFIX}{conn.domain_token}"
+        if want not in [t.strip() for t in await lookup_txt(conn.email_domain)]:
+            raise HTTPException(422, f"No TXT record \"{want}\" found on {conn.email_domain} yet. "
+                                     "Add it at your DNS provider, wait for it to publish, then try again.")
+        from backend.services.dates import now_utc
+        conn.domain_verified_at = now_utc()
+        await audit_record(db, org_id=current.org_id, actor_id=current.id, action="sso.domain_verified",
+                           entity_type="sso_connection", entity_id=conn.id,
+                           diff={"email_domain": conn.email_domain})
+        await db.commit()
+        await db.refresh(conn)
     return _ser(conn)
 
 
@@ -138,8 +230,8 @@ async def discover(
     if not domain:
         return {"sso": False}
     conn = (await db.execute(select(SsoConnection).where(
-        SsoConnection.email_domain == domain, SsoConnection.enabled == True)  # noqa: E712
-        .order_by(SsoConnection.id).limit(1))).scalar_one_or_none()
+        SsoConnection.email_domain == domain, *_active())
+        .order_by(SsoConnection.domain_verified_at, SsoConnection.id).limit(1))).scalar_one_or_none()
     if not conn:
         return {"sso": False}
     return {"sso": True, "protocol": conn.protocol, "display_name": conn.display_name,
@@ -155,8 +247,8 @@ async def authorize(
     """Gated seam: returns the IdP authorization URL a real OIDC flow would send
     the browser to. Completing the exchange requires a live IdP + secret."""
     conn = (await db.execute(select(SsoConnection).where(
-        SsoConnection.id == conn_id, SsoConnection.enabled == True))).scalar_one_or_none()  # noqa: E712
-    if not conn:
+        SsoConnection.id == conn_id, *_active()))).scalar_one_or_none()
+    if not conn:   # unknown, disabled, or its email domain not yet proven (SEC-07)
         raise HTTPException(404, "SSO provider not found or disabled")
     if not _allowed_redirect(redirect_uri):
         raise HTTPException(422, "redirect_uri must be on this site")
