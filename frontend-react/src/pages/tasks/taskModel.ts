@@ -3,6 +3,8 @@
 // The client-side filters are idempotent: when the server already filtered, running them again
 // changes nothing; when it didn't (older API ignores the params), they do the filtering here.
 
+import { shopLocale } from "../../lib/shopTime";
+
 export type Task = {
   id: string; title?: string; description?: string | null; status?: string | null;
   priority?: number | string | null;
@@ -129,6 +131,30 @@ export function replaceTask(day: MyDay, id: string, withTask: Task | null): MyDa
   return next;
 }
 
+/** What staff see on the chip for a task the system made (source != manual), and why. */
+export const AUTO_LABEL = "Made by Tekly";
+export const AUTO_HINT = "Created automatically from a work order or a call";
+
+/** In the shop's pool: nobody is on it yet. */
+export const isPool = (t: Task): boolean => !t.assigned_to_id && !(t.assignee_ids || []).length;
+
+/** With include_pool=true the server mixes the shop's unassigned tasks into the groups. Take the
+ *  ones other people made out into their own list ("Up for grabs"; my own unassigned to-dos stay
+ *  in my day), and take them off the counts. A null `me` leaves the day as it is. */
+export function splitPool(day: MyDay, me: string | null | undefined): { day: MyDay; pool: Task[] } {
+  if (!me) return { day, pool: [] };
+  const next = { ...day, counts: { ...day.counts } } as MyDay;
+  const pool: Task[] = [];
+  for (const b of ["catch_up", "today", "upcoming", "later"] as DayBucket[]) {
+    const keep: Task[] = [];
+    for (const t of day[b]) (isPool(t) && t.created_by_id !== me ? pool : keep).push(t);
+    next[b] = keep;
+    next.counts[b] = Math.max(0, day.counts[b] - (day[b].length - keep.length));
+  }
+  pool.sort((a, b) => (dueOf(a) || "9999").localeCompare(dueOf(b) || "9999"));
+  return { day: next, pool };
+}
+
 /** The due time as the shop's wall clock: due_wall once withShopTimes ran, else due_at as sent. */
 export const dueOf = (t: Pick<Task, "due_at" | "due_wall">): string | null | undefined => (t.due_wall !== undefined ? t.due_wall : t.due_at);
 
@@ -152,7 +178,7 @@ export function dueClock(due?: string | null): string | null {
 export function fmtClock(hhmm: string): string {
   const [h, m] = hhmm.split(":").map(Number);
   const d = new Date(2000, 0, 1, h, m);
-  return d.toLocaleTimeString([], { hour: "numeric", minute: "2-digit" });
+  return d.toLocaleTimeString(shopLocale() ?? [], { hour: "numeric", minute: "2-digit" });
 }
 
 export type TaskGroup = { key: string; label: string; items: Task[] };
@@ -184,7 +210,7 @@ export function dayLabel(ymd: string, today: string): string {
   if (ymd === today) return "Today";
   if (ymd === addDays(today, 1)) return "Tomorrow";
   const sameYear = ymd.slice(0, 4) === today.slice(0, 4);
-  return asLocal(ymd).toLocaleDateString([], { weekday: "long", month: "short", day: "numeric", ...(sameYear ? {} : { year: "numeric" }) });
+  return asLocal(ymd).toLocaleDateString(shopLocale() ?? [], { weekday: "long", month: "short", day: "numeric", ...(sameYear ? {} : { year: "numeric" }) });
 }
 
 /** Upcoming and Later: one group per day, soonest first; tasks with no date last. */
@@ -198,14 +224,14 @@ export function groupByDay(items: Task[], today: string): TaskGroup[] {
   return [...map.entries()].map(([k, v]) => ({ key: k || "none", label: dayLabel(k, today), items: v }));
 }
 
-/** When a catch-up task was due, short: "Yesterday", "Mon", "Nov 3". */
+/** When a catch-up task was due: "Yesterday", else a clear date in the shop's style ("Fri 7 Nov"). */
 export function lateLabel(due: string | null | undefined, today: string): string {
   const k = dayOf(due);
   if (!k) return "";
   if (k === addDays(today, -1)) return "Yesterday";
   const d = asLocal(k);
-  const diff = Math.round((asLocal(today).getTime() - d.getTime()) / 86_400_000);
-  return diff > 0 && diff < 7 ? d.toLocaleDateString([], { weekday: "short" }) : d.toLocaleDateString([], { month: "short", day: "numeric" });
+  // A clear date ("Fri 7 Nov"), never a bare weekday that could be this week or last.
+  return d.toLocaleDateString(shopLocale() ?? [], { weekday: "short", day: "numeric", month: "short", ...(k.slice(0, 4) === today.slice(0, 4) ? {} : { year: "numeric" }) });
 }
 
 export type QuickWhen = "today" | "tomorrow" | "pick";

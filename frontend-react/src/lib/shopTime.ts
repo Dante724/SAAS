@@ -13,20 +13,36 @@ import { api } from "../api/client";
 import { serverDate } from "./serverTime";
 
 let cached: string | null = null;
-let pending: Promise<string> | null = null;
+let cachedLocale: string | undefined;
+let pending: Promise<string | null> | null = null;
+let failed = false;
+const listeners = new Set<() => void>();
+const changed = () => listeners.forEach((f) => f());
 
 const validTz = (tz?: string | null): string | null => {
   if (!tz) return null;
   try { new Intl.DateTimeFormat("en-US", { timeZone: tz }); return tz; } catch { return null; }
 };
 
-/** The shop's timezone. The server uses the shop's zone, or UTC when none is set; so do we. */
-export function loadShopTz(): Promise<string> {
+/** The shop's date and time style, from its country (GB: "Fri 7 Nov", 24-hour; US: "Fri, Nov 7",
+ *  12-hour; IN: "Fri, 7 Nov", 12-hour…). Undefined until loaded: the browser's own style. */
+export function localeFor(country?: string | null): string | undefined {
+  const cc = (country || "").trim().toUpperCase();
+  if (!/^[A-Z]{2}$/.test(cc)) return undefined;
+  const tag = `en-${cc}`;
+  try { return Intl.DateTimeFormat.supportedLocalesOf([tag]).length ? tag : "en-GB"; } catch { return undefined; }
+}
+export const shopLocale = (): string | undefined => cachedLocale;
+
+/** The shop's timezone (and date style). The server uses the shop's zone, or UTC when none is
+ *  set; so do we. If the shop can't be reached this resolves null and NOTHING guesses a zone:
+ *  screens show a retry and don't save times (a guessed UTC put new tasks a day early in India). */
+export function loadShopTz(): Promise<string | null> {
   if (cached) return Promise.resolve(cached);
   if (!pending) {
-    pending = api.get<{ timezone?: string | null }>("/staff/company")
-      .then((c) => (cached = validTz(c?.timezone) || "UTC"))
-      .catch(() => { pending = null; return "UTC"; });   // try again next time; UTC is the server's own fallback
+    pending = api.get<{ timezone?: string | null; country?: string | null }>("/staff/company")
+      .then((c) => { cachedLocale = localeFor(c?.country); cached = validTz(c?.timezone) || "UTC"; failed = false; changed(); return cached; })
+      .catch(() => { pending = null; failed = true; changed(); return null; });
   }
   return pending;
 }
@@ -35,14 +51,25 @@ export function loadShopTz(): Promise<string> {
 export const knownShopTz = (): string | null => cached;
 
 /** Tests and tools: forget (or preset) the loaded zone. */
-export function resetShopTz(tz: string | null = null) { cached = validTz(tz); pending = null; }
-
-/** The shop's timezone, or null while it loads. */
-export function useShopTz(): string | null {
-  const [tz, setTz] = useState<string | null>(cached);
-  useEffect(() => { let live = true; if (!tz) loadShopTz().then((z) => { if (live) setTz(z); }); return () => { live = false; }; }, [tz]);
-  return tz;
+export function resetShopTz(tz: string | null = null, country: string | null = null) {
+  cached = validTz(tz); cachedLocale = localeFor(country); pending = null; failed = false;
 }
+
+/** The shop's clock for a screen: the zone (null while loading or when it failed), whether the
+ *  last load failed, and retry(). */
+export function useShopClock(): { tz: string | null; failed: boolean; retry: () => void } {
+  const [, bump] = useState(0);
+  useEffect(() => {
+    const on = () => bump((n) => n + 1);
+    listeners.add(on);
+    if (!cached && !failed) loadShopTz();
+    return () => { listeners.delete(on); };
+  }, []);
+  return { tz: cached, failed: !cached && failed, retry: () => { failed = false; changed(); loadShopTz(); } };
+}
+
+/** The shop's timezone, or null while it loads (or if it couldn't be loaded). */
+export function useShopTz(): string | null { return useShopClock().tz; }
 
 const p2 = (n: number) => String(n).padStart(2, "0");
 type Parts = { y: number; mo: number; d: number; h: number; mi: number; s: number };
@@ -102,7 +129,7 @@ export function shopToday(tz: string, now: Date = new Date()): string {
 /** An instant (or a shop date) formatted on the shop's clock. Empty when missing. */
 export function fmtShop(iso: string | null | undefined, tz: string, opts: Intl.DateTimeFormatOptions = { month: "short", day: "numeric", hour: "numeric", minute: "2-digit" }): string {
   if (!iso) return "";
-  if (DATE_ONLY.test(iso)) { const [y, mo, d] = iso.split("-").map(Number); return new Date(y, mo - 1, d).toLocaleDateString([], { month: opts.month || "short", day: "numeric" }); }
+  if (DATE_ONLY.test(iso)) { const [y, mo, d] = iso.split("-").map(Number); return new Date(y, mo - 1, d).toLocaleDateString(shopLocale() ?? [], { month: opts.month || "short", day: "numeric" }); }
   const d = serverDate(iso);
-  return d ? d.toLocaleString([], { ...opts, timeZone: tz }) : "";
+  return d ? d.toLocaleString(shopLocale() ?? [], { ...opts, timeZone: tz }) : "";
 }

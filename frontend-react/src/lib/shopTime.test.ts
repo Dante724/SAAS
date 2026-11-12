@@ -1,6 +1,6 @@
 // The shop's clock for task times: IST, UTC and a DST shop, independent of the test machine's zone.
-import { describe, it, expect } from "vitest";
-import { toShopWall, fromShopWall, shopToday, offsetMinutes, fmtShop } from "./shopTime";
+import { describe, it, expect, vi, afterEach } from "vitest";
+import { toShopWall, fromShopWall, shopToday, offsetMinutes, fmtShop, loadShopTz, knownShopTz, resetShopTz, localeFor, shopLocale } from "./shopTime";
 
 describe("shop time", () => {
   it("shows a stored UTC instant on an IST shop's clock, and on a UTC shop's", () => {
@@ -37,5 +37,34 @@ describe("shop time", () => {
     expect(fmtShop("2026-11-11T04:00:00", "Asia/Kolkata", { hour: "numeric", minute: "2-digit", hour12: false })).toMatch(/09:30|9:30/);
     expect(fmtShop("2026-11-11T04:00:00", "UTC", { hour: "numeric", minute: "2-digit", hour12: false })).toMatch(/04:00|4:00/);
     expect(fmtShop(null, "UTC")).toBe("");
+  });
+});
+
+describe("loading the shop's clock", () => {
+  afterEach(() => { vi.unstubAllGlobals(); resetShopTz(); });
+  const reply = (body: unknown, status = 200) => ({ ok: status < 400, status, statusText: "", headers: new Headers(), json: async () => body, text: async () => JSON.stringify(body) }) as Response;
+
+  it("never guesses UTC when the shop can't be reached, and loads on a retry", async () => {
+    resetShopTz();
+    let up = false;
+    vi.stubGlobal("fetch", vi.fn(async () => (up ? reply({ timezone: "Asia/Kolkata", country: "GB" }) : reply({ detail: "down" }, 503))));
+    expect(await loadShopTz()).toBeNull();
+    expect(knownShopTz()).toBeNull();
+    up = true;
+    expect(await loadShopTz()).toBe("Asia/Kolkata");
+    expect(shopLocale()).toBe("en-GB");
+  });
+
+  it("uses UTC only when the shop really has no zone set (the server's own rule)", async () => {
+    resetShopTz();
+    vi.stubGlobal("fetch", vi.fn(async () => reply({ timezone: null })));
+    expect(await loadShopTz()).toBe("UTC");
+  });
+
+  it("takes the date style from the shop's country", () => {
+    expect(localeFor("GB")).toBe("en-GB");
+    expect(localeFor("in")).toBe("en-IN");
+    expect(localeFor(null)).toBeUndefined();
+    expect(new Date(2026, 10, 7, 15, 0).toLocaleString(localeFor("GB"), { hour: "numeric", minute: "2-digit" })).toBe("15:00");
   });
 });

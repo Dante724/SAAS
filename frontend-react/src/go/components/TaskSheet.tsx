@@ -7,7 +7,7 @@ import { PrimaryButton, Sheet, goField } from "./ui";
 import Chip from "./Chip";
 import { announceChange, useStaff, useToast } from "../lib/useGo";
 import { newKey } from "../lib/photos";
-import { fromShopWall, shopToday, useShopTz } from "../../lib/shopTime";
+import { fromShopWall, shopToday, useShopClock } from "../../lib/shopTime";
 import { addDays } from "../../pages/tasks/taskModel";
 
 type When = "none" | "today" | "tomorrow" | "pick";
@@ -34,7 +34,8 @@ export default function TaskSheet({ open, onClose, orderId, orderLabel }: { open
   const key = useRef(newKey());
   const input = useRef<HTMLInputElement>(null);
   const mayAssign = can("can_assign_staff");
-  const tz = useShopTz();
+  // Dates are on the shop's clock. If it can't be reached, say so and don't save (never guess UTC).
+  const { tz, failed: tzFailed, retry: retryTz } = useShopClock();
 
   useEffect(() => {
     if (!open) return;
@@ -91,7 +92,8 @@ export default function TaskSheet({ open, onClose, orderId, orderLabel }: { open
             ))}
           </div>
         </div>
-        <PrimaryButton onClick={save} disabled={!title.trim() || busy}>{busy ? "Adding…" : "Add task"}</PrimaryButton>
+        {tzFailed && <p role="status" className="text-go-sub text-ink-secondary">Can't save until your shop's clock loads. <button type="button" onClick={retryTz} className="font-semibold text-primary underline">Try again</button></p>}
+        <PrimaryButton onClick={save} disabled={!title.trim() || busy || !tz}>{busy ? "Adding…" : "Add task"}</PrimaryButton>
       </div>
     </Sheet>
   );

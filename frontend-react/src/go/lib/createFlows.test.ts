@@ -78,6 +78,8 @@ describe("tasks (due times are UTC instants; days are the shop's)", () => {
     expect(bucket(t({ due_at: "2026-10-21T18:00:00" }), now, "UTC")).toBe("later");
     expect(bucket(t({}), now, "UTC")).toBe("someday");
     expect(bucket(t({ status: "done", due_at: "2026-10-01T09:00:00" }), now, "UTC")).toBe("done");
+    expect(bucket(t({ status: "cancelled", due_at: "2026-10-01T09:00:00" }), now, "UTC")).toBe("cancelled");   // never open or late
+    expect(dueCount([t({ status: "cancelled", due_at: "2026-10-19T09:00:00" })], now, "UTC")).toBe(0);
   });
   it("IST shop at 23:30: a task at 00:30 tomorrow (shop) is later, not today; end of today is today", () => {
     const now = new Date("2026-11-12T18:00:00Z");                                           // 23:30 IST

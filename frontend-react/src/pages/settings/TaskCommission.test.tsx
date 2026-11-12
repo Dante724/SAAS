@@ -56,15 +56,17 @@ describe("When a task has several people", () => {
     getStatus = 404;
     render(<TaskCommissionCard onFlash={vi.fn()} />);
     const sel = screen.getByRole("combobox", { name: "When a task has several people" });
-    await waitFor(() => expect(sel.closest("[title]")).toHaveAttribute("title", "This setting arrives with the next server update."));
+    expect(await screen.findByText("Coming soon.")).toBeVisible();
     expect(sel).toBeDisabled();
   });
 
   it("is greyed with a reason for people who don't manage payroll, and says it applies from now on", async () => {
-    payrollOk = false;
+    payrollOk = false; getStatus = 403;   // what the real GET answers someone without payroll rights
     render(<TaskCommissionCard onFlash={vi.fn()} />);
     const sel = screen.getByRole("combobox", { name: "When a task has several people" });
-    await waitFor(() => expect(sel.closest("[title]")).toHaveAttribute("title", "Only people who manage payroll can change this"));
+    expect(await screen.findByText("Only people who manage payroll can change this.")).toBeVisible();   // on screen, not a tooltip
+    expect(screen.queryByText("Couldn't load this setting.")).toBeNull();
+    expect(screen.queryByRole("button", { name: "Try again" })).toBeNull();
     expect(sel).toBeDisabled();
     expect(screen.getByText(/Changes apply to tasks closed from now on/)).toBeInTheDocument();
     expect(screen.getAllByRole("option").map((o) => o.textContent)).toEqual(["Split the amount between them", "Pay each person the full amount", "Pay only the main person"]);

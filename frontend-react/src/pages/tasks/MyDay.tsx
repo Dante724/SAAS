@@ -10,11 +10,11 @@ import EmptyState, { ErrorState } from "../../components/EmptyState";
 import { Badge } from "../../components/Card";
 import { Avatar } from "../orders/look";
 import { api, ApiError } from "../../api/client";
-import { useShopTz, toShopWall, fromShopWall, shopToday, fmtShop } from "../../lib/shopTime";
+import { useShopClock, toShopWall, fromShopWall, shopToday, fmtShop, shopLocale } from "../../lib/shopTime";
 import {
   type Task, type MyDay as Day, type DayBucket, type QuickWhen, type TaskGroup,
   normDay, moveTasks, insertTask, replaceTask, groupByTime, groupByDay, dueClock, fmtClock, lateLabel,
-  quickDue, bucketForDue, dayLabel, matchesQuery, normPriority, normStatus, PRIORITY_LABEL, isAuto, dueOf, withShopTimes,
+  quickDue, bucketForDue, dayLabel, matchesQuery, normPriority, normStatus, PRIORITY_LABEL, isAuto, dueOf, withShopTimes, splitPool, AUTO_LABEL, AUTO_HINT,
 } from "./taskModel";
 import type { Emp } from "./TaskPanel";
 
@@ -42,12 +42,17 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
   const [raw, setDay] = useState<Day | null>(null);
   // Due times arrive as UTC instants: put them on the shop's clock before grouping (and wait for
   // the zone, so nothing is grouped by the browser's clock first).
-  const tz = useShopTz();
-  const day = useMemo(() => (raw && tz ? withShopTimes(raw, (iso) => toShopWall(iso, tz)) : null), [raw, tz]);
+  const { tz, failed: tzFailed, retry: retryTz } = useShopClock();
+  // Staff also see the shop's unassigned tasks ("Up for grabs") and can take one.
+  const poolMode = !isManager && person === "me";
+  const split = useMemo(() => (raw && tz ? splitPool(withShopTimes(raw, (iso) => toShopWall(iso, tz)), poolMode ? meId : null) : null), [raw, tz, poolMode, meId]);
+  const day = split?.day ?? null;
+  const pool = split?.pool ?? [];
   const [failed, setFailed] = useState(false);
   const [view, setView] = useState<View>("today");
   const [q, setQ] = useState("");
   const [showDone, setShowDone] = useState(false);
+  const [showPool, setShowPool] = useState(false);
   const [ticking, setTicking] = useState<string[]>([]);
   const [justDone, setJustDone] = useState<Record<string, { from: DayBucket; status?: string | null }>>({});   // ticked here: offer Undo in the row
   const [busyMove, setBusyMove] = useState(false);
@@ -59,25 +64,41 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
   // opening a task (which changes the URL) from reloading the whole day.
   const onPersonRef = useRef(onPerson);
   onPersonRef.current = onPerson;
+  const flashRef = useRef(flash);
+  flashRef.current = flash;
 
   const load = useCallback((quiet = false) => {
     const id = ++req.current;
     if (!quiet) { setDay(null); setFailed(false); }
-    api.get<Partial<Day>>(`/tasks/my-day?assignee=${encodeURIComponent(person)}`).then((r) => {
+    api.get<Partial<Day>>(`/tasks/my-day?assignee=${encodeURIComponent(person)}${poolMode ? "&include_pool=true" : ""}`).then((r) => {
       if (id !== req.current) return;
-      const d = normDay(r, tz ? shopToday(tz) : "");
+      const d = normDay(r, "");
       setDay(d); setFailed(false);
       if (!quiet && !d.catch_up.length && !d.today.length) setFocusAdd((n) => n + 1);   // an empty day: ready to type
     }).catch((e) => {
       if (id !== req.current) return;
+      if (e instanceof ApiError && (e.status === 403 || e.status === 404) && person !== "me") {
+        // Not allowed to see that day, or that person isn't in the shop any more: back to mine.
+        onPersonRef.current("me"); if (e.status === 404) flashRef.current("That person's day isn't available"); return;
+      }
+      // Only my own day can be a missing route (the server is older than My day).
       if (e instanceof ApiError && e.status === 404) { onUnavailable(); return; }
-      if (e instanceof ApiError && e.status === 403 && person !== "me") { onPersonRef.current("me"); return; }   // not allowed to see that day
       if (!quiet || !dayRef.current) setFailed(true);
     });
-  }, [person, onUnavailable]);
+  }, [person, poolMode, onUnavailable]);
   useEffect(() => { load(); }, [load]);
   const first = useRef(true);
   useEffect(() => { if (first.current) { first.current = false; return; } load(true); }, [reloadKey, load]);
+  // "Today" moves on at the shop's midnight, and a tab left in the background may be stale: check
+  // every minute, and reload when the page is shown again.
+  const shownDate = raw?.date;
+  useEffect(() => {
+    const tick = () => { if (tz && shownDate && shopToday(tz) !== shownDate) load(true); };
+    const vis = () => { if (document.visibilityState === "visible") load(true); };
+    const h = setInterval(tick, 60_000);
+    document.addEventListener("visibilitychange", vis);
+    return () => { clearInterval(h); document.removeEventListener("visibilitychange", vis); };
+  }, [tz, shownDate, load]);
 
   const today = day?.date || (tz ? shopToday(tz) : "");
   const qx = q.trim();
@@ -113,25 +134,59 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
   }
 
   // ── catch up ──
+  // The server lists at most 100 catch-up tasks but counts all of them. "Move all" means all: send
+  // the ones on screen (pages of up to 500), fetch the day again, and repeat until none are left or
+  // a round moves nothing (whatever is left couldn't be moved).
   async function moveAll() {
     if (!day || !day.catch_up.length) return;
-    const prev = day;
-    const ids = day.catch_up.map((t) => t.id);
+    const prev = raw;
     setBusyMove(true);
-    setDay(moveTasks(day, ids, "today", { overdue: false, due_at: today }));
+    setDay((d) => d && moveTasks(d, d.catch_up.map((t) => t.id), "today", { overdue: false, due_at: today }));
+    let ids = day.catch_up.map((t) => t.id);
+    let moved = 0, skipped = new Set<string>();
     try {
-      // {"moved": n, "skipped": [ids]}: skipped ones were finished, removed or changed meanwhile.
-      const r = await api.post<{ moved?: number; skipped?: string[] }>("/tasks/move-to-today", { ids });
-      const skipped = Array.isArray(r?.skipped) ? r.skipped.length : 0;
-      const n = typeof r?.moved === "number" ? r.moved : ids.length - skipped;
-      const moved = n === 1 ? "Moved 1 task to today" : `Moved ${n} tasks to today`;
-      flash(!skipped ? moved : `${n ? `${moved}. ` : ""}${skipped === 1 ? "1 couldn't be moved" : `${skipped} couldn't be moved`}`);
+      for (let round = 0; round < 50 && ids.length; round++) {
+        let roundMoved = 0;
+        for (let i = 0; i < ids.length; i += 500) {
+          const page = ids.slice(i, i + 500);
+          // {"moved": n, "skipped": [ids]}: skipped ones were finished, removed or changed meanwhile.
+          const r = await api.post<{ moved?: number; skipped?: string[] }>("/tasks/move-to-today", { ids: page });
+          const sk = Array.isArray(r?.skipped) ? r.skipped : [];
+          sk.forEach((x) => skipped.add(x));
+          roundMoved += typeof r?.moved === "number" ? r.moved : page.length - sk.length;
+        }
+        moved += roundMoved;
+        if (!roundMoved) break;
+        const next = normDay(await api.get<Partial<Day>>(`/tasks/my-day?assignee=${encodeURIComponent(person)}${poolMode ? "&include_pool=true" : ""}`), "");
+        setDay(next);
+        ids = next.counts.catch_up > 0 ? next.catch_up.map((t) => t.id).filter((x) => !skipped.has(x)) : [];
+      }
+      const said = moved === 1 ? "Moved 1 task to today" : `Moved ${moved} tasks to today`;
+      flash(!skipped.size ? said : `${moved ? `${said}. ` : ""}${skipped.size === 1 ? "1 couldn't be moved" : `${skipped.size} couldn't be moved`}`);
       setView("today");
-      load(true);   // the server's answer wins (it skips tasks finished or removed meanwhile)
+      load(true);   // the server's answer wins
     } catch {
-      setDay(prev);
-      flash("Couldn't move them to today.", () => { moveAll(); }, "Try again");
+      if (!moved) setDay(prev);
+      flash(moved ? `Moved ${moved}, then lost the connection. Some are still in Catch up.` : "Couldn't move them to today.", () => { moveAll(); }, "Try again");
+      if (moved) load(true);
     } finally { setBusyMove(false); }
+  }
+
+  // ── up for grabs ──
+  async function take(t: Task) {
+    if (!meId) return;
+    const before = raw;
+    const mine = { assigned_to_id: meId, assignee_ids: [meId], assignee_names: ["Me"] };
+    setDay((d) => d && replaceTask(d, t.id, { ...t, ...mine, due_wall: undefined }));   // it leaves the pool and joins my day
+    try {
+      await api.patch(`/tasks/${t.id}`, { assignee_ids: [meId] });
+      flash(`It's yours: ${t.title}`);
+      load(true);
+    } catch {
+      setDay(before);
+      flash("Couldn't take it. Someone may have taken it already.");
+      load(true);
+    }
   }
 
   // ── quick add ──
@@ -183,31 +238,38 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
       {/* Main action on the left, whose day and search on the right. */}
       {/* On phones the toolbar box steps aside (display: contents) so quick add can stick to the top on its own. */}
       <div className="max-sm:contents flex flex-col lg:flex-row lg:items-start gap-3">
-        <QuickAdd today={today} tz={tz} meId={meId} emps={people} mayAssign={isManager} onAdd={add} flash={flash} focusKey={focusAdd} />
-        <div className="flex items-center gap-2 lg:ml-auto lg:pt-1.5 max-sm:mt-3">
-          <span title={isManager ? undefined : "Only managers can see other people's day"} className="flex-shrink-0">
+        <QuickAdd today={today} tz={tz} tzFailed={tzFailed} meId={meId} emps={people} mayAssign={isManager} onAdd={add} flash={flash} focusKey={focusAdd} />
+        <div className="lg:ml-auto lg:pt-1.5 max-sm:mt-3">
+          <div className="flex items-center gap-2">
             <TeklySelect value={person} onChange={(e) => onPerson(e.target.value)} disabled={!isManager} aria-label="Whose day"
-              className="glass-input h-9 py-2 px-3 text-xs rounded-xl min-w-[150px]">
+              aria-describedby={isManager ? undefined : "whose-day-why"} className="glass-input h-9 py-2 px-3 text-xs rounded-xl min-w-[150px]">
               <option value="me">Me</option>
               <option value="all">Everyone</option>
               {people.map((e) => <option key={e.id} value={e.id}>{e.name}</option>)}
             </TeklySelect>
-          </span>
-          <div className="relative flex-1 lg:w-60 lg:flex-none">
-            <M n="search" c="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" />
-            <input value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search tasks" placeholder="Search task, job or client…"
-              className="glass-input w-full h-9 rounded-xl pl-8 pr-3 py-2 text-xs text-ink-primary" />
+            <div className="relative flex-1 lg:w-60 lg:flex-none">
+              <M n="search" c="absolute left-2.5 top-1/2 -translate-y-1/2 text-ink-tertiary text-sm pointer-events-none" />
+              <input value={q} onChange={(e) => setQ(e.target.value)} aria-label="Search tasks" placeholder="Search task, work order or client…"
+                className="glass-input w-full h-9 rounded-xl pl-8 pr-3 py-2 text-xs text-ink-primary" />
+            </div>
           </div>
+          {/* The reason is on screen, not in a tooltip: a phone has no hover. */}
+          {!isManager && <p id="whose-day-why" className="mt-1.5 text-2xs text-ink-tertiary">Only managers can see other people's day.</p>}
         </div>
       </div>
 
       <div className="flex items-center gap-3 flex-wrap">
         <Tabs look="segmented" label="Which days" value={view} onChange={setView} tabs={tabs} />
-        <p className="hidden sm:block ml-auto text-xs text-ink-tertiary">{person === "all" ? "Everyone · " : person !== "me" ? `${nameOfPerson} · ` : ""}{new Date(`${today}T00:00`).toLocaleDateString([], { weekday: "long", month: "long", day: "numeric" })}</p>
+        {today && <p className="hidden sm:block ml-auto text-xs text-ink-tertiary">{person === "all" ? "Everyone · " : person !== "me" ? `${nameOfPerson} · ` : ""}{new Date(`${today}T00:00`).toLocaleDateString(shopLocale() ?? [], { weekday: "long", month: "long", day: "numeric" })}</p>}
       </div>
 
-      {failed && !day && <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card"><ErrorState title="Couldn't load your day" onRetry={() => load()} /></div>}
-      {!day && !failed && <DaySkeleton />}
+      {tzFailed && !tz && (
+        <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card">
+          <ErrorState title="Couldn't reach your shop's clock" body="Times can't be shown or saved until it loads. Check your connection and try again." onRetry={retryTz} />
+        </div>
+      )}
+      {!tzFailed && failed && !day && <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card"><ErrorState title="Couldn't load your day" onRetry={() => load()} /></div>}
+      {!day && !failed && !tzFailed && <DaySkeleton />}
 
       {day && view === "today" && (<>
         {pick(day.catch_up).length > 0 && (
@@ -237,6 +299,29 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
           ) : <Groups groups={groupByTime(pick(day.today))} render={(t) => row(t, "today")} />}
           {capped("today")}
         </section>
+
+        {poolMode && pick(pool).length > 0 && (
+          <section aria-labelledby="pool-h" className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card overflow-hidden">
+            <div className="flex items-center gap-3 px-4 py-3 border-b border-slate-100">
+              <span className="w-7 h-7 rounded-full bg-blue-50 text-primary grid place-items-center flex-shrink-0"><M n="group" c="text-sm" /></span>
+              <div className="min-w-0">
+                <h2 id="pool-h" className="text-sm font-semibold text-ink-primary">Up for grabs<span className="sr-only">, {pool.length === 1 ? "1 task" : `${pool.length} tasks`}</span></h2>
+                <p className="text-2xs text-ink-secondary" aria-hidden="true">Shop tasks nobody has taken yet. Take one and it moves to your day.</p>
+              </div>
+            </div>
+            <ul className="divide-y divide-slate-100">
+              {pick(pool).slice(0, showPool ? undefined : 5).map((t) => (
+                <TaskRow key={t.id} t={t} from={bucketForDue(dueOf(t) || null, today)} today={today} tz={tz || "UTC"} showWho={false} ticking={false}
+                  onOpen={() => onOpen(t)} onToggle={() => undefined} onTake={() => take(t)} />
+              ))}
+            </ul>
+            {pick(pool).length > 5 && (
+              <div className="px-4 py-2.5 border-t border-slate-100">
+                <Button variant="link" onClick={() => setShowPool((v) => !v)}>{showPool ? "Show fewer" : `Show all ${pick(pool).length}`}</Button>
+              </div>
+            )}
+          </section>
+        )}
 
         {day.done_today.length > 0 && (
           <section className="rounded-2xl border border-slate-200/90 bg-white/60 overflow-hidden">
@@ -278,7 +363,7 @@ function Groups({ groups, render }: { groups: TaskGroup[]; render: (t: Task) => 
 }
 
 function NoMatch({ q, onClear }: { q: string; onClear: () => void }) {
-  return <EmptyState icon={<M n="search" c="text-lg" />} title={`No tasks match "${q}"`} body="Try a job number, a client's name or another word from the task." action={<Button onClick={onClear}>Clear search</Button>} />;
+  return <EmptyState icon={<M n="search" c="text-lg" />} title={`No tasks match "${q}"`} body="Try a work order number, a client's name or another word from the task." action={<Button onClick={onClear}>Clear search</Button>} />;
 }
 
 function DaySkeleton() {
@@ -297,8 +382,9 @@ function DaySkeleton() {
 }
 
 // ── one row ──────────────────────────────────────────────────────────────────
-function TaskRow({ t, from, today, tz, showWho, ticking, onOpen, onToggle, onUndo }: {
+function TaskRow({ t, from, today, tz, showWho, ticking, onOpen, onToggle, onUndo, onTake }: {
   t: Task; from: DayBucket; today: string; tz: string; showWho: boolean; ticking: boolean; onOpen: () => void; onToggle: (done: boolean) => void; onUndo?: () => void;
+  onTake?: () => void;                  // an "Up for grabs" row: take it instead of ticking it
 }) {
   const done = from === "done_today" || !!t.completed_at;
   const checked = done || ticking;
@@ -306,16 +392,22 @@ function TaskRow({ t, from, today, tz, showWho, ticking, onOpen, onToggle, onUnd
   const names = (t.assignee_names && t.assignee_names.length) ? t.assignee_names : t.assignee_name ? [t.assignee_name] : [];
   const prio = normPriority(t.priority);
   const clock = dueClock(dueOf(t));
-  const when = from === "catch_up" ? lateLabel(dueOf(t), today)
+  const when = onTake
+    ? (from === "today" ? (clock ? fmtClock(clock) : "Today") : from === "catch_up" ? lateLabel(dueOf(t), today) : t.due_at ? fmtShop(t.due_at, tz, { weekday: "short", day: "numeric", month: "short" }) : "")
+    : from === "catch_up" ? lateLabel(dueOf(t), today)
     : from === "done_today" ? fmtShop(t.completed_at, tz, { hour: "numeric", minute: "2-digit" })
     : clock ? fmtClock(clock) : "";
   return (
     <li className={`group relative flex items-center gap-3 px-4 py-3 transition-colors hover:bg-slate-50/80 ${pending ? "opacity-60" : ""}`}>
+      {onTake ? (
+        <Button size="sm" className="relative z-10 flex-shrink-0" onClick={onTake} aria-label={`Take it: ${t.title}`}>Take it</Button>
+      ) : (
       <button type="button" onClick={() => onToggle(!done)} disabled={pending || ticking} aria-pressed={checked}
         aria-label={done ? `Mark "${t.title}" not done` : `Mark "${t.title}" done`}
         className={`relative z-10 hit44 w-5 h-5 rounded-full border-[1.5px] grid place-items-center flex-shrink-0 transition-colors duration-200 ${checked ? "bg-emerald-500 border-emerald-500 text-white" : "border-slate-300 bg-white hover:border-primary"}`}>
         {checked && <M n="check" c="text-xs tk-tick" />}
       </button>
+      )}
       <div className="min-w-0 flex-1">
         <button type="button" onClick={onOpen} disabled={pending}
           className={`block max-w-full line-clamp-2 break-words text-left text-sm font-medium rounded after:absolute after:inset-0 after:content-[''] focus:outline-none focus-visible:after:ring-2 focus-visible:after:ring-inset focus-visible:after:ring-primary/40 transition-colors duration-300 ${checked ? "text-ink-tertiary line-through decoration-slate-300" : "text-ink-primary"}`}>
@@ -326,12 +418,12 @@ function TaskRow({ t, from, today, tz, showWho, ticking, onOpen, onToggle, onUnd
             {t.order_id ? (
               <Link to={`/orders?open=${encodeURIComponent(t.order_id)}`}
                 className="relative z-10 inline-flex items-center gap-1 h-5 px-1.5 rounded-md bg-slate-100 text-ink-secondary font-semibold hover:bg-blue-50 hover:text-primary max-w-[240px]">
-                <M n="handyman" c="text-2xs flex-shrink-0" /><span className="sr-only">Open job </span><span className="tabular-nums whitespace-nowrap">{t.order_number || "Job"}</span>
+                <M n="handyman" c="text-2xs flex-shrink-0" /><span className="sr-only">Open work order </span><span className="tabular-nums whitespace-nowrap">{t.order_number || "Work order"}</span>
                 {t.client_name && <span className="font-medium truncate">· {t.client_name}</span>}
               </Link>
             ) : t.client_name ? <span className="truncate">{t.client_name}</span> : null}
             {prio > 0 && !done && <Badge tone={prio === 2 ? "danger" : "warning"} size="sm">{PRIORITY_LABEL[prio]}</Badge>}
-            {isAuto(t) && <Badge tone="neutral" size="sm" className="gap-0.5"><M n="bolt" c="text-2xs" />Auto</Badge>}
+            {isAuto(t) && <span title={AUTO_HINT}><Badge tone="neutral" size="sm" className="gap-0.5"><M n="bolt" c="text-2xs" />{AUTO_LABEL}<span className="sr-only">: {AUTO_HINT}</span></Badge></span>}
           </div>
         )}
       </div>
@@ -349,8 +441,8 @@ function TaskRow({ t, from, today, tz, showWho, ticking, onOpen, onToggle, onUnd
 }
 
 // ── quick add ────────────────────────────────────────────────────────────────
-function QuickAdd({ today, tz, meId, emps, mayAssign, onAdd, flash, focusKey }: {
-  today: string; tz: string | null; meId?: string; emps: Emp[]; mayAssign: boolean;
+function QuickAdd({ today, tz, tzFailed, meId, emps, mayAssign, onAdd, flash, focusKey }: {
+  today: string; tz: string | null; tzFailed: boolean; meId?: string; emps: Emp[]; mayAssign: boolean;
   onAdd: (body: Record<string, any>, preview: Task, forName: string | null, key: string) => Promise<boolean>;
   flash: (msg: string) => void;
   focusKey: number;                     // bumped when the day loads empty: put the cursor here
@@ -370,10 +462,15 @@ function QuickAdd({ today, tz, meId, emps, mayAssign, onAdd, flash, focusKey }: 
   const key = useRef(newKey());
   useEffect(() => { if (focusKey) input.current?.focus(); }, [focusKey]);
 
+  const [hint, setHint] = useState("");
+  // Why Add task can't run right now, said on screen (a greyed button alone says nothing on a phone).
+  const blocked = !tz ? (tzFailed ? "Can't save until your shop's clock loads." : "Getting your shop's clock…") : "";
   async function save() {
     const text = title.trim();
     if (busy) return;                              // a second Enter while sending adds nothing
-    if (!text) { input.current?.focus(); return; }
+    if (!text) { setHint("Type what needs doing first."); input.current?.focus(); return; }
+    if (blocked) { setHint(blocked); return; }
+    setHint("");
     if (when === "pick" && !picked) { flash("Pick a date first"); return; }
     if (who === "others" && !other) { flash("Choose who it's for"); return; }
     const assignee = who === "others" ? other : meId || null;
@@ -404,12 +501,14 @@ function QuickAdd({ today, tz, meId, emps, mayAssign, onAdd, flash, focusKey }: 
     <div className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-2">
       <div className="flex items-center gap-2">
         <M n="add" c="ml-2 text-base text-ink-tertiary flex-shrink-0" />
-        <input ref={input} value={title} onChange={(e) => setTitle(e.target.value)} onKeyDown={onKey} aria-label="Add a task" placeholder="Add a task…" enterKeyHint="done"
+        <input ref={input} value={title} onChange={(e) => { setTitle(e.target.value); setHint(""); }} onKeyDown={onKey} aria-label="Add a task" placeholder="Add a task…" enterKeyHint="done"
+          aria-describedby={hint || blocked ? "quick-add-why" : undefined}
           className="flex-1 min-w-0 h-10 bg-transparent text-sm text-ink-primary placeholder:text-ink-placeholder outline-none focus-visible:outline-none" />
-        <span title={title.trim() ? undefined : "Type what needs doing first"} className="flex-shrink-0">
-          <Button variant="primary" onClick={save} disabled={!title.trim()} busy={busy}>Add task</Button>
-        </span>
+        {/* Greyed, not disabled: a tap still says why (on screen, below), on a phone too. */}
+        <Button variant="primary" onClick={save} busy={busy} aria-disabled={!title.trim() || !!blocked}
+          className={`flex-shrink-0 ${!title.trim() || blocked ? "opacity-50 cursor-not-allowed hover:bg-primary" : ""}`}>Add task</Button>
       </div>
+      {(hint || (blocked && title.trim())) && <p id="quick-add-why" role="status" className="px-3 pt-1 text-2xs text-ink-secondary">{hint || blocked}</p>}
       {/* On phones the choices fold away until you start a task, so the sticky box stays small. */}
       <div className={`flex flex-wrap items-center gap-x-3 gap-y-2 px-2 pt-2 pb-1 border-t border-slate-100 mt-2 ${active || title || who !== "me" || when !== "today" || job || jobOpen ? "" : "max-sm:hidden"}`}>
         <Tabs look="chips" label="When" value={when} onChange={setWhen} className="!gap-1.5"
@@ -421,6 +520,7 @@ function QuickAdd({ today, tz, meId, emps, mayAssign, onAdd, flash, focusKey }: 
         <span className="hidden sm:block w-px h-5 bg-slate-200" aria-hidden="true" />
         <Tabs look="chips" label="Who" value={who} onChange={setWho} className="!gap-1.5"
           tabs={[{ id: "me", label: "Me" }, { id: "others", label: "Others", disabled: !mayAssign, title: mayAssign ? undefined : "Only managers can give tasks to other people" }]} />
+        {!mayAssign && <span className="text-2xs text-ink-tertiary">Only managers can give tasks to others.</span>}
         {who === "others" && (
           <TeklySelect value={other} onChange={(e) => setOther(e.target.value)} aria-label="Who it's for" className="glass-input h-8 py-1.5 px-3 text-xs rounded-full min-w-[140px]">
             <option value="">Choose a person…</option>
@@ -431,7 +531,7 @@ function QuickAdd({ today, tz, meId, emps, mayAssign, onAdd, flash, focusKey }: 
         {jobOpen || job ? (
           <div className="w-56"><JobPicker value={job} onChange={(j) => { setJob(j); if (!j) setJobOpen(false); }} /></div>
         ) : (
-          <Button variant="ghost" size="sm" onClick={() => setJobOpen(true)} icon={<M n="link" c="text-xs" />}>Link a job</Button>
+          <Button variant="ghost" size="sm" onClick={() => setJobOpen(true)} icon={<M n="link" c="text-xs" />}>Link a work order</Button>
         )}
       </div>
     </div>

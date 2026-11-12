@@ -1,6 +1,6 @@
 // My day: regrouping and optimistic moves on the /tasks/my-day reply.
 import { describe, it, expect } from "vitest";
-import { normDay, moveTasks, insertTask, replaceTask, dueClock, groupByTime, groupByDay, dayLabel, lateLabel, quickDue, bucketForDue, type Task } from "./taskModel";
+import { splitPool, normDay, moveTasks, insertTask, replaceTask, dueClock, groupByTime, groupByDay, dayLabel, lateLabel, quickDue, bucketForDue, type Task } from "./taskModel";
 
 const T = (id: string, due?: string | null, extra: Partial<Task> = {}): Task => ({ id, title: id, due_at: due ?? null, ...extra });
 
@@ -65,5 +65,21 @@ describe("times and days", () => {
     expect(bucketForDue("2026-11-30", "2026-11-30")).toBe("today");
     expect(bucketForDue("2026-12-01", "2026-11-30")).toBe("upcoming");
     expect(bucketForDue("2026-12-24", "2026-11-30")).toBe("later");
+  });
+});
+
+describe("splitPool (Up for grabs)", () => {
+  it("takes other people's unassigned tasks out of my day, keeps my own to-dos, and fixes the counts", () => {
+    const day = normDay({
+      today: [T("mine", "2026-11-11T10:00", { assigned_to_id: "me" }), T("pool", "2026-11-11T12:00", { created_by_id: "e2" }), T("todo", "2026-11-11", { created_by_id: "me" })],
+      later: [T("pool2", null, { created_by_id: "e3", assignee_ids: [] })],
+      counts: { catch_up: 0, today: 3, upcoming: 0, later: 1, done_today: 0 },
+    }, "2026-11-11");
+    const { day: d, pool } = splitPool(day, "me");
+    expect(d.today.map((t) => t.id)).toEqual(["mine", "todo"]);
+    expect(d.counts.today).toBe(2);
+    expect(d.counts.later).toBe(0);
+    expect(pool.map((t) => t.id)).toEqual(["pool", "pool2"]);   // dated first
+    expect(splitPool(day, null).pool).toEqual([]);              // managers and other views: as sent
   });
 });

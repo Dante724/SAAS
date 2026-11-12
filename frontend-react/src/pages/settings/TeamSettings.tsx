@@ -224,26 +224,28 @@ export function TaskCommissionCard({ onFlash }: { onFlash: (m: string) => void }
   const mayEdit = can("can_manage_payroll");
   const [mode, setMode] = useState<string | null>(null);
   const [allowed, setAllowed] = useState<string[] | null>(null);
-  const [state, setState] = useState<"loading" | "ready" | "missing" | "error">("loading");
+  const [state, setState] = useState<"loading" | "ready" | "missing" | "forbidden" | "error">("loading");
   const [saving, setSaving] = useState(false);
   function load() {
     setState("loading");
     api.get<{ task_commission_mode?: string; task_commission_modes?: string[] }>("/payroll/settings")
       .then((r) => { setMode(r?.task_commission_mode || "split"); setAllowed(Array.isArray(r?.task_commission_modes) && r.task_commission_modes.length ? r.task_commission_modes : null); setState("ready"); })
-      .catch((e: any) => setState(e?.status === 404 ? "missing" : "error"));
+      .catch((e: any) => setState(e?.status === 404 ? "missing" : e?.status === 403 ? "forbidden" : "error"));
   }
   useEffect(() => { load(); }, []);
   async function save(next: string) {
     const prev = mode;
     setMode(next); setSaving(true);
     try { await api.put("/payroll/settings", { task_commission_mode: next }); onFlash("Saved. Tasks closed from now on are paid this way."); }
-    catch (e: any) { setMode(prev); onFlash(e?.status === 403 ? "Only people who manage payroll can change this" : e?.message ? `Couldn't save: ${e.message}` : "Couldn't save. Try again."); }
+    catch (e: any) { setMode(prev); onFlash(e?.status === 403 ? "Only people who manage payroll can change this" : "Couldn't save. Try again."); }
     finally { setSaving(false); }
   }
   const off = state !== "ready" || saving || !mayEdit;
-  const reason = state === "missing" ? "This setting arrives with the next server update."
+  const forbidden = state === "forbidden" || !mayEdit;
+  const reason = state === "missing" ? "Coming soon."
+    : forbidden ? "Only people who manage payroll can change this."
     : state === "error" ? "Couldn't load this setting."
-    : !mayEdit ? "Only people who manage payroll can change this" : undefined;
+    : undefined;
   const hint = TASK_COMMISSION_MODES.find(([v]) => v === (mode || "split"))?.[2];
   return (
     <section aria-labelledby="task-commission-h" className="bg-white rounded-2xl border border-slate-200/90 shadow-clay-card p-4 flex flex-col sm:flex-row sm:items-center gap-3">
@@ -251,10 +253,12 @@ export function TaskCommissionCard({ onFlash }: { onFlash: (m: string) => void }
       <div className="min-w-0 flex-1">
         <h3 id="task-commission-h" className="text-sm font-semibold text-ink-primary">When a task has several people</h3>
         <p className="text-xs text-ink-tertiary">How commission on a task is paid when more than one person is on it. {state === "ready" && hint} Changes apply to tasks closed from now on.</p>
-        {state === "error" && <button onClick={load} className={buttonClass("link", "sm", "mt-1")}>Try again</button>}
+        {/* The reason is on screen (not a hover tooltip), so it reads on a phone too. */}
+        {reason && <p id="task-commission-why" className="mt-1 text-xs font-medium text-ink-secondary">{reason}</p>}
+        {state === "error" && !forbidden && <button onClick={load} className={buttonClass("link", "sm", "mt-1")}>Try again</button>}
       </div>
-      <span title={reason} className="sm:w-64 flex-shrink-0">
-        <TeklySelect value={mode || "split"} onChange={(e) => save(e.target.value)} disabled={off} aria-label="When a task has several people"
+      <span className="sm:w-64 flex-shrink-0">
+        <TeklySelect value={mode || "split"} onChange={(e) => save(e.target.value)} disabled={off} aria-label="When a task has several people" aria-describedby={reason ? "task-commission-why" : undefined}
           className="glass-input w-full h-9 py-2 px-3 text-xs rounded-xl">
           {(allowed || TASK_COMMISSION_MODES.map(([v]) => v)).map((v) => <option key={v} value={v}>{TASK_COMMISSION_MODES.find(([k]) => k === v)?.[1] || v.replace(/_/g, " ")}</option>)}
         </TeklySelect>

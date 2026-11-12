@@ -19,7 +19,9 @@ import { resetShopTz } from "../../lib/shopTime";
 
 const reply = (body: unknown, status = 200) => ({ ok: status < 400, status, statusText: "", headers: new Headers(), json: async () => body, text: async () => JSON.stringify(body) }) as Response;
 const DATE = "2026-11-11";
-const DAY = () => ({
+// Everything in "my day" is mine (assigned to me); "Up for grabs" tests add unassigned ones.
+const mine = (ts: any[]) => ts.map((t) => ({ assigned_to_id: "me", assignee_ids: ["me"], ...t }));
+const DAY = () => { const d: any = ({
   date: DATE,
   catch_up: [
     { id: "c1", title: "Chase supplier RMA #A88", due_at: "2026-11-06T17:00:00", overdue: true, order_id: "o1", order_number: "WO-0998", client_name: "MobileParts UK" },
@@ -34,29 +36,46 @@ const DAY = () => ({
   later: [{ id: "l1", title: "Tidy the parts shelf", due_at: null }],
   done_today: [{ id: "d1", title: "Open the till", completed_at: `${DATE}T08:55:00Z`, status: "done" }],
   counts: { catch_up: 2, today: 3, upcoming: 1, later: 1, done_today: 1 },
-});
+  }); for (const k of ["catch_up", "today", "upcoming", "later", "done_today"]) d[k] = mine(d[k]); return d; };
 let calls: { method: string; url: string; body: any }[] = [];
 let dayBody: any;
 let dayStatus = 200;
 let failPost = false;
 let failMove = false;
 let shopTz: string | null = null;     // GET /staff/company timezone (none = UTC, like the server)
+let shopCountry: string | null = null;
+let tzFail = false;
+let goneId: string | null = null;   // an employee who left the shop
+let patchFail = false;
+// Like the server: each list holds at most 100, counts are the true totals.
+const capDay = (d: any) => ({ ...d, catch_up: d.catch_up.slice(0, 100), counts: { ...d.counts, catch_up: Math.max(d.counts.catch_up, d.catch_up.length) } });
 let moveReply: any = { moved: 2 };
 
 beforeEach(() => {
   calls = []; manager = true; dayBody = DAY(); dayStatus = 200; failPost = false; failMove = false;
   try { localStorage.clear(); } catch { /* storage may be off */ }
-  shopTz = null; moveReply = { moved: 2 }; resetShopTz();
+  shopTz = null; shopCountry = null; tzFail = false; patchFail = false; goneId = null; moveReply = { moved: 2 }; resetShopTz();
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method || "GET";
     calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : null });
-    if (method === "GET" && url.startsWith("/api/tasks/my-day")) return dayStatus === 200 ? reply(dayBody) : reply({ detail: "x" }, dayStatus);
-    if (method === "GET" && url.startsWith("/api/staff/company")) return reply({ name: "Fix Point", timezone: shopTz });
+    if (method === "GET" && url.startsWith("/api/tasks/my-day") && goneId && url.includes(`assignee=${goneId}`)) return reply({ detail: "Employee not found" }, 404);
+    if (method === "GET" && url.startsWith("/api/tasks/my-day")) return dayStatus === 200 ? reply(capDay(dayBody)) : reply({ detail: dayStatus === 404 && !url.includes("assignee=me") ? "Employee not found" : "Not Found" }, dayStatus);
+    if (method === "GET" && url.startsWith("/api/staff/company")) return tzFail ? reply({ detail: "boom" }, 500) : reply({ name: "Fix Point", timezone: shopTz, country: shopCountry });
     if (method === "GET" && url.startsWith("/api/tasks?")) return reply({ items: [{ id: "x1", title: "A task in the list", assignee_ids: ["me"], due_at: "2026-11-11T04:00:00" }] });
-    if (method === "POST" && url === "/api/tasks/move-to-today") return failMove ? reply({ detail: "no" }, 500) : reply(moveReply);
+    if (method === "POST" && url === "/api/tasks/move-to-today") {
+      if (failMove) return reply({ detail: "no" }, 500);
+      const ids: string[] = calls[calls.length - 1].body.ids; const skip = new Set(moveReply.skipped || []);
+      for (const id of ids) { const t = dayBody.catch_up.find((x: any) => x.id === id); if (t && !skip.has(id)) { dayBody.catch_up = dayBody.catch_up.filter((x: any) => x.id !== id); dayBody.today.push({ ...t, overdue: false, due_at: `${DATE}T23:59:59` }); } }
+      dayBody.counts = { ...dayBody.counts, catch_up: dayBody.catch_up.length + (dayBody.extraCatchUp || 0), today: dayBody.today.length };
+      return reply(moveReply);
+    }
     if (method === "POST" && url === "/api/tasks") { if (failPost) return reply({ detail: "no" }, 500); const b = calls[calls.length - 1].body; const t = { id: `new${calls.length}`, title: b.title, due_at: b.due_at }; if (b.assigned_to_id === "me") (b.due_at === DATE ? dayBody.today : dayBody.upcoming).push(t); return reply(t); }
     if (method === "PATCH" && /^\/api\/tasks\/[^/?]+$/.test(url)) {     // like the server: done moves to Done today and back
       const id = url.split("/").pop(); const b = calls[calls.length - 1].body;
+      if (patchFail) return reply({ detail: "Someone else took it" }, 409);
+      if (b?.assignee_ids) {   // a claim: the task is mine now
+        for (const k of ["catch_up", "today", "upcoming", "later"]) dayBody[k] = dayBody[k].map((x: any) => (x.id === id ? { ...x, assigned_to_id: b.assignee_ids[0], assignee_ids: b.assignee_ids } : x));
+      }
       if (b?.status) {
         const all = ["catch_up", "today", "upcoming", "later", "done_today"].flatMap((k) => dayBody[k]);
         const t = all.find((x: any) => x.id === id);
@@ -104,9 +123,9 @@ describe("My day", () => {
     const heads = screen.getAllByRole("heading", { level: 3 }).map((h) => h.textContent);
     expect(heads).toEqual(["Morning1", "Afternoon1", "Any time today1"]);
     // job + client chip opens the job; Auto badge; priority badge
-    expect(screen.getByRole("link", { name: /^Open job\s*WO-1019.*Jane Kim$/ })).toHaveAttribute("href", "/orders?open=o3");
+    expect(screen.getByRole("link", { name: /^Open work order\s*WO-1019.*Jane Kim$/ })).toHaveAttribute("href", "/orders?open=o3");
     const jane = screen.getByText("Call Jane about collection").closest("li")!;
-    expect(within(jane).getByText("Auto")).toBeInTheDocument();
+    expect(within(jane).getByText(/Made by Tekly/)).toBeInTheDocument();
     expect(within(screen.getByText("QC check MacBook Air keyboard").closest("li")!).getByText("High")).toBeInTheDocument();
   });
 
@@ -182,7 +201,7 @@ describe("My day", () => {
     await u.click(within(when).getByRole("button", { name: "Tomorrow" }));
     await u.click(within(screen.getByRole("group", { name: "Who" })).getByRole("button", { name: "Others" }));
     await u.selectOptions(screen.getByLabelText("Who it's for"), "e2");
-    await u.click(screen.getByRole("button", { name: "Link a job" }));
+    await u.click(screen.getByRole("button", { name: "Link a work order" }));
     await u.click(screen.getByRole("button", { name: "pick job" }));
     await u.type(screen.getByLabelText("Add a task"), "Order MacBook keyboard{Enter}");
     expect(posts("/api/tasks")[0].body).toMatchObject({ due_at: "2026-11-12", assigned_to_id: "e2", assignee_ids: ["e2"], order_id: "o9" });
@@ -214,7 +233,7 @@ describe("My day", () => {
     await screen.findByText("QC check MacBook Air keyboard");
     const sel = screen.getByLabelText("Whose day");
     expect(sel).toBeDisabled();
-    expect(sel.closest("[title]")).toHaveAttribute("title", "Only managers can see other people's day");
+    expect(screen.getByText("Only managers can see other people's day.")).toBeVisible();   // on screen, not hover-only
     expect(within(screen.getByRole("group", { name: "Who" })).getByRole("button", { name: "Others" })).toBeDisabled();
   });
 
@@ -255,7 +274,7 @@ describe("My day", () => {
     expect(await screen.findByText("A task in the list")).toBeInTheDocument();
     const tab = screen.getByRole("tab", { name: "My day" });
     expect(tab).toBeDisabled();
-    expect(tab).toHaveAttribute("title", expect.stringContaining("latest server update"));
+    expect(tab).toHaveAttribute("title", expect.stringContaining("isn't ready yet"));
   });
 });
 
@@ -343,8 +362,10 @@ describe("My day: the rest of the acceptance list", () => {
     renderAt();
     await screen.findByText("QC check MacBook Air keyboard");
     const add = screen.getByRole("button", { name: "Add task" });
-    expect(add).toBeDisabled();
-    expect(add.closest("[title]")).toHaveAttribute("title", "Type what needs doing first");
+    expect(add).toHaveAttribute("aria-disabled", "true");
+    await userEvent.setup().click(add);
+    expect(screen.getByText("Type what needs doing first.")).toBeVisible();   // a tap says why, on a phone too
+    expect(posts("/api/tasks")).toHaveLength(0);
   });
 
   it("Pick date sends the chosen date, with a time only when one is set", async () => {
@@ -368,7 +389,7 @@ describe("My day: the rest of the acceptance list", () => {
     calls = [];
     renderAt("/tasks?assignee=e2");
     await screen.findByText("QC check MacBook Air keyboard");
-    expect(calls.filter((c) => c.url.startsWith("/api/tasks/my-day")).every((c) => c.url === "/api/tasks/my-day?assignee=me")).toBe(true);
+    expect(calls.filter((c) => c.url.startsWith("/api/tasks/my-day")).every((c) => c.url.startsWith("/api/tasks/my-day?assignee=me"))).toBe(true);
   });
 
   it("Everyone shows who each task is for; Me doesn't", async () => {
@@ -464,5 +485,116 @@ describe("the shop's clock (due times are UTC instants)", () => {
     await screen.findByText("QC check MacBook Air keyboard");
     await u.click(screen.getByRole("button", { name: "Move all to today" }));
     expect(await screen.findByText("Moved 1 task to today. 1 couldn't be moved")).toBeInTheDocument();
+  });
+});
+
+describe("review fixes", () => {
+  const POOL = { id: "p1", title: "Replace Switch HDMI port", due_at: `${DATE}T12:00:00`, created_by_id: "e2", assigned_to_id: null, assignee_ids: [] };
+  const MY_TODO = { id: "m1", title: "Order more screen protectors", due_at: `${DATE}T23:59:59`, created_by_id: "me", assigned_to_id: null, assignee_ids: [] };
+
+  it("staff see 'Up for grabs' (include_pool) and can take a task, which joins their day", async () => {
+    manager = false;
+    dayBody.today.push(POOL, MY_TODO); dayBody.counts.today += 2;
+    const u = userEvent.setup();
+    renderAt();
+    const pool = await screen.findByRole("region", { name: /^Up for grabs/ });
+    expect(calls.find((c) => c.url.startsWith("/api/tasks/my-day"))!.url).toBe("/api/tasks/my-day?assignee=me&include_pool=true");
+    expect(within(pool).getByText("Replace Switch HDMI port")).toBeInTheDocument();
+    expect(within(pool).queryByText("Order more screen protectors")).toBeNull();      // my own to-do stays in my day
+    expect(screen.getByRole("button", { name: /Today\s*6/ })).toBeInTheDocument();     // the pool isn't counted as mine
+    await u.click(within(pool).getByRole("button", { name: "Take it: Replace Switch HDMI port" }));
+    expect(calls.filter((c) => c.method === "PATCH").pop()).toMatchObject({ url: "/api/tasks/p1", body: { assignee_ids: ["me"] } });
+    expect(await screen.findByText("It's yours: Replace Switch HDMI port")).toBeInTheDocument();
+    await waitFor(() => expect(screen.queryByRole("region", { name: /^Up for grabs/ })).toBeNull());
+    expect(screen.getByRole("button", { name: 'Mark "Replace Switch HDMI port" done' })).toBeInTheDocument();
+  });
+
+  it("taking a task someone else got first puts it back and says so; managers don't get a pool", async () => {
+    manager = false; patchFail = true;
+    dayBody.today.push(POOL);
+    const u = userEvent.setup();
+    const { unmount } = renderAt();
+    const pool = await screen.findByRole("region", { name: /^Up for grabs/ });
+    await u.click(within(pool).getByRole("button", { name: /Take/ }));
+    expect(await screen.findByText("Couldn't take it. Someone may have taken it already.")).toBeInTheDocument();
+    unmount();
+    manager = true; patchFail = false; calls = [];
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    expect(calls.find((c) => c.url.startsWith("/api/tasks/my-day"))!.url).toBe("/api/tasks/my-day?assignee=me");
+  });
+
+  it("a removed person's day (404) goes back to Me; it doesn't turn My day off", async () => {
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    goneId = "e3";
+    await u.selectOptions(screen.getByLabelText("Whose day"), "e3");
+    expect(await screen.findByText("That person's day isn't available")).toBeInTheDocument();
+    await waitFor(() => expect(at).toBe("/tasks"));
+    expect(screen.getByRole("tab", { name: "My day" })).not.toBeDisabled();
+  });
+
+  it("Move all to today moves ALL of them, page after page, not only the 100 on screen", async () => {
+    dayBody.catch_up = Array.from({ length: 137 }, (_, i) => ({ id: `late${i}`, title: `Late ${i}`, due_at: "2026-11-05T09:00:00", overdue: true }));
+    const u = userEvent.setup();
+    renderAt();
+    expect(await screen.findByRole("heading", { name: "Catch up, 137 tasks" })).toBeInTheDocument();
+    moveReply = {} as any;   // like the server, count what moved
+    await u.click(screen.getByRole("button", { name: "Move all to today" }));
+    expect(await screen.findByText("Moved 137 tasks to today")).toBeInTheDocument();
+    const moves = posts("/api/tasks/move-to-today");
+    expect(moves.length).toBe(2);
+    expect(moves.flatMap((m) => m.body.ids)).toHaveLength(137);
+    expect(screen.queryByRole("region", { name: /^Catch up/ })).toBeNull();
+  });
+
+  it("if the shop's clock can't be reached: a retry, and no times saved on a guess", async () => {
+    tzFail = true;
+    const u = userEvent.setup();
+    renderAt();
+    expect(await screen.findByText("Couldn't reach your shop's clock")).toBeInTheDocument();
+    await u.type(screen.getByLabelText("Add a task"), "Order Pixel 8 screen{Enter}");
+    expect(screen.getByText("Can't save until your shop's clock loads.")).toBeVisible();
+    expect(posts("/api/tasks")).toHaveLength(0);
+    tzFail = false;
+    await u.click(screen.getByRole("button", { name: "Try again" }));
+    expect(await screen.findByText("QC check MacBook Air keyboard")).toBeInTheDocument();
+  });
+
+  it("reloads when the page is shown again (a new shop day may have started)", async () => {
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    const before = calls.filter((c) => c.url.startsWith("/api/tasks/my-day")).length;
+    act(() => { document.dispatchEvent(new Event("visibilitychange")); });
+    await waitFor(() => expect(calls.filter((c) => c.url.startsWith("/api/tasks/my-day")).length).toBe(before + 1));
+  });
+
+  it("announces Done and Undo through a live region that is always on the page", async () => {
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    const live = document.querySelector('[aria-live="polite"][role="status"]')!;
+    expect(live).toBeInTheDocument();
+    expect(live.textContent).toBe("");
+    await u.click(screen.getByRole("button", { name: 'Mark "Call Jane about collection" done' }));
+    await waitFor(() => expect(live.textContent).toContain("Done: Call Jane about collection"));
+  });
+
+  it("UK shop: a late task shows a clear date ('Fri 6 Nov'), times are 24-hour, and the chip says who made it", async () => {
+    shopTz = "Europe/London"; shopCountry = "GB";
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    expect(screen.getByText("Chase supplier RMA #A88").closest("li")!.textContent).toMatch(/Fri 6 Nov/);
+    expect(screen.getByText("QC check MacBook Air keyboard").closest("li")!.textContent).toMatch(/15:00/);
+    expect(screen.getByText("Call Jane about collection").closest("li")!.textContent).toMatch(/Made by Tekly/);
+  });
+
+  it("staff see why things are greyed, written on the page (not hover-only)", async () => {
+    manager = false;
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    expect(screen.getByText("Only managers can see other people's day.")).toBeVisible();
+    expect(screen.getByText("Only managers can give tasks to others.")).toBeVisible();
   });
 });

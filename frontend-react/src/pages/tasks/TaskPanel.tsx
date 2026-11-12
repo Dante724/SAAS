@@ -1,15 +1,15 @@
 import { useEffect, useRef, useState } from "react";
 import TeklySelect from "../../components/TeklySelect";
 import { M } from "../../components/Shell";
-import EmptyState from "../../components/EmptyState";
+import EmptyState, { ErrorState } from "../../components/EmptyState";
 import DateField from "../../components/DateField";
 import JobPicker from "../../components/JobPicker";
 import { api, ApiError } from "../../api/client";
 import { useMe, hasFeature } from "../../context/Me";
 import { buttonClass } from "../../components/Button";
 import { Badge } from "../../components/Card";
-import { useShopTz, fmtShop, toShopWall, fromShopWall } from "../../lib/shopTime";
-import { type Task, STATUS_LABEL, normStatus, statusLabel, normPriority, isAuto } from "./taskModel";
+import { useShopClock, fmtShop, toShopWall, fromShopWall } from "../../lib/shopTime";
+import { type Task, STATUS_LABEL, normStatus, statusLabel, normPriority, isAuto, AUTO_LABEL, AUTO_HINT } from "./taskModel";
 
 // The task panel (a right-hand drawer), shared by My day and the List view. It loads the task by
 // id, so `/tasks?task=<id>` can open it straight from a link or a bell notification.
@@ -36,7 +36,7 @@ export default function TaskPanel({ taskId, seed, emps, onClose, onUnavailable, 
 }) {
   const { me } = useMe();
   const clockOk = hasFeature(me, "time_clock");   // task timer: Shop plan
-  const shopTz = useShopTz();
+  const { tz: shopTz, failed: tzFailed, retry: retryTz } = useShopClock();
   const tz = shopTz || "UTC";
   const [sel, setSel] = useState<Task | null>(seed && seed.id === taskId ? seed : null);
 
@@ -87,7 +87,7 @@ export default function TaskPanel({ taskId, seed, emps, onClose, onUnavailable, 
 
   async function patch(id: string, body: any, note?: string) {
     try { await api.patch(`/tasks/${id}`, body); if (note) flash(note); onChanged(); load(id); }
-    catch (e: any) { flash(`Failed: ${e.message}`); }
+    catch { flash("Couldn't save the change. Try again."); }
   }
   function saveText(field: "title" | "description") {
     if (!sel) return;
@@ -105,16 +105,16 @@ export default function TaskPanel({ taskId, seed, emps, onClose, onUnavailable, 
       const r = await api.del<any>(`/tasks/${t.id}`);
       onClose(); onChanged();
       flash("Task deleted", softDelete(r) ? () => restore(t.id) : undefined);
-    } catch (e: any) { flash(`Failed: ${e.message}`); }
+    } catch { flash("Couldn't delete the task. Try again."); }
   }
   async function postComment(id: string) {
     const b = comment.trim(); if (!b) return;
     try { await api.post(`/tasks/${id}/comments`, { body: b }); setComment(""); api.get<{ items: Feed[] }>(`/tasks/${id}/feed`).then((r) => setFeed(r.items || [])).catch(() => setFeed([])); }
-    catch (e: any) { flash(`Failed: ${e.message}`); }
+    catch { flash("Couldn't post the comment. Try again."); }
   }
   async function startTimer(id: string) {
     try { await api.post(`/timeclock/start?switch=true`, { task_id: id, category: "task" }); flash("Timer started on this task"); }
-    catch (e: any) { flash(e.message?.includes("turned off") ? "Work-order timer is off in Settings" : `Could not start: ${e.message}`); }
+    catch (e: any) { flash(e.message?.includes("turned off") ? "Work-order timer is off in Settings" : "Couldn't start the timer. Try again."); }
   }
   const selIds = (sel?.assignee_ids && sel.assignee_ids.length ? sel.assignee_ids : (sel?.assigned_to_id ? [sel.assigned_to_id] : []));
   function toggleAssignee(id: string) {
@@ -135,14 +135,16 @@ export default function TaskPanel({ taskId, seed, emps, onClose, onUnavailable, 
             <span className="sk block h-5 w-48 rounded mt-1" aria-hidden="true" />
             <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary flex-shrink-0"><M n="close" c="text-base" /></button>
           </header>
-          <div className="p-6 space-y-3" role="status"><span className="sr-only">Loading…</span><span className="sk block h-8 w-64 rounded" /><span className="sk block h-20 w-full rounded" /><span className="sk block h-8 w-full rounded" /></div>
+          {tzFailed
+            ? <ErrorState title="Couldn't reach your shop's clock" body="Due times can't be shown or changed until it loads." onRetry={retryTz} />
+            : <div className="p-6 space-y-3" role="status"><span className="sr-only">Loading…</span><span className="sk block h-8 w-64 rounded" /><span className="sk block h-20 w-full rounded" /><span className="sk block h-8 w-full rounded" /></div>}
         </>) : (<>
           <header className="px-6 py-4 border-b border-slate-100 flex items-start justify-between gap-2 bg-slate-50/70">
             <div className="flex-1 min-w-0">
               <input value={draft.title} onChange={(e) => setDraft({ ...draft, title: e.target.value })} onBlur={() => saveText("title")}
                 onKeyDown={(e) => { if (e.key === "Enter") (e.target as HTMLInputElement).blur(); if (e.key === "Escape") { e.stopPropagation(); setDraft({ ...draft, title: sel.title || "" }); } }}
                 aria-label="Task title" className="w-full bg-transparent text-base font-bold text-ink-primary rounded-md px-1 -mx-1 hover:bg-white focus:bg-white focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40" />
-              <p className="text-2xs text-ink-tertiary mt-0.5 flex items-center gap-1.5">{sel.completed_at ? `Completed ${atShop(sel.completed_at, tz)}` : `Due ${atShop(sel.due_at, tz)}`}{isAuto(sel) && <Badge tone="neutral" size="sm" className="gap-0.5"><M n="bolt" c="text-2xs" />Auto</Badge>}</p>
+              <p className="text-2xs text-ink-tertiary mt-0.5 flex items-center gap-1.5">{sel.completed_at ? `Completed ${atShop(sel.completed_at, tz)}` : `Due ${atShop(sel.due_at, tz)}`}{isAuto(sel) && <span title={AUTO_HINT}><Badge tone="neutral" size="sm" className="gap-0.5"><M n="bolt" c="text-2xs" />{AUTO_LABEL}<span className="sr-only">: {AUTO_HINT}</span></Badge></span>}</p>
             </div>
             <button aria-label="Close" onClick={onClose} className="w-8 h-8 rounded-lg hover:bg-slate-200/60 flex items-center justify-center text-ink-tertiary flex-shrink-0"><M n="close" c="text-base" /></button>
           </header>
@@ -166,7 +168,7 @@ export default function TaskPanel({ taskId, seed, emps, onClose, onUnavailable, 
                 </TeklySelect></div>
             </div>
             <div>
-              <label className="block font-semibold text-ink-tertiary mb-1">Assigned technicians</label>
+              <label className="block font-semibold text-ink-tertiary mb-1">Assigned to</label>
               <div className="flex flex-wrap gap-1.5 mb-2">
                 {selIds.length === 0 && <span className="text-ink-tertiary">Unassigned</span>}
                 {selIds.map((id) => <span key={id} className="inline-flex items-center gap-1 px-2 py-0.5 rounded-full bg-blue-50 text-primary border border-blue-200 text-2xs font-semibold">{nameOf(id)}<button aria-label={`Remove ${nameOf(id)}`} onClick={() => toggleAssignee(id)} className="rounded-full hover:text-rose-600"><M n="close" c="text-2xs" /></button></span>)}

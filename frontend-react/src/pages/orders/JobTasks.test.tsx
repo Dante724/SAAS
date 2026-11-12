@@ -49,9 +49,9 @@ describe("JobTasks", () => {
   it("marks automation tasks and shows priority, int or legacy word", async () => {
     render(<JobTasks orderId="o1" emps={[]} onFlash={vi.fn()} />);
     const row = (await screen.findByText("Chase the deposit")).closest("li")!;
-    expect(row.textContent).toContain("Auto");
+    expect(row.textContent).toContain("Made by Tekly");
     expect(row.textContent).toContain("Urgent");
-    expect(screen.getByText("Order the screen").closest("li")!.textContent).not.toContain("Auto");
+    expect(screen.getByText("Order the screen").closest("li")!.textContent).not.toContain("Made by Tekly");
   });
 
   it("shows a due time on the shop's clock (IST shop, UTC instant from the server)", async () => {

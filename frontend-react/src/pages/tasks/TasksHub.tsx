@@ -15,7 +15,7 @@ import { buttonClass } from "../../components/Button";
 import { Badge } from "../../components/Card";
 import { theadRowClass } from "../../components/Table";
 import { useShopTz, fmtShop, fromShopWall } from "../../lib/shopTime";
-import { type Task, type StatusFilter, normStatus, statusLabel, normPriority, PRIORITY_LABEL, isAuto, applyFilters } from "./taskModel";
+import { type Task, type StatusFilter, normStatus, statusLabel, normPriority, PRIORITY_LABEL, isAuto, applyFilters, AUTO_LABEL, AUTO_HINT } from "./taskModel";
 import TaskPanel, { type Emp } from "./TaskPanel";
 import MyDay from "./MyDay";
 
@@ -122,13 +122,15 @@ export default function TasksHub() {
 
   async function patch(id: string, body: any, note?: string) {
     try { await api.patch(`/tasks/${id}`, body); if (note) flash(note); changed(); }
-    catch (e: any) { flash(`Failed: ${e.message}`); }
+    catch { flash("Couldn't save the change. Try again."); }   // the server's wording is for the log, not for staff
   }
   async function toggleDone(t: Task) { patch(t.id, { status: t.completed_at ? "todo" : "done" }); }
   async function createTask() {
     if (!form.title.trim()) { flash("Title required"); return; }
+    // A due time is on the shop's clock: never send it (or drop it) before that clock is known.
+    if (form.due_at && !tz) { flash("Couldn't reach your shop's clock, so the due time can't be saved yet. Try again."); return; }
     try { await api.post("/tasks", { title: form.title.trim(), assignee_ids: form.assignee_ids, assigned_to_id: form.assignee_ids[0] || null, priority: Number(form.priority), due_at: form.due_at && tz ? fromShopWall(form.due_at, tz) : null, order_id: form.order_id || null }); setCreate(false); setForm({ title: "", assignee_ids: [], priority: 0, due_at: "", order_id: "" }); changed(); flash("Task created"); }
-    catch (e: any) { flash(`Failed: ${e.message}`); }
+    catch { flash("Couldn't create the task. Try again."); }
   }
 
   // Idempotent client-side pass: filters the full list from the older API, changes nothing the newer one already filtered.
@@ -146,7 +148,8 @@ export default function TasksHub() {
     <Shell title="Tasks">
       <div className="flex-1 overflow-y-auto px-4 sm:px-6 py-5 space-y-4">
         <Tabs label="Tasks views" value={shownView} onChange={setView} className="-mt-2"
-          tabs={[{ id: "day", label: "My day", disabled: dayMissing, title: dayMissing ? "My day needs the latest server update. The list shows every task meanwhile." : undefined }, { id: "list", label: "List" }]} />
+          tabs={[{ id: "day", label: "My day", disabled: dayMissing, title: dayMissing ? "My day isn't ready yet. Here's the full list for now." : undefined }, { id: "list", label: "List" }]} />
+        {dayMissing && <p className="text-xs text-ink-tertiary -mt-1">My day isn't ready yet. Here's the full list for now.</p>}
         {shownView === "day" && (
           <MyDay meId={me?.id} emps={emps} isManager={isManager} person={dayPerson} onPerson={setDayPerson} onOpen={openTask} flash={flash} onUnavailable={onDayMissing} onShowAll={() => setView("list")} reloadKey={dayReload} />
         )}
@@ -197,7 +200,7 @@ export default function TasksHub() {
                   <td className="py-3 pl-5 pr-2" onClick={(e) => e.stopPropagation()}><button onClick={() => toggleDone(t)} aria-label={t.completed_at ? `Mark "${t.title}" not done` : `Mark "${t.title}" done`} aria-pressed={!!t.completed_at} className={`w-6 h-6 rounded-md border-2 flex items-center justify-center ${t.completed_at ? "bg-emerald-500 border-emerald-500 text-white" : "border-slate-300 hover:border-primary"}`}>{t.completed_at && <M n="check" c="text-xs" />}</button></td>
                   <td className="py-3 px-3"><span className="inline-flex items-center gap-1.5 flex-wrap">
                     <span className={`font-bold ${t.completed_at ? "text-ink-tertiary line-through" : "text-ink-primary"}`}>{t.title}</span>
-                    {isAuto(t) && <Badge tone="neutral" size="sm" className="gap-0.5"><M n="bolt" c="text-2xs" />Auto</Badge>}
+                    {isAuto(t) && <span title={AUTO_HINT}><Badge tone="neutral" size="sm" className="gap-0.5"><M n="bolt" c="text-2xs" />{AUTO_LABEL}<span className="sr-only">: {AUTO_HINT}</span></Badge></span>}
                     {!t.completed_at && <PriorityBadge p={t.priority} />}
                   </span></td>
                   <td className="py-3 px-3"><Badge tone={t.completed_at ? "success" : normStatus(t.status) === "in_progress" ? "warning" : "neutral"} size="sm">{statusLabel(t)}</Badge></td>
@@ -251,10 +254,18 @@ export default function TasksHub() {
           </div>
         </div>
       )}
-      {toast && <div role="status" className="fixed bottom-6 left-1/2 -translate-x-1/2 bg-ink-primary text-white text-xs font-semibold pl-4 pr-2 py-2 rounded-xl shadow-clay-drawer z-[70] flex items-center gap-3">
-        <span className="py-0.5">{toast.msg}</span>
-        {toast.undo && <button onClick={() => { const u = toast.undo!; setToast(null); u(); }} className="px-2.5 py-1 rounded-lg text-blue-200 font-bold hover:bg-white/10">{toast.label || "Undo"}</button>}
-      </div>}
+      {/* One polite live region that is always on the page, so screen readers announce each
+          message (Done, Undo, errors) even though the toast comes and goes. Light surface, like
+          Tekly Go's toasts; a problem gets the soft rose tint. */}
+      <div role="status" aria-live="polite" className="fixed inset-x-0 bottom-6 z-[70] flex justify-center px-4 pointer-events-none">
+        {toast && (
+          <div className={`pointer-events-auto flex items-center gap-3 pl-4 pr-2 py-2 rounded-xl border text-xs font-semibold shadow-clay-drawer max-w-md
+            ${/^Couldn't|isn't available|lost the connection/.test(toast.msg) ? "bg-rose-50 border-rose-200 text-rose-800" : "bg-white border-slate-200 text-ink-primary"}`}>
+            <span className="py-0.5">{toast.msg}</span>
+            {toast.undo && <button onClick={() => { const u = toast.undo!; setToast(null); u(); }} className="px-2.5 py-1 rounded-lg text-primary font-bold hover:bg-primary/10">{toast.label || "Undo"}</button>}
+          </div>
+        )}
+      </div>
     </Shell>
   );
 }

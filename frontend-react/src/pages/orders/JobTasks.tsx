@@ -6,7 +6,7 @@ import EmptyState from "../../components/EmptyState";
 import { Avatar } from "./look";
 import { buttonClass } from "../../components/Button";
 import { Badge } from "../../components/Card";
-import { isAuto, normPriority, PRIORITY_LABEL } from "../tasks/taskModel";
+import { isAuto, normPriority, PRIORITY_LABEL, AUTO_LABEL, AUTO_HINT } from "../tasks/taskModel";
 import { useShopTz, fmtShop } from "../../lib/shopTime";
 
 // J4 — the job's tasks, on the job: add one, assign it, tick it off.
@@ -74,7 +74,7 @@ export default function JobTasks({ orderId, emps, onFlash }: { orderId: string; 
                 <input type="checkbox" checked={!!t.completed_at} onChange={() => toggle(t)} aria-label={`Done: ${t.title}`} className="h-4 w-4 accent-[rgb(var(--c-primary))]" />
                 <span className="flex-1 min-w-0 flex items-center gap-1.5">
                   <span className={`min-w-0 truncate text-xs ${t.completed_at ? "line-through text-ink-tertiary" : "text-ink-primary font-medium"}`}>{t.title}</span>
-                  {isAuto(t) && <Badge tone="neutral" size="sm">Auto</Badge>}
+                  {isAuto(t) && <span title={AUTO_HINT}><Badge tone="neutral" size="sm">{AUTO_LABEL}</Badge></span>}
                   {!t.completed_at && normPriority(t.priority) > 0 && <Badge tone={normPriority(t.priority) === 2 ? "danger" : "warning"} size="sm">{PRIORITY_LABEL[normPriority(t.priority)]}</Badge>}
                 </span>
                 {t.due_at && tz && !t.completed_at && <span className={`text-2xs whitespace-nowrap ${t.overdue ? "font-semibold text-rose-600" : "text-ink-tertiary"}`}>{t.overdue ? "Overdue · " : "Due "}{fmtShop(t.due_at, tz)}</span>}

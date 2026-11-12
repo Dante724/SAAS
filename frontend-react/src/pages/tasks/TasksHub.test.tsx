@@ -74,12 +74,12 @@ describe("TasksHub", () => {
     expect(within(r1).getByText("To do")).toBeInTheDocument();
     expect(within(r1).getByText("WO-12")).toBeInTheDocument();
     expect(within(r1).getByText("Ann Lee")).toBeInTheDocument();
-    expect(within(r1).getByText("Auto")).toBeInTheDocument();
+    expect(within(r1).getByText(/Made by Tekly/)).toBeInTheDocument();
     expect(within(r1).getByText("Urgent")).toBeInTheDocument();
     const r2 = rows().find((r) => within(r).queryByText("Call the supplier"))!;
     expect(within(r2).getByText("To do")).toBeInTheDocument();                // legacy "open"
     expect(within(r2).getByText("High")).toBeInTheDocument();                 // legacy string priority
-    expect(within(r2).queryByText("Auto")).not.toBeInTheDocument();
+    expect(within(r2).queryByText(/Made by Tekly/)).not.toBeInTheDocument();
   });
 
   it("searches by client and filters by priority and person", async () => {
