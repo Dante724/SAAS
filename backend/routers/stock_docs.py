@@ -100,58 +100,25 @@ async def _take_stock(db: AsyncSession, part_id: str, warehouse, qty: float, *,
 
 
 async def _deplete_batches_fefo(db: AsyncSession, part_id: str, warehouse, qty: float) -> None:
-    """First-Expired-First-Out batch depletion.
+    """First-Expired-First-Out batch depletion: the layers with the nearest expiry go first, so the
+    expiration report doesn't keep flagging stock that has already left.
 
-    Aggregate stock only knows *how much* is on the shelf; batches know *which* stock and
-    *when it expires*. When we remove stock, the batches with the nearest expiry must go
-    first — otherwise a write-off would leave the oldest goods sitting on the shelf and
-    the expiration report would keep flagging stock that, on paper, we'd already removed.
-
-    Parts without any tracked batches are a no-op: the aggregate decrement in the caller
-    is all there is for them, so non-perishable inventory is unaffected.
-    """
-    from backend.models import StockItemBatch
-
-    batches = (await db.execute(select(StockItemBatch).where(
-        StockItemBatch.part_id == part_id,
-        StockItemBatch.warehouse_id == warehouse.id,
-        StockItemBatch.qty_remaining > 0)
-        # NULL expiry sorts last: dated (perishable) stock is consumed before undated
-        .order_by(StockItemBatch.expiry_date.is_(None), StockItemBatch.expiry_date,
-                  StockItemBatch.received_at))).scalars().all()
-
-    remaining = float(qty)
-    for b in batches:
-        if remaining <= 0:
-            break
-        take = min(float(b.qty_remaining or 0), remaining)
-        b.qty_remaining = float(b.qty_remaining or 0) - take
-        remaining -= take
-    # If batches don't cover the full quantity (untracked receipts predate batch tracking),
-    # the aggregate decrement already handled it — we simply drain what batches we have.
+    Audit INV-02: through the one layer service (`stock_consume`) — the warehouse's layers plus the
+    location's untagged ones (older data; they were never drained before), locked and read fresh
+    (two documents at once each wrote qty_remaining from what they read). Units no layer covers
+    (stock from before cost layers) need nothing more: the caller already took them off the shelf."""
+    from backend.services import stock_consume
+    await stock_consume._consume_layers(db, warehouse.org_id, part_id, qty, warehouse.location_id,
+                                        fefo=True, warehouse_id=warehouse.id)
 
 
 async def _restore_batches(db: AsyncSession, part_id: str, warehouse, qty: float) -> None:
-    """W3-C: a reverted write-off puts its units back on the cost layers it drew (the reverse of
-    _deplete_batches_fefo: the last layer drawn first, never above what a layer received), so the
-    layers keep holding exactly what's on the shelf."""
-    from decimal import Decimal as _D
-
-    from backend.models import StockItemBatch
-    batches = (await db.execute(select(StockItemBatch).where(
-        StockItemBatch.part_id == part_id, StockItemBatch.warehouse_id == warehouse.id)
-        .order_by(StockItemBatch.expiry_date.is_(None), StockItemBatch.expiry_date,
-                  StockItemBatch.received_at).with_for_update())).scalars().all()
-    left = _D(str(qty))
-    for b in reversed(batches):
-        if left <= 0:
-            break
-        room = _D(str(b.qty_received or 0)) - _D(str(b.qty_remaining or 0))
-        if room <= 0:
-            continue
-        back = min(room, left)
-        b.qty_remaining = _D(str(b.qty_remaining or 0)) + back
-        left -= back
+    """W3-C: a reverted write-off puts its units back on the cost layers it drew (the newest layer
+    first, never above what a layer received), so the layers keep holding exactly what's on the
+    shelf. Same layer set and locking as `_deplete_batches_fefo`."""
+    from backend.services import stock_consume
+    await stock_consume.restore_layers(db, warehouse.org_id, part_id, warehouse.location_id, qty,
+                                       warehouse_id=warehouse.id)
 
 
 async def _give_stock(db: AsyncSession, part_id: str, warehouse, qty: float,

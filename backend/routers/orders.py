@@ -4887,7 +4887,7 @@ async def _reverse_fulfillment(db, order, part_id, qty, *, ref_type="order", ref
         await stock_rows.add(db, part_id, loc_id, q, bin_id=back_bin)
         db.add(StockMovement(part_id=part_id, location_id=loc_id, bin_id=back_bin,
                              movement_type="return", qty=q, ref_type=ref_type, ref_id=ref_id or order.id))
-    from backend.models import SerializedItem, StockItemBatch
+    from backend.models import SerializedItem
     # Release serialized units (the ones named, else newest allocated first)
     serials = units if units is not None else (await db.execute(select(SerializedItem).where(
         SerializedItem.org_id == order.org_id, SerializedItem.part_id == part_id,
@@ -4902,22 +4902,11 @@ async def _reverse_fulfillment(db, order, part_id, qty, *, ref_type="order", ref
         else:
             serial_log.record(db, s, "returned", ref_type="order", ref_id=order.id,
                               label=f"Taken off {order.order_number}")
-    # Restore cost layers (approximate without a per-line consumption journal:
-    # newest layer first, never exceeding what that layer originally received)
-    from decimal import Decimal as _D
-    remaining = _D(str(qty))
-    layers = (await db.execute(select(StockItemBatch).where(
-        StockItemBatch.org_id == order.org_id, StockItemBatch.part_id == part_id)
-        .order_by(StockItemBatch.received_at.desc()))).scalars().all()
-    for layer in layers:
-        if remaining <= 0:
-            break
-        consumed = _D(str(layer.qty_received or 0)) - _D(str(layer.qty_remaining or 0))
-        if consumed <= 0:
-            continue
-        back = min(remaining, consumed)
-        layer.qty_remaining = _D(str(layer.qty_remaining or 0)) + back
-        remaining -= back
+    # Restore cost layers at the location each unit goes back to (audit INV-02: per location and
+    # locked, like sales and write-offs — newest layer first, never above what a layer received).
+    from backend.services import stock_consume
+    for loc_id, _b, q in plan:
+        await stock_consume.restore_layers(db, order.org_id, part_id, loc_id, q)
     return float(qty)
 
 
@@ -5038,7 +5027,7 @@ async def _consume_from_bins(db, order, line, qty, current, *, bin_id=None, seri
                              movement_type="use", qty=-t_qty, ref_type="order", ref_id=order.id,
                              created_by_id=current.id))
     # FIFO cost layers for the drawn units; the line's other units keep their cost.
-    layered, layer_cost = await stock_consume._consume_layers(db, order.org_id, part_id, taken)
+    layered, layer_cost = await stock_consume._consume_layers(db, order.org_id, part_id, taken, order.location_id)
     if layered > 1e-9:
         old_cost = float(line.cost_price or 0)
         new_unit = (layer_cost + (taken - layered) * old_cost) / taken
