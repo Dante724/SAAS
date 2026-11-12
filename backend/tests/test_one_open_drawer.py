@@ -35,9 +35,11 @@ async def test_only_one_drawer_opens_per_location_under_concurrency(client, tena
 
 
 @pytest.mark.asyncio
-async def test_current_shift_tolerates_two_open_rows(client, tenant, db):
-    """Drawers doubled before this fix exist in real data: /shifts/current must still answer with
-    the newest open one, not 500, so the shop can close them."""
+async def test_a_second_open_row_is_refused_by_the_database(client, tenant, db):
+    """Drawers doubled before the open lock existed in real data. Migration w2b01 merged them and
+    a partial unique index (audit DB-04) now refuses a second open drawer at one location."""
+    from sqlalchemy.exc import IntegrityError
+
     from backend.models import CashShift, Employee
     loc = await _loc(client, tenant)
     r = await client.post("/api/finance/shifts/open", json={"location_id": loc, "opening_float": 10}, headers=tenant)
@@ -45,11 +47,12 @@ async def test_current_shift_tolerates_two_open_rows(client, tenant, db):
     first = r.json()["id"]
     me = (await client.get("/api/auth/me", headers=tenant)).json()["id"]
     emp = (await db.execute(select(Employee).where(Employee.id == me))).scalar_one()
-    # a second open row, as the unlocked open left behind
+    # a second open row, as the unlocked open left behind, can no longer be written
     db.add(CashShift(location_id=loc, opened_by_id=emp.id, opening_float=20))
-    await db.commit()
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
     cur = await client.get("/api/finance/shifts/current", params={"location_id": loc}, headers=tenant)
     assert cur.status_code == 200, cur.text
     assert cur.json()["open"] is True
-    assert cur.json()["id"] != first                 # the newest open drawer
-    assert cur.json()["opening_float"] == 20
+    assert cur.json()["id"] == first

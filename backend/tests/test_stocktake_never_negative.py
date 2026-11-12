@@ -98,9 +98,11 @@ async def test_bin_count_overtaken_by_stock_leaving_the_bin_is_refused(client, t
 
 
 @pytest.mark.asyncio
-async def test_receipt_average_ignores_a_negative_on_hand(client, tenant, db):
-    """Legacy negative stock (from before this fix) must not skew the moving average: receiving
-    2 @ 20 onto −1 on hand at avg 10 gives 20, not 30."""
+async def test_negative_on_hand_can_no_longer_exist(client, tenant, db):
+    """Legacy negative stock used to skew the moving average. Migration w2b01 set it to 0 (with an
+    adjust movement) and a CHECK (audit DB-07) now refuses it; receiving onto 1 @ 10 averages normally."""
+    from sqlalchemy.exc import IntegrityError
+
     from backend.models import Part, StockLevel
     loc = await _loc(client, tenant)
     p = await _part(client, tenant, sku="INV01-D", barcode="INV01-D", cost=10)
@@ -108,10 +110,12 @@ async def test_receipt_average_ignores_a_negative_on_hand(client, tenant, db):
         "location_id": loc, "qty": 1, "movement_type": "receive", "unit_cost": 10}, headers=tenant)
     row = (await db.execute(select(StockLevel).where(StockLevel.part_id == p["id"]))).scalars().first()
     row.qty_available = -1
-    await db.commit()
+    with pytest.raises(IntegrityError):
+        await db.commit()
+    await db.rollback()
     r = await client.post(f"/api/inventory/parts/{p['id']}/adjust", json={
         "location_id": loc, "qty": 2, "movement_type": "receive", "unit_cost": 20}, headers=tenant)
     assert r.status_code == 200, r.text
     db.expire_all()
     part = (await db.execute(select(Part).where(Part.id == p["id"]))).scalar_one()
-    assert float(part.avg_cost) == pytest.approx(20)
+    assert float(part.avg_cost) == pytest.approx(50 / 3, abs=1e-3)     # (1 × 10 + 2 × 20) / 3, stored to 4 dp
