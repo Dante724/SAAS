@@ -223,10 +223,18 @@ class RefundIn(BaseModel):
 
 
 @router.post("/charges/{charge_id}/refund")
-async def refund_charge(charge_id: str, data: RefundIn, db: AsyncSession = Depends(get_db),
+async def refund_charge(charge_id: str, data: RefundIn, request: Request, db: AsyncSession = Depends(get_db),
                         current: Employee = Depends(require_perm("can_refund_card_payments"))):
-    ch = await svc.refund(db, await _charge(db, current.org_id, charge_id), amount=data.amount, actor_id=current.id)
-    return await _ser(db, ch)
+    """A retry with the same Idempotency-Key (the web dialog sends one per refund) gets the first
+    answer back instead of refunding the card again; a new key is a genuine second refund."""
+    from backend.services.idempotency import run_once
+
+    async def work():
+        ch = await svc.refund(db, await _charge(db, current.org_id, charge_id), amount=data.amount,
+                              actor_id=current.id)
+        return await _ser(db, ch)
+    return await run_once(db, current.org_id, request, "terminal.refund",
+                          {"charge_id": charge_id, "body": data}, work)
 
 
 class SimulateIn(BaseModel):

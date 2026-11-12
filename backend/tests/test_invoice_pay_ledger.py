@@ -13,8 +13,10 @@ async def test_invoice_payment_moves_client_balance(client, tenant):
     invoice_id = inv["id"]
 
     before = (await client.get(f"/api/clients/{cid}", headers=tenant)).json()["balance"]
+    till = (await client.post("/api/cash/accounts", json={"name": "Till", "payment_option": "cash"},
+                              headers=tenant)).json()["id"]   # audit FIN-04: cash lands in a till
     r = await client.post(f"/api/finance/invoices/{invoice_id}/pay", headers=tenant,
-                          json={"amount": 100, "method": "cash"})
+                          json={"amount": 100, "method": "cash", "account_id": till})
     assert r.status_code == 200, r.text
     after = (await client.get(f"/api/clients/{cid}", headers=tenant)).json()["balance"]
 
