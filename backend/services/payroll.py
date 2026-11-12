@@ -155,7 +155,9 @@ class CommissionEngine:
         """A closed task was reopened, cancelled or deleted: claw back every person's still-open
         task_closed commission for it (every rule, the pre-tk02 key too), so closing it again
         nets exactly one payout per person (the next close posts under `<key>@<n>`). A deletion
-        honours the rule's cancel_if_deleted, as for orders. Returns the number of claw-backs."""
+        honours the rule's cancel_if_deleted, as for orders. The claw-back key leaves the reason out
+        (task_reversal:<group>@<rows>), so a reopen and a cancel racing each other post it once.
+        Returns the number of claw-backs."""
         L = EmployeeBalanceLedger
         rows = (await self.db.execute(select(L).where(
             L.org_id == self.org_id, L.ref_id == task.id, L.event == "task_closed",
@@ -180,7 +182,7 @@ class CommissionEngine:
             if await self._post(
                     employee_id=first.employee_id, entry_type="clawback", amount=-net,
                     event="task_closed", rule_id=first.rule_id, ref_type="task", ref_id=task.id,
-                    idempotency_key=f"task_{reason}:{key}@{n_rows}", accrual_key=key,
+                    idempotency_key=f"task_reversal:{key}@{n_rows}", accrual_key=key,
                     note=f"Task {reason}: {task.title}"):
                 posted += 1
         await self.db.commit()

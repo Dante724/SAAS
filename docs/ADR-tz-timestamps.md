@@ -41,3 +41,23 @@ calls, no timezone-aware columns, and "today" computed with the server's `date.t
 2. Switch `now_utc()` to return aware, add a SQLAlchemy `TypeDecorator` that attaches UTC to values
    read from SQLite, and make `parse_dt` always return aware UTC for instants.
 3. Run the whole suite on Postgres and SQLite; grep for naive literals in tests.
+
+## Addendum, 11 Nov 2026: task due times are UTC instants (migration tk02)
+
+`tasks.due_at` is a naive **UTC instant**, like `created_at`, not a wall-clock scheduled time.
+The backend always read it that way (overdue flag, on-time commission, automations), but the web
+Tasks screen and Tekly Go used to send the shop's wall time with no offset, which was stored as if
+it were UTC (in an IST shop, a task due 18:00 read as 23:30).
+
+- **Input** (`routers/tasks._parse_due`): a date alone (`YYYY-MM-DD`) is the end of that shop
+  day, 23:59:59 local (`dates.range_edge(..., end=True)`, the reports' rule). A datetime with an
+  offset is that instant. A datetime **without** an offset is shop wall time, converted with that
+  day's offset, so older Go builds and other callers that send `datetime-local` values keep working.
+- **Existing rows:** migration tk02 converted every `source = 'manual'` due time from the shop's
+  wall time to UTC. A bare-date value stored at 00:00 became the end of that day. Automation,
+  inquiry and missed-call tasks were already UTC and were not touched.
+- **"Shop clock"** for tasks is `dates.shop_tzname(org)`, the org's zone, as the reports use. My day,
+  date-only due dates, move-to-today, alert texts and the overdue sweep's working-hours check all
+  read it. The sweep uses the branch's `working_hours` (opening times), but reads them on this one
+  clock, so a branch whose `Location.timezone` differs from the org's still runs on the org's day.
+- **Output** stays naive UTC ISO (unchanged shape). Clients convert to the shop zone to show it.

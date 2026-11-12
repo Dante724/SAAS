@@ -70,7 +70,8 @@ def _local(day: date, hh: int, mm: int = 0, ss: int = 0, tz: str = TZ) -> dateti
 
 
 def _iso(dt: datetime) -> str:
-    return dt.isoformat()
+    """A naive UTC instant as the API expects an instant: with its offset (no offset = shop time)."""
+    return dt.isoformat() + "+00:00"
 
 
 # ── 1. visibility by role ────────────────────────────────────────────────────
@@ -223,11 +224,12 @@ async def test_overdue_never_alerts_closed_or_deleted_tasks(client, tenant, db):
 
 
 @pytest.mark.asyncio
-async def test_overdue_rearms_when_the_due_time_moves_later(client, tenant, db):
+async def test_overdue_rearms_when_the_due_time_moves_later(client, tenant, db, monkeypatch):
     from backend.services.task_alerts import sweep_overdue
     me = await _me(client, tenant)
     _, e1 = await _employee(client, db, me["org_id"], "od4@x.dev")
     now = _working_now()
+    _freeze(monkeypatch, now.isoformat())      # the PATCH judges "in the future" on the app clock
     t = await _task(client, tenant, assigned_to_id=e1.id, due_at=_iso(now - timedelta(hours=1)))
     assert await sweep_overdue(db, me["org_id"], now=now) == 1
     new_due = now + timedelta(hours=1)
@@ -539,6 +541,7 @@ async def test_move_to_today(client, tenant, db, monkeypatch):
     await client.patch(f"/api/tasks/{done['id']}", json={"status": "done"}, headers=tenant)
     hidden = await _task(client, tenant, assigned_to_id=other.id, due_at=_iso(_local(today - timedelta(days=2), 9)))
     sent.clear()
+    _freeze(monkeypatch, _local(today, 9).isoformat())        # 09:00 shop time: 10:30 is still ahead
     r = await client.post("/api/tasks/move-to-today", json={"ids": [
         timed["id"], undated["id"], own["id"], done["id"], hidden["id"], "nope"]}, headers=SH)
     assert r.status_code == 200, r.text
@@ -569,7 +572,7 @@ async def test_due_at_accepts_a_date_or_a_datetime(client, tenant):
     z = await _task(client, tenant, due_at="2026-12-01T10:00:00+05:30")
     assert z["due_at"] == "2026-12-01T04:30:00"
     naive = await _task(client, tenant, due_at="2026-12-01T10:00:00")
-    assert naive["due_at"] == "2026-12-01T10:00:00"                     # taken as given, as before
+    assert naive["due_at"] == "2026-12-01T04:30:00"                     # no offset = shop wall time
     p = await client.patch(f"/api/tasks/{naive['id']}", json={"due_at": "2026-12-02"}, headers=tenant)
     assert p.json()["due_at"] == "2026-12-02T18:29:59"              # 23:59:59 IST
     bad = await client.post("/api/tasks", json={"title": "x", "due_at": "tomorrow"}, headers=tenant)
@@ -751,18 +754,18 @@ async def test_task_closed_mid_sweep_is_not_alerted(client, tenant, db, monkeypa
     """OVD-3: the claim is a conditional UPDATE, so a task closed after the sweep read it is left."""
     from sqlalchemy import update
 
-    from backend.services import notification_rules as nr
     from backend.services.task_alerts import sweep_overdue
     me = await _me(client, tenant)
     _, e1 = await _employee(client, db, me["org_id"], "ovd3@x.dev")
     now = _working_now()
     t = await _task(client, tenant, assigned_to_id=e1.id, due_at=_iso(now - timedelta(hours=1)))
-    real = nr._into_working_hours
+    from backend.services import task_alerts
+    real = task_alerts._held
 
     async def close_it_first(_db, *a, **k):
         await _db.execute(update(Task).where(Task.id == t["id"]).values(status="done"))
         return await real(_db, *a, **k)
-    monkeypatch.setattr(nr, "_into_working_hours", close_it_first)
+    monkeypatch.setattr(task_alerts, "_held", close_it_first)
     assert await sweep_overdue(db, me["org_id"], now=now) == 0
     assert await _bell(db, e1.id, "task.overdue") == []
 
@@ -821,3 +824,398 @@ async def test_my_day_query_count_is_flat(client, tenant, db):
     finally:
         event.remove(engine, "before_cursor_execute", count)
     assert small == big, (small, big)
+
+
+# ── review round 2 ────────────────────────────────────────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_staff_can_claim_a_pool_task_themselves(client, tenant, db):
+    """H1 / VIS-6: a staff member picks up an unassigned task someone else made, with their own
+    headers. Giving it to someone else, or editing anything else, is still refused."""
+    me = await _me(client, tenant)
+    SH, staff = await _employee(client, db, me["org_id"], "claim@x.dev")
+    OH, other = await _employee(client, db, me["org_id"], "claim-o@x.dev")
+    pool = await _task(client, tenant, title="pool")
+    assert (await client.patch(f"/api/tasks/{pool['id']}", json={"title": "mine now"}, headers=SH)).status_code == 403
+    assert (await client.patch(f"/api/tasks/{pool['id']}", json={"assigned_to_id": other.id},
+                               headers=SH)).status_code == 403
+    r = await client.patch(f"/api/tasks/{pool['id']}", json={"assigned_to_id": staff.id, "status": "in_progress"},
+                           headers=SH)
+    assert r.status_code == 200, r.text
+    assert r.json()["assigned_to_id"] == staff.id and r.json()["assignee_ids"] == [staff.id]
+    assert r.json()["status"] == "in_progress"
+    # it is theirs now: gone from the pool for others
+    assert (await client.get(f"/api/tasks/{pool['id']}", headers=OH)).status_code == 404
+    assert (await client.patch(f"/api/tasks/{pool['id']}", json={"assignee_ids": [other.id]},
+                               headers=OH)).status_code == 404
+    # assignee_ids form of the claim works too
+    pool2 = await _task(client, tenant, title="pool 2")
+    assert (await client.patch(f"/api/tasks/{pool2['id']}", json={"assignee_ids": [other.id]},
+                               headers=OH)).status_code == 200
+
+
+@pytest.mark.asyncio
+async def test_my_day_include_pool(client, tenant, db):
+    """include_pool=true adds the shop's unassigned tasks to the buckets; default unchanged."""
+    me = await _me(client, tenant)
+    SH, staff = await _employee(client, db, me["org_id"], "pool@x.dev")
+    await _task(client, tenant, title="pool today", due_at=today_in(TZ).isoformat())
+    await _task(client, tenant, title="mine", assigned_to_id=staff.id)
+    _, t = await _titles(client, SH)
+    assert t["today"] == [] and t["later"] == ["mine"]
+    d, t = await _titles(client, SH, include_pool="true")
+    assert t["today"] == ["pool today"] and t["later"] == ["mine"]
+    assert d["today"][0]["assigned_to_id"] is None and d["today"][0]["assignee_ids"] == []
+
+
+@pytest.mark.asyncio
+async def test_old_go_clients_send_shop_wall_time(client, tenant):
+    """H2: a Go build from before the shop-clock fix sends datetime-local values ("…T18:00", no
+    offset, no seconds) meaning 18:00 in the shop. They are stored as that instant in UTC."""
+    t = await _task(client, tenant, due_at="2026-11-12T18:00")
+    assert t["due_at"] == "2026-11-12T12:30:00"                       # 18:00 IST
+    p = await client.patch(f"/api/tasks/{t['id']}", json={"due_at": "2026-11-13T09:15"}, headers=tenant)
+    assert p.json()["due_at"] == "2026-11-13T03:45:00"
+    await client.put("/api/staff/company", json={"timezone": "America/New_York"}, headers=tenant)
+    summer = await _task(client, tenant, due_at="2026-07-01T09:00")
+    assert summer["due_at"] == "2026-07-01T13:00:00"                  # EDT that day, not today's EST
+
+
+@pytest.mark.asyncio
+async def test_move_to_today_past_time_goes_to_end_of_day_without_alerting(client, tenant, db, monkeypatch):
+    """H3 / MTT-1: a kept time that has already passed today becomes the end of today, so the
+    moved task isn't overdue and the sweep has nothing to say about it."""
+    from backend.services.task_alerts import sweep_overdue
+    me = await _me(client, tenant)
+    _, e1 = await _employee(client, db, me["org_id"], "h3@x.dev")
+    today = today_in(TZ)
+    morning = await _task(client, tenant, assigned_to_id=e1.id, due_at=_iso(_local(today - timedelta(days=1), 9)))
+    evening = await _task(client, tenant, assigned_to_id=e1.id, due_at=_iso(_local(today - timedelta(days=1), 17)))
+    three_pm = _local(today, 15)
+    assert await sweep_overdue(db, me["org_id"], now=three_pm) == 2
+    _freeze(monkeypatch, three_pm.isoformat())
+    r = await client.post("/api/tasks/move-to-today", json={"ids": [morning["id"], evening["id"]]}, headers=tenant)
+    assert r.json()["moved"] == 2
+    rows = {t.id: t for t in (await db.execute(select(Task).where(Task.id.in_([morning["id"], evening["id"]])))).scalars()}
+    assert utc_to_wall(rows[morning["id"]].due_at, TZ) == datetime.combine(today, time(23, 59, 59))
+    assert utc_to_wall(rows[evening["id"]].due_at, TZ) == datetime.combine(today, time(17, 0))
+    for t in rows.values():
+        assert t.overdue_alerted_at is None                          # both now in the future: re-armed
+    assert await sweep_overdue(db, me["org_id"], now=three_pm + timedelta(minutes=15)) == 0
+    assert len(await _bell(db, e1.id, "task.overdue")) == 2           # only the original two
+
+
+@pytest.mark.asyncio
+async def test_moving_a_due_time_to_another_past_time_does_not_realert(client, tenant, db):
+    """H3 / OVD-4: re-arm only when the new due time is in the future."""
+    from backend.services.task_alerts import sweep_overdue
+    me = await _me(client, tenant)
+    _, e1 = await _employee(client, db, me["org_id"], "h3b@x.dev")
+    now = _working_now()
+    t = await _task(client, tenant, assigned_to_id=e1.id, due_at=_iso(now - timedelta(days=2)))
+    assert await sweep_overdue(db, me["org_id"], now=now) == 1
+    await client.patch(f"/api/tasks/{t['id']}", json={"due_at": _iso(now - timedelta(days=1))}, headers=tenant)
+    assert await sweep_overdue(db, me["org_id"], now=now) == 0
+    assert len(await _bell(db, e1.id, "task.overdue")) == 1
+
+
+@pytest.mark.asyncio
+async def test_pushes_go_out_only_after_the_commit(client, tenant, db, monkeypatch):
+    """H4 / MTT-5: with real push on, nothing commits halfway through move-to-today, a PATCH or
+    the sweep; every push is sent after the request's (or the shop's) one commit."""
+    import sys
+    import types
+
+    from sqlalchemy.ext.asyncio import AsyncSession
+
+    from backend.models import PushSubscription
+    from backend.services import push
+    from backend.services.task_alerts import sweep_overdue
+    me = await _me(client, tenant)
+    _, e1 = await _employee(client, db, me["org_id"], "h4@x.dev")
+    db.add(PushSubscription(employee_id=e1.id, org_id=me["org_id"], endpoint="https://push.example/x",
+                            p256dh="k", auth="a"))
+    await db.commit()
+    events = []
+    fake = types.ModuleType("pywebpush")
+    fake.webpush = lambda **kw: events.append("push")
+    monkeypatch.setitem(sys.modules, "pywebpush", fake)
+    monkeypatch.setattr(push, "push_enabled", lambda: True)
+    real_commit = AsyncSession.commit
+
+    async def commit(self):
+        events.append("commit")
+        return await real_commit(self)
+    monkeypatch.setattr(AsyncSession, "commit", commit)
+
+    t1 = await _task(client, tenant, assigned_to_id=e1.id)
+    assert "push" in events and events[0] == "commit"
+    t2 = await _task(client, tenant, assigned_to_id=e1.id)
+    events.clear()
+    r = await client.post("/api/tasks/move-to-today", json={"ids": [t1["id"], t2["id"]]}, headers=tenant)
+    assert r.status_code == 200
+    assert events and events[0] == "commit" and "push" in events
+    first_push = events.index("push")
+    assert events[:first_push].count("commit") == 1                  # one transaction, then the push
+    events.clear()
+    await client.patch(f"/api/tasks/{t1['id']}", json={"title": "renamed"}, headers=tenant)
+    assert events[0] == "commit"
+    now = _working_now()
+    t3 = await _task(client, tenant, assigned_to_id=e1.id, due_at=_iso(now - timedelta(hours=1)))
+    events.clear()
+    assert await sweep_overdue(db, me["org_id"], now=now) >= 1
+    assert events[0] == "commit" and "push" in events
+    assert t3
+
+
+@pytest.mark.asyncio
+async def test_racing_reopen_and_cancel_claw_back_once(client, tenant, db):
+    """M1: two reversals that both read the paid state post one claw-back, not two."""
+    from backend.services.payroll import CommissionEngine
+    me, e1, e2, rule, t = await _two_people_task(client, tenant, db, "each_full")
+    await client.patch(f"/api/tasks/{t['id']}", json={"status": "done"}, headers=tenant)
+    task = (await db.execute(select(Task).where(Task.id == t["id"]))).scalar_one()
+    eng = CommissionEngine(db, me["org_id"])
+    stale = {}
+    real_state = eng._group_state
+
+    async def remembered(key):
+        if key not in stale:
+            stale[key] = await real_state(key)
+        return stale[key]                       # the second reversal sees what the first one saw
+    eng._group_state = remembered
+    await eng.reverse_for_task(task, "reopened")
+    await eng.reverse_for_task(task, "cancelled")
+    assert await _paid(db, e1.id) == 0 and await _paid(db, e2.id) == 0
+    keys = (await db.execute(select(EmployeeBalanceLedger.idempotency_key).where(
+        EmployeeBalanceLedger.ref_id == t["id"], EmployeeBalanceLedger.entry_type == "clawback"))).scalars().all()
+    assert keys and all(k.startswith("task_reversal:") for k in keys)
+
+
+@pytest.mark.asyncio
+async def test_alert_texts_show_the_shop_clock(client, tenant, db):
+    """M3: bell and push texts show the due time on the shop's clock; a date-only due shows no time."""
+    me = await _me(client, tenant)
+    _, e1 = await _employee(client, db, me["org_id"], "m3@x.dev")
+    await _task(client, tenant, title="dated", assigned_to_id=e1.id, due_at="2026-12-24")
+    await _task(client, tenant, title="timed", assigned_to_id=e1.id, due_at="2026-12-24T14:30:00+05:30")
+    today = await _task(client, tenant, title="today", assigned_to_id=e1.id, due_at=today_in(TZ).isoformat())
+    bodies = {n.body for n in await _bell(db, e1.id, "task.assigned")}
+    assert "dated · due 24 Dec" in bodies
+    assert "timed · due 24 Dec 14:30" in bodies
+    assert "today · due today" in bodies
+    assert today
+
+
+@pytest.mark.asyncio
+async def test_unassigned_overdue_task_is_marked_handled_then_alerts_its_new_owner(client, tenant, db):
+    """L5: an overdue task with nobody on it is stamped (it leaves the pending index), and giving
+    it to someone alerts that person on the next tick."""
+    from backend.services.task_alerts import sweep_overdue
+    me = await _me(client, tenant)
+    _, e1 = await _employee(client, db, me["org_id"], "l5@x.dev")
+    now = _working_now()
+    t = await _task(client, tenant, title="nobody", due_at=_iso(now - timedelta(hours=1)))
+    assert await sweep_overdue(db, me["org_id"], now=now) == 0
+    row = (await db.execute(select(Task).where(Task.id == t["id"]))).scalar_one()
+    assert row.overdue_alerted_at is not None
+    await client.patch(f"/api/tasks/{t['id']}", json={"assigned_to_id": e1.id}, headers=tenant)
+    assert await sweep_overdue(db, me["org_id"], now=now + timedelta(minutes=15)) == 1
+    assert len(await _bell(db, e1.id, "task.overdue")) == 1
+
+
+@pytest.mark.asyncio
+async def test_new_endpoints_are_rate_limited_like_the_rest(client, tenant):
+    """NF-4: the shared /api limiter counts my-day and move-to-today (its headers are on them)."""
+    r = await client.get("/api/tasks/my-day", headers=tenant)
+    assert "X-RateLimit-Limit" in r.headers
+    m = await client.post("/api/tasks/move-to-today", json={"ids": ["x"]}, headers=tenant)
+    assert "X-RateLimit-Limit" in m.headers
+
+
+@pytest.mark.asyncio
+async def test_job_task_list_respects_visibility(client, tenant, db):
+    """R2: the work order's task list (GET /api/tasks?order_id=…, the JobTasks drawer) only shows
+    a staff member the tasks they can see; search goes through the same list."""
+    me = await _me(client, tenant)
+    SH, staff = await _employee(client, db, me["org_id"], "jt@x.dev")
+    _, other = await _employee(client, db, me["org_id"], "jt-o@x.dev")
+    order = (await client.post("/api/orders", json={"complaint": "x"}, headers=tenant)).json()
+    await _task(client, tenant, title="Swap screen", order_id=order["id"], assigned_to_id=staff.id)
+    await _task(client, tenant, title="Swap battery", order_id=order["id"], assigned_to_id=other.id)
+    got = (await client.get(f"/api/tasks?order_id={order['id']}", headers=SH)).json()
+    assert [x["title"] for x in got["items"]] == ["Swap screen"] and got["total"] == 1
+    found = (await client.get("/api/tasks?q=Swap", headers=SH)).json()
+    assert [x["title"] for x in found["items"]] == ["Swap screen"]
+
+
+# ── QA round: untested criteria and sweep batching ────────────────────────────────────────────
+@pytest.mark.asyncio
+async def test_role_change_takes_effect_on_the_next_request(client, tenant, db):
+    """VIS-7: visibility follows the role as it is now; nothing is cached per session."""
+    me = await _me(client, tenant)
+    SH, staff = await _employee(client, db, me["org_id"], "vis7@x.dev")
+    _, other = await _employee(client, db, me["org_id"], "vis7-o@x.dev")
+    t = await _task(client, tenant, title="theirs", assigned_to_id=other.id)
+    assert (await client.get(f"/api/tasks/{t['id']}", headers=SH)).status_code == 404
+    role = (await db.execute(select(Role).where(Role.id == staff.role_id))).scalar_one()
+    role.permissions = {"can_assign_staff": True}
+    await db.commit()
+    assert (await client.get(f"/api/tasks/{t['id']}", headers=SH)).status_code == 200
+    assert (await client.get("/api/tasks/my-day?assignee=all", headers=SH)).status_code == 200
+    role.permissions = {}
+    await db.commit()
+    assert (await client.get(f"/api/tasks/{t['id']}", headers=SH)).status_code == 404
+
+
+@pytest.mark.asyncio
+async def test_overdue_and_commission_stay_inside_the_shop(client, tenant, db):
+    """TEN-4: an id from another shop smuggled into assignee_ids gets no alert and no pay, and
+    another shop's commission rule never applies."""
+    import uuid
+
+    from backend.services.task_alerts import sweep_overdue
+    me = await _me(client, tenant)
+    _, e1 = await _employee(client, db, me["org_id"], "ten4@x.dev")
+    r = await client.post("/api/auth/register", json={
+        "org_name": "Other Co", "name": "Boss", "email": f"boss-{uuid.uuid4().hex[:6]}@x.dev",
+        "password": "pw-test-12345"})
+    H2 = {"Authorization": f"Bearer {r.json()['access_token']}"}
+    other = await _me(client, H2)
+    db.add(CommissionRule(org_id=other["org_id"], name="Other shop", event="task_closed", calc_type="flat", amount=99))
+    await db.commit()
+    now = _working_now()
+    t = await _task(client, tenant, assigned_to_id=e1.id, due_at=_iso(now - timedelta(hours=1)))
+    await db.execute(Task.__table__.update().where(Task.id == t["id"]).values(assignee_ids=[e1.id, other["id"]]))
+    await db.commit()
+    assert await sweep_overdue(db, me["org_id"], now=now) == 1
+    assert len(await _bell(db, e1.id, "task.overdue")) == 1
+    assert await _bell(db, other["id"], "task.overdue") == []
+    await client.patch(f"/api/tasks/{t['id']}", json={"status": "done"}, headers=tenant)
+    assert await _paid(db, e1.id) == 0 and await _paid(db, other["id"]) == 0
+
+
+@pytest.mark.asyncio
+async def test_move_to_today_rolls_back_entirely_on_a_failure(client, tenant, db, monkeypatch):
+    """MTT-5: a failure part-way through the batch changes nothing."""
+    from backend.routers import tasks as tasks_router
+    me = await _me(client, tenant)
+    old = _iso(_local(today_in(TZ) - timedelta(days=2), 10))
+    ids = [(await _task(client, tenant, assigned_to_id=me["id"], due_at=old))["id"] for _ in range(3)]
+    real, calls = tasks_router._feed, []
+
+    async def fail_on_second(*a, **k):
+        calls.append(1)
+        if len(calls) == 2:
+            raise RuntimeError("disk full")
+        return await real(*a, **k)
+    monkeypatch.setattr(tasks_router, "_feed", fail_on_second)
+    r = await client.post("/api/tasks/move-to-today", json={"ids": ids}, headers=tenant)
+    assert r.status_code == 500
+    rows = (await db.execute(select(Task).where(Task.id.in_(ids)).execution_options(populate_existing=True))).scalars().all()
+    assert all(utc_to_wall(r.due_at, TZ).date() == today_in(TZ) - timedelta(days=2) for r in rows)
+    moved = (await db.execute(select(EventFeedItem).where(
+        EventFeedItem.entity_id.in_(ids), EventFeedItem.body.like("%moved to today%")))).scalars().all()
+    assert moved == []
+
+
+@pytest.mark.asyncio
+async def test_overdue_without_a_device_or_with_a_failing_push(client, tenant, db, monkeypatch, caplog):
+    """OVD-7: no subscription still gives a bell row; a push that blows up is logged and the
+    bell row stays."""
+    import logging
+
+    from backend.models import PushSubscription
+    from backend.services import push
+    from backend.services.task_alerts import sweep_overdue
+    me = await _me(client, tenant)
+    _, quiet = await _employee(client, db, me["org_id"], "ovd7a@x.dev")
+    _, broken = await _employee(client, db, me["org_id"], "ovd7b@x.dev")
+    db.add(PushSubscription(employee_id=broken.id, org_id=me["org_id"], endpoint="https://push.example/b",
+                            p256dh="k", auth="a"))
+    await db.commit()
+
+    async def explode(*a, **k):
+        raise RuntimeError("push service down")
+    monkeypatch.setattr(push, "_dispatch_push", explode)
+    now = _working_now()
+    await _task(client, tenant, assignee_ids=[quiet.id, broken.id], due_at=_iso(now - timedelta(hours=1)))
+    with caplog.at_level(logging.ERROR):
+        assert await sweep_overdue(db, me["org_id"], now=now) == 1
+    assert len(await _bell(db, quiet.id, "task.overdue")) == 1
+    assert len(await _bell(db, broken.id, "task.overdue")) == 1
+    assert any("deferred push failed" in r.getMessage() for r in caplog.records)
+
+
+@pytest.mark.asyncio
+async def test_rules_for_one_person_and_percentage_rules(client, tenant, db):
+    """COM-4: a rule tied to one employee pays only them (the mode applies among the people it
+    covers, i.e. them alone, in full); a percentage rule has no basis on a task and pays nothing."""
+    me = await _me(client, tenant)
+    await client.put("/api/payroll/settings", json={"task_commission_mode": "split"}, headers=tenant)
+    _, e1 = await _employee(client, db, me["org_id"], "com4a@x.dev")
+    _, e2 = await _employee(client, db, me["org_id"], "com4b@x.dev")
+    _, e3 = await _employee(client, db, me["org_id"], "com4c@x.dev")
+    db.add(CommissionRule(org_id=me["org_id"], name="e2 bonus", event="task_closed", calc_type="flat",
+                          amount=6, employee_id=e2.id))
+    db.add(CommissionRule(org_id=me["org_id"], name="e3 bonus", event="task_closed", calc_type="flat",
+                          amount=7, employee_id=e3.id))
+    db.add(CommissionRule(org_id=me["org_id"], name="Percent", event="task_closed", calc_type="percent", amount=10))
+    await db.commit()
+    t = await _task(client, tenant, assignee_ids=[e1.id, e2.id])
+    await client.patch(f"/api/tasks/{t['id']}", json={"status": "done"}, headers=tenant)
+    assert await _paid(db, e1.id) == 0
+    assert await _paid(db, e2.id) == pytest.approx(6.0)
+    assert await _paid(db, e3.id) == 0                    # not on the task
+
+
+@pytest.mark.asyncio
+async def test_on_time_term_uses_the_shop_day_for_date_only_dues(client, tenant, db, monkeypatch):
+    """COM-11: a task due "today" (date only) and closed at 23:30 shop time is on time; one due
+    yesterday is late."""
+    me = await _me(client, tenant)
+    db.add(CommissionRule(org_id=me["org_id"], name="On time", event="task_closed", calc_type="flat",
+                          amount=5, term_condition="on_time"))
+    await db.commit()
+    today = today_in(TZ)
+    t_ok = await _task(client, tenant, assigned_to_id=me["id"], due_at=today.isoformat())
+    t_late = await _task(client, tenant, assigned_to_id=me["id"], due_at=(today - timedelta(days=1)).isoformat())
+    _freeze(monkeypatch, _local(today, 23, 30).isoformat())
+    ok = (await client.patch(f"/api/tasks/{t_ok['id']}", json={"status": "done"}, headers=tenant)).json()
+    late = (await client.patch(f"/api/tasks/{t_late['id']}", json={"status": "done"}, headers=tenant)).json()
+    assert ok["completed_on_time"] is True and late["completed_on_time"] is False
+    assert await _paid(db, me["id"]) == pytest.approx(5.0)
+
+
+def test_unknown_zone_is_logged_once(caplog):
+    """DUE-8: an unknown zone falls back to UTC and says so once, not on every request."""
+    import logging
+
+    from backend.services import dates
+    dates._BAD_ZONES.discard("Mars/Olympus-2")
+    with caplog.at_level(logging.WARNING, logger="tekly.dates"):
+        for _ in range(3):
+            assert dates.zone("Mars/Olympus-2") is not None
+            dates.utc_to_wall(datetime(2026, 1, 1), "Mars/Olympus-2")
+    assert sum("Mars/Olympus-2" in r.getMessage() for r in caplog.records) == 1
+
+
+@pytest.mark.asyncio
+async def test_a_closed_branch_does_not_starve_open_ones(client, tenant, db, monkeypatch):
+    """Batching: held tasks at a branch outside its hours don't use up the batch."""
+    from backend.models import Location
+    from backend.services import task_alerts
+    me = await _me(client, tenant)
+    _, e1 = await _employee(client, db, me["org_id"], "starve@x.dev")
+    shut = Location(org_id=me["org_id"], name="Night branch", working_hours={
+        d: {"open": "20:00", "close": "21:00"} for d in ("mon", "tue", "wed", "thu", "fri", "sat", "sun")})
+    db.add(shut)
+    await db.commit()
+    now = _working_now()
+    for i in range(3):     # the oldest overdue tasks are at the closed branch
+        db.add(Task(org_id=me["org_id"], title=f"night {i}", assigned_to_id=e1.id, assignee_ids=[e1.id],
+                    status="todo", location_id=shut.id, due_at=now - timedelta(days=3, minutes=i)))
+    await db.commit()
+    await _task(client, tenant, title="open branch", assigned_to_id=e1.id, due_at=_iso(now - timedelta(hours=1)))
+    monkeypatch.setattr(task_alerts, "OVERDUE_BATCH", 2)
+    assert await task_alerts.sweep_overdue(db, me["org_id"], now=now) == 1
+    assert [n.body.split(" · ")[0] for n in await _bell(db, e1.id, "task.overdue")] == ["open branch"]

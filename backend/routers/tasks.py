@@ -45,6 +45,7 @@ from backend.services.task_visibility import (
     involves_sql,
     own_day_sql,
     sees_all,
+    unassigned_sql,
     visibility_conds,
 )
 
@@ -104,30 +105,51 @@ async def _shop_tz(db: AsyncSession, org_id: str) -> str:
 
 
 async def _parse_due(db: AsyncSession, current: Employee, value) -> Optional[datetime]:
-    """due_at from a request, as the naive UTC instant tasks store. A date alone (YYYY-MM-DD) is
-    the end of that shop day (23:59:59, dates.range_edge, as the reports read a "To" date); a
-    datetime with an offset is converted to UTC; a datetime without one is taken as given (as
-    before). Empty clears it; anything else is a 400."""
+    """due_at from a request, as the naive UTC instant tasks store (docs/ADR-tz-timestamps.md).
+
+    - a date alone (YYYY-MM-DD): the end of that shop day (23:59:59 shop time, dates.range_edge,
+      as the reports read a "To" date);
+    - a datetime with an offset ("…Z", "+05:30"): that instant;
+    - a datetime without an offset: **shop wall time** (what a datetime-local field, and every Go
+      build before the shop-clock fix, sends), converted with that day's offset.
+    Empty clears it; anything else is a 400."""
     if not value:
         return None
     v = str(value).strip()
+    tz = await _shop_tz(db, current.org_id)
     if len(v) == 10:
         parse_date(v, "due_at")   # a clean 400 for a malformed date
-        return range_edge(v, await _shop_tz(db, current.org_id), end=True)
+        return range_edge(v, tz, end=True)
     dt = parse_dt(v, "due_at")
     if dt.tzinfo is not None:
-        dt = dt.astimezone(timezone.utc).replace(tzinfo=None)
-    return dt
+        return dt.astimezone(timezone.utc).replace(tzinfo=None)
+    return wall_to_utc(dt, tz)
 
 
 def _set_due(t: Task, new_due: Optional[datetime]) -> bool:
-    """Change the due time. Moving it later (or clearing it) re-arms the overdue alert: returns
-    True when the caller must also forget who was told (task_alerts.rearm)."""
-    rearm = new_due is None or t.due_at is None or new_due > t.due_at
+    """Change the due time. The overdue alert re-arms only when the task is no longer overdue:
+    the due time is cleared, or moves later AND into the future (OVD-4). Moving it to a time that
+    has already passed keeps the earlier alert, so nobody is pinged again for the same lateness.
+    Returns True when the caller must also forget who was told (task_alerts.rearm)."""
+    rearm = new_due is None or (new_due > now_utc() and (t.due_at is None or new_due > t.due_at))
     if rearm:
         t.overdue_alerted_at = None
     t.due_at = new_due
     return rearm
+
+
+def _pushes(db: AsyncSession) -> list:
+    """Pushes collected during this request (push.notify(deferred=…)); sent by _send_pushes only
+    after the request's final commit, so a push never commits half a request and the blocking
+    web-push call never runs inside it."""
+    return db.info.setdefault("task_pushes", [])
+
+
+async def _send_pushes(db: AsyncSession) -> None:
+    items = db.info.pop("task_pushes", [])
+    if items:
+        from backend.services.push import dispatch_deferred
+        await dispatch_deferred(db, items)
 
 
 @router.get("")
@@ -329,6 +351,7 @@ async def _create_task(data: TaskIn, ids: list, primary, db: AsyncSession, curre
     await _feed(db, current, t, f"Task created: {t.title}")
     await _notify(db, current, t, "assigned", recipients=ids)
     await db.commit()
+    await _send_pushes(db)
     await db.refresh(t)
     return {**_ser(t, await _names(db, current.org_id)),
             "order_number": (await _order_numbers(db, current.org_id, [t.order_id])).get(t.order_id)}
@@ -341,6 +364,7 @@ MY_DAY_BUCKETS = ("catch_up", "today", "upcoming", "later", "done_today")
 @router.get("/my-day")
 async def my_day(
     assignee: str = Query("me", max_length=64),
+    include_pool: bool = False,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
@@ -357,6 +381,10 @@ async def my_day(
       upcoming    open, due in the 7 days after today      by due time, then priority
       later       open, no due date or due after that      newest first
       done_today  status done, completed today             most recent first
+    include_pool=true (with "me" or your own id): also the shop's unassigned tasks, whoever made
+              them, so the screen can offer them to pick up (PATCH assigned_to_id=<me> claims
+              one). Default false. Pool items are the ones with no assigned_to_id and no
+              assignee_ids.
     Each list holds at most 100 items (the GET /api/tasks item shape); `counts` are true totals.
     One query ranks and counts every bucket (window functions); names, job numbers and clients are
     then batch-loaded for all rows at once."""
@@ -368,7 +396,8 @@ async def my_day(
     who = (assignee or "me").strip() or "me"
     cond = [Task.org_id == current.org_id, Task.archived_at.is_(None)]
     if who in ("me", current.id):
-        cond.append(own_day_sql(current.id))
+        cond.append(or_(own_day_sql(current.id), unassigned_sql()) if include_pool
+                    else own_day_sql(current.id))
     elif not await sees_all(db, current):
         raise HTTPException(403, "Only a manager can see someone else's day.")
     elif who != "all":
@@ -425,9 +454,10 @@ async def move_to_today(
     else 422.
 
     Each open task you may change (assigned to you or made by you; any task for a manager) gets
-    today's date on the shop's clock. A task with a time keeps its time of day; one with no due
-    date, or a date-only one (23:59:59), gets the end of today. Moving it later re-arms its overdue
-    alert. Everything else is left alone and listed in `skipped`: ids that are unknown, in another
+    today's date on the shop's clock. A task keeps its time of day when that time is still ahead
+    today; otherwise (already past, no due date, or date-only) it gets the end of today, 23:59:59
+    shop time, so a moved task is never overdue straight away. Its overdue alert re-arms only
+    when the new due time is in the future. Everything else is left alone and listed in `skipped`: ids that are unknown, in another
     shop, hidden from you, not yours to change, done, cancelled or deleted (one list, so a hidden
     task looks exactly like a missing one). All in one transaction. One feed line per task; instead
     of one "Task updated" per task, each other person involved gets a single alert for the move.
@@ -445,13 +475,19 @@ async def move_to_today(
         return {"moved": 0, "skipped": skipped}
     tz = await _shop_tz(db, current.org_id)
     today = today_in(tz)
+    end_of_today = wall_to_utc(datetime.combine(today, END_OF_DAY), tz)
+    now = now_utc()
     from backend.services.notification_rules import task_people
     from backend.services.task_alerts import rearm
     told: dict[str, list[Task]] = {}
     rearmed = []
     for t in rows:
-        clock = utc_to_wall(t.due_at, tz).time() if t.due_at else END_OF_DAY
-        if _set_due(t, wall_to_utc(datetime.combine(today, clock), tz)):
+        new_due = end_of_today
+        if t.due_at:
+            kept = wall_to_utc(datetime.combine(today, utc_to_wall(t.due_at, tz).time()), tz)
+            if kept > now:      # its time of day is still ahead today: keep it
+                new_due = kept
+        if _set_due(t, new_due):
             rearmed.append(t.id)
         await _feed(db, current, t, "Due date moved to today")
         for person in task_people(t) | ({t.created_by_id} if t.created_by_id else set()):
@@ -461,6 +497,7 @@ async def move_to_today(
     for person, tasks in told.items():
         await _notify_moved(db, current, person, tasks)
     await db.commit()
+    await _send_pushes(db)
     return {"moved": len(rows), "skipped": skipped}
 
 
@@ -471,7 +508,7 @@ async def _notify_moved(db: AsyncSession, current: Employee, person: str, tasks:
         if len(tasks) == 1:
             from backend.services import notification_rules as nr
             await nr.notify_task_bell(db, org_id=current.org_id, task=tasks[0], event="changed",
-                                      actor_id=current.id, recipients={person})
+                                      actor_id=current.id, recipients={person}, deferred=_pushes(db))
             return
         from backend.models import Employee as _Emp
         from backend.services.push import notify as push_notify
@@ -481,7 +518,8 @@ async def _notify_moved(db: AsyncSession, current: Employee, person: str, tasks:
             await push_notify(db, org_id=current.org_id, employee_id=person, kind="task.changed",
                               title="Tasks moved to today",
                               body=f"{current.name} moved {len(tasks)} tasks to today",
-                              deep_link=f"/tasks?task={tasks[0].id}", commit=False)
+                              deep_link=f"/tasks?task={tasks[0].id}", commit=False,
+                              deferred=_pushes(db))
     except Exception:  # noqa: BLE001 — logged; the move still succeeds
         log.warning("move-to-today notification failed (employee=%s)", person, exc_info=True)
 
@@ -534,7 +572,8 @@ async def update_task(
     current: Employee = Depends(get_current_employee),
 ):
     t = await _load(db, current, task_id)
-    await _check_may_change(db, current, t)
+    if not _is_self_claim(t, data, current):
+        await _check_may_change(db, current, t)
     if t.archived_at is not None:
         raise HTTPException(409, "This task was deleted. Restore it before changing it.")
     if data.status is not None and data.status not in STATUSES:
@@ -600,6 +639,7 @@ async def update_task(
         await _notify(db, current, t, "changed")
 
     await db.commit()
+    await _send_pushes(db)
     await db.refresh(t)
     return {**_ser(t, await _names(db, current.org_id)),
             "order_number": (await _order_numbers(db, current.org_id, [t.order_id])).get(t.order_id)}
@@ -681,6 +721,7 @@ async def add_comment(
     await _feed(db, current, t, data.body, kind="comment")
     await _notify(db, current, t, "changed")
     await db.commit()
+    await _send_pushes(db)
     return {"ok": True}
 
 
@@ -693,6 +734,23 @@ async def _check_assign(db: AsyncSession, current: Employee, people: list) -> No
     """Giving work to someone else needs can_assign_staff; anyone may take a task themselves."""
     if any(p and p != current.id for p in people) and not await has_perm(db, current, "can_assign_staff"):
         raise HTTPException(403, "Your role can't assign tasks to other people. Assign it to yourself.")
+
+
+def _is_self_claim(t: Task, data, current: Employee) -> bool:
+    """Anyone may pick up an unassigned task (the shop's pool): a PATCH that only makes the caller
+    its assignee, optionally with a status, needs no other right. Everything else still goes
+    through _check_may_change."""
+    from backend.services.notification_rules import task_people
+    if task_people(t) or t.archived_at is not None:
+        return False
+    sent = data.model_dump(exclude_unset=True)
+    if not sent or set(sent) - {"assigned_to_id", "assignee_ids", "status"}:
+        return False
+    if "assigned_to_id" in sent and sent["assigned_to_id"] != current.id:
+        return False
+    if "assignee_ids" in sent and set(sent["assignee_ids"] or []) != {current.id}:
+        return False
+    return "assigned_to_id" in sent or "assignee_ids" in sent
 
 
 async def _check_may_change(db: AsyncSession, current: Employee, t: Task) -> None:
@@ -728,7 +786,7 @@ async def _notify(db: AsyncSession, current: Employee, t: Task, event: str,
     try:
         from backend.services import notification_rules as nr
         await nr.notify_task(db, org_id=current.org_id, task=t, event=event,
-                             actor_id=current.id, recipients=recipients)
+                             actor_id=current.id, recipients=recipients, deferred=_pushes(db))
     except Exception:  # noqa: BLE001
         log.warning("task notification failed (task=%s event=%s)", t.id, event, exc_info=True)
 

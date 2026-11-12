@@ -388,6 +388,7 @@ async def sweep_overdue_tasks() -> None:
     kind task.overdue). Held outside the branch's working hours until the next opening; see
     services/task_alerts.py for the rules."""
     from backend.db.database import AsyncSessionLocal
+    from backend.db.tenancy import set_tenant
     from backend.services.task_alerts import overdue_org_ids, sweep_overdue
 
     now = now_utc()
@@ -396,6 +397,7 @@ async def sweep_overdue_tasks() -> None:
     sent = 0
     for oid in org_ids:
         async with AsyncSessionLocal() as db:   # a session per shop: one failure never stalls the rest
+            set_tenant(db, oid)                 # this session is this shop's only
             try:
                 sent += await sweep_overdue(db, oid, now)
             except Exception:  # noqa: BLE001

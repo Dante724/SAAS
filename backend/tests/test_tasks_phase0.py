@@ -297,8 +297,19 @@ async def test_notification_failure_is_logged_not_swallowed(client, tenant, monk
 
 
 # ── 6. scheduled automation sweep ────────────────────────────────────────────
+@pytest.fixture
+def jobs_use_test_db(db, monkeypatch):
+    """Scheduled jobs open their own sessions through database.AsyncSessionLocal (the app engine).
+    Point it at the test database, so these tests read the same rows whether the run sets only
+    TEST_DATABASE_URL (a Postgres test DB beside a SQLite app DB) or both."""
+    from sqlalchemy.ext.asyncio import async_sessionmaker
+
+    from backend.db import database
+    monkeypatch.setattr(database, "AsyncSessionLocal", async_sessionmaker(db.bind, expire_on_commit=False))
+
+
 @pytest.mark.asyncio
-async def test_scheduled_sweep_fires_once_and_skips_old_backlog(client, tenant, db):
+async def test_scheduled_sweep_fires_once_and_skips_old_backlog(client, tenant, db, jobs_use_test_db):
     from backend.core import scheduled
     org = (await _me(client, tenant))["org_id"]
     rid = (await client.post("/api/automations", json={
@@ -326,7 +337,7 @@ async def test_scheduled_sweep_fires_once_and_skips_old_backlog(client, tenant, 
 
 
 @pytest.mark.asyncio
-async def test_low_stock_fires_once_per_episode(client, tenant, db):
+async def test_low_stock_fires_once_per_episode(client, tenant, db, jobs_use_test_db):
     from backend.core import scheduled
     from backend.models import Part
     org = (await _me(client, tenant))["org_id"]
