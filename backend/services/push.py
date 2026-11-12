@@ -46,8 +46,11 @@ async def notify(db: AsyncSession, *, org_id: str, employee_id: str, kind: str,
     and `respect_prefs` is True, nothing is created or sent and None is returned.
 
     `deferred`: a list to collect the push into instead of sending it now; the caller sends it
-    with dispatch_deferred() after its own commit. Use it inside a transaction or savepoint:
-    sending commits (pruned or touched subscriptions), which would close the caller's transaction.
+    with dispatch_deferred() after its own commit. Prefer it inside a transaction or savepoint:
+    the push then goes out only for work that was actually saved.
+
+    `commit=False` never commits the caller's session (the push is sent now, and the
+    subscription bookkeeping it causes is saved with the caller's own commit).
     """
     if respect_prefs and not await _kind_enabled(db, employee_id, kind):
         return None
@@ -67,7 +70,9 @@ async def notify(db: AsyncSession, *, org_id: str, employee_id: str, kind: str,
     if deferred is not None:
         deferred.append((employee_id, payload))
     else:
-        await _dispatch_push(db, employee_id, payload)
+        # commit=False: the caller owns the transaction (it may still fail and roll back), so the
+        # subscription bookkeeping rides the caller's own commit and is never committed here.
+        await _dispatch_push(db, employee_id, payload, commit=commit)
     return n
 
 
@@ -75,7 +80,7 @@ async def dispatch_deferred(db: AsyncSession, items: list) -> None:
     """Send pushes collected with notify(deferred=...), once the caller has committed."""
     for employee_id, payload in items:
         try:
-            await _dispatch_push(db, employee_id, payload)
+            await _dispatch_push(db, employee_id, payload, commit=True)
         except Exception:  # noqa: BLE001 — a push is best-effort, never the caller's failure
             log.exception("deferred push failed (employee=%s)", employee_id)
 
@@ -89,7 +94,13 @@ async def _kind_enabled(db: AsyncSession, employee_id: str, kind: str) -> bool:
     return True if pref is None else bool(pref.enabled)
 
 
-async def _dispatch_push(db: AsyncSession, employee_id: str, payload: dict) -> None:
+async def _dispatch_push(db: AsyncSession, employee_id: str, payload: dict, *, commit: bool) -> None:
+    """Send to every device of the employee. Sending touches (last_used_at) or prunes (gone
+    endpoints) subscriptions. ``commit`` saves that bookkeeping straight away, and only callers
+    that own the transaction pass True: notify(commit=True), and dispatch_deferred() after the
+    caller's commit. With False the changes stay pending in the caller's session and are saved
+    (or rolled back, harmlessly) with the caller's own work: committing here used to save a
+    caller's half-done transaction (audit NTF-01)."""
     subs = (await db.execute(
         select(PushSubscription).where(PushSubscription.employee_id == employee_id)
     )).scalars().all()
@@ -123,4 +134,5 @@ async def _dispatch_push(db: AsyncSession, employee_id: str, payload: dict) -> N
                 await db.delete(s)
             else:
                 log.warning("push failed (employee=%s): %s", employee_id, e)
-    await db.commit()
+    if commit:
+        await db.commit()
