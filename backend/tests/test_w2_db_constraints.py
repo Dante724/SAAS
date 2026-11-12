@@ -231,7 +231,7 @@ async def test_check_constraints_refuse_bad_signs_and_made_up_values(client, db)
         TimeEntry(org_id=org, employee_id=me, state="whatever", ended_at=datetime(2026, 1, 1)),
         TimeEntry(org_id=org, employee_id=me, category="nap", state="stopped", ended_at=datetime(2026, 1, 1)),
         TimeEntry(org_id=org, employee_id=me, state="stopped", duration_sec=-60, ended_at=datetime(2026, 1, 1)),
-        Membership(**{**ms, "status": "totally_made_up"}),
+        Membership(**{**ms, "status": "made_up"}),
         Membership(**{**ms, "billing": "weekly"}),
         Membership(**{**ms, "price": -1}),
         StockTransfer(org_id=org, transfer_number="T-9", from_location_id=loc, to_location_id=loc, status="lost"),
