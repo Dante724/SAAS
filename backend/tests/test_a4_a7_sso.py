@@ -73,6 +73,7 @@ async def test_sso_config_discovery_and_authorize(client, tenant, monkeypatch):
     assert created.status_code == 201
     assert created.json()["client_secret"] == "***"        # secret redacted in responses
     cid = created.json()["id"]
+    await _prove_domain(client, tenant, created.json(), monkeypatch)   # SEC-07
 
     # discovery by email domain (unauth)
     disc = (await client.get("/api/sso/discover?email=jane@acme.test")).json()
@@ -88,6 +89,18 @@ async def test_sso_config_discovery_and_authorize(client, tenant, monkeypatch):
 
 
 # ── SSO hardening (security phase 4) ─────────────────────────────────────────
+async def _prove_domain(client, h, conn, monkeypatch):
+    """Publish the connection's TXT token (faked DNS) and verify it (audit SEC-07)."""
+    from backend.routers import sso
+    value = conn["domain_verification"]["value"]
+
+    async def fake(domain):
+        return [value] if domain == conn["email_domain"] else []
+    monkeypatch.setattr(sso, "lookup_txt", fake)
+    r = await client.post(f"/api/sso/config/{conn['id']}/verify-domain", headers=h)
+    assert r.status_code == 200, r.text
+
+
 async def _register(client, email):
     r = await client.post("/api/auth/register", json={
         "org_name": "Other shop", "name": "Other", "email": email, "password": "S3cure-pass-123!"})
@@ -96,12 +109,13 @@ async def _register(client, email):
 
 
 @pytest.mark.asyncio
-async def test_sso_rejects_public_and_already_claimed_domains(client, tenant):
+async def test_sso_rejects_public_and_already_claimed_domains(client, tenant, monkeypatch):
     r = await client.post("/api/sso/config", json={"email_domain": "gmail.com", "enabled": True}, headers=tenant)
     assert r.status_code == 422
     r = await client.post("/api/sso/config", json={"email_domain": "claimed.test", "enabled": True,
                                                    "issuer": "https://idp.claimed.test"}, headers=tenant)
     assert r.status_code == 201, r.text
+    await _prove_domain(client, tenant, r.json(), monkeypatch)      # only a proven claim blocks (SEC-07)
     other = await _register(client, "owner@elsewhere.test")
     r = await client.post("/api/sso/config", json={"email_domain": "Claimed.TEST", "enabled": True}, headers=other)
     assert r.status_code == 409
@@ -113,8 +127,11 @@ async def test_sso_refuses_plain_http_idp_and_foreign_redirects(client, tenant, 
     monkeypatch.setattr(settings, "PUBLIC_BASE_URL", "https://app.example")
     r = await client.post("/api/sso/config", json={"issuer": "http://idp.insecure.test"}, headers=tenant)
     assert r.status_code == 422
-    cid = (await client.post("/api/sso/config", json={
-        "issuer": "https://idp.redir.test", "client_id": "c", "enabled": True}, headers=tenant)).json()["id"]
+    conn = (await client.post("/api/sso/config", json={
+        "issuer": "https://idp.redir.test", "client_id": "c", "enabled": True,
+        "email_domain": "redir.test"}, headers=tenant)).json()
+    cid = conn["id"]
+    await _prove_domain(client, tenant, conn, monkeypatch)      # only a proven domain routes (SEC-07)
     r = await client.get(f"/api/sso/authorize/{cid}?redirect_uri=https://evil.example/steal")
     assert r.status_code == 422
     ok = (await client.get(f"/api/sso/authorize/{cid}?redirect_uri=https://app.example/sso/cb")).json()

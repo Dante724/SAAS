@@ -3706,6 +3706,10 @@ class SsoConnection(OrgScoped, Base):
     client_secret: Mapped[Optional[str]] = mapped_column(String(300))
     metadata_url: Mapped[Optional[str]] = mapped_column(String(400))
     email_domain: Mapped[Optional[str]] = mapped_column(String(120))     # auto-route logins from this domain
+    # Audit SEC-07: the domain routes logins only once the shop proves it owns it, by publishing
+    # "tekly-sso-verification=<domain_token>" as a DNS TXT record (routers/sso.verify_domain).
+    domain_token: Mapped[Optional[str]] = mapped_column(String(64))
+    domain_verified_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     enabled: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 

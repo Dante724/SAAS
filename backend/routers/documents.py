@@ -1883,7 +1883,7 @@ class AssetLabelIn(BaseModel):
 async def render_asset_labels(
     data: AssetLabelIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_asset_info")),
 ):
     """144ic — print anything: render a label template against selected ASSETS, one label
     per physical page at exact size (the asset equivalent of product price-tag bulk print)."""
@@ -2265,7 +2265,7 @@ async def auto_print_sale(
 async def render_client_labels(
     data: ClientLabelIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_view_client_info")),
 ):
     """144ie — print anything: render a template against selected CLIENTS, one per physical
     page at exact size (contact cards, loyalty tags, mailing labels)."""

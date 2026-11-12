@@ -2168,6 +2168,8 @@ function SsoSettings() {
     catch (e: any) { alertDialog(e.message || "Failed"); } finally { setBusy(false); }
   }
   async function del(id: string) { try { await api.del(`/sso/config/${id}`); reload(); } catch (e: any) { alertDialog(e.message); } }
+  // Audit SEC-07: a domain signs nobody in until a DNS TXT record proves the shop owns it.
+  async function verify(id: string) { try { await api.post(`/sso/config/${id}/verify-domain`, {}); reload(); } catch (e: any) { alertDialog(e.message); } }
   const inp = (k: string, label: string, extra: { placeholder?: string; type?: string } = {}) => (
     <div><label htmlFor={`sso-${k}`} className={lbl}>{label}</label><input id={`sso-${k}`} type={extra.type || "text"} value={f[k]} onChange={(e) => setF({ ...f, [k]: e.target.value })} placeholder={extra.placeholder} className={field} /></div>
   );
@@ -2202,8 +2204,16 @@ function SsoSettings() {
             <span className="font-medium text-ink-primary">{s.display_name}</span>
             {s.email_domain && <span className="text-xs text-ink-tertiary">@{s.email_domain}</span>}
             <div className="flex-1" />
+            {s.domain_verification && <Badge tone={s.domain_verification.verified ? "success" : "warning"} size="sm">{s.domain_verification.verified ? "Domain verified" : "Domain not verified"}</Badge>}
             <Badge tone={s.enabled ? "success" : "neutral"} size="sm">{s.enabled ? "Enabled" : "Disabled"}</Badge>
             <button type="button" aria-label="Delete" onClick={() => del(s.id)} className="w-8 h-8 grid place-items-center rounded-lg text-ink-tertiary hover:text-rose-600 hover:bg-rose-50"><M n="delete" c="text-sm" /></button>
+          </div>
+        ))}
+        {(items || []).filter((s) => s.domain_verification && !s.domain_verification.verified).map((s) => (
+          <div key={`${s.id}-dns`} className="px-5 py-3 space-y-2 text-xs text-ink-secondary">
+            <div>To prove you own {s.email_domain}, add this TXT record at your DNS provider, then check it. Until then nobody is sent to this sign-in.</div>
+            <div className="font-mono break-all text-ink-primary">{s.domain_verification.value}</div>
+            <button type="button" onClick={() => verify(s.id)} className={btnSecondary}>Check DNS record</button>
           </div>
         ))}
         {items && items.length === 0 && <div className="px-5 py-3 text-xs text-ink-tertiary">No SSO connections. Staff sign in with email and password until one is enabled.</div>}

@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.services.dates import parse_dt, parse_wall_dt
 from backend.models import Appointment, Client, Service, Employee
-from backend.services.auth import get_current_employee
+from backend.services.auth import get_current_employee, require_perm
 
 router = APIRouter(prefix="/api/appointments", tags=["appointments"])
 
@@ -69,7 +69,7 @@ class AppointmentIn(BaseModel):
 async def create_appointment(
     data: AppointmentIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_tickets")),
 ):
     start = await parse_wall_dt(db, current.org_id, current.location_id, data.scheduled_for, "scheduled_for")
     dur = data.duration_min
@@ -127,7 +127,7 @@ class AppointmentStatusIn(BaseModel):
 async def update_appointment(
     bid: str, data: AppointmentStatusIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_tickets")),
 ):
     b = (await db.execute(select(Appointment).where(
         Appointment.id == bid, Appointment.org_id == current.org_id))).scalar_one_or_none()

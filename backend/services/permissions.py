@@ -31,7 +31,7 @@ CATALOG = {
         ("can_transfer_tickets", "Transfer tickets"),
         ("can_delete_tickets", "Delete tickets"),
         ("can_assign_staff", "Assign managers and technicians"),
-        ("can_create_clients", "Create contacts (incl. from outbound calls)"),
+        ("can_create_clients", "Create and edit contacts (incl. from outbound calls)"),
         ("can_view_client_info", "View the client info"),
         ("can_view_asset_info", "View the asset info"),
         ("can_view_item_prices", "View prices of labors, services, products"),
