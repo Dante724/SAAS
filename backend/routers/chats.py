@@ -145,7 +145,7 @@ class ThreadIn(BaseModel):
 async def create_thread(
     data: ThreadIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_reply_customer")),
 ):
     client = await cs.link_client(db, current.org_id, data.contact_phone)
     t = ChatThread(org_id=current.org_id, channel=data.channel,
@@ -186,7 +186,7 @@ async def _transport(db: AsyncSession, org_id: str, t: ChatThread, body: str) ->
 async def send_message(
     tid: str, data: SendIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_reply_customer")),
 ):
     t = await _load(db, current.org_id, tid)
     if not data.body.strip():
@@ -210,7 +210,7 @@ async def send_message(
 async def receive_inbound(
     tid: str, data: SendIn,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_reply_customer")),
 ):
     """Log an inbound message by hand (a customer replied on another device, a demo)."""
     t = await _load(db, current.org_id, tid)
@@ -406,7 +406,7 @@ async def generic_inbound(org_id: str, data: InboundIn, request: Request,
 async def thread_to_lead(
     tid: str,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_tickets")),
 ):
     """Convert the conversation into an Inquiry on the leads board (Orderry)."""
     t = (await db.execute(select(ChatThread).where(
@@ -454,6 +454,9 @@ async def thread_to_order(
         raise HTTPException(404, "Thread not found")
     if t.order_id:
         raise HTTPException(409, "This chat already has a work order")
+    # Audit SEC-06: the same right as creating that record from the job screen.
+    from backend.services.auth import assert_perm
+    await assert_perm(db, current, "can_create_estimates" if is_estimate else "can_create_tickets")
     if not is_estimate:
         from backend.services.billing import assert_can_add_job
         await assert_can_add_job(db, current.org_id)

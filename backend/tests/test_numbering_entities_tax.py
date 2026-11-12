@@ -126,12 +126,14 @@ async def test_tax_exception_precedence(client, tenant, db):
     await client.put("/api/settings/tax-rules",
                      json={"doc_family": "tickets_sales", "tax_ids": [base["id"]]}, headers=tenant)
 
-    # category exemption for category "cat1"
-    await client.post("/api/settings/tax-exceptions",
-                      json={"doc_family": "tickets_sales", "target_type": "category",
-                            "target_id": "cat1", "exempt": True}, headers=tenant)
+    # category exemption for a category of this shop (audit SEC-08 refuses made-up ids)
+    cat1 = (await client.post("/api/catalog/categories", json={"name": "Cat 1"}, headers=tenant)).json()["id"]
+    r = await client.post("/api/settings/tax-exceptions",
+                          json={"doc_family": "tickets_sales", "target_type": "category",
+                                "target_id": cat1, "exempt": True}, headers=tenant)
+    assert r.status_code == 201, r.text
     exempt = await resolve_taxes(db, me["org_id"], doc_family="tickets_sales",
-                                 net_amount=100.0, category_id="cat1")
+                                 net_amount=100.0, category_id=cat1)
     assert exempt["exempt"] and exempt["tax_total"] == 0.0
 
     # a product with no exception still gets the default stack

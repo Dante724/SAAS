@@ -1120,5 +1120,49 @@ async def read_log(org_id: Optional[str] = None, limit: int = 100, before_id: Op
             "chain_ok": await admin_log.verify_chain(db)}
 
 
+# ── SSO email domains (audit SEC-07) ─────────────────────────────────────────
+# A shop proves an SSO email domain with a DNS TXT record (routers/sso.py). When the wrong shop
+# holds one (a record left behind after a domain changed hands, a dispute), support releases it
+# here so the real owner can claim and prove it. Same right as changing a shop's owner or email.
+def _domain(raw: str) -> str:
+    return (raw or "").strip().lower().lstrip("@")
+
+
+@private.get("/sso/domains/{domain}")
+async def sso_domain_claims(domain: str, ctx: AdminCtx = Depends(require_admin_perm("change_owner")),
+                            db: AsyncSession = Depends(get_db)):
+    from backend.models import SsoConnection
+    rows = (await db.execute(select(SsoConnection).where(SsoConnection.email_domain == _domain(domain))
+                             .order_by(SsoConnection.created_at)
+                             .execution_options(skip_tenant_filter=True))).scalars().all()
+    return {"items": [{"id": c.id, "org_id": c.org_id, "display_name": c.display_name, "enabled": c.enabled,
+                       "verified": c.domain_verified_at is not None,
+                       "verified_at": c.domain_verified_at.isoformat() if c.domain_verified_at else None}
+                      for c in rows]}
+
+
+class ReleaseDomainIn(BaseModel):
+    reason: str = Field(min_length=3, max_length=500)
+
+
+@private.post("/sso/domains/{domain}/release")
+async def release_sso_domain(domain: str, data: ReleaseDomainIn,
+                             ctx: AdminCtx = Depends(require_admin_perm("change_owner")),
+                             db: AsyncSession = Depends(get_db)):
+    """Take a domain off every shop's SSO connections that hold it. The connections stay (their
+    IdP settings too) but route nobody until a shop claims and proves the domain again."""
+    from backend.models import SsoConnection
+    d = _domain(domain)
+    rows = (await db.execute(select(SsoConnection).where(SsoConnection.email_domain == d)
+                             .execution_options(skip_tenant_filter=True))).scalars().all()
+    for c in rows:
+        await admin_log.write(db, admin=ctx.admin, action="sso_domain_release", org_id=c.org_id,
+                              before={"email_domain": d, "verified": c.domain_verified_at is not None},
+                              after={"email_domain": None}, reason=data.reason, ip=ctx.ip)
+        c.email_domain, c.domain_token, c.domain_verified_at = None, None, None
+    await db.commit()
+    return {"ok": True, "released": len(rows)}
+
+
 router.include_router(public)
 router.include_router(private)

@@ -263,7 +263,7 @@ async def list_cards(db: AsyncSession = Depends(get_db), current: Employee = Dep
 
 @router.post("/cards", status_code=201)
 async def create_card(data: CardIn, db: AsyncSession = Depends(get_db),
-                      current: Employee = Depends(get_current_employee)):
+                      current: Employee = Depends(require_perm("can_view_reports"))):
     if data.subject not in SUBJECTS:
         raise HTTPException(400, "Unknown subject")
     count = (await db.execute(select(func.count()).select_from(InsightCard)
@@ -276,7 +276,7 @@ async def create_card(data: CardIn, db: AsyncSession = Depends(get_db),
 
 @router.delete("/cards/{cid}")
 async def delete_card(cid: str, db: AsyncSession = Depends(get_db),
-                      current: Employee = Depends(get_current_employee)):
+                      current: Employee = Depends(require_perm("can_view_reports"))):
     c = (await db.execute(select(InsightCard).where(InsightCard.id == cid, InsightCard.org_id == current.org_id))).scalar_one_or_none()
     if not c:
         raise HTTPException(404, "Card not found")
@@ -286,7 +286,7 @@ async def delete_card(cid: str, db: AsyncSession = Depends(get_db),
 
 @router.patch("/cards/reorder")
 async def reorder_cards(data: ReorderIn, db: AsyncSession = Depends(get_db),
-                        current: Employee = Depends(get_current_employee)):
+                        current: Employee = Depends(require_perm("can_view_reports"))):
     rows = {c.id: c for c in (await db.execute(select(InsightCard).where(InsightCard.org_id == current.org_id))).scalars().all()}
     for idx, cid in enumerate(data.ordered_ids):
         if cid in rows:

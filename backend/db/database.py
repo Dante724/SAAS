@@ -89,6 +89,11 @@ from backend.db import (
 class Base(DeclarativeBase):
     metadata = MetaData(naming_convention=_NAMING_CONVENTION)
 
+
+# Audit SEC-08: the flush-time check on soft (FK-less) id columns, registered with every session.
+from backend.db import soft_refs as _soft_refs  # noqa: E402,F401
+
+
 async def insert_ignore(db: AsyncSession, model, **values) -> bool:
     """INSERT … ON CONFLICT DO NOTHING, for seeds that several requests can run at once (a new
     shop's first page load, Settings › Industry & assets). Two seeds can both see "row missing"

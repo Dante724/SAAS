@@ -185,7 +185,7 @@ async def create_lead(
     response: Response,
     idempotency_key: Optional[str] = Header(None, max_length=64),
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_tickets")),
 ):
     lead, created = await svc.create_lead(db, current.org_id, data.model_dump(), actor=current,
                                           idempotency_key=idempotency_key or data.idempotency_key)
@@ -224,7 +224,7 @@ async def update_lead(
     lead_id: str,
     data: LeadUpdate,
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_create_tickets")),
 ):
     lead = await _get(db, current, lead_id)
     lead = await svc.update_lead(db, current.org_id, lead, data.model_dump(exclude_unset=True), actor=current)

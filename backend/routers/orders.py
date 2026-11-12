@@ -3484,6 +3484,7 @@ async def ensure_public_link(
     )).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)   # SEC-06: a job the caller may act on
     if not order.public_token:
         order.public_token = await unique_public_token(db)   # 144cu — collision-checked
         await db.commit()
@@ -3502,6 +3503,7 @@ async def rotate_public_link(
         select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)   # SEC-06: a job the caller may act on
     order.public_token = await unique_public_token(db)   # 144cu — collision-checked
     await db.commit()
     return {"token": order.public_token, "path": f"/track/{order.public_token}", "rotated": True}
@@ -3518,6 +3520,7 @@ async def revoke_public_link(
         select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)   # SEC-06: a job the caller may act on
     order.public_token = None
     await db.commit()
     return {"ok": True, "revoked": True}
@@ -4302,6 +4305,8 @@ async def set_order_code(
         Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    await _guard_order_access(db, current, order)   # SEC-06: a job the caller may act on,
+    await _guard_editable(db, order, current)          # and one still open to edits
     want = (data.barcode or "").strip()[:100]
     if not want:
         order.barcode = await unique_order_code(db)   # never leave a WO codeless

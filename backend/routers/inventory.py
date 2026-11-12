@@ -2579,7 +2579,7 @@ async def create_pos_from_forecast(
 @router.post("/reorder-digest")
 async def reorder_digest(
     db: AsyncSession = Depends(get_db),
-    current: Employee = Depends(get_current_employee),
+    current: Employee = Depends(require_perm("can_manage_inventory")),
 ):
     """Push a weekly 'what to reorder' digest to inventory managers' notification feed.
     Intended to be called on a schedule (e.g. weekly), like /automations/sweep. No-op
