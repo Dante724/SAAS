@@ -8,13 +8,14 @@ import type { ReactNode } from "react";
 // label (a long row scrolls sideways with no visible scrollbar), so switching never moves anything.
 export type TabItem<T extends string> = { id: T; label: ReactNode; count?: number | null; icon?: ReactNode; disabled?: boolean; title?: string };
 
-export default function Tabs<T extends string>({ tabs, value, onChange, look = "underline", label, className = "" }: {
+export default function Tabs<T extends string>({ tabs, value, onChange, look = "underline", label, className = "", itemClassName = "" }: {
   tabs: TabItem<T>[];
   value: T;
   onChange: (id: T) => void;
   look?: "underline" | "segmented" | "chips";
   label: string;          // accessible name of the group, e.g. "Finance sections"
   className?: string;
+  itemClassName?: string; // added to every tab (e.g. a 32px segment inside a 36px toolbar)
 }) {
   const row = look === "underline" ? "flex gap-6 overflow-x-auto no-scrollbar border-b border-slate-200"
     : look === "segmented" ? "inline-flex rounded-xl bg-slate-100 p-1 gap-0.5 max-w-full overflow-x-auto no-scrollbar"
@@ -32,7 +33,7 @@ export default function Tabs<T extends string>({ tabs, value, onChange, look = "
         return (
           <button key={t.id} type="button" disabled={t.disabled} title={t.title} onClick={() => onChange(t.id)}
             {...(isTabs ? { role: "tab", "aria-selected": on } : { "aria-pressed": on })}
-            className={`hit44 shrink-0 inline-flex items-center gap-1.5 whitespace-nowrap font-semibold transition-colors disabled:opacity-70 disabled:cursor-not-allowed ${cls}`}>
+            className={`hit44 shrink-0 inline-flex items-center gap-1.5 whitespace-nowrap font-semibold transition-colors disabled:opacity-70 disabled:cursor-not-allowed ${cls} ${itemClassName}`}>
             {t.icon}{t.label}
             {t.count != null && <span className={`tabular-nums font-medium ${on ? "text-primary" : "text-ink-tertiary"}`}>{t.count}</span>}
           </button>
