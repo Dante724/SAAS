@@ -45,6 +45,17 @@ def _tier(points: float) -> str:
     return "standard"
 
 
+async def _editable_order(db, current, order_id) -> Order:
+    """The job a discount goes on, locked, and only while it can still be edited: a closed job
+    takes no new discount lines without "Edit the closed ticket", a locked status none at all
+    (audit Q20 — these three paths skipped the guard every line edit has)."""
+    from backend.routers.orders import _guard_editable, _guard_order_access
+    order = await _order_or_404(db, current.org_id, order_id, lock=True)
+    await _guard_order_access(db, current, order)
+    await _guard_editable(db, order, current)
+    return order
+
+
 async def _order_or_404(db, org_id, order_id, *, lock: bool = False) -> Order:
     q = select(Order).where(Order.id == order_id, Order.org_id == org_id)
     if lock:
@@ -282,7 +293,7 @@ async def redeem_giftcard(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_set_discount")),
 ):
-    order = await _order_or_404(db, current.org_id, order_id, lock=True)
+    order = await _editable_order(db, current, order_id)
     g = (await db.execute(select(GiftCard).where(
         GiftCard.org_id == current.org_id, GiftCard.code == data.code.strip().upper()))).scalar_one_or_none()
     if not g or not g.active:
@@ -441,7 +452,7 @@ async def apply_coupon(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_set_discount")),
 ):
-    order = await _order_or_404(db, current.org_id, order_id, lock=True)
+    order = await _editable_order(db, current, order_id)
     # The coupon reads the job's lines and balance, then adds lines and recomputes the total:
     # hold the job's write lock (SQLite ignores FOR UPDATE) so concurrent edits wait for it.
     from backend.services.invoice_money import lock_order
@@ -536,7 +547,7 @@ async def redeem_loyalty(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_set_discount")),
 ):
-    order = await _order_or_404(db, current.org_id, order_id, lock=True)
+    order = await _editable_order(db, current, order_id)
     if not order.client_id:
         raise HTTPException(400, "Order has no client to redeem points for")
     org = (await db.execute(select(Organisation).where(Organisation.id == current.org_id))).scalar_one()

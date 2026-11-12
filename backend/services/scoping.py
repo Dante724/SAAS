@@ -62,9 +62,9 @@ def scope_orders(q, role: Optional[Role], current: Employee):
         q = q.where(or_(Order.assigned_to_id == current.id,
                         Order.assigned_to_id.is_(None)))
     if (role.location_scope or "all") == "selected":
-        allowed = _ids(role.location_ids)
-        if allowed:
-            q = q.where(Order.location_id.in_(allowed))
+        # SEC-03: "selected" with none picked means no locations, not all of them (the write
+        # checks, check_location_access, already read it that way).
+        q = q.where(Order.location_id.in_(_ids(role.location_ids)))
     # A5: per-status VIEW ACL — hide orders whose status this role may not see.
     hidden = _ids(getattr(role, "hidden_status_keys", None))
     if hidden:
@@ -159,10 +159,8 @@ async def can_view_order(db, current: Employee, order: Order) -> bool:
     if (role.order_scope or "all") == "own":
         if order.assigned_to_id not in (current.id, None):
             return False
-    if (role.location_scope or "all") == "selected":
-        allowed = _ids(role.location_ids)
-        if allowed and order.location_id not in allowed:
-            return False
+    if (role.location_scope or "all") == "selected" and order.location_id not in _ids(role.location_ids):
+        return False   # SEC-03: an empty selection allows nothing
     # same per-status VIEW ACL scope_orders applies to lists
     if order.status in _ids(getattr(role, "hidden_status_keys", None)):
         return False

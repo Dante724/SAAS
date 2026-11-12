@@ -293,7 +293,15 @@ async def _move_for_customer(db: AsyncSession, order: "Order", target, note: str
                                f"Moved to '{target.name}' for the customer without the usual check: {exc.detail}")
         await db.flush()
         if getattr(target, "converts_to_order", False) and order.is_estimate and not order.converted_order_id:
-            return await _convert_estimate(db, actor, order)
+            try:
+                return await _convert_estimate(db, actor, order)
+            except HTTPException as conv:
+                # Q27: e.g. the asset is still on an open job. The customer's decision stands; the
+                # shop converts it once the other job is closed.
+                await log_system_event(db, order.org_id, "order", order.id,
+                                       f"Accepted, but not converted to a work order: {conv.detail}")
+                await db.flush()
+                return None
         return None
 
 
