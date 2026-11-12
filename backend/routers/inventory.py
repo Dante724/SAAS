@@ -1303,11 +1303,47 @@ class POIn(BaseModel):
 
 
 def _po_charges(po: PurchaseOrder) -> list:
-    return [c for c in (po.charges or []) if isinstance(c, dict)]
+    from backend.services.po_charges import charge_rows
+    return charge_rows(po.charges)
 
 
 def _po_charges_total(po: PurchaseOrder) -> float:
-    return q2(sum(float(c.get("amount") or 0) for c in _po_charges(po)))
+    from backend.services.po_charges import charges_total
+    return charges_total(po.charges)
+
+
+def _po_charges_owed(po: PurchaseOrder, lines) -> float:
+    """What of the PO's charges is in the supplier balance (bought on credit; the supplier bills
+    them): capitalised, the freight already put into received units (it rode in the received
+    cost); not capitalised, the whole charges once fully received (receive_po posts them then)."""
+    if not po.on_credit:
+        return 0.0
+    if po.charges_to_cost:
+        return q2(po.freight_capitalised or 0)
+    fully = bool(lines) and all((pl.qty_received or 0) >= (pl.qty_ordered or 0) for pl in lines)
+    return _po_charges_total(po) if fully else 0.0
+
+
+async def _post_charges_owed(db, current, po: PurchaseOrder, lines, before: float) -> None:
+    """A changed freight bill moves what we owe the supplier by the difference (one write-path,
+    services/ledger.adjust_supplier_ap, so the contact ledger moves with it)."""
+    delta = q2(_po_charges_owed(po, lines) - before)
+    if abs(delta) < 0.005:
+        return
+    sup = (await db.execute(select(Supplier).where(
+        Supplier.id == po.supplier_id, Supplier.org_id == current.org_id))).scalar_one_or_none()
+    if sup:
+        from backend.services.ledger import adjust_supplier_ap
+        await adjust_supplier_ap(db, current.org_id, sup, delta, entry_type="posting",
+                                 note=f"PO {po.po_number} charges revised", ref_type="po",
+                                 ref_id=po.id, created_by_id=current.id)
+
+
+def _po_retotal(po: PurchaseOrder, lines) -> None:
+    """A PO's total is its line subtotal plus its charges; every path that changes either calls
+    this (the nightly reconcile's ``po`` check re-derives the same sum)."""
+    subtotal = sum((l.qty_ordered or 0) * (l.unit_cost or 0) for l in lines)
+    po.total = q2(subtotal + _po_charges_total(po))
 
 
 # ── 144ar — landed-cost allocation basis ────────────────────────────────────
@@ -1688,8 +1724,7 @@ async def edit_po(
 
     # recompute total = line subtotal + charges
     lines = (await db.execute(select(POLine).where(POLine.po_id == po.id))).scalars().all()
-    subtotal = sum((l.qty_ordered or 0) * (l.unit_cost or 0) for l in lines)
-    po.total = q2(subtotal + _po_charges_total(po))
+    _po_retotal(po, lines)
     await db.commit()
 
     supplier = (await db.execute(select(Supplier).where(Supplier.id == po.supplier_id))).scalar_one_or_none()
@@ -1973,6 +2008,7 @@ async def recost_po(
     po_lines = (await db.execute(select(POLine).where(POLine.po_id == po_id)
                                  .with_for_update())).scalars().all()
     await stock_posting.lock_parts(db, [pl.part_id for pl in po_lines])   # id order: no deadlock
+    owed_before = _po_charges_owed(po, po_lines)
     if data.charges is not None:
         po.charges = [{"label": (c.label or "Charge").strip(), "amount": q2(float(c.amount or 0))}
                       for c in (data.charges or []) if (c.amount or 0) or (c.label or "").strip()]
@@ -1980,9 +2016,13 @@ async def recost_po(
         po.charges_to_cost = data.charges_to_cost
     if data.alloc_basis is not None:
         po.alloc_basis = data.alloc_basis if data.alloc_basis in _ALLOC_BASES else "value"
+    _po_retotal(po, po_lines)            # new charges change what the PO is worth (it went stale)
 
     charges_total = _po_charges_total(po)
-    if not (po.charges_to_cost and charges_total > 0):
+    # A capitalised bill that is lowered to nothing still has freight sitting in stock (and in what
+    # we owe): it goes on to the recost below, which takes it back out (a negative delta).
+    if not (po.charges_to_cost and (charges_total > 0 or abs(float(po.freight_capitalised or 0)) >= 0.005)):
+        await _post_charges_owed(db, current, po, po_lines, owed_before)
         await db.commit()
         return {"ok": True, "applied": 0.0, "note": "No capitalised charges to recost"}
 
@@ -2006,12 +2046,22 @@ async def recost_po(
 
     delta_total = q2(target - (po.freight_capitalised or 0))
     if abs(delta_total) < 0.005:
+        await _post_charges_owed(db, current, po, po_lines, owed_before)
         await db.commit()
         return {"ok": True, "applied": 0.0, "note": "Already up to date"}
 
     # QA fix D: the freight belongs to this PO's units only. What lands on stock is the share of its
     # units still on hand; the share of units already sold / used is sunk COGS (`expensed`). Both
     # count as accounted for, so the same bill recosted again applies nothing.
+    if not target:
+        # The bill went to nothing: take the capitalised freight back out of the same units, spread
+        # by the same basis (a unit charge stands in for the bill to get each part's share).
+        ref = _freight_per_unit(po_lines, 1.0, basis, weights)
+        per_part_target = {}
+        for pl in po_lines:
+            if (pl.qty_received or 0) > 0:
+                per_part_target[pl.part_id] = per_part_target.get(pl.part_id, 0.0) + ref.get(pl.id, 0.0) * pl.qty_received
+        target = sum(per_part_target.values())
     applied = expensed = 0.0
     scale = (delta_total / target) if target else 0
     for part_id, tpart in sorted(per_part_target.items()):      # products locked above
@@ -2025,6 +2075,7 @@ async def recost_po(
         applied += res["applied"]
         expensed += res["expensed"]
     po.freight_capitalised = q2((po.freight_capitalised or 0) + delta_total)
+    await _post_charges_owed(db, current, po, po_lines, owed_before)
     if abs(expensed) >= 0.005:
         # The freight on units already sold or used can't go into stock any more — it's cost of goods
         # sold now. Record it as a (non-cash) business expense so it reaches profit instead of vanishing.

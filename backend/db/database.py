@@ -81,6 +81,7 @@ install_slow_query_log()
 
 from backend.db import (
     actors,  # noqa: E402,F401 — records who discounted, refunded, closed a drawer
+    soft_void,  # noqa: E402,F401 — voided payments stay on record but out of every read (DB-11)
     tenancy,  # noqa: E402,F401 — registers the cross-tenant reference guard
 )
 
