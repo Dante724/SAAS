@@ -598,10 +598,16 @@ async def update_task(
         t.assignee_ids = ids
         await _feed(db, current, t, "Assignees updated")
     elif data.assigned_to_id is not None:
-        # single-assignee edit keeps the list in step
-        cur = list(t.assignee_ids or [])
-        if data.assigned_to_id and data.assigned_to_id not in cur:
-            t.assignee_ids = [data.assigned_to_id] + cur
+        # Single-owner edit (the work order's task list): the new owner REPLACES the old one in
+        # the list too. Every id in assignee_ids sees the task, gets its overdue alerts and shares
+        # its commission, so leaving the old owner there would keep paying and pinging them.
+        # Clearing the owner promotes the next assignee, as the assignee_ids branch above does.
+        cur = [p for p in (t.assignee_ids or []) if p != prev_assignee]
+        if data.assigned_to_id:
+            t.assignee_ids = [data.assigned_to_id] + [p for p in cur if p != data.assigned_to_id]
+        else:
+            t.assignee_ids = cur
+            t.assigned_to_id = cur[0] if cur else None
     if data.due_at is not None and _set_due(t, await _parse_due(db, current, data.due_at)):
         from backend.services.task_alerts import rearm
         await rearm(db, current.org_id, [t.id])
