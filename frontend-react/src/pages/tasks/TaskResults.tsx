@@ -8,7 +8,7 @@ import { Badge } from "../../components/Card";
 import { Avatar } from "../orders/look";
 import { api } from "../../api/client";
 import { fmtShop, toShopWall } from "../../lib/shopTime";
-import { type Task, applyFilters, isPool, normStatus, normPriority, PRIORITY_LABEL, isAuto, dueClock, fmtClock, AUTO_LABEL, AUTO_HINT } from "./taskModel";
+import { type Task, applyFilters, normStatus, normPriority, PRIORITY_LABEL, isAuto, dueClock, fmtClock, AUTO_LABEL, AUTO_HINT } from "./taskModel";
 
 // One flat list of tasks from GET /tasks: what a search finds across the whole shop (open, done
 // and cancelled, so history is one search away), and the stand-in for My day on a server that
@@ -19,7 +19,8 @@ const PAGE = 50;
 
 export default function TaskResults({ q, whose, meId, tz, onOpen, onClear, flash, onChanged, onPaged, reloadKey, note }: {
   q: string;                         // the search ("" = every task for `whose`)
-  whose: string;                     // used only without a search: "me", "all", "pool" or an employee id
+  whose: string;                     // used only without a search: "me", "all" or an employee id (the
+                                     // list API can't ask for unassigned tasks: Up for grabs comes from My day)
   meId?: string;
   tz: string | null;
   onOpen: (t: Task) => void;
@@ -34,6 +35,7 @@ export default function TaskResults({ q, whose, meId, tz, onOpen, onClear, flash
   const [total, setTotal] = useState<number | null>(null);   // only the paged (newer) API says
   const [failed, setFailed] = useState(false);
   const [page, setPage] = useState(1);
+  const [closedTotal, setClosedTotal] = useState<number | null>(null);   // done + cancelled matches, from the server
   const req = useRef(0);
   // A search covers the whole shop (whatever the person menu says); the plain list follows it.
   const scope = q ? "all" : whose;
@@ -44,7 +46,7 @@ export default function TaskResults({ q, whose, meId, tz, onOpen, onClear, flash
     const p = new URLSearchParams();
     if (q) p.set("q", q);
     if (scope === "me") { p.set("mine", "true"); p.set("assignee", "me"); }
-    else if (scope !== "all" && scope !== "pool") p.set("assignee", scope);
+    else if (scope !== "all") p.set("assignee", scope);
     p.set("limit", String(PAGE));                     // the older API ignores these and sends everything
     p.set("offset", String((page - 1) * PAGE));
     setFailed(false);
@@ -57,15 +59,25 @@ export default function TaskResults({ q, whose, meId, tz, onOpen, onClear, flash
   };
   // eslint-disable-next-line react-hooks/exhaustive-deps
   useEffect(() => { load(); }, [q, scope, page, reloadKey]);
+  // "N from history" counts every match, not one page: ask the server for the closed ones' total
+  // (one row). Without an answer the line simply doesn't say it.
+  useEffect(() => {
+    setClosedTotal(null);
+    if (!q) return;
+    let live = true;
+    api.get<ListReply>(`/tasks?${new URLSearchParams({ q, status: "done,cancelled", limit: "1", offset: "0" }).toString()}`)
+      .then((r) => { if (live && typeof r.total === "number") setClosedTotal(r.total); }).catch(() => undefined);
+    return () => { live = false; };
+  }, [q, reloadKey]);
 
   // The older API sends the whole list: narrow it here (a no-op when the server already did).
   const paged = total !== null;
-  const narrowed = applyFilters(items || [], { me: meId, scope: scope === "me" ? "mine" : "everyone", status: "all", q, assignee: scope === "me" || scope === "all" || scope === "pool" ? "" : scope })
-    .filter((t) => scope !== "pool" || (isPool(t) && !t.completed_at && normStatus(t.status) !== "cancelled"));
+  const narrowed = applyFilters(items || [], { me: meId, scope: scope === "me" ? "mine" : "everyone", status: "all", q, assignee: scope === "me" || scope === "all" ? "" : scope });
   const count = paged ? (total as number) : narrowed.length;
   const shown = paged ? narrowed : narrowed.slice((page - 1) * PAGE, page * PAGE);
   const closed = (t: Task) => !!t.completed_at || ["done", "cancelled"].includes(normStatus(t.status));
-  const history = shown.filter(closed).length;
+  // The older API sent every match, so counting here is the full answer; the paged one says it above.
+  const history = paged ? closedTotal : narrowed.filter(closed).length;
 
   async function toggle(t: Task) {
     const done = !closed(t);
