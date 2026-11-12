@@ -63,7 +63,11 @@ async def test_viewer_cannot_set_a_standing_client_discount(client, tenant, db):
     assert (await client.patch(f"/api/clients/{cid}", json=DISCOUNT, headers=tenant)).status_code == 200
     full = (await client.get(f"/api/clients/{cid}", headers=tenant)).json()
     keep = {k: full[k] for k in ("name", "disc_services_mode", "disc_services_value")}
-    assert (await client.patch(f"/api/clients/{cid}", json=keep, headers=vh)).status_code == 200
+    # (someone who may edit contacts but not set discounts; a zero-permission Viewer may not edit
+    # contacts at all since audit SEC-06)
+    desk = await _staff(client, tenant, db, "Desk", {"can_create_clients": True, "can_view_client_info": True})
+    assert (await client.patch(f"/api/clients/{cid}", json=keep, headers=vh)).status_code == 403
+    assert (await client.patch(f"/api/clients/{cid}", json=keep, headers=desk)).status_code == 200
 
 
 @pytest.mark.asyncio
