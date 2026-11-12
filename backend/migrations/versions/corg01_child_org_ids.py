@@ -20,7 +20,7 @@ Idempotent: a column, FK or index that already exists (create_all databases, a r
 left as it is. Downgrade drops what this added.
 
 Revision ID: corg01
-Revises: srch01
+Revises: sso01
 """
 import logging
 
@@ -28,7 +28,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "corg01"
-down_revision = "srch01"
+down_revision = "sso01"
 branch_labels = None
 depends_on = None
 
