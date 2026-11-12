@@ -742,7 +742,9 @@ async def test_b16_contact_lead_invoice_events(client, tenant, db):
     oid = (await client.post("/api/orders", json={"client_id": cid}, headers=tenant)).json()["id"]
     inv = (await client.post("/api/finance/invoices", json={"order_id": oid, "subtotal": 50}, headers=tenant)).json()
     assert "invoice.paid" not in await _events(db, org)
-    pay = await client.post(f"/api/finance/invoices/{inv['id']}/pay", json={"method": "cash", "amount": 50}, headers=tenant)
+    till = (await client.post("/api/cash/accounts", json={"name": "Till", "payment_option": "cash"}, headers=tenant)).json()["id"]   # audit FIN-04
+    pay = await client.post(f"/api/finance/invoices/{inv['id']}/pay",
+                            json={"method": "cash", "amount": 50, "account_id": till}, headers=tenant)
     assert pay.status_code in (200, 201), pay.text
     ev = await _events(db, org)
     assert ev.count("contact.created") == 1 and ev.count("lead.created") == 1

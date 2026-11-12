@@ -13,8 +13,10 @@ async def _open_paid_shift(client, h):
     cid = (await client.post("/api/clients", json={"name": "C", "phone": "+1"}, headers=h)).json()["id"]
     oid = (await client.post("/api/orders", json={"client_id": cid}, headers=h)).json()["id"]
     inv = (await client.post("/api/finance/invoices", json={"order_id": oid, "subtotal": 50}, headers=h)).json()
-    await client.post(f"/api/finance/invoices/{inv['id']}/pay",
-                      json={"method": "cash", "amount": 50, "shift_id": sid}, headers=h)
+    till = (await client.post("/api/cash/accounts", json={"name": "Till", "payment_option": "cash"}, headers=h)).json()["id"]   # audit FIN-04: cash lands in a till
+    r = await client.post(f"/api/finance/invoices/{inv['id']}/pay",
+                          json={"method": "cash", "amount": 50, "shift_id": sid, "account_id": till}, headers=h)
+    assert r.status_code == 200, r.text
     return sid
 
 
