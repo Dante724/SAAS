@@ -717,6 +717,9 @@ async def deliver_one(delivery_id: str, from_statuses=("pending",)) -> Optional[
         delivery, ep = row
         if delivery.status not in from_statuses:
             return None
+        from backend.services.org_live import org_id_is_live
+        if not await org_id_is_live(db, delivery.org_id):
+            return None             # suspended shop: the row waits as it is until it's unsuspended
         if not ep.active or ep.deleted_at is not None:
             delivery.status, delivery.next_attempt_at = "abandoned", None
             delivery.error = delivery.error or "Endpoint is off"
@@ -754,7 +757,8 @@ async def retry_sweep(now: Optional[datetime] = None, limit: int = 100) -> int:
     from sqlalchemy import and_, case, func, or_, update
 
     from backend.db.database import AsyncSessionLocal
-    from backend.models import WebhookDelivery
+    from backend.models import Organisation, WebhookDelivery
+    from backend.services.org_live import live_org_clause
     now = now or datetime.utcnow()
     async with AsyncSessionLocal() as db:
         stale = now - STUCK_SENDING_AFTER
@@ -770,7 +774,9 @@ async def retry_sweep(now: Optional[datetime] = None, limit: int = 100) -> int:
                                          else_=now))
             .execution_options(synchronize_session=False))
         await db.commit()
-        ids = (await db.execute(select(WebhookDelivery.id).where(
+        ids = (await db.execute(select(WebhookDelivery.id)
+               .join(Organisation, Organisation.id == WebhookDelivery.org_id).where(
+            live_org_clause(),                  # a suspended shop's deliveries wait
             WebhookDelivery.status.in_(("failed", "pending")),
             WebhookDelivery.attempts < MAX_ATTEMPTS,
             or_(WebhookDelivery.next_attempt_at.is_(None), WebhookDelivery.next_attempt_at <= now),

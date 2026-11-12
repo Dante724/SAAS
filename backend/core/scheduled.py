@@ -10,6 +10,7 @@ from sqlalchemy import select
 
 from backend.core.jobs import job_runner
 from backend.services.dates import now_utc
+from backend.services.org_live import live_org_clause
 
 log = logging.getLogger("tekly.jobs")
 
@@ -68,7 +69,7 @@ async def sweep_notifications() -> None:
 
     async with AsyncSessionLocal() as db:
         org_ids = (await db.execute(
-            select(Organisation.id).where(Organisation.active == True)  # noqa: E712
+            select(Organisation.id).where(live_org_clause())   # suspended shops send nothing
         )).scalars().all()
 
     async def tick(deliver: bool) -> None:
@@ -143,13 +144,14 @@ async def sweep_time_automations() -> None:
     product that is low right now (at most once until it recovers).
     """
     from backend.db.database import AsyncSessionLocal
-    from backend.models import AutomationRule
+    from backend.models import AutomationRule, Organisation
     from backend.services import automation as auto
 
     async with AsyncSessionLocal() as db:
-        org_ids = (await db.execute(select(AutomationRule.org_id).where(
+        org_ids = (await db.execute(select(AutomationRule.org_id)
+                                    .join(Organisation, Organisation.id == AutomationRule.org_id).where(
             AutomationRule.active == True,  # noqa: E712
-            AutomationRule.event.in_(auto.TIME_EVENTS)).distinct())).scalars().all()
+            AutomationRule.event.in_(auto.TIME_EVENTS), live_org_clause()).distinct())).scalars().all()
     fired = 0
     for oid in org_ids:
         async with AsyncSessionLocal() as db:   # a session per shop: one failure never stalls the rest
@@ -175,7 +177,7 @@ async def sweep_contact_lifecycle() -> None:
 
     async with AsyncSessionLocal() as db:
         org_ids = (await db.execute(
-            select(Organisation.id).where(Organisation.active == True)  # noqa: E712
+            select(Organisation.id).where(live_org_clause())   # suspended shops send nothing
         )).scalars().all()
     sent = 0
     for oid in org_ids:
@@ -203,7 +205,7 @@ async def sweep_memberships() -> None:
         for oid in org_ids:
             try:
                 org = (await db.execute(select(Organisation).where(
-                    Organisation.id == oid, Organisation.active == True))).scalar_one_or_none()  # noqa: E712
+                    Organisation.id == oid, live_org_clause()))).scalar_one_or_none()   # suspended: no billing
                 if org:
                     stats = await mb.sweep(db, org)
                     await db.commit()
@@ -328,7 +330,7 @@ async def sweep_morning_briefs() -> None:
             select(AutomationSetting.org_id)
             .join(Organisation, Organisation.id == AutomationSetting.org_id)
             .where(AutomationSetting.key == sense.SETTING_KEY, AutomationSetting.enabled == True,  # noqa: E712
-                   Organisation.active == True))).scalars().all()  # noqa: E712
+                   live_org_clause()))).scalars().all()
         sent = 0
         for oid in org_ids:
             try:
@@ -357,7 +359,7 @@ async def sweep_sense_agents() -> None:
             select(AutomationSetting.org_id)
             .join(Organisation, Organisation.id == AutomationSetting.org_id)
             .where(AutomationSetting.key == sense.SETTING_KEY, AutomationSetting.enabled == True,  # noqa: E712
-                   Organisation.active == True))).scalars().all()  # noqa: E712
+                   live_org_clause()))).scalars().all()
         made = 0
         for oid in org_ids:
             try:

@@ -437,13 +437,15 @@ def _stuck(now: datetime):
 
 
 async def orgs_with_due(db: AsyncSession, now: Optional[datetime] = None) -> list:
-    """Active shops that have something for the outbox to do right now (one query for all)."""
+    """Live shops that have something for the outbox to do right now (one query for all). A
+    suspended shop's queue waits untouched until it is unsuspended (services/org_live)."""
     from backend.models import Organisation
+    from backend.services.org_live import live_org_clause
     now = now or now_utc()
     return list((await db.execute(
         select(NotificationLog.org_id).distinct()
         .join(Organisation, Organisation.id == NotificationLog.org_id)
-        .where(Organisation.active == True, or_(_due(now), _stuck(now)))  # noqa: E712
+        .where(live_org_clause(), or_(_due(now), _stuck(now)))
     )).scalars().all())
 
 
@@ -552,6 +554,12 @@ async def run_due(db: AsyncSession, *, org_id: str, now: Optional[datetime] = No
     """Outbox tick for one shop: reclaim stuck rows, then claim and send every due one, committing
     after each so a crash never re-sends what already went out."""
     now = now or now_utc()
+    from backend.services.org_live import org_id_is_live
+    if not await org_id_is_live(db, org_id):
+        # Suspended (or switched off) at send time: send nothing and leave every row as it is
+        # (no attempt used), so unsuspending delivers them.
+        return {"due": 0, "sent": 0, "failed": 0, "retrying": 0, "dead": 0, "reclaimed": 0,
+                "held": "shop_not_live"}
     reclaimed = await _reclaim_stuck(db, org_id, now)
     due = (await db.execute(select(NotificationLog.id).where(
         NotificationLog.org_id == org_id, _due(now))
