@@ -1401,8 +1401,35 @@ async def post_stocktake(
     # QA F2 / W3-D: each line's variance was taken against the book when it was counted
     # (_mark_counted), and is applied to the book as it is now. The product's rows are locked
     # first so a sale can't land between reading and adjusting.
-    for pid in sorted({l.part_id for l in lines}):
-        await stock_rows.rows(db, pid, st.location_id, lock=True)
+    held = {pid: await stock_rows.rows(db, pid, st.location_id, lock=True)
+            for pid in sorted({l.part_id for l in lines})}
+    # Audit INV-01: a shortage is applied to the book as it is now, so stock that left after the
+    # count can leave less on the shelf than the count says is missing (counted 3 of 5, then 4
+    # written off: −2 against 1). That count no longer describes the shelf — taking it would drive
+    # stock negative and skew the next receipt's moving average — so nothing posts until those
+    # lines are recounted (a recount reads the book again).
+    stale = []
+    for l in lines:
+        if not l.variance or l.variance > 0:
+            continue
+        line_bin = l.bin_id or st.bin_id
+        if line_bin:
+            target = [r for r in held[l.part_id] if r.bin_id == line_bin]
+        elif st.by_bin:
+            target = [r for r in held[l.part_id] if r.bin_id is None]
+        else:
+            target = held[l.part_id]
+        on_shelf = sum(max(float(r.qty_available or 0), 0) for r in target)
+        if -l.variance > on_shelf + 1e-9:
+            stale.append((l, on_shelf))
+    if stale:
+        names = dict((await db.execute(select(Part.id, Part.name).where(
+            Part.id.in_({l.part_id for l, _ in stale}), Part.org_id == current.org_id))).all())
+        what = "; ".join(f"{names.get(l.part_id, 'a product')} (counted {l.counted_qty:g}, "
+                         f"{on_shelf:g} left in stock now)" for l, on_shelf in stale)
+        await db.rollback()
+        raise HTTPException(409, f"Stock left after these were counted, so the count no longer fits "
+                                 f"what's in stock: {what}. Recount them, then post.")
     adjusted = 0
     for l in lines:
         if not l.variance:
@@ -1419,12 +1446,12 @@ async def post_stocktake(
         if line_bin or l.variance > 0:
             await stock_rows.add(db, l.part_id, st.location_id, l.variance, bin_id=line_bin)
             moved = l.variance
-        elif st.by_bin:      # the no-bin line of a by-bin count: only the unbinned rows, none below zero
+        elif st.by_bin:      # the no-bin line of a by-bin count: only the unbinned rows, none below zero (checked above)
             loose = [r for r in await stock_rows.rows(db, l.part_id, st.location_id) if r.bin_id is None]
-            taken = await stock_rows.draw(db, l.part_id, st.location_id, -l.variance, allow_short=True, only=loose)
+            taken = await stock_rows.draw(db, l.part_id, st.location_id, -l.variance, only=loose)
             moved = -sum(q for _b, q in taken)
         else:
-            taken = await stock_rows.draw(db, l.part_id, st.location_id, -l.variance, allow_short=True)
+            taken = await stock_rows.draw(db, l.part_id, st.location_id, -l.variance)
             moved = -sum(q for _b, q in taken)
         # council M3: the cost layers follow the shelf. A shortage drains layers the way a write-off
         # does (FIFO / FEFO, locked); a surplus gets its own layer at the average cost. Before this
