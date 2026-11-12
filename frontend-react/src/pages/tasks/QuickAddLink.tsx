@@ -23,7 +23,9 @@ const toHit = (o: OrderRow): JobHit => ({
 });
 
 /** Suggestions for what is being typed: the work-order search (GET /orders?q=, which already keeps
- *  to what this person may open), debounced, stale answers dropped, open jobs first, three at most. */
+ *  to what this person may open), debounced, stale answers dropped, open jobs first, three at most.
+ *  open_first=true has the server rank open jobs first, so a customer's closed history can't fill
+ *  the five it returns; the sort below keeps that order on a server that ignores the flag. */
 export function useJobSuggest(title: string, linked: boolean) {
   const clue = useMemo(() => findJobClue(title), [title]);
   const [hits, setHits] = useState<JobHit[]>([]);
@@ -38,7 +40,7 @@ export function useJobSuggest(title: string, linked: boolean) {
     if (!term) { setHits([]); setForTerm(null); return; }
     const ctl = new AbortController();
     const h = setTimeout(() => {
-      api.get<{ items?: OrderRow[] }>(`/orders?q=${encodeURIComponent(term)}&limit=5`, { signal: ctl.signal })
+      api.get<{ items?: OrderRow[] }>(`/orders?q=${encodeURIComponent(term)}&limit=5&open_first=true`, { signal: ctl.signal })
         .then((r) => {
           if (ctl.signal.aborted) return;
           const c = clueRef.current;
