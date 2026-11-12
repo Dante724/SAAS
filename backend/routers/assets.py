@@ -686,7 +686,7 @@ async def convert_to_product(
     current: Employee = Depends(require_perm("can_convert_asset_to_product")),
 ):
     """Orderry: turn a non-sellable company asset into a sellable product (stock)."""
-    from backend.models import Location, Part, StockMovement
+    from backend.models import Location, Part
     d = (await db.execute(select(Device).where(
         Device.id == asset_id, Device.org_id == current.org_id))).scalar_one_or_none()
     if not d:
@@ -702,7 +702,7 @@ async def convert_to_product(
         sell_price=data.sale_price or d.sale_price or 0.0,
         cost_price=d.purchase_price or 0.0,
     )
-    from backend.services import product_codes, stock_rows
+    from backend.services import product_codes
     await product_codes.ensure_sku_free(db, current.org_id, part.sku)
     db.add(part)
     await db.flush()
@@ -714,11 +714,13 @@ async def convert_to_product(
             Location.org_id == current.org_id).order_by(Location.id))).scalars().first()
         loc_id = default_loc.id if default_loc else None
     if loc_id:
-        await stock_rows.add(db, part.id, loc_id, 1)
-        # record the stock movement so the product's History shows where the unit came from
-        db.add(StockMovement(part_id=part.id, location_id=loc_id, movement_type="receive",
-                             qty=1, unit_cost=float(d.purchase_price or 0),
-                             ref_type="conversion", ref_id=asset_id, created_by_id=current.id))
+        # Audit INV-07: received through the one stock-inflow engine — the movement (so the product's
+        # History shows where the unit came from) and a cost layer at what the asset cost.
+        from backend.services import stock_posting
+        await stock_posting.apply_receipt_line(
+            db, org_id=current.org_id, part=part, location_id=loc_id, qty=1,
+            unit_cost=float(d.purchase_price or 0), created_by_id=current.id,
+            ref_type="conversion", ref_id=asset_id, cost_known=True)
     d.converted_to_part_id = part.id
     d.asset_status = "sold"
     # build 144aa: record the conversion document so it appears on the Conversions page

@@ -82,6 +82,16 @@ def _guard_qty(*vals) -> None:
             raise HTTPException(422, f"Quantity {v} is out of range (max {MAX_STOCK_QTY:,}). "
                                      "This looks like a barcode or serial, not a count.")
 
+async def _reachable_rows(db, current, rows):
+    """Audit SEC-04: the stock rows / movements / layers / holds at warehouses this person may
+    reach (all of them for an unrestricted role)."""
+    from backend.services import warehouses as _whs
+    r = await _whs.reach(db, current)
+    if r is None:
+        return list(rows)
+    return [x for x in rows if _whs.reachable(r, getattr(x, "location_id", None), getattr(x, "warehouse_id", None))]
+
+
 _FULL_PHOTO = object()
 
 
@@ -141,7 +151,7 @@ async def list_parts(
     if location_id:
         _sq = _sq.where(StockLevel.location_id == location_id)
     stock_result = await db.execute(_sq)
-    stocks = stock_result.scalars().all()
+    stocks = await _reachable_rows(db, current, stock_result.scalars().all())   # SEC-04
 
     items = [_ser_part(p, stocks, image=thumbs.get(p.id)) for p in parts]
     if device_id:
@@ -238,7 +248,7 @@ async def get_part(
     if not part:
         raise HTTPException(404, "Part not found")
     stock_result = await db.execute(select(StockLevel).where(StockLevel.part_id == part_id))
-    stocks = stock_result.scalars().all()
+    stocks = await _reachable_rows(db, current, stock_result.scalars().all())   # SEC-04
     return _ser_part(part, stocks)
 
 @router.put("/parts/{part_id}")
@@ -1016,7 +1026,7 @@ async def part_movements(
         .order_by(StockMovement.created_at.desc())
         .limit(200)
     )
-    movements = result.scalars().all()
+    movements = await _reachable_rows(db, current, result.scalars().all())   # SEC-04
     # resolve location, bin and people names in one pass each
     from backend.models import Employee as _Emp
     from backend.models import Location, StorageBin
@@ -1055,6 +1065,7 @@ async def part_batches(
         select(StockItemBatch).where(
             StockItemBatch.org_id == current.org_id, StockItemBatch.part_id == part_id)
         .order_by(StockItemBatch.received_at.desc()).limit(300))).scalars().all()
+    rows = await _reachable_rows(db, current, rows)   # SEC-04
     po_ids = {r.po_id for r in rows if r.po_id}
     loc_ids = {r.location_id for r in rows if r.location_id}
     wh_ids = {r.warehouse_id for r in rows if r.warehouse_id}
@@ -1112,14 +1123,15 @@ async def part_stock(
     from backend.models import Location, StorageBin
     from backend.services.valuation import unit_cost as _valuation_cost
     unit_cost = _valuation_cost(part)   # the one valuation basis (services/valuation)
-    loc_ids = {sl.location_id for sl in part.stock_levels}
-    bin_ids = {sl.bin_id for sl in part.stock_levels if sl.bin_id}
+    levels = await _reachable_rows(db, current, part.stock_levels)   # SEC-04: only reachable warehouses
+    loc_ids = {sl.location_id for sl in levels}
+    bin_ids = {sl.bin_id for sl in levels if sl.bin_id}
     locs = dict((await db.execute(select(Location.id, Location.name).where(
         Location.id.in_(loc_ids), Location.org_id == current.org_id))).all()) if loc_ids else {}
     bins = dict((await db.execute(select(StorageBin.id, StorageBin.name).where(
         StorageBin.id.in_(bin_ids), StorageBin.org_id == current.org_id))).all()) if bin_ids else {}
     rows = []
-    for sl in sorted(part.stock_levels, key=lambda r: (locs.get(r.location_id) or "", r.bin_id is None,
+    for sl in sorted(levels, key=lambda r: (locs.get(r.location_id) or "", r.bin_id is None,
                                                        bins.get(r.bin_id) or "")):
         avail = sl.qty_available or 0
         rows.append({"location": locs.get(sl.location_id) or "—", "location_id": sl.location_id,
@@ -1178,7 +1190,7 @@ async def _release_expired(db: AsyncSession, org_id: str):
     for r in rows:
         if r.released:
             continue
-        await stock_rows.reserve(db, r.part_id, r.location_id, -r.qty)
+        await stock_rows.reserve(db, r.part_id, r.location_id, -r.qty, ref_type="reservation", ref_id=r.id)
         r.released = True
     await db.commit()
 
@@ -1222,7 +1234,8 @@ async def reserve_stock(
         raise HTTPException(409, f"Only {free:g} available to reserve")
     if avail <= 0:
         raise HTTPException(404, "No stock at this location")
-    await stock_rows.reserve(db, data.part_id, data.location_id, data.qty)
+    await stock_rows.reserve(db, data.part_id, data.location_id, data.qty,
+                             ref_type="order" if data.order_id else None, ref_id=data.order_id)
     r = StockReservation(org_id=current.org_id, part_id=data.part_id, location_id=data.location_id,
                          order_id=data.order_id, qty=data.qty,
                          expires_at=now_utc() + timedelta(days=hold_days))
@@ -1250,7 +1263,7 @@ async def release_reservation(
                           .with_for_update().execution_options(populate_existing=True))).scalar_one()
     if r.released:
         raise HTTPException(404, "Reservation not found or already released")
-    await stock_rows.reserve(db, r.part_id, r.location_id, -r.qty)
+    await stock_rows.reserve(db, r.part_id, r.location_id, -r.qty, ref_type="reservation", ref_id=r.id)
     r.released = True
     await db.commit()
     return {"ok": True}
@@ -1265,6 +1278,7 @@ async def list_reservations(
     rows = (await db.execute(select(StockReservation).where(
         StockReservation.org_id == current.org_id, StockReservation.released == False  # noqa: E712
     ))).scalars().all()
+    rows = await _reachable_rows(db, current, rows)   # SEC-04
     parts = await names_by_id(db, Part.id, Part.name, [r.part_id for r in rows],
                               org_col=Part.org_id, org_id=current.org_id)
     return {"items": [{"id": r.id, "part_id": r.part_id, "part": parts.get(r.part_id), "qty": r.qty,
@@ -2199,7 +2213,8 @@ async def receive_po(
         to_reserve = recv - await apply_receipt_to_orders(db, current.org_id, po, pl, recv)
         if pl.reserved_order_id and to_reserve > 0:
             from backend.models import StockReservation
-            await stock_rows.reserve(db, pl.part_id, po.location_id, to_reserve)   # ii144a: on the location
+            await stock_rows.reserve(db, pl.part_id, po.location_id, to_reserve,   # ii144a: on the location
+                                     ref_type="po", ref_id=po.id)
             db.add(StockReservation(org_id=current.org_id, part_id=pl.part_id,
                                     location_id=po.location_id, order_id=pl.reserved_order_id,
                                     qty=to_reserve, released=False))
@@ -2571,6 +2586,7 @@ async def list_movements(
         .join(Part, StockMovement.part_id == Part.id)
         .where(Part.org_id == current.org_id, StockMovement.movement_type.in_(types))
         .order_by(StockMovement.created_at.desc()).limit(300))).scalars().all()
+    rows = await _reachable_rows(db, current, rows)   # SEC-04
     parts = await names_by_id(db, Part.id, Part.name, [m.part_id for m in rows],
                               org_col=Part.org_id, org_id=current.org_id)
     locs = {l.id: l.name for l in (await db.execute(
@@ -2662,7 +2678,31 @@ async def merge_parts(
             raise HTTPException(
                 400, "Serialized products can only be merged with serialized products")
 
-    moved = {"stock": 0, "movements": 0, "units": 0, "batches": 0}
+    # Audit INV-04: lock every product in the merge (id order, as receipts do) and their stock rows,
+    # so a sale or receipt can't change them between the read below and the fold.
+    from backend.models import BundleComponent, Order, OrderLine, PurchaseOrder
+    from backend.services import stock_posting, valuation
+    all_ids = [target.id] + [s.id for s in sources]
+    await stock_posting.lock_parts(db, all_ids)
+    for p in [target, *sources]:
+        await db.refresh(p)
+    await db.execute(select(StockLevel.id).where(StockLevel.part_id.in_(all_ids))
+                     .order_by(StockLevel.id).with_for_update())
+
+    # The merged product's average is the qty-weighted mean of everything on hand (the source's
+    # units used to be revalued at the target's average).
+    async def _on_hand(pid):
+        return max(float((await db.execute(select(func.coalesce(func.sum(StockLevel.qty_available), 0))
+                                           .where(StockLevel.part_id == pid))).scalar_one() or 0), 0.0)
+    qty_sum, value = 0.0, 0.0
+    for p in [target, *sources]:
+        q = await _on_hand(p.id)
+        qty_sum += q
+        value += q * valuation.unit_cost(p)
+    new_avg = round(value / qty_sum, 4) if qty_sum > 1e-9 else None
+
+    moved = {"stock": 0, "movements": 0, "units": 0, "batches": 0, "reservations": 0,
+             "po_lines": 0, "kit_components": 0, "job_lines": 0}
     for s in sources:
         # ii144a: archive the source first, so its SKU / barcodes are free before the target takes them
         s.active = False
@@ -2684,10 +2724,12 @@ async def merge_parts(
             tgt_sl = await stock_rows.row_for(db, target.id, sl.location_id, sl.bin_id,
                                               warehouse_id=sl.warehouse_id)
             if tgt_sl:
-                await _atomic_add(db, tgt_sl, "qty_available", sl.qty_available, round_to=None)   # atomic
-                await _atomic_add(db, tgt_sl, "qty_reserved", sl.qty_reserved or 0, round_to=None)
-                sl.qty_available = 0
-                sl.qty_reserved = 0
+                # both rows are locked: move exactly what the source row holds, atomically
+                qa, qr = float(sl.qty_available or 0), float(sl.qty_reserved or 0)
+                await _atomic_add(db, tgt_sl, "qty_available", qa, round_to=None)
+                await _atomic_add(db, tgt_sl, "qty_reserved", qr, round_to=None)
+                await _atomic_add(db, sl, "qty_available", -qa, round_to=None)
+                await _atomic_add(db, sl, "qty_reserved", -qr, round_to=None)
             else:
                 sl.part_id = target.id
                 await db.flush()
@@ -2713,9 +2755,47 @@ async def merge_parts(
                 StockItemBatch.part_id == s.id))).scalars().all():
             b.part_id = target.id
             moved["batches"] += 1
+        # INV-04: everything else that names the source follows it — holds (their qty_reserved moved
+        # with the stock rows above), open PO lines, kit components and job lines (so removing a line
+        # gives the unit back to the target, where its "use" movement now is).
+        for r in (await db.execute(select(StockReservation).where(
+                StockReservation.org_id == current.org_id, StockReservation.part_id == s.id))).scalars().all():
+            r.part_id = target.id
+            moved["reservations"] += 1
+        open_pos = select(PurchaseOrder.id).where(PurchaseOrder.org_id == current.org_id,
+                                                  PurchaseOrder.status.not_in(("received", "cancelled")))
+        moved["po_lines"] += (await db.execute(_upd(POLine).where(
+            POLine.part_id == s.id, POLine.po_id.in_(open_pos)).values(part_id=target.id)
+            .execution_options(synchronize_session=False))).rowcount or 0
+        from backend.models import Bundle
+        org_bundles = select(Bundle.id).where(Bundle.org_id == current.org_id)
+        moved["kit_components"] += (await db.execute(_upd(BundleComponent).where(
+            BundleComponent.ref_type == "product", BundleComponent.ref_id == s.id,
+            BundleComponent.bundle_id.in_(org_bundles)).values(ref_id=target.id)
+            .execution_options(synchronize_session=False))).rowcount or 0
+        org_orders = select(Order.id).where(Order.org_id == current.org_id)
+        moved["job_lines"] += (await db.execute(_upd(OrderLine).where(
+            OrderLine.kind == "product", OrderLine.ref_id == s.id, OrderLine.order_id.in_(org_orders))
+            .values(ref_id=target.id).execution_options(synchronize_session=False))).rowcount or 0
+        # Q1: the merge itself is on the target's movement history (no qty: the stock moved with
+        # the source's own movements, re-pointed above)
+        db.add(StockMovement(part_id=target.id, location_id=(await _first_location(db, target.id, current.org_id)),
+                             movement_type="merge", qty=0, ref_type="part_merge", ref_id=s.id,
+                             created_by_id=current.id))
 
+    if new_avg is not None:
+        target.avg_cost = new_avg
     await db.commit()
     return {"ok": True, "target_id": target.id, "merged": len(sources), "moved": moved}
+
+
+async def _first_location(db, part_id: str, org_id: str):
+    """A location for a zero-qty audit movement: where the product has stock rows, else the shop's first."""
+    from backend.models import Location
+    loc = (await db.execute(select(StockLevel.location_id).where(StockLevel.part_id == part_id)
+                            .order_by(StockLevel.qty_available.desc()).limit(1))).scalar_one_or_none()
+    return loc or (await db.execute(select(Location.id).where(Location.org_id == org_id)
+                                    .order_by(Location.created_at).limit(1))).scalar_one_or_none()
 
 
 # ── Build 79: markup-based auto-pricing ──────────────────────────────────────

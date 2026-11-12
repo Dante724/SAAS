@@ -18,7 +18,7 @@ much may be taken before calling this.
 """
 from decimal import Decimal
 
-from sqlalchemy import func, select
+from sqlalchemy import select
 
 from backend.services import stock_rows
 
@@ -45,18 +45,74 @@ async def _draw_what_is_there(db, part_id, location_id, qty) -> float:
             return 0.0
 
 
-async def _consume_layers(db, org_id, part_id, qty) -> tuple[float, float]:
-    """FIFO-draw up to `qty` from the part's cost layers. Returns (units drawn, their total cost)."""
+def _layer_q(org_id, part_id, location_id, *, warehouse_id=None, live=True):
+    """The part's cost layers at one location (audit INV-02: never another branch's), locked and
+    read fresh. `warehouse_id` keeps them to that warehouse's layers plus the location's untagged ones."""
+    from sqlalchemy import or_
+
     from backend.models import StockItemBatch
-    from backend.services.serialized import consume_fifo_lifo
-    layered = (await db.execute(select(func.coalesce(func.sum(StockItemBatch.qty_remaining), 0)).where(
-        StockItemBatch.org_id == org_id, StockItemBatch.part_id == part_id,
-        StockItemBatch.qty_remaining > 0))).scalar_one()
-    take = min(Decimal(str(qty)), Decimal(str(layered or 0)))
-    if take <= 0:
+    q = select(StockItemBatch).where(StockItemBatch.org_id == org_id, StockItemBatch.part_id == part_id,
+                                     StockItemBatch.location_id == location_id)
+    if warehouse_id:
+        q = q.where(or_(StockItemBatch.warehouse_id == warehouse_id, StockItemBatch.warehouse_id.is_(None)))
+    if live:
+        q = q.where(StockItemBatch.qty_remaining > 0)
+    return q.with_for_update().execution_options(populate_existing=True)
+
+
+async def _consume_layers(db, org_id, part_id, qty, location_id, *, fefo: bool = False,
+                          warehouse_id=None) -> tuple[float, float]:
+    """FIFO-draw (FEFO with `fefo`) up to `qty` from the part's cost layers at `location_id`.
+    Returns (units drawn, their total cost) — never more than the layers hold.
+
+    Audit INV-02: jobs drew layers org-wide while sales and write-offs drew the location's, so a
+    job at branch A emptied branch B's layers and branch valuation/COGS drifted. The layers are
+    locked (FOR UPDATE) and re-read, so two consumers can't both take the same units."""
+    from backend.models import StockItemBatch
+    if qty <= _EPS:
         return 0.0, 0.0
-    res = await consume_fifo_lifo(db, org_id=org_id, part_id=part_id, qty=take, method="fifo")
-    return float(take), float(res["total_cost"])
+    q = _layer_q(org_id, part_id, location_id, warehouse_id=warehouse_id)
+    if fefo:    # dated (perishable) stock first, undated last
+        q = q.order_by(StockItemBatch.expiry_date.is_(None), StockItemBatch.expiry_date,
+                       StockItemBatch.received_at, StockItemBatch.id)
+    else:
+        q = q.order_by(StockItemBatch.received_at, StockItemBatch.id)
+    left, drawn, cost = Decimal(str(qty)), Decimal("0"), Decimal("0")
+    for b in (await db.execute(q)).scalars().all():
+        if left <= 0:
+            break
+        take = min(Decimal(str(b.qty_remaining or 0)), left)
+        if take <= 0:
+            continue
+        b.qty_remaining = Decimal(str(b.qty_remaining or 0)) - take
+        drawn += take
+        cost += take * Decimal(str(b.unit_cost or 0))
+        left -= take
+    return float(drawn), float(cost)
+
+
+async def restore_layers(db, org_id, part_id, location_id, qty, *, warehouse_id=None) -> float:
+    """Put `qty` units back on the part's cost layers at `location_id` — the reverse of a draw: the
+    newest layer first, never above what a layer received. Returns the units restored (INV-02:
+    only this location's layers, locked, so a line removed at branch A can't refill branch B)."""
+    from backend.models import StockItemBatch
+    left = Decimal(str(qty))
+    if left <= 0:
+        return 0.0
+    q = _layer_q(org_id, part_id, location_id, warehouse_id=warehouse_id, live=False).order_by(
+        StockItemBatch.received_at.desc(), StockItemBatch.id.desc())
+    done = Decimal("0")
+    for b in (await db.execute(q)).scalars().all():
+        if left <= 0:
+            break
+        room = Decimal(str(b.qty_received or 0)) - Decimal(str(b.qty_remaining or 0))
+        if room <= 0:
+            continue
+        back = min(room, left)
+        b.qty_remaining = Decimal(str(b.qty_remaining or 0)) + back
+        left -= back
+        done += back
+    return float(done)
 
 
 async def _allocate_serials(db, org_id, part_id, order_id, n: int) -> None:
@@ -84,7 +140,7 @@ async def consume_for_line(db, *, org_id: str, order_id: str, line, location_id:
         return 0.0
     db.add(StockMovement(part_id=part_id, location_id=location_id, movement_type="use",
                          qty=-taken, ref_type="order", ref_id=order_id))
-    layered, layer_cost = await _consume_layers(db, org_id, part_id, taken)
+    layered, layer_cost = await _consume_layers(db, org_id, part_id, taken, location_id)
     if layered > _EPS:
         old_cost = float(line.cost_price or 0)
         new_unit = (layer_cost + (taken - layered) * old_cost) / taken

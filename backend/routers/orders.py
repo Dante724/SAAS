@@ -3687,7 +3687,7 @@ async def reserve_stock_for_order(
         if take <= 0:
             short.append({"part": part_names.get(part_id, part_id), "needed": want, "free": max(free, 0)})
             continue
-        await stock_rows.reserve(db, part_id, order.location_id, take)
+        await stock_rows.reserve(db, part_id, order.location_id, take, ref_type="order", ref_id=order.id)
         db.add(StockReservation(org_id=current.org_id, part_id=part_id, location_id=order.location_id,
                                 order_id=order_id, qty=take,
                                 expires_at=now + timedelta(days=hold_days)))
@@ -3916,7 +3916,8 @@ async def _archive_order(db, current, order_id, reason, do_refund):
     for _h in _holds:
         if _h.released:
             continue
-        await stock_rows.reserve(db, _h.part_id, _h.location_id, -float(_h.qty or 0))
+        await stock_rows.reserve(db, _h.part_id, _h.location_id, -float(_h.qty or 0),
+                                 ref_type="reservation", ref_id=_h.id)
         _h.released = True
     if not order.is_estimate:
         from backend.services.payroll import CommissionEngine
@@ -4887,13 +4888,16 @@ async def _add_line(order_id: str, data: LineIn, db: AsyncSession, current: Empl
         from backend.models import Bundle, BundleComponent, Part
         from backend.models import Service as _Svc
         bundle = (await db.execute(select(Bundle).where(
-            Bundle.id == data.ref_id, Bundle.org_id == current.org_id))).scalar_one_or_none()
+            Bundle.id == data.ref_id, Bundle.org_id == current.org_id,
+            Bundle.active == True))).scalar_one_or_none()  # noqa: E712  (INV-09: not an archived kit)
         if not bundle:
             raise HTTPException(404, "Bundle not found")
         comps = (await db.execute(select(BundleComponent).where(
             BundleComponent.bundle_id == bundle.id))).scalars().all()
         if not comps:
             raise HTTPException(400, "This bundle has no components")
+        if any(not (c.qty or 0) > 0 for c in comps):     # INV-09: saved before quantities were checked
+            raise HTTPException(409, f"Kit “{bundle.name}” has a component with no quantity — fix the kit first")
         # 144db — resolve device-variant product slots against the WO's device (once)
         _kit_device = None
         if order.device_id:
@@ -5110,7 +5114,7 @@ async def _reverse_fulfillment(db, order, part_id, qty, *, ref_type="order", ref
         await stock_rows.add(db, part_id, loc_id, q, bin_id=back_bin)
         db.add(StockMovement(part_id=part_id, location_id=loc_id, bin_id=back_bin,
                              movement_type="return", qty=q, ref_type=ref_type, ref_id=ref_id or order.id))
-    from backend.models import SerializedItem, StockItemBatch
+    from backend.models import SerializedItem
     # Release serialized units (the ones named, else newest allocated first)
     serials = units if units is not None else (await db.execute(select(SerializedItem).where(
         SerializedItem.org_id == order.org_id, SerializedItem.part_id == part_id,
@@ -5125,22 +5129,11 @@ async def _reverse_fulfillment(db, order, part_id, qty, *, ref_type="order", ref
         else:
             serial_log.record(db, s, "returned", ref_type="order", ref_id=order.id,
                               label=f"Taken off {order.order_number}")
-    # Restore cost layers (approximate without a per-line consumption journal:
-    # newest layer first, never exceeding what that layer originally received)
-    from decimal import Decimal as _D
-    remaining = _D(str(qty))
-    layers = (await db.execute(select(StockItemBatch).where(
-        StockItemBatch.org_id == order.org_id, StockItemBatch.part_id == part_id)
-        .order_by(StockItemBatch.received_at.desc()))).scalars().all()
-    for layer in layers:
-        if remaining <= 0:
-            break
-        consumed = _D(str(layer.qty_received or 0)) - _D(str(layer.qty_remaining or 0))
-        if consumed <= 0:
-            continue
-        back = min(remaining, consumed)
-        layer.qty_remaining = _D(str(layer.qty_remaining or 0)) + back
-        remaining -= back
+    # Restore cost layers at the location each unit goes back to (audit INV-02: per location and
+    # locked, like sales and write-offs — newest layer first, never above what a layer received).
+    from backend.services import stock_consume
+    for loc_id, _b, q in plan:
+        await stock_consume.restore_layers(db, order.org_id, part_id, loc_id, q)
     return float(qty)
 
 
@@ -5261,7 +5254,7 @@ async def _consume_from_bins(db, order, line, qty, current, *, bin_id=None, seri
                              movement_type="use", qty=-t_qty, ref_type="order", ref_id=order.id,
                              created_by_id=current.id))
     # FIFO cost layers for the drawn units; the line's other units keep their cost.
-    layered, layer_cost = await stock_consume._consume_layers(db, order.org_id, part_id, taken)
+    layered, layer_cost = await stock_consume._consume_layers(db, order.org_id, part_id, taken, order.location_id)
     if layered > 1e-9:
         old_cost = float(line.cost_price or 0)
         new_unit = (layer_cost + (taken - layered) * old_cost) / taken
@@ -5691,9 +5684,13 @@ async def delete_kit(
     order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    # Audit INV-10: the job's lock and a fresh read, as delete_line — two removals of one kit queue
+    # up and the second finds nothing, instead of both giving the stock back.
+    await _lock_for_lines(db, order)
     await _guard_editable(db, order, current)
     lines = (await db.execute(select(OrderLine).where(
-        OrderLine.order_id == order_id, OrderLine.bundle_group_id == group_id))).scalars().all()
+        OrderLine.order_id == order_id, OrderLine.bundle_group_id == group_id)
+        .execution_options(populate_existing=True))).scalars().all()
     if not lines:
         raise HTTPException(404, "Kit not found on this job")
     perms = await _order_perms(db, current)
@@ -5708,6 +5705,7 @@ async def delete_kit(
             deducted = (line.qty or 0) - (line.pending_stock or 0)
             if deducted > 0:
                 await _reverse_fulfillment(db, order, line.ref_id, deducted)
+        await _audit_line(db, current, order_id, line, "order.line_delete")     # INV-10
         await db.delete(line)
     await db.flush()
     await _recalc_order(db, order)

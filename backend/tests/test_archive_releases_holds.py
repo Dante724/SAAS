@@ -168,12 +168,12 @@ def _pause_first_release(monkeypatch):
     started = asyncio.Event()
     calls = []
 
-    async def paused(db_, part_id, location_id, delta):
+    async def paused(db_, part_id, location_id, delta, **kw):   # kw: the hold's ref (audit Q1)
         calls.append(1)
         if len(calls) == 1:
             started.set()
             await asyncio.sleep(0.7)
-        return await orig(db_, part_id, location_id, delta)
+        return await orig(db_, part_id, location_id, delta, **kw)
     monkeypatch.setattr(stock_rows, "reserve", paused)
     return started
 

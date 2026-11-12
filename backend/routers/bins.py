@@ -75,6 +75,9 @@ async def list_bins(
     if warehouse_id:
         q = q.where(StorageBin.warehouse_id == warehouse_id)
     rows = (await db.execute(q.order_by(StorageBin.name))).scalars().all()
+    from backend.services import warehouses as _whs
+    _r = await _whs.reach(db, current)            # SEC-04: bins of warehouses they can reach
+    rows = [b for b in rows if _whs.reachable(_r, b.location_id, b.warehouse_id)]
     defaults = await _default_bin_ids(db, current.org_id)
     # on-hand per bin, one query
     qty = dict((await db.execute(select(StockLevel.bin_id, func.coalesce(func.sum(StockLevel.qty_available), 0))
@@ -95,6 +98,9 @@ async def bin_contents(
         StorageBin.id == bin_id, StorageBin.org_id == current.org_id))).scalar_one_or_none()
     if not b:
         raise HTTPException(404, "Bin not found")
+    from backend.services import warehouses as _whs
+    if not _whs.reachable(await _whs.reach(db, current), b.location_id, b.warehouse_id):   # SEC-04
+        raise HTTPException(403, "You don't have access to this warehouse")
     rows = (await db.execute(select(StockLevel, Part).join(Part, Part.id == StockLevel.part_id).where(
         StockLevel.bin_id == b.id, Part.org_id == current.org_id,
         (StockLevel.qty_available != 0) | (StockLevel.qty_reserved != 0)).order_by(Part.name))).all()

@@ -1150,6 +1150,11 @@ async def undo(db, current, batch: ImportBatch) -> dict:
         created.setdefault(t, []).append(i)
     stock = u.get("stock", [])
 
+    # Audit INV-03: lock the stock rows the import filled before checking whether its stock was used,
+    # so a sale or job can't take the units between that check and the reversal below.
+    from backend.services import stock_rows
+    for s in stock:
+        await stock_rows.rows(db, s["part_id"], s["location_id"], lock=True)
     used = 0
     for t, ids in created.items():
         if t != "categories":      # a category made by the import is removed only if nothing else uses it
@@ -1179,15 +1184,11 @@ async def undo(db, current, batch: ImportBatch) -> dict:
         await db.rollback()
         raise HTTPException(409, "This import was already undone")
 
+    created_parts = set(created.get("parts", []))
     for s in stock:
-        await db.execute(delete(SerializedItem).where(SerializedItem.batch_id.in_(s["batch_ids"])))
-        await db.execute(delete(StockItemBatch).where(StockItemBatch.id.in_(s["batch_ids"])))
-        await db.execute(delete(StockMovement).where(
-            StockMovement.part_id == s["part_id"], StockMovement.ref_type == "import", StockMovement.ref_id == batch.id))
-        sl = (await db.execute(select(StockLevel).where(
-            StockLevel.part_id == s["part_id"], StockLevel.location_id == s["location_id"]))).scalars().first()
-        if sl is not None:
-            sl.qty_available = (sl.qty_available or 0) - s["qty"]
+        if s["part_id"] in created_parts:
+            continue            # the product itself goes below, with every row it ever had
+        await _reverse_stock(db, current, batch, s)
     kept = 0
     for entry in reversed(u.get("updated", [])):
         t, i, before = entry[0], entry[1], entry[2]
@@ -1210,7 +1211,7 @@ async def undo(db, current, batch: ImportBatch) -> dict:
             kept_categories += 1
             continue
         if t == "parts":
-            for m in (StockLevel, StockMovement, StockItemBatch, SerializedItem):
+            for m in (SerializedItem, StockLevel, StockMovement, StockItemBatch):   # units before their layers
                 await db.execute(delete(m).where(m.part_id == i))
         await db.execute(delete(models[t]).where(models[t].id == i))
     from backend.services import audit
@@ -1220,6 +1221,43 @@ async def undo(db, current, batch: ImportBatch) -> dict:
     await db.commit()
     return {"ok": True, "removed": len(u.get("created", [])), "restored": len(u.get("updated", [])),
             "kept_newer": kept}
+
+
+async def _reverse_stock(db, current, batch: ImportBatch, s: dict) -> None:
+    """Audit INV-03 — take an import's opening stock of an existing product back out the way any
+    stock leaves: a guarded draw from the bins it went into (never below zero; 409 if it's no longer
+    there), one compensating `import_undo` movement per bin, the import's cost layers emptied (kept,
+    so history still explains them) and its serial units retired as written off. Before, the undo
+    deleted the movements, layers and units and subtracted the qty from an arbitrary row."""
+    from backend.services import serial_log, stock_rows
+    part_id, loc = s["part_id"], s["location_id"]
+    layers = (await db.execute(select(StockItemBatch).where(StockItemBatch.id.in_(s["batch_ids"] or [""]))
+                               .with_for_update().execution_options(populate_existing=True))).scalars().all()
+    units = (await db.execute(select(SerializedItem).where(SerializedItem.batch_id.in_(s["batch_ids"] or [""]))
+                              .with_for_update().execution_options(populate_existing=True))).scalars().all()
+    if any(Decimal(str(b.qty_remaining)) != Decimal(str(b.qty_received)) for b in layers) or \
+            any(u.status != "in_stock" for u in units):
+        raise HTTPException(409, "Can't undo: the imported stock has been used since")
+    received = (await db.execute(select(StockMovement.bin_id, StockMovement.qty, StockMovement.warehouse_id,
+                                        StockMovement.unit_cost).where(
+        StockMovement.part_id == part_id, StockMovement.location_id == loc, StockMovement.ref_type == "import",
+        StockMovement.ref_id == batch.id, StockMovement.qty > 0))).all()
+    for bin_id, qty, wh_id, cost in received or [(None, s["qty"], None, None)]:
+        try:
+            taken = await stock_rows.draw(db, part_id, loc, float(qty), bin_id=bin_id)
+        except stock_rows.NotEnoughStock as e:
+            raise HTTPException(409, f"Can't undo: only {e.have:g} of the {float(qty):g} imported units are "
+                                     f"still in stock")
+        for t_bin, t_qty in taken:
+            db.add(StockMovement(part_id=part_id, location_id=loc, bin_id=t_bin, warehouse_id=wh_id,
+                                 movement_type="import_undo", qty=-t_qty, unit_cost=cost,
+                                 ref_type="import", ref_id=batch.id, created_by_id=current.id))
+    for b in layers:
+        b.qty_remaining = Decimal("0")
+    for u in units:
+        u.status = "written_off"
+        serial_log.record(db, u, "written_off", ref_type="import", ref_id=batch.id,
+                          label="Import undone", actor_id=current.id)
 
 
 # ── templates ────────────────────────────────────────────────────────────────

@@ -445,7 +445,8 @@ async def delete_sale(
             if hold:
                 hold.qty = (hold.qty or 0) + d["qty"]
                 hold.released = False
-                await stock_rows.reserve(db, ln.ref_id, sale.location_id, d["qty"])
+                await stock_rows.reserve(db, ln.ref_id, sale.location_id, d["qty"],
+                                         ref_type="sale_void", ref_id=sale.id)
 
     if sale.coupon_id:
         await db.execute(sa_update(Coupon).where(Coupon.id == sale.coupon_id, Coupon.uses > 0)

@@ -67,6 +67,17 @@ class DocLine(BaseModel):
     comment_public: bool = False
 
 
+async def _reachable_docs(db: AsyncSession, current, docs: list) -> list:
+    """Audit SEC-04: documents of warehouses this person can reach (all for an unrestricted role)."""
+    r = await wh.reach(db, current)
+    if r is None:
+        return list(docs)
+    from backend.models import Warehouse
+    loc_of = dict((await db.execute(select(Warehouse.id, Warehouse.location_id).where(
+        Warehouse.org_id == current.org_id))).all())
+    return [d for d in docs if wh.reachable(r, loc_of.get(d.warehouse_id), d.warehouse_id)]
+
+
 async def _stock_rows(db: AsyncSession, part_id: str, warehouse) -> list[StockLevel]:
     # Prefer warehouse-keyed rows; fall back to the location-level rows that postings, sales
     # and PO receipts actually write (they key StockLevel by location_id, warehouse_id NULL).
@@ -100,58 +111,25 @@ async def _take_stock(db: AsyncSession, part_id: str, warehouse, qty: float, *,
 
 
 async def _deplete_batches_fefo(db: AsyncSession, part_id: str, warehouse, qty: float) -> None:
-    """First-Expired-First-Out batch depletion.
+    """First-Expired-First-Out batch depletion: the layers with the nearest expiry go first, so the
+    expiration report doesn't keep flagging stock that has already left.
 
-    Aggregate stock only knows *how much* is on the shelf; batches know *which* stock and
-    *when it expires*. When we remove stock, the batches with the nearest expiry must go
-    first — otherwise a write-off would leave the oldest goods sitting on the shelf and
-    the expiration report would keep flagging stock that, on paper, we'd already removed.
-
-    Parts without any tracked batches are a no-op: the aggregate decrement in the caller
-    is all there is for them, so non-perishable inventory is unaffected.
-    """
-    from backend.models import StockItemBatch
-
-    batches = (await db.execute(select(StockItemBatch).where(
-        StockItemBatch.part_id == part_id,
-        StockItemBatch.warehouse_id == warehouse.id,
-        StockItemBatch.qty_remaining > 0)
-        # NULL expiry sorts last: dated (perishable) stock is consumed before undated
-        .order_by(StockItemBatch.expiry_date.is_(None), StockItemBatch.expiry_date,
-                  StockItemBatch.received_at))).scalars().all()
-
-    remaining = float(qty)
-    for b in batches:
-        if remaining <= 0:
-            break
-        take = min(float(b.qty_remaining or 0), remaining)
-        b.qty_remaining = float(b.qty_remaining or 0) - take
-        remaining -= take
-    # If batches don't cover the full quantity (untracked receipts predate batch tracking),
-    # the aggregate decrement already handled it — we simply drain what batches we have.
+    Audit INV-02: through the one layer service (`stock_consume`) — the warehouse's layers plus the
+    location's untagged ones (older data; they were never drained before), locked and read fresh
+    (two documents at once each wrote qty_remaining from what they read). Units no layer covers
+    (stock from before cost layers) need nothing more: the caller already took them off the shelf."""
+    from backend.services import stock_consume
+    await stock_consume._consume_layers(db, warehouse.org_id, part_id, qty, warehouse.location_id,
+                                        fefo=True, warehouse_id=warehouse.id)
 
 
 async def _restore_batches(db: AsyncSession, part_id: str, warehouse, qty: float) -> None:
-    """W3-C: a reverted write-off puts its units back on the cost layers it drew (the reverse of
-    _deplete_batches_fefo: the last layer drawn first, never above what a layer received), so the
-    layers keep holding exactly what's on the shelf."""
-    from decimal import Decimal as _D
-
-    from backend.models import StockItemBatch
-    batches = (await db.execute(select(StockItemBatch).where(
-        StockItemBatch.part_id == part_id, StockItemBatch.warehouse_id == warehouse.id)
-        .order_by(StockItemBatch.expiry_date.is_(None), StockItemBatch.expiry_date,
-                  StockItemBatch.received_at).with_for_update())).scalars().all()
-    left = _D(str(qty))
-    for b in reversed(batches):
-        if left <= 0:
-            break
-        room = _D(str(b.qty_received or 0)) - _D(str(b.qty_remaining or 0))
-        if room <= 0:
-            continue
-        back = min(room, left)
-        b.qty_remaining = _D(str(b.qty_remaining or 0)) + back
-        left -= back
+    """W3-C: a reverted write-off puts its units back on the cost layers it drew (the newest layer
+    first, never above what a layer received), so the layers keep holding exactly what's on the
+    shelf. Same layer set and locking as `_deplete_batches_fefo`."""
+    from backend.services import stock_consume
+    await stock_consume.restore_layers(db, warehouse.org_id, part_id, warehouse.location_id, qty,
+                                       warehouse_id=warehouse.id)
 
 
 async def _give_stock(db: AsyncSession, part_id: str, warehouse, qty: float,
@@ -218,6 +196,7 @@ async def list_returns(
     if warehouse_id:
         q = q.where(PurchaseReturn.warehouse_id == warehouse_id)
     rows = (await db.execute(q.order_by(PurchaseReturn.created_at.desc()).limit(200))).scalars().all()
+    rows = await _reachable_docs(db, current, rows)      # SEC-04
     lines = await rows_by(db, PurchaseReturnLine, PurchaseReturnLine.return_id, [r.id for r in rows])
     return {"items": [_ser_return(r, lines.get(r.id, [])) for r in rows]}
 
@@ -288,7 +267,8 @@ async def create_return(
             qty=ln.qty, unit_cost=cost, total=line_total))
         db.add(StockMovement(
             part_id=ln.part_id, location_id=w.location_id, warehouse_id=w.id,
-            movement_type="return_to_supplier", qty=-ln.qty, created_by_id=current.id))
+            movement_type="return_to_supplier", qty=-ln.qty, created_by_id=current.id,
+            ref_type="purchase_return", ref_id=doc.id))
 
     doc.total = total
     # settlement: credit the supplier's balance, or take cash back from an account
@@ -341,21 +321,23 @@ async def delete_return(
     lines = (await db.execute(select(PurchaseReturnLine).where(
         PurchaseReturnLine.return_id == doc.id))).scalars().all()
     for ln in lines:
+        if ln.serialized_item_id:
+            # INV-05: a unit that is back in stock some other way (a stocktake found it) isn't restored twice
+            unit = (await db.execute(select(SerializedItem).where(
+                SerializedItem.id == ln.serialized_item_id, SerializedItem.org_id == current.org_id,
+                SerializedItem.part_id == ln.part_id).with_for_update())).scalar_one_or_none()
+            if unit is None or unit.status != "written_off":
+                continue
+            unit.status = "in_stock"
+            serial_log.record(db, unit, "restored", ref_type="purchase_return", ref_id=doc.id,
+                              label="Supplier return deleted", actor_id=current.id)
         await _give_stock(db, ln.part_id, w, ln.qty, w.location_id if w else None, bin_id=getattr(ln, "bin_id", None))
         if w:
             await _restore_batches(db, ln.part_id, w, ln.qty)
-        if ln.serialized_item_id:
-            unit = (await db.execute(select(SerializedItem).where(
-                SerializedItem.id == ln.serialized_item_id, SerializedItem.org_id == current.org_id,
-                SerializedItem.part_id == ln.part_id))).scalar_one_or_none()
-            if unit:
-                unit.status = "in_stock"
-                serial_log.record(db, unit, "restored", ref_type="purchase_return", ref_id=doc.id,
-                                  label="Supplier return deleted", actor_id=current.id)
         db.add(StockMovement(
             part_id=ln.part_id, location_id=w.location_id if w else None,
             warehouse_id=doc.warehouse_id, movement_type="return_reverted",
-            qty=ln.qty, created_by_id=current.id))
+            qty=ln.qty, created_by_id=current.id, ref_type="purchase_return", ref_id=doc.id))
     # 144ax: only a BALANCE-settled return ever moved the AP balance on create, so only that
     # reverses it here. (Previously the column was bumped unconditionally — a cash-settled return,
     # which is paid from the cashbox, had its deletion wrongly inflate the AP balance with no
@@ -403,6 +385,7 @@ async def list_write_offs(
     if warehouse_id:
         q = q.where(WriteOff.warehouse_id == warehouse_id)
     rows = (await db.execute(q.order_by(WriteOff.created_at.desc()).limit(200))).scalars().all()
+    rows = await _reachable_docs(db, current, rows)      # SEC-04
     by_doc = await rows_by(db, WriteOffLine, WriteOffLine.write_off_id, [d.id for d in rows])
     # 144bg — resolve part names once so the list view can show a readable summary row.
     pname = await names_by_id(db, Part.id, Part.name,
@@ -479,7 +462,8 @@ async def create_write_off(
             comment=ln.comment, comment_public=ln.comment_public))
         db.add(StockMovement(
             part_id=ln.part_id, location_id=w.location_id, warehouse_id=w.id,
-            movement_type="writeoff", qty=-ln.qty, created_by_id=current.id))
+            movement_type="writeoff", qty=-ln.qty, created_by_id=current.id,
+            ref_type="write_off", ref_id=doc.id))
 
     doc.total_cost = total
     await db.commit()
@@ -509,17 +493,30 @@ async def edit_write_off_line(
     current: Employee = Depends(require_perm("can_manage_inventory")),
 ):
     """Correct a write-off after the fact. Changing the quantity settles the difference
-    against stock, so the books stay true rather than needing a compensating entry."""
+    against stock, so the books stay true rather than needing a compensating entry.
+
+    Audit INV-05: the document and the line are locked (FOR UPDATE) and re-read, so two edits can't
+    both take the same delta and an edit can't land on a write-off a concurrent revert just undid
+    (the revert's conditional status UPDATE waits for this lock). A line that names a serial unit,
+    or any line of a serialized product, keeps its qty: each unit is its own line."""
     doc = (await db.execute(select(WriteOff).where(
-        WriteOff.id == doc_id, WriteOff.org_id == current.org_id))).scalar_one_or_none()
+        WriteOff.id == doc_id, WriteOff.org_id == current.org_id)
+        .with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
     if not doc:
         raise HTTPException(404, "Write-off not found")
     if doc.status == "reverted":
         raise HTTPException(409, "This write-off has been reverted")
     ln = (await db.execute(select(WriteOffLine).where(
-        WriteOffLine.id == line_id, WriteOffLine.write_off_id == doc_id))).scalar_one_or_none()
+        WriteOffLine.id == line_id, WriteOffLine.write_off_id == doc_id)
+        .with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
     if not ln:
         raise HTTPException(404, "Line not found")
+    if data.qty is not None and data.qty != ln.qty:
+        serialized = ln.serialized_item_id or (await db.execute(select(Part.serialized).where(
+            Part.id == ln.part_id, Part.org_id == current.org_id))).scalar_one_or_none()
+        if serialized:
+            raise HTTPException(422, "This line is one serialized unit — its quantity can't change. "
+                                     "Add or remove a line naming each IMEI / serial instead.")
 
     w = await wh.resolve(db, current.org_id, warehouse_id=doc.warehouse_id)
     if data.qty is not None and data.qty != ln.qty:
@@ -535,7 +532,7 @@ async def edit_write_off_line(
         db.add(StockMovement(
             part_id=ln.part_id, location_id=w.location_id if w else None,
             warehouse_id=doc.warehouse_id, movement_type="writeoff_adjust",
-            qty=-delta, created_by_id=current.id))
+            qty=-delta, created_by_id=current.id, ref_type="write_off", ref_id=doc.id))
         ln.qty = data.qty
     if data.comment is not None:
         ln.comment = data.comment
@@ -571,21 +568,24 @@ async def delete_write_off(
     lines = (await db.execute(select(WriteOffLine).where(
         WriteOffLine.write_off_id == doc.id))).scalars().all()
     for ln in lines:
+        if ln.serialized_item_id:
+            # INV-05: only a unit still written off comes back. One a stocktake already found is on
+            # the shelf (with its stock) — restoring it again counted the same phone twice.
+            unit = (await db.execute(select(SerializedItem).where(
+                SerializedItem.id == ln.serialized_item_id, SerializedItem.org_id == current.org_id,
+                SerializedItem.part_id == ln.part_id).with_for_update())).scalar_one_or_none()
+            if unit is None or unit.status != "written_off":
+                continue
+            unit.status = "in_stock"
+            serial_log.record(db, unit, "restored", ref_type="write_off", ref_id=doc.id,
+                              label="Write-off reverted", actor_id=current.id)
         await _give_stock(db, ln.part_id, w, ln.qty, w.location_id if w else None, bin_id=getattr(ln, "bin_id", None))
         if w:
             await _restore_batches(db, ln.part_id, w, ln.qty)
-        if ln.serialized_item_id:
-            unit = (await db.execute(select(SerializedItem).where(
-                SerializedItem.id == ln.serialized_item_id, SerializedItem.org_id == current.org_id,
-                SerializedItem.part_id == ln.part_id))).scalar_one_or_none()
-            if unit:
-                unit.status = "in_stock"
-                serial_log.record(db, unit, "restored", ref_type="write_off", ref_id=doc.id,
-                                  label="Write-off reverted", actor_id=current.id)
         db.add(StockMovement(
             part_id=ln.part_id, location_id=w.location_id if w else None,
             warehouse_id=doc.warehouse_id, movement_type="writeoff_reverted",
-            qty=ln.qty, created_by_id=current.id))
+            qty=ln.qty, created_by_id=current.id, ref_type="write_off", ref_id=doc.id))
     await db.commit()
     return {"ok": True, "stock_restored": True}
 
