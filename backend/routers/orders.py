@@ -1689,6 +1689,17 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     from backend.services.invoice_money import lock_order
     await lock_order(db, order.id)
     await db.refresh(order, ["status", "closed_at", "total"])
+    if data.status == order.status:
+        # WO-01: the job is already there (a double tap, a phone retry, the tech app's offline
+        # replay, a board drop on its own column). Nothing moves, so nothing else may happen: no
+        # second customer message, webhook or feedback request, and closed_at, the SLA clock
+        # (status_entered_at) and the warranty keep their values. Read under lock_order, so the
+        # second of two racing requests lands here. The commit only saves what the caller already
+        # did in this request (e.g. /finish's payment on an already-finished job) and ends the lock.
+        if not check_only:
+            await db.commit()
+        return {"ok": True, "status": order.status, "unchanged": True, "triggers_payment": False,
+                "is_closing": False, "is_dropped": False, "converted_order_id": None}
     if target is None and data.status != order.status and data.status not in _LEGACY_CLOSE_KEYS:
         # QA F1: any text (or an invoice / PO / estimate key such as inv_paid) used to be saved and
         # could lock the job closed. Only the record's own, switched-on pipeline is accepted.
