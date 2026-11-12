@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import defer, selectinload
 
 from backend.routers.assets import public_custom
 from backend.db.database import get_db
@@ -69,6 +69,10 @@ class DeviceIn(BaseModel):
     template_key: Optional[str] = None
     asset_group_id: Optional[str] = None
     custom_data: Optional[dict] = None
+
+# The columns a contact's asset list never shows: the photo and the encrypted passcode.
+_DEVICE_LIGHT = (defer(Device.image_data), defer(Device.passcode_enc))
+
 
 def _ser_client(c: Client, supplier=None, order_count=None) -> dict:
     return {
@@ -136,7 +140,9 @@ async def list_clients(
 
     q = (select(Client)
          .where(Client.org_id == current.org_id)
-         .options(selectinload(Client.devices))   # order counts come from one grouped query below
+         # order counts come from one grouped query below; the asset's photo and passcode are
+         # never printed in a list (PERF-04)
+         .options(selectinload(Client.devices).options(*_DEVICE_LIGHT))
          .order_by(Client.created_at.desc() if sort == "recent" else Client.name, Client.id))
     q = scoping.scope_clients(q, scope_role, current)
     if role == "supplier":
@@ -307,7 +313,7 @@ async def get_client(
 ):
     result = await db.execute(
         select(Client).where(Client.id == client_id, Client.org_id == current.org_id)
-        .options(selectinload(Client.devices), selectinload(Client.orders))
+        .options(selectinload(Client.devices).options(*_DEVICE_LIGHT))
     )
     client = result.scalar_one_or_none()
     if not client:
@@ -318,7 +324,11 @@ async def get_client(
     from backend.models import Supplier
     mirror = (await db.execute(select(Supplier).where(
         Supplier.org_id == current.org_id, Supplier.client_id == client.id))).scalars().first()
-    return _ser_client(client, supplier=mirror)
+    from backend.models import Order
+    # counted, not every order the client ever had loaded as full rows (PERF-04)
+    n_orders = (await db.execute(select(func.count()).select_from(Order).where(
+        Order.client_id == client.id, Order.org_id == current.org_id))).scalar_one()
+    return _ser_client(client, supplier=mirror, order_count=n_orders)
 
 @router.post("/{client_id}/portal-link")
 async def issue_portal_link(

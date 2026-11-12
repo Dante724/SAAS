@@ -4,7 +4,7 @@ from typing import Optional
 from fastapi import APIRouter, Depends
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy import case, select, func
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import defer, selectinload
 from backend.db.database import get_db
 from backend.models import Order, Client, Invoice, Part, StockLevel, Task, Employee
 from backend.services.auth import get_current_employee, require_perm
@@ -13,6 +13,10 @@ from backend.services.dates import day_start_utc, now_utc, range_edge, shop_toda
 from backend.services import revenue as money_rules, stock_rows
 from backend.services.revenue import low_stock_count_query, low_stock_query, line_net
 from backend.services.task_visibility import assigned_sql, visibility_conds
+
+# Product photos (parts.image_data, up to 400 KB each) are never needed to print a report row
+# (PERF-03): every report that reads Part rows defers the column.
+_NO_PHOTO = defer(Part.image_data)
 
 router = APIRouter(prefix="/api/reports", tags=["reports"])
 
@@ -504,7 +508,7 @@ async def _rep_product_turnover(db, org, df, dt, **kw):
     it; "all" both."""
     movement = kw.get("movement") or "with"
     rows = (await db.execute(
-        select(StockMovement, Part).join(Part, StockMovement.part_id == Part.id)
+        select(StockMovement, Part).options(_NO_PHOTO).join(Part, StockMovement.part_id == Part.id)
         .where(Part.org_id == org, StockMovement.movement_type.in_(("use", "return")),
                StockMovement.created_at >= df, StockMovement.created_at <= dt))).all()
     agg: dict = {}
@@ -527,7 +531,7 @@ async def _rep_product_turnover(db, org, df, dt, **kw):
 async def _rep_inventory_writeoffs(db, org, df, dt, **kw):
     """Manual write-offs (movement_type=writeoff) — separate report from turnover."""
     rows = (await db.execute(
-        select(StockMovement, Part).join(Part, StockMovement.part_id == Part.id)
+        select(StockMovement, Part).options(_NO_PHOTO).join(Part, StockMovement.part_id == Part.id)
         .where(Part.org_id == org, StockMovement.movement_type == "writeoff",
                StockMovement.created_at >= df, StockMovement.created_at <= dt))).all()
     cols = ["Product", "Qty", "Date"]
@@ -537,7 +541,7 @@ async def _rep_inventory_writeoffs(db, org, df, dt, **kw):
 
 async def _rep_stock_levels(db, org, df, dt, **kw):
     parts = (await db.execute(select(Part).where(Part.org_id == org, Part.active == True)  # noqa: E712
-        .options(selectinload(Part.stock_levels)))).scalars().all()
+        .options(selectinload(Part.stock_levels), _NO_PHOTO))).scalars().all()
     cols = ["Product", "SKU", "Available", "Reserved", "Min", "Value (cost)"]
     data = []
     for p in parts:
@@ -550,12 +554,13 @@ async def _rep_stock_levels(db, org, df, dt, **kw):
 
 
 async def _rep_activity_log(db, org, df, dt, **kw):
-    rows = (await db.execute(select(EventFeedItem).where(
+    # Text only: the row's photo or file never leaves the database for this report (PERF-05).
+    rows = (await db.execute(select(
+        EventFeedItem.created_at, EventFeedItem.entity_type, EventFeedItem.body).where(
         EventFeedItem.org_id == org, EventFeedItem.created_at >= df, EventFeedItem.created_at <= dt)
-        .order_by(EventFeedItem.created_at.desc()).limit(500))).scalars().all()
+        .order_by(EventFeedItem.created_at.desc()).limit(500))).all()
     cols = ["When", "Entity", "Event"]
-    data = [[r.created_at.strftime("%Y-%m-%d %H:%M"), getattr(r, "entity_type", "—") or "—",
-             (getattr(r, "body", "") or getattr(r, "message", "") or "")] for r in rows]
+    data = [[r.created_at.strftime("%Y-%m-%d %H:%M"), r.entity_type or "—", r.body or ""] for r in rows]
     return cols, data
 
 
@@ -695,7 +700,7 @@ async def _rep_assortment(db, org, df, dt, **kw):
     whs = {w.id: w for w in (await db.execute(select(Warehouse).where(
         Warehouse.org_id == org, Warehouse.kind == "product",
         Warehouse.deleted_at.is_(None)))).scalars().all()}
-    rows = (await db.execute(select(StockLevel, Part)
+    rows = (await db.execute(select(StockLevel, Part).options(_NO_PHOTO)
         .join(Part, StockLevel.part_id == Part.id)
         .where(Part.org_id == org, Part.active == True))).all()  # noqa: E712
 
@@ -715,29 +720,34 @@ async def _rep_assortment(db, org, df, dt, **kw):
     return cols, data
 
 
+async def _on_order(db, org) -> dict:
+    """{part id: units still to arrive} over the shop's open purchase orders, in one grouped
+    query (PERF-11: it used to be one query per open PO). Only lines with something still
+    outstanding count, as before."""
+    from backend.models import POLine, PurchaseOrder
+    out = func.coalesce(POLine.qty_ordered, 0) - func.coalesce(POLine.qty_received, 0)
+    open_pos = (select(PurchaseOrder.id)
+                .join(Supplier, PurchaseOrder.supplier_id == Supplier.id)
+                .where(Supplier.org_id == org,
+                       PurchaseOrder.status.notin_(["received", "canceled", "cancelled"])))
+    return {pid: float(q or 0) for pid, q in (await db.execute(
+        select(POLine.part_id, func.sum(out))
+        .where(POLine.po_id.in_(open_pos), out > 0)
+        .group_by(POLine.part_id))).all()}
+
+
 async def _rep_purchase_list(db, org, df, dt, **kw):
     """What to buy. A product is short when what's on the shelf, minus what's already
     promised to a customer, falls below its minimum — reserved stock isn't really yours
     to sell. Anything already on order is netted off, so the same part isn't ordered
     twice while the first delivery is still in transit."""
-    from backend.models import POLine, PurchaseOrder
 
     parts = (await db.execute(select(Part).where(
         Part.org_id == org, Part.active == True)  # noqa: E712
-        .options(selectinload(Part.stock_levels)))).scalars().all()
+        .options(selectinload(Part.stock_levels), _NO_PHOTO))).scalars().all()
 
     # what's already coming
-    incoming: dict = {}
-    open_pos = (await db.execute(select(PurchaseOrder)
-        .join(Supplier, PurchaseOrder.supplier_id == Supplier.id)
-        .where(Supplier.org_id == org,
-               PurchaseOrder.status.notin_(["received", "canceled", "cancelled"])))).scalars().all()
-    for po in open_pos:
-        for ln in (await db.execute(select(POLine).where(
-                POLine.po_id == po.id))).scalars().all():
-            outstanding = (ln.qty_ordered or 0) - (ln.qty_received or 0)
-            if outstanding > 0:
-                incoming[ln.part_id] = incoming.get(ln.part_id, 0) + outstanding
+    incoming = await _on_order(db, org)
 
     cols = ["Product", "SKU", "Available", "Reserved", "Free", "Min", "On order",
             "Suggest order", "Est. cost"]
@@ -766,7 +776,7 @@ async def _rep_expiration(db, org, df, dt, **kw):
     from backend.models import StockItemBatch, Warehouse
     whs = {w.id: w.name for w in (await db.execute(select(Warehouse).where(
         Warehouse.org_id == org))).scalars().all()}
-    rows = (await db.execute(select(StockItemBatch, Part)
+    rows = (await db.execute(select(StockItemBatch, Part).options(_NO_PHOTO)
         .join(Part, StockItemBatch.part_id == Part.id)
         .where(StockItemBatch.org_id == org,
                StockItemBatch.expiry_date.isnot(None),
@@ -846,7 +856,7 @@ async def _rep_stock_valuation(db, org, df, dt, **kw):
     whs = {w.id: w.name for w in (await db.execute(select(Warehouse).where(
         Warehouse.org_id == org, Warehouse.kind == "product",
         Warehouse.deleted_at.is_(None)))).scalars().all()}
-    rows = (await db.execute(select(StockLevel, Part)
+    rows = (await db.execute(select(StockLevel, Part).options(_NO_PHOTO)
         .join(Part, StockLevel.part_id == Part.id)
         .where(Part.org_id == org, Part.active == True))).all()  # noqa: E712
     agg = {}
@@ -873,7 +883,7 @@ async def _rep_dead_stock(db, org, df, dt, **kw):
     the tied-up cash you could free by clearing them. The inverse of the reorder list."""
     parts = (await db.execute(select(Part).where(
         Part.org_id == org, Part.active == True)  # noqa: E712
-        .options(selectinload(Part.stock_levels)))).scalars().all()
+        .options(selectinload(Part.stock_levels), _NO_PHOTO))).scalars().all()
     last = {}
     mv_rows = (await db.execute(
         select(StockMovement.part_id, func.max(StockMovement.created_at))
@@ -905,7 +915,6 @@ async def _rep_reorder_forecast(db, org, df, dt, **kw):
     days-of-cover and stockout date, then suggests an order quantity that covers the
     supplier's lead time plus a 14-day buffer — netting off what's already on order.
     Unlike the min-stock purchase list, this reacts to how fast things actually move."""
-    from backend.models import POLine, PurchaseOrder
     WINDOW, COVER = 28, 14
     since = now_utc() - timedelta(days=WINDOW)
     vel = {pid: float(q or 0) for pid, q in (await db.execute(
@@ -914,21 +923,12 @@ async def _rep_reorder_forecast(db, org, df, dt, **kw):
         .where(Part.org_id == org, StockMovement.movement_type == "use",
                StockMovement.created_at >= since)
         .group_by(StockMovement.part_id))).all()}
-    incoming = {}
-    open_pos = (await db.execute(select(PurchaseOrder)
-        .join(Supplier, PurchaseOrder.supplier_id == Supplier.id)
-        .where(Supplier.org_id == org,
-               PurchaseOrder.status.notin_(["received", "canceled", "cancelled"])))).scalars().all()
-    for po in open_pos:
-        for ln in (await db.execute(select(POLine).where(POLine.po_id == po.id))).scalars().all():
-            out = (ln.qty_ordered or 0) - (ln.qty_received or 0)
-            if out > 0:
-                incoming[ln.part_id] = incoming.get(ln.part_id, 0) + out
+    incoming = await _on_order(db, org)
     lead = {s.id: (s.lead_days or 0) for s in (await db.execute(
         select(Supplier).where(Supplier.org_id == org))).scalars().all()}
     parts = (await db.execute(select(Part).where(
         Part.org_id == org, Part.active == True)  # noqa: E712
-        .options(selectinload(Part.stock_levels)))).scalars().all()
+        .options(selectinload(Part.stock_levels), _NO_PHOTO))).scalars().all()
     cols = ["Product", "SKU", "Free", "Daily use", "Days left", "Stockout ~", "Lead days",
             "On order", "Suggest order", "Est. cost"]
     data = []
