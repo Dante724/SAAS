@@ -158,10 +158,14 @@ async def test_notify_prefers_oauth_then_falls_back(client, tenant, db, monkeypa
                            access_token="at", connected=True, is_default=True))
     await db.commit()
 
-    async def _fake_send(c, *, recipient, subject, body, html=False):
+    via: list = []
+
+    async def _fake_send(c, *, recipient, subject, body, html=False, message_id=None):
+        via.append(message_id)
         return {"status": "sent", "error": None}
     monkeypatch.setattr("backend.services.email_oauth.send_via_connection", _fake_send)
 
     r1 = await client.post(f"/api/orders/{oid}/notify",
                            json={"channel": "email", "subject": "Hi", "body": "Ready"}, headers=tenant)
     assert r1.status_code == 200 and r1.json()["delivery"] == "oauth"
+    assert r1.json()["status"] == "sent" and len(via) == 1     # really went out through the mailbox

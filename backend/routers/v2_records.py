@@ -609,9 +609,9 @@ async def add_order_comment(oid: str, data: OrderCommentIn, db: AsyncSession = D
         db.add(c)
         await db.flush()
         await _audit(db, p, "order.comment", "order", o.id, comment_id=c.id, visible_to_client=bool(visible))
-        await v1._commit(db)
-        if visible:
+        if visible:   # queued with the comment, in its transaction (audit WO-08)
             await notify_comment_added(db, p.org_id, o.id, actor_id=None)
+        await v1._commit(db)
         created = getattr(c, "created_at", None)
         return {"data": {"id": c.id, "order_id": o.id, "body": c.body, "visible_to_client": bool(visible),
                          "created_at": created.replace(microsecond=0).isoformat() + "Z" if created else None}}

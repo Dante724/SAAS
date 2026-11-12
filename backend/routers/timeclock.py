@@ -74,12 +74,34 @@ def _shift_elapsed(s) -> int:
     return max(int((end - s.started_at).total_seconds()), 0)
 
 
-def _ser_shift(s) -> dict:
+def _ser_shift(s, needs_review: bool = False) -> dict:
     return {"id": s.id, "location_id": s.location_id,
             "started_at": utc_iso(s.started_at),
             "ended_at": utc_iso(s.ended_at),
             "elapsed_sec": _shift_elapsed(s),
-            "hours_worked": q2(s.hours_worked or 0), "open": s.ended_at is None}
+            "hours_worked": q2(s.hours_worked or 0), "open": s.ended_at is None,
+            "needs_review": needs_review}
+
+
+# LAB-07: a shift left open (a forgotten clock-out) is closed at most this long after it started,
+# and flagged for a manager to correct, like a job timer left running (AUTO_STOP_HOURS).
+SHIFT_CAP_HOURS = 16
+
+
+async def _shifts_to_review(db, shift_ids) -> set:
+    """Shifts closed by the cap and not corrected by a manager since."""
+    from backend.models import AuditLog
+    ids = [i for i in shift_ids if i]
+    if not ids:
+        return set()
+    rows = (await db.execute(select(AuditLog.entity_id, AuditLog.action).where(
+        AuditLog.entity_type == "shift", AuditLog.entity_id.in_(ids),
+        AuditLog.action.in_(("shift.auto_capped", "shift.correct")))
+        .order_by(AuditLog.created_at, AuditLog.id))).all()
+    last: dict = {}
+    for sid, action in rows:
+        last[sid] = action
+    return {sid for sid, action in last.items() if action == "shift.auto_capped"}
 
 
 async def _open_shift(db, employee_id):
@@ -127,23 +149,37 @@ async def shift_clock_in(db: AsyncSession = Depends(get_db),
 async def shift_clock_out(db: AsyncSession = Depends(get_db),
                           current: Employee = Depends(get_current_employee)):
     from backend.models import Shift
+    from backend.services import audit
+    await _lock_employee(db, current.id)          # a double tap closes the shift once
     s = await _open_shift(db, current.id)
     if not s:
         raise HTTPException(409, "You are not clocked in")
     # Close every open shift, not just the newest: one leaked open (e.g. by an older double
     # tap) would otherwise accrue hours forever. Only the newest is worked time; a leaked
     # duplicate closes at its own start with 0 hours, so payroll doesn't pay the time twice.
+    capped = False
     for o in (await db.execute(select(Shift).where(
             Shift.employee_id == current.id, Shift.ended_at.is_(None)))).scalars().all():
         if o is s:
-            o.ended_at = now_utc()
+            end, cap = now_utc(), o.started_at + timedelta(hours=SHIFT_CAP_HOURS)
+            if end > cap:
+                # LAB-07: a forgotten clock-out. Pay at most the cap, and flag it for a manager,
+                # who corrects it to the real hours (PATCH /shifts/{id}).
+                capped = True
+                await audit.record(db, org_id=current.org_id, actor_id=current.id, action="shift.auto_capped",
+                                   entity_type="shift", entity_id=o.id,
+                                   diff={"clocked_out_at": utc_iso(end), "capped_at": utc_iso(cap),
+                                         "elapsed_hours": float(q2((end - o.started_at).total_seconds() / 3600)),
+                                         "cap_hours": SHIFT_CAP_HOURS})
+                end = cap
+            o.ended_at = end
             o.hours_worked = q2(_shift_elapsed(o) / 3600.0)
         else:
             o.ended_at = o.started_at
             o.hours_worked = 0
     await db.commit()
     await db.refresh(s)
-    return _ser_shift(s)
+    return _ser_shift(s, needs_review=capped)
 
 
 @router.get("/shift/history")
@@ -153,7 +189,126 @@ async def shift_history(db: AsyncSession = Depends(get_db),
     rows = (await db.execute(select(Shift).where(Shift.employee_id == current.id)
             .order_by(Shift.started_at.desc()).limit(60))).scalars().all()
     total = q2(sum(s.hours_worked or 0 for s in rows if s.ended_at))
-    return {"items": [_ser_shift(s) for s in rows], "total_hours": total}
+    review = await _shifts_to_review(db, [s.id for s in rows])
+    return {"items": [_ser_shift(s, s.id in review) for s in rows], "total_hours": total}
+
+
+# ── LAB-07: manager corrections to attendance shifts ──────────────────────────────────────────
+async def _org_shift(db: AsyncSession, org_id: str, shift_id: str):
+    """A shift of this shop (shifts have no org_id: they belong to the shop through the employee)."""
+    from backend.models import Shift
+    s = (await db.execute(select(Shift).join(Employee, Employee.id == Shift.employee_id).where(
+        Shift.id == shift_id, Employee.org_id == org_id))).scalar_one_or_none()
+    if not s:
+        raise HTTPException(404, "Shift not found")
+    return s
+
+
+class ShiftFixIn(BaseModel):
+    started_at: Optional[str] = None
+    ended_at: Optional[str] = None
+    reason: str = Field(min_length=1, max_length=500)
+
+
+async def _reprice_paid_shift(db: AsyncSession, org_id: str, s, old_hours: float) -> Decimal:
+    """A shift whose attendance wage was already posted is paid again for its corrected hours:
+    the difference goes in as a new ledger row in the shift's group (`attendance:<shift>`, as
+    payroll.post_attendance_wages keys it), never by editing the old row (the ledger is
+    append-only), dated to today so a correction to a period already run reaches the next run.
+    Same shape as the per-entry wages of timesheets (_sync_day_wages). The rate is the one the
+    shift was paid at. A shift not yet paid posts nothing: the next posting pays the new hours.
+    Call with the employee row locked. Returns the change posted."""
+    from backend.models import EmployeeBalanceLedger as L
+    from backend.services.payroll import CommissionEngine, _money
+    key = L.normalize_key(f"attendance:{s.id}")
+    net, n = (await db.execute(select(func.coalesce(func.sum(L.amount), 0), func.count(L.id)).where(
+        L.org_id == org_id, L.accrual_key == key))).one()
+    if not n:
+        return Decimal("0")
+    net = _money(net)
+    if old_hours and old_hours > 0:
+        rate = Decimal(str(net)) / Decimal(str(old_hours))
+    else:
+        emp = (await db.execute(select(Employee).where(Employee.id == s.employee_id))).scalar_one()
+        rate = Decimal(str(emp.hourly_cost_rate or (emp.wage_value if emp.wage_type == "hourly" else 0) or 0))
+    delta = _money(_money(Decimal(str(s.hours_worked or 0)) * rate) - net)
+    if delta == 0:
+        return Decimal("0")
+    tz = await _emp_tz(db, org_id, s.employee_id)
+    today, day = today_in(tz), utc_to_wall(s.started_at, tz).date()
+    posted = await CommissionEngine(db, org_id)._post(
+        employee_id=s.employee_id, entry_type="hourly_wage", amount=delta, event=None, rule_id=None,
+        ref_type="attendance", ref_id=f"{s.id}:{today}:{today}", idempotency_key=f"{key}@{n}",
+        accrual_key=key, note=f"Shop attendance wages {day}: shift corrected ({q2(s.hours_worked or 0)}h)")
+    return delta if posted else Decimal("0")
+
+
+@router.patch("/shifts/{shift_id}")
+async def correct_shift(
+    shift_id: str, data: ShiftFixIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_manage_payroll")),
+):
+    """LAB-07: a manager corrects an attendance shift (a forgotten clock-out, a wrong start). Every
+    change is written to the audit log with the reason, and a shift already paid has its wage
+    re-priced with a reversing ledger row."""
+    from backend.models import Shift
+    from backend.services import audit
+    s = await _org_shift(db, current.org_id, shift_id)
+    await _assert_manage_emp(db, current, s.employee_id)
+    await assert_not_self(db, current, s.employee_id, "correct your own shift")
+    await _lock_employee(db, s.employee_id)
+    await db.refresh(s)
+    start = _udt(data.started_at, "started_at") if data.started_at else s.started_at
+    end = _udt(data.ended_at, "ended_at") if data.ended_at else s.ended_at
+    if end is None:
+        raise HTTPException(400, "Give the time this shift ended")
+    if end <= start:
+        raise HTTPException(400, "A shift must end after it starts")
+    if end > now_utc() + timedelta(minutes=1):
+        raise HTTPException(400, "A shift can't end in the future")
+    if end - start > timedelta(hours=24):
+        raise HTTPException(400, "A shift can't be longer than 24 hours")
+    clash = (await db.execute(select(Shift.id).where(
+        Shift.employee_id == s.employee_id, Shift.id != s.id, Shift.started_at < end,
+        func.coalesce(Shift.ended_at, now_utc()) > start).limit(1))).first()
+    if clash:
+        raise HTTPException(409, "That overlaps another shift of this person")
+    before = {"started_at": utc_iso(s.started_at), "ended_at": utc_iso(s.ended_at),
+              "hours_worked": float(q2(s.hours_worked or 0))}
+    old_hours = float(s.hours_worked or 0)
+    s.started_at, s.ended_at = start, end
+    s.hours_worked = q2((end - start).total_seconds() / 3600.0)
+    await db.flush()
+    wage_change = await _reprice_paid_shift(db, current.org_id, s, old_hours)
+    after = {"started_at": utc_iso(s.started_at), "ended_at": utc_iso(s.ended_at),
+             "hours_worked": float(q2(s.hours_worked))}
+    diff = {k: [before[k], after[k]] for k in before if before[k] != after[k]}
+    diff.update(reason=data.reason.strip(), wage_change=float(wage_change))
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="shift.correct",
+                       entity_type="shift", entity_id=s.id, diff=diff)
+    await db.commit()
+    await db.refresh(s)
+    return {"ok": True, "shift": _ser_shift(s), "wage_change": float(wage_change)}
+
+
+@router.get("/shifts/{shift_id}/audit")
+async def shift_audit(
+    shift_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """LAB-07: the trail of a shift: automatic caps and manager corrections, newest first."""
+    from backend.models import AuditLog
+    s = await _org_shift(db, current.org_id, shift_id)
+    if not await _can_manage_emp(db, current, s.employee_id):
+        raise HTTPException(403, "Not allowed")
+    names = await _emp_map(db, current.org_id)
+    rows = (await db.execute(select(AuditLog).where(
+        AuditLog.org_id == current.org_id, AuditLog.entity_type == "shift", AuditLog.entity_id == s.id)
+        .order_by(AuditLog.created_at.desc(), AuditLog.id))).scalars().all()
+    return {"items": [{"action": a.action, "diff": a.diff, "actor": names.get(a.actor_id, "—"),
+                       "at": utc_iso(a.created_at)} for a in rows]}
 
 
 # Build 144dn — manager-only live roster: who is clocked in right now and where.
@@ -269,6 +424,19 @@ async def _running_for(db: AsyncSession, org_id: str, employee_id: str) -> Optio
         TimeEntry.state == "running", TimeEntry.ended_at.is_(None)))).scalars().first()
 
 
+async def _stop_all_running(db: AsyncSession, org_id: str, employee_id: str, newest: TimeEntry) -> list:
+    """Stop the person's running timer before a new one starts. A second one left running by a
+    double tap from before LAB-05 is stopped too (at its own start, so its time isn't counted
+    twice), so a switch always leaves exactly one running. Call with the employee row locked."""
+    others = (await db.execute(select(TimeEntry).where(
+        TimeEntry.org_id == org_id, TimeEntry.employee_id == employee_id, TimeEntry.id != newest.id,
+        TimeEntry.state == "running", TimeEntry.ended_at.is_(None)))).scalars().all()
+    _stop(newest)
+    for o in others:
+        _stop(o, when=o.started_at, needs_review=True)
+    return [newest, *others]
+
+
 def _stop(e: TimeEntry, when: Optional[datetime] = None, needs_review: bool = False) -> None:
     when = when or now_utc()
     # guard against a timer left running for days
@@ -345,11 +513,14 @@ async def start_timer(
         if order is None and task.order_id:
             order = await _resolve_order(db, current.org_id, task.order_id)
 
+    # LAB-05: lock the employee row first, so a double tap serialises here: the second request
+    # waits, then sees the first one's timer (409, or it switches) instead of adding a second one.
+    await _lock_employee(db, current.id)
     running = await _running_for(db, current.org_id, current.id)
     if running:
         if not switch:
             raise HTTPException(409, "You already have a running timer. Stop it or use switch.")
-        _stop(running)
+        await _stop_all_running(db, current.org_id, current.id, running)
     cost, billable = _rates(current)
     # billable/paid labour = a job (order) or a task; break/admin/other are unpaid
     is_labour = bool(data.order_id) or bool(task_id) or data.category == "job"
@@ -421,12 +592,15 @@ async def switch_timer(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
+    if not await _clock_enabled(db, current.org_id, "wo"):
+        raise HTTPException(403, "Work-order / job timer is turned off for this company")
     order = await _resolve_order(db, current.org_id, data.order_id)
+    await _lock_employee(db, current.id)          # LAB-05: one switch at a time per person
     running = await _running_for(db, current.org_id, current.id)
     if running:
-        _stop(running)
-        await _maybe_emit_stop(db, running)
-        await _apply_labour_billing(db, running)   # bill the timer we just stopped
+        for e in await _stop_all_running(db, current.org_id, current.id, running):
+            await _maybe_emit_stop(db, e)
+            await _apply_labour_billing(db, e)    # bill the timer we just stopped
     cost, billable = _rates(current)
     e = TimeEntry(
         org_id=current.org_id, employee_id=current.id, order_id=data.order_id,
