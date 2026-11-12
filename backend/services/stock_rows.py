@@ -135,14 +135,14 @@ async def add(db, part_id: str, location_id: str, qty: float, *, bin_id: Optiona
 
 
 async def draw(db, part_id: str, location_id: str, qty: float, *, bin_id: Optional[str] = None,
-               allow_short: bool = False, only: Optional[list[StockLevel]] = None) -> list[tuple[Optional[str], float]]:
+               only: Optional[list[StockLevel]] = None) -> list[tuple[Optional[str], float]]:
     """Take `qty` out of the location. Returns [(bin_id, taken), …] in the order taken.
 
     Each row is decremented by a guarded UPDATE (`qty_available >= take`), so two requests drawing
     at once can't push a bin negative; a lost race re-reads and tries again. When the rows don't
-    hold enough: `NotEnoughStock` (nothing is changed), or with `allow_short` the rest is taken
-    from the unbinned row, which may go negative — the old behaviour of paths that never checked.
-    `only` limits the draw to the given rows (a warehouse's rows, for stock documents)."""
+    hold enough: `NotEnoughStock` (nothing is changed). On-hand never goes below zero (audit DB-07:
+    a CHECK on stock_levels; the old `allow_short`, which booked the shortfall as negative stock on
+    the unbinned row, had no caller left and is gone). `only` limits the draw to the given rows (a warehouse's rows, for stock documents)."""
     if qty <= _EPS:
         return []
     await _check_reach(db, location_id)
@@ -154,7 +154,7 @@ async def draw(db, part_id: str, location_id: str, qty: float, *, bin_id: Option
         if bin_id:
             candidates = sorted(candidates, key=lambda r: r.bin_id != bin_id)
         have = sum(max(r.qty_available or 0, 0) for r in candidates)
-        if have + _EPS < qty and not allow_short:
+        if have + _EPS < qty:
             raise NotEnoughStock(have, qty)
         plan, left = [], qty
         for r in candidates:
@@ -181,16 +181,7 @@ async def draw(db, part_id: str, location_id: str, qty: float, *, bin_id: Option
             continue
         for r, _take in done:
             await db.refresh(r, attribute_names=["qty_available"])
-        out = [(r.bin_id, take) for r, take in done]
-        if left > _EPS and allow_short:
-            main = await row_for(db, part_id, location_id, None, create=True)
-            await _bump(db, main, "qty_available", -left)
-            out.append((None, left))
-        return out
-    if allow_short:      # kept losing races: the caller allowed a shortfall, so book it on the main row
-        main = await row_for(db, part_id, location_id, None, create=True)
-        await _bump(db, main, "qty_available", -qty)
-        return [(None, qty)]
+        return [(r.bin_id, take) for r, take in done]
     raise NotEnoughStock(0, qty)
 
 

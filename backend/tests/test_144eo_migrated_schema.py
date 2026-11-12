@@ -131,6 +131,53 @@ def test_every_org_id_column_is_not_null_in_the_migrated_db(migrated_db):
     assert not loose, "org_id is NOT NULL in the model but nullable in the migrated DB:\n  " + "\n  ".join(loose)
 
 
+def _migrated(migrated_db, fn):
+    url = migrated_db if MIGRATED_ON_PG else f"sqlite+aiosqlite:///{migrated_db}"
+
+    async def go():
+        eng = create_async_engine(url, poolclass=NullPool)
+        try:
+            async with eng.connect() as conn:
+                return await conn.run_sync(fn)
+        finally:
+            await eng.dispose()
+    return db_isolation.run(go())
+
+
+def test_every_model_check_constraint_and_partial_index_is_in_the_migrated_db(migrated_db):
+    """Audit DB-16: alembic's compare never looks at CHECK constraints or partial-index predicates,
+    so the gate above can't see one go missing. Every CHECK the models declare must exist (by name)
+    on the migrated database, and every partial unique index must still be partial there."""
+    from sqlalchemy import CheckConstraint, inspect
+
+    def collect(sync_conn):
+        insp = inspect(sync_conn)
+        checks, partial = {}, {}
+        for table in Base.metadata.sorted_tables:
+            if any(isinstance(c, CheckConstraint) for c in table.constraints):
+                checks[table.name] = {c["name"] for c in insp.get_check_constraints(table.name)}
+        if MIGRATED_ON_PG:
+            rows = sync_conn.exec_driver_sql("SELECT indexname, indexdef FROM pg_indexes").fetchall()
+        else:
+            rows = sync_conn.exec_driver_sql("SELECT name, sql FROM sqlite_master WHERE type = 'index' "
+                                             "AND sql IS NOT NULL").fetchall()
+        for name, sql in rows:
+            partial[name] = " WHERE " in sql.upper()
+        return checks, partial
+
+    checks, partial = _migrated(migrated_db, collect)
+    missing = []
+    for table in Base.metadata.sorted_tables:
+        for c in table.constraints:
+            if isinstance(c, CheckConstraint) and c.name not in checks.get(table.name, set()):
+                missing.append(f"CHECK {c.name} on {table.name}")
+        for ix in table.indexes:
+            where = ix.dialect_options["postgresql" if MIGRATED_ON_PG else "sqlite"].get("where")
+            if ix.unique and where is not None and ix.name in partial and not partial[ix.name]:
+                missing.append(f"partial predicate of {ix.name} on {table.name}")
+    assert not missing, "The migrations don't build these (add them in a migration):\n  " + "\n  ".join(missing)
+
+
 def test_fired_rule_delete_keeps_logs_on_migrated_schema(migrated_db):
     if MIGRATED_ON_PG:
         pytest.skip("SQLite-only probe (PRAGMA-driven inserts); the SQLite job runs it")

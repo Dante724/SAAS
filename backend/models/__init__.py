@@ -12,6 +12,7 @@ from sqlalchemy import (
     DDL,
     JSON,
     Boolean,
+    CheckConstraint,
     Date,
     DateTime,
     Float,
@@ -50,6 +51,17 @@ TRIAL_DAYS = 14
 # creates on migrated databases and the before_create hook below on create_all ones.
 _SEARCH_NUM_STRIP = (" ", "-", "#", "/", ".", "_")      # search_match.NUM_STRIP
 _SEARCH_PHONE_STRIP = (" ", "-", "(", ")", ".", "/", "+")   # search_match.PHONE_STRIP
+
+
+# Audit DB-07: CHECKs on values that are summed in SQL allow float dust (0.3 − 0.1 − 0.2 is
+# −2.8e-17 on SQLite's REAL): a stock quantity may not go below −STOCK_DUST, money below −MONEY_DUST
+# (half a cent; Numeric(12,2) rounds that to zero on Postgres).
+STOCK_DUST = "0.000001"
+MONEY_DUST = "0.005"
+
+
+def _one_of(col: str, values) -> str:
+    return f"{col} IN ({', '.join(repr(v) for v in values)})"
 
 
 def _search_stripped(expr: str, chars) -> str:
@@ -1351,7 +1363,11 @@ class StockLevel(OrgScoped, Base):
                             sqlite_where=text("bin_id IS NOT NULL"), postgresql_where=text("bin_id IS NOT NULL")),
                       Index("uq_stock_levels_part_loc_unbinned", "part_id", "location_id",
                             text("coalesce(warehouse_id, '')"), unique=True,
-                            sqlite_where=text("bin_id IS NULL"), postgresql_where=text("bin_id IS NULL")))
+                            sqlite_where=text("bin_id IS NULL"), postgresql_where=text("bin_id IS NULL")),
+                      # Audit DB-07: on-hand and held can't go below zero (draw() is guarded; this is
+                      # the backstop for any other writer).
+                      CheckConstraint(f"qty_available >= -{STOCK_DUST}", name="qty_available_nonneg"),
+                      CheckConstraint(f"qty_reserved >= -{STOCK_DUST}", name="qty_reserved_nonneg"))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
     part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"))
@@ -1508,7 +1524,9 @@ class Invoice(OrgScoped, Base):
     # Invoices list: filter org_id, sort created_at DESC. One invoice number per shop (migration
     # ls144r4; scripts/find_duplicate_invoice_numbers.py finds legacy clashes).
     __table_args__ = (Index("ix_invoices_org_created", "org_id", "created_at"),
-                      UniqueConstraint("org_id", "invoice_number", name="uq_invoices_org_number"))
+                      UniqueConstraint("org_id", "invoice_number", name="uq_invoices_org_number"),
+                      CheckConstraint(f"amount_paid > -{MONEY_DUST}", name="amount_paid_nonneg"),   # DB-07
+                      CheckConstraint(f"credited > -{MONEY_DUST}", name="credited_nonneg"))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     invoice_number: Mapped[str] = mapped_column(String(50))
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
@@ -1641,6 +1659,9 @@ class Payment(OrgScoped, Base):
 
 class CashShift(OrgScoped, Base):
     __tablename__ = "cash_shifts"
+    # Audit DB-04: one open drawer per location (open_shift's lock is app-only, a no-op on SQLite).
+    __table_args__ = (Index("uq_cash_shifts_open_location", "location_id", unique=True,
+                            sqlite_where=text("closed_at IS NULL"), postgresql_where=text("closed_at IS NULL")),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
@@ -2567,6 +2588,16 @@ class TimeEntry(OrgScoped, Base):
     order_id is null). Rates are snapshotted at start so later raises don't
     rewrite history. At most one 'running' entry per employee at a time."""
     __tablename__ = "time_entries"
+    __table_args__ = (
+        # Audit DB-04 / LAB-05: one running timer per person, whatever the writer.
+        Index("uq_time_entries_running_employee", "employee_id", unique=True,
+              sqlite_where=text("state = 'running' AND ended_at IS NULL"),
+              postgresql_where=text("state = 'running' AND ended_at IS NULL")),
+        CheckConstraint(_one_of("state", ("running", "stopped", "approved", "void")), name="state_valid"),
+        CheckConstraint(_one_of("category", ("job", "task", "break", "admin", "other")), name="category_valid"),
+        CheckConstraint(_one_of("source", ("timer", "manual")), name="source_valid"),
+        CheckConstraint("duration_sec >= 0", name="duration_nonneg"),
+    )
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     employee_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id"), index=True)
@@ -2809,6 +2840,8 @@ class Sale(OrgScoped, Base):
     """Over-the-counter sale (Orderry Sales page): services + products sold
     without a work order. One warehouse per sale; estimated profit = total − cost."""
     __tablename__ = "sales"
+    # Audit DB-05 / FIN-17: one sale number per shop.
+    __table_args__ = (Index("uq_sales_org_number", "org_id", "sale_number", unique=True),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
@@ -2959,6 +2992,11 @@ class StockTransfer(OrgScoped, Base):
     Cancel before shipping returns the reservation; after shipping you choose
     the warehouse that takes the goods back."""
     __tablename__ = "stock_transfers"
+    __table_args__ = (
+        Index("uq_stock_transfers_org_number", "org_id", "transfer_number", unique=True),   # DB-05
+        CheckConstraint(_one_of("status", ("draft", "ready", "in_transit", "received", "completed", "canceled")),
+                        name="status_valid"),
+    )
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     transfer_number: Mapped[str] = mapped_column(String(20))
@@ -3346,6 +3384,11 @@ class NotificationPreference(OrgScoped, Base):
 
 class GiftCard(OrgScoped, Base):
     __tablename__ = "gift_cards"
+    __table_args__ = (
+        Index("uq_gift_cards_org_code", "org_id", "code", unique=True),     # DB-06: a clash made it unusable
+        CheckConstraint(f"balance > -{MONEY_DUST}", name="balance_nonneg"),     # DB-07
+        CheckConstraint("initial_value >= 0", name="initial_value_nonneg"),
+    )
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     code: Mapped[str] = mapped_column(String(40), index=True)          # e.g. GC-8F3K2P
@@ -3372,6 +3415,14 @@ class GiftCardLedger(OrgScoped, Base):
 
 class Coupon(OrgScoped, Base):
     __tablename__ = "coupons"
+    __table_args__ = (
+        Index("uq_coupons_org_code", "org_id", "code", unique=True),        # DB-06
+        CheckConstraint(_one_of("kind", ("pct", "fixed")), name="kind_valid"),   # DB-07
+        CheckConstraint("value >= 0", name="value_nonneg"),
+        CheckConstraint("min_total >= 0", name="min_total_nonneg"),
+        CheckConstraint("uses >= 0 AND max_uses >= 0 AND (max_uses = 0 OR uses <= max_uses)",
+                        name="uses_in_range"),
+    )
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     # 144bi: a coupon issued to a specific returning client (null = public code).
@@ -3841,6 +3892,12 @@ class PurchaseReturn(OrgScoped, Base):
     a return that has been paid out can't be deleted until its payment is removed.
     """
     __tablename__ = "purchase_returns"
+    __table_args__ = (
+        Index("uq_purchase_returns_org_number", "org_id", "number", unique=True,     # DB-05
+              sqlite_where=text("number IS NOT NULL"), postgresql_where=text("number IS NOT NULL")),
+        CheckConstraint(_one_of("status", ("posted", "deleted")), name="status_valid"),     # DB-07
+        CheckConstraint(_one_of("settlement", ("balance", "cash")), name="settlement_valid"),
+    )
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     number: Mapped[Optional[str]] = mapped_column(String(40))
@@ -3877,7 +3934,10 @@ class WriteOff(OrgScoped, Base):
     """
     __tablename__ = "write_offs"
     # Lists page newest-first inside one shop (audit 29 Oct 2026).
-    __table_args__ = (Index("ix_write_offs_org_id_created_at", "org_id", "created_at"),)
+    __table_args__ = (Index("ix_write_offs_org_id_created_at", "org_id", "created_at"),
+                      Index("uq_write_offs_org_number", "org_id", "number", unique=True,     # DB-05
+                            sqlite_where=text("number IS NOT NULL"), postgresql_where=text("number IS NOT NULL")),
+                      CheckConstraint(_one_of("status", ("posted", "reverted")), name="status_valid"))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     number: Mapped[Optional[str]] = mapped_column(String(40))
@@ -3915,7 +3975,11 @@ class Posting(OrgScoped, Base):
     """
     __tablename__ = "postings"
     # Lists page newest-first inside one shop (audit 29 Oct 2026).
-    __table_args__ = (Index("ix_postings_org_id_created_at", "org_id", "created_at"),)
+    __table_args__ = (Index("ix_postings_org_id_created_at", "org_id", "created_at"),
+                      Index("uq_postings_org_number", "org_id", "number", unique=True,     # DB-05
+                            sqlite_where=text("number IS NOT NULL"), postgresql_where=text("number IS NOT NULL")),
+                      CheckConstraint(_one_of("status", ("posted", "deleted")), name="status_valid"),
+                      CheckConstraint(_one_of("settlement", ("balance", "cash")), name="settlement_valid"))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     number: Mapped[Optional[str]] = mapped_column(String(40))
@@ -4436,7 +4500,18 @@ class MembershipPlanItem(OrgScoped, Base):
 class Membership(OrgScoped, Base):
     """One plan on one asset, paid by one client."""
     __tablename__ = "memberships"
-    __table_args__ = (Index("ix_memberships_org_status_end", "org_id", "status", "period_end"),)
+    __table_args__ = (
+        Index("ix_memberships_org_status_end", "org_id", "status", "period_end"),
+        # Audit DB-04: one live membership per plan per asset (sell's check-then-insert had no lock).
+        Index("uq_memberships_live_device_plan", "device_id", "plan_id", unique=True,
+              sqlite_where=text(f"{_one_of('status', ('scheduled', 'active', 'paused'))} AND device_id IS NOT NULL"),
+              postgresql_where=text(f"{_one_of('status', ('scheduled', 'active', 'paused'))} "
+                                    "AND device_id IS NOT NULL")),
+        CheckConstraint(_one_of("status", ("scheduled", "active", "paused", "lapsed", "cancelled")),
+                        name="status_valid"),     # DB-07
+        CheckConstraint(_one_of("billing", ("monthly", "yearly")), name="billing_valid"),
+        CheckConstraint("price >= 0", name="price_nonneg"),
+    )
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     plan_id: Mapped[str] = mapped_column(String, ForeignKey("membership_plans.id"), index=True)
@@ -4454,7 +4529,7 @@ class Membership(OrgScoped, Base):
     manager_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     sold_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     ended_on: Mapped[Optional[date]] = mapped_column(Date)
-    ended_reason: Mapped[Optional[str]] = mapped_column(String(20))       # cancelled|unpaid|transferred
+    ended_reason: Mapped[Optional[str]] = mapped_column(String(20))       # cancelled|unpaid|transferred|duplicate (w2b01)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
 
