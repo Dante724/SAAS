@@ -165,9 +165,12 @@ async def test_partial_refund_claws_back_its_share(client, db):
     await _status(client, H, o["id"], done)
     assert await _commission(db, org, tech) == 20
 
-    # the rest refunded → nothing left, and an archive takes nothing more
-    await client.post("/api/returns/refunds", json={
-        "account_id": till, "amount": 200, "order_id": o["id"]}, headers=H)
+    # the rest refunded → nothing left, and an archive takes nothing more. The same amount again
+    # seconds later is a new refund only with its own Idempotency-Key (FIN-01 double-click guard).
+    r = await client.post("/api/returns/refunds", json={
+        "account_id": till, "amount": 200, "order_id": o["id"]},
+        headers={**H, "Idempotency-Key": f"rest-{uuid.uuid4().hex[:8]}"})
+    assert r.status_code == 201, r.text
     assert await _commission(db, org, tech) == 0
     await client.post(f"/api/orders/{o['id']}/archive", json={"reason": "x", "refund": False}, headers=H)
     assert await _commission(db, org, tech) == 0
