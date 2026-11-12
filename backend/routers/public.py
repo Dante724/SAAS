@@ -306,14 +306,35 @@ async def _move_for_customer(db: AsyncSession, order: "Order", target, note: str
 
 
 @router.get("/track/{token}")
-async def track(token: str, db: AsyncSession = Depends(get_db)):
+async def track(token: str, request: Request, db: AsyncSession = Depends(get_db)):
     order = await _load(db, token)
-    return await _track_payload(db, order)
+    return _etagged(request, await _track_payload(db, order, f"/api/media/track/{token}"))
 
 
-async def _track_payload(db: AsyncSession, order: "Order") -> dict:
+# A busy job's updates are capped like the staff timeline (feed.py): newest first.
+TRACK_UPDATES_LIMIT = 200
+_MEDIA_ITEMS = ("photo", "signature", "file")
+
+
+def _etagged(request: Request, payload: dict) -> Response:
+    """The page polls every 20 s (PERF-01): answer 304 while nothing it shows has changed.
+    `no-cache` lets the browser keep the copy but revalidate every poll; never a shared cache."""
+    from fastapi.encoders import jsonable_encoder
+    from fastapi.responses import JSONResponse
+    resp = JSONResponse(jsonable_encoder(payload))
+    etag = '"' + hashlib.sha256(resp.body).hexdigest()[:32] + '"'
+    headers = {"ETag": etag, "Cache-Control": "private, no-cache", "Referrer-Policy": "no-referrer"}
+    inm = request.headers.get("if-none-match") or ""
+    if etag in [t.strip().removeprefix("W/") for t in inm.split(",")]:
+        return Response(status_code=304, headers=headers)
+    resp.headers.update(headers)
+    return resp
+
+
+async def _track_payload(db: AsyncSession, order: "Order", media_base: str) -> dict:
     """Everything the customer sees for one job. The track page and the customer portal's job
-    view both show this, so the two pages never drift apart."""
+    view both show this, so the two pages never drift apart. Photos and files are URLs under
+    ``media_base`` (the link's own token, routers/media.py), never inline base64 (PERF-01)."""
     client = (await db.execute(select(Client).where(Client.id == order.client_id))).scalar_one_or_none() if order.client_id else None
     device = (await db.execute(select(Device).where(Device.id == order.device_id))).scalar_one_or_none() if order.device_id else None
     org = (await db.execute(select(Organisation).where(Organisation.id == order.org_id))).scalar_one_or_none()
@@ -324,14 +345,18 @@ async def _track_payload(db: AsyncSession, order: "Order") -> dict:
         select(OrderStatusLog).where(OrderStatusLog.order_id == order.id).order_by(OrderStatusLog.changed_at)
     )).scalars().all()
 
-    # only client-visible feed items
+    # only client-visible feed items; the attachment itself stays in the DB / storage
     feed = (await db.execute(
-        select(EventFeedItem).where(
+        select(EventFeedItem.id, EventFeedItem.item_type, EventFeedItem.body,
+               EventFeedItem.media_name, EventFeedItem.media_mime, EventFeedItem.created_at,
+               (EventFeedItem.media_data.isnot(None) | EventFeedItem.media_blob_id.isnot(None)).label("has_media"))
+        .where(
+            EventFeedItem.org_id == order.org_id,
             EventFeedItem.entity_type == "order",
             EventFeedItem.entity_id == order.id,
             EventFeedItem.visibility == "client",
-        ).order_by(desc(EventFeedItem.created_at))
-    )).scalars().all()
+        ).order_by(desc(EventFeedItem.created_at)).limit(TRACK_UPDATES_LIMIT)
+    )).all()
 
     # 144ct — staff replies to the customer are client-visible OrderComments (the work-order
     # ConversationPanel posts them). Surface them here so the customer actually sees the reply,
@@ -480,7 +505,7 @@ async def _track_payload(db: AsyncSession, order: "Order") -> dict:
         # server-side. When it's closed for this order, the page offers "Start a new request".
         **(await _message_fields(db, order, org)),
         "allow_recommend": getattr(org, "oe_allow_recommend", True),
-        "recommendations": await _public_recommendations(db, order),
+        "recommendations": await _public_recommendations(db, order, media_base),
         "checklist": await _public_checklist(db, order),
         "invoice": (lambda i: _public_invoice_block(i, _fx) if i else None)(await _order_invoice(db, order)),
         "has_signature": bool((await db.execute(select(DocumentSignature.id).where(
@@ -493,13 +518,16 @@ async def _track_payload(db: AsyncSession, order: "Order") -> dict:
         "updates": sorted(
             [
                 {"type": f.item_type, "body": f.body,
-                 "media_data": f.media_data if f.item_type in ("photo", "signature", "file") else None,
-                 "media_name": f.media_name, "media_mime": getattr(f, "media_mime", None),
+                 # a URL now (PERF-01); the field keeps its name so older pages still show it
+                 "media_data": (_url := (f"{media_base}/feed/{f.id}"
+                                         if f.item_type in _MEDIA_ITEMS and f.has_media else None)),
+                 "media_url": _url,
+                 "media_name": f.media_name, "media_mime": f.media_mime,
                  "at": f.created_at.isoformat() if f.created_at else None}
                 for f in feed
             ] + [
                 # 144ct — staff reply shown to the customer as a shop message
-                {"type": "shop_message", "body": c.body, "media_data": None,
+                {"type": "shop_message", "body": c.body, "media_data": None, "media_url": None,
                  "media_name": None, "media_mime": None,
                  "at": c.created_at.isoformat() if c.created_at else None}
                 for c in staff_msgs
@@ -857,7 +885,7 @@ async def portal_home(token: str, db: AsyncSession = Depends(get_db)):
 
 
 @router.get("/portal/{token}/order/{order_id}")
-async def portal_order(token: str, order_id: str, db: AsyncSession = Depends(get_db)):
+async def portal_order(token: str, order_id: str, request: Request, db: AsyncSession = Depends(get_db)):
     """One job in the portal: the same payload as the track page, plus the portal's own fields.
     `public_token` lets the portal reach the per-job extras (rating, new request, signed PDF,
     e-invoice) — the portal holder is the job's own customer, who already gets that link."""
@@ -867,7 +895,7 @@ async def portal_order(token: str, order_id: str, db: AsyncSession = Depends(get
     )).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
-    payload = await _track_payload(db, order)
+    payload = await _track_payload(db, order, f"/api/media/portal/{token}/{order.id}")
     payload.update({
         "id": order.id,
         "public_token": order.public_token,
@@ -875,7 +903,7 @@ async def portal_order(token: str, order_id: str, db: AsyncSession = Depends(get
         "warranty_until": order.warranty_until.isoformat() if order.warranty_until else None,
         "can_approve": payload["awaiting_approval"],
     })
-    return payload
+    return _etagged(request, payload)
 
 
 @router.post("/portal/{token}/order/{order_id}/respond")
@@ -950,15 +978,19 @@ async def _public_checklist(db: AsyncSession, order: "Order") -> list[dict]:
     return out
 
 
-async def _public_recommendations(db: AsyncSession, order: "Order") -> list[dict]:
+async def _public_recommendations(db: AsyncSession, order: "Order", media_base: str) -> list[dict]:
     """Recommendations the customer should see: everything published (sent) or
-    already decided. Drafts stay hidden. Public-safe fields only."""
+    already decided. Drafts stay hidden. Public-safe fields only; the photo is a URL."""
+    from sqlalchemy.orm import defer
     from backend.models import Recommendation as _R
     if not await _recommend_enabled(db, order.org_id):
         return []
-    rows = (await db.execute(select(_R).where(
+    has_media = _R.media_data.isnot(None).label("has_media")
+    rows = (await db.execute(select(_R, has_media).options(defer(_R.media_data)).where(
         _R.order_id == order.id, _R.status.in_(("sent", "approved", "declined")))
-        .order_by(_R.created_at))).scalars().all()
+        .order_by(_R.created_at))).all()
+    media = {r.id for r, m in rows if m}
+    rows = [r for r, _m in rows]
     # Several items per job: say which item each one is for, so the customer decides per item.
     from backend.services.multi_asset import item_names
     names = await item_names(db, order.org_id, [r.order_item_id for r in rows])
@@ -966,7 +998,7 @@ async def _public_recommendations(db: AsyncSession, order: "Order") -> list[dict
         "id": r.id, "title": r.title, "note": r.note,
         "qty": r.qty, "unit_price": r.unit_price,
         "line_total": q2((r.qty or 0) * (r.unit_price or 0)),
-        "media_data": r.media_data, "status": r.status,
+        "media_data": f"{media_base}/rec/{r.id}" if r.id in media else None, "status": r.status,
         "kind": r.kind, "urgency": r.urgency, "decline_reason": r.decline_reason,
         "decided_by_name": r.decided_by_name,
         "decided_at": r.decided_at.isoformat() if r.decided_at else None,

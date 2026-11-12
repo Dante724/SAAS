@@ -88,6 +88,16 @@ def range_edge(value: str, tzname: str | None, *, end: bool) -> datetime:
     return day_start_utc(parsed.date(), tzname)
 
 
+def report_edge(value: str, tzname: str | None, *, end: bool) -> datetime:
+    """range_edge for a report window compared with `<=`: a date-only "To" runs to the last
+    microsecond of that shop day, not 23:59:59 (RPT-06: a row stamped 23:59:59.5 was in neither
+    that day's window nor the next). A due date keeps range_edge's 23:59:59."""
+    edge = range_edge(value, tzname, end=end)
+    if end and datetime.fromisoformat(value).tzinfo is None and datetime.fromisoformat(value).time() == time.min:
+        return edge + timedelta(seconds=1) - timedelta(microseconds=1)
+    return edge
+
+
 def parse_dt(value, field: str = "date") -> datetime:
     try:
         return datetime.fromisoformat(value)

@@ -60,7 +60,7 @@ let closedTotal = 0;       // its count of done + cancelled matches
 // managers and 403 for staff).
 let poolServer: null | { pool: any } = null;
 // GET /orders?q= (the work-order search) and GET /orders/{id}: what quick add's smart link sees.
-let orderSearch: (q: string) => { items: any[]; delay?: number } = () => ({ items: [] });
+let orderSearch: (q: string, params: URLSearchParams) => { items: any[]; delay?: number } = () => ({ items: [] });
 let orderGet: (id: string) => number = () => 200;
 
 beforeEach(() => {
@@ -113,7 +113,8 @@ beforeEach(() => {
     }
     if (method === "GET" && url.endsWith("/feed")) return reply({ items: [] });
     if (method === "GET" && url.startsWith("/api/orders?")) {
-      const r = orderSearch(new URL(url, "http://x").searchParams.get("q") || "");
+      const params = new URL(url, "http://x").searchParams;
+      const r = orderSearch(params.get("q") || "", params);
       if (r.delay) await new Promise((res) => setTimeout(res, r.delay));
       return reply({ items: r.items, total: r.items.length });
     }
@@ -1048,7 +1049,7 @@ describe("quick add: smart link and the job you just looked at", () => {
     const opts = within(list).getAllByRole("option");
     expect(opts.map((o) => o.textContent)).toEqual([
       "WO-1042Jane Kim · Apple iPhone 14 ProIn repair", "WO-10420Tom Reed · Apple iPhone 14 ProIn repair", "WO-10421Ana Lee · Apple iPhone 14 ProIn repair"]);
-    expect(searches().pop()).toBe("/api/orders?q=1042&limit=5");
+    expect(searches().pop()).toBe("/api/orders?q=1042&limit=5&open_first=true");
     expect(box()).toHaveAttribute("aria-activedescendant", "quick-add-jobs-0");
     expect(opts[0]).toHaveAttribute("aria-selected", "true");
     await u.keyboard("{ArrowDown}");
@@ -1059,6 +1060,23 @@ describe("quick add: smart link and the job you just looked at", () => {
     expect(box()).toHaveValue("Chase parts for WO-1042");
     await u.keyboard("{Enter}");
     expect(posts("/api/tasks")[0].body).toMatchObject({ title: "Chase parts for WO-1042", order_id: "o1" });
+  });
+
+  it("asks the server for open jobs first, so a customer's closed history can't crowd out the job on the bench", async () => {
+    // Jane has six closed jobs newer than her open one. A server that honours open_first
+    // puts the open one in the five it returns; without it, the five newest are all closed.
+    const closed = Array.from({ length: 6 }, (_, i) => WO(`c${i}`, `WO-20${i}`, "Jane Kim", { closed_at: "2026-11-01T10:00:00Z", status: "done" }));
+    const open = WO("o1", "WO-150", "Jane Kim");
+    orderSearch = (_q, p) => ({ items: (p.get("open_first") === "true" ? [open, ...closed] : [...closed, open]).slice(0, Number(p.get("limit"))) });
+    const u = userEvent.setup();
+    renderAt();
+    await screen.findByText("QC check MacBook Air keyboard");
+    await u.type(box(), "Ring Jane about pickup");
+    const list = await screen.findByRole("listbox", { name: "Work orders that match" });
+    const opts = within(list).getAllByRole("option");
+    expect(opts[0]).toHaveTextContent("WO-150");
+    expect(opts[0]).toHaveTextContent("In repair");
+    expect(opts.slice(1).every((o) => /Closed/.test(o.textContent || ""))).toBe(true);
   });
 
   it("nothing is linked unless picked: Enter saves without a job", async () => {
@@ -1115,7 +1133,7 @@ describe("quick add: smart link and the job you just looked at", () => {
     await u.clear(box()); await u.type(box(), "Ring Jane about pickup");
     await screen.findByRole("option", { name: /WO-1042/ });
     expect(within(screen.getByRole("listbox")).getAllByRole("option")).toHaveLength(1);
-    expect(searches().pop()).toBe("/api/orders?q=Jane&limit=5");
+    expect(searches().pop()).toBe("/api/orders?q=Jane&limit=5&open_first=true");
   });
 
   const remember = (ago: number, id = "r1") => localStorage.setItem("tekly.recentJob.me", JSON.stringify({ id, number: "WO-1042", client: "Jane Kim", device: "iPhone 14 Pro", at: Date.now() - ago }));

@@ -6,7 +6,7 @@ from fastapi import APIRouter, Depends, File, Form, HTTPException, Query, Upload
 from pydantic import BaseModel, Field, field_validator
 from sqlalchemy import func, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
-from sqlalchemy.orm import selectinload
+from sqlalchemy.orm import defer, selectinload
 
 from backend.core import paging as _paging
 from backend.db.database import get_db
@@ -82,7 +82,11 @@ def _guard_qty(*vals) -> None:
             raise HTTPException(422, f"Quantity {v} is out of range (max {MAX_STOCK_QTY:,}). "
                                      "This looks like a barcode or serial, not a count.")
 
-def _ser_part(p: Part, stock: list[StockLevel]) -> dict:
+_FULL_PHOTO = object()
+
+
+def _ser_part(p: Part, stock: list[StockLevel], image=_FULL_PHOTO) -> dict:
+    """`image`: the full photo by default; the list passes a thumbnail (PERF-03)."""
     total_qty = sum(s.qty_available for s in stock if s.part_id == p.id)
     total_res = sum(s.qty_reserved for s in stock if s.part_id == p.id)
     margin = round((p.sell_price - p.cost_price) / p.sell_price * 100, 1) if p.sell_price else 0
@@ -92,7 +96,7 @@ def _ser_part(p: Part, stock: list[StockLevel]) -> dict:
         "cost_price": p.cost_price, "avg_cost": p.avg_cost, "sell_price": p.sell_price, "repair_price": p.repair_price,
         "barcode": p.barcode, "mpn": p.mpn, "min_stock": p.min_stock, "margin_pct": margin,
         "weight": getattr(p, "weight", None), "dimensions": getattr(p, "dimensions", None),
-        "image_data": getattr(p, "image_data", None),
+        "image_data": getattr(p, "image_data", None) if image is _FULL_PHOTO else image,
         "min_order_qty": getattr(p, "min_order_qty", 0) or 0,
         "qty_available": total_qty, "qty_reserved": total_res,
         "low_stock": total_qty <= p.min_stock,
@@ -120,8 +124,17 @@ async def list_parts(
         q = q.where(Part.category_id == category_id)
     if category:
         q = q.where(Part.category == category)
-    result = await db.execute(q.offset(skip).limit(limit))
+    # PERF-20: a stable order, so pages never repeat or skip a product, and a total over every
+    # match, not the page. PERF-03: the photo is sent as a list thumbnail, never read whole here.
+    total = None
+    if not (low_stock or compatible_only):       # those two filter in Python, below
+        total = (await db.execute(select(func.count()).select_from(
+            q.with_only_columns(Part.id).order_by(None).subquery()))).scalar_one()
+    result = await db.execute(q.options(defer(Part.image_data))
+                              .order_by(Part.name, Part.id).offset(skip).limit(limit))
     parts = result.scalars().all()
+    from backend.routers.catalog_products import _thumbnails
+    thumbs = await _thumbnails(db, [p.id for p in parts])
 
     part_ids = [p.id for p in parts]
     _sq = select(StockLevel).where(StockLevel.part_id.in_(part_ids))
@@ -130,7 +143,7 @@ async def list_parts(
     stock_result = await db.execute(_sq)
     stocks = stock_result.scalars().all()
 
-    items = [_ser_part(p, stocks) for p in parts]
+    items = [_ser_part(p, stocks, image=thumbs.get(p.id)) for p in parts]
     if device_id:
         from backend.models import Device
         from backend.services.compatibility import part_fits
@@ -143,7 +156,7 @@ async def list_parts(
             items = [i for i in items if i.get("fits")]
     if low_stock:
         items = [i for i in items if i["low_stock"]]
-    return {"total": len(items), "items": items}
+    return {"total": len(items) if total is None else total, "items": items}
 
 
 @router.get("/scan")
@@ -2279,7 +2292,8 @@ async def reorder_list(
 ):
     """Parts at or below min stock — the suggested reorder list."""
     parts = (await db.execute(
-        select(Part).where(Part.org_id == current.org_id, Part.active == True).options(selectinload(Part.stock_levels))  # noqa: E712
+        select(Part).where(Part.org_id == current.org_id, Part.active == True)  # noqa: E712
+        .options(selectinload(Part.stock_levels), defer(Part.image_data))   # PERF-03: no photos
     )).scalars().all()
     out = []
     for p in parts:

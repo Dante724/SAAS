@@ -22,7 +22,8 @@ router = APIRouter(prefix="/api/feed", tags=["event-feed"])
 VALID_ENTITIES = {"order", "client", "lead"}
 VALID_ITEMS = {"comment", "photo", "signature", "file"}
 PROTECTED_ITEMS = {"system", "status", "signature", "client_message"}
-MAX_MEDIA_CHARS = 8_000_000  # ~6 MB base64 ceiling for the demo
+# The size ceiling is media.max_bytes() (MEDIA_MAX_BYTES) on every backend (PERF-22): it used to
+# be 8M base64 characters (~6 MB) here on the db backend and 8 MB of bytes on the others.
 
 
 _MEDIA_RE = re.compile(r"^data:([a-z0-9.+-]+/[a-z0-9.+-]+)(;[a-z0-9=._-]+)*;base64,", re.I)
@@ -143,8 +144,9 @@ async def create_feed_item(
         raise HTTPException(400, "Comment body is required")
     if data.item_type in {"photo", "signature", "file"} and not data.media_data:
         raise HTTPException(400, "Media payload is required")
-    if data.media_data and len(data.media_data) > MAX_MEDIA_CHARS:
-        raise HTTPException(413, "Attachment too large (max ~6 MB)")
+    from backend.services import media as _media
+    if data.media_data and _media.too_large(data.media_data):
+        raise HTTPException(413, _media.too_large_message())
     if data.media_data and not _safe_media(data.media_data):
         # Shown as a download link on the public tracking page: a javascript: or HTML/SVG value
         # would run in the app's origin when clicked (audit 2026-10-29, M1).
