@@ -22,15 +22,19 @@ from backend.models import (
 from backend.services.auth import record_scope, require_perm
 from backend.services.money import q2
 from backend.services.revenue import line_net
-from backend.services.dates import now_utc
+from backend.services.dates import day_start_utc, now_utc, shop_tzname, today_in, utc_to_wall
 
 router = APIRouter(prefix="/api/analytics", tags=["analytics"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
 
 
-def _window(days: int):
-    end = now_utc()
-    return end - timedelta(days=days), end
+async def _shop_window(db, org_id: str, days: int, location_id: Optional[str] = None):
+    """The last `days` shop days, today included, as naive UTC (start at the shop's midnight), and
+    the shop's zone (RPT-03: windows and daily series were UTC days, so a West-coast shop's
+    evening jobs showed on "tomorrow")."""
+    tz = await shop_tzname(db, org_id, location_id)
+    today = today_in(tz)
+    return day_start_utc(today - timedelta(days=days - 1), tz), now_utc(), tz
 
 
 async def _terminal_keys(db, org_id):
@@ -52,7 +56,7 @@ async def technician_productivity(
     (services/revenue, the rule every report uses; design audit BUG-05: this summed job totals with
     tax inside for any finished status). Attribution is by the order's assignee."""
     from backend.services import revenue as money_rules
-    start, end = _window(days)
+    start, end, _tz = await _shop_window(db, current.org_id, days, location_id)
     earned = await money_rules.earned_jobs_query(db, current.org_id, start, end, location_id)
     orders = (await db.execute(earned)).scalars().all()
     figs = await money_rules.job_figures(db, earned.with_only_columns(Order.id))
@@ -97,8 +101,8 @@ async def location_comparison(
     the day the job was created). Revenue tied to no location (invoices that bill no job, a sale
     with no location) gets its own row, so the rows add up to the shop's revenue."""
     from backend.services import revenue as money_rules
-    start, end = _window(days)
     org = current.org_id
+    start, end, _tz = await _shop_window(db, org, days)
     locs = {loc.id: loc.name for loc in (await db.execute(select(Location).where(
         Location.org_id == org))).scalars().all()}
     created = dict((await db.execute(
@@ -109,9 +113,10 @@ async def location_comparison(
     earned = await money_rules.earned_jobs_query(db, org, start, end, cols=(Order.location_id, func.count()))
     closed = dict((await db.execute(earned.group_by(Order.location_id))).all())
 
+    by_loc = await money_rules.net_sales_by_location(db, org, start, end)   # PERF-11: one pass
     rows = []
     for lid in {*locs, *created, *closed}:
-        rev = (await money_rules.net_sales(db, org, start, end, lid))["revenue"] if lid else 0.0
+        rev = by_loc.get(lid, 0.0) if lid else 0.0
         n_created, n_closed = created.get(lid, 0), closed.get(lid, 0)
         if not (n_created or n_closed or rev):
             continue
@@ -139,20 +144,25 @@ async def trends(
     """Daily created / closed / revenue. Created is by the day a job was opened; closed and revenue
     by the day it was earned, ex tax, the same rule as every other report (services/revenue)."""
     from backend.services import revenue as money_rules
-    start, end = _window(days)
+    start, end, tz = await _shop_window(db, current.org_id, days)
+
+    def day(at):      # the shop's calendar day of a stored instant
+        return utc_to_wall(at, tz).date().isoformat()
     series: dict = {}
     created = (await db.execute(select(Order.created_at).where(
         Order.org_id == current.org_id, Order.is_estimate == False, Order.archived == False,  # noqa: E712
         Order.created_at >= start))).scalars().all()
     for at in created:
         if at:
-            series.setdefault(at.date().isoformat(), {"created": 0, "closed": 0, "revenue": 0.0})["created"] += 1
-    rows = (await db.execute(await money_rules.earned_jobs_query(db, current.org_id, start, end, with_date=True))).all()
-    figs = await money_rules.job_figures(db, [o for o, _ in rows]) if rows else {}
+            series.setdefault(day(at), {"created": 0, "closed": 0, "revenue": 0.0})["created"] += 1
+    earned = await money_rules.earned_jobs_query(db, current.org_id, start, end, with_date=True)
+    rows = (await db.execute(earned)).all()
+    # the jobs as a SELECT, never a Python id list (PERF-15: asyncpg's 32,767-parameter limit)
+    figs = await money_rules.job_figures(db, earned.with_only_columns(Order.id)) if rows else {}
     for o, at in rows:
         if not at:
             continue
-        s = series.setdefault(at.date().isoformat(), {"created": 0, "closed": 0, "revenue": 0.0})
+        s = series.setdefault(day(at), {"created": 0, "closed": 0, "revenue": 0.0})
         s["closed"] += 1
         s["revenue"] += float((figs.get(o.id) or {}).get("revenue") or 0)
     return {"period_days": days,
@@ -247,7 +257,7 @@ async def business_insights(
     from collections import defaultdict
 
     from backend.services import revenue as money_rules
-    start, end = _window(days)
+    start, end, _tz = await _shop_window(db, current.org_id, days)
     created = (await db.execute(select(func.count()).select_from(Order).where(
         Order.org_id == current.org_id, Order.is_estimate == False, Order.archived == False,  # noqa: E712
         Order.created_at >= start))).scalar() or 0
@@ -317,7 +327,7 @@ async def fleet_statement(
     if not cl:
         from fastapi import HTTPException
         raise HTTPException(404, "Client not found")
-    start, _ = _window(days)
+    start, _end, tz = await _shop_window(db, current.org_id, days)
     terminal = await _terminal_keys(db, current.org_id)
     devices = {d.id: d for d in (await db.execute(select(Device).where(
         Device.client_id == client_id))).scalars().all()}
@@ -335,7 +345,7 @@ async def fleet_statement(
         lines.append({
             "order_id": o.id, "order_number": o.order_number,
             "vehicle": (" ".join(x for x in [dev.brand, dev.model] if x) if dev else None) or "—",
-            "closed_at": o.closed_at.date().isoformat() if o.closed_at else None,
+            "closed_at": utc_to_wall(o.closed_at, tz).date().isoformat() if o.closed_at else None,
             "amount": q2(amt),
         })
     lines.sort(key=lambda r: r["closed_at"] or "")

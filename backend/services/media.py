@@ -11,7 +11,9 @@ no longer bloats the primary DB:
 `store()` returns a MediaBlob row; `load()` returns (bytes|data_url, mime).
 Existing inline payloads keep working, so migration is incremental.
 """
+import asyncio
 import base64
+import functools
 import hashlib
 import os
 import re
@@ -44,6 +46,50 @@ def _key_for(org_id: str, raw: bytes, name: Optional[str]) -> str:
     return f"{settings.MEDIA_S3_PREFIX}{org_id}/{h}{ext}"
 
 
+def max_bytes() -> int:
+    """The one size ceiling for any attachment, whatever the backend (PERF-22)."""
+    return int(getattr(settings, "MEDIA_MAX_BYTES", 8 * 1024 * 1024))
+
+
+def payload_bytes(payload: Optional[str]) -> int:
+    """Decoded size of a data URL / base64 payload, worked out without decoding it."""
+    if not payload:
+        return 0
+    m = _DATA_URL.match(payload[:256]) if payload.startswith("data:") else None
+    body = payload.split(",", 1)[1] if m else payload
+    if m and not m.group(2):
+        return len(body.encode())
+    body = body.strip()
+    pad = len(body) - len(body.rstrip("="))
+    return max(0, (len(body) * 3) // 4 - pad)
+
+
+def too_large(payload: Optional[str]) -> bool:
+    return payload_bytes(payload) > max_bytes()
+
+
+def too_large_message() -> str:
+    return f"Attachment too large (max {max_bytes() // (1024 * 1024)} MB)"
+
+
+@functools.lru_cache(maxsize=4)
+def _s3_client(region: str):
+    """One boto3 client per region, reused (PERF-02: a new client per call re-resolved
+    credentials and endpoints every time). boto3 clients are thread-safe."""
+    import boto3  # imported lazily; only when actually offloading to S3
+    return boto3.client("s3", region_name=region or None)
+
+
+def _s3():
+    return _s3_client(settings.MEDIA_S3_REGION or "")
+
+
+async def _s3_call(fn, /, **kw):
+    """boto3 is blocking: run it on a worker thread so the event loop keeps serving every
+    other shop while S3 answers (PERF-02)."""
+    return await asyncio.to_thread(fn, **kw)
+
+
 def active_backend() -> str:
     b = (settings.MEDIA_BACKEND or "db").lower()
     if b == "s3" and not settings.MEDIA_S3_BUCKET:
@@ -55,7 +101,7 @@ async def store(db, org_id: str, payload: str, *, name: Optional[str] = None,
                 mime: Optional[str] = None) -> MediaBlob:
     raw, sniffed_mime = _decode_payload(payload)
     # Build 144cq: enforce a hard size ceiling on every upload (DoS / abuse guard).
-    _cap = int(getattr(settings, "MEDIA_MAX_BYTES", 8 * 1024 * 1024))
+    _cap = max_bytes()
     if len(raw) > _cap:
         raise ValueError(f"upload too large (max {_cap // (1024 * 1024)} MB)")
     mime = mime or sniffed_mime
@@ -71,11 +117,9 @@ async def store(db, org_id: str, payload: str, *, name: Optional[str] = None,
             f.write(raw)
         blob.storage_key = key
     elif backend == "s3":
-        import boto3  # imported lazily; only when actually offloading to S3
         key = _key_for(org_id, raw, name)
-        boto3.client("s3", region_name=settings.MEDIA_S3_REGION).put_object(
-            Bucket=settings.MEDIA_S3_BUCKET, Key=key, Body=raw,
-            ContentType=mime or "application/octet-stream")
+        await _s3_call(_s3().put_object, Bucket=settings.MEDIA_S3_BUCKET, Key=key, Body=raw,
+                       ContentType=mime or "application/octet-stream")
         blob.storage_key = key
     else:  # db (legacy)
         blob.inline_data = payload
@@ -85,18 +129,21 @@ async def store(db, org_id: str, payload: str, *, name: Optional[str] = None,
     return blob
 
 
+def _read_file(path: str) -> bytes:
+    with open(path, "rb") as f:
+        return f.read()
+
+
 async def load(blob: MediaBlob) -> Tuple[bytes, str]:
     """Return (raw_bytes, mime) for a stored blob, whatever backend it used."""
     mime = blob.mime or "application/octet-stream"
     if blob.backend == "local" and blob.storage_key:
         path = os.path.join(settings.MEDIA_LOCAL_DIR, blob.storage_key)
-        with open(path, "rb") as f:
-            return f.read(), mime
+        return await asyncio.to_thread(_read_file, path), mime
     if blob.backend == "s3" and blob.storage_key:
-        import boto3
-        obj = boto3.client("s3", region_name=settings.MEDIA_S3_REGION).get_object(
-            Bucket=settings.MEDIA_S3_BUCKET, Key=blob.storage_key)
-        return obj["Body"].read(), mime
+        def _get(key: str) -> bytes:
+            return _s3().get_object(Bucket=settings.MEDIA_S3_BUCKET, Key=key)["Body"].read()
+        return await asyncio.to_thread(_get, blob.storage_key), mime
     # db legacy
     raw, _ = _decode_payload(blob.inline_data or "")
     return raw, mime
@@ -117,9 +164,8 @@ async def erase(db, blobs: list[MediaBlob]) -> int:
                     if b.backend == "local":
                         os.remove(os.path.join(settings.MEDIA_LOCAL_DIR, b.storage_key))
                     elif b.backend == "s3":
-                        import boto3
-                        boto3.client("s3", region_name=settings.MEDIA_S3_REGION).delete_object(
-                            Bucket=settings.MEDIA_S3_BUCKET, Key=b.storage_key)
+                        await _s3_call(_s3().delete_object, Bucket=settings.MEDIA_S3_BUCKET,
+                                       Key=b.storage_key)
                 except FileNotFoundError:
                     pass
         b.inline_data, b.storage_key, b.name, b.size_bytes = None, None, None, 0

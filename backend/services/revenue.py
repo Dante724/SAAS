@@ -109,7 +109,29 @@ def _ids_cond(col, orders):
     return col.in_([getattr(o, "id", o) for o in orders])
 
 
+# asyncpg refuses a statement with more than 32,767 bind parameters (PERF-15). A Python id list is
+# sent in chunks well under that; an id SELECT stays in SQL and needs none.
+IN_CHUNK = 5000
+
+
+def chunks(ids, size: int = IN_CHUNK):
+    ids = list(ids)
+    for i in range(0, len(ids), size):
+        yield ids[i:i + size]
+
+
 async def job_figures(db: AsyncSession, orders, dropped: Optional[set] = None) -> dict:
+    """See _job_figures. A long id list is worked in chunks (each job's figures only read its own
+    rows, so the chunks are independent)."""
+    if isinstance(orders, Select) or len(orders) <= IN_CHUNK:
+        return await _job_figures(db, orders, dropped)
+    out: dict = {}
+    for part in chunks(orders):
+        out.update(await _job_figures(db, part, dropped))
+    return out
+
+
+async def _job_figures(db: AsyncSession, orders, dropped: Optional[set] = None) -> dict:
     """Per job: gross, net and tax of its lines; parts cost (less returned, restocked parts); what
     credit notes and revenue refunds took off it; and what it earned (all time):
     `charged` (with tax), `revenue` (ex tax) and `tax`. A dropped job earns only the money the
@@ -133,8 +155,10 @@ async def job_figures(db: AsyncSession, orders, dropped: Optional[set] = None) -
         f = fig(oid)
         f["status"], f["total"], f["written_off"] = status, float(total or 0), float(wo or 0)
         org_of = org_of or org
+    if org_of is None:          # none of these jobs exists: nothing more to read
+        return _finish(out, dropped or set())
     if dropped is None:
-        dropped = await _dropped_keys(db, org_of) if org_of else set()
+        dropped = await _dropped_keys(db, org_of)
 
     is_part = (OrderLine.line_type == "part") | (OrderLine.kind == "product")
     rate = func.coalesce(OrderLine.tax_rate, 0)
@@ -163,7 +187,7 @@ async def job_figures(db: AsyncSession, orders, dropped: Optional[set] = None) -
         fig(oid)["parts_cost"] -= float(back or 0)
     # A dropped job puts its parts back on the shelf (orders._return_parts_on_drop marks them
     # pending_stock again): those aren't a cost of the job either.
-    if dropped:
+    if dropped and any(f["status"] in dropped for f in out.values()):
         for oid, back in (await db.execute(
                 select(OrderLine.order_id,
                        func.sum(func.coalesce(OrderLine.cost_price, 0) * func.coalesce(OrderLine.pending_stock, 0)))
@@ -175,7 +199,7 @@ async def job_figures(db: AsyncSession, orders, dropped: Optional[set] = None) -
     # credit notes on the invoices billing the job, ex tax and with tax — an invoice billing several
     # jobs shares them out by job total, the same split the job screen uses (order_money)
     from backend.services.order_money import invoice_job_shares
-    sh = invoice_job_shares()
+    sh = invoice_job_shares(org_id=org_of)
     for oid, sub, tot in (await db.execute(
             select(sh.c.order_id, func.sum(CreditNote.subtotal * sh.c.share), func.sum(CreditNote.total * sh.c.share))
             .join(Invoice, Invoice.id == sh.c.invoice_id)
@@ -192,6 +216,11 @@ async def job_figures(db: AsyncSession, orders, dropped: Optional[set] = None) -
             .where(_ids_cond(Payment.order_id, orders)).group_by(Payment.order_id))).all():
         f = fig(oid)
         f["paid"], f["refunded"] = float(paid or 0), float(back or 0)
+    return _finish(out, dropped)
+
+
+def _finish(out: dict, dropped: set) -> dict:
+    """What each job earned, from its summed figures (see job_figures)."""
     for f in out.values():
         billed = f["gross"] - f["credited_gross"]
         overpaid = max(0.0, f["paid"] - max(billed, 0.0))
@@ -225,14 +254,16 @@ def _billed_on(org_id):
 
 async def earned_jobs_query(db, org_id, df=None, dt=None, location_id=None, cols=None, *,
                             include_dropped: bool = False, technician_id: Optional[str] = None,
-                            allowed_locations=None, with_date: bool = False):
+                            allowed_locations=None, with_date: bool = False,
+                            dropped: Optional[set] = None):
     """SELECT of the work orders earned in the period — closed, or first billed on an issued
     invoice, whichever came first — with the date filter applied in the database. The one date
     rule for every report that counts a job's revenue. Estimates and deleted (archived) jobs never
     count; dropped jobs only with include_dropped (they earn the money they kept, see job_figures).
     with_date=True returns (Order, earned_at) rows."""
     billed = _billed_on(org_id)
-    dropped = await _dropped_keys(db, org_id)
+    if dropped is None:
+        dropped = await _dropped_keys(db, org_id)
     earned_at = case((Order.closed_at.is_(None), billed.c.billed_at),
                      (billed.c.billed_at.is_(None), Order.closed_at),
                      *([(Order.status.in_(dropped), Order.closed_at)] if dropped else []),   # the day it was dropped
@@ -261,15 +292,24 @@ async def earned_jobs(db, org_id, df=None, dt=None, location_id=None) -> list:
 
 def _manual_invoice():
     """SQL condition: an invoice that bills no work order."""
-    return Invoice.order_id.is_(None) & ~Invoice.id.in_(select(InvoiceOrder.invoice_id))
+    # correlated, so it reads only this invoice's links (PERF-08: `NOT IN (SELECT … FROM
+    # invoice_orders)` read every shop's links)
+    from sqlalchemy import exists
+    return Invoice.order_id.is_(None) & ~exists().where(InvoiceOrder.invoice_id == Invoice.id)
 
 
 async def net_sales(db: AsyncSession, org_id: str, df: Optional[datetime] = None,
-                    dt: Optional[datetime] = None, location_id: Optional[str] = None) -> dict:
-    """Revenue, tax and COGS for a period (None = open-ended), per the definition above."""
-    dropped = await _dropped_keys(db, org_id)
+                    dt: Optional[datetime] = None, location_id: Optional[str] = None, *,
+                    dropped: Optional[set] = None, jobs: Optional[dict] = None) -> dict:
+    """Revenue, tax and COGS for a period (None = open-ended), per the definition above.
+    `dropped`: the shop's dropped keys when the caller already has them. `jobs`: a dict the
+    figures of the jobs earned in the period are put in (the Home dashboard's average job)."""
+    if dropped is None:
+        dropped = await _dropped_keys(db, org_id)
     jf = await job_figures(db, await earned_jobs_query(db, org_id, df, dt, location_id, cols=(Order.id,),
-                                                       include_dropped=True), dropped)
+                                                       include_dropped=True, dropped=dropped), dropped)
+    if jobs is not None:
+        jobs.update(jf)
     # a dropped job adds what it kept (net of its refunds and credit notes already)
     job_net = sum(f["revenue"] if f["dropped"] else f["net"] for f in jf.values())
     job_tax = sum(f["tax"] if f["dropped"] else f["gross"] - f["net"] for f in jf.values())
@@ -287,7 +327,7 @@ async def net_sales(db: AsyncSession, org_id: str, df: Optional[datetime] = None
     refund_net = refund_tax = 0.0
     if in_period:
         for oid, f in (await job_figures(db, rq.with_only_columns(Payment.order_id).group_by(None)
-                                                .distinct())).items():
+                                                .distinct(), dropped)).items():
             if oid not in in_period or not f["refunded"]:
                 continue
             share = in_period[oid] / f["refunded"]
@@ -303,7 +343,7 @@ async def net_sales(db: AsyncSession, org_id: str, df: Optional[datetime] = None
     cn_net, cn_tax = (float(x or 0) for x in (await db.execute(cq)).one())
     if dropped:   # a dropped job's share of its invoices' credit notes is already inside what it kept
         from backend.services.order_money import invoice_job_shares
-        sh = invoice_job_shares()
+        sh = invoice_job_shares(org_id=org_id)
         dq = (select(func.coalesce(func.sum(CreditNote.subtotal * sh.c.share), 0),
                      func.coalesce(func.sum(CreditNote.tax_total * sh.c.share), 0))
               .select_from(CreditNote).join(sh, sh.c.invoice_id == CreditNote.invoice_id)
@@ -375,51 +415,177 @@ async def net_sales(db: AsyncSession, org_id: str, df: Optional[datetime] = None
     }
 
 
+async def net_sales_by_location(db: AsyncSession, org_id: str, df: Optional[datetime] = None,
+                                dt: Optional[datetime] = None) -> dict:
+    """{location_id: revenue} for every branch at once, each equal to
+    net_sales(..., location_id)["revenue"]: the same terms, grouped by location in the database
+    instead of one net_sales per branch (PERF-11: ~12 statements per location). Revenue tied to no
+    branch (manual invoices, a sale with no location) is not in any row; callers show it apart."""
+    from collections import defaultdict
+    rev: dict = defaultdict(float)
+    dropped = await _dropped_keys(db, org_id)
+
+    # earned jobs, each in its own branch
+    earned = await earned_jobs_query(db, org_id, df, dt, cols=(Order.id,), include_dropped=True, dropped=dropped)
+    loc_of = dict((await db.execute(select(Order.id, Order.location_id).where(
+        Order.id.in_(earned)))).all())
+    for oid, f in (await job_figures(db, earned, dropped)).items():
+        rev[loc_of.get(oid)] += f["revenue"] if f["dropped"] else f["net"]
+
+    # refunds paid in the period on any (not dropped, not deleted) job: their revenue share
+    rq = (select(Payment.order_id, Order.location_id, func.sum(Payment.amount))
+          .join(Order, Order.id == Payment.order_id)
+          .where(Order.org_id == org_id, Payment.kind == "refund", *_in(Payment.paid_at, df, dt),
+                 Order.archived == False,  # noqa: E712
+                 *([Order.status.notin_(dropped)] if dropped else []))
+          .group_by(Payment.order_id, Order.location_id))
+    in_period = {oid: (lid, abs(float(a or 0))) for oid, lid, a in (await db.execute(rq)).all()}
+    if in_period:
+        figs = await job_figures(db, rq.with_only_columns(Payment.order_id).group_by(None).distinct(), dropped)
+        for oid, (lid, amount) in in_period.items():
+            f = figs.get(oid)
+            if f and f["refunded"]:
+                rev[lid] -= f["refund_net"] * amount / f["refunded"]
+
+    # credit notes on a branch's jobs' invoices (primary job), less a dropped job's share
+    for lid, net in (await db.execute(
+            select(Order.location_id, func.coalesce(func.sum(CreditNote.subtotal), 0))
+            .select_from(CreditNote).join(Invoice, Invoice.id == CreditNote.invoice_id)
+            .join(Order, Order.id == Invoice.order_id)
+            .where(CreditNote.org_id == org_id, CreditNote.status == "issued", *_in(CreditNote.issued_at, df, dt))
+            .group_by(Order.location_id))).all():
+        rev[lid] -= float(net or 0)
+    if dropped:
+        from backend.services.order_money import invoice_job_shares
+        sh = invoice_job_shares(org_id=org_id)
+        for lid, net in (await db.execute(
+                select(Order.location_id, func.coalesce(func.sum(CreditNote.subtotal * sh.c.share), 0))
+                .select_from(CreditNote).join(sh, sh.c.invoice_id == CreditNote.invoice_id)
+                .join(Order, Order.id == sh.c.order_id)
+                .where(CreditNote.org_id == org_id, CreditNote.status == "issued", Order.status.in_(dropped),
+                       *_in(CreditNote.issued_at, df, dt))
+                .group_by(Order.location_id))).all():
+            rev[lid] += float(net or 0)
+
+    # counter sales ex tax, and what came back to the till
+    sale_tax_col = getattr(Sale, "tax", None)
+    sale_tax = func.coalesce(func.sum(sale_tax_col), 0) if sale_tax_col is not None else func.sum(0)
+    for lid, total, tax in (await db.execute(
+            select(Sale.location_id, func.coalesce(func.sum(Sale.total), 0), sale_tax)
+            .where(Sale.org_id == org_id, Sale.voided_at.is_(None), *_in(Sale.created_at, df, dt))
+            .group_by(Sale.location_id))).all():
+        rev[lid] += float(total or 0) - float(tax or 0)
+    for lid, amount in (await db.execute(
+            select(ClientReturn.location_id, func.coalesce(func.sum(Refund.amount), 0))
+            .select_from(Refund).outerjoin(ClientReturn, ClientReturn.id == Refund.return_id)
+            .where(Refund.org_id == org_id, Refund.order_id.is_(None), Refund.voided_at.is_(None),
+                   ClientReturn.sale_id.is_(None), *_in(Refund.created_at, df, dt))
+            .group_by(ClientReturn.location_id))).all():
+        rev[lid] -= float(amount or 0)
+    for lid, amount, tax in (await db.execute(
+            select(ClientReturn.location_id, func.coalesce(func.sum(ClientReturn.amount), 0),
+                   func.coalesce(func.sum(ClientReturn.tax), 0))
+            .where(ClientReturn.org_id == org_id, ClientReturn.sale_id.isnot(None),
+                   *_in(ClientReturn.created_at, df, dt))
+            .group_by(ClientReturn.location_id))).all():
+        rev[lid] -= float(amount or 0) - float(tax or 0)
+    for lid, amount in (await db.execute(
+            select(Sale.location_id, func.coalesce(func.sum(func.abs(Transaction.amount)), 0))
+            .select_from(Transaction).join(Sale, Sale.id == Transaction.ref_id)
+            .where(Transaction.org_id == org_id, Transaction.status != "deleted", Transaction.ref_type == "sale",
+                   Transaction.txn_type.in_(("expense", "refund")), *_in(Transaction.actual_date, df, dt))
+            .group_by(Sale.location_id))).all():
+        rev[lid] -= float(amount or 0)
+    return {lid: q2(v) for lid, v in rev.items() if lid is not None}
+
+
+def shop_payments(org_id: str, location_id: Optional[str] = None):
+    """SQL condition: a payment of this shop (of this branch). Payments carry no org_id: they
+    belong to the shop through their job, invoice or account; a branch's are its jobs'."""
+    from backend.models import Account
+    if location_id:
+        return Payment.order_id.in_(select(Order.id).where(
+            Order.org_id == org_id, Order.location_id == location_id))
+    return or_(Payment.order_id.in_(select(Order.id).where(Order.org_id == org_id)),
+               Payment.invoice_id.in_(select(Invoice.id).where(Invoice.org_id == org_id)),
+               Payment.account_id.in_(select(Account.id).where(Account.org_id == org_id)))
+
+
+def money_in_payment():
+    """SQL condition: a payment that brought new money in (paying from a client's balance doesn't)."""
+    return func.coalesce(Payment.method, "") != "balance"
+
+
 async def cash_collected(db: AsyncSession, org_id: str, df: Optional[datetime] = None,
                          dt: Optional[datetime] = None, location_id: Optional[str] = None) -> dict:
     """Money in and money handed back in a period: {"in", "refunds", "net"}."""
-    from backend.models import Account
-    if location_id:
-        mine = Payment.order_id.in_(select(Order.id).where(
-            Order.org_id == org_id, Order.location_id == location_id))
-    else:
-        # Payments carry no org_id: they belong to the shop through their job, invoice or account.
-        mine = or_(Payment.order_id.in_(select(Order.id).where(Order.org_id == org_id)),
-                   Payment.invoice_id.in_(select(Invoice.id).where(Invoice.org_id == org_id)),
-                   Payment.account_id.in_(select(Account.id).where(Account.org_id == org_id)))
+    return (await cash_collected_windows(db, org_id, [(df, dt)], location_id))[0]
+
+
+async def cash_collected_windows(db: AsyncSession, org_id: str, windows: list,
+                                 location_id: Optional[str] = None) -> list:
+    """cash_collected for several (df, dt) windows at once: each sum is taken per window in the
+    same statement (the Home dashboard's today and this month: 4 statements instead of 8)."""
+    def within(col, df, dt):
+        conds = _in(col, df, dt)
+        return conds[0] if len(conds) == 1 else (conds[0] & conds[1]) if conds else None
+
+    def per_window(col, value, extra=None):
+        cols = []
+        for df, dt in windows:
+            cond = within(col, df, dt)
+            if extra is not None:
+                cond = extra if cond is None else (cond & extra)
+            cols.append(func.coalesce(func.sum(value if cond is None else case((cond, value), else_=0)), 0))
+        return cols
+
+    def bound(col):
+        """The outer filter: from the earliest start to the latest end (None = open)."""
+        starts = [df for df, _ in windows]
+        ends = [dt for _, dt in windows]
+        return _in(col, None if any(x is None for x in starts) else min(starts),
+                   None if any(x is None for x in ends) else max(ends))
+
+    n = len(windows)
     is_refund = func.coalesce(Payment.kind, "payment") == "refund"
-    paid_in, paid_back = (await db.execute(select(
-        func.coalesce(func.sum(case((is_refund, 0), else_=Payment.amount)), 0),
-        func.coalesce(func.sum(case((is_refund, Payment.amount), else_=0)), 0))
-        .where(mine, func.coalesce(Payment.method, "") != "balance", *_in(Payment.paid_at, df, dt)))).one()
-    sq = select(func.coalesce(func.sum(Sale.total), 0)).where(
-        Sale.org_id == org_id, Sale.paid == True, Sale.voided_at.is_(None), *_in(Sale.created_at, df, dt))  # noqa: E712
+    prow = (await db.execute(select(
+        *per_window(Payment.paid_at, Payment.amount, ~is_refund),
+        *per_window(Payment.paid_at, Payment.amount, is_refund))
+        .where(shop_payments(org_id, location_id), money_in_payment(), *bound(Payment.paid_at)))).one()
+    sq = select(*per_window(Sale.created_at, Sale.total)).where(
+        Sale.org_id == org_id, Sale.paid == True, Sale.voided_at.is_(None), *bound(Sale.created_at))  # noqa: E712
     if location_id:
         sq = sq.where(Sale.location_id == location_id)
-    money_in = float(paid_in or 0) + float((await db.execute(sq)).scalar() or 0)
-    back = abs(float(paid_back or 0))
+    srow = (await db.execute(sq)).one()
     # Money handed back at the till moves no Payment: a till return's cash refund (a Refund with no
     # payment of its own; deleted ones put the cash back) and card refunds of counter sales.
-    tq = select(func.coalesce(func.sum(Refund.amount), 0)).outerjoin(
+    tq = select(*per_window(Refund.created_at, Refund.amount)).outerjoin(
         ClientReturn, ClientReturn.id == Refund.return_id).where(
         Refund.org_id == org_id, Refund.payment_id.is_(None), Refund.voided_at.is_(None),
-        *_in(Refund.created_at, df, dt))
+        *bound(Refund.created_at))
     if location_id:
         tq = tq.where(ClientReturn.location_id == location_id)
-    srq = select(func.coalesce(func.sum(func.abs(Transaction.amount)), 0)).where(
+    trow = (await db.execute(tq)).one()
+    srq = select(*per_window(Transaction.actual_date, func.abs(Transaction.amount))).where(
         Transaction.org_id == org_id, Transaction.status != "deleted", Transaction.ref_type == "sale",
-        Transaction.txn_type.in_(("expense", "refund")), *_in(Transaction.actual_date, df, dt))
+        Transaction.txn_type.in_(("expense", "refund")), *bound(Transaction.actual_date))
     if location_id:
         srq = srq.where(Transaction.ref_id.in_(select(Sale.id).where(Sale.location_id == location_id)))
-    back += float((await db.execute(tq)).scalar() or 0) + float((await db.execute(srq)).scalar() or 0)
-    return {"in": q2(money_in), "refunds": q2(back), "net": q2(money_in - back)}
+    xrow = (await db.execute(srq)).one()
+    out = []
+    for i in range(n):
+        money_in = float(prow[i] or 0) + float(srow[i] or 0)
+        back = abs(float(prow[n + i] or 0)) + float(trow[i] or 0) + float(xrow[i] or 0)
+        out.append({"in": q2(money_in), "refunds": q2(back), "net": q2(money_in - back)})
+    return out
 
 
 async def receivables(db: AsyncSession, org_id: str, location_id: Optional[str] = None,
-                      open_only: bool = False) -> float:
+                      open_only: bool = False, *, dropped: Optional[set] = None) -> float:
     """What customers still owe (see the definition above), summed in the database."""
     from backend.services.order_money import balances_due
-    dropped = await _dropped_keys(db, org_id)
+    if dropped is None:
+        dropped = await _dropped_keys(db, org_id)
     due = balances_due(org_id)
     q = select(func.coalesce(func.sum(due.c.owed), 0)).select_from(due).join(Order, Order.id == due.c.order_id).where(
         Order.org_id == org_id, Order.is_estimate == False, Order.archived == False)  # noqa: E712

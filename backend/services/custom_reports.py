@@ -162,13 +162,13 @@ async def build_and_run(db: AsyncSession, org_id: str, config: dict,
     if src["date_field"] and (date_from or date_to):
         dcol = getattr(model, src["date_field"])
         # a date-only range is the shop's day, like every built-in report (services/dates.range_edge)
-        from backend.services.dates import range_edge, shop_tzname
+        from backend.services.dates import report_edge, shop_tzname
         tz = await shop_tzname(db, org_id, location_id)
         try:
             if date_from:
-                conds.append(dcol >= range_edge(date_from, tz, end=False))
+                conds.append(dcol >= report_edge(date_from, tz, end=False))
             if date_to:
-                conds.append(dcol <= range_edge(date_to, tz, end=True))
+                conds.append(dcol <= report_edge(date_to, tz, end=True))
         except ValueError:
             raise ValueError("Invalid date in the date range (expected YYYY-MM-DD).")
     if src["has_location"] and location_id:

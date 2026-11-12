@@ -192,6 +192,8 @@ class Settings(BaseSettings):
     SUPPORT_EMAIL: str = "hello@tekly.app"
     SUPPORT_URL: str = ""              # help centre / contact page; empty = mailto SUPPORT_EMAIL
 
+    HOME_DASHBOARD_CACHE_S: int = 30   # PERF-07: Home's shop-wide figures, per shop + branch (0 = off)
+
     # ── B3: media storage ─────────────────────────────────────────────────
     MEDIA_BACKEND: str = "db"          # db | local | s3  (db = legacy inline; local/s3 = offloaded)
     MEDIA_MAX_BYTES: int = 8 * 1024 * 1024   # Build 144cq: hard cap on any single upload (8 MB)

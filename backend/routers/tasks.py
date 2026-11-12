@@ -88,13 +88,14 @@ async def _names(db: AsyncSession, org_id: str) -> dict:
         Employee.org_id == org_id))).scalars().all()}
 
 
-async def _items(db: AsyncSession, org_id: str, rows) -> list[dict]:
-    """List items for `rows` with names, job numbers and client names batch-loaded (three queries
-    whatever the row count). The one shape GET /api/tasks and My day both return."""
-    names = await _names(db, org_id)
-    numbers = await _order_numbers(db, org_id, [t.order_id for t in rows])
-    clients = await _client_names(db, org_id, rows)
-    return [{**_ser(t, names), "order_number": numbers.get(t.order_id),
+async def _items(db: AsyncSession, current: Employee, rows) -> list[dict]:
+    """List items for `rows` with names, job numbers and client names batch-loaded (a few queries
+    whatever the row count). The one shape GET /api/tasks, GET /api/tasks/{id} and My day return.
+    A job the viewer can't open shows neither its number nor its client (see _linked_orders)."""
+    names = await _names(db, current.org_id)
+    jobs = await _linked_orders(db, current, [t.order_id for t in rows])
+    clients = await _client_names(db, current.org_id, rows, jobs)
+    return [{**_ser(t, names), "order_number": (jobs.get(t.order_id) or (None,))[0],
              "client_name": clients.get(t.id)} for t in rows]
 
 
@@ -212,8 +213,17 @@ async def list_tasks(
             .where(*cond))
     term = (q or "").strip()
     if term:
-        base = base.where(or_(*[col.icontains(term, autoescape=True) for col in (
-            Task.title, Task.description, Order.order_number, Client.name, oc.name)]))
+        linked = [col.icontains(term, autoescape=True) for col in (Order.order_number, Client.name, oc.name)]
+        from backend.services import scoping
+        every_job = select(Order.id).where(Order.org_id == current.org_id)
+        jobs = scoping.scope_orders(every_job, await scoping.role_for(db, current), current)
+        if jobs is not every_job:
+            # a record-scoped viewer: a task on a job they can't open isn't found by that job's
+            # number or client (the row doesn't show them either, see _shown_client)
+            linked = [and_(or_(Task.order_id.is_(None), Task.order_id.in_(jobs.correlate(None))), c)
+                      for c in linked]
+        base = base.where(or_(Task.title.icontains(term, autoescape=True),
+                              Task.description.icontains(term, autoescape=True), *linked))
     total = (await db.execute(select(func.count()).select_from(
         base.with_only_columns(Task.id).subquery()))).scalar_one()
     ordered = base.order_by(
@@ -224,31 +234,64 @@ async def list_tasks(
     if offset:
         ordered = ordered.offset(offset)
     rows = (await db.execute(ordered)).scalars().all()
-    out = {"items": await _items(db, current.org_id, rows), "statuses": STATUSES, "total": total}
+    out = {"items": await _items(db, current, rows), "statuses": STATUSES, "total": total}
     if limit is not None:
         out.update(limit=clamp(limit), offset=offset)
     return out
 
 
-async def _client_names(db: AsyncSession, org_id: str, rows) -> dict:
-    """task id → client name: the task's own client, else the linked job's client."""
-    oids = {t.order_id for t in rows if t.order_id and not t.client_id}
-    order_client = dict((await db.execute(select(Order.id, Order.client_id).where(
-        Order.id.in_(oids), Order.org_id == org_id))).all()) if oids else {}
-    cids = {t.client_id for t in rows if t.client_id} | {c for c in order_client.values() if c}
+def _shown_client(t: Task, jobs: dict):
+    """The client id a task row names: its own, else its job's. None when the task is linked to a
+    job the viewer can't open — a task on a hidden job names nobody (its client usually IS the
+    job's client: Go's part request copies it)."""
+    if t.order_id and t.order_id not in jobs:
+        return None
+    return t.client_id or (jobs.get(t.order_id) or (None, None))[1]
+
+
+async def _client_names(db: AsyncSession, org_id: str, rows, jobs: dict) -> dict:
+    """task id → client name: the task's own client, else the linked job's client (`jobs` is
+    _linked_orders' answer, so only for jobs the viewer can open)."""
+    cids = {c for c in (_shown_client(t, jobs) for t in rows) if c}
     names = dict((await db.execute(select(Client.id, Client.name).where(
         Client.id.in_(cids), Client.org_id == org_id))).all()) if cids else {}
-    return {t.id: names.get(t.client_id or order_client.get(t.order_id)) for t in rows}
+    return {t.id: names.get(_shown_client(t, jobs)) for t in rows}
 
 
-async def _order_numbers(db: AsyncSession, org_id: str, order_ids) -> dict:
-    """J4 — job numbers for linked jobs, this shop's jobs only (a bad link never shows another
-    shop's job)."""
+async def _visible_jobs(db: AsyncSession, current: Employee, q):
+    """`q` (a select over Order) narrowed to this shop's jobs the caller may open: the record
+    scope GET /api/orders/{id} enforces (scoping.can_view_order / scope_orders)."""
+    from backend.services import scoping
+    return scoping.scope_orders(q.where(Order.org_id == current.org_id),
+                                await scoping.role_for(db, current), current)
+
+
+async def _linked_orders(db: AsyncSession, current: Employee, order_ids) -> dict:
+    """J4 — order id → (job number, client id) for linked jobs the caller may open: this shop's
+    jobs only (a bad link never shows another shop's job), within the caller's record scope (a
+    task a manager linked to someone else's job doesn't show a scoped technician that job)."""
     ids = {i for i in order_ids if i}
     if not ids:
         return {}
-    return dict((await db.execute(select(Order.id, Order.order_number).where(
-        Order.id.in_(ids), Order.org_id == org_id))).all())
+    q = await _visible_jobs(db, current, select(Order.id, Order.order_number, Order.client_id)
+                            .where(Order.id.in_(ids)))
+    return {i: (n, c) for i, n, c in (await db.execute(q)).all()}
+
+
+async def _order_number(db: AsyncSession, current: Employee, order_id) -> Optional[str]:
+    return ((await _linked_orders(db, current, [order_id])).get(order_id) or (None,))[0]
+
+
+async def _check_order_link(db: AsyncSession, current: Employee, order_id: str) -> None:
+    """A job id sent by the caller (the job picker): 404 unless it is one of this shop's jobs the
+    caller may open. Out of scope reads exactly like unknown, so the answer never confirms that
+    someone else's job exists. Server-side automation links jobs itself and doesn't come here."""
+    from backend.services.owned import problem
+    found = (await db.execute(await _visible_jobs(db, current, select(Order.id).where(
+        Order.id == order_id)))).scalar_one_or_none()
+    if found is None:
+        raise problem(404, "That work order doesn't exist any more. Pick another.",
+                      f"No work order with id {order_id!r} in this shop")
 
 
 class TaskIn(BaseModel):
@@ -282,6 +325,8 @@ async def create_task(
     if primary and primary not in ids:
         ids = [primary] + ids
     await _check_assign(db, current, ids)
+    if data.order_id:
+        await _check_order_link(db, current, data.order_id)
     from backend.services.idempotency import idem_begin
     claim = await idem_begin(db, current.org_id, request, "tasks.create")
     if claim.replay is not None:
@@ -342,7 +387,7 @@ async def _create_task(data: TaskIn, ids: list, primary, db: AsyncSession, curre
     t = Task(
         org_id=current.org_id, title=data.title, description=data.description,
         assigned_to_id=primary, assignee_ids=ids, created_by_id=current.id,
-        order_id=data.order_id, client_id=data.client_id, lead_id=data.lead_id,
+        order_id=data.order_id or None, client_id=data.client_id, lead_id=data.lead_id,
         location_id=data.location_id or current.location_id,
         parent_task_id=data.parent_task_id, priority=data.priority,
         due_at=await _parse_due(db, current, data.due_at),
@@ -355,7 +400,7 @@ async def _create_task(data: TaskIn, ids: list, primary, db: AsyncSession, curre
     await _send_pushes(db)
     await db.refresh(t)
     return {**_ser(t, await _names(db, current.org_id)),
-            "order_number": (await _order_numbers(db, current.org_id, [t.order_id])).get(t.order_id)}
+            "order_number": await _order_number(db, current, t.order_id)}
 
 
 # ── My day ───────────────────────────────────────────────────────────────────
@@ -443,7 +488,7 @@ async def my_day(
     counts = dict.fromkeys(MY_DAY_BUCKETS, 0)
     for _t, key, total in found:
         counts[key] = int(total)
-    items = await _items(db, current.org_id, [t for t, _k, _n in found])
+    items = await _items(db, current, [t for t, _k, _n in found])
     out = {"date": today.isoformat(), **{key: [] for key in MY_DAY_BUCKETS}}
     for (_t, key, _n), item in zip(found, items):
         out[key].append(item)
@@ -584,17 +629,9 @@ async def get_task(
     current: Employee = Depends(get_current_employee),
 ):
     t = await _load(db, current, task_id)
-    d = _ser(t, await _names(db, current.org_id))
-    # J4 — linked records are read within this shop only, as a second line of defence behind
-    # the tenancy guard that refuses cross-shop links when a task is saved.
-    if t.order_id:
-        o = (await db.execute(select(Order).where(
-            Order.id == t.order_id, Order.org_id == current.org_id))).scalar_one_or_none()
-        d["order_number"] = o.order_number if o else None
-    if t.client_id:
-        c = (await db.execute(select(Client).where(
-            Client.id == t.client_id, Client.org_id == current.org_id))).scalar_one_or_none()
-        d["client_name"] = c.name if c else None
+    # J4 — linked records are read within this shop and the caller's record scope only (_items),
+    # as a second line of defence behind the checks that refuse such links when a task is saved.
+    d = (await _items(db, current, [t]))[0]
     d["subtasks"] = [_ser(x) for x in (await db.execute(select(Task).where(
         Task.parent_task_id == t.id, Task.org_id == current.org_id,
         Task.archived_at.is_(None), *await visibility_conds(db, current)))).scalars().all()]
@@ -637,6 +674,8 @@ async def update_task(
     prev_assignee, prev_status = t.assigned_to_id, t.status
     from backend.services.notification_rules import task_people
     prev_people = task_people(t)
+    if data.order_id and data.order_id != t.order_id:
+        await _check_order_link(db, current, data.order_id)
 
     for f in ("title", "description", "priority", "assigned_to_id", "client_id", "order_id"):
         v = getattr(data, f)
@@ -701,7 +740,7 @@ async def update_task(
     await _send_pushes(db)
     await db.refresh(t)
     return {**_ser(t, await _names(db, current.org_id)),
-            "order_number": (await _order_numbers(db, current.org_id, [t.order_id])).get(t.order_id)}
+            "order_number": await _order_number(db, current, t.order_id)}
 
 
 @router.delete("/{task_id}")
@@ -743,7 +782,7 @@ async def restore_task(
         await db.commit()
         await db.refresh(t)
     return {**_ser(t, await _names(db, current.org_id)),
-            "order_number": (await _order_numbers(db, current.org_id, [t.order_id])).get(t.order_id)}
+            "order_number": await _order_number(db, current, t.order_id)}
 
 
 # ── event feed ───────────────────────────────────────────────────────────────

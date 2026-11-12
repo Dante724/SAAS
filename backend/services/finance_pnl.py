@@ -23,7 +23,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import Invoice, Transaction
 from backend.services.money import q2
-from backend.services.dates import now_utc, range_edge, shop_tzname, zone
+from backend.services.dates import now_utc, report_edge, shop_tzname, zone
 
 _EXCLUDED_INVOICE = ("draft", "void", "cancelled", "canceled")
 
@@ -38,8 +38,8 @@ async def compute_pnl(db: AsyncSession, org_id: str, date_from: Optional[str],
     # A date-only range is the shop's day, as on Total profit and every other report: read as UTC
     # days the P&L for "today" missed the shop's evening and counted the next morning.
     tz = await shop_tzname(db, org_id, location_id)
-    df = range_edge(date_from, tz, end=False) if date_from else now_utc() - timedelta(days=30)
-    dt = range_edge(date_to, tz, end=True) if date_to else now_utc() + timedelta(days=1)
+    df = report_edge(date_from, tz, end=False) if date_from else now_utc() - timedelta(days=30)
+    dt = report_edge(date_to, tz, end=True) if date_to else now_utc() + timedelta(days=1)
 
     inv_date = func.coalesce(Invoice.issued_at, Invoice.created_at)
     inv_count = int((await db.execute(select(func.count()).where(
