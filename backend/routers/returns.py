@@ -167,12 +167,46 @@ class RefundIn(BaseModel):
     reason: Optional[str] = None
 
 
+_DOUBLE_CLICK_S = 10   # as cash._refuse_double_click: the same refund again this soon is a double click
+
+
+def _keyed(request) -> bool:
+    return bool(request is not None and (request.headers.get("Idempotency-Key") or "").strip())
+
+
+async def refuse_double_refund(db, org_id: str, order_id: str, account_id: str, amount: float) -> None:
+    """Audit FIN-01: a refund sent without an Idempotency-Key that repeats one just booked (same
+    job, cashbox and amount) is a double click or a network retry, not a second refund. Called
+    under the job's lock, so the second request sees the first one's Refund."""
+    from datetime import timedelta
+
+    from backend.services.money import q2
+    since = now_utc() - timedelta(seconds=_DOUBLE_CLICK_S)
+    hit = (await db.execute(select(Refund.id).where(
+        Refund.org_id == org_id, Refund.order_id == order_id, Refund.account_id == account_id,
+        Refund.voided_at.is_(None), Refund.amount == q2(abs(amount)), Refund.created_at >= since)
+        .limit(1))).scalar_one_or_none()
+    if hit:
+        raise HTTPException(409, f"{q2(abs(amount)):.2f} was just refunded on this job from this cashbox. "
+                                 "If the customer is owed more, refund again in a moment.")
+
+
 @router.post("/refunds", status_code=201)
 async def create_refund(
     data: RefundIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_create_returns")),
 ):
+    """Money back on a job. Audit FIN-01: a retry with the same Idempotency-Key gets the first
+    answer back instead of paying out again; without a key, the same refund again within a few
+    seconds is refused as a double click."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "returns.refund", data,
+                          lambda: _create_refund(data, db, current, keyed=_keyed(request)))
+
+
+async def _create_refund(data: RefundIn, db: AsyncSession, current: Employee, *, keyed: bool):
     # Giving money back is a payments action (as closing a job with money owed is, #74): the front
     # desk that takes payments can refund without seeing the shop's finances (QA A-5).
     if not (await has_perm(db, current, "can_make_client_payments") or await has_perm(db, current, "can_view_finance")):
@@ -207,6 +241,8 @@ async def create_refund(
     net_paid = await _net_paid(db, order_id)
     if data.amount > net_paid + 1e-6:
         raise HTTPException(400, f"Cannot refund more than was paid ({net_paid:g})")
+    if not keyed:
+        await refuse_double_refund(db, current.org_id, order_id, acct.id, data.amount)
     # Money handed back beyond an overpayment is money the customer is no longer charged: the
     # job's total goes down with it, so a goodwill refund or a returned item never shows the
     # customer as owing (QA F1). Handing back an overpayment, or (W3-C) a deposit on a job that

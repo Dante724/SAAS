@@ -68,6 +68,15 @@ async def test_each_kind_of_drift_is_reported(client, tenant, db, check):
     elif check == "invoice":
         await db.execute(update(Invoice).where(Invoice.id == s["invoice"]).values(amount_paid=100))
         want = s["invoice"]
+    elif check == "split_leg":
+        # a client advance whose cash leg was voided on its own (till reversed, credit kept)
+        r = await client.post(f"/api/clients/{s['client']}/balance", headers=tenant,
+                              json={"kind": "advance", "amount": 30, "account_id": s["till"]})
+        assert r.status_code == 201, r.text
+        want = (await db.execute(select(Transaction.id).where(
+            Transaction.account_id == s["till"], Transaction.ref_type == "client"))).scalar_one()
+        await db.execute(update(Transaction).where(Transaction.id == want).values(status="deleted"))
+        await db.execute(update(Account).where(Account.id == s["till"]).values(balance=Account.balance - 30))
     else:
         await db.execute(update(StockLevel).where(StockLevel.part_id == s["part"])
                          .values(qty_available=StockLevel.qty_available + 2))
