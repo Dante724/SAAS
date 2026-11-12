@@ -68,6 +68,9 @@ async def apply_receipt_line(
         await _lock_part(db, part)
         on_hand = (await db.execute(select(func.coalesce(func.sum(StockLevel.qty_available), 0))
             .where(StockLevel.part_id == part.id))).scalar() or 0
+        # Audit INV-01: units that aren't there carry no cost. A negative on-hand (older data, an
+        # import undo) weighted in turned avg 10 + 2 @ 20 into 30; nothing on the shelf → the receipt's cost.
+        on_hand = max(float(on_hand), 0.0)
         old_avg = part.avg_cost or part.cost_price or 0
         denom = on_hand + qty
         part.avg_cost = q4(((on_hand * old_avg) + (qty * unit_cost)) / denom) if denom else unit_cost
