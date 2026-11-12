@@ -102,6 +102,13 @@ async def insert_ignore(db: AsyncSession, model, **values) -> bool:
         from sqlalchemy.dialects.postgresql import insert
     else:
         from sqlalchemy.dialects.sqlite import insert
+    # A Core insert skips the ORM flush that fills a child row's shop from its parent (tenancy.
+    # ORG_PARENTS): fill it here the same way, so the NOT NULL org_id never sees a gap.
+    from backend.db.tenancy import ORG_PARENTS, org_for_new_row
+    table = model.__table__.name
+    if table in ORG_PARENTS and not values.get("org_id"):
+        tenant = db.sync_session.info.get("tenant_org")
+        values["org_id"] = await db.run_sync(lambda s: org_for_new_row(s, table, values, tenant))
     res = await db.execute(insert(model).values(**values).on_conflict_do_nothing())
     return res.rowcount == 1
 
