@@ -92,14 +92,7 @@ export type MyDay = Record<DayBucket, Task[]> & {
   /** Set by filterDay: the group it was cut from held more than the server sent (100 a group), so
    *  this group's count covers only what was on screen. */
   capped?: Partial<Record<DayBucket, boolean>>;
-  /** Newer servers, with assignee=all: every active person's exact counts, and the pool's. */
-  team?: TeamCount[];
-  pool?: PoolCount;
 };
-/** One person's exact counts from the server (a task with two people counts for both). */
-export type TeamCount = { employee_id: string; overdue: number; today: number; done_today: number };
-/** The shop's open unassigned tasks, by group, counted by the server. */
-export type PoolCount = { overdue: number; today: number; upcoming: number; later: number };
 /** The server sent fewer rows than it counted for this group (it lists at most 100). */
 export const isCapped = (day: MyDay, b: DayBucket): boolean => day.counts[b] > day[b].length || !!day.capped?.[b];
 
@@ -109,8 +102,6 @@ export function normDay(r: Partial<MyDay> | null | undefined, fallbackDate: stri
   for (const b of DAY_BUCKETS) d[b] = Array.isArray(r?.[b]) ? (r![b] as Task[]) : [];
   d.counts = {} as MyDay["counts"];
   for (const b of DAY_BUCKETS) d.counts[b] = typeof r?.counts?.[b] === "number" ? r!.counts![b] : d[b].length;
-  if (Array.isArray(r?.team)) d.team = r!.team;
-  if (r?.pool && typeof r.pool === "object") d.pool = r.pool;
   return d;
 }
 
@@ -266,11 +257,7 @@ export function bucketForDue(due: string | null, today: string): DayBucket {
   return k <= addDays(today, 7) ? "upcoming" : "later";
 }
 
-// ── whose tasks / team row ────────────────────────────────────────────────────
-
-/** Everyone on a task: the primary owner and the extra assignees, once each. */
-export const assigneesOf = (t: Pick<Task, "assigned_to_id" | "assignee_ids">): string[] =>
-  [...new Set([t.assigned_to_id, ...(t.assignee_ids || [])].filter((x): x is string => !!x))];
+// ── whose tasks ───────────────────────────────────────────────────────────────
 
 /** Keep only some tasks of a day (Up for grabs out of everyone's day). Counts are always what is
  *  left in the lists; a group whose source was capped (the server counted more than it sent) is
@@ -283,33 +270,4 @@ export function filterDay(day: MyDay, keep: (t: Task) => boolean): MyDay {
     if (isCapped(day, b)) next.capped![b] = true;
   }
   return next;
-}
-
-/** A count and whether it is only a lower bound (counted from a capped group): shown as "100+". */
-export type Tally = { n: number; more: boolean };
-export const fmtTally = (t: Tally): string => `${t.n}${t.more ? "+" : ""}`;
-export type PersonLoad = { id: string; name: string; position?: string | null; overdue: Tally; today: Tally; done: Tally };
-/** The team row, from everyone's day: how many open tasks wait in the pool, and per person how
- *  many are overdue, due today and done today. A task with two people counts for both.
- *  A newer server sends the exact numbers (`team`, `pool`): those are used as they are. Otherwise
- *  they are counted from the lists, so a number from a capped group is a lower bound (`more`). */
-export function teamLoad(day: MyDay, people: { id: string; name: string; position?: string | null }[]): { pool: Tally; people: PersonLoad[] } {
-  if (day.team && day.pool) {
-    const by = new Map(day.team.map((c) => [c.employee_id, c]));
-    const exact = (n: unknown): Tally => ({ n: typeof n === "number" ? n : 0, more: false });
-    const p = day.pool;
-    return {
-      pool: exact((p.overdue || 0) + (p.today || 0) + (p.upcoming || 0) + (p.later || 0)),
-      people: people.map((x) => { const c = by.get(x.id); return { id: x.id, name: x.name, position: x.position, overdue: exact(c?.overdue), today: exact(c?.today), done: exact(c?.done_today) }; }),
-    };
-  }
-  const open: DayBucket[] = ["catch_up", "today", "upcoming", "later"];
-  const pool = { n: open.reduce((n, b) => n + day[b].filter(isPool).length, 0), more: open.some((b) => isCapped(day, b)) };
-  const tally = (b: DayBucket, id: string): Tally => ({ n: day[b].filter((t) => assigneesOf(t).includes(id)).length, more: isCapped(day, b) });
-  return { pool, people: people.map((p) => ({ id: p.id, name: p.name, position: p.position, overdue: tally("catch_up", p.id), today: tally("today", p.id), done: tally("done_today", p.id) })) };
-}
-
-/** One person's card from their own day: the server's exact counts (and the optimistic moves on it). */
-export function ownLoad(day: MyDay): Pick<PersonLoad, "overdue" | "today" | "done"> {
-  return { overdue: { n: day.counts.catch_up, more: false }, today: { n: day.counts.today, more: false }, done: { n: day.counts.done_today, more: false } };
 }

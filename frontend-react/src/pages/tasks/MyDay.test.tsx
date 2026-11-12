@@ -54,23 +54,20 @@ const LIST = () => [{ id: "x1", title: "A task in the list", assignee_ids: ["me"
 let listItems: any[] = LIST();
 let listPaged = false;     // the newer list API (pages, says `total`)
 let closedTotal = 0;       // its count of done + cancelled matches
-let teamFail = false;      // everyone's day (the team row's copy) fails
-// A server with assignee=pool and team/pool counts (null = the #203 server: "pool" reads as an
-// unknown person, 404 for managers and 403 for staff).
-let poolServer: null | { pool: any; teamCounts?: { team: any[]; pool: any } } = null;
+// A server with assignee=pool (null = the #203 server: "pool" reads as an unknown person, 404 for
+// managers and 403 for staff).
+let poolServer: null | { pool: any } = null;
 
 beforeEach(() => {
   calls = []; manager = true; dayBody = DAY(); dayStatus = 200; failPost = false; failMove = false;
   try { localStorage.clear(); } catch { /* storage may be off */ }
-  shopTz = null; shopCountry = null; tzFail = false; patchFail = false; goneId = null; moveReply = { moved: 2 }; listItems = LIST(); listPaged = false; closedTotal = 0; teamFail = false; poolServer = null; resetShopTz();
+  shopTz = null; shopCountry = null; tzFail = false; patchFail = false; goneId = null; moveReply = { moved: 2 }; listItems = LIST(); listPaged = false; closedTotal = 0; poolServer = null; resetShopTz();
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method || "GET";
     calls.push({ method, url, body: init?.body ? JSON.parse(String(init.body)) : null });
     if (method === "GET" && url.startsWith("/api/tasks/my-day") && goneId && url.includes(`assignee=${goneId}`)) return reply({ detail: "Employee not found" }, 404);
-    if (method === "GET" && url.startsWith("/api/tasks/my-day") && teamFail && url.includes("assignee=all")) return reply({ detail: "boom" }, 500);
     if (method === "GET" && url.startsWith("/api/tasks/my-day") && url.includes("assignee=pool"))
       return poolServer ? reply(poolServer.pool) : manager ? reply({ detail: "Employee not found" }, 404) : reply({ detail: "Only a manager can see someone else's day." }, 403);
-    if (method === "GET" && url.startsWith("/api/tasks/my-day") && poolServer?.teamCounts && url.includes("assignee=all")) return reply({ ...capDay(dayBody), ...poolServer.teamCounts });
     if (method === "GET" && url.startsWith("/api/tasks/my-day")) return dayStatus === 200 ? reply(capDay(dayBody)) : reply({ detail: dayStatus === 404 && !url.includes("assignee=me") ? "Employee not found" : "Not Found" }, dayStatus);
     if (method === "GET" && url.startsWith("/api/staff/company")) return tzFail ? reply({ detail: "boom" }, 500) : reply({ name: "Fix Point", timezone: shopTz, country: shopCountry });
     if (method === "GET" && url.startsWith("/api/tasks?") && listPaged && url.includes("status=done%2Ccancelled")) return reply({ items: listItems.slice(0, 1), total: closedTotal });
@@ -667,45 +664,32 @@ describe("one-page Tasks (v2)", () => {
     done_today: [{ id: "d1", title: "Open the till", status: "done", completed_at: `${DATE}T08:55:00Z`, assigned_to_id: "e3", assignee_ids: ["e3"], assignee_names: ["Tom Reed"] }],
     counts: { catch_up: 1, today: 3, upcoming: 1, later: 0, done_today: 1 },
   });
-  const card = (name: RegExp) => within(screen.getByRole("group", { name: "Team" })).getByRole("button", { name });
+  const myDayCalls = () => calls.filter((c) => c.url.startsWith("/api/tasks/my-day")).map((c) => c.url);
 
-  it("Everyone (managers): a team row with Up for grabs first, then each person's overdue / today / done", async () => {
+  it("Everyone (managers): the normal list with who each task is for; no team cards; the menu picks a person or Up for grabs", async () => {
     dayBody = TEAM();
     const u = userEvent.setup();
     renderAt("/tasks?assignee=all");
     await screen.findByText("Ring Ana about the iPad");
-    const cards = within(screen.getByRole("group", { name: "Team" })).getAllByRole("button");
-    expect(cards.map((c) => c.getAttribute("aria-label"))).toEqual([
-      "Up for grabs: 2 waiting",
-      "Me (you): 0 overdue, 1 today, 0 done today",
-      "Jane Kim: 0 overdue, 1 today, 0 done today",
-      "Tom Reed: 1 overdue, 1 today, 1 done today",
-    ]);
-    // a card picks that person; clicking it again goes back to Everyone
-    await u.click(card(/^Tom Reed/));
+    expect(screen.queryByRole("group", { name: "Team" })).not.toBeInTheDocument();       // removed (owner)
+    expect(screen.getByRole("img", { name: "Assigned to Jane Kim" })).toBeInTheDocument();
+    expect(screen.getByRole("img", { name: "Assigned to Me, Tom Reed" })).toBeInTheDocument();
+    await u.selectOptions(screen.getByLabelText("Whose tasks"), "e3");
     expect(at).toBe("/tasks?assignee=e3");
-    await waitFor(() => expect(calls.some((c) => c.url === "/api/tasks/my-day?assignee=e3")).toBe(true));
-    expect(card(/^Tom Reed/)).toHaveAttribute("aria-pressed", "true");             // the row stays, counted from everyone
-    await u.click(card(/^Tom Reed/));
-    expect(at).toBe("/tasks?assignee=all");
-    await u.click(card(/^Up for grabs/));
+    await u.selectOptions(screen.getByLabelText("Whose tasks"), "pool");
     expect(at).toBe("/tasks?assignee=pool");
     await screen.findByText("Test the new charge port stock");
     expect(screen.queryByText("Ring Ana about the iPad")).not.toBeInTheDocument();  // only the pool
     expect(screen.getByRole("button", { name: /^Today\s*1$/ })).toBeInTheDocument();
   });
 
-  it("no team row for Me, nor for staff, nor while searching", async () => {
+  it("one person picked loads only that person's day (no second fetch of everyone's)", async () => {
     dayBody = TEAM();
-    const u = userEvent.setup();
-    const { unmount } = renderAt();
-    await screen.findByText("QC check MacBook Air keyboard");
+    renderAt("/tasks?assignee=e3");
+    await screen.findByText("Ring Ana about the iPad");
+    await new Promise((r) => setTimeout(r, 400));
+    expect(myDayCalls()).toEqual(["/api/tasks/my-day?assignee=e3"]);
     expect(screen.queryByRole("group", { name: "Team" })).not.toBeInTheDocument();
-    unmount();
-    renderAt("/tasks?assignee=all");
-    await screen.findByRole("group", { name: "Team" });
-    await u.type(screen.getByLabelText("Search all tasks"), "jane");
-    await waitFor(() => expect(screen.queryByRole("group", { name: "Team" })).not.toBeInTheDocument());
   });
 
   it("quick add gives the task to whoever is shown: a person, or nobody for Up for grabs", async () => {
@@ -732,7 +716,6 @@ describe("one-page Tasks (v2)", () => {
     renderAt("/tasks?assignee=pool");
     await screen.findByText("Test the new charge port stock");
     expect(calls.filter((c) => c.url.startsWith("/api/tasks/my-day")).pop()!.url).toBe("/api/tasks/my-day?assignee=me&include_pool=true");
-    expect(screen.queryByRole("group", { name: "Team" })).not.toBeInTheDocument();
     await u.click(screen.getByRole("button", { name: "Take it: Test the new charge port stock" }));
     expect(calls.filter((c) => c.method === "PATCH").pop()).toMatchObject({ url: "/api/tasks/p1", body: { assignee_ids: ["me"] } });
   });
@@ -767,57 +750,9 @@ describe("one-page Tasks (v2): review fixes", () => {
     done_today: [{ id: "d1", title: "Open the till", status: "done", completed_at: `${DATE}T08:55:00Z`, assigned_to_id: "e3", assignee_ids: ["e3"], assignee_names: ["Tom Reed"] }],
     counts: { catch_up: 1, today: 3, upcoming: 0, later: 0, done_today: 1 },
   });
-  const allCalls = () => calls.filter((c) => c.url === "/api/tasks/my-day?assignee=all").length;
-  const tom = () => within(screen.getByRole("group", { name: "Team" })).getByRole("button", { name: /^Tom Reed/ });
-
-  it("one person picked: everyone's day is fetched once per pick, not on every reload; their own card moves at once", async () => {
-    dayBody = TEAM();
-    const u = userEvent.setup();
-    renderAt("/tasks?assignee=e3");
-    await screen.findByText("Ring Ana about the iPad");
-    await waitFor(() => expect(tom()).toHaveAttribute("aria-label", "Tom Reed: 1 overdue, 3 today, 1 done today"));
-    expect(allCalls()).toBe(1);
-    await u.click(screen.getByRole("button", { name: 'Mark "Ring Ana about the iPad" done' }));
-    // the picked person's card follows their own day straight away
-    await waitFor(() => expect(tom()).toHaveAttribute("aria-label", "Tom Reed: 1 overdue, 2 today, 2 done today"));
-    await waitFor(() => expect(calls.filter((c) => c.url === "/api/tasks/my-day?assignee=e3").length).toBeGreaterThan(1));   // the quiet reload
-    await new Promise((r) => setTimeout(r, 400));
-    expect(allCalls()).toBe(1);                                                   // ...without asking for everyone again
-  });
-
-  it("clicking through several cards quickly asks for everyone's day once (debounced)", async () => {
-    dayBody = TEAM();
-    renderAt("/tasks?assignee=all");
-    await screen.findByRole("group", { name: "Team" });
-    const before = allCalls();
-    act(() => go("/tasks?assignee=e3"));
-    act(() => go("/tasks?assignee=e2"));
-    act(() => go("/tasks?assignee=e3"));
-    await waitFor(() => expect(allCalls()).toBe(before + 1));
-    await new Promise((r) => setTimeout(r, 400));
-    expect(allCalls()).toBe(before + 1);
-  });
-
-  it("team counts that couldn't load are dropped, said on the page, and Try again fetches them", async () => {
-    dayBody = TEAM(); teamFail = true;
-    const u = userEvent.setup();
-    renderAt("/tasks?assignee=e3");
-    await screen.findByText("Ring Ana about the iPad");
-    expect(await screen.findByText(/Couldn't update the team counts/)).toBeInTheDocument();
-    expect(screen.queryByRole("group", { name: "Team" })).not.toBeInTheDocument();      // no stale numbers
-    teamFail = false;
-    await u.click(screen.getByRole("button", { name: "Try again" }));
-    expect(await screen.findByRole("group", { name: "Team" })).toBeInTheDocument();
-    expect(screen.queryByText(/Couldn't update the team counts/)).not.toBeInTheDocument();
-  });
-
-  it("numbers counted from a capped group show as lower bounds, and Up for grabs says there may be more", async () => {
+  it("an Up for grabs cut from a capped day (older server) says there may be more", async () => {
     dayBody = TEAM(); dayBody.counts.today = 180;                                   // the server sent 3 of 180
-    renderAt("/tasks?assignee=all");
-    await screen.findByRole("group", { name: "Team" });
-    expect(tom()).toHaveAttribute("aria-label", "Tom Reed: 1 overdue, 2+ today, 1 done today");
-    expect(within(screen.getByRole("group", { name: "Team" })).getByRole("button", { name: "Up for grabs: 1+ waiting" })).toBeInTheDocument();
-    act(() => go("/tasks?assignee=pool"));
+    renderAt("/tasks?assignee=pool");
     await screen.findByText("Test the new charge port stock");
     expect(screen.getByRole("button", { name: /^Today\s*1$/ })).toBeInTheDocument();  // what is listed, never a mix with 180
     expect(screen.getByText(/Showing 1, there may be more/)).toBeInTheDocument();
@@ -867,28 +802,11 @@ describe("one-page Tasks (v2): review fixes", () => {
   });
 });
 
-describe("server counts + search fix", () => {
+describe("server pool + search fix", () => {
   const POOL = () => {
     const today = Array.from({ length: 100 }, (_, i) => ({ id: `p${i}`, title: `Pool task ${i}`, due_at: `${DATE}T13:00:00`, assigned_to_id: null, assignee_ids: [] }));
     return { date: DATE, catch_up: [], today, upcoming: [], later: [], done_today: [], counts: { catch_up: 0, today: 250, upcoming: 0, later: 0, done_today: 0 } };
   };
-  const team = () => within(screen.getByRole("group", { name: "Team" }));
-
-  it("Everyone: the team row uses the server's exact counts, no '+' even when the lists are capped", async () => {
-    dayBody = DAY(); dayBody.counts.today = 180;                                  // lists capped...
-    poolServer = { pool: POOL(), teamCounts: {                                  // ...but the server counted
-      team: [{ employee_id: "me", overdue: 2, today: 140, done_today: 1 }, { employee_id: "e3", overdue: 0, today: 41, done_today: 7 }],
-      pool: { overdue: 3, today: 250, upcoming: 4, later: 1 } } };
-    renderAt("/tasks?assignee=all");
-    await screen.findByRole("group", { name: "Team" });
-    expect(team().getAllByRole("button").map((c) => c.getAttribute("aria-label"))).toEqual([
-      "Up for grabs: 258 waiting",
-      "Me (you): 2 overdue, 140 today, 1 done today",
-      "Jane Kim: 0 overdue, 0 today, 0 done today",                             // not in the reply: nothing on
-      "Tom Reed: 0 overdue, 41 today, 7 done today",
-    ]);
-    expect(screen.queryByText(/\d\+/)).not.toBeInTheDocument();
-  });
 
   it("Up for grabs asks the server for the pool (exact counts, no client cut) when it can", async () => {
     poolServer = { pool: POOL() };

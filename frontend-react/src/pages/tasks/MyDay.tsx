@@ -15,7 +15,7 @@ import { useShopClock, toShopWall, fromShopWall, shopToday, fmtShop, shopLocale 
 import {
   type Task, type MyDay as Day, type DayBucket, type QuickWhen, type TaskGroup,
   normDay, moveTasks, insertTask, replaceTask, groupByTime, groupByDay, dueClock, fmtClock, lateLabel,
-  quickDue, bucketForDue, dayLabel, normPriority, normStatus, PRIORITY_LABEL, isAuto, dueOf, withShopTimes, splitPool, filterDay, isPool, teamLoad, ownLoad, isCapped, fmtTally, AUTO_LABEL, AUTO_HINT,
+  quickDue, bucketForDue, dayLabel, normPriority, normStatus, PRIORITY_LABEL, isAuto, dueOf, withShopTimes, splitPool, filterDay, isPool, isCapped, AUTO_LABEL, AUTO_HINT,
 } from "./taskModel";
 import type { Emp } from "./TaskPanel";
 import TaskResults from "./TaskResults";
@@ -73,17 +73,6 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
   }, [raw, tz, pooled, serverPool, poolMode, meId]);
   const day = split?.day ?? null;
   const pool = split?.pool ?? [];
-  // The team row (managers, any view but Me) is counted from everyone's day.
-  const needTeam = isManager && person !== "me" && !missing;
-  // Everyone and Up for grabs already load everyone's day; one person picked needs its own copy.
-  const ownTeam = needTeam && src !== "all";
-  const [teamRaw, setTeamRaw] = useState<Day | null>(null);
-  const [teamFailed, setTeamFailed] = useState(false);
-  const [teamTry, setTeamTry] = useState(0);
-  // Picking a card from Everyone keeps everyone's day already on screen until the fresh copy lands.
-  const lastAll = useRef<Day | null>(null);
-  if (src === "all" && raw) lastAll.current = raw;
-  const teamDay = !needTeam ? null : src === "all" ? raw : teamFailed ? null : (teamRaw ?? lastAll.current);
   const [failed, setFailed] = useState(false);
   const [view, setView] = useState<View>("today");
   const [q, setQ] = useState("");
@@ -129,21 +118,6 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
     });
   }, [dayUrl, src, person, missing, onUnavailable]);
   useEffect(() => { load(); }, [load]);
-  // One person picked: the team row still counts everyone. Fetched when the pick changes (or the
-  // panel changed something, or Try again), debounced so clicking through cards asks once; not on
-  // the quiet reloads after a tick, an add or a take (the picked person's own card follows their day).
-  const teamReq = useRef(0);
-  useEffect(() => {
-    const id = ++teamReq.current;
-    if (!ownTeam) { setTeamRaw(null); setTeamFailed(false); return; }
-    const h = setTimeout(() => {
-      api.get<Partial<Day>>("/tasks/my-day?assignee=all")
-        .then((r) => { if (id === teamReq.current) { setTeamRaw(normDay(r, "")); setTeamFailed(false); } })
-        // Never keep counts we couldn't refresh: drop them and say so.
-        .catch(() => { if (id === teamReq.current) { setTeamRaw(null); setTeamFailed(true); } });
-    }, 250);
-    return () => clearTimeout(h);
-  }, [ownTeam, person, reloadKey, teamTry]);
   const first = useRef(true);
   useEffect(() => { if (first.current) { first.current = false; return; } load(true); }, [reloadKey, load]);
   // "Today" moves on at the shop's midnight, and a tab left in the background may be stale: check
@@ -286,15 +260,6 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
     { id: "done" as View, label: "Done", count: counts?.done_today ?? null, disabled: off },
   ];
   const nameOfPerson = person === "me" ? "you" : person === "all" ? "anyone" : pooled ? "Up for grabs" : (picked?.name || "this person");
-  const team = useMemo(() => {
-    if (!teamDay) return null;
-    const active = emps.filter((e) => e.active !== false);
-    const ordered = [...active.filter((e) => e.id === meId), ...active.filter((e) => e.id !== meId)];
-    const t = teamLoad(teamDay, ordered);
-    // The picked person's card uses their own day: exact server counts, moved optimistically.
-    return raw && ownTeam ? { ...t, people: t.people.map((p) => (p.id === person ? { ...p, ...ownLoad(raw) } : p)) } : t;
-  }, [teamDay, emps, meId, raw, ownTeam, person]);
-
   const row = (t: Task, from: DayBucket) => (pooled && !isManager
     ? <TaskRow key={t.id} t={t} from={from} today={today} tz={tz || "UTC"} showWho={false} ticking={false} onOpen={() => onOpen(t)} onToggle={() => undefined} onTake={() => take(t)} />
     : <TaskRow key={t.id} t={t} from={from} today={today} tz={tz || "UTC"} showWho={showWho} ticking={ticking.includes(t.id)}
@@ -342,13 +307,6 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
           </div>
         </div>
       </div>
-
-      {team && !searching && <TeamRow team={team} meId={meId} person={person} onPick={(p) => onPerson(p === person ? "all" : p)} />}
-      {ownTeam && teamFailed && !searching && (
-        <p role="status" className="flex flex-wrap items-center gap-x-1.5 text-xs text-ink-secondary">
-          <M n="error" c="text-sm text-rose-600" />Couldn't update the team counts · <Button variant="link" onClick={() => setTeamTry((n) => n + 1)}>Try again</Button>
-        </p>
-      )}
 
       {(searching || missing) ? (
         <TaskResults q={qDeb} whose={pooled ? "all" : person} meId={meId} tz={tz} onOpen={onOpen} onClear={clearSearch} flash={flash}
@@ -445,49 +403,6 @@ export default function MyDay({ meId, emps, isManager, person, onPerson, onOpen,
         </section>
       )}
       </>)}
-    </div>
-  );
-}
-
-// ── team row (managers, Everyone) ────────────────────────────────────────────
-function TeamRow({ team, meId, person, onPick }: { team: ReturnType<typeof teamLoad>; meId?: string; person: string; onPick: (p: string) => void }) {
-  const card = "hit44 text-left rounded-2xl border p-3 flex flex-col gap-2 min-w-0 transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-primary/40";
-  return (
-    <div role="group" aria-label="Team" className="grid grid-cols-2 sm:grid-cols-[repeat(auto-fill,minmax(190px,1fr))] gap-2.5">
-      <button type="button" onClick={() => onPick("pool")} aria-pressed={person === "pool"}
-        aria-label={`Up for grabs: ${fmtTally(team.pool)} waiting`}
-        className={`${card} bg-amber-50/70 ${person === "pool" ? "border-primary ring-2 ring-primary/15" : "border-amber-200/80 hover:border-amber-300"}`}>
-        <span className="flex items-center gap-2.5 min-w-0">
-          <span className="w-7 h-7 rounded-full bg-white text-amber-700 grid place-items-center flex-shrink-0 border border-amber-200/80"><M n="group" c="text-sm" /></span>
-          <span className="min-w-0"><span className="block text-sm font-semibold text-ink-primary truncate">Up for grabs</span><span className="block text-2xs text-ink-secondary truncate">Nobody has these yet</span></span>
-        </span>
-        <span className="text-xs text-ink-secondary"><b className="font-semibold text-amber-700 tabular-nums mr-1">{fmtTally(team.pool)}</b>waiting</span>
-      </button>
-      {team.people.map((p) => {
-        const total = p.overdue.n + p.today.n + p.done.n;
-        return (
-          <button key={p.id} type="button" onClick={() => onPick(p.id)} aria-pressed={person === p.id}
-            aria-label={`${p.name}${p.id === meId ? " (you)" : ""}: ${fmtTally(p.overdue)} overdue, ${fmtTally(p.today)} today, ${fmtTally(p.done)} done today`}
-            className={`${card} bg-white ${person === p.id ? "border-primary ring-2 ring-primary/15" : "border-slate-200/90 hover:border-slate-300"}`}>
-            <span className="flex items-center gap-2.5 min-w-0">
-              <Avatar name={p.name} size={28} />
-              <span className="min-w-0">
-                <span className="block text-sm font-semibold text-ink-primary truncate">{p.name}{p.id === meId && <span className="font-normal text-ink-tertiary"> (you)</span>}</span>
-                <span className="block text-2xs text-ink-secondary truncate">{p.position || " "}</span>
-              </span>
-            </span>
-            <span className="flex flex-wrap gap-x-3 gap-y-0.5 text-xs text-ink-secondary tabular-nums" aria-hidden="true">
-              <span><b className={`font-semibold mr-1 ${p.overdue.n ? "text-amber-700" : "text-ink-primary"}`}>{fmtTally(p.overdue)}</b>overdue</span>
-              <span><b className="font-semibold text-ink-primary mr-1">{fmtTally(p.today)}</b>today</span>
-              <span><b className="font-semibold text-emerald-700 mr-1">{fmtTally(p.done)}</b>done</span>
-            </span>
-            <span className="flex h-1 rounded-full bg-slate-100 overflow-hidden" aria-hidden="true">
-              {total > 0 && <span className="bg-emerald-500" style={{ width: `${(p.done.n / total) * 100}%` }} />}
-              {total > 0 && <span className="bg-amber-500" style={{ width: `${(p.overdue.n / total) * 100}%` }} />}
-            </span>
-          </button>
-        );
-      })}
     </div>
   );
 }
