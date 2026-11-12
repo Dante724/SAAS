@@ -9,7 +9,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 from backend.db.database import get_db
 from backend.models import (
-    ClientReturn, ClientReturnLine, Refund, Order, StockMovement,
+    ClientReturn, ClientReturnLine, Refund, Order,
     Account, Employee, Part, Payment,
 )
 from backend.services.auth import assert_perm, get_current_employee, has_perm, require_perm
@@ -87,6 +87,8 @@ async def _create_return(data: ReturnIn, db: AsyncSession, current: Employee):
             raise HTTPException(422, "Return a positive quantity")
         if order is not None:
             await _check_job_holds(db, order, part, li.qty)
+        elif li.restock:
+            await _check_free_standing(db, current, part, li.qty)
         units = await _returned_units(db, current, part, li, order) if li.restock and li.qty > 0 else []
         db.add(ClientReturnLine(return_id=ret.id, part_id=li.part_id,
                                 qty=li.qty, restock=li.restock))
@@ -104,21 +106,55 @@ async def _create_return(data: ReturnIn, db: AsyncSession, current: Employee):
                 restocked += 1
             continue
         if li.restock and li.qty > 0:
-            from backend.services import serial_log, stock_rows
-            await stock_rows.add(db, li.part_id, loc_id, li.qty)
-            db.add(StockMovement(part_id=li.part_id, location_id=loc_id,
-                                 movement_type="return", qty=li.qty,
-                                 ref_type="client_return", ref_id=ret.id))
-            for u in units:
-                u.status, u.location_id, u.bin_id, u.warehouse_id, u.order_id = "in_stock", loc_id, None, None, None
-                serial_log.record(db, u, "returned", ref_type="client_return", ref_id=ret.id,
-                                  label=data.reason or "Customer return", actor_id=current.id)
+            await _restock_free_standing(db, current, ret, part, loc_id, li.qty, units, data.reason)
             restocked += 1
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "return", ret.id,
                            f"Client return: {len(data.lines)} line(s), {restocked} restocked")
     await db.commit()
     return {"id": ret.id, "restocked": restocked}
+
+
+MAX_RETURN_QTY = 10_000     # one line of goods back over the counter; more is a typo or a scan
+
+
+async def _check_free_standing(db, current, part, qty: float) -> None:
+    """Audit INV-06 — a return with no job behind it puts stock on the shelf that no document took
+    off it. A serialized product is bounded by its units (each must be one this shop sold); any other
+    product needs `can_manage_inventory` (the front desk returns goods against a job), a sane
+    quantity, and a whole one for products counted in whole units."""
+    from backend.services import stock_rows
+    if qty > MAX_RETURN_QTY:
+        raise HTTPException(422, f"At most {MAX_RETURN_QTY:,} units of “{part.name}” per return line")
+    stock_rows.check_whole(part, qty)
+    if not part.serialized:
+        if not await has_perm(db, current, "can_manage_inventory"):
+            raise HTTPException(403, "Taking goods back without a job needs inventory rights — return them "
+                                     "against the job, or ask a manager")
+
+
+async def _restock_free_standing(db, current, ret, part, loc_id: str, qty: float, units: list, reason) -> None:
+    """INV-06 — the units come in as a receipt of the return document: on a cost layer (a returned
+    unit at its own cost, else the product's valuation cost), with a `return` movement naming the
+    return, through the one stock-inflow engine. The returned serial units are re-attached to it."""
+    from backend.services import serial_log, stock_posting, valuation
+    out: dict = {}
+    if units:
+        cost = sum(float(u.unit_cost or 0) for u in units) / len(units) or valuation.unit_cost(part)
+    else:
+        cost = valuation.unit_cost(part)
+    await stock_posting.apply_receipt_line(
+        db, org_id=current.org_id, part=part, location_id=loc_id, qty=qty, unit_cost=float(cost),
+        created_by_id=current.id, ref_type="client_return", ref_id=ret.id, movement_type="return",
+        create_batch=True, out=out)
+    batch = out.get("batch")
+    for u in units:
+        u.status, u.location_id, u.warehouse_id, u.order_id = "in_stock", loc_id, None, None
+        u.bin_id = batch.bin_id if batch is not None else None
+        if batch is not None:
+            u.batch_id = batch.id
+        serial_log.record(db, u, "returned", ref_type="client_return", ref_id=ret.id,
+                          label=reason or "Customer return", actor_id=current.id)
 
 
 async def _check_job_holds(db, order, part, qty: float) -> None:

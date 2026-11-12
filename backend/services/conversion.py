@@ -129,12 +129,15 @@ async def product_to_asset(db: AsyncSession, org_id: str, employee_id: str, *,
     # ── inventory effect: a company unit leaves available stock ───────────────
     owner_before = "company"
     if unit.location_id:
-        from backend.services import stock_rows
+        from backend.services import stock_rows, stock_writeoff
         have, _held = await stock_rows.totals(db, part.id, unit.location_id)
-        if have > 0:      # out of the unit's own bin first
+        if have >= 1:     # out of the unit's own bin and cost layer, with a movement (audit Q1)
             try:
-                await stock_rows.draw(db, part.id, unit.location_id, min(1, have), bin_id=unit.bin_id)
-            except stock_rows.NotEnoughStock:
+                await stock_writeoff.write_off(
+                    db, part=part, location_id=unit.location_id, qty=1, created_by_id=employee_id,
+                    movement_type="convert_to_asset", ref_type="asset", ref_id=device.id,
+                    bin_id=unit.bin_id, batch_id=unit.batch_id)
+            except HTTPException:
                 pass      # taken concurrently — never below zero, as before
     unit.status = "converted_to_asset"
     unit.converted_asset_id = device.id
@@ -283,19 +286,27 @@ async def asset_to_product(db: AsyncSession, org_id: str, employee_id: str, *,
     # optionally bring it into stock as a serialized unit (company-owned inventory)
     unit = None
     if create_stock_unit and ident:
-        unit = SerializedItem(
-            org_id=org_id, part_id=part.id, serial_number=ident,
-            location_id=location_id or device.location_id,
-            unit_cost=cost_price or float(device.purchase_price or 0),
-            status="in_stock")
-        db.add(unit)
-        await db.flush()
-        from backend.services import serial_log
-        serial_log.record(db, unit, "received", ref_type="asset", ref_id=device.id, label="From an asset")
-        loc = unit.location_id
+        loc = location_id or device.location_id
+        unit_cost = float(cost_price or device.purchase_price or 0)
         if loc:
-            from backend.services import stock_rows
-            await stock_rows.add(db, part.id, loc, 1, bin_id=unit.bin_id)
+            # Audit INV-07: received like any stock — a movement naming the asset, a cost layer at the
+            # unit's cost and the serial unit on that layer — through the one stock-inflow engine.
+            from backend.services import stock_posting
+            out: dict = {}
+            await stock_posting.apply_receipt_line(
+                db, org_id=org_id, part=part, location_id=loc, qty=1, unit_cost=unit_cost,
+                created_by_id=employee_id, ref_type="asset", ref_id=device.id, serials=[ident],
+                cost_known=True, out=out)
+            await db.flush()
+            unit = (await db.execute(select(SerializedItem).where(
+                SerializedItem.batch_id == out["batch"].id))).scalar_one()
+        else:     # nowhere to put it: the unit is recorded, with no stock to go with it (as before)
+            unit = SerializedItem(org_id=org_id, part_id=part.id, serial_number=ident,
+                                  unit_cost=unit_cost, status="in_stock")
+            db.add(unit)
+            await db.flush()
+            from backend.services import serial_log
+            serial_log.record(db, unit, "received", ref_type="asset", ref_id=device.id, label="From an asset")
 
     device.converted_to_part_id = part.id
     device.asset_status = "for_sale" if create_stock_unit else device.asset_status
