@@ -39,7 +39,7 @@ VALIDATE split would hold the same lock). SQLite can't add a CHECK in place: the
 are not reflected faithfully) is recreated from its saved SQL.
 
 Revision ID: w2b01
-Revises: sso01
+Revises: corg01
 """
 import logging
 from collections import defaultdict
@@ -49,7 +49,7 @@ import sqlalchemy as sa
 from alembic import op
 
 revision = "w2b01"
-down_revision = "sso01"
+down_revision = "corg01"
 branch_labels = None
 depends_on = None
 
@@ -240,13 +240,15 @@ def _suffix_duplicates(bind, table, col, maxlen, what):
 def _repair_check_values(bind, now):
     # stock: a negative on-hand goes to 0 with an 'adjust' movement, so the ledger still sums to it
     mv_cols = _columns(bind, "stock_movements")
-    for r in _rows(bind, f"SELECT id, part_id, location_id, warehouse_id, bin_id, qty_available FROM stock_levels "
-                         f"WHERE qty_available < -{STOCK_DUST}"):
+    org_col = "org_id" if "org_id" in _columns(bind, "stock_levels") else "NULL AS org_id"
+    for r in _rows(bind, f"SELECT id, {org_col}, part_id, location_id, warehouse_id, bin_id, qty_available "
+                         f"FROM stock_levels WHERE qty_available < -{STOCK_DUST}"):
         vals = {"id": f"w2b01-{r.id}"[:36], "part_id": r.part_id, "location_id": r.location_id,
                 "warehouse_id": r.warehouse_id, "bin_id": r.bin_id, "movement_type": "adjust",
                 "qty": -float(r.qty_available), "unit_cost": 0, "ref_type": "w2b01", "ref_id": r.id, "created_at": now}
-        if "org_id" in mv_cols:      # once the stock ledger carries the shop (wave 2, DB-02)
-            vals["org_id"] = (_rows(bind, "SELECT org_id FROM locations WHERE id = :l", l=r.location_id) or [(None,)])[0][0]
+        if "org_id" in mv_cols:      # the stock ledger carries the shop since corg01 (wave 2, DB-02)
+            vals["org_id"] = r.org_id or (_rows(bind, "SELECT org_id FROM locations WHERE id = :l",
+                                                l=r.location_id) or [(None,)])[0][0]
         vals = {k: v for k, v in vals.items() if k in mv_cols}
         bind.execute(sa.text(f"INSERT INTO stock_movements ({', '.join(vals)}) VALUES "
                              f"({', '.join(':' + k for k in vals)})").bindparams(
@@ -342,8 +344,16 @@ def _add_checks(bind):
                 op.create_check_constraint(op.f(name), table, sa.text(expr))
 
 
+# corg01's SQLite table rebuild dropped this expression index (alembic doesn't reflect expression
+# indexes): put it back. Postgres never lost it. Same definition as models.StockLevel.
+_UNBINNED = ("CREATE UNIQUE INDEX IF NOT EXISTS uq_stock_levels_part_loc_unbinned ON stock_levels "
+             "(part_id, location_id, coalesce(warehouse_id, '')) WHERE bin_id IS NULL")
+
+
 def upgrade() -> None:
     bind = op.get_bind()
+    if bind.dialect.name == "sqlite":
+        op.execute(_UNBINNED)
     now = _now()
     _refuse_unknown_values(bind)          # before anything is written
     _merge_open_drawers(bind, now)
