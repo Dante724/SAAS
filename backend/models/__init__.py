@@ -44,6 +44,33 @@ def _now() -> datetime:
 TRIAL_DAYS = 14
 
 
+# ── srch01: the work-order search box's trigram indexes (Postgres only) ───────────────────────
+# Each is the exact expression services/search_match emits for that column, so the planner can
+# use it (test_order_search_indexes compares them). gin_trgm_ops needs pg_trgm, which srch01
+# creates on migrated databases and the before_create hook below on create_all ones.
+_SEARCH_NUM_STRIP = (" ", "-", "#", "/", ".", "_")      # search_match.NUM_STRIP
+_SEARCH_PHONE_STRIP = (" ", "-", "(", ")", ".", "/", "+")   # search_match.PHONE_STRIP
+
+
+def _search_stripped(expr: str, chars) -> str:
+    for ch in chars:
+        expr = f"replace({expr}, '{ch}', '')"
+    return expr
+
+
+def _search_flat(col: str) -> str:
+    """number_match / code_match: lower-cased, NUM_STRIP removed."""
+    return _search_stripped(f"lower({col})", _SEARCH_NUM_STRIP)
+
+
+def _trgm_index(name: str, expr: str) -> Index:
+    return Index(name, text(f"({expr}) gin_trgm_ops"), postgresql_using="gin").ddl_if(dialect="postgresql")
+
+
+event.listen(Base.metadata, "before_create",
+             DDL("CREATE EXTENSION IF NOT EXISTS pg_trgm").execute_if(dialect="postgresql"))
+
+
 def _trial_end() -> date:
     from datetime import timedelta
 
@@ -431,7 +458,13 @@ class WageRecord(Base):
 class Client(OrgScoped, Base):
     __tablename__ = "clients"
     # Clients list: filter org_id, sort by name (clients had no org index before).
-    __table_args__ = (Index("ix_clients_org_name", "org_id", "name"),)
+    __table_args__ = (
+        Index("ix_clients_org_name", "org_id", "name"),
+        # srch01: the work-order search box (name words, phone however typed, billed-to company)
+        _trgm_index("ix_clients_name_trgm", "name"),
+        _trgm_index("ix_clients_phone_trgm", _search_stripped("phone", _SEARCH_PHONE_STRIP)),
+        Index("ix_clients_payer_id", "payer_id"),
+    )
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     name: Mapped[str] = mapped_column(String(200))
@@ -509,6 +542,10 @@ class Device(OrgScoped, Base):
         Index("ix_devices_org_imei", "org_id", "imei"),
         Index("ix_devices_org_vin", "org_id", "vin"),
         Index("ix_devices_org_hin", "org_id", "hin"),
+        # srch01: the work-order search box (brand/model substrings, identifiers however typed)
+        _trgm_index("ix_devices_brand_trgm", "brand"),
+        _trgm_index("ix_devices_model_trgm", "model"),
+        *(_trgm_index(f"ix_devices_{c}_trgm", _search_flat(c)) for c in ("serial", "imei", "vin", "hin")),
     )
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     # Build 144do (security): devices are now tenant-anchored directly. Previously
@@ -641,6 +678,11 @@ class Order(OrgScoped, Base):
         # build it (a lookup index + a separate unique index, see y5a7c9e1g3i5) so models and the
         # migrated production schema match. Uniqueness is unchanged.
         Index("uq_orders_barcode", "barcode", unique=True),
+        # srch01: the search box's job number, anywhere in it, and as "WO12" = "WO-00012"
+        _trgm_index("ix_orders_number_trgm", _search_flat("order_number")),
+        Index("ix_orders_number_digits", "org_id",
+              text(f"ltrim({_search_flat('order_number')}, 'abcdefghijklmnopqrstuvwxyz0')"))
+        .ddl_if(dialect="postgresql"),
     )
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     order_number: Mapped[str] = mapped_column(String(50))

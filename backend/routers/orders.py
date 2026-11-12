@@ -7,7 +7,7 @@ from typing import List, Literal, Optional
 
 from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel, Field, field_validator, model_validator
-from sqlalchemy import func, select
+from sqlalchemy import case, func, select
 from sqlalchemy.ext.asyncio import AsyncSession
 from sqlalchemy.orm import selectinload
 
@@ -494,37 +494,49 @@ def _apply_order_filters(q, org_id: str, *, status=None, location_id=None, searc
 def _order_search_clause(s: str, org_id: str):
     """One search box: the job number (with or without its prefix, separators or zero padding),
     the client's name (every word, any order, any case — or the company they're billed to),
-    the client's phone however it's formatted, or the asset (brand, model, serial, IMEI, VIN, HIN).
-    Every subquery is pinned to the shop, so another shop's clients or assets never match."""
-    from sqlalchemy import or_
+    the client's phone however it's typed, or the asset (brand, model, serial, IMEI, VIN, HIN).
+    Every subquery is pinned to the shop, so another shop's clients or assets never match.
+
+    Shape: `orders.id IN (<jobs by number> UNION <jobs of matching clients> UNION <jobs on
+    matching assets>)`, and each client/asset set is itself a UNION of one-condition selects.
+    Each branch then filters a single table on a single expression, which Postgres answers from
+    the srch01 trigram indexes; the equivalent OR of IN-subqueries can't use them, so every
+    search used to filter all of the shop's jobs, clients and assets row by row."""
+    from sqlalchemy import union
+    from sqlalchemy.orm import aliased
 
     from backend.models import Device
     from backend.services import search_match as sm
-    conds = []
-    num = sm.number_match(Order.order_number, s)
-    if num is not None:
-        conds.append(num)
     # A short bare number ("12", "#3") is a job number: matching it inside serials, VINs or
     # phones too would bury the job under every asset that happens to contain those digits.
+    num = sm.number_match(Order.order_number, s)
     if num is not None and re.fullmatch(r"#?\s*\d{1,3}", s.strip()):
         return num
-    name_ids = select(Client.id).where(Client.org_id == org_id, sm.words_match(Client.name, s))
-    client_or = [Client.id.in_(name_ids),
-                 Client.payer_id.in_(name_ids)]      # people billed to a matching company
+    job = aliased(Order)       # the subqueries' own orders: never correlated with the outer query
+    jobs = []
+    if num is not None:
+        jobs.append(select(job.id).where(job.org_id == org_id, sm.number_match(job.order_number, s)))
+
+    named = aliased(Client)
+    name_ids = select(named.id).where(named.org_id == org_id, sm.words_match(named.name, s))
+    clients = [name_ids,
+               # people billed to a matching company
+               select(Client.id).where(Client.org_id == org_id, Client.payer_id.in_(name_ids))]
     phone = sm.phone_match(Client.phone, s)
     if phone is not None:
-        client_or.append(phone)
-    conds.append(Order.client_id.in_(
-        select(Client.id).where(Client.org_id == org_id, or_(*client_or))))
+        clients.append(select(Client.id).where(Client.org_id == org_id, phone))
+    jobs.append(select(job.id).where(job.org_id == org_id, job.client_id.in_(union(*clients))))
+
     # The asset: brand/model, or any of its identifiers (serial, IMEI, VIN, HIN) with spaces,
     # dashes and case ignored.
-    dev_or = [Device.brand.icontains(s, autoescape=True), Device.model.icontains(s, autoescape=True)]
+    conds = [Device.brand.icontains(s, autoescape=True), Device.model.icontains(s, autoescape=True)]
     for col in (Device.serial, Device.imei, Device.vin, Device.hin):
         code = sm.code_match(col, s)
         if code is not None:
-            dev_or.append(code)
-    conds.append(Order.device_id.in_(select(Device.id).where(Device.org_id == org_id, or_(*dev_or))))
-    return or_(*conds)
+            conds.append(code)
+    devices = union(*[select(Device.id).where(Device.org_id == org_id, c) for c in conds])
+    jobs.append(select(job.id).where(job.org_id == org_id, job.device_id.in_(devices)))
+    return Order.id.in_(union(*jobs))
 
 
 def _device_image_url(device_id: Optional[str], has_image: bool) -> Optional[str]:
@@ -584,6 +596,7 @@ async def list_orders(
     created_to: Optional[str] = None,
     include_archived: bool = False,
     facets: bool = False,                     # also return status counts + assignees for the toolbar
+    open_first: bool = False,                 # open jobs (closed_at unset) before closed, then newest first
     skip: int = Query(0, ge=0),
     limit: int = Query(50, ge=1, le=1000),
     db: AsyncSession = Depends(get_db),
@@ -602,8 +615,10 @@ async def list_orders(
         return scoping.scope_orders(base.where(Order.org_id == current.org_id), role, current)
 
     base = _apply_order_filters(scoped(select(Order)), current.org_id, status=status, **flt)
+    # open_first: quick add's job link wants the job on the bench, not the client's closed history
+    first = (case((Order.closed_at.is_(None), 0), else_=1),) if open_first else ()
     orders = (await db.execute(base.options(*_order_list_options())
-                               .order_by(Order.created_at.desc(), Order.id.desc())
+                               .order_by(*first, Order.created_at.desc(), Order.id.desc())
                                .offset(skip).limit(limit))).scalars().all()
     # total = rows matching the same filters + record scope (it used to count the whole org)
     total = (await db.execute(_apply_order_filters(
