@@ -11,7 +11,7 @@ Postgres, served by the GIN index ix_tasks_assignee_ids_gin, and to a quoted-id 
 text elsewhere (SQLite, where shops are small). With ix_tasks_org_assignee and ix_tasks_org_creator
 every arm of "assigned to me or made by me" has an index Postgres can BitmapOr.
 """
-from sqlalchemy import Boolean, String, and_, cast, func, or_
+from sqlalchemy import Boolean, String, and_, cast, func, literal, or_
 from sqlalchemy.dialects.postgresql import JSONB
 from sqlalchemy.ext.compiler import compiles
 from sqlalchemy.sql.expression import ColumnElement
@@ -22,7 +22,8 @@ MANAGE_PERM = "can_assign_staff"
 
 
 class list_has(ColumnElement):
-    """`json_list_column` contains the string `value` (an employee id)."""
+    """`json_list_column` contains `value`: an employee id, or a column of ids (Employee.id, so one
+    grouped query can count every person's tasks)."""
     type = Boolean()
     inherit_cache = False
 
@@ -33,7 +34,11 @@ class list_has(ColumnElement):
 
 @compiles(list_has)
 def _list_has_text(el, compiler, **kw):
-    return compiler.process(cast(el.column, String).contains(f'"{el.value}"', autoescape=True), **kw)
+    if isinstance(el.value, str):
+        return compiler.process(cast(el.column, String).contains(f'"{el.value}"', autoescape=True), **kw)
+    # A column: instr() is an exact substring test (LIKE would read "_" in an id as a wildcard).
+    quoted = literal('"', String) + el.value + literal('"', String)
+    return compiler.process(func.instr(cast(el.column, String), quoted) > 0, **kw)
 
 
 @compiles(list_has, "postgresql")

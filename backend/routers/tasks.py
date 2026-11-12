@@ -43,6 +43,7 @@ from backend.services.dates import (
 from backend.services.task_visibility import (
     assigned_sql,
     involves_sql,
+    list_has,
     own_day_sql,
     sees_all,
     unassigned_sql,
@@ -375,6 +376,8 @@ async def my_day(
               "<employee_id>": that person's day, same rule. "all": every live task in the shop.
               Both need can_assign_staff (403 otherwise); an id that isn't an employee of this
               shop is a 404 (another shop's employee looks exactly like a missing one).
+              "pool": the shop's unassigned tasks ("Up for grabs"), for anyone; staff see only
+              what the visibility rules allow them. `counts` are true totals as for any day.
     Buckets (open = todo or in_progress, not deleted):
       catch_up    open, due before today's start           oldest due first, then priority
       today       open, due today                          by due time, then priority (high first)
@@ -386,6 +389,11 @@ async def my_day(
               one). Default false. Pool items are the ones with no assigned_to_id and no
               assignee_ids.
     Each list holds at most 100 items (the GET /api/tasks item shape); `counts` are true totals.
+    With "all" the reply also carries exact team numbers, whatever the lists' cap:
+      team  [{employee_id, overdue, today, done_today}] for every active employee; a task with
+            several assignees counts for each of them (assigned_to_id or assignee_ids)
+      pool  {overdue, today, upcoming, later}: open unassigned tasks per bucket
+    Each is one grouped COUNT query, however many people the shop has.
     One query ranks and counts every bucket (window functions); names, job numbers and clients are
     then batch-loaded for all rows at once."""
     tz = await _shop_tz(db, current.org_id)
@@ -398,6 +406,9 @@ async def my_day(
     if who in ("me", current.id):
         cond.append(or_(own_day_sql(current.id), unassigned_sql()) if include_pool
                     else own_day_sql(current.id))
+    elif who == "pool":
+        # Up for grabs: the shop's unassigned tasks, for anyone who may see them.
+        cond += [unassigned_sql(), *await visibility_conds(db, current)]
     elif not await sees_all(db, current):
         raise HTTPException(403, "Only a manager can see someone else's day.")
     elif who != "all":
@@ -437,7 +448,49 @@ async def my_day(
     for (_t, key, _n), item in zip(found, items):
         out[key].append(item)
     out["counts"] = counts
+    if who == "all":
+        out["team"] = await _team_counts(db, current.org_id, t0, t1)
+        out["pool"] = await _pool_counts(db, current.org_id, t0, t1, t8)
     return out
+
+
+def _open_and_done_today(t0: datetime, t1: datetime):
+    is_open = Task.status.notin_(TASK_CLOSED)
+    return is_open, and_(Task.status == "done", Task.completed_at >= t0, Task.completed_at < t1)
+
+
+async def _team_counts(db: AsyncSession, org_id: str, t0: datetime, t1: datetime) -> list[dict]:
+    """Every active employee's overdue / due today / done today, in one grouped query: employees
+    LEFT JOIN the tasks they are on (primary owner or in assignee_ids, so a shared task counts for
+    each of them). Same shop-day edges and open/done rules as the My day buckets."""
+    is_open, done_today = _open_and_done_today(t0, t1)
+    on_task = or_(Task.assigned_to_id == Employee.id, list_has(Task.assignee_ids, Employee.id))
+    n = lambda c: func.coalesce(func.sum(case((c, 1), else_=0)), 0)   # noqa: E731
+    rows = (await db.execute(
+        select(Employee.id,
+               n(and_(is_open, Task.due_at < t0)),
+               n(and_(is_open, Task.due_at >= t0, Task.due_at < t1)),
+               n(done_today))
+        .select_from(Employee)
+        .outerjoin(Task, and_(Task.org_id == org_id, Task.archived_at.is_(None), on_task,
+                              or_(is_open, done_today)))
+        .where(Employee.org_id == org_id, Employee.active.is_(True))
+        .group_by(Employee.id).order_by(Employee.id))).all()
+    return [{"employee_id": eid, "overdue": int(a), "today": int(b), "done_today": int(c)}
+            for eid, a, b, c in rows]
+
+
+async def _pool_counts(db: AsyncSession, org_id: str, t0: datetime, t1: datetime, t8: datetime) -> dict:
+    """The shop's open unassigned tasks per open bucket (one query)."""
+    is_open, _ = _open_and_done_today(t0, t1)
+    n = lambda c: func.coalesce(func.sum(case((c, 1), else_=0)), 0)   # noqa: E731
+    row = (await db.execute(select(
+        n(Task.due_at < t0),
+        n(and_(Task.due_at >= t0, Task.due_at < t1)),
+        n(and_(Task.due_at >= t1, Task.due_at < t8)),
+        n(or_(Task.due_at.is_(None), Task.due_at >= t8)))
+        .where(Task.org_id == org_id, Task.archived_at.is_(None), is_open, unassigned_sql()))).one()
+    return dict(zip(("overdue", "today", "upcoming", "later"), (int(x) for x in row)))
 
 
 class MoveIn(BaseModel):
