@@ -116,7 +116,17 @@ async def test_receive_cannot_change_another_shops_part_even_with_a_stray_po_lin
         "supplier_id": sup.get("id") or sup["supplier"]["id"], "location_id": await _loc(client, B),
         "lines": [{"part_id": pb["id"], "qty_ordered": 5, "unit_cost": 999}]}, headers=B)).json()
     line = (await db.execute(select(POLine).where(POLine.po_id == po["po_id"]))).scalar_one()
-    line.part_id = pa["id"]          # simulate legacy cross-tenant data written before the guard
+    line_id = line.id
+    # The ORM can no longer write it: a PO line carries its shop (DB-02), so the flush guard refuses.
+    from backend.db.tenancy import CrossTenantReference
+    line.part_id = pa["id"]
+    with pytest.raises(CrossTenantReference):
+        await db.flush()
+    await db.rollback()
+    # Legacy cross-tenant data written before the guard: plant it with a Core UPDATE (no flush).
+    from sqlalchemy import update
+    await db.execute(update(POLine.__table__).where(POLine.__table__.c.id == line_id)
+                     .values(part_id=pa["id"]))
     await db.commit()
     r = await client.post(f"/api/inventory/po/{po['po_id']}/receive", json={}, headers=B)
     assert r.status_code in (403, 404, 409, 422), r.text
