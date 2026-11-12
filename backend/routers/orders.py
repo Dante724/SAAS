@@ -859,10 +859,10 @@ class SystemActor:
         self.name = name
 
 
-async def _new_job_steps(db, current, order, creator_id=None):
+async def _new_job_steps(db, current, order, creator_id=None, pushes=None):
     """What happens once a job exists: checklists for its first status, the order.created
-    webhook, the creator's commission, the assignee's alert, the "created" notification rules
-    and automations. Shared by create_order and estimate conversion (flow check E3), so a job
+    webhook, the creator's commission, the assignee's alert, the "created" messages' staff pushes
+    (the messages themselves were queued before the job's commit) and automations. Shared by create_order and estimate conversion (flow check E3), so a job
     made from an approved estimate gets the same treatment as one typed in at the counter.
     Each step is best-effort and commits on its own; a failure is logged and rolled back so the
     steps after it still work (R1). `current` may be a SystemActor (customer approved online)."""
@@ -895,24 +895,6 @@ async def _new_job_steps(db, current, order, creator_id=None):
                      kind="job.assigned", title=f"New job {order.order_number}",
                      body=(order.complaint or "")[:140], deep_link=f"/tech#/order/{order.id}")
 
-    created_matched = 0
-
-    async def notification_rules():
-        # Phase 1: fire "order created" notifications (real work orders only).
-        # 144jc: run the rules engine first (client + staff), fall back to the legacy
-        # template dispatch only when no rule matched — same convergence as status change.
-        nonlocal created_matched
-        from backend.services import notification_rules as _nr
-        _cres = await _nr.evaluate(db, org_id=current.org_id, order_id=order.id, event="created")
-        created_matched = (_cres or {}).get("matched", 0)
-        await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
-                                     event="created", actor_id=current.id)
-
-    async def legacy_notifications():
-        from backend.services.notifications import dispatch_order_notifications
-        await dispatch_order_notifications(
-            db, org_id=current.org_id, order_id=order.id, trigger_event="order_created")
-
     async def automations():
         # Build 144w: workflow automations for order-created.
         from backend.services import automation as _auto
@@ -927,11 +909,26 @@ async def _new_job_steps(db, current, order, creator_id=None):
     # approved online: the assignee already got that alert (customer_messages.notify_staff_about_customer).
     if current.id and order.assigned_to_id and order.assigned_to_id != current.id:
         await _order_side_effect(db, order, "technician notification", notify_technician, *reload)
-    if not order.is_estimate:
-        await _order_side_effect(db, order, "notification rules", notification_rules, *reload)
-        if created_matched == 0:
-            await _order_side_effect(db, order, "order notifications", legacy_notifications, *reload)
+    # The "created" customer/staff messages were queued in the job's own transaction
+    # (_queue_created_messages, audit WO-08); their staff pushes go out now it is committed.
+    if pushes:
+        from backend.services.push import dispatch_deferred
+        await dispatch_deferred(db, pushes)
     await _order_side_effect(db, order, "automations", automations, *reload)
+
+
+async def _queue_created_messages(db, current, order) -> list:
+    """Queue the "order created" messages (rules for the customer and staff, else the shop's
+    templates: the only path on plans without rules) in the transaction that saves the job, so
+    the job and its messages commit together (audit WO-08, NTF-02). Call before that commit;
+    returns the staff pushes to send after it (pass them to _new_job_steps). Estimates send none."""
+    pushes: list = []
+    if not order.is_estimate:
+        from backend.services import notification_rules as _nr
+        await _nr.queue_order_event(db, org_id=current.org_id, order_id=order.id, event="created",
+                                    actor_id=current.id, legacy_trigger="order_created",
+                                    push_later=pushes)
+    return pushes
 
 
 @router.post("", status_code=201)
@@ -1212,6 +1209,7 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
             await log_system_event(db, current.org_id, "order", order.id,
                                    f"Added without deduction: {shortfall:g} unit(s) pending stock")
 
+    _pushes = await _queue_created_messages(db, current, order)   # WO-08: saved with the job
     await db.commit()
     await db.refresh(order)
 
@@ -1224,7 +1222,7 @@ async def _create_order(data: OrderIn, db: AsyncSession, current: Employee):
         await sync_order_field_upsells(db, current.org_id, order, current)
 
     await _order_side_effect(db, order, "upsell drafting", upsells, current)
-    await _new_job_steps(db, current, order)
+    await _new_job_steps(db, current, order, pushes=_pushes)
 
     result = await db.execute(
         select(Order)
@@ -2008,6 +2006,18 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
 
     # (Preview: the dropped-job write-off above, from workstream B, is the one in charge.)
 
+    # Customer/staff messages are queued (outbox) in THIS transaction, before the commissions
+    # below commit it, so the status change and its messages are saved together or not at all
+    # (audit WO-08). A rule error rolls back only the messages (savepoint) and is logged. Nothing
+    # here calls Twilio/SMTP; staff web pushes go out after the commit.
+    import logging
+    from backend.services import notification_rules as _nr
+    from backend.services import push as _push
+    _ev = "closed" if is_closing else "status_changed"
+    _pushes: list = []
+    await _nr.queue_order_event(db, org_id=current.org_id, order_id=order.id, event=_ev,
+                                status_key=data.status, actor_id=current.id, push_later=_pushes)
+
     # Mandate 1: payroll commissions. Accrue when the order enters a terminal
     # (closed) state; claw back when it leaves one (reopen) or is an estimate.
     # Runs before the commit below so the status, the client ledger and the commissions save
@@ -2028,45 +2038,12 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
             await db.refresh(order, ["lines"])
             await eng.accrue_on_status(order, order.status)
 
-    # Customer/staff messages are queued (outbox), never sent here: nothing in this request calls
-    # Twilio/SMTP, and the notification sweep delivers them. Order of work:
-    #   1. commit the status change. (CommissionEngine above already commits it for jobs; this
-    #      makes it explicit, and the place where a failed save is reported as such.)
-    #   2. queue the messages in a short transaction of their own, in this request's session.
-    #      Not in a savepoint opened before the rules' reads: on SQLite that transaction keeps a
-    #      read snapshot, and when another connection commits meanwhile (the webhook outbox, a
-    #      second request on the job) its first insert fails with "database is locked".
-    #      A rule error rolls back only the queueing and is logged; the status change stands.
-    #   3. send staff web pushes, after everything is committed (sending writes and blocks).
-    import logging
-    from backend.services import notification_rules as _nr
-    from backend.services import push as _push
-    _ev = "closed" if is_closing else "status_changed"
-    _pushes: list = []
     try:
         await db.commit()
     except Exception:
         logging.getLogger("tekly.notifications").exception(
             "status change failed for org %s order %s (%s to %s)", current.org_id, order.id, _ev, data.status)
         raise
-    try:
-        await _nr.evaluate(db, org_id=current.org_id, order_id=order.id,
-                           event=_ev, status_key=data.status, commit=False)
-        # 144jb: Internal › Workflows — notify the assignee + manager (staff-scoped rules).
-        await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
-                                     event=_ev, status_key=data.status, actor_id=current.id,
-                                     commit=False, push_later=_pushes)
-        # No legacy fallback: the old "templates when no rule matched and the status has
-        # triggers_notification" path is gone so one setting (Settings › Notifications) decides
-        # what the customer gets. Flagged statuses were converted to equivalent per-status rules.
-        await db.commit()
-    except Exception:  # noqa: BLE001 — never fails the status change, which is already saved
-        await db.rollback()
-        _pushes.clear()                 # their bell items were rolled back too
-        logging.getLogger("tekly.notifications").exception(
-            "notification rules failed for org %s order %s (%s to %s); status change kept",
-            current.org_id, order.id, _ev, data.status)
-        await db.refresh(order)         # the rollback expired it; the code below reads it
     await _push.dispatch_deferred(db, _pushes)
 
     # Notify the assigned technician their job's status moved (unless they did it).
@@ -2170,12 +2147,13 @@ async def _convert_estimate(db, current, estimate):
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "order", estimate.id,
                            f"Converted from estimate {old_number} to work order {estimate.order_number}")
+    _pushes = await _queue_created_messages(db, current, estimate)   # WO-08: saved with the job
     await db.commit()
     from backend.models import AuditLog
     creator = (await db.execute(select(AuditLog.actor_id).where(
         AuditLog.org_id == current.org_id, AuditLog.action == "order.create",
         AuditLog.entity_id == estimate.id).limit(1))).scalar_one_or_none()
-    await _new_job_steps(db, current, estimate, creator_id=creator)
+    await _new_job_steps(db, current, estimate, creator_id=creator, pushes=_pushes)
     return estimate.id
 
 
@@ -2622,9 +2600,13 @@ async def add_comment(
     comment = OrderComment(order_id=order_id, author_id=current.id,
                            body=data.body, visible_to_client=data.visible_to_client)
     db.add(comment)
+    _pushes: list = []
+    if data.visible_to_client:   # WO-08: the messages commit with the comment
+        await notify_comment_added(db, current.org_id, order_id, actor_id=current.id, push_later=_pushes)
     await db.commit()
-    if data.visible_to_client:
-        await notify_comment_added(db, current.org_id, order_id, actor_id=current.id)
+    if _pushes:
+        from backend.services.push import dispatch_deferred
+        await dispatch_deferred(db, _pushes)
     return {"ok": True}
 
 
@@ -2641,21 +2623,14 @@ def _check_signature(v: Optional[str]) -> Optional[str]:
     return v
 
 
-async def notify_comment_added(db: AsyncSession, org_id: str, order_id: str, actor_id: Optional[str]) -> None:
+async def notify_comment_added(db: AsyncSession, org_id: str, order_id: str, actor_id: Optional[str],
+                               push_later: Optional[list] = None) -> None:
     """comment_added notifications for a client-visible comment (shared by the app and the API).
-    144jc: rules engine first (client + staff), legacy template fallback."""
-    c_matched = 0
-    try:
-        from backend.services import notification_rules as _nr
-        _cr = await _nr.evaluate(db, org_id=org_id, order_id=order_id, event="comment_added")
-        c_matched = (_cr or {}).get("matched", 0)
-        await _nr.notify_staff_order(db, org_id=org_id, order_id=order_id,
-                                     event="comment_added", actor_id=actor_id)
-    except Exception:  # noqa: BLE001
-        pass
-    if c_matched == 0:
-        from backend.services.notifications import dispatch_order_notifications
-        await dispatch_order_notifications(db, org_id=org_id, order_id=order_id, trigger_event="comment_added")
+    144jc: rules engine first (client + staff), legacy template fallback. Queued in the caller's
+    transaction: call it before committing the comment (audit WO-08), then send `push_later`."""
+    from backend.services import notification_rules as _nr
+    await _nr.queue_order_event(db, org_id=org_id, order_id=order_id, event="comment_added",
+                                actor_id=actor_id, legacy_trigger="comment_added", push_later=push_later)
 
 
 class SignatureIn(BaseModel):
@@ -3084,40 +3059,62 @@ async def notify_order_customer(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_send_sms")),
 ):
-    """Message button: email/SMS the customer about this order. Delivery goes
-    through the configured channel adapter (a real gateway is required to
-    actually send; the simulated adapter records the attempt)."""
+    """Message button: email/SMS the customer about this order.
+
+    Goes through the notification outbox (audit NTF-03): the message is saved on the job's history
+    (trigger_event "manual"), the customer's consent and STOP are honoured, a first text carries
+    the opt-out line, and it is sent straight away with the same claim, retry and record as every
+    other message. The answer says what really happened: ``status`` is sent | retrying (the
+    provider failed; the outbox tries again) | dead | skipped (no contact, no consent) | waiting."""
+    from backend.models import NotificationLog
+    from backend.services import notification_rules as _nr
+    from backend.services.notifications import channel_consented
     o = (await db.execute(select(Order).where(
         Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not o:
         raise HTTPException(404, "Order not found")
+    if data.channel not in ("email", "sms", "whatsapp"):
+        raise HTTPException(422, "channel must be email or sms")
     client = None
     if o.client_id:
-        client = (await db.execute(select(Client).where(Client.id == o.client_id))).scalar_one_or_none()
+        client = (await db.execute(select(Client).where(
+            Client.id == o.client_id, Client.org_id == current.org_id))).scalar_one_or_none()
     recipient = None
     if client:
         recipient = client.email if data.channel == "email" else client.phone
     if not recipient:
         raise HTTPException(422, f"No {data.channel} on file for this customer")
-    delivery = "simulated"
-    try:
+    body = await _nr.with_opt_out(db, current.org_id, o.client_id, data.channel, data.body)
+    log = NotificationLog(org_id=current.org_id, scope="client", channel=data.channel, trigger_event="manual",
+                          order_id=o.id, client_id=o.client_id, recipient=recipient,
+                          subject=data.subject, body=body, send_at=now_utc())
+    if channel_consented(client, data.channel):
+        log.status = "scheduled"
+    else:
+        log.status, log.error = "skipped", f"No client consent for {data.channel}"
+    db.add(log)
+    from backend.routers.feed import log_system_event
+    await log_system_event(db, current.org_id, "order", o.id, f"{data.channel.upper()} message to customer")
+    await db.commit()
+    status = log.status if log.status == "skipped" else await _nr.deliver_now(db, org_id=current.org_id,
+                                                                               log_id=log.id)
+    delivery = "outbox"
+    if data.channel == "email":
         from backend.config import settings as _settings
-        from backend.services.notifications import _adapter_for, notif_creds, try_oauth_email
-        result = None
-        if data.channel == "email":
-            # Prefer the shop's connected Gmail/Outlook account; fall back to SMTP.
-            result = await try_oauth_email(db, current.org_id,
-                                           recipient=recipient, subject=data.subject, body=data.body)
-            if result is not None:
-                delivery = "oauth"
-        if result is None:
-            _creds = await notif_creds(db, current.org_id, data.channel, transactional=True)   # about this job
-            result = await _adapter_for(data.channel, _creds).send(
-                recipient=recipient, subject=data.subject, body=data.body)
-            delivery = "smtp" if (data.channel == "email" and _settings.SMTP_HOST) else "simulated"
-    except Exception:
-        pass   # seam: simulated/absent gateway
-    return {"ok": True, "channel": data.channel, "recipient": recipient, "delivery": delivery}
+        from backend.models import EmailConnection
+        if (await db.execute(select(EmailConnection.id).where(
+                EmailConnection.org_id == current.org_id, EmailConnection.connected == True)  # noqa: E712
+                .limit(1))).first():
+            delivery = "oauth"
+        else:
+            delivery = "smtp" if _settings.SMTP_HOST else "simulated"
+    elif data.channel in ("sms", "whatsapp"):
+        delivery = "twilio"
+    err = (await db.execute(select(NotificationLog.error, NotificationLog.last_error).where(
+        NotificationLog.id == log.id))).first()
+    return {"ok": status == "sent", "status": status, "channel": data.channel, "recipient": recipient,
+            "delivery": delivery, "message_id": log.id,
+            "error": (err.error or err.last_error) if err and status != "sent" else None}
 
 
 class SendDocIn(BaseModel):

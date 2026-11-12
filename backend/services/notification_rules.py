@@ -50,7 +50,19 @@ def is_marketing_event(trigger_event: Optional[str]) -> bool:
     return ev == "birthday" or ev.startswith("agent.win_back")
 
 
-async def _send(db, org_id, channel, *, recipient, subject, body, log=None, headers=None, transactional=None):
+def outbox_message_id(log) -> str:
+    """The Message-ID of an outbox email: made from the row, so every try of the same message
+    (a retry after a timeout, a resend after a crash) is the same message to the receiving mail
+    system, which keeps one copy (audit NTF-05). Texts have no such key at Twilio."""
+    from urllib.parse import urlparse
+
+    from backend.config import settings
+    host = urlparse(settings.public_base).hostname or "localhost"
+    return f"<notif.{log.id}@{host}>"
+
+
+async def _send(db, org_id, channel, *, recipient, subject, body, log=None, headers=None, transactional=None,
+                message_id=None):
     """144jn: send through THIS shop's own provider credentials (per-tenant).
     An email is HTML only when its template was when the message was filled (log.is_html, fixed
     when the log row is first saved); built-in and template-less messages are plain text.
@@ -62,13 +74,20 @@ async def _send(db, org_id, channel, *, recipient, subject, body, log=None, head
     from backend.services.notifications import log_is_html
     html = await log_is_html(db, log) if log is not None else False
     if channel == "email" and not headers:
-        result = await try_oauth_email(db, org_id, recipient=recipient, subject=subject, body=body, html=html)
+        if message_id:
+            result = await try_oauth_email(db, org_id, recipient=recipient, subject=subject, body=body,
+                                           html=html, message_id=message_id)
+        else:
+            result = await try_oauth_email(db, org_id, recipient=recipient, subject=subject, body=body, html=html)
         if result is not None:
             return result
     if transactional is None:
         transactional = not is_marketing_event(log.trigger_event if log is not None else None)
     creds = await notif_creds(db, org_id, channel, transactional=transactional)
     adapter = _adapter_for(channel, creds)
+    from backend.services.notifications import SmtpEmailAdapter
+    if message_id and isinstance(adapter, SmtpEmailAdapter):
+        headers = {**(headers or {}), "Message-ID": message_id}
     if headers:
         return await adapter.send(recipient=recipient, subject=subject, body=body, html=html, headers=headers)
     return await adapter.send(recipient=recipient, subject=subject, body=body, html=html)
@@ -311,6 +330,87 @@ async def evaluate(db: AsyncSession, *, org_id: str, order_id: str, event: str,
     return {"sent": 0, "queued": queued, "scheduled": scheduled, "matched": len(matched)}
 
 
+async def queue_order_event(db: AsyncSession, *, org_id: str, order_id: str, event: str,
+                            status_key: Optional[str] = None, actor_id: Optional[str] = None,
+                            legacy_trigger: Optional[str] = None,
+                            push_later: Optional[list] = None) -> dict:
+    """Queue everything an order event sends, inside the CALLER's transaction (audit WO-08).
+
+    Call it after the business change is made and before the caller commits: the customer's
+    messages (rules, or the shop's templates when no rule matched and `legacy_trigger` names the
+    template event: the only path on plans without rules), and the staff alerts, are then saved
+    in the same commit as the change. A crash, a DB blip or a failed commit between the two can no
+    longer keep the change and lose its messages; the outbox (run_due) delivers what was saved.
+
+    The work runs in a savepoint: if a rule or template fails, only the messages are rolled back
+    and logged, and the business change still commits (as before). Staff web pushes are collected
+    into `push_later` (sent by the caller after its commit); the ones made inside a failed
+    savepoint are dropped with it. Never raises an Exception."""
+    mark = len(push_later) if push_later is not None else 0
+    try:
+        async with db.begin_nested():
+            res = await evaluate(db, org_id=org_id, order_id=order_id, event=event,
+                                 status_key=status_key, commit=False) or {}
+            if legacy_trigger and not res.get("matched"):
+                from backend.services.notifications import dispatch_order_notifications
+                res["legacy_queued"] = await dispatch_order_notifications(
+                    db, org_id=org_id, order_id=order_id, trigger_event=legacy_trigger,
+                    status_key=status_key, commit=False)
+            await notify_staff_order(db, org_id=org_id, order_id=order_id, event=event,
+                                     status_key=status_key, actor_id=actor_id, commit=False,
+                                     push_later=push_later)
+        return res
+    except Exception:  # noqa: BLE001 — messages never undo the change that caused them
+        if push_later is not None:
+            del push_later[mark:]
+        logger.exception("notification rules failed for org %s order %s (%s); the change is kept",
+                         org_id, order_id, event)
+        return {"failed": True}
+
+
+RESCHEDULED = "Job was rescheduled before this reminder was sent"
+
+
+async def _reminder_lead(db: AsyncSession, rule_id: Optional[str]) -> Optional[timedelta]:
+    if not rule_id:
+        return None
+    off = (await db.execute(select(NotificationRule.reminder_offset_min).where(
+        NotificationRule.id == rule_id))).scalar_one_or_none()
+    return None if off is None else timedelta(minutes=off or 0)
+
+
+async def _reminder_still_due(db: AsyncSession, org_id: str, log, tz_cache: dict) -> bool:
+    """Is a queued job reminder still for the job's current time? Its send_at was worked out from
+    the job's scheduled_for when it was queued (scheduled_for minus the rule's lead, on the shop's
+    clock), so a job that was moved since no longer gives the same send_at (audit NTF-04)."""
+    from backend.services.dates import shop_tzname, wall_to_utc
+    row = (await db.execute(select(Order.scheduled_for, Order.location_id).where(
+        Order.id == log.order_id, Order.org_id == org_id))).first()
+    if row is None or row.scheduled_for is None:
+        return False
+    lead = await _reminder_lead(db, log.rule_id)
+    if lead is None or log.send_at is None:
+        return True                       # the rule is gone: nothing to compare with, leave it
+    key = row.location_id or ""
+    if key not in tz_cache:
+        tz_cache[key] = await shop_tzname(db, org_id, row.location_id)
+    return abs(wall_to_utc(row.scheduled_for - lead, tz_cache[key]) - log.send_at) < timedelta(seconds=1)
+
+
+async def _cancel_moved_reminders(db: AsyncSession, org_id: str, tz_cache: dict) -> int:
+    """Skip queued job reminders whose job has been moved (or unscheduled) since they were queued,
+    so the history shows them as cancelled and queue_reminders queues one for the new time."""
+    rows = (await db.execute(select(NotificationLog).where(
+        NotificationLog.org_id == org_id, NotificationLog.trigger_event == "reminder",
+        NotificationLog.status == "scheduled", NotificationLog.order_id.isnot(None)))).scalars().all()
+    n = 0
+    for log in rows:
+        if not await _reminder_still_due(db, org_id, log, tz_cache):
+            log.status, log.error, log.claimed_at = "skipped", RESCHEDULED, None
+            n += 1
+    return n
+
+
 async def queue_reminders(db: AsyncSession, *, org_id: str,
                           now: Optional[datetime] = None) -> int:
     """For every `reminder` rule, queue a send for each order whose scheduled_for
@@ -325,6 +425,7 @@ async def queue_reminders(db: AsyncSession, *, org_id: str,
         NotificationRule.active == True))).scalars().all()  # noqa: E712
     queued = 0
     tz_cache: dict = {}
+    await _cancel_moved_reminders(db, org_id, tz_cache)   # NTF-04: a moved job's old reminder
     for rule in rules:
         lead = timedelta(minutes=rule.reminder_offset_min or 0)
         orders = (await db.execute(select(Order).where(
@@ -340,10 +441,13 @@ async def queue_reminders(db: AsyncSession, *, org_id: str,
                                               lead, now, tz_cache)
             if send_at is None:
                 continue
-            # Any earlier row is a duplicate, whatever its status: a send that failed (a Twilio
-            # timeout) used to be queued again on every 2-minute tick, ~30 texts an hour.
+            # Any earlier row for this job's CURRENT time is a duplicate, whatever its status: a
+            # send that failed (a Twilio timeout) used to be queued again on every 2-minute tick,
+            # ~30 texts an hour. The time is part of the key (send_at follows scheduled_for), so a
+            # rescheduled job gets a reminder for its new time (audit NTF-04), as appointments do.
             dupe = (await db.execute(select(NotificationLog.id).where(
                 NotificationLog.rule_id == rule.id, NotificationLog.order_id == order.id,
+                NotificationLog.send_at == send_at,
             ).limit(1))).scalar_one_or_none()
             if dupe:
                 continue
@@ -504,6 +608,10 @@ async def _hold_or_skip(db: AsyncSession, org_id: str, log, now: datetime) -> bo
         if verdict == "stop":
             log.status, log.error, log.claimed_at = "skipped", why, None
             return True
+    # A job reminder is only true while the job is still booked for the time it names (NTF-04).
+    if log.trigger_event == "reminder" and log.order_id and not await _reminder_still_due(db, org_id, log, {}):
+        log.status, log.error, log.claimed_at = "skipped", RESCHEDULED, None
+        return True
     # Send-time status guard: a message queued because the job entered a status is only
     # still true while the job is in it.
     if log.expect_status and log.order_id:
@@ -569,46 +677,74 @@ async def run_due(db: AsyncSession, *, org_id: str, now: Optional[datetime] = No
     for i, log_id in enumerate(due):
         if i and time.monotonic() - started > OUTBOX_BATCH_SECONDS:
             break                                     # out of time: the rest go next tick
-        if not await _claim(db, org_id, log_id, now):
-            continue                                  # another sweep has it
+        outcome = await _deliver_one(db, org_id, log_id, now)
+        if outcome in counts:
+            counts[outcome] += 1
+    return {"due": len(due), "sent": counts["sent"], "failed": counts["retrying"] + counts["dead"],
+            "retrying": counts["retrying"], "dead": counts["dead"], "reclaimed": reclaimed}
+
+
+async def _deliver_one(db: AsyncSession, org_id: str, log_id: str, now: datetime) -> Optional[str]:
+    """Claim one due outbox row, send it and record the outcome, committing at each step so a crash
+    never re-sends what already went out. Returns sent | retrying | dead | held (settled without
+    sending: skipped, or put back to wait), or None when another sweep has the row."""
+    if not await _claim(db, org_id, log_id, now):
+        return None                                   # another sweep has it
+    log = (await db.execute(select(NotificationLog).where(
+        NotificationLog.id == log_id, NotificationLog.org_id == org_id)
+        .execution_options(populate_existing=True))).scalar_one()
+    if await _hold_or_skip(db, org_id, log, now):
+        await db.commit()
+        return "held"
+    # Sense emails carry List-Unsubscribe headers (and have no template, so they are plain
+    # text either way); every other message passes its log so HTML-ness follows the template.
+    extra = {"log": log}
+    if (log.trigger_event or "").startswith("agent."):
+        from backend.services.sense_agents import email_headers
+        h = email_headers(log)
+        extra = {"headers": h} if h else {}   # no template: plain text, nothing to look up
+    if is_marketing_event(log.trigger_event):
+        # Win-back / birthday: the marketing part of the operator's daily text budget. (Agent
+        # texts carry no log here, so _send can't tell from it; everything else is transactional.)
+        extra["transactional"] = False
+    if log.channel == "email":
+        extra["message_id"] = outbox_message_id(log)  # NTF-05: the same on every try
+    try:
+        result = await asyncio.wait_for(_send(db, org_id, log.channel,
+            recipient=log.recipient, subject=log.subject, body=log.body, **extra), SEND_TIMEOUT_S)
+    except Exception as exc:  # noqa: BLE001 — one bad row must not stop the rows behind it
+        # Only the error type: a raw message could carry the recipient or provider details.
+        result = {"status": "failed",
+                  "error": "Timed out" if isinstance(exc, asyncio.TimeoutError) else type(exc).__name__}
+        await db.rollback()                       # the claim is committed; drop anything half-done
         log = (await db.execute(select(NotificationLog).where(
             NotificationLog.id == log_id, NotificationLog.org_id == org_id)
             .execution_options(populate_existing=True))).scalar_one()
-        if await _hold_or_skip(db, org_id, log, now):
-            await db.commit()
-            continue
-        # Sense emails carry List-Unsubscribe headers (and have no template, so they are plain
-        # text either way); every other message passes its log so HTML-ness follows the template.
-        extra = {"log": log}
-        if (log.trigger_event or "").startswith("agent."):
-            from backend.services.sense_agents import email_headers
-            h = email_headers(log)
-            extra = {"headers": h} if h else {}   # no template: plain text, nothing to look up
-        if is_marketing_event(log.trigger_event):
-            # Win-back / birthday: the marketing part of the operator's daily text budget. (Agent
-            # texts carry no log here, so _send can't tell from it; everything else is transactional.)
-            extra["transactional"] = False
-        try:
-            result = await asyncio.wait_for(_send(db, org_id, log.channel,
-                recipient=log.recipient, subject=log.subject, body=log.body, **extra), SEND_TIMEOUT_S)
-        except Exception as exc:  # noqa: BLE001 — one bad row must not stop the rows behind it
-            # Only the error type: a raw message could carry the recipient or provider details.
-            result = {"status": "failed",
-                      "error": "Timed out" if isinstance(exc, asyncio.TimeoutError) else type(exc).__name__}
-            await db.rollback()                       # the claim is committed; drop anything half-done
-            log = (await db.execute(select(NotificationLog).where(
-                NotificationLog.id == log_id, NotificationLog.org_id == org_id)
-                .execution_options(populate_existing=True))).scalar_one()
-        # A worker that dies here (killed, cancelled) leaves the row "sending"; _reclaim_stuck retries it.
-        outcome = _record(log, result)
-        await db.commit()
-        counts[outcome] += 1
-        if outcome != "sent":
-            log_.warning("notification %s (org %s, %s) %s after attempt %d: %s", log_id, org_id,
-                         log.channel, "will retry" if outcome == "retrying" else "gave up",
-                         log.attempts, log.last_error)
-    return {"due": len(due), "sent": counts["sent"], "failed": counts["retrying"] + counts["dead"],
-            "retrying": counts["retrying"], "dead": counts["dead"], "reclaimed": reclaimed}
+    # A worker that dies here (killed, cancelled) leaves the row "sending"; _reclaim_stuck retries it.
+    outcome = _record(log, result)
+    await db.commit()
+    if outcome != "sent":
+        log_.warning("notification %s (org %s, %s) %s after attempt %d: %s", log_id, org_id,
+                     log.channel, "will retry" if outcome == "retrying" else "gave up",
+                     log.attempts, log.last_error)
+    return outcome
+
+
+async def deliver_now(db: AsyncSession, *, org_id: str, log_id: str) -> str:
+    """Send one queued (committed) outbox row straight away, for a staff member waiting on the
+    answer (the job's Message customer button). Same claim, send-time checks, retry and record as
+    the sweep, so a failed try is retried later and the answer is the row's real state: sent |
+    retrying | dead | skipped | waiting (out of hours, shop not live) | sending (another worker
+    has it)."""
+    from backend.services.org_live import org_id_is_live
+    if await org_id_is_live(db, org_id):
+        outcome = await _deliver_one(db, org_id, log_id, now_utc())
+        if outcome in ("sent", "retrying", "dead"):
+            return outcome
+    st = (await db.execute(select(NotificationLog.status).where(
+        NotificationLog.id == log_id, NotificationLog.org_id == org_id)
+        .execution_options(populate_existing=True))).scalar_one_or_none()
+    return {"scheduled": "waiting", None: "skipped"}.get(st, st)
 
 
 # ── Account emails (password reset, email verification) ─────────────────────────────────────
