@@ -397,6 +397,10 @@ async def change_status(
     # read the same old status, and must not reserve, ship, credit or un-reserve a second time.
     if not await claim_status(db, t, prev, new):
         raise HTTPException(409, "Someone else just changed this transfer. Refresh and try again.")
+    # INV-11: the lines as they are now, after the claim — a receive that committed in between set
+    # the counts this move credits.
+    lines = (await db.execute(select(StockTransferLine).where(StockTransferLine.transfer_id == tid)
+                              .execution_options(populate_existing=True))).scalars().all()
 
     if new == "canceled":
         parts = await _parts(db, current.org_id, lines)
@@ -573,8 +577,11 @@ async def receive_lines(
     destination is credited with the verified count and the difference is booked as a
     loss on arrival rather than quietly vanishing.
     """
+    # Audit INV-11: locked and read fresh — a complete (or cancel) that claimed the transfer first
+    # is seen here, and one that comes after waits for this receive (its claim updates this row).
     t = (await db.execute(select(StockTransfer).where(
-        StockTransfer.id == tid, StockTransfer.org_id == current.org_id))).scalar_one_or_none()
+        StockTransfer.id == tid, StockTransfer.org_id == current.org_id)
+        .with_for_update().execution_options(populate_existing=True))).scalar_one_or_none()
     if not t:
         raise HTTPException(404, "Transfer not found")
     if t.status not in ("in_transit", "received"):
@@ -607,7 +614,8 @@ async def receive_lines(
 
 async def _receive_line(db, org_id: str, tid: str, r: ReceiveLine) -> StockTransferLine:
     """The transfer line a received row means: its line id, else the one line for the product."""
-    q = select(StockTransferLine).where(StockTransferLine.transfer_id == tid)
+    q = (select(StockTransferLine).where(StockTransferLine.transfer_id == tid)
+         .with_for_update().execution_options(populate_existing=True))
     if r.line_id:
         ln = (await db.execute(q.where(StockTransferLine.id == r.line_id))).scalar_one_or_none()
         if not ln:

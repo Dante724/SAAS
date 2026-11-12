@@ -86,3 +86,35 @@ async def test_write_off_and_supplier_return_movements_name_their_document(clien
         ("writeoff", "write_off", wo), ("writeoff_adjust", "write_off", wo), ("writeoff_reverted", "write_off", wo),
         ("return_to_supplier", "purchase_return", pr), ("return_reverted", "purchase_return", pr)])
     await _ledger_matches(db, pid)
+
+
+async def test_transfer_receive_rereads_the_transfer_and_refuses_once_completed(client, tenant, db):
+    """INV-11: a receive that read the transfer before a concurrent complete must not write counts
+    onto the completed transfer. The handler re-reads the transfer locked (fresh), so the stale copy
+    this session already holds can't let it through."""
+    from fastapi import HTTPException
+
+    from backend.models import Employee, StockTransfer, StockTransferLine
+    from backend.routers.transfers import ReceiveIn, ReceiveLine, receive_lines
+    from backend.tests.test_qa_f2_stock import _draft_transfer
+    tid, p, _dest = await _draft_transfer(client, tenant, db, "INV11-1", stock=5)
+    for s in ("ready", "in_transit"):
+        r = await client.patch(f"/api/transfers/{tid}/status", json={"status": s}, headers=tenant)
+        assert r.status_code == 200, r.text
+    me = (await client.get("/api/auth/me", headers=tenant)).json()
+    emp = (await db.execute(select(Employee).where(Employee.id == me["id"]))).scalar_one()
+    # this request read the transfer while it was still in transit …
+    t = (await db.execute(select(StockTransfer).where(StockTransfer.id == tid))).scalar_one()
+    assert t.status == "in_transit"
+    # … then someone completed it
+    r = await client.patch(f"/api/transfers/{tid}/status", json={"status": "received"}, headers=tenant)
+    assert r.status_code == 200, r.text
+    r = await client.patch(f"/api/transfers/{tid}/status", json={"status": "completed"}, headers=tenant)
+    assert r.status_code == 200, r.text
+    with pytest.raises(HTTPException) as e:
+        await receive_lines(tid, ReceiveIn(lines=[ReceiveLine(part_id=p["id"], qty_received=0)]), db=db, current=emp)
+    assert e.value.status_code == 409
+    await db.rollback()
+    db.expire_all()
+    ln = (await db.execute(select(StockTransferLine).where(StockTransferLine.transfer_id == tid))).scalar_one()
+    assert ln.qty_received != 0                    # the stale receive wrote nothing

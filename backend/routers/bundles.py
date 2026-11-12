@@ -1,7 +1,7 @@
 """Bundles — catalog kits that explode into components on the order."""
 from typing import Literal, Optional
 from fastapi import APIRouter, Depends, HTTPException
-from pydantic import BaseModel
+from pydantic import BaseModel, Field
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
@@ -53,6 +53,11 @@ async def _validate_components(db, org_id, comps) -> None:
         _n, _p, missing = await _resolve(db, org_id, c.ref_type, c.ref_id)
         if missing:
             raise HTTPException(400, f"Component {c.ref_id} is not one of your {c.ref_type}s")
+        if c.ref_type == "product":
+            # audit INV-09: 1.5 screws is a typo; a kit saved with it 500'd when added to a job
+            from backend.services import stock_rows
+            part = (await db.execute(select(Part).where(Part.id == c.ref_id, Part.org_id == org_id))).scalar_one()
+            stock_rows.check_whole(part, c.qty)
 
 
 @router.get("")
@@ -98,7 +103,7 @@ async def where_used(
 class CompIn(BaseModel):
     ref_type: str  # service|product
     ref_id: str
-    qty: float = 1
+    qty: float = Field(1, gt=0, le=10_000)    # audit INV-09: 0, negative or huge kits were saved
     device_variant: bool = False   # 144db — product slot auto-picks the part that fits the WO's device
 
 

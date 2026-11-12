@@ -4664,13 +4664,16 @@ async def _add_line(order_id: str, data: LineIn, db: AsyncSession, current: Empl
         from backend.models import Bundle, BundleComponent, Part
         from backend.models import Service as _Svc
         bundle = (await db.execute(select(Bundle).where(
-            Bundle.id == data.ref_id, Bundle.org_id == current.org_id))).scalar_one_or_none()
+            Bundle.id == data.ref_id, Bundle.org_id == current.org_id,
+            Bundle.active == True))).scalar_one_or_none()  # noqa: E712  (INV-09: not an archived kit)
         if not bundle:
             raise HTTPException(404, "Bundle not found")
         comps = (await db.execute(select(BundleComponent).where(
             BundleComponent.bundle_id == bundle.id))).scalars().all()
         if not comps:
             raise HTTPException(400, "This bundle has no components")
+        if any(not (c.qty or 0) > 0 for c in comps):     # INV-09: saved before quantities were checked
+            raise HTTPException(409, f"Kit “{bundle.name}” has a component with no quantity — fix the kit first")
         # 144db — resolve device-variant product slots against the WO's device (once)
         _kit_device = None
         if order.device_id:
@@ -5448,9 +5451,13 @@ async def delete_kit(
     order = (await db.execute(select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
+    # Audit INV-10: the job's lock and a fresh read, as delete_line — two removals of one kit queue
+    # up and the second finds nothing, instead of both giving the stock back.
+    await _lock_for_lines(db, order)
     await _guard_editable(db, order, current)
     lines = (await db.execute(select(OrderLine).where(
-        OrderLine.order_id == order_id, OrderLine.bundle_group_id == group_id))).scalars().all()
+        OrderLine.order_id == order_id, OrderLine.bundle_group_id == group_id)
+        .execution_options(populate_existing=True))).scalars().all()
     if not lines:
         raise HTTPException(404, "Kit not found on this job")
     perms = await _order_perms(db, current)
@@ -5465,6 +5472,7 @@ async def delete_kit(
             deducted = (line.qty or 0) - (line.pending_stock or 0)
             if deducted > 0:
                 await _reverse_fulfillment(db, order, line.ref_id, deducted)
+        await _audit_line(db, current, order_id, line, "order.line_delete")     # INV-10
         await db.delete(line)
     await db.flush()
     await _recalc_order(db, order)
