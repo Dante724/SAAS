@@ -9,6 +9,14 @@ name: tekly
 x-db-url: &db-url
   DATABASE_URL: postgresql+asyncpg://${POSTGRES_USER:-tekly}:${POSTGRES_PASSWORD:?set POSTGRES_PASSWORD in .env}@db:5432/${POSTGRES_DB:-tekly}
 
+# Every container that runs the Tekly image loads backend.config.settings, which refuses to boot
+# in staging/production without these (migrations too: backend/migrations/env.py imports it).
+# Guarded by backend/tests/test_one_server_compose_env.py.
+x-app-env: &app-env
+  REDIS_URL: redis://redis:6379/0
+  # Only the tunnel may set X-Forwarded-For, so rate limits see each visitor's real address.
+  FORWARDED_ALLOW_IPS: 172.30.0.10
+
 services:
   db:
     image: postgres:16-alpine
@@ -42,7 +50,7 @@ services:
     image: ${TEKLY_IMAGE:-tekly:latest}
     env_file: .env
     environment:
-      <<: *db-url
+      <<: [ *db-url, *app-env ]
     command: [ "alembic", "-c", "backend/alembic.ini", "upgrade", "head" ]
     depends_on:
       db: { condition: service_healthy }
@@ -53,11 +61,8 @@ services:
     restart: unless-stopped
     env_file: .env
     environment:
-      <<: *db-url
-      REDIS_URL: redis://redis:6379/0
+      <<: [ *db-url, *app-env ]
       WEB_CONCURRENCY: ${WEB_CONCURRENCY:-2}
-      # Only the tunnel may set X-Forwarded-For, so rate limits see each visitor's real address.
-      FORWARDED_ALLOW_IPS: 172.30.0.10
     depends_on:
       migrate: { condition: service_completed_successfully }
       redis: { condition: service_started }

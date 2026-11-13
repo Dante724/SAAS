@@ -12,13 +12,28 @@ The money columns were already NUMERIC; the ORM now reads all of them (and these
 Measures stay Float on purpose (mm, kg, GPS, hours, meter readings, thresholds).
 
 Postgres converts each value with ``round(col::numeric, scale)`` (half away from zero), so stored
-binary noise such as 2.9999999999999996 becomes 3.0000. This rewrites the affected tables
-(order_lines, stock_movements and stock_levels are the large ones), so run it in a quiet window.
+binary noise such as 2.9999999999999996 becomes 3.0000. Each table is rewritten ONCE (one
+ALTER TABLE with all its columns), but the whole revision runs in one transaction, so the 30 tables
+stay locked (ACCESS EXCLUSIVE) until it commits; organisations, orders, order_lines, transactions,
+stock_movements and stock_levels are the ones every request touches. Run it in a maintenance window
+(DEPLOY.md, "Migrations that lock tables").
+
+Pre-flight, before anything changes: a value NUMERIC(p,s) can't hold (|x| that rounds to 10^(p-s)
+or more, +-Infinity, NaN) would abort the ALTER half-way with no list of rows. Instead the upgrade
+stops first with a count per column (no row data); fix those values, then run it again.
+
+SQLite (development only): each table is rebuilt in batch mode, and every index that rebuild loses
+(expression and partial unique indexes such as uq_parts_org_sku_active) is put back from its saved
+SQL, the same way as w2b01.
+
 Downgrade casts back to double precision; values that were rounded stay rounded.
 
 Revision ID: dec08
 Revises: w2b01
 """
+import importlib.util
+from pathlib import Path
+
 import sqlalchemy as sa
 from alembic import op
 
@@ -65,25 +80,80 @@ def _pg() -> bool:
     return op.get_bind().dialect.name == "postgresql"
 
 
-def upgrade() -> None:
+def _sqlite_rebuild():
+    """w2b01's helper: batch-rebuild a SQLite table, then put back every index or trigger the rebuild
+    lost (alembic doesn't reflect expression indexes, and partial ones only partly)."""
+    path = Path(__file__).with_name("w2b01_one_open_unique_numbers_checks.py")
+    spec = importlib.util.spec_from_file_location("_w2b01_helpers", path)
+    mod = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(mod)
+    return mod._sqlite_rebuild
+
+
+def pg_alter_sql(table: str, cols: dict) -> str:
+    """One ALTER TABLE for every column of a table, so Postgres rewrites the table once."""
+    return f"ALTER TABLE {table} " + ", ".join(
+        f"ALTER COLUMN {col} TYPE NUMERIC({p},{s}) USING round({col}::numeric, {s})"
+        for col, (p, s) in cols.items())
+
+
+def _problem_counts(bind, table: str, col: str, p: int, s: int) -> dict:
+    """How many values of table.col NUMERIC(p,s) can't take: {'out of range': n, 'infinite': n, 'NaN': n}."""
+    limit = 10 ** (p - s)
+    if bind.dialect.name == "postgresql":
+        v = f"{col}::float8"
+        finite = f"{v} NOT IN ('NaN'::float8, 'Infinity'::float8, '-Infinity'::float8)"
+        sql = (f"SELECT count(*) FILTER (WHERE CASE WHEN {finite} "
+               f"THEN abs(round({col}::numeric, {s})) >= {limit} ELSE false END), "
+               f"count(*) FILTER (WHERE {v} IN ('Infinity'::float8, '-Infinity'::float8)), "
+               f"count(*) FILTER (WHERE {v} = 'NaN'::float8) FROM {table}")
+    else:   # SQLite stores +-Infinity as REAL and NaN as NULL
+        sql = (f"SELECT coalesce(sum(abs({col}) <= 1e308 AND abs(round({col}, {s})) >= {limit}), 0), "
+               f"coalesce(sum(abs({col}) > 1e308), 0), 0 FROM {table}")
+    out, inf, nan = bind.exec_driver_sql(sql).fetchone()
+    return {what: n for what, n in (("out of range", out), ("infinite", inf), ("NaN", nan)) if n}
+
+
+def _preflight(bind) -> None:
+    """Stop before any ALTER if a value can't become NUMERIC: counts per column, never row data."""
+    bad = []
     for table, cols in COLUMNS.items():
-        if _pg():
-            for col, (p, s) in cols.items():
-                op.execute(f'ALTER TABLE {table} ALTER COLUMN {col} TYPE NUMERIC({p},{s}) '
-                           f'USING round({col}::numeric, {s})')
+        for col, (p, s) in cols.items():
+            counts = _problem_counts(bind, table, col, p, s)
+            if counts:
+                bad.append(f"{table}.{col} NUMERIC({p},{s}): "
+                           + ", ".join(f"{n} {what}" for what, n in counts.items()))
+    if bad:
+        raise RuntimeError(
+            "dec08 aborted, nothing changed: these values don't fit their new exact type (out of range = "
+            "rounds to 10^(p-s) or more; NUMERIC can't hold +-Infinity, and a NaN would break every "
+            "comparison the app makes on it):\n  " + "\n  ".join(bad)
+            + "\nCorrect them (UPDATE <table> SET <column> = <sane value> WHERE ...), then upgrade again.")
+
+
+def upgrade() -> None:
+    bind = op.get_bind()
+    _preflight(bind)
+    rebuild = None if _pg() else _sqlite_rebuild()
+    for table, cols in COLUMNS.items():
+        if rebuild is None:
+            op.execute(pg_alter_sql(table, cols))
         else:
-            with op.batch_alter_table(table) as b:
+            def change(b, cols=cols):
                 for col, (p, s) in cols.items():
                     b.alter_column(col, type_=sa.Numeric(p, s), existing_type=sa.Float())
+            rebuild(bind, table, change)
 
 
 def downgrade() -> None:
+    bind = op.get_bind()
+    rebuild = None if _pg() else _sqlite_rebuild()
     for table, cols in COLUMNS.items():
-        if _pg():
-            for col in cols:
-                op.execute(f"ALTER TABLE {table} ALTER COLUMN {col} TYPE DOUBLE PRECISION "
-                           f"USING {col}::double precision")
+        if rebuild is None:
+            op.execute(f"ALTER TABLE {table} " + ", ".join(
+                f"ALTER COLUMN {col} TYPE DOUBLE PRECISION USING {col}::double precision" for col in cols))
         else:
-            with op.batch_alter_table(table) as b:
+            def change(b, cols=cols):
                 for col, (p, s) in cols.items():
                     b.alter_column(col, type_=sa.Float(), existing_type=sa.Numeric(p, s))
+            rebuild(bind, table, change)

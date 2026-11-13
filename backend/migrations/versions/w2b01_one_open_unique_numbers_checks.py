@@ -23,7 +23,11 @@ Existing data is repaired FIRST, and every change is logged (WARNING, logger ale
 - Live memberships on one asset for one plan: the oldest stays; the later ones are cancelled with
   ended_reason 'duplicate' (their invoices are left for the shop to void or credit).
 - Duplicate numbers and codes: the oldest keeps its value; the others get the first free "-2",
-  "-3", … suffix (the value is shortened to fit the column when needed).
+  "-3", … suffix (the value is shortened to fit the column when needed), and each renamed row gets
+  an audit_log row (action "<entity>.<column>_renamed", diff old -> new, no actor), so the shop can
+  see that a gift card, coupon or receipt number it handed out now answers to another value.
+  (Added after merge; the schema is unchanged. Databases that ran it before have the renames
+  only in the migration log.)
 - Values outside the new CHECKs: a negative on-hand is set to 0 with a matching 'adjust' stock
   movement (the ledger still sums to the shelf); a negative gift-card balance is set to 0 with a
   ledger line; a coupon used more than its limit gets its limit raised to its uses (still spent); an
@@ -34,7 +38,9 @@ Existing data is repaired FIRST, and every change is logged (WARNING, logger ale
 Repairs are not undone by the downgrade, which only drops the indexes and constraints.
 
 Postgres: CHECKs are added directly (the repairs ran in the same transaction, so a NOT VALID /
-VALIDATE split would hold the same lock). SQLite can't add a CHECK in place: the table is rebuilt
+VALIDATE split would hold the same lock). Everything runs in one transaction, so the CHECKed tables
+(ACCESS EXCLUSIVE) and the uniquely-indexed ones (SHARE: writes wait) stay locked until it commits:
+seconds today, a maintenance window at scale (DEPLOY.md, "Migrations that lock tables"). SQLite can't add a CHECK in place: the table is rebuilt
 (batch), and every index the rebuild didn't carry over exactly (expression and partial indexes
 are not reflected faithfully) is recreated from its saved SQL.
 
@@ -42,6 +48,7 @@ Revision ID: w2b01
 Revises: pv01
 """
 import logging
+import uuid
 from collections import defaultdict
 from datetime import datetime, timezone
 
@@ -213,7 +220,22 @@ def _cancel_double_memberships(bind, today):
 
 # ── DB-05 / DB-06 repairs ───────────────────────────────────────────────────────────────────────
 
-def _suffix_duplicates(bind, table, col, maxlen, what):
+def _audit_rename(bind, now, org, table, rid, col, old, new, copies):
+    """One audit_log row per renamed row, so the shop can see (Settings > Audit log) that a gift
+    card, coupon or document it knows by a number now answers to another one. Actor: none (system)."""
+    entity = {"gift_cards": "gift_card", "coupons": "coupon", "sales": "sale", "stock_transfers": "stock_transfer",
+              "write_offs": "write_off", "purchase_returns": "purchase_return", "postings": "posting"}[table]
+    vals = {"id": str(uuid.uuid4()), "org_id": org, "actor_id": None, "action": f"{entity}.{col}_renamed",
+            "entity_type": entity, "entity_id": rid, "created_at": now,
+            "diff": {col: [old, new], "reason": f"w2b01: {copies} rows of this shop shared {col} {old!r}; "
+                                                f"the oldest kept it, this one was renamed so each is unique"}}
+    vals = {k: v for k, v in vals.items() if k in _columns(bind, "audit_log")}
+    bind.execute(sa.text(f"INSERT INTO audit_log ({', '.join(vals)}) VALUES ({', '.join(':' + k for k in vals)})")
+                 .bindparams(sa.bindparam("created_at", type_=sa.DateTime), sa.bindparam("diff", type_=sa.JSON)),
+                 vals)
+
+
+def _suffix_duplicates(bind, table, col, maxlen, what, now):
     groups = _rows(bind, f"SELECT org_id, {col} AS val FROM {table} WHERE {col} IS NOT NULL AND org_id IS NOT NULL "
                          f"GROUP BY org_id, {col} HAVING count(*) > 1")
     for org, val in groups:
@@ -231,6 +253,7 @@ def _suffix_duplicates(bind, table, col, maxlen, what):
                     break
             taken.add(new)
             _exec(bind, f"UPDATE {table} SET {col} = :new WHERE id = :id", new=new, id=rid)
+            _audit_rename(bind, now, org, table, rid, col, val, new, len(dups))
             log.warning("w2b01 %s: shop %s had %d %s %r; %s %s renumbered to %r",
                         "DB-06" if what.endswith("code") else "DB-05", org, len(dups), what, val, table, rid, new)
 
@@ -367,7 +390,7 @@ def upgrade() -> None:
             ("postings", "number", 40, "postings numbered"),
             ("coupons", "code", 40, "coupons with code"),
             ("gift_cards", "code", 40, "gift cards with code")):
-        _suffix_duplicates(bind, table, col, maxlen, what)
+        _suffix_duplicates(bind, table, col, maxlen, what, now)
     _repair_check_values(bind, now)
     _add_checks(bind)          # table rebuilds on SQLite: before the new indexes, so those aren't rebuilt
     for name, table, cols, where in UNIQUE:
