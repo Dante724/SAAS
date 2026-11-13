@@ -102,7 +102,8 @@ async def test_gift_card_lifecycle(client, tenant):
     assert r.status_code == 200 and r.json()["redeemed"] == pytest.approx(30.0)
     assert r.json()["card_balance"] == pytest.approx(20.0)
     detail = (await client.get(f"/api/orders/{o['id']}", headers=tenant)).json()
-    assert detail["total"] == pytest.approx(0.0)
+    # FIN-09: the card pays the job (a gift_card payment); the job keeps its price
+    assert detail["total"] == pytest.approx(30.0)
     over = await client.post(f"/api/orders/{o['id']}/redeem-giftcard",
                              json={"code": code, "amount": 999}, headers=tenant)
     assert over.status_code == 400
