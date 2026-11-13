@@ -292,15 +292,26 @@ async def _org_currency(db: AsyncSession, org_id: str) -> str:
     return (org.currency_code or "usd").lower()
 
 
+def _assert_account_scope(db: AsyncSession, account_id: Optional[str]) -> None:
+    """Re-review money N1: a cashbox-restricted role is refused BEFORE the provider is called.
+    post_transaction refuses the account too, but only after the card was charged or refunded."""
+    from backend.services.scoping import ACCOUNT_FORBIDDEN, account_allowed
+    if not account_allowed(db, account_id):
+        raise TerminalError(403, ACCOUNT_FORBIDDEN)
+
+
 async def _pick_account(db: AsyncSession, org_id: str, account_id: Optional[str]) -> Account:
+    from backend.services.scoping import account_allowed
     if account_id:
         acc = (await db.execute(select(Account).where(
             Account.id == account_id, Account.org_id == org_id))).scalar_one_or_none()
         if not acc:
             raise TerminalError(404, "Account not found")
+        _assert_account_scope(db, acc.id)
         return acc
-    accs = (await db.execute(select(Account).where(
+    accs = [a for a in (await db.execute(select(Account).where(
         Account.org_id == org_id, Account.active == True))).scalars().all()  # noqa: E712
+        if account_allowed(db, a.id)]   # only the cashboxes this role may use
     acc = next((a for a in accs if a.payment_option == "card"), None) or next(
         (a for a in accs if a.payment_option == "cashless"), None)
     if not acc:
@@ -457,7 +468,12 @@ async def start_charge(db: AsyncSession, *, org_id: str, actor_id: str, terminal
 
 async def refresh(db: AsyncSession, ch: TerminalCharge) -> TerminalCharge:
     """Poll the provider for a waiting charge and settle it if it has finished. A provider that's
-    down leaves the charge waiting; the next poll (or the webhook) tries again."""
+    down leaves the charge waiting; the next poll (or the webhook) tries again.
+    A role that may not use the charge's cashbox doesn't poll or settle it (settling posts into that
+    account, which it would refuse after the provider answered); the webhook or an allowed user does."""
+    from backend.services.scoping import account_allowed
+    if not account_allowed(db, ch.account_id):
+        return ch
     if ch.provider == "square" and not ch.provider_ref and ch.status in OPEN:
         try:
             _searched, co = await _square_find_checkout(db, ch)
@@ -810,6 +826,7 @@ async def simulate(db: AsyncSession, ch: TerminalCharge, outcome: str) -> Termin
 async def refund(db: AsyncSession, ch: TerminalCharge, *, amount: Optional[float], actor_id: str) -> TerminalCharge:
     if ch.status != "succeeded":
         raise TerminalError(409, "Only an approved charge can be refunded.")
+    _assert_account_scope(db, ch.account_id)   # before the card is refunded at the provider
     left = q2((ch.amount or 0) - (ch.refunded_amount or 0))
     amount = q2(left if amount is None else amount)
     if amount <= 0:

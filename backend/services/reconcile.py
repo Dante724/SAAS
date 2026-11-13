@@ -67,6 +67,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.models import (
     Account,
+    AuditLog,
     CreditNote,
     CreditNoteLine,
     EmployeeBalanceLedger,
@@ -205,9 +206,13 @@ _CONTACT_LEG_TYPES = ("client", "supplier_payment")   # routers/cash._CONTACT_LE
 async def _split_legs(db: AsyncSession, org_id: str | None) -> list[Mismatch]:
     voided = (Transaction.status == "deleted") & Transaction.reverses_txn_id.is_(None)
     delta = (Transaction.status != "deleted") & Transaction.reverses_txn_id.isnot(None)
+    # re-review N7: a leg the owner accepted as settled by hand (POST /cash/transactions/{id}/accept-split)
+    accepted = select(AuditLog.entity_id).where(
+        AuditLog.org_id == Transaction.org_id, AuditLog.action == "cash.split_leg_accepted",
+        AuditLog.entity_type == "transaction", AuditLog.entity_id == Transaction.id)
     rows = (await db.execute(
         select(Transaction.org_id, Transaction.id, Transaction.amount, voided)
-        .where(Transaction.ref_type.in_(_CONTACT_LEG_TYPES), voided | delta,
+        .where(Transaction.ref_type.in_(_CONTACT_LEG_TYPES), voided | delta, ~accepted.exists(),
                func.abs(func.coalesce(Transaction.amount, 0)) > _MONEY_EPS,
                *_org_filter(Transaction.org_id, org_id))
         .execution_options(skip_tenant_filter=True))).all()   # cross-shop by design: a platform sweep

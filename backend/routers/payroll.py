@@ -1055,6 +1055,9 @@ async def post_attendance_wages(
             continue
     rate = emp.hourly_cost_rate or (emp.wage_value if emp.wage_type == "hourly" else 0.0) or 0.0
     hours, wage, posted = 0.0, Decimal("0"), 0
+    from backend.services.dates import today_in
+    from backend.services.payroll import open_wage_day
+    today = today_in(tz)
     for s in shifts:
         if keys[s.id] in paid or any(a <= s.started_at.date() <= b and s.ended_at <= at for a, b, at in legacy):
             continue
@@ -1062,10 +1065,12 @@ async def post_attendance_wages(
         if amount <= 0:
             continue
         day = utc_to_wall(s.started_at, tz).date()
-        # attribute the wage to the shop day worked, not "now", so it lands in that month's payroll
+        # attribute the wage to the shop day worked, not "now", so it lands in that month's payroll;
+        # unless that month was already accrued: then today, so the next run picks it up (N-4)
+        on = await open_wage_day(db, current.org_id, emp.id, day, today)
         db.add(L(org_id=current.org_id, employee_id=emp.id, entry_type="hourly_wage", amount=amount,
-                 ref_type="attendance", ref_id=f"{s.id}:{day}:{day}", idempotency_key=keys[s.id],
-                 accrual_key=keys[s.id], created_at=datetime(day.year, day.month, day.day, 12, 0, 0),
+                 ref_type="attendance", ref_id=f"{s.id}:{on}:{on}", idempotency_key=keys[s.id],
+                 accrual_key=keys[s.id], created_at=datetime(on.year, on.month, on.day, 12, 0, 0),
                  note=f"Shop attendance wages {day} ({q2(s.hours_worked or 0)}h)"))
         hours += float(s.hours_worked or 0)
         wage += amount
@@ -1228,6 +1233,25 @@ async def void_run(
     if run.status == "draft":
         raise HTTPException(400, "A draft posts nothing, so there is nothing to void")
     await assert_not_self(db, current, run.employee_id, "void your own pay run")
+    # SEC-02 (re-review): voiding puts the payout back into its cashbox. Check, before anything is
+    # posted or moved, that the caller's role may use that cashbox (the role's account list, bound to
+    # this request's session), as cash.void_document_legs does.
+    t = acc = None
+    if run.cash_txn_id:
+        from backend.services.scoping import account_allowed, may_use_account
+        t = (await db.execute(select(Transaction).where(
+            Transaction.id == run.cash_txn_id, Transaction.org_id == current.org_id))).scalar_one_or_none()
+        if t and t.status != "deleted":
+            acc = (await db.execute(select(Account).where(
+                Account.id == t.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
+            role = None
+            if current.role_id:
+                from backend.models import Role
+                role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
+            if not account_allowed(db, t.account_id) or not may_use_account(role, t.account_id):
+                name = acc.name if acc else "the cashbox it was paid from"
+                raise HTTPException(403, f"Your role can't use the cashbox \"{name}\" this run was paid from, "
+                                         "so it can't void it.")
     posted = (await db.execute(select(EmployeeBalanceLedger).where(
         EmployeeBalanceLedger.org_id == current.org_id,
         EmployeeBalanceLedger.ref_type == "payroll_run",
@@ -1237,12 +1261,8 @@ async def void_run(
         await eng._post(employee_id=e.employee_id, entry_type=e.entry_type, amount=-_money(e.amount),
                         event=None, rule_id=None, ref_type="payroll_run_void", ref_id=run.id,
                         idempotency_key=f"void:{e.id}", note=f"Void of {e.note or e.entry_type}: {reason}"[:500])
-    if run.cash_txn_id:
-        t = (await db.execute(select(Transaction).where(
-            Transaction.id == run.cash_txn_id, Transaction.org_id == current.org_id))).scalar_one_or_none()
-        if t and t.status != "deleted":
-            acc = (await db.execute(select(Account).where(
-                Account.id == t.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
+    if t is not None:
+        if t.status != "deleted":
             if acc:
                 await add_to_column(db, acc, "balance", -t.amount)   # the money is back in the cashbox
             t.status = "deleted"

@@ -84,10 +84,30 @@ def _s3():
     return _s3_client(settings.MEDIA_S3_REGION or "")
 
 
-async def _s3_call(fn, /, **kw):
+async def _s3_call(method: str, /, **kw):
     """boto3 is blocking: run it on a worker thread so the event loop keeps serving every
-    other shop while S3 answers (PERF-02)."""
-    return await asyncio.to_thread(fn, **kw)
+    other shop while S3 answers (PERF-02). The client is looked up (and on first use built, which
+    resolves credentials, possibly over the network) on that thread too (N-7)."""
+    return await asyncio.to_thread(lambda: getattr(_s3(), method)(**kw))
+
+
+async def decode(payload: str) -> Tuple[bytes, Optional[str]]:
+    """_decode_payload on a worker thread: base64 of up to MEDIA_MAX_BYTES is too slow for the loop
+    (N-7)."""
+    return await asyncio.to_thread(_decode_payload, payload)
+
+
+def _write_file(path: str, raw: bytes) -> None:
+    os.makedirs(os.path.dirname(path), exist_ok=True)
+    with open(path, "wb") as f:
+        f.write(raw)
+
+
+def _remove_file(path: str) -> None:
+    try:
+        os.remove(path)
+    except FileNotFoundError:
+        pass
 
 
 def active_backend() -> str:
@@ -99,7 +119,7 @@ def active_backend() -> str:
 
 async def store(db, org_id: str, payload: str, *, name: Optional[str] = None,
                 mime: Optional[str] = None) -> MediaBlob:
-    raw, sniffed_mime = _decode_payload(payload)
+    raw, sniffed_mime = await decode(payload)
     # Build 144cq: enforce a hard size ceiling on every upload (DoS / abuse guard).
     _cap = max_bytes()
     if len(raw) > _cap:
@@ -111,14 +131,11 @@ async def store(db, org_id: str, payload: str, *, name: Optional[str] = None,
 
     if backend == "local":
         key = _key_for(org_id, raw, name)
-        path = os.path.join(settings.MEDIA_LOCAL_DIR, key)
-        os.makedirs(os.path.dirname(path), exist_ok=True)
-        with open(path, "wb") as f:
-            f.write(raw)
+        await asyncio.to_thread(_write_file, os.path.join(settings.MEDIA_LOCAL_DIR, key), raw)
         blob.storage_key = key
     elif backend == "s3":
         key = _key_for(org_id, raw, name)
-        await _s3_call(_s3().put_object, Bucket=settings.MEDIA_S3_BUCKET, Key=key, Body=raw,
+        await _s3_call("put_object", Bucket=settings.MEDIA_S3_BUCKET, Key=key, Body=raw,
                        ContentType=mime or "application/octet-stream")
         blob.storage_key = key
     else:  # db (legacy)
@@ -145,7 +162,7 @@ async def load(blob: MediaBlob) -> Tuple[bytes, str]:
             return _s3().get_object(Bucket=settings.MEDIA_S3_BUCKET, Key=key)["Body"].read()
         return await asyncio.to_thread(_get, blob.storage_key), mime
     # db legacy
-    raw, _ = _decode_payload(blob.inline_data or "")
+    raw, _ = await decode(blob.inline_data or "")
     return raw, mime
 
 
@@ -160,14 +177,10 @@ async def erase(db, blobs: list[MediaBlob]) -> int:
             shared = (await db.execute(select(MediaBlob.id).where(
                 MediaBlob.storage_key == b.storage_key, MediaBlob.id.notin_(ids)).limit(1))).first()
             if not shared:
-                try:
-                    if b.backend == "local":
-                        os.remove(os.path.join(settings.MEDIA_LOCAL_DIR, b.storage_key))
-                    elif b.backend == "s3":
-                        await _s3_call(_s3().delete_object, Bucket=settings.MEDIA_S3_BUCKET,
-                                       Key=b.storage_key)
-                except FileNotFoundError:
-                    pass
+                if b.backend == "local":
+                    await asyncio.to_thread(_remove_file, os.path.join(settings.MEDIA_LOCAL_DIR, b.storage_key))
+                elif b.backend == "s3":
+                    await _s3_call("delete_object", Bucket=settings.MEDIA_S3_BUCKET, Key=b.storage_key)
         b.inline_data, b.storage_key, b.name, b.size_bytes = None, None, None, 0
     return len(blobs)
 

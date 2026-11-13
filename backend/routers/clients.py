@@ -1097,10 +1097,21 @@ class BalanceMoveIn(BaseModel):
 
 @router.post("/{client_id}/balance", status_code=201)
 async def move_balance(
-    client_id: str, data: BalanceMoveIn,
+    client_id: str, data: BalanceMoveIn, request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_make_client_payments")),
 ):
+    """Post an advance, payout or manual adjustment against a contact's balance. Re-review N9
+    (FIN-01 pattern): a retry with the same Idempotency-Key gets the first answer back; without a
+    key, the same movement again within a few seconds is refused as a double click."""
+    from backend.routers.cash import _keyed
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "clients.balance", {"client_id": client_id, "body": data},
+                          lambda: _move_balance(client_id, data, db, current, keyed=_keyed(request)))
+
+
+async def _move_balance(client_id: str, data: BalanceMoveIn, db: AsyncSession, current: Employee, *,
+                        keyed: bool):
     """Post an advance, payout or manual adjustment against a contact's balance.
 
     Convention: a positive balance means the client owes us. An *advance* (client pays in)
@@ -1140,6 +1151,22 @@ async def move_balance(
     # balance disagreeing with its own ledger.
     from backend.services.money import add_to_column
     await add_to_column(db, c, "balance", signed)
+    if not keyed:
+        # The contact row is locked now (the atomic UPDATE above, the last lock taken), so a second
+        # identical request waits here and then sees the first one's ledger row.
+        from datetime import timedelta
+
+        from backend.routers.cash import _DOUBLE_CLICK_S
+        from backend.services.dates import now_utc
+        hit = (await db.execute(select(ClientLedgerEntry.id).where(
+            ClientLedgerEntry.org_id == current.org_id, ClientLedgerEntry.client_id == client_id,
+            ClientLedgerEntry.entry_type == data.kind, ClientLedgerEntry.amount == signed,
+            ClientLedgerEntry.id != entry.id, ClientLedgerEntry.ref_type.is_(None),
+            ClientLedgerEntry.created_at >= now_utc() - timedelta(seconds=_DOUBLE_CLICK_S)).limit(1))).first()
+        if hit:
+            await db.rollback()
+            raise HTTPException(409, f"This {data.kind} of {amt:.2f} was just recorded. If it's needed twice, "
+                                     "record it again in a moment.")
     await db.commit()
     return {"id": entry.id, "balance": float(c.balance)}
 

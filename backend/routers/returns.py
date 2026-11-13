@@ -14,13 +14,14 @@ from backend.models import (
 )
 from backend.services.auth import assert_perm, get_current_employee, has_perm, require_perm
 from backend.services.dates import now_utc
+from backend.services.money import Qty  # NUMERIC input bounds (N3)
 
 router = APIRouter(prefix="/api/returns", tags=["returns"])
 
 
 class ReturnLineIn(BaseModel):
     part_id: str
-    qty: float = 1
+    qty: Qty = 1
     restock: bool = True
     serials: Optional[list[str]] = None   # QA F2: a serialized product — which units came back
 
@@ -182,17 +183,36 @@ async def _returned_units(db, current, part, li, order=None) -> list:
     if abs(li.qty - round(li.qty)) > 1e-9 or len(named) != int(round(li.qty)):
         raise HTTPException(422, f"Scan the IMEI / serial of each “{part.name}” coming back "
                                  f"({len(named)} of {li.qty:g} entered)")
+    # Re-review N1: with no job, only a unit this shop SOLD can come back. A unit allocated to a job
+    # is still held by that job (its stock already left the shelf on the job, and comes back when the
+    # line is removed), so taking it back without the job put a phantom unit on the shelf.
+    statuses = ("sold", "allocated_to_order") if order is not None else ("sold",)
     units = []
     for sn in named:
         u = (await db.execute(select(SerializedItem).where(
             SerializedItem.org_id == current.org_id, SerializedItem.part_id == part.id,
-            SerializedItem.status.in_(("sold", "allocated_to_order")),
+            SerializedItem.status.in_(statuses),
             *([SerializedItem.order_id == order.id] if order is not None else []),
             _sn_matches(SerializedItem.serial_number, sn)).with_for_update())).scalars().first()
         if u is None:
+            if order is None:
+                await _refuse_unit_on_a_job(db, current, part, sn)
             raise HTTPException(409, f"{sn} isn't a “{part.name}” this shop sold")
         units.append(u)
     return units
+
+
+async def _refuse_unit_on_a_job(db, current, part, sn: str) -> None:
+    """N1: say why a unit still on a job can't come back without it, and which job to use."""
+    from backend.models import Order, SerializedItem
+    from backend.services.serial_intake import matches as _sn_matches
+    num = (await db.execute(select(Order.order_number).join(SerializedItem, SerializedItem.order_id == Order.id).where(
+        SerializedItem.org_id == current.org_id, SerializedItem.part_id == part.id,
+        SerializedItem.status == "allocated_to_order",
+        _sn_matches(SerializedItem.serial_number, sn)))).scalars().first()
+    if num is not None:
+        raise HTTPException(409, f"{sn} is still on job {num}. Return it against that job, or "
+                                 f"remove it from the job first.")
 
 
 class RefundIn(BaseModel):

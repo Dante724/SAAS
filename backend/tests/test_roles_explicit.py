@@ -40,7 +40,7 @@ def test_a_permission_added_later_is_off_for_explicit_roles():
     assert P.role_allows(r, "can_some_future_permission") is False
     legacy = Role(name="old", permissions={}, perms_explicit=False)
     assert P.role_allows(legacy, "can_some_future_permission") is True   # only until snapshotted
-    assert P.role_allows(None, "anything") is True                       # the owner
+    assert P.role_allows(None, "anything") is False                      # SEC-11: no role grants nothing (the owner is has_perm's call)
 
 
 def test_shop_creators_legacy_admin_role_keeps_everything():

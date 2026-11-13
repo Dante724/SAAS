@@ -19,6 +19,7 @@ from backend.services.auth import get_current_employee, require_perm, record_sco
 from backend.services import media as _media
 from backend.services.money import q2
 from backend.services.dates import now_utc
+from backend.services.money import Qty  # NUMERIC input bounds (N3)
 
 router = APIRouter(prefix="/api/orders", tags=["recommendations"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -34,7 +35,7 @@ class RecIn(BaseModel):
     note: Optional[str] = None
     kind: str = "custom"
     ref_id: Optional[str] = None
-    qty: float = 1.0
+    qty: Qty = 1.0
     unit_price: float = 0.0
     media_data: Optional[str] = None
     order_item_id: Optional[str] = None     # several items per job: which item (null = whole job)
@@ -46,7 +47,7 @@ class RecPatch(BaseModel):
     note: Optional[str] = None
     kind: Optional[str] = None
     ref_id: Optional[str] = None
-    qty: Optional[float] = None
+    qty: Optional[Qty] = None
     unit_price: Optional[float] = None
     media_data: Optional[str] = None
     order_item_id: Optional[str] = None     # "" / null = whole job

@@ -22,7 +22,7 @@ from backend.models import (
 )
 from backend.services.crypto import decrypt as _dec
 from backend.services.crypto import encrypt as _enc
-from backend.services.money import q2
+from backend.services.money import json_dumps, q2
 from backend.services.dates import now_utc
 
 AUTH_BASE = "https://appcenter.intuit.com/connect/oauth2"
@@ -355,7 +355,9 @@ async def _push(conn: QboConnection, entity_type: str, payload: dict, remote_id:
             else "https://quickbooks.api.intuit.com")
     url = f"{host}/v3/company/{conn.realm_id}/{entity}"
     async with httpx.AsyncClient(timeout=15.0) as client:
-        resp = await client.post(url, json=payload, headers={
+        # Money columns read back as Exact (Decimal): encode with the money JSON hook, not httpx's
+        # plain json.dumps, which raises on Decimal (re-review decimal N1).
+        resp = await client.post(url, content=json_dumps(payload), headers={
             "Authorization": f"Bearer {_dec(conn.access_token)}",
             "Accept": "application/json", "Content-Type": "application/json"})
     if resp.status_code not in (200, 201):
@@ -380,7 +382,7 @@ async def _void_remote_payment(conn: QboConnection, remote_id: str) -> None:
             raise RuntimeError(f"QBO payment read {got.status_code}: {got.text[:160]}")
         token = (got.json().get("Payment") or {}).get("SyncToken")
         resp = await client.post(base, params={"operation": "update", "include": "void"},
-                                 json={"Id": remote_id, "SyncToken": token, "sparse": True},
+                                 content=json_dumps({"Id": remote_id, "SyncToken": token, "sparse": True}),
                                  headers=headers)
     if resp.status_code not in (200, 201):
         raise RuntimeError(f"QBO payment void {resp.status_code}: {resp.text[:160]}")

@@ -91,7 +91,8 @@ class OrgScoped:
 # Tables that carry an org_id but are not tenant-filtered, and why. A test fails when a new model
 # with an org_id is neither marked nor listed here.
 UNSCOPED_ORG_TABLES = {
-    "order_statuses": "org_id NULL = the platform's default status set, read by every shop",
+    "order_statuses": "org_id NULL = the platform's default status set, read by every shop "
+                      "(filtered to this shop's rows + the shared ones by _shared_criteria, SEC-13)",
     "admin_action_log": "platform console audit trail; org_id is the shop acted on, nullable",
     "billing_events": "Stripe Billing webhook ledger (platform), org_id nullable",
     "role_permission_backups": "written and read by migrations only",
@@ -136,7 +137,21 @@ def _scope_to_tenant(state: ORMExecuteState) -> None:
     if state.execution_options.get("skip_tenant_filter"):
         return
     state.statement = state.statement.options(
-        with_loader_criteria(OrgScoped, lambda cls: cls.org_id == tenant, include_aliases=True))
+        with_loader_criteria(OrgScoped, lambda cls: cls.org_id == tenant, include_aliases=True),
+        *_shared_criteria(tenant, select_=state.is_select))
+
+
+def _shared_criteria(tenant, *, select_: bool) -> tuple:
+    """Audit SEC-13: tables a shop shares with the platform's defaults (``order_statuses``: org_id
+    NULL = the default status set). A read sees this shop's rows and the shared ones, never another
+    shop's; a bulk UPDATE / DELETE touches this shop's rows only."""
+    from sqlalchemy import or_
+
+    from backend.models import OrderStatus
+    if select_:
+        return (with_loader_criteria(OrderStatus, lambda cls: or_(cls.org_id == tenant, cls.org_id.is_(None)),
+                                     include_aliases=True),)
+    return (with_loader_criteria(OrderStatus, lambda cls: cls.org_id == tenant, include_aliases=True),)
 
 
 @event.listens_for(Mapper, "load")
@@ -266,6 +281,28 @@ def _child_collections(mapper: Mapper) -> tuple:
                  if rel.direction.name == "ONETOMANY" and rel.mapper.local_table.name in ORG_PARENTS)
 
 
+@cache
+def _class_for_table(table: str):
+    from backend.db.database import Base
+    for m in Base.registry.mappers:
+        if m.local_table is not None and m.local_table.name == table and not m.inherits:
+            return m.class_
+    return None
+
+
+def _loaded(session: Session, table: str, oid):
+    """The row of `table` with this id if this session already holds it (an identity-map lookup,
+    no SQL and no walk over the map)."""
+    cls = _class_for_table(table)
+    if cls is None:
+        return None
+    from sqlalchemy.orm import util as orm_util
+    try:
+        return session.identity_map.get(orm_util.identity_key(cls, oid))
+    except Exception:       # noqa: BLE001 — composite / odd keys: fall back to the query
+        return None
+
+
 def org_for_new_row(session: Session, table: str, values: dict, tenant=None):
     """The shop a new ``table`` row with these column values belongs to: the first parent link
     that names one (``ORG_PARENTS``), else ``tenant``. For Core inserts (``insert_ignore``)."""
@@ -284,6 +321,8 @@ def _org_from_links(session: Session, obj, table: str, owners: dict, tenant, dep
             key = (target.name, val)
             if key not in owners:
                 parent = owners.get(("obj", target.name, val))
+                if parent is None:
+                    parent = _loaded(session, target.name, val)
                 if parent is not None and not parent.__dict__.get("org_id") and target.name in ORG_PARENTS \
                         and depth < 3:
                     owners[key] = _org_from_links(session, parent, target.name, owners, None, depth + 1)
@@ -322,16 +361,18 @@ def _fill_missing_org(session: Session, tenant) -> None:
     todo = [o for o in session.new if _table_of(o) in ORG_PARENTS and not o.__dict__.get("org_id")]
     if not todo:
         return
-    # Rows already in this session, by (table, id): a parent flushed earlier, or a new one with
-    # an explicit id, answers without a query.
+    # Re-review N8: this runs on every flush, and a bulk import autoflushes once per row in a
+    # session holding thousands of loaded rows. So it looks only at what changed: new rows by id
+    # here (a loaded parent is found by its identity key in `_org_from_links`), and parents among
+    # the new and modified rows below (appending to a loaded parent's collection marks it modified).
     owners: dict = {}
-    for o in list(session.identity_map.values()) + list(session.new):
+    for o in session.new:
         oid = o.__dict__.get("id")
         if oid:
             owners[("obj", _table_of(o), oid)] = o
     # Children reachable only from a parent's collection (no backref): they take the parent's shop.
     from_collection: dict = {}
-    for o in list(session.identity_map.values()) + list(session.new):
+    for o in list(session.new) + list(session.dirty):
         mapper = getattr(inspect(o, raiseerr=False), "mapper", None)
         if mapper is None:
             continue

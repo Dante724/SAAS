@@ -21,6 +21,21 @@ from backend.models import Order, Invoice, Payment, Client, Part
 from backend.services.money import q2
 
 
+def _payment_at(org_id: str, location_id: str):
+    """Re-review N6: a payment has no branch of its own (there is no `Payment.location_id`; the
+    filter was a 500). It is at a branch through its links: its job's branch; with no job, the
+    branch of the drawer shift it was taken on; with neither, a cash box kept at that branch."""
+    from sqlalchemy import and_, or_
+
+    from backend.models import Account, CashShift
+    return or_(
+        Payment.order_id.in_(select(Order.id).where(Order.org_id == org_id, Order.location_id == location_id)),
+        and_(Payment.order_id.is_(None), Payment.shift_id.in_(select(CashShift.id).where(
+            CashShift.org_id == org_id, CashShift.location_id == location_id))),
+        and_(Payment.order_id.is_(None), Payment.shift_id.is_(None), Payment.account_id.in_(select(Account.id).where(
+            Account.org_id == org_id, Account.location_id == location_id))))
+
+
 # ── Whitelist ────────────────────────────────────────────────────────────────
 # Each field: type drives which operators/aggregates are allowed and how the
 # value renders. `date_field` is what the report's date range filters on.
@@ -54,6 +69,7 @@ SOURCES: dict[str, dict] = {
     },
     "payments": {
         "label": "Payments", "model": Payment, "date_field": "paid_at", "has_location": True,
+        "location_filter": _payment_at,
         "fields": {
             "method": _f("Method", "text"), "kind": _f("Kind", "text"),
             "amount": _f("Amount", "money"), "reference": _f("Reference", "text"),
@@ -172,7 +188,8 @@ async def build_and_run(db: AsyncSession, org_id: str, config: dict,
         except ValueError:
             raise ValueError("Invalid date in the date range (expected YYYY-MM-DD).")
     if src["has_location"] and location_id:
-        conds.append(model.location_id == location_id)
+        at = src.get("location_filter")
+        conds.append(at(org_id, location_id) if at else model.location_id == location_id)
     for flt in (config.get("filters") or []):
         fk, op = flt.get("field"), flt.get("op")
         if fk not in fields:

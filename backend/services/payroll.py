@@ -41,6 +41,22 @@ def _money(x) -> Decimal:
 
 # tk02: how a task_closed commission is paid when the task has several assignees
 TASK_COMMISSION_MODES = ("split", "each_full", "first_only")
+async def open_wage_day(db: AsyncSession, org_id: str, employee_id: str, day, today):
+    """The date to put on a wage first paid now for work done on `day` (N-4).
+
+    Payroll runs pick hourly wages up by the dates in their ref_id (`<source>:<from>:<to>`) that
+    overlap the run's period, and an accrued run is never re-read. So a wage dated into a period an
+    accrued (or paid) run already covers would never be paid. It is dated to `today` instead, which
+    no accrued run can cover (the current month can't be accrued), so the next run picks it up, the
+    same rule corrections follow. Otherwise it keeps the day worked, so it lands in that month."""
+    from backend.models import PayrollRun
+    covered = (await db.execute(select(PayrollRun.id).where(
+        PayrollRun.org_id == org_id, PayrollRun.employee_id == employee_id,
+        PayrollRun.status.notin_(("draft", "void")),
+        PayrollRun.period_start <= day, PayrollRun.period_end >= day).limit(1))).first()
+    return today if covered else day
+
+
 def _task_shares(amount: Decimal, n: int, mode: str) -> list[Decimal]:
     """Each payee's part of one rule's amount. `split` shares it at the ledger's 4 dp, the first
     payee (the primary owner) taking what rounding leaves over, so the parts add up to `amount`."""
@@ -303,15 +319,17 @@ class CommissionEngine:
             EmployeeBalanceLedger.idempotency_key == EmployeeBalanceLedger.normalize_key(idempotency_key)))).scalar_one_or_none()
         if existing:
             return False
-        self.db.add(EmployeeBalanceLedger(
-            org_id=self.org_id, employee_id=employee_id, entry_type=entry_type,
-            amount=amount, event=event, rule_id=rule_id, ref_type=ref_type,
-            ref_id=ref_id, idempotency_key=idempotency_key, note=note,
-            accrual_key=accrual_key))
+        # A savepoint, so losing the race on the key undoes only this row (N-11: this rolled back
+        # the caller's whole session, and the caller then committed and reported success).
         try:
-            await self.db.flush()
+            async with self.db.begin_nested():
+                self.db.add(EmployeeBalanceLedger(
+                    org_id=self.org_id, employee_id=employee_id, entry_type=entry_type,
+                    amount=amount, event=event, rule_id=rule_id, ref_type=ref_type,
+                    ref_id=ref_id, idempotency_key=idempotency_key, note=note,
+                    accrual_key=accrual_key))
+                await self.db.flush()
         except IntegrityError:
-            await self.db.rollback()
             return False
         return True
 

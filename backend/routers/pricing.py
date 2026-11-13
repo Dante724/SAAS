@@ -17,6 +17,7 @@ from backend.services.auth import get_current_employee, require_perm
 from backend.services.money import q2
 from backend.services.dates import now_utc
 from backend.services.owned import get_owned_or_404
+from backend.services.money import Pct, Qty  # NUMERIC input bounds (N3)
 
 router = APIRouter(prefix="/api/pricing", tags=["pricing"])
 
@@ -74,7 +75,7 @@ async def list_types(
 
 class TypeIn(BaseModel):
     name: str
-    markup_pct: float = 0.0
+    markup_pct: Pct = 0.0
     is_default: bool = False
     location_scope: str = "all"
     location_ids: list[str] = []
@@ -257,7 +258,7 @@ class MarginCheckIn(BaseModel):
     kind: Optional[str] = None          # product|service
     ref_id: Optional[str] = None
     unit_price: float = 0.0
-    qty: float = 1.0
+    qty: Qty = 1.0
     discount: float = 0.0
     discount_type: str = "pct"          # pct|fixed
     cost_price: Optional[float] = None
@@ -356,8 +357,8 @@ async def set_type_item(
 
 # ── Quantity break tiers (144he) ────────────────────────────────────────────
 class TierIn(BaseModel):
-    min_qty: float
-    markup_pct: float
+    min_qty: Qty
+    markup_pct: Pct
 
 
 @router.get("/types/{type_id}/tiers")

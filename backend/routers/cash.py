@@ -33,6 +33,7 @@ from backend.services.auth import assert_perm, get_current_employee, has_perm, r
 from backend.core import paging as _paging
 from backend.services.money import MAX_MONEY, add_to_column, check_money, claim_status, q2
 from backend.services import scoping
+from backend.services.money import Pct, Rate  # NUMERIC input bounds (N3)
 
 
 async def _check_backdating(db, org_id, issued_at: Optional[datetime] = None):
@@ -71,6 +72,25 @@ router = APIRouter(prefix="/api/cash", tags=["cash"],
 
 
 # ── helpers ──────────────────────────────────────────
+
+class system_posting:
+    """Re-review money N4: postings into an account the cashier didn't choose (the safe a cash drop
+    goes into, the cashbox a job's payment came from when it is refunded on archive, the online
+    account a customer's payment settles into) are not limited by the role's cashbox list. The
+    scope is lifted only inside the block and put back after, even on error."""
+
+    def __init__(self, db):
+        self.db = db
+
+    def __enter__(self):
+        self.prev = scoping.session_allowed_accounts(self.db)
+        scoping.bind_account_scope(self.db, None)
+        return self
+
+    def __exit__(self, *exc):
+        scoping.bind_account_scope(self.db, sorted(self.prev) if self.prev is not None else None)
+        return False
+
 
 async def post_transaction(db, org_id, account_id, txn_type, amount, *,
                            cash_flow_item_id=None, comment=None, ref_type=None,
@@ -153,7 +173,7 @@ class AccountIn(BaseModel):
     is_company: bool = False
     is_virtual: bool = False
     location_id: Optional[str] = None
-    fee_pct: float = 0.0
+    fee_pct: Pct = 0.0
     fee_fixed: float = 0.0
     currency_code: Optional[str] = None   # Build 144cr: chosen at create, locked after
 
@@ -516,6 +536,52 @@ async def delete_transaction(
     return {"ok": True, "voided": len(legs)}
 
 
+SPLIT_LEG_ACCEPTED = "cash.split_leg_accepted"   # services/reconcile reads it
+
+
+class AcceptSplitIn(BaseModel):
+    reason: str
+
+
+async def _split_leg_accepted(db, org_id: str, txn_id: str) -> bool:
+    from backend.models import AuditLog
+    return (await db.execute(select(AuditLog.id).where(
+        AuditLog.org_id == org_id, AuditLog.action == SPLIT_LEG_ACCEPTED,
+        AuditLog.entity_type == "transaction", AuditLog.entity_id == txn_id).limit(1))).first() is not None
+
+
+@router.post("/transactions/{txn_id}/accept-split")
+async def accept_split_leg(
+    txn_id: str,
+    data: AcceptSplitIn,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_correct_transactions")),
+):
+    """Re-review money N7: a client/supplier cash leg voided on its own, or corrected, before those
+    were guarded (#213) moved the till but not the contact, and can no longer be deleted or corrected
+    (409). Once the contact side has been settled by hand, the owner accepts it here with a reason:
+    the nightly split_leg sweep stops reporting it, and a voided one can't be restored any more
+    (that would put the till off by the same amount again). Nothing moves; the record says who and why."""
+    t = await _get_txn(db, current.org_id, txn_id)
+    if t.ref_type not in ("client", "supplier_payment"):
+        raise HTTPException(409, "Only the cash side of a client balance movement or a supplier payment is "
+                                 "checked against its contact.")
+    split = (t.status == "deleted" and not t.reverses_txn_id) or (t.status != "deleted" and t.reverses_txn_id)
+    if not split:
+        raise HTTPException(409, "This transaction is in step with its contact; there's nothing to accept.")
+    scoping.assert_account_allowed(db, t.account_id)
+    reason = (data.reason or "").strip()
+    if not reason:
+        raise HTTPException(400, "A reason is required")
+    if await _split_leg_accepted(db, current.org_id, t.id):
+        return {"ok": True, "accepted": True}
+    from backend.models import AuditLog
+    db.add(AuditLog(org_id=current.org_id, actor_id=current.id, action=SPLIT_LEG_ACCEPTED,
+                    entity_type="transaction", entity_id=t.id, diff={"reason": reason[:300]}))
+    await db.commit()
+    return {"ok": True, "accepted": True}
+
+
 @router.post("/transactions/{txn_id}/restore")
 async def restore_transaction(
     txn_id: str,
@@ -536,6 +602,11 @@ async def restore_transaction(
     if t.ref_type in _DOCUMENT_LEGS:
         raise HTTPException(409, f"This transaction is the cash side of a {_DOCUMENT_LEGS[t.ref_type]} "
                                  "that was voided. Take the payment again from that document instead.")
+    # Re-review N7: a contact leg accepted as settled by hand stays voided; restoring it would count
+    # the money a second time.
+    if t.ref_type in _CONTACT_LEGS and await _split_leg_accepted(db, current.org_id, t.id):
+        raise HTTPException(409, "This transaction was accepted as settled on the contact's side, so restoring "
+                                 "it would count the money twice.")
     legs = [t]
     if t.transfer_pair_id:
         legs = (await db.execute(select(Transaction).where(
@@ -560,7 +631,7 @@ class TransferIn(BaseModel):
     from_account_id: str
     to_account_id: str
     amount: float
-    rate: Optional[float] = None       # Build 144cr: exchange rate for cross-currency (1 secondary = rate base)
+    rate: Optional[Rate] = None       # Build 144cr: exchange rate for cross-currency (1 secondary = rate base)
     comment: Optional[str] = None
 
     @field_validator("amount")
@@ -639,9 +710,12 @@ async def _transfer(data: TransferIn, db: AsyncSession, current: Employee):
     await post_transaction(db, current.org_id, frm.id, "transfer", -debit,
                            comment=data.comment or "Transfer out", ref_type="manual",
                            employee_id=current.id, transfer_pair_id=pair, fx_rate=fx)
-    await post_transaction(db, current.org_id, to.id, "transfer", credit,
-                           comment=data.comment or "Transfer in", ref_type="manual",
-                           employee_id=current.id, transfer_pair_id=pair, fx_rate=fx)
+    # The money must come out of a cashbox this role may use (checked above); it may go into any
+    # (a cash drop from the till into the safe). The role still can't see the safe's balance.
+    with system_posting(db):
+        await post_transaction(db, current.org_id, to.id, "transfer", credit,
+                               comment=data.comment or "Transfer in", ref_type="manual",
+                               employee_id=current.id, transfer_pair_id=pair, fx_rate=fx)
     await db.commit()
     return {"ok": True, "debited": debit, "credited": credit, "rate": fx,
             "from_currency": from_ccy, "to_currency": to_ccy}
@@ -1112,6 +1186,10 @@ async def void_document_legs(db, org_id, ref_type, ref_id, reason, actor_id) -> 
         Transaction.org_id == org_id, Transaction.ref_type == ref_type, Transaction.ref_id == ref_id,
         func.coalesce(Transaction.status, "active") != "deleted")
         .order_by(Transaction.account_id, Transaction.id))).scalars().all()
+    # SEC-02 (re-review): every cashbox the document touched must be one this role may use, checked
+    # before any leg moves (the caller's other undo steps roll back with the 403).
+    for leg in legs:
+        scoping.assert_account_allowed(db, leg.account_id)
     for leg in legs:
         acc = (await db.execute(select(Account).where(
             Account.id == leg.account_id, Account.org_id == org_id))).scalar_one_or_none()
