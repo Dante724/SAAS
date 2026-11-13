@@ -20,6 +20,9 @@ from backend.services.money import Exact, d2, dsum, json_dumps
 pytestmark = pytest.mark.asyncio
 
 # Floats that are measures, not money: they stay binary floats on purpose.
+# order_lines.booked_hours (flat-rate hours billed, 144av #2) is listed under quantities in DB-08 but
+# is a time measure: the money it drives is computed into the line's NUMERIC price/total, which is
+# what gets stored and summed. Decided in the PR #222 re-review (FIN-14 b); keep it Float.
 MEASURES = {
     "document_templates.page_w_mm", "document_templates.page_h_mm", "document_templates.margin_mm",
     "label_templates.width_mm", "label_templates.height_mm",

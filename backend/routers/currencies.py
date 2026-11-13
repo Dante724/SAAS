@@ -21,6 +21,7 @@ from backend.models import (
 )
 from backend.services.auth import require_perm
 from backend.services.dates import now_utc
+from backend.services.money import Rate  # NUMERIC input bounds (N3)
 
 router = APIRouter(prefix="/api/finance/currencies", tags=["currencies"])
 
@@ -46,13 +47,13 @@ class CurrencyIn(BaseModel):
     code: str
     symbol: str = ""
     position: str = "before"       # before|after
-    rate: float = 1.0
+    rate: Rate = 1.0
 
 
 class CurrencyPatch(BaseModel):
     symbol: Optional[str] = None
     position: Optional[str] = None
-    rate: Optional[float] = None
+    rate: Optional[Rate] = None
 
 
 def _validate_rate(rate: float) -> float:

@@ -14,13 +14,14 @@ from backend.models import (
 )
 from backend.services.auth import assert_perm, get_current_employee, has_perm, require_perm
 from backend.services.dates import now_utc
+from backend.services.money import Qty  # NUMERIC input bounds (N3)
 
 router = APIRouter(prefix="/api/returns", tags=["returns"])
 
 
 class ReturnLineIn(BaseModel):
     part_id: str
-    qty: float = 1
+    qty: Qty = 1
     restock: bool = True
     serials: Optional[list[str]] = None   # QA F2: a serialized product — which units came back
 

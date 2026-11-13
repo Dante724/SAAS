@@ -8,12 +8,29 @@ shortest decimal text (``repr``), exactly as ``money.dec`` does, so ``Exact("0.1
 ``0.30`` and ``Exact("30.01") == 30.01``. Results stay ``Exact``. ``round()`` is half-up, the money
 convention, not Python's banker's rounding.
 
+Known edges, decided on purpose (re-review N6):
+
+* ``hash``: ``Exact("0.1")`` equals both ``0.1`` and ``Decimal("0.1")``, which aren't equal to each
+  other, so it can share a hash with only one of them. It hashes like the float it equals (request
+  values are floats), so ``{30.01: x}.get(Exact("30.01"))`` finds ``x``. Don't mix plain
+  ``Decimal`` and ``Exact`` keys in one dict or set; values no float holds keep Decimal's hash.
+* ``%`` and ``//`` keep Decimal's sign rules: ``Exact(-7) % 3 == -1`` and ``Exact(-7) // 2 == -3``
+  (float gives 2 and -4). ``divmod`` agrees with them.
+* Decimal methods (``quantize``, ``sqrt``, ``copy_abs``, ``max`` ...) return ``Exact`` and lift a
+  float argument, so their results still mix with floats. ``money.d2`` deliberately returns a
+  plain ``Decimal`` (documents print it as "10.50").
+* ``"%.2f" % x`` goes through ``float()`` and can't be hooked: on a half-cent it rounds like the
+  float (``"%.2f" % Exact("2.675") == "2.67"``) where ``f"{x:.2f}"`` rounds half-up ("2.68").
+  Format money with f-strings or ``money.d2``.
+* NaN (Postgres ``numeric`` allows it) compares like a float NaN: ``<``, ``>``, ``==`` are False
+  and nothing raises, where plain Decimal raises ``InvalidOperation``.
+
 ``ExactNumeric(p, s)`` is the column type: ``NUMERIC(p, s)`` in the database (same DDL as
 ``Numeric``), ``Exact`` in Python. A float written to it is lifted the same way, so the stored
 value is the float's decimal text rounded by the database to the column's scale.
 """
 import re
-from decimal import ROUND_HALF_UP, Decimal
+from decimal import ROUND_HALF_UP, Decimal, InvalidOperation
 
 from sqlalchemy import Numeric
 from sqlalchemy.types import TypeDecorator
@@ -67,31 +84,36 @@ class Exact(Decimal):
         return Decimal.__format__(self, spec)
 
     # ── comparisons: lift floats so 30.01 == Exact("30.01") ─────────────────
+    # NaN compares like a float NaN (False, never InvalidOperation); see the module notes.
     def __eq__(self, other):
         o = _lift(other)
-        return NotImplemented if o is NotImplemented else Decimal.__eq__(self, o)
+        if o is NotImplemented:
+            return NotImplemented
+        try:
+            return Decimal.__eq__(self, o)
+        except InvalidOperation:                 # signalling NaN
+            return False
 
     def __ne__(self, other):
-        o = _lift(other)
-        return NotImplemented if o is NotImplemented else Decimal.__ne__(self, o)
+        r = self.__eq__(other)
+        return r if r is NotImplemented else not r
 
     def __lt__(self, other):
-        o = _lift(other)
-        return NotImplemented if o is NotImplemented else Decimal.__lt__(self, o)
+        return _compare(Decimal.__lt__, self, other)
 
     def __le__(self, other):
-        o = _lift(other)
-        return NotImplemented if o is NotImplemented else Decimal.__le__(self, o)
+        return _compare(Decimal.__le__, self, other)
 
     def __gt__(self, other):
-        o = _lift(other)
-        return NotImplemented if o is NotImplemented else Decimal.__gt__(self, o)
+        return _compare(Decimal.__gt__, self, other)
 
     def __ge__(self, other):
-        o = _lift(other)
-        return NotImplemented if o is NotImplemented else Decimal.__ge__(self, o)
+        return _compare(Decimal.__ge__, self, other)
 
-    __hash__ = Decimal.__hash__
+    def __hash__(self):
+        # Equal to the float it round-trips with, so it must hash like it (see the module notes).
+        f = self._as_float()
+        return hash(f) if f is not None else Decimal.__hash__(self)
 
     # ── unary ────────────────────────────────────────────────────────────────
     def __neg__(self, context=None):
@@ -109,22 +131,64 @@ class Exact(Decimal):
         return Exact(self.quantize(Decimal(1).scaleb(-n), rounding=ROUND_HALF_UP))
 
 
+def _compare(base, self, other):
+    o = _lift(other)
+    if o is NotImplemented:
+        return NotImplemented
+    try:
+        return base(self, o)
+    except InvalidOperation:                     # NaN on either side: False, like float
+        return False
+
+
+def _wrap(r):
+    if isinstance(r, Decimal):
+        return r if isinstance(r, Exact) else Exact(r)
+    if isinstance(r, tuple):                     # divmod
+        return tuple(_wrap(x) for x in r)
+    return r
+
+
 def _binary(name):
     base = getattr(Decimal, name)
 
-    def op(self, other):
+    def op(self, other, *modulo):                # *modulo: pow(x, y, m)
         o = _lift(other)
         if o is NotImplemented:
             return NotImplemented
-        r = base(self, o)
-        return Exact(r) if isinstance(r, Decimal) and not isinstance(r, Exact) else r
+        if modulo:
+            m = _lift(modulo[0])
+            if m is NotImplemented:
+                return NotImplemented
+            return _wrap(base(self, o, m))
+        return _wrap(base(self, o))
     op.__name__ = name
     return op
 
 
-for _n in ("add", "sub", "mul", "truediv", "floordiv", "mod", "pow"):
+for _n in ("add", "sub", "mul", "truediv", "floordiv", "mod", "divmod", "pow"):
     setattr(Exact, f"__{_n}__", _binary(f"__{_n}__"))
     setattr(Exact, f"__r{_n}__", _binary(f"__r{_n}__"))
+
+
+def _method(name):
+    base = getattr(Decimal, name)
+
+    def m(self, *args, **kwargs):
+        args = tuple(Decimal(repr(a)) if isinstance(a, float) else a for a in args)
+        return _wrap(base(self, *args, **kwargs))
+    m.__name__ = name
+    m.__doc__ = base.__doc__
+    return m
+
+
+# Decimal methods that return a number stay Exact (re-review N6), so the result still mixes with
+# floats. Float arguments (x.max(3.5), x.quantize(0.01)) are lifted like operator operands.
+for _n in ("quantize", "sqrt", "exp", "ln", "log10", "copy_abs", "copy_negate", "copy_sign",
+           "normalize", "max", "min", "max_mag", "min_mag", "fma", "remainder_near", "scaleb",
+           "to_integral", "to_integral_value", "to_integral_exact", "next_plus", "next_minus",
+           "next_toward", "logb", "rotate", "shift"):
+    setattr(Exact, _n, _method(_n))
 
 
 class ExactNumeric(TypeDecorator):

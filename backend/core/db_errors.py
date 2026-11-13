@@ -4,12 +4,18 @@ broken reference) are real bugs and stay 500s.
 
 SQLite names the index only for expression indexes ("UNIQUE constraint failed: index 'uq_…'") and
 the columns otherwise ("… failed: product_barcodes.org_id, product_barcodes.barcode"); Postgres
-names the constraint. Both forms are matched."""
+names the constraint. Both forms are matched.
+
+A value a column can't hold (DataError: numeric overflow, text too long) is a 422 with a sentence
+(re-review N3)."""
+import logging
 from typing import Optional
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DataError, IntegrityError
+
+log = logging.getLogger("tekly.db_errors")
 
 # (index name, SQLite column form) → message
 _MESSAGES = (
@@ -57,3 +63,31 @@ async def integrity_error_handler(request: Request, exc: IntegrityError):
     if msg is None:
         raise exc
     return JSONResponse(status_code=409, content={"detail": msg})
+
+
+# ── DataError: a value the column can't hold (re-review N3) ─────────────────
+# Since DB-08 quantities, percentages, rates and points are NUMERIC(p, s); Postgres refuses a value
+# past the precision ("numeric field overflow") where double precision took it. Request models bound
+# these inputs (money.Qty/Pct/Rate/Points); this is the backstop for any path that still lets one
+# through: a 422 with a sentence instead of a 500, and no SQL in the reply.
+_DATA_MESSAGES = (
+    (("numeric field overflow", "out of range"),
+     "A number is too large to save. Check quantities, percentages and rates."),
+    (("value too long", "string data, right truncated"),
+     "A text value is too long to save."),
+)
+
+
+def data_error_message(exc: DataError) -> str:
+    text = str(exc.orig if exc.orig is not None else exc).lower()
+    for needles, msg in _DATA_MESSAGES:
+        if any(n in text for n in needles):
+            return msg
+    return "A value isn't valid for the field it's saved in."
+
+
+async def data_error_handler(request: Request, exc: DataError):
+    msg = data_error_message(exc)
+    log.warning("DataError mapped to 422: %s (%s)", msg,
+                type(exc.orig).__name__ if exc.orig is not None else "no driver error")
+    return JSONResponse(status_code=422, content={"detail": msg})

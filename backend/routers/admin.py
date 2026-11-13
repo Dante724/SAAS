@@ -70,6 +70,7 @@ from backend.services.platform_auth import (
 )
 from backend.services.ratelimit import aenforce as _rate
 from backend.services.ratelimit import client_ip as _ip
+from backend.services.money import Pct  # NUMERIC input bounds (N3)
 
 public = APIRouter(prefix="/api/admin", tags=["platform-admin"])
 private = APIRouter(prefix="/api/admin", tags=["platform-admin"],
@@ -478,7 +479,7 @@ async def _apply(db, org: Organisation, action: str, payload: dict) -> tuple[dic
 
 
 class DiscountIn(BaseModel):
-    pct: float
+    pct: Pct
     until: Optional[str] = None
     reason: str = Field(min_length=3, max_length=300)
 
@@ -700,7 +701,7 @@ async def patch_employee_window(org_id: str, emp_id: str, data: EmployeeWindow,
 # ── Coupons ──────────────────────────────────────────────────────────────────
 class CouponIn(BaseModel):
     code: Optional[str] = Field(None, max_length=32)
-    percent: float
+    percent: Pct
     plan: Optional[str] = None
     expires_at: Optional[str] = None
     note: Optional[str] = Field(None, max_length=300)

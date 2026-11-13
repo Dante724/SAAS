@@ -19,6 +19,7 @@ from backend.services.numbering import next_number
 from backend.services.redact import can_see_costs, drop_cost_fields
 from backend.services.dates import now_utc
 from backend.services.owned import get_owned_or_404, problem, require_location
+from backend.services.money import Pct, Qty  # NUMERIC input bounds (N3)
 
 router = APIRouter(prefix="/api/inventory", tags=["inventory"])
 
@@ -34,7 +35,7 @@ class PartIn(BaseModel):
     barcode: Optional[str] = None
     code: Optional[str] = None           # internal code (ii144a: may be the shop's unique identifier)
     min_stock: int = 0
-    min_order_qty: float = 0
+    min_order_qty: Qty = 0
     weight: Optional[float] = None       # kg — used for weight-basis freight allocation (144ar)
     dimensions: Optional[str] = None     # "LxWxH" cm
     active: Optional[bool] = None        # false archives (refused while the product still has stock)
@@ -52,7 +53,7 @@ _ADJUST_TYPES = {"receive", "adjust", "writeoff"}
 
 class StockAdjust(BaseModel):
     location_id: str
-    qty: float
+    qty: Qty
     movement_type: str = "receive"  # receive|writeoff|adjust (transfers go through /transfers)
     note: Optional[str] = None
     # What stock coming in cost (opening stock, a count-up). Omitted → the current average cost,
@@ -373,7 +374,7 @@ async def adjust_stock(
 class ScanAdjust(BaseModel):
     code: str                         # scanned SKU / barcode / internal code
     location_id: str
-    qty: float
+    qty: Qty
     movement_type: str = "receive"    # receive|writeoff|adjust
     note: Optional[str] = None
     serials: Optional[list[SerialStr]] = Field(None, max_length=500)   # QA F2: serialized products
@@ -412,9 +413,9 @@ async def scan_adjust(
 
 class PostingLine(BaseModel):
     part_id: str
-    qty: float
+    qty: Qty
     purchase_price: float = 0.0
-    markup_pct: Optional[float] = None   # if set, new sell price = purchase * (1 + markup/100)
+    markup_pct: Optional[Pct] = None   # if set, new sell price = purchase * (1 + markup/100)
     serials: Optional[list[SerialStr]] = Field(None, max_length=500)  # serial-tracked: one serial / IMEI per unit
     bin_id: Optional[str] = None         # ii144a: put away straight into a bin at the posting's location
     lot: Optional[str] = Field(None, max_length=40)   # ii144b: batch / lot (GS1 (10) from the label)
@@ -510,9 +511,9 @@ class PreviewRow(BaseModel):
     code: Optional[str] = None       # sku / barcode / code typed or pasted
     mpn: Optional[str] = None        # opa: manufacturer part number column
     name: Optional[str] = None
-    qty: float = 1
+    qty: Qty = 1
     purchase_price: Optional[float] = None
-    markup_pct: Optional[float] = None
+    markup_pct: Optional[Pct] = None
     product_type: Optional[str] = Field(None, max_length=60)   # 16a: supplier sheet "Type" (serialized / expiry …)
     serials: Optional[list[SerialStr]] = Field(None, max_length=500)  # serials already pasted for this row
 
@@ -620,9 +621,9 @@ class CommitRow(BaseModel):
     new_sku: Optional[str] = Field(None, max_length=100)
     new_mpn: Optional[str] = Field(None, max_length=64)
     new_type: Optional[str] = None       # 16a: standard | serialized | expiry (new products only)
-    qty: float = 1
+    qty: Qty = 1
     purchase_price: Optional[float] = None
-    markup_pct: Optional[float] = None
+    markup_pct: Optional[Pct] = None
     serials: Optional[list[SerialStr]] = Field(None, max_length=1000)  # one per unit for serial-tracked products
     expiry_date: Optional[date] = None   # dates this delivery's batch (expiry-tracked products)
     lot: Optional[str] = Field(None, max_length=40)   # ii144b: batch / lot, e.g. GS1 (10) from the label
@@ -873,7 +874,7 @@ async def extract_posting(
 
 class BulkAdjustRow(BaseModel):
     part_id: str
-    set_qty: Optional[float] = None      # set absolute on-hand at the location
+    set_qty: Optional[Qty] = None      # set absolute on-hand at the location
     delta: Optional[float] = None        # or add/subtract this much
     note: Optional[str] = None
 
@@ -1290,7 +1291,7 @@ async def list_reservations(
 
 class POLineIn(BaseModel):
     part_id: str
-    qty_ordered: float
+    qty_ordered: Qty
     unit_cost: float = 0.0
 
 class POIn(BaseModel):
@@ -1621,7 +1622,7 @@ class POChargeIn(BaseModel):
 class POEditLineIn(BaseModel):
     id: Optional[str] = None          # existing line to update; omit to add a new one
     part_id: str
-    qty_ordered: float
+    qty_ordered: Qty
     unit_cost: float = 0.0
 
 
@@ -2132,7 +2133,7 @@ async def set_po_invoice(
 
 class ReceiveLineIn(BaseModel):
     po_line_id: str
-    qty: float
+    qty: Qty
     bin_id: Optional[str] = None        # post-to-bin (Orderry: enter the matching bin per product)
     serials: Optional[list[SerialStr]] = Field(None, max_length=500)  # serialized intake: one serial per unit
 
@@ -2518,7 +2519,7 @@ async def reorder_forecast(
 
 class ForecastPOItem(BaseModel):
     part_id: str
-    qty: float
+    qty: Qty
 
 
 class ForecastPOIn(BaseModel):
@@ -2851,7 +2852,7 @@ async def _first_location(db, part_id: str, org_id: str):
 
 # ── Build 79: markup-based auto-pricing ──────────────────────────────────────
 class MarkupIn(BaseModel):
-    markup_pct: float          # sell = cost * (1 + markup/100)
+    markup_pct: Pct          # sell = cost * (1 + markup/100)
     part_ids: Optional[list[str]] = None   # default: every active product
     basis: str = "avg_cost"    # avg_cost|cost_price
     allow_lower: bool = False  # W3-D: a price the markup would lower is kept unless this is set

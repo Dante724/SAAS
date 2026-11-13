@@ -31,6 +31,7 @@ from backend.services.auth import assert_perm, get_current_employee, has_perm, r
 from backend.services.batching import names_by_id, rows_by
 from backend.services.numbering import next_number
 from backend.services.dates import now_utc
+from backend.services.money import Pct, Qty  # NUMERIC input bounds (N3)
 
 router = APIRouter(prefix="/api/orders", tags=["orders"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -81,19 +82,19 @@ class LineIn(BaseModel):
     line_type: Optional[str] = None
     order_item_id: Optional[str] = None             # several items per job: which item (null = whole job)
     description: str
-    qty: float = 1.0
+    qty: Qty = 1.0
     unit_price: float = 0.0
     cost_price: float = 0.0
     kind: Optional[str] = None  # service|product|custom
     technician_id: Optional[str] = None
-    work_share: float = 1.0
+    work_share: Pct = 1.0
     booked_hours: float = 0.0                       # 144av #2 — flat-rate hrs billed
     co_technicians: Optional[list] = None           # 144av #3 — [{employee_id, share}]
     discount: float = 0.0
     discount_type: str = "pct"  # pct|fixed
     discount_paid_by: str = "client"  # client|company (company-paid keeps commissions whole)
     tax_id: Optional[str] = None
-    tax_rate: float = 0.0
+    tax_rate: Pct = 0.0
     tax_mode: str = "imposed"  # included|imposed
     warranty_days: Optional[int] = None    # None = take the catalog item's warranty (G2)
     ref_id: Optional[str] = None
@@ -2365,7 +2366,7 @@ async def _guard_order_access(db, current, order):
 
 class DepositIn(BaseModel):
     amount: Optional[float] = None   # absolute deposit in base currency
-    percent: Optional[float] = None  # or a % of the current total
+    percent: Optional[Pct] = None  # or a % of the current total
 
 
 async def _clean_intake_photos(db, org_id: str, ids) -> list:
@@ -5465,14 +5466,14 @@ async def update_kit(
 
 class LineUpdate(BaseModel):
     order_item_id: Optional[str] = None              # several items per job ("" / null = whole job)
-    qty: Optional[float] = None
+    qty: Optional[Qty] = None
     unit_price: Optional[float] = None
     cost_price: Optional[float] = None
     discount: Optional[float] = None
     discount_type: Optional[str] = None
     description: Optional[str] = None
     technician_id: Optional[str] = None
-    work_share: Optional[float] = None               # 144av #3
+    work_share: Optional[Pct] = None               # 144av #3
     booked_hours: Optional[float] = None             # 144av #2
     co_technicians: Optional[list] = None            # 144av #3
 

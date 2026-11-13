@@ -205,6 +205,16 @@ Overlaps (counted once in the roadmap):
 - DB-08 = FIN-14;
 - PERF-09 follows from DB-01/02.
 
+FIN-14 status after PR #222 and its re-review (13 Nov):
+- Money, rates, percentages, points and quantities are exact NUMERIC end to end (DB-08).
+- `order_lines.booked_hours` stays `Float` on purpose: it is a time measure, and the money it drives
+  is stored in the line's NUMERIC price and total. It is listed with the other measures in
+  `backend/tests/test_money_decimal_db08.py` (`MEASURES`).
+- **Open, owner decision:** 3-decimal currencies (KWD, BHD, OMR, JOD, TND) are not supported. Money
+  columns are `NUMERIC(12,2)` and `money.round_price` clamps to 2 places, so fils can't be stored.
+  Only gateway amounts handle them (`money.minor_units`). Supporting them needs a migration to
+  scale 3 and a per-currency rounding rule. Nothing is built until the owner decides.
+
 ## 6. Prior audit (29 Oct) — status
 
 | Item | Status |

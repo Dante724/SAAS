@@ -20,6 +20,7 @@ from backend.services.auth import (
     verify_password,
 )
 from backend.services.dates import now_utc
+from backend.services.money import Pct  # NUMERIC input bounds (N3)
 
 router = APIRouter(prefix="/api/staff", tags=["staff"])
 
@@ -44,8 +45,8 @@ class EmployeeIn(BaseModel):
     location_id: Optional[str] = None
     wage_type: str = "fixed"
     wage_value: float = 0.0
-    commission_labour: float = 0.0
-    commission_parts: float = 0.0
+    commission_labour: Pct = 0.0
+    commission_parts: Pct = 0.0
     weekly_hours: Optional[float] = None
     hourly_basis: Optional[str] = None    # labour|attendance (null = labour)
     track_job_hours: bool = True          # show the work-order labour timer
@@ -66,8 +67,8 @@ class EmployeeUpdate(BaseModel):
     location_id: Optional[str] = None
     wage_type: Optional[str] = None
     wage_value: Optional[float] = None
-    commission_labour: Optional[float] = None
-    commission_parts: Optional[float] = None
+    commission_labour: Optional[Pct] = None
+    commission_parts: Optional[Pct] = None
     weekly_hours: Optional[float] = None
     hourly_basis: Optional[str] = None
     track_job_hours: Optional[bool] = None
