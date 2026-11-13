@@ -225,12 +225,12 @@ export default function CashPanel() {
                       <td className={`py-2.5 px-4 text-right tabular-nums font-bold text-rose-600 ${dim}`}>{!inc ? money(Math.abs(t.amount || 0), sym) : ""}</td>
                       <td className={`py-2.5 px-4 text-right tabular-nums text-ink-tertiary ${dim}`}>{t.balance_after != null ? money(t.balance_after, sym) : "—"}</td>
                       <td className="py-2.5 px-4 text-right whitespace-nowrap no-underline">
-                        {t.split_pending && can("can_correct_transactions") && <button onClick={() => acceptSplit(t)} className="text-[11px] font-bold text-primary hover:underline mr-3">Accept</button>}
+                        {t.split_pending && can("can_correct_transactions") && <button onClick={() => acceptSplit(t)} className="text-2xs font-bold text-primary hover:underline mr-3">Accept</button>}
                         {del ? (
                           <button onClick={() => restoreTxn(t)} className="text-[11px] font-bold text-sky-600 hover:underline">Restore</button>
                         ) : (
                           <>
-                            {t.supplier_payment_reversible && t.ref_id && can("can_manage_inventory") && can("can_delete_transactions") && <button onClick={() => reverseSupplierPayment(t)} className="text-[11px] font-bold text-primary hover:underline mr-3">Reverse payment</button>}
+                            {t.supplier_payment_reversible && t.ref_id && can("can_manage_inventory") && can("can_delete_transactions") && <button onClick={() => reverseSupplierPayment(t)} className="text-2xs font-bold text-primary hover:underline mr-3">Reverse payment</button>}
                             <button onClick={() => correctTxn(t)} className="text-[11px] font-bold text-amber-600 hover:underline mr-3">Correct</button>
                             <button onClick={() => deleteTxn(t)} className="text-[11px] font-bold text-rose-600 hover:underline">Delete</button>
                           </>
