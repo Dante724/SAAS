@@ -105,13 +105,15 @@ async def test_role_from_template_and_validation(client, tenant):
 
 @pytest.mark.asyncio
 async def test_role_location_scope_roundtrip(client, tenant):
+    # F1 (wave 4): the role editor only takes this shop's own locations
+    loc_a = (await client.get("/api/staff/locations", headers=tenant)).json()["items"][0]["id"]
     r = await client.post("/api/settings/rbac/roles",
                          json={"name": "Loc A only", "location_scope": "selected",
-                               "location_ids": ["locA"]}, headers=tenant)
+                               "location_ids": [loc_a]}, headers=tenant)
     assert r.status_code == 201
     got = next(x for x in (await client.get("/api/settings/rbac/roles", headers=tenant)).json()["items"]
                if x["id"] == r.json()["id"])
-    assert got["location_scope"] == "selected" and got["location_ids"] == ["locA"]
+    assert got["location_scope"] == "selected" and got["location_ids"] == [loc_a]
 
 
 @pytest.mark.asyncio
