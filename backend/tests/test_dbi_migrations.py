@@ -310,7 +310,8 @@ def test_pg_dbi01_keys_are_validated_and_hold():
         # the database itself refuses cross-shop rows
         with pytest.raises(Exception, match="fk_payments_client_id_org"):
             _pg(url, _pg_insert(url, "payments", {"id": "p-x", "org_id": "orgA", "order_id": "ordA",
-                                                  "client_id": "cl-orgB", "method": "cash", "amount": 1}))
+                                                  "client_id": "cl-orgB", "method": "cash", "kind": "payment",
+                                                  "amount": 1}))
         with pytest.raises(Exception, match="fk_stock_movements_part_id_org"):
             _pg(url, _pg_insert(url, "stock_movements", {"id": "m-x", "org_id": "orgA", "part_id": "part-orgB",
                                                          "location_id": "loc-orgA", "movement_type": "adjust",

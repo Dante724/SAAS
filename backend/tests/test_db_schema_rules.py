@@ -162,6 +162,8 @@ SOFT_REFS = {
                            "created on SQLite"),
     "order_lines.bundle_group_id": "a group label shared by a kit's lines, not a row id",
     "transactions.transfer_pair_id": "a label shared by the two halves of a transfer, not a row id",
+    "membership_assets.plan_id": ("w4s01: a copy of memberships.plan_id kept by a trigger, only for the "
+                                  "one-live-membership-per-plan-per-asset index; memberships.plan_id is the FK"),
     # external ids
     "integration_mappings.remote_id": EXTERNAL, "integration_sync_logs.remote_id": EXTERNAL,
     "organisations.stripe_customer_id": EXTERNAL, "organisations.stripe_subscription_id": EXTERNAL,

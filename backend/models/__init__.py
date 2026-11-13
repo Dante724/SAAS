@@ -25,6 +25,7 @@ from sqlalchemy import (
     Text,
     UniqueConstraint,
     event,
+    false,
     text,
 )
 from sqlalchemy.ext.hybrid import hybrid_property
@@ -449,6 +450,9 @@ class Employee(OrgScoped, Base):
 
 class Shift(OrgScoped, Base):
     __tablename__ = "shifts"
+    # w4s01: at most one open attendance shift per employee (clock-in's employee lock is app-only)
+    __table_args__ = (Index("uq_shifts_open_employee", "employee_id", unique=True,
+                            sqlite_where=text("ended_at IS NULL"), postgresql_where=text("ended_at IS NULL")),)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
     employee_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id"), index=True)
@@ -456,6 +460,8 @@ class Shift(OrgScoped, Base):
     started_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     hours_worked: Mapped[float] = mapped_column(Float, default=0.0)
+    # w4s01: closed by the 16 h cap (or as a duplicate open shift) and not yet corrected by a manager
+    needs_review: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
     employee: Mapped["Employee"] = relationship(back_populates="shifts")
 
 class WageRecord(OrgScoped, Base):
@@ -826,6 +832,8 @@ class Order(OrgScoped, Base):
 
 class OrderLine(OrgScoped, Base):
     __tablename__ = "order_lines"
+    __table_args__ = (CheckConstraint(_one_of("line_role", ("item", "giftcard", "coupon", "loyalty")),
+                                      name="line_role_valid"),)   # FIN-03 (w4s01)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
     order_id: Mapped[str] = mapped_column(String, ForeignKey("orders.id"), index=True)
@@ -874,6 +882,33 @@ class OrderLine(OrgScoped, Base):
     # stamps lines inserted by code that doesn't know the column (the previous image).
     created_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=_now,
                                                            server_default=text("CURRENT_TIMESTAMP"))
+    # FIN-03 (w4s01): what the line is. 'item' = work, parts, fees, discounts; 'giftcard' / 'coupon' /
+    # 'loyalty' = a redemption (a negative line plus a ledger row or a coupon use), which only the
+    # redeem endpoints write, so a hand-typed "Coupon X" line is never mistaken for one. Nullable
+    # until the contract release: on Postgres a line the previous image inserts (NULL) gets its role
+    # from the old description rule (trigger fill_line_role); the app treats NULL as 'item'.
+    line_role: Mapped[Optional[str]] = mapped_column(String(10), default="item")
+
+
+ORDER_LINE_ROLES = ("item", "giftcard", "coupon", "loyalty")
+REDEMPTION_ROLES = ("giftcard", "coupon", "loyalty")
+# w4s01's bridge for the previous image (Postgres only; dropped in the contract release).
+ORDER_LINE_PG_TRIGGERS = [
+    "CREATE OR REPLACE FUNCTION fill_line_role() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN IF NEW.line_role IS "
+    "NULL THEN NEW.line_role := CASE WHEN NEW.line_type = 'fee' AND coalesce(NEW.kind, 'custom') = 'custom' AND "
+    "(coalesce(NEW.total, 0) < 0 OR coalesce(NEW.unit_price, 0) < 0) AND substr(NEW.description, 1, 10) = "
+    "'Gift card ' THEN 'giftcard' WHEN NEW.line_type = 'fee' AND coalesce(NEW.kind, 'custom') = 'custom' AND "
+    "(coalesce(NEW.total, 0) < 0 OR coalesce(NEW.unit_price, 0) < 0) AND substr(NEW.description, 1, 7) = "
+    "'Coupon ' THEN 'coupon' WHEN NEW.line_type = 'fee' AND coalesce(NEW.kind, 'custom') = 'custom' AND "
+    "(coalesce(NEW.total, 0) < 0 OR coalesce(NEW.unit_price, 0) < 0) AND substr(NEW.description, 1, 16) = "
+    "'Loyalty points (' THEN 'loyalty' ELSE 'item' END; IF NEW.line_role = 'giftcard' AND NEW.ref_id IS NULL "
+    "THEN NEW.ref_id := (SELECT g.id FROM gift_cards g WHERE g.org_id = NEW.org_id AND g.code = "
+    "upper(trim(substr(NEW.description, 11)))); END IF; END IF; RETURN NEW; END $$",
+    "DROP TRIGGER IF EXISTS fill_line_role ON order_lines",
+    "CREATE TRIGGER fill_line_role BEFORE INSERT ON order_lines FOR EACH ROW EXECUTE FUNCTION fill_line_role()",
+]
+for _sql in ORDER_LINE_PG_TRIGGERS:
+    event.listen(OrderLine.__table__, "after_create", DDL(_sql).execute_if(dialect="postgresql"))
 
 
 class OrderItem(OrgScoped, Base):
@@ -1679,12 +1714,17 @@ class Payment(OrgScoped, Base):
     __tablename__ = "payments"
     __table_args__ = (Index("ix_payments_paid_at", "paid_at"),   # phase 4 perf: hot lookup path
                       # PERF-09: a shop's money reports range its own payments by date
-                      Index("ix_payments_org_id_paid_at", "org_id", "paid_at"))
+                      Index("ix_payments_org_id_paid_at", "org_id", "paid_at"),
+                      # DB-07 (w4s01): money back is a refund row with a positive amount, never a negative payment
+                      CheckConstraint("amount >= 0", name="amount_nonneg"),
+                      CheckConstraint(_one_of("kind", ("payment", "prepayment", "refund")), name="kind_valid"))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
     invoice_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("invoices.id"), index=True)
     client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"), index=True)
-    method: Mapped[str] = mapped_column(String(50))  # cash|card|transfer|balance|online
+    # cash|card|transfer|balance|online|gift_card (FIN-09: a job paid from a gift card; no cashbox,
+    # no new money — the card was paid for when it was sold; refunds of it go back to the card)
+    method: Mapped[str] = mapped_column(String(50))
     kind: Mapped[str] = mapped_column(String(20), default="payment")  # prepayment|payment|refund
     order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     account_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("accounts.id"), index=True)
@@ -1851,7 +1891,9 @@ class Transaction(OrgScoped, Base):
     transfer (paired), invoice_payment, fee. The ledger that feeds all reports."""
     __tablename__ = "transactions"
     # Finance P&L / fee aggregates: filter org_id + txn_type.
-    __table_args__ = (Index("ix_transactions_org_type", "org_id", "txn_type"),)
+    __table_args__ = (Index("ix_transactions_org_type", "org_id", "txn_type"),
+                      CheckConstraint(_one_of("status", ("active", "corrected", "deleted")),
+                                      name="status_valid"))   # DB-07 (w4s01)
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     account_id: Mapped[str] = mapped_column(String, ForeignKey("accounts.id"), index=True)
@@ -2343,7 +2385,10 @@ class StorageBin(OrgScoped, Base):
                             sqlite_where=text("active = 1"), postgresql_where=text("active")),
                       Index("uq_storage_bins_barcode", "org_id", "barcode", unique=True,
                             sqlite_where=text("active = 1 AND barcode IS NOT NULL"),
-                            postgresql_where=text("active AND barcode IS NOT NULL")))
+                            postgresql_where=text("active AND barcode IS NOT NULL")),
+                      # DB-16 release 1 (w4s01): one default bin per warehouse
+                      Index("uq_storage_bins_default_warehouse", "warehouse_id", unique=True,
+                            sqlite_where=text("is_default"), postgresql_where=text("is_default")))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"))
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))  # the warehouse
@@ -2357,6 +2402,43 @@ class StorageBin(OrgScoped, Base):
     max_weight_capacity: Mapped[float] = mapped_column(Float, default=0.0)  # kg, 0 = unlimited
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
+    # DB-16 release 1 (w4s01): this bin is its warehouse's default. Kept equal to
+    # warehouses.default_bin_id by the triggers below (the app still writes default_bin_id); release 2
+    # moves the app onto this flag and drops the FK that makes the warehouses <-> bins cycle.
+    is_default: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+
+
+_BIN_CLEAR = ("UPDATE storage_bins SET is_default = {f} WHERE warehouse_id = NEW.id AND is_default "
+              "AND id {ne} NEW.default_bin_id")
+_BIN_PUT = ("UPDATE storage_bins SET is_default = {t} WHERE id = NEW.default_bin_id AND warehouse_id = NEW.id "
+            "AND NOT is_default")
+_BIN_MOVED = ("UPDATE storage_bins SET is_default = EXISTS (SELECT 1 FROM warehouses w WHERE w.id = "
+              "NEW.warehouse_id AND w.default_bin_id = NEW.id) WHERE id = NEW.id")
+STORAGE_BIN_TRIGGERS = {
+    "sqlite": [
+        "CREATE TRIGGER IF NOT EXISTS warehouses_sync_default_bin AFTER UPDATE OF default_bin_id ON warehouses "
+        f"BEGIN {_BIN_CLEAR.format(f='0', ne='IS NOT')}; {_BIN_PUT.format(t='1')}; END",
+        "CREATE TRIGGER IF NOT EXISTS warehouses_sync_default_bin_ins AFTER INSERT ON warehouses "
+        f"BEGIN {_BIN_CLEAR.format(f='0', ne='IS NOT')}; {_BIN_PUT.format(t='1')}; END",
+        "CREATE TRIGGER IF NOT EXISTS storage_bins_sync_default AFTER UPDATE OF warehouse_id ON storage_bins "
+        f"BEGIN {_BIN_MOVED}; END",
+    ],
+    "postgresql": [
+        "CREATE OR REPLACE FUNCTION warehouses_sync_default_bin() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+        f"{_BIN_CLEAR.format(f='false', ne='IS DISTINCT FROM')}; {_BIN_PUT.format(t='true')}; RETURN NEW; END $$",
+        "DROP TRIGGER IF EXISTS warehouses_sync_default_bin ON warehouses",
+        "CREATE TRIGGER warehouses_sync_default_bin AFTER INSERT OR UPDATE OF default_bin_id ON warehouses "
+        "FOR EACH ROW EXECUTE FUNCTION warehouses_sync_default_bin()",
+        "CREATE OR REPLACE FUNCTION storage_bins_sync_default() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+        f"IF NEW.warehouse_id IS DISTINCT FROM OLD.warehouse_id THEN {_BIN_MOVED}; END IF; RETURN NEW; END $$",
+        "DROP TRIGGER IF EXISTS storage_bins_sync_default ON storage_bins",
+        "CREATE TRIGGER storage_bins_sync_default AFTER UPDATE OF warehouse_id ON storage_bins "
+        "FOR EACH ROW EXECUTE FUNCTION storage_bins_sync_default()",
+    ],
+}
+for _dialect, _stmts in STORAGE_BIN_TRIGGERS.items():
+    for _sql in _stmts:
+        event.listen(StorageBin.__table__, "after_create", DDL(_sql).execute_if(dialect=_dialect))
 
 
 # ════════ Payroll & Commissions (Mandate 1) ════════
@@ -2914,6 +2996,7 @@ class Sale(OrgScoped, Base):
 
 class SaleLine(OrgScoped, Base):
     __tablename__ = "sale_lines"
+    __table_args__ = (CheckConstraint("qty <> 0", name="qty_nonzero"),)   # DB-07 (w4s01): a document line moves something
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
     sale_id: Mapped[str] = mapped_column(String, ForeignKey("sales.id"), index=True)
@@ -3007,6 +3090,7 @@ class ClientReturn(OrgScoped, Base):
 
 class ClientReturnLine(OrgScoped, Base):
     __tablename__ = "client_return_lines"
+    __table_args__ = (CheckConstraint("qty <> 0", name="qty_nonzero"),)   # DB-07 (w4s01): a document line moves something
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
     return_id: Mapped[str] = mapped_column(String, ForeignKey("client_returns.id"), index=True)
@@ -3065,6 +3149,7 @@ class StockTransfer(OrgScoped, Base):
 
 class StockTransferLine(OrgScoped, Base):
     __tablename__ = "stock_transfer_lines"
+    __table_args__ = (CheckConstraint("qty <> 0", name="qty_nonzero"),)   # DB-07 (w4s01): a document line moves something
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
     transfer_id: Mapped[str] = mapped_column(String, ForeignKey("stock_transfers.id"), index=True)
@@ -3965,6 +4050,7 @@ class PurchaseReturn(OrgScoped, Base):
 
 class PurchaseReturnLine(OrgScoped, Base):
     __tablename__ = "purchase_return_lines"
+    __table_args__ = (CheckConstraint("qty <> 0", name="qty_nonzero"),)   # DB-07 (w4s01): a document line moves something
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
     return_id: Mapped[str] = mapped_column(String, ForeignKey("purchase_returns.id"), index=True)
@@ -4003,6 +4089,7 @@ class WriteOff(OrgScoped, Base):
 
 class WriteOffLine(OrgScoped, Base):
     __tablename__ = "write_off_lines"
+    __table_args__ = (CheckConstraint("qty <> 0", name="qty_nonzero"),)   # DB-07 (w4s01): a document line moves something
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
     write_off_id: Mapped[str] = mapped_column(String, ForeignKey("write_offs.id"), index=True)
@@ -4048,6 +4135,7 @@ class Posting(OrgScoped, Base):
 
 class PostingLine(OrgScoped, Base):
     __tablename__ = "posting_lines"
+    __table_args__ = (CheckConstraint("qty <> 0", name="qty_nonzero"),)   # DB-07 (w4s01): a document line moves something
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
     posting_id: Mapped[str] = mapped_column(String, ForeignKey("postings.id"), index=True)
@@ -4329,6 +4417,7 @@ class CreditNote(OrgScoped, Base):
 class CreditNoteLine(OrgScoped, Base):
     """opb — one credited line: qty × unit price, plus tax at tax_rate percent."""
     __tablename__ = "credit_note_lines"
+    __table_args__ = (CheckConstraint("qty <> 0", name="qty_nonzero"),)   # DB-07 (w4s01): a document line moves something
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
     credit_note_id: Mapped[str] = mapped_column(
@@ -4588,11 +4677,53 @@ class Membership(OrgScoped, Base):
 class MembershipAsset(OrgScoped, Base):
     """The assets a membership covers. Phase 1 writes one row; fleet plans will write several."""
     __tablename__ = "membership_assets"
-    __table_args__ = (UniqueConstraint("membership_id", "device_id", name="uq_membership_asset"),)
+    __table_args__ = (UniqueConstraint("membership_id", "device_id", name="uq_membership_asset"),
+                      # Audit DB-04 (w4s01): one live membership of a plan per asset, over every asset a
+                      # membership covers (w2b01's index sees only memberships.device_id)
+                      Index("uq_membership_assets_live_device_plan", "device_id", "plan_id", unique=True,
+                            sqlite_where=text("live"), postgresql_where=text("live")))
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     membership_id: Mapped[str] = mapped_column(String, ForeignKey("memberships.id"))
     device_id: Mapped[str] = mapped_column(String, ForeignKey("devices.id"), index=True)
+    # Copies of the membership's plan and "is it live" (scheduled/active/paused), written only by the
+    # database triggers below, whichever code changes the membership. Never set them in the app.
+    plan_id: Mapped[Optional[str]] = mapped_column(String)
+    live: Mapped[bool] = mapped_column(Boolean, default=False, server_default=false())
+
+
+_LIVE_SQL = "('scheduled', 'active', 'paused')"
+_MS_PICK = ("plan_id = (SELECT m.plan_id FROM memberships m WHERE m.id = NEW.membership_id), live = "
+            f"coalesce((SELECT m.status IN {_LIVE_SQL} FROM memberships m WHERE m.id = NEW.membership_id), 0)")
+MEMBERSHIP_ASSET_TRIGGERS = {
+    "sqlite": [
+        "CREATE TRIGGER IF NOT EXISTS membership_assets_fill AFTER INSERT ON membership_assets "
+        f"BEGIN UPDATE membership_assets SET {_MS_PICK} WHERE id = NEW.id; END",
+        "CREATE TRIGGER IF NOT EXISTS membership_assets_refill AFTER UPDATE OF membership_id ON membership_assets "
+        f"BEGIN UPDATE membership_assets SET {_MS_PICK} WHERE id = NEW.id; END",
+        "CREATE TRIGGER IF NOT EXISTS memberships_sync_assets AFTER UPDATE OF status, plan_id ON memberships "
+        f"BEGIN UPDATE membership_assets SET plan_id = NEW.plan_id, live = (NEW.status IN {_LIVE_SQL}) "
+        "WHERE membership_id = NEW.id; END",
+    ],
+    "postgresql": [
+        "CREATE OR REPLACE FUNCTION membership_assets_fill() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+        f"SELECT m.plan_id, (m.status IN {_LIVE_SQL}) INTO NEW.plan_id, NEW.live FROM memberships m "
+        "WHERE m.id = NEW.membership_id; NEW.live := coalesce(NEW.live, false); RETURN NEW; END $$",
+        "DROP TRIGGER IF EXISTS membership_assets_fill ON membership_assets",
+        "CREATE TRIGGER membership_assets_fill BEFORE INSERT OR UPDATE OF membership_id ON membership_assets "
+        "FOR EACH ROW EXECUTE FUNCTION membership_assets_fill()",
+        "CREATE OR REPLACE FUNCTION memberships_sync_assets() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+        f"UPDATE membership_assets SET plan_id = NEW.plan_id, live = (NEW.status IN {_LIVE_SQL}) "
+        "WHERE membership_id = NEW.id AND (plan_id IS DISTINCT FROM NEW.plan_id OR live IS DISTINCT FROM "
+        f"(NEW.status IN {_LIVE_SQL})); RETURN NEW; END $$",
+        "DROP TRIGGER IF EXISTS memberships_sync_assets ON memberships",
+        "CREATE TRIGGER memberships_sync_assets AFTER UPDATE OF status, plan_id ON memberships "
+        "FOR EACH ROW EXECUTE FUNCTION memberships_sync_assets()",
+    ],
+}
+for _dialect, _stmts in MEMBERSHIP_ASSET_TRIGGERS.items():
+    for _sql in _stmts:
+        event.listen(MembershipAsset.__table__, "after_create", DDL(_sql).execute_if(dialect=_dialect))
 
 
 class MembershipPeriod(OrgScoped, Base):

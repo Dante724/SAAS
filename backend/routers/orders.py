@@ -3824,11 +3824,13 @@ async def _archive_order(db, current, order_id, reason, do_refund):
     # Only real cash/card payments are refundable here — payments settled on the client's own
     # balance (method="balance") never put cash in the till, so refunding them as cash would hand
     # the customer money they never paid. (Those settle by reversing the ledger, handled elsewhere.)
+    # FIN-09: gift-card money isn't refunded as cash either: it goes back to the card (below).
     _pays = (await db.execute(select(Payment).where(
         Payment.order_id == order_id, Payment.kind.in_(["payment", "prepayment"]),
-        Payment.method != "balance"))).scalars().all()
+        Payment.method.notin_(("balance", "gift_card"))))).scalars().all()
     _refunded_already = (await db.execute(select(func.coalesce(func.sum(Payment.amount), 0.0)).where(
-        Payment.order_id == order_id, Payment.kind == "refund"))).scalar() or 0.0
+        Payment.order_id == order_id, Payment.kind == "refund",
+        func.coalesce(Payment.method, "") != "gift_card"))).scalar() or 0.0
     _net = q2(sum(p.amount for p in _pays) - abs(_refunded_already))
     if _net > 0 and not do_refund:
         raise HTTPException(409, "This order has payments on it. Delete with refund, "
@@ -3895,6 +3897,12 @@ async def _archive_order(db, current, order_id, reason, do_refund):
             refunds_by_account.append({"account_id": acct.id, "account": acct.name, "amount": amt})
             refunded = q2(refunded + amt)
 
+    # FIN-09: what gift cards paid on the job goes back to the cards, before the invoice clean-up
+    # below (an invoice whose money is all given back can then be cancelled).
+    if not order.is_estimate:
+        from backend.routers.engage import return_all_gift_cards
+        await return_all_gift_cards(db, current.org_id, order, current.id, "job deleted")
+
     order.archived = True
     order.archive_reason = reason
     order.archived_at = now_utc()
@@ -3931,16 +3939,22 @@ async def _archive_order(db, current, order_id, reason, do_refund):
     # and points its redemption lines spent, exactly as deleting each line does (row-locked, capped
     # by what this job redeemed), and the lines go so a restore can't keep the discount for free.
     # Runs after the refund and the invoice clean-up above, so an invoice cancelled there no longer
-    # holds the line. A line a sent or paid invoice still bills stays (as on line delete).
+    # holds the line. A line a sent or paid invoice still bills stays (as on line delete), but what it
+    # spent goes back all the same (#226); restore spends it again (_restore_order).
+    _kept_returned: list = []
+    _kept_seen: set = set()
     if not order.is_estimate:
         from backend.models import OrderLine as _OL
-        from backend.routers.engage import give_back_redemption, redemption_kind
+        from backend.routers.engage import give_back_kept_line, give_back_redemption, redemption_kind
         from backend.services.invoice_money import locking_invoice, release_line
         _gone: set = set()
         _prev_total = float(order.total or 0)
         for _ln in (await db.execute(select(_OL).where(_OL.order_id == order_id)
                                      .order_by(_OL.id))).scalars().all():
-            if _ln.id in _gone or not redemption_kind(_ln) or await locking_invoice(db, _ln.id):
+            if _ln.id in _gone or not redemption_kind(_ln):
+                continue
+            if await locking_invoice(db, _ln.id):
+                _kept_returned += await give_back_kept_line(db, current.org_id, order, _ln, _kept_seen)
                 continue
             for _other in await give_back_redemption(db, current.org_id, order, _ln, current.id):
                 if _other.id in _gone:
@@ -4009,7 +4023,9 @@ async def _archive_order(db, current, order_id, reason, do_refund):
     from backend.services.audit import record as _audit
     await _audit(db, org_id=current.org_id, actor_id=current.id, action="order.archive",
                  entity_type="order", entity_id=order.id,
-                 diff={"reason": reason, "refunded": refunded})
+                 diff={"reason": reason, "refunded": refunded,
+                       # #226: what kept redemption lines gave back; restore spends exactly this again
+                       **({"redemptions_returned": _kept_returned} if _kept_returned else {})})
     await log_system_event(db, current.org_id, "order", order.id,
                            f"Order archived: {reason}" + (f" (refunded {refunded})" if refunded else ""))
     await db.commit()
@@ -4045,12 +4061,24 @@ async def _restore_order(db, current, order_id):
     order to re-earn it); un-deleting should never silently double-pay.
     ponytail: restore un-hides only, re-close to re-accrue commission."""
     order = (await db.execute(
-        select(Order).where(Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
+        select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
+        .with_for_update())).scalar_one_or_none()
     if not order:
         raise HTTPException(404, "Order not found")
     await _guard_order_access(db, current, order)
     if not order.archived:
         raise HTTPException(400, "Order is not archived")
+    # #226: a redemption line a sent invoice kept on the deleted job gave its gift card value, coupon
+    # use or points back then; the restored job keeps that discount, so it is spent again (row-locked),
+    # or the restore is refused when it can't be (the card, coupon or points are gone meanwhile).
+    from backend.models import AuditLog
+    _arch = (await db.execute(select(AuditLog.diff).where(
+        AuditLog.org_id == current.org_id, AuditLog.entity_type == "order", AuditLog.entity_id == order.id,
+        AuditLog.action == "order.archive").order_by(AuditLog.created_at.desc(), AuditLog.id.desc())
+        .limit(1))).scalar_one_or_none() or {}
+    if _arch.get("redemptions_returned"):
+        from backend.routers.engage import respend_kept_redemptions
+        await respend_kept_redemptions(db, current.org_id, order, _arch["redemptions_returned"])
     order.archived = False
     order.archive_reason = None
     order.archived_at = None
@@ -5695,6 +5723,8 @@ async def update_line(
                   else f"{line.description} edited")
         await _respread_kit(db, order_id, line.bundle_group_id, actor=current, change=change)
     await _audit_line(db, current, order_id, line, "order.line_update", before=_before)
+    from backend.routers.engage import recap_redemptions
+    await recap_redemptions(db, current.org_id, order, current.id)   # FIN-03: no redemption the job doesn't need
     await _recalc_order(db, order)
     await db.commit()
     resp = {"ok": True, "total": line.total, "order_total": order.total,
@@ -5761,6 +5791,8 @@ async def delete_line(
     await db.flush()
     if _kit:
         await _respread_kit(db, order_id, _kit, actor=current, change=f"Removed {line.description}")
+    from backend.routers.engage import recap_redemptions
+    await recap_redemptions(db, current.org_id, order, current.id)   # FIN-03: no redemption the job doesn't need
     await _recalc_order(db, order)
     await _log_amount_change(db, current.org_id, order, _prev_total)
     await db.commit()
@@ -5810,6 +5842,8 @@ async def delete_kit(
     for line in lines:
         await db.delete(line)
     await db.flush()
+    from backend.routers.engage import recap_redemptions
+    await recap_redemptions(db, current.org_id, order, current.id)   # FIN-03: no redemption the job doesn't need
     await _recalc_order(db, order)
     await _log_amount_change(db, current.org_id, order, _prev_total)
     await db.commit()
