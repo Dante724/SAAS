@@ -130,9 +130,56 @@ async def test_database_data_error_is_a_422_with_a_sentence():
     body = json.loads(r.body)
     assert r.status_code == 422 and "too large" in body["detail"]
     assert "stock_levels" not in body["detail"] and "$1" not in body["detail"]     # no SQL leaks out
-    other = DataError("INSERT ...", {}, Exception("value too long for type character varying(32)"))
-    r = await handler(None, other)
+    too_long = DataError("INSERT ...", {}, Exception("value too long for type character varying(32)"))
+    r = await handler(None, too_long)
     assert r.status_code == 422 and "too long" in json.loads(r.body)["detail"]
+
+    class _PgError(Exception):              # asyncpg's adapted error carries the SQLSTATE
+        sqlstate = "22003"
+    r = await handler(None, DataError("UPDATE ...", {}, _PgError("integer out of range")))
+    assert r.status_code == 422 and "too large" in json.loads(r.body)["detail"]
+
+
+@pytest.mark.parametrize("driver_text", [
+    'invalid input syntax for type uuid: "abc"',
+    'invalid input syntax for type numeric: "1,5"',
+    "cannot cast type boolean to numeric",
+    "division by zero",
+])
+async def test_other_data_errors_stay_500s_monitoring_sees(driver_text):
+    """Only overflow and too-long text are the user's input. Any other DataError is a bug in the
+    app (a bad cast, unparsed input reaching SQL), so the handler re-raises it: a 500 in monitoring."""
+    from sqlalchemy.exc import DataError
+
+    from main import app
+    handler = app.exception_handlers[DataError]
+    exc = DataError("SELECT ...", {}, Exception(driver_text))
+    with pytest.raises(DataError) as raised:
+        await handler(None, exc)
+    assert raised.value is exc
+
+
+async def test_unmapped_data_error_is_a_500_through_the_app():
+    from fastapi import FastAPI
+    from httpx import ASGITransport, AsyncClient
+    from sqlalchemy.exc import DataError
+
+    from backend.core.db_errors import data_error_handler
+    mini = FastAPI()
+    mini.add_exception_handler(DataError, data_error_handler)
+
+    @mini.get("/overflow")
+    async def overflow():
+        raise DataError("UPDATE ...", {}, Exception("numeric field overflow"))
+
+    @mini.get("/bad-cast")
+    async def bad_cast():
+        raise DataError("SELECT ...", {}, Exception('invalid input syntax for type uuid: "x"'))
+
+    async with AsyncClient(transport=ASGITransport(app=mini, raise_app_exceptions=False),
+                           base_url="http://t") as c:
+        assert (await c.get("/overflow")).status_code == 422
+        assert (await c.get("/bad-cast")).status_code == 500
 
 
 # ── API shape: money is a JSON number ────────────────────────────────────────
