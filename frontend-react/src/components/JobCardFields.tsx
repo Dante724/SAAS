@@ -1,5 +1,6 @@
 import { useEffect, useState } from "react";
 import { api } from "../api/client";
+import { isStaleOrder, patchOrderHeader } from "../pages/orders/orderVersion";
 import CustomFields from "./CustomFields";
 
 // The work order's own form fields (Passcode, Accessories…) on the job card, editable after intake.
@@ -7,9 +8,10 @@ import CustomFields from "./CustomFields";
 // any marked "Before closing" — those must be fillable here or the order could never be closed.
 type LayoutItem = { ref: string; kind: string; key: string; label: string; visible: boolean; require?: string; field?: any };
 
-export default function JobCardFields({ orderId, typeId, value, onSaved, onFlash }: {
+export default function JobCardFields({ orderId, typeId, value, onSaved, onFlash, onStale }: {
   orderId: string; typeId?: string | null; value?: Record<string, any> | null;
   onSaved: (v: Record<string, any>) => void; onFlash: (m: string) => void;
+  onStale?: () => void;   // someone else saved the job first: reload it
 }) {
   const [layout, setLayout] = useState<LayoutItem[] | null>(null);
   const [draft, setDraft] = useState<Record<string, any>>(value || {});
@@ -35,9 +37,13 @@ export default function JobCardFields({ orderId, typeId, value, onSaved, onFlash
   async function save() {
     setBusy(true);
     try {
-      const r = await api.patch<{ custom_data: Record<string, any> }>(`/orders/${orderId}/custom-data`, { custom_data: draft });
+      // WO-03: sent with the job's version; refused (409) if someone else saved the job first.
+      const r = await patchOrderHeader<{ custom_data: Record<string, any> }>(orderId, `/orders/${orderId}/custom-data`, { custom_data: draft });
       onSaved(r.custom_data); onFlash("Details saved");
-    } catch (e: any) { onFlash(`Failed: ${e.message}`); } finally { setBusy(false); }
+    } catch (e: any) {
+      if (isStaleOrder(e)) { onFlash(e.message); onStale?.(); }
+      else onFlash(`Failed: ${e.message}`);
+    } finally { setBusy(false); }
   }
 
   return (

@@ -212,8 +212,8 @@ async def sync_order(
         EcommerceOrderMap.external_order_id == data.external_order_id))).scalar_one_or_none()
 
     from backend.models import Client, Location, Order
-    from backend.routers.orders import _order_number
-    from sqlalchemy import func as _f
+    from backend.routers.orders import initial_job_status, job_number
+    from backend.services import new_job
 
     if existing:
         if existing.order_id and data.external_status:
@@ -237,19 +237,20 @@ async def sync_order(
         loc = (await db.execute(select(Location).where(
             Location.org_id == current.org_id).order_by(Location.id).limit(1))).scalar_one_or_none()
         loc_id = loc.id if loc else None
-    seq_val = (await db.execute(select(_f.count()).select_from(Order).where(
-        Order.org_id == current.org_id))).scalar() or 0
+    # Re-review N2: the shop's real work-order number (count(*)+1 reused numbers the sequence had
+    # handed out, a unique-index 500), a valid starting status and the shared create pipeline.
     order = Order(org_id=current.org_id, client_id=client.id,
-                  order_number=_order_number(current.org_id, seq_val + 1),
+                  order_number=await job_number(db, current.org_id, False),
                   complaint=f"{integ.platform} order {data.external_order_id}",
-                  location_id=loc_id, status="new")
-    db.add(order)
-    await db.flush()
+                  location_id=loc_id, status=await initial_job_status(db, current.org_id))
+    await new_job.begin_new_job(db, current, order, note=f"Imported from {integ.platform}")
     db.add(EcommerceOrderMap(org_id=current.org_id, integration_id=integration_id,
                              external_order_id=data.external_order_id, order_id=order.id,
                              external_status=data.external_status))
     integ.last_synced_at = now_utc()
+    pushes = await new_job.seal_new_job(db, current, order, source=integ.platform)
     await db.commit()
+    await new_job.after_new_job(db, current, order, pushes)
     return {"order_id": order.id, "created": True, "updated": False}
 
 

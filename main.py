@@ -1,3 +1,4 @@
+import asyncio
 import logging
 import os
 from contextlib import asynccontextmanager
@@ -149,6 +150,12 @@ async def lifespan(app: FastAPI):
         yield
     finally:
         await job_runner.stop()
+        # Web pushes for work committed just before shutdown are still sending (re-review N4).
+        try:
+            from backend.services import push as _push
+            await asyncio.wait_for(_push.wait_pending(), timeout=15)
+        except Exception:  # noqa: BLE001 — a push is best-effort; never block a deploy on one
+            log.warning("pushes still pending at shutdown were not all sent")
         log.info("Tekly shut down cleanly")
 
 

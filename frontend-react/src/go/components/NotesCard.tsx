@@ -4,6 +4,7 @@
 import { useEffect, useState } from "react";
 import { NotebookPen } from "lucide-react";
 import { api } from "../../api/client";
+import { isStaleOrder, patchOrderHeader, rememberOrderVersion } from "../../pages/orders/orderVersion";
 import { Card, GoButton, PrimaryButton, Sheet, goArea } from "./ui";
 import { haptic } from "../lib/scanner";
 import { useToast } from "../lib/useGo";
@@ -21,17 +22,42 @@ export default function NotesCard({ orderId, techNotes, conclusion, readOnly, on
   const [concl, setConcl] = useState(conclusion || "");
   const [busy, setBusy] = useState(false);
   useEffect(() => { if (open) { setNotes(techNotes || ""); setConcl(conclusion || ""); } }, [open, techNotes, conclusion]);
+  // WO-03: read the job's current notes and version as the editor opens, so the save can say
+  // "this is what I edited" (If-Match) and never overwrite a colleague's later save.
+  async function fetchCurrent() {
+    const o = await api.get<any>(`/orders/${encodeURIComponent(orderId)}`);
+    rememberOrderVersion(orderId, o?.updated_at);
+    return { tech_notes: o?.tech_notes || "", conclusion: o?.conclusion || "" };
+  }
+  useEffect(() => {
+    if (!open) return;
+    let live = true;
+    fetchCurrent().then((cur) => {
+      if (!live) return;
+      if (cur.tech_notes !== (techNotes || "") || cur.conclusion !== (conclusion || "")) {
+        setNotes(cur.tech_notes); setConcl(cur.conclusion); onSaved(cur);
+      }
+    }).catch(() => { /* offline: the save says so */ });
+    return () => { live = false; };
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [open, orderId]);
 
   async function save() {
     if (!navigator.onLine) { toast({ title: "You're offline", body: "Notes need a connection to save.", tone: "warn" }); return; }
     setBusy(true);
     try {
-      await api.patch(`/orders/${encodeURIComponent(orderId)}/notes`, { tech_notes: notes.trim(), conclusion: concl.trim() });
+      await patchOrderHeader(orderId, `/orders/${encodeURIComponent(orderId)}/notes`, { tech_notes: notes.trim(), conclusion: concl.trim() });
       haptic();
       onSaved({ tech_notes: notes.trim(), conclusion: concl.trim() });
       setOpen(false);
     } catch (e: any) {
-      toast({ title: "Couldn't save the notes", body: e?.message, tone: "error" });
+      if (isStaleOrder(e)) {
+        // Someone else saved the job meanwhile: show their notes (reloaded) and say so.
+        try { const cur = await fetchCurrent(); setNotes(cur.tech_notes); setConcl(cur.conclusion); onSaved(cur); } catch { /* keep the text */ }
+        toast({ title: "Notes changed on another screen", body: e.message, tone: "warn" });
+      } else {
+        toast({ title: "Couldn't save the notes", body: e?.message, tone: "error" });
+      }
     } finally { setBusy(false); }
   }
 

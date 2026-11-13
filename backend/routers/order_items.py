@@ -23,7 +23,7 @@ from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
 
 from backend.db.database import get_db
-from backend.models import Device, Employee, Order, OrderItem, OrderLine, OrderStatusLog, Recommendation, TimeEntry
+from backend.models import Device, Employee, Order, OrderItem, OrderLine, Recommendation, TimeEntry
 from backend.services import multi_asset as ma
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.dates import now_utc
@@ -262,9 +262,18 @@ async def collect_items(order_id: str, data: CollectIn, db: AsyncSession = Depen
 async def split_item(order_id: str, item_id: str, db: AsyncSession = Depends(get_db),
                      current: Employee = Depends(require_perm("can_create_tickets"))):
     """Move one item and the lines tagged to it onto a new job for the same customer, linked
-    back to this one. Its recommendations and logged time on those lines go with it."""
+    back to this one. Its recommendations and logged time on those lines go with it.
+    Re-review N2: the new job goes through the create pipeline (services/new_job)."""
     from backend.routers.feed import log_system_event
-    from backend.routers.orders import _guard_editable, _recalc_order, job_number, unique_public_token
+    from backend.routers.orders import (
+        _guard_editable,
+        _recalc_order,
+        active_employee_id,
+        assert_asset_free,
+        initial_job_status,
+        job_number,
+    )
+    from backend.services import new_job
     from backend.services.audit import record as _audit
     await ma.require_enabled(db, current.org_id)
     order = await _order(db, current, order_id)
@@ -281,19 +290,25 @@ async def split_item(order_id: str, item_id: str, db: AsyncSession = Depends(get
     if set(line_ids) & await ma.invoiced_line_ids(db, current.org_id, order.id):
         raise HTTPException(409, "That item's work is already on an invoice")
 
+    if not order.is_estimate:
+        from backend.services.billing import assert_can_add_job
+        await assert_can_add_job(db, current.org_id)                # Solo: new jobs a month
+        await assert_asset_free(db, current.org_id, it.asset_id, exclude_order_id=order.id)   # Q27
+
     number = await job_number(db, current.org_id, bool(order.is_estimate))
-    status = "draft" if order.is_estimate else "new"
+    status = await initial_job_status(db, current.org_id, is_estimate=bool(order.is_estimate),
+                                      type_id=order.type_id)        # WO-06: one of the shop's statuses
     name = (await ma.item_names(db, current.org_id, [it.id])).get(it.id, ("Item", 0))[0]
-    new = Order(order_number=number, org_id=current.org_id, public_token=await unique_public_token(db),
+    new = Order(order_number=number, org_id=current.org_id,
                 client_id=order.client_id, device_id=it.asset_id, location_id=order.location_id,
                 priority=order.priority, complaint=it.complaint or order.complaint,
-                assigned_to_id=order.assigned_to_id, manager_id=order.manager_id, type_id=order.type_id,
+                # CLI-02: not someone who has left since
+                assigned_to_id=await active_employee_id(db, current.org_id, order.assigned_to_id),
+                manager_id=await active_employee_id(db, current.org_id, order.manager_id), type_id=order.type_id,
                 template_key=order.template_key, status=status, is_estimate=order.is_estimate,
                 due_at=order.due_at, currency_code=order.currency_code, fx_rate=order.fx_rate,
                 split_from_order_id=order.id)
-    db.add(new)
-    await db.flush()
-    db.add(OrderStatusLog(order_id=new.id, from_status=None, to_status=status, changed_by_id=current.id))
+    await new_job.begin_new_job(db, current, new)
     it.order_id, it.sort_order = new.id, 0
     if line_ids:
         await db.execute(update(OrderLine).where(OrderLine.order_id == order.id, OrderLine.id.in_(line_ids))
@@ -312,9 +327,11 @@ async def split_item(order_id: str, item_id: str, db: AsyncSession = Depends(get
                  diff={"from": order.order_number, "to": new.order_number, "item": name})
     await log_system_event(db, current.org_id, "order", order.id, f"Split {name} into its own job {new.order_number}")
     await log_system_event(db, current.org_id, "order", new.id, f"Split from {order.order_number} ({name})")
+    pushes = await new_job.seal_new_job(db, current, new, source="split", from_order=order.order_number)
     await db.commit()
-    return {"ok": True, "id": new.id, "order_number": new.order_number, "line_count": len(line_ids),
-            "items": await _list(db, order), **(await _links(db, order))}
+    result = {"ok": True, "id": new.id, "order_number": new.order_number, "line_count": len(line_ids)}
+    await new_job.after_new_job(db, current, new, pushes)
+    return {**result, "items": await _list(db, order), **(await _links(db, order))}
 
 
 class ContinueIn(BaseModel):
@@ -326,35 +343,41 @@ async def continue_as_linked_job(order_id: str, data: ContinueIn, db: AsyncSessi
                                  current: Employee = Depends(require_perm("can_create_tickets"))):
     """Start a new job that carries on from this one — open or closed, e.g. the customer came back
     or the work needs a second visit. Same customer, device, location, type, people and job fields;
-    a fresh status, no lines. Linked both ways."""
-    from backend.models import OrderStatus
+    a fresh status, no lines. Linked both ways.
+    Re-review N2: the new job goes through the create pipeline (services/new_job): the plan's job
+    limit, one open ticket per asset, a valid starting status, nobody who has left, the audit row,
+    the "created" messages, commissions and automations."""
     from backend.routers.feed import log_system_event
-    from backend.routers.orders import unique_public_token
+    from backend.routers.orders import active_employee_id, assert_asset_free, initial_job_status, job_number
+    from backend.services import new_job
     from backend.services.audit import record as _audit
-    from backend.services.numbering import next_number
+    from backend.services.billing import assert_can_add_job
     order = await _order(db, current, order_id)
     if order.is_estimate:
         raise HTTPException(409, "Estimates can't be continued — create a job from the estimate instead")
-    status = (await db.execute(select(OrderStatus.key).where(
-        OrderStatus.org_id == current.org_id, OrderStatus.is_default == True,  # noqa: E712
-        OrderStatus.active == True, OrderStatus.record_type == "work_order"))).scalars().first() or "new"  # noqa: E712
+    await assert_can_add_job(db, current.org_id)                      # Solo: new jobs a month
+    await assert_asset_free(db, current.org_id, order.device_id)      # Q27: the asset may still be in
+    status = await initial_job_status(db, current.org_id, type_id=order.type_id)
     complaint = (data.complaint or "").strip() or order.complaint
-    new = Order(order_number=await next_number(db, current.org_id, "order"), org_id=current.org_id,
-                public_token=await unique_public_token(db), client_id=order.client_id, device_id=order.device_id,
+    new = Order(order_number=await job_number(db, current.org_id, False), org_id=current.org_id,
+                client_id=order.client_id, device_id=order.device_id,
                 location_id=order.location_id, priority=order.priority, complaint=complaint,
-                assigned_to_id=order.assigned_to_id, manager_id=order.manager_id, type_id=order.type_id,
+                assigned_to_id=await active_employee_id(db, current.org_id, order.assigned_to_id),   # CLI-02
+                manager_id=await active_employee_id(db, current.org_id, order.manager_id),
+                type_id=order.type_id,
                 template_key=order.template_key, status=status, is_estimate=False,
                 currency_code=order.currency_code, fx_rate=order.fx_rate,
                 custom_data=dict(order.custom_data or {}), continued_from_order_id=order.id)
-    db.add(new)
-    await db.flush()
-    db.add(OrderStatusLog(order_id=new.id, from_status=None, to_status=status, changed_by_id=current.id))
+    await new_job.begin_new_job(db, current, new)
     await _audit(db, org_id=current.org_id, actor_id=current.id, action="order.continue",
                  entity_type="order", entity_id=new.id, diff={"from": order.order_number, "to": new.order_number})
     await log_system_event(db, current.org_id, "order", order.id, f"Continued in job {new.order_number}")
     await log_system_event(db, current.org_id, "order", new.id, f"Continued from job {order.order_number}")
+    pushes = await new_job.seal_new_job(db, current, new, source="continue", from_order=order.order_number)
     await db.commit()
-    return {"ok": True, "id": new.id, "order_number": new.order_number}
+    result = {"ok": True, "id": new.id, "order_number": new.order_number}
+    await new_job.after_new_job(db, current, new, pushes)
+    return result
 
 
 @router.get("/{order_id}/linked")

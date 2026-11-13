@@ -445,8 +445,9 @@ async def thread_to_order(
     complaint from the customer's first inbound message, and links the thread to the
     order so the conversation stays attached to the job.
     """
-    from backend.models import Client, Order, OrderStatus
-    from backend.services.numbering import next_number
+    from backend.models import Client, Order
+    from backend.routers.orders import initial_job_status, job_number
+    from backend.services import new_job
 
     t = (await db.execute(select(ChatThread).where(
         ChatThread.id == tid, ChatThread.org_id == current.org_id))).scalar_one_or_none()
@@ -482,20 +483,20 @@ async def thread_to_order(
         ChatMessage.thread_id == tid, ChatMessage.direction == "in")
         .order_by(ChatMessage.created_at).limit(1))).scalars().first()
 
-    initial = (await db.execute(select(OrderStatus).where(
-        OrderStatus.org_id == current.org_id,
-        OrderStatus.record_type == ("estimate" if is_estimate else "work_order"),
-        OrderStatus.is_default == True, OrderStatus.active == True))).scalars().first()  # noqa: E712
-
+    # Re-review N2 (WO-05/06): the shared create pipeline. A starting status from the record's own
+    # pipeline (an estimate no longer gets the work-order key "new"), its own number sequence, the
+    # barcode and track link, the audit row and "created" messages, then the post-create steps.
     order = Order(
         org_id=current.org_id, location_id=current.location_id,
-        order_number=await next_number(db, current.org_id, "order"),
+        order_number=await job_number(db, current.org_id, is_estimate),
         client_id=client_id, assigned_to_id=current.id, is_estimate=is_estimate,
-        status=initial.key if initial else "new",
+        status=await initial_job_status(db, current.org_id, is_estimate=is_estimate),
         complaint=(first_in.body if first_in else None) or f"From {t.channel} chat",
     )
-    db.add(order)
-    await db.flush()
+    await new_job.begin_new_job(db, current, order, note=f"Created from {t.channel} chat")
     t.order_id = order.id
+    pushes = await new_job.seal_new_job(db, current, order, source="chat")
     await db.commit()
-    return {"order_id": order.id, "order_number": order.order_number, "client_id": client_id}
+    result = {"order_id": order.id, "order_number": order.order_number, "client_id": client_id}
+    await new_job.after_new_job(db, current, order, pushes)
+    return result

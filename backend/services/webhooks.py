@@ -35,6 +35,8 @@ from typing import Optional
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
 
+from backend.services.after_commit import current_tx, is_outermost, undone
+
 log = logging.getLogger("tekly.webhooks")
 
 API_VERSION = "2026-10-25"
@@ -312,7 +314,7 @@ _OUTBOX_KEY = "repairos_webhook_outbox"       # delivery ids to send after commi
 _SEEN_KEY = "tekly_webhook_seen"              # (event, record id) already emitted in this session
 _LIVE_KEY = "tekly_webhook_live"              # deliveries to re-render before commit
 _PENDING_KEY = "tekly_webhook_pending"        # ORM-detected events waiting for after_flush_postexec
-_UPDATED_KEY = "tekly_webhook_order_updates"  # order id -> (changed fields, deliveries) this txn
+_UPDATED_KEY = "tekly_webhook_order_updates"  # order id -> (changed fields, deliveries, txn) this txn
 _CREATED_KEY = "tekly_webhook_created_orders"  # orders created in this session: no order.updated
 
 
@@ -331,18 +333,18 @@ def _queue(session, org_id: str, ep, name: str, event_id: str, data: dict, now: 
                         attempts=0, created_at=now)
     session.add(d)
     # Transactional outbox: the row commits (or rolls back) with the caller's change, and the
-    # POST happens only after commit.
-    session.info.setdefault(_OUTBOX_KEY, []).append(d.id)
+    # POST happens only after commit. Tagged with its transaction (savepoints: services/after_commit).
+    session.info.setdefault(_OUTBOX_KEY, []).append((current_tx(session), d.id))
     return d
 
 
 def _emit_sync(session, org_id: str, event: str, data: dict, *, obj=None, record_id=None) -> list:
     """Write one delivery per subscribed endpoint. `obj`, when given, is re-rendered before commit."""
     if record_id is not None:
-        seen = session.info.setdefault(_SEEN_KEY, set())
+        seen = session.info.setdefault(_SEEN_KEY, {})
         if (event, record_id) in seen:
             return []
-        seen.add((event, record_id))
+        seen[(event, record_id)] = current_tx(session)
     endpoints = _endpoints_sync(session, org_id)
     if not endpoints:
         return []
@@ -356,7 +358,7 @@ def _emit_sync(session, org_id: str, event: str, data: dict, *, obj=None, record
         d = _queue(session, org_id, ep, name, event_id, data, now)
         out.append(d)
         if obj is not None:
-            session.info.setdefault(_LIVE_KEY, []).append((d, obj, event, event_id, name, now))
+            session.info.setdefault(_LIVE_KEY, []).append((d, obj, event, event_id, name, now, current_tx(session)))
     return out
 
 
@@ -447,7 +449,7 @@ def _emit_after_flush(session, _ctx) -> None:
                     continue
                 changed = list(fields)
                 ds = _emit_sync(session, obj.org_id, event, {**build(obj), "changed_fields": changed}, obj=obj)
-                updates[obj.id] = (changed, ds)
+                updates[obj.id] = (changed, ds, current_tx(session))
             else:
                 _emit_sync(session, obj.org_id, event, build(obj), obj=obj, record_id=obj.id)
     except Exception:  # noqa: BLE001
@@ -455,14 +457,17 @@ def _emit_after_flush(session, _ctx) -> None:
 
 
 def _render_before_commit(session) -> None:
-    """Re-render record payloads from the state about to be committed."""
+    """Re-render record payloads from the state about to be committed (the real commit only: a
+    SAVEPOINT release fires before_commit too, and the record may still change after it)."""
+    if not is_outermost(session):
+        return
     live = session.info.pop(_LIVE_KEY, None)
     updates = session.info.pop(_UPDATED_KEY, None) or {}
     if not live:
         return
     try:
         builders = _builders()
-        for d, obj, event, event_id, name, created in live:
+        for d, obj, event, event_id, name, created, _tx in live:
             if obj not in session:
                 continue
             data = builders[event][1](obj)
@@ -493,20 +498,36 @@ def _register_hooks() -> None:
 
     @event.listens_for(Session, "after_commit")
     def _flush_outbox(session):
+        if not is_outermost(session):
+            return     # a SAVEPOINT release: the deliveries aren't saved yet (re-review N4)
         session.info.pop(_LIVE_KEY, None)
         session.info.pop(_UPDATED_KEY, None)
-        ids = session.info.pop(_OUTBOX_KEY, None)
+        ids = [i for _tx, i in session.info.pop(_OUTBOX_KEY, None) or ()]
         if ids:
             from backend.core.jobs import job_runner
             try:
-                job_runner.enqueue(deliver_pending, list(ids), retries=2, name="webhook-outbox")
+                job_runner.enqueue(deliver_pending, ids, retries=2, name="webhook-outbox")
             except RuntimeError:   # no running loop (sync context): the retry sweep delivers them
                 pass
 
-    @event.listens_for(Session, "after_rollback")
-    def _drop_outbox(session):
-        for k in (_OUTBOX_KEY, _LIVE_KEY, _PENDING_KEY, _UPDATED_KEY, _SEEN_KEY):
-            session.info.pop(k, None)
+    @event.listens_for(Session, "after_soft_rollback")
+    def _drop_outbox(session, rolled_back):
+        """Forget what the rollback undid. A SAVEPOINT rollback (a failed audit row, rule or
+        automation) undoes only the deliveries queued inside it; the rest still go out (N4)."""
+        session.info.pop(_PENDING_KEY, None)
+        if rolled_back.parent is None:
+            for k in (_OUTBOX_KEY, _LIVE_KEY, _UPDATED_KEY, _SEEN_KEY):
+                session.info.pop(k, None)
+            return
+        info = session.info
+        if _OUTBOX_KEY in info:
+            info[_OUTBOX_KEY] = [x for x in info[_OUTBOX_KEY] if not undone(x[0], rolled_back)]
+        if _LIVE_KEY in info:
+            info[_LIVE_KEY] = [x for x in info[_LIVE_KEY] if not undone(x[-1], rolled_back)]
+        if _UPDATED_KEY in info:
+            info[_UPDATED_KEY] = {k: v for k, v in info[_UPDATED_KEY].items() if not undone(v[2], rolled_back)}
+        if _SEEN_KEY in info:
+            info[_SEEN_KEY] = {k: t for k, t in info[_SEEN_KEY].items() if not undone(t, rolled_back)}
 
 
 _register_hooks()

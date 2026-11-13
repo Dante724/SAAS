@@ -369,6 +369,17 @@ async def queue_order_event(db: AsyncSession, *, org_id: str, order_id: str, eve
         return {"failed": True}
 
 
+async def queue_payment_received(db: AsyncSession, org_id: str, order_ids, actor_id: Optional[str] = None,
+                                 push_later: Optional[list] = None) -> None:
+    """payment_received messages (customer receipt + staff) for every job the money reached,
+    queued in the CALLER's transaction: call it before the payment's commit, then send
+    `push_later` with push.dispatch_deferred after it (audit WO-08: they used to be made after the
+    commit, so a crash in between kept the payment and lost the receipt). Never raises."""
+    for oid in dict.fromkeys(o for o in order_ids if o):
+        await queue_order_event(db, org_id=org_id, order_id=oid, event="payment_received",
+                                actor_id=actor_id, push_later=push_later)
+
+
 RESCHEDULED = "Job was rescheduled before this reminder was sent"
 
 
@@ -380,33 +391,47 @@ async def _reminder_lead(db: AsyncSession, rule_id: Optional[str]) -> Optional[t
     return None if off is None else timedelta(minutes=off or 0)
 
 
+async def _still_due_at(db: AsyncSession, org_id: str, scheduled_for, location_id, lead, send_at,
+                       tz_cache: dict) -> bool:
+    """The comparison behind _reminder_still_due, from values already read."""
+    from backend.services.dates import shop_tzname, wall_to_utc
+    if scheduled_for is None:
+        return False
+    if lead is None or send_at is None:
+        return True                       # the rule is gone: nothing to compare with, leave it
+    key = location_id or ""
+    if key not in tz_cache:
+        tz_cache[key] = await shop_tzname(db, org_id, location_id)
+    return abs(wall_to_utc(scheduled_for - lead, tz_cache[key]) - send_at) < timedelta(seconds=1)
+
+
 async def _reminder_still_due(db: AsyncSession, org_id: str, log, tz_cache: dict) -> bool:
     """Is a queued job reminder still for the job's current time? Its send_at was worked out from
     the job's scheduled_for when it was queued (scheduled_for minus the rule's lead, on the shop's
     clock), so a job that was moved since no longer gives the same send_at (audit NTF-04)."""
-    from backend.services.dates import shop_tzname, wall_to_utc
     row = (await db.execute(select(Order.scheduled_for, Order.location_id).where(
         Order.id == log.order_id, Order.org_id == org_id))).first()
-    if row is None or row.scheduled_for is None:
+    if row is None:
         return False
-    lead = await _reminder_lead(db, log.rule_id)
-    if lead is None or log.send_at is None:
-        return True                       # the rule is gone: nothing to compare with, leave it
-    key = row.location_id or ""
-    if key not in tz_cache:
-        tz_cache[key] = await shop_tzname(db, org_id, row.location_id)
-    return abs(wall_to_utc(row.scheduled_for - lead, tz_cache[key]) - log.send_at) < timedelta(seconds=1)
+    return await _still_due_at(db, org_id, row.scheduled_for, row.location_id,
+                               await _reminder_lead(db, log.rule_id), log.send_at, tz_cache)
 
 
 async def _cancel_moved_reminders(db: AsyncSession, org_id: str, tz_cache: dict) -> int:
     """Skip queued job reminders whose job has been moved (or unscheduled) since they were queued,
-    so the history shows them as cancelled and queue_reminders queues one for the new time."""
-    rows = (await db.execute(select(NotificationLog).where(
-        NotificationLog.org_id == org_id, NotificationLog.trigger_event == "reminder",
-        NotificationLog.status == "scheduled", NotificationLog.order_id.isnot(None)))).scalars().all()
+    so the history shows them as cancelled and queue_reminders queues one for the new time.
+    One joined read for every queued reminder with its job's time and its rule's lead (re-review
+    N9: it used to query the job and the rule once per reminder, every 2-minute tick)."""
+    rows = (await db.execute(
+        select(NotificationLog, Order.scheduled_for, Order.location_id, NotificationRule.reminder_offset_min)
+        .outerjoin(Order, and_(Order.id == NotificationLog.order_id, Order.org_id == org_id))
+        .outerjoin(NotificationRule, NotificationRule.id == NotificationLog.rule_id)
+        .where(NotificationLog.org_id == org_id, NotificationLog.trigger_event == "reminder",
+               NotificationLog.status == "scheduled", NotificationLog.order_id.isnot(None)))).all()
     n = 0
-    for log in rows:
-        if not await _reminder_still_due(db, org_id, log, tz_cache):
+    for log, scheduled_for, location_id, offset in rows:
+        lead = None if offset is None else timedelta(minutes=offset or 0)
+        if not await _still_due_at(db, org_id, scheduled_for, location_id, lead, log.send_at, tz_cache):
             log.status, log.error, log.claimed_at = "skipped", RESCHEDULED, None
             n += 1
     return n
@@ -976,6 +1001,13 @@ async def notify_staff_order(db: AsyncSession, *, org_id: str, order_id: str, ev
     if not order:
         return 0
 
+    # Re-review N3 (CLI-02): only people who still work here. Deactivating someone leaves them on
+    # their open jobs, and their email/phone on file is now a personal one.
+    people = {order.assigned_to_id, order.manager_id} - {None, actor_id}
+    active = set((await db.execute(select(_Emp.id).where(
+        _Emp.id.in_(people), _Emp.org_id == org_id, _Emp.active == True)))  # noqa: E712
+        .scalars().all()) if people else set()
+
     sent = 0
     for rule in rules:
         if rule.record_type and getattr(order, "record_type", "work_order") != rule.record_type:
@@ -984,9 +1016,7 @@ async def notify_staff_order(db: AsyncSession, *, org_id: str, order_id: str, ev
             continue
         if rule.location_id and rule.location_id != order.location_id:
             continue
-        targets = {order.assigned_to_id, order.manager_id}
-        targets.discard(None)
-        targets.discard(actor_id)          # don't notify whoever made the change
+        targets = set(active)              # assignee + manager, not whoever made the change
         if not targets:
             continue
         subject = f"{order.order_number}: {event.replace('_', ' ')}"

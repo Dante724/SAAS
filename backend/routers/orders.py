@@ -1667,7 +1667,17 @@ async def change_status(
     data: StatusChange,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
+    request: Request = None,
 ):
+    """Move a job to another status. A replay with the same Idempotency-Key (the tech app's
+    offline queue, re-review N1) gets the first answer instead of running again."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "orders.status",
+                          {"order_id": order_id, "change": data.model_dump(mode="json")},
+                          lambda: _change_status(order_id, data, db, current))
+
+
+async def _change_status(order_id: str, data: StatusChange, db: AsyncSession, current: Employee):
     result = await db.execute(
         select(Order)
         .where(Order.id == order_id, Order.org_id == current.org_id)
@@ -1836,10 +1846,28 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
         # (status_entered_at) and the warranty keep their values. Read under lock_order, so the
         # second of two racing requests lands here. The commit only saves what the caller already
         # did in this request (e.g. /finish's payment on an already-finished job) and ends the lock.
-        if not check_only:
-            await db.commit()
+        # Re-review N5: a comment or note sent with it is still the user's text: it is saved (the
+        # comment on the job, the note in its history), with no status side effects.
+        if check_only:
+            return {"ok": True, "status": order.status, "unchanged": True, "triggers_payment": False,
+                    "is_closing": False, "is_dropped": False, "converted_order_id": None}
+        saved_note = False
+        if (data.comment or "").strip():
+            from backend.models import OrderComment as _SameOC   # (OrderComment is local further down)
+            from backend.routers.feed import default_visibility
+            _vis = await default_visibility(db, current.org_id, "comment") == "client"
+            db.add(_SameOC(order_id=order.id, author_id=current.id, body=data.comment.strip(),
+                           visible_to_client=_vis))
+            saved_note = True
+        if (data.note or "").strip():
+            from backend.routers.feed import log_system_event
+            await log_system_event(db, current.org_id, "order", order.id,
+                                   f"Note (status unchanged): {data.note.strip()}")
+            saved_note = True
+        await db.commit()
         return {"ok": True, "status": order.status, "unchanged": True, "triggers_payment": False,
-                "is_closing": False, "is_dropped": False, "converted_order_id": None}
+                "is_closing": False, "is_dropped": False, "converted_order_id": None,
+                "saved_note": saved_note, "updated_at": await _saved_version(db, order)}
     if target is None and data.status != order.status and data.status not in _LEGACY_CLOSE_KEYS:
         # QA F1: any text (or an invoice / PO / estimate key such as inv_paid) used to be saved and
         # could lock the job closed. Only the record's own, switched-on pipeline is accepted.
@@ -2163,6 +2191,44 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     await _nr.queue_order_event(db, org_id=current.org_id, order_id=order.id, event=_ev,
                                 status_key=data.status, actor_id=current.id, push_later=_pushes)
 
+    # Re-review N7: the status webhooks (outbox rows, POSTed after the commit) and the feedback
+    # request are saved in THIS transaction too, so a crash right after the commit can't keep the
+    # status and lose them. Each runs in a savepoint: a failure undoes only its own rows, is logged,
+    # and never fails the status change.
+    async def webhooks():
+        from backend.services.webhooks import emit_event
+        await emit_event(db, current.org_id, "order.status_changed", {
+            "id": order.id, "order_number": order.order_number,
+            "from": prev, "to": data.status})
+        if is_closing and not prev_terminal and not order.is_estimate:
+            await emit_event(db, current.org_id, "order.closed", {
+                "id": order.id, "order_number": order.order_number, "status": data.status,
+                "total": order.total,
+                "closed_at": order.closed_at.replace(microsecond=0).isoformat() + "Z" if order.closed_at else None})
+
+    # Phase E: if this status is the configured feedback trigger, create a
+    # pending Feedback row and fire a notification with the rating link.
+    async def feedback():
+        from backend.models import Feedback, FeedbackSettings
+        fs = (await db.execute(select(FeedbackSettings).where(
+            FeedbackSettings.org_id == current.org_id, FeedbackSettings.active == True,  # noqa: E712
+            FeedbackSettings.trigger_status_id == target.id))).scalar_one_or_none()
+        if fs:
+            db.add(Feedback(org_id=current.org_id, order_id=order.id, client_id=order.client_id, system=fs.system))
+            from backend.routers.feed import log_system_event
+            await log_system_event(db, current.org_id, "order", order.id, "Feedback request sent to customer")
+
+    async def _saved_with_it(label, fn):
+        try:
+            async with db.begin_nested():
+                await fn()
+        except Exception:  # noqa: BLE001 — never fails the status change, but never silent either
+            logging.getLogger("tekly").exception("order %s status change kept, but %s failed", order.id, label)
+
+    await _saved_with_it("status webhooks", webhooks)
+    if target:
+        await _saved_with_it("feedback request", feedback)
+
     # Mandate 1: payroll commissions. Accrue when the order enters a terminal
     # (closed) state; claw back when it leaves one (reopen) or is an estimate.
     # Runs before the commit below so the status, the client ledger and the commissions save
@@ -2203,34 +2269,8 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
                      kind="schedule.changed", title=f"{order.order_number} \u2192 {data.status}",
                      body="Status updated", deep_link=f"/tech#/order/{order.id}")
 
-    async def webhooks():
-        from backend.services.webhooks import emit_event
-        await emit_event(db, current.org_id, "order.status_changed", {
-            "id": order.id, "order_number": order.order_number,
-            "from": prev, "to": data.status})
-        if is_closing and not prev_terminal and not order.is_estimate:
-            await emit_event(db, current.org_id, "order.closed", {
-                "id": order.id, "order_number": order.order_number, "status": data.status,
-                "total": order.total,
-                "closed_at": order.closed_at.replace(microsecond=0).isoformat() + "Z" if order.closed_at else None})
-
-    # Phase E: if this status is the configured feedback trigger, create a
-    # pending Feedback row and fire a notification with the rating link.
-    async def feedback():
-        from backend.models import Feedback, FeedbackSettings
-        fs = (await db.execute(select(FeedbackSettings).where(
-            FeedbackSettings.org_id == current.org_id, FeedbackSettings.active == True,  # noqa: E712
-            FeedbackSettings.trigger_status_id == target.id))).scalar_one_or_none()
-        if fs:
-            db.add(Feedback(org_id=current.org_id, order_id=order.id, client_id=order.client_id, system=fs.system))
-            from backend.routers.feed import log_system_event
-            await log_system_event(db, current.org_id, "order", order.id, "Feedback request sent to customer")
-
     if order.assigned_to_id and order.assigned_to_id != current.id:
         await _order_side_effect(db, order, "status push to the technician", tech_push, *reload)
-    await _order_side_effect(db, order, "status webhooks", webhooks, *reload)
-    if target:
-        await _order_side_effect(db, order, "feedback request", feedback, *reload)
 
     # Estimate auto-conversion: entering a status flagged converts_to_order
     # turns the estimate into a work order (Orderry "Order created" status).
@@ -2241,7 +2281,9 @@ async def _apply_status_change(db, current, order, new_status, note=None, reason
     # tell the frontend whether to open the payment window (per-status trigger)
     wants_payment = bool(target.triggers_payment) if target else is_closing
     return {"ok": True, "status": data.status, "triggers_payment": wants_payment,
-            "is_closing": is_closing, "is_dropped": is_dropping, "converted_order_id": converted_id}
+            "is_closing": is_closing, "is_dropped": is_dropping, "converted_order_id": converted_id,
+            # WO-03 / re-review N6: the job's new version, for the drawer's next If-Match
+            "updated_at": await _saved_version(db, order)}
 
 
 async def _convert_estimate(db, current, estimate):
@@ -5010,7 +5052,8 @@ async def _add_line(order_id: str, data: LineIn, db: AsyncSession, current: Empl
             await _audit_line(db, current, order_id, existing, "order.line_update", before=_before)
             await _recalc_order(db, order)
             await db.commit()
-            return {"ok": True, "line_id": existing.id, "merged": True}
+            return {"ok": True, "line_id": existing.id, "merged": True,
+                    "updated_at": await _saved_version(db, order)}   # N6: the drawer's next If-Match
 
     await _apply_client_discount(db, current.org_id, order.client_id, data)
     await _auto_apply_tax(db, current.org_id, data, order.location_id)
@@ -5070,7 +5113,8 @@ async def _add_line(order_id: str, data: LineIn, db: AsyncSession, current: Empl
     await log_system_event(db, current.org_id, "order", order.id, f"Added {data.kind or data.line_type}: {data.description}")
     await _log_amount_change(db, current.org_id, order, _prev_total)
     await db.commit()
-    resp = {"ok": True, "line_id": line.id}
+    resp = {"ok": True, "line_id": line.id,
+            "updated_at": await _saved_version(db, order)}   # N6: the drawer's next If-Match
     if _mg["below_floor"] and _mg["guard"] == "warn":   # 144gy warn: allow but flag
         resp["margin_warning"] = f"Low margin: {_mg['margin_pct']}% (floor {_mg['floor']}%)."
     return resp
@@ -5621,7 +5665,8 @@ async def update_line(
     await _audit_line(db, current, order_id, line, "order.line_update", before=_before)
     await _recalc_order(db, order)
     await db.commit()
-    resp = {"ok": True, "total": line.total, "order_total": order.total}
+    resp = {"ok": True, "total": line.total, "order_total": order.total,
+            "updated_at": await _saved_version(db, order)}   # N6: the drawer's next If-Match
     if _mg["below_floor"] and _mg["guard"] == "warn":
         resp["margin_warning"] = f"Low margin: {_mg['margin_pct']}% (floor {_mg['floor']}%)."
     return resp
