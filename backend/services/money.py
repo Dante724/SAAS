@@ -16,6 +16,9 @@ Rollout (see SPEC_money_decimal.md): Phase 1 ships this module + the highest-val
 and, finally, carry Decimal through the hot compute paths unconverted.
 """
 from decimal import Decimal, ROUND_HALF_UP
+from typing import Annotated
+
+from pydantic import AfterValidator
 
 from backend.db.exact import Exact  # noqa: F401  (re-exported: the type every money column reads as)
 
@@ -24,8 +27,12 @@ _TT = Decimal("0.0001")
 
 
 def d2(x) -> Decimal:
-    """Quantize to 2dp as an exact Decimal, round-half-up. Accepts float/int/str/Decimal/None (0)."""
-    return dec(x).quantize(_CENT, rounding=ROUND_HALF_UP)
+    """Quantize to 2dp as an exact Decimal, round-half-up. Accepts float/int/str/Decimal/None (0).
+
+    Always a plain ``Decimal``, also for an ``Exact`` input (whose own ``quantize`` stays Exact):
+    documents print it with its two places ("10.50"). Lift it with ``dec``/``Exact`` before mixing
+    it with floats."""
+    return Decimal.quantize(dec(x), _CENT, rounding=ROUND_HALF_UP)
 
 
 def q2(x) -> float:
@@ -53,7 +60,8 @@ def q4(x) -> float:
 
 
 def msum(values) -> float:
-    """Exact sum of money values (each coerced through Decimal), quantized to 2dp."""
+    """Exact sum of money values (each coerced through Decimal), quantized to 2dp. Same fast path
+    as ``dsum``."""
     return float(dsum(values))
 
 
@@ -71,11 +79,21 @@ def dec(x) -> Decimal:
 
 
 def dsum(values) -> Decimal:
-    """Exact sum of money values as a Decimal quantized to 2dp (round-half-up)."""
-    total = Decimal("0")
+    """Exact sum of money values as a plain Decimal quantized to 2dp (round-half-up).
+
+    Fast path (re-review N8): ``total + Exact`` would dispatch to ``Exact.__radd__`` and re-wrap
+    every partial sum (about 10x slower than Decimal). Calling ``Decimal.__add__`` directly adds an
+    Exact as the Decimal it is, with no wrapper; floats and ints are lifted once each."""
+    add = Decimal.__add__
+    total = Decimal(0)
     for v in values:
-        total += dec(v)
-    return total.quantize(_CENT, rounding=ROUND_HALF_UP)
+        if isinstance(v, Decimal):
+            total = add(total, v)
+        elif type(v) is int:
+            total = add(total, Decimal(v))
+        else:
+            total = add(total, dec(v))
+    return Decimal.quantize(total, _CENT, rounding=ROUND_HALF_UP)
 
 
 def round_to_step(x, step) -> float:
@@ -164,6 +182,34 @@ async def claim_status(db, obj, expected, new, *, attr: str = "status", where=()
 
 
 MAX_MONEY = 1e9      # a single price/amount above this is a typo, not a repair-shop price
+
+# ── Input bounds for the exact NUMERIC columns (re-review N3) ────────────────
+# NUMERIC(p, s) holds magnitudes below 10**(p - s); Postgres refuses more with "numeric field
+# overflow" (the old double-precision columns took anything). Request models type these fields
+# with the aliases below so a typo (a 13-digit EAN scanned into a qty box) is a 422 that names the
+# field with a sentence ("Quantity is out of range ..."), not pydantic's "Input should be less than
+# or equal to 1000000000". The bound only fires past the column's limit, so a field's own
+# validators ("Quantity must be greater than zero") still speak for every value inside it. Anything still reaching the database out of range is mapped to a 422 by
+# backend.core.db_errors.data_error_handler.
+MAX_QTY = 1_000_000_000            # NUMERIC(14,4) quantities: < 1e10
+MAX_PCT = 99_999                   # NUMERIC(9,4) percentages and tax rates: < 1e5
+MAX_RATE = 1_000_000_000           # NUMERIC(18,8) currency / FX rates: < 1e10
+MAX_POINTS = 100_000_000_000       # NUMERIC(14,2) loyalty points: < 1e12
+
+
+
+def _bounded(label: str, limit: int, hint: str = "") -> AfterValidator:
+    def check(v):
+        if v is not None and abs(v) > limit:
+            raise ValueError(f"{label} is out of range: it can be at most {limit:,} either way.{hint}")
+        return v
+    return AfterValidator(check)
+
+
+Qty = Annotated[float, _bounded("Quantity", MAX_QTY, " Is that a barcode or serial number?")]
+Pct = Annotated[float, _bounded("Percentage", MAX_PCT)]
+Rate = Annotated[float, _bounded("Rate", MAX_RATE)]
+Points = Annotated[float, _bounded("Points value", MAX_POINTS)]
 
 
 def check_money(v, *, allow_negative: bool = False):

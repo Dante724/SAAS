@@ -411,11 +411,13 @@ def _discount_fits(item: MembershipPlanItem, line: OrderLine) -> bool:
 
 
 async def coverage_for_line(db: AsyncSession, memberships: list[Membership],
-                            line: OrderLine) -> Optional[tuple[Membership, MembershipPlanItem]]:
-    """The plan item that would cover (or discount) this line, if any."""
+                            line: OrderLine, *, lock: bool = True) -> Optional[tuple[Membership, MembershipPlanItem]]:
+    """The plan item that would cover (or discount) this line, if any. lock=False for a preview
+    (the job banner): a read takes no plan lock (re-review money N6); applying does."""
     if line.kind == "membership" or line.membership_id:
         return None
-    await lock_memberships(db, [m.id for m in memberships if m.status == "active"])
+    if lock:
+        await lock_memberships(db, [m.id for m in memberships if m.status == "active"])
     best = None
     for m in memberships:
         if m.status != "active":

@@ -503,9 +503,11 @@ async def _rep_sold_products(db, org, df, dt, **kw):
 async def _rep_cash_flow(db, org, df, dt, **kw):
     """Cash flow statement — income vs expense by cash-flow item. A deleted transaction (a voided
     sale's takings, a deleted refund's payout) is struck through and left out, as in the account."""
-    txns = (await db.execute(select(Transaction).where(
+    from backend.services.scoping import scope_accounts
+    # SEC-02 (re-review N3): a cashbox-restricted role sees only its own cashboxes' movements
+    txns = (await db.execute(scope_accounts(select(Transaction).where(
         Transaction.org_id == org, func.coalesce(Transaction.status, "active") != "deleted",
-        Transaction.actual_date >= df, Transaction.actual_date <= dt))).scalars().all()
+        Transaction.actual_date >= df, Transaction.actual_date <= dt), db, Transaction.account_id))).scalars().all()
     items = {c.id: c.name for c in (await db.execute(select(CashFlowItem).where(CashFlowItem.org_id == org))).scalars().all()}
     agg = {}
     for t in txns:
@@ -520,7 +522,9 @@ async def _rep_cash_flow(db, org, df, dt, **kw):
 
 async def _rep_total_money(db, org, df, dt, **kw):
     """Account balances snapshot."""
-    accts = (await db.execute(select(Account).where(Account.org_id == org, Account.active == True))).scalars().all()  # noqa: E712
+    from backend.services.scoping import scope_accounts
+    accts = (await db.execute(scope_accounts(select(Account).where(
+        Account.org_id == org, Account.active == True), db, Account.id))).scalars().all()  # noqa: E712
     cols = ["Account", "Type", "Balance"]
     data = [[a.name, a.payment_option, q2(a.balance)] for a in accts]
     return cols, data
@@ -709,13 +713,20 @@ async def _rep_labor_cost(db, org, df, dt, **kw):
     billable = sum(e.duration_sec for e in rows if e.billable)
     cost = sum(e.duration_sec / 3600 * (e.cost_rate or 0) for e in rows)
     bill = sum(e.duration_sec / 3600 * (e.billable_rate or 0) for e in rows if e.billable)
-    # Overtime is per person per shop day (RPT-01), the same rule the timesheet pays by.
+    # Overtime is per person per shop day (RPT-01), the same rule the timesheet pays by, on the same
+    # clock payroll counts each person's days on: their branch's zone, else the shop's (N-11; this
+    # used the report location's zone for everyone).
+    from backend.models import Employee
     from backend.routers.timeclock import _overtime_split
-    tz = await shop_tzname(db, org, kw.get("location_id"))
     per_emp: dict = {}
     for e in rows:
         per_emp.setdefault(e.employee_id, []).append(e)
-    ot = sum(_overtime_split(es, tz)[1] for es in per_emp.values())
+    homes = dict((await db.execute(select(Employee.id, Employee.location_id).where(
+        Employee.org_id == org, Employee.id.in_(list(per_emp))))).all()) if per_emp else {}
+    zones: dict = {}
+    for loc in set(homes.values()) | {None}:
+        zones[loc] = await shop_tzname(db, org, loc)
+    ot = sum(_overtime_split(es, zones[homes.get(emp_id)])[1] for emp_id, es in per_emp.items())
     cols = ["Metric", "Value"]
     out = [["Total hours", q2(total / 3600)], ["Billable hours", q2(billable / 3600)],
            ["Overtime hours (>8h/day)", q2(ot)], ["Labor cost", q2(cost)],
@@ -1305,6 +1316,10 @@ async def _company_figures(db, oid: str, location_id: Optional[str]) -> dict:
     # suppliers), summed in the database in one statement
     from backend.models import Client, Supplier
     acct = [Account.org_id == oid, Account.active == True]  # noqa: E712
+    from backend.services.scoping import session_allowed_accounts
+    _allowed = session_allowed_accounts(db)   # SEC-02 (re-review N3): only this role's cashboxes
+    if _allowed is not None:
+        acct.append(Account.id.in_(sorted(_allowed)))
     cash_bal, cashless_bal, ar, ap = (float(x or 0) for x in (await db.execute(select(
         select(func.coalesce(func.sum(Account.balance), 0)).where(
             *acct, Account.payment_option == "cash").scalar_subquery(),

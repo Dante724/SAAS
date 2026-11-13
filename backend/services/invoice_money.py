@@ -349,6 +349,17 @@ async def freeze_lines(db: AsyncSession, inv: Invoice) -> None:
     await db.flush()
 
 
+async def _take_off_paid(db: AsyncSession, inv: Invoice, amount: float) -> None:
+    """Lower an invoice's paid amount by `amount`, capped at what it holds. Re-review inventory N6:
+    the cap was read from the in-memory row, which a refund on another job sharing this invoice may
+    have lowered meanwhile (callers lock the job, not the invoice), so the decrement went below zero
+    and tripped ck_invoices_amount_paid_nonneg (a 500). The row is locked and re-read first: the
+    job's lock is already held, so this keeps the Order -> Invoice order."""
+    paid = (await db.execute(select(Invoice.amount_paid).where(Invoice.id == inv.id).with_for_update()
+                             .execution_options(populate_existing=True))).scalar_one()
+    await add_to_column(db, inv, "amount_paid", -min(float(amount), float(paid or 0)))
+
+
 async def release_payments(db: AsyncSession, inv: Invoice, amount: float, *, prefer_order: str | None = None) -> float:
     """Take up to ``amount`` of job money off an invoice and hold it on its job again (newest
     first, the preferred job's first; a row is split when only part comes off). Money without a
@@ -369,7 +380,7 @@ async def release_payments(db: AsyncSession, inv: Invoice, amount: float, *, pre
             r.invoice_id = None
         left = q2(left - take)
     moved = q2(amount - left)
-    await add_to_column(db, inv, "amount_paid", -min(moved, float(inv.amount_paid or 0)))
+    await _take_off_paid(db, inv, moved)
     settle_status(inv)
     await db.flush()
     return moved
@@ -526,7 +537,7 @@ async def reverse_charge(db: AsyncSession, order: Order, charge_ref: str | None,
         if iid:
             inv = (await db.execute(select(Invoice).where(Invoice.id == iid))).scalar_one_or_none()
             if inv:
-                await add_to_column(db, inv, "amount_paid", -min(amt, float(inv.amount_paid or 0)))
+                await _take_off_paid(db, inv, amt)
                 settle_status(inv)
     await db.flush()
     return out

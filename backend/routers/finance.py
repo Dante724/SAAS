@@ -13,6 +13,7 @@ from backend.services.money import MAX_MONEY, check_money, d2, dec, msum, q2, q4
 from backend.core.spreadsheet import safe_row
 from backend.services.invoicing import DISPLAY_MODES, balance_due as _balance_due
 from backend.services.dates import day_end_utc, day_start_utc, now_utc, range_edge, shop_today, shop_tzname, today_in
+from backend.services.money import Pct, Qty  # NUMERIC input bounds (N3)
 
 router = APIRouter(prefix="/api/finance", tags=["finance"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -21,7 +22,7 @@ class InvoiceLineIn(BaseModel):
     kind: str = "custom"                            # service|product|labor|custom
     source_id: Optional[str] = None                 # catalog ref (null for hand-typed)
     description: str = ""
-    qty: float = 1.0
+    qty: Qty = 1.0
     unit_price: float = 0.0
 
     # B3: a 0 or negative quantity or price made negative invoices.
@@ -49,8 +50,8 @@ class InvoiceIn(BaseModel):
     # Invoices store discount and tax as amounts. A manual invoice sets them as percentages:
     # discount_pct / tax_pct (tax on the discounted subtotal). Older clients send the
     # percentages in discount / tax, which are read the same way when the _pct fields are absent.
-    discount_pct: Optional[float] = None
-    tax_pct: Optional[float] = None
+    discount_pct: Optional[Pct] = None
+    tax_pct: Optional[Pct] = None
     discount: float = 0.0
     tax: float = 0.0
     comment: str = ""                               # 144ed
@@ -1332,13 +1333,14 @@ async def accountant_export(
         raise HTTPException(400, "Invalid date range: expected YYYY-MM-DD")
     exp_from = date.fromisoformat(date_from[:10]) if date_from else today.replace(day=1)
     exp_to = date.fromisoformat(date_to[:10]) if date_to else today
-    rows = (await db.execute(
+    from backend.services import scoping
+    rows = (await db.execute(scoping.scope_accounts(   # SEC-02 (re-review N3): only usable cashboxes
         select(Transaction, Account.name, CashFlowItem.name)
         .join(Account, Transaction.account_id == Account.id)
         .outerjoin(CashFlowItem, Transaction.cash_flow_item_id == CashFlowItem.id)
         .where(Transaction.org_id == current.org_id, Transaction.status != "deleted",
                Transaction.actual_date >= df, Transaction.actual_date <= dt)
-        .order_by(Transaction.actual_date))).all()
+        .order_by(Transaction.actual_date), db, Transaction.account_id))).all()
     # Combine cashbox transactions with business expenses (Expense model — rent/utilities that never
     # hit a cashbox but belong in the accountant pack), sorted by date.
     lines: list[tuple] = []

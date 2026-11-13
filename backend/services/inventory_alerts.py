@@ -70,10 +70,13 @@ async def _alert_recipients(db: AsyncSession, org_id: str) -> list[Employee]:
     role_ids = {e.role_id for e in emps if e.role_id}
     roles = {r.id: r for r in (await db.execute(select(Role).where(
         Role.id.in_(role_ids)))).scalars().all()} if role_ids else {}
+    from backend.models import Organisation
+    owner_id = (await db.execute(select(Organisation.owner_id).where(Organisation.id == org_id))).scalar_one_or_none()
     out = []
     for e in emps:
         role = roles.get(e.role_id)
-        if role_allows(role, BASE_PERM) and role_allows(role, ALERT_PERM):
+        # SEC-11: role_allows(None) is False now; the shop owner is named, not inferred from "no role"
+        if (e.id == owner_id and role is None) or (role_allows(role, BASE_PERM) and role_allows(role, ALERT_PERM)):
             out.append(e)
     return out
 

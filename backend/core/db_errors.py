@@ -4,12 +4,19 @@ broken reference) are real bugs and stay 500s.
 
 SQLite names the index only for expression indexes ("UNIQUE constraint failed: index 'uq_…'") and
 the columns otherwise ("… failed: product_barcodes.org_id, product_barcodes.barcode"); Postgres
-names the constraint. Both forms are matched."""
+names the constraint. Both forms are matched.
+
+A value a column can't hold (DataError: numeric overflow, text too long) is a 422 with a sentence
+(re-review N3). Every other DataError (invalid input syntax, a bad cast) is an app bug and stays
+a 500."""
+import logging
 from typing import Optional
 
 from fastapi import Request
 from fastapi.responses import JSONResponse
-from sqlalchemy.exc import IntegrityError
+from sqlalchemy.exc import DataError, IntegrityError
+
+log = logging.getLogger("tekly.db_errors")
 
 # (index name, SQLite column form) → message
 _MESSAGES = (
@@ -57,3 +64,40 @@ async def integrity_error_handler(request: Request, exc: IntegrityError):
     if msg is None:
         raise exc
     return JSONResponse(status_code=409, content={"detail": msg})
+
+
+# ── DataError: a value the column can't hold (re-review N3) ─────────────────
+# Since DB-08 quantities, percentages, rates and points are NUMERIC(p, s); Postgres refuses a value
+# past the precision ("numeric field overflow") where double precision took it. Request models bound
+# these inputs (money.Qty/Pct/Rate/Points); this is the backstop for any path that still lets one
+# through: a 422 with a sentence instead of a 500, and no SQL in the reply.
+# Only these two are the user's input. Any other DataError (invalid input syntax for a uuid or
+# number, a bad cast, division by zero) means the app sent SQL it shouldn't have: it re-raises and
+# stays a 500, so monitoring sees it.
+# (Postgres SQLSTATE, driver-text needles) → message
+_DATA_MESSAGES = (
+    ("22003", ("numeric field overflow", "numeric value out of range"),
+     "A number is too large to save. Check quantities, percentages and rates."),
+    ("22001", ("value too long for type",),
+     "A text value is too long to save."),
+)
+
+
+def data_error_message(exc: DataError) -> Optional[str]:
+    """The plain message for an overflow / too-long DataError, or None for any other kind."""
+    orig = exc.orig
+    state = getattr(orig, "sqlstate", None) or getattr(orig, "pgcode", None)
+    text = str(orig if orig is not None else exc).lower()
+    for code, needles, msg in _DATA_MESSAGES:
+        if state == code or any(n in text for n in needles):
+            return msg
+    return None
+
+
+async def data_error_handler(request: Request, exc: DataError):
+    msg = data_error_message(exc)
+    if msg is None:
+        raise exc
+    log.warning("DataError mapped to 422: %s (%s)", msg,
+                type(exc.orig).__name__ if exc.orig is not None else "no driver error")
+    return JSONResponse(status_code=422, content={"detail": msg})

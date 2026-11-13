@@ -685,8 +685,11 @@ async def _notify_disabled(db, ep) -> None:
         where, fix = "an automation rule's webhook", "Fix the endpoint, then save the rule again in Settings › Notifications › Automations."
     else:
         where, fix = (ep.description or ep.url)[:80], "Fix the endpoint, then turn it back on in Settings › Integrations."
+    from backend.models import Organisation
+    owner_id = (await db.execute(select(Organisation.owner_id).where(Organisation.id == ep.org_id))).scalar_one_or_none()
     for emp, role in rows:
-        if role_allows(role, "can_manage_settings"):
+        # SEC-11: role_allows(None) is False now; the shop owner always hears about it
+        if emp.id == owner_id or role_allows(role, "can_manage_settings"):
             await notify(db, org_id=ep.org_id, employee_id=emp.id, kind="webhook.disabled",
                          title="Webhook turned off",
                          body=f"Deliveries to {where} failed for 24 hours, so it was turned off. {fix}",

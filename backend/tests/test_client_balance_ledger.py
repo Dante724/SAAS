@@ -7,8 +7,15 @@ while the ledger summed to -60. The movement must be the same atomic UPDATE the 
 ledger uses (services.ledger.post_contact_ledger / money.add_to_column).
 """
 import asyncio
+import uuid
 
 import pytest
+
+
+def _keyed(tenant):
+    """Re-review N9: a keyless repeat of the same movement within seconds is now refused as a double
+    click; six deliberate advances each carry their own Idempotency-Key (as the dialog sends)."""
+    return {**tenant, "Idempotency-Key": uuid.uuid4().hex}
 
 
 async def _new_client(client, tenant, name="Race Co"):
@@ -21,7 +28,7 @@ async def _new_client(client, tenant, name="Race Co"):
 async def test_client_balance_matches_ledger_under_concurrent_advances(client, tenant):
     cid = await _new_client(client, tenant)
     rs = await asyncio.gather(*[
-        client.post(f"/api/clients/{cid}/balance", json={"kind": "advance", "amount": 10}, headers=tenant)
+        client.post(f"/api/clients/{cid}/balance", json={"kind": "advance", "amount": 10}, headers=_keyed(tenant))
         for _ in range(6)])
     assert all(r.status_code == 201 for r in rs), [r.text for r in rs]
     b = (await client.get(f"/api/clients/{cid}/balance", headers=tenant)).json()
@@ -39,7 +46,7 @@ async def test_client_balance_matches_ledger_under_concurrent_cash_advances(clie
     rs = await asyncio.gather(*[
         client.post(f"/api/clients/{cid}/balance",
                     json={"kind": "advance" if i % 2 else "payout", "amount": 10, "account_id": acc},
-                    headers=tenant)
+                    headers=_keyed(tenant))
         for i in range(6)])
     assert all(r.status_code == 201 for r in rs), [r.text for r in rs]
     b = (await client.get(f"/api/clients/{cid}/balance", headers=tenant)).json()

@@ -27,6 +27,7 @@ from backend.services.numbering import next_number
 from backend.services.money import add_to_column, d2, dec, q2, q4
 from backend.core.spreadsheet import MAX_IMPORT_ROWS, safe_row
 from backend.services.dates import now_utc
+from backend.services.money import Points, Qty  # NUMERIC input bounds (N3)
 
 router = APIRouter(prefix="/api/sales", tags=["sales"])
 st_router = APIRouter(prefix="/api/stocktake", tags=["stocktake"])
@@ -48,7 +49,7 @@ class SaleLineIn(BaseModel):
     kind: str  # product|service
     ref_id: Optional[str] = None
     description: str = ""
-    qty: float = 1
+    qty: Qty = 1
     unit_price: float = 0
     discount: float = 0  # pct
     serials: Optional[list[str]] = Field(None, max_length=500)   # ii144c: which units are sold
@@ -84,7 +85,7 @@ class SaleIn(BaseModel):
     lines: list[SaleLineIn] = []
     coupon_code: Optional[str] = None     # 144bb — POS rewards
     gift_card_code: Optional[str] = None  # B5: a tender, not a discount
-    redeem_points: float = 0
+    redeem_points: Points = 0
     cash_tendered: Optional[float] = None   # B5: cash the customer handed over → change due
     expected_due: Optional[float] = None    # B5: what the Charge button showed; a different charge is refused
 
@@ -748,7 +749,7 @@ async def _pay_sale(sale_id: str, data: SalePayIn, db: AsyncSession, current: Em
 
 class SaleReturnLineIn(BaseModel):
     line_id: str
-    qty: float = Field(gt=0)
+    qty: Qty = Field(gt=0)
     serials: Optional[list[str]] = Field(None, max_length=500)   # QA F2: which sold units came back
 
 
@@ -1337,7 +1338,7 @@ async def get_stocktake(
 
 
 class CountIn(BaseModel):
-    counted_qty: float
+    counted_qty: Qty
 
 
 @st_router.patch("/{st_id}/lines/{line_id}")
@@ -1614,7 +1615,7 @@ async def list_stocktakes(
 # ── Build 91: stocktake depth ────────────────────────────────────────────────
 class ScanIn(BaseModel):
     code: str = Field(max_length=500)   # barcode, SKU, MPN, a unit serial — or a bin label
-    qty: float = 1                  # each scan adds this much (a blind count always adds one)
+    qty: Qty = 1                  # each scan adds this much (a blind count always adds one)
     bin_id: Optional[str] = None
     register_unknown: bool = False  # create a product for a code we don't recognise
 

@@ -1123,6 +1123,33 @@ async def _references(db, table: str, ids: list, created: dict) -> int:
                 if own and "id" in t.c:
                     q = q.where(not_(t.c.id.in_(own)))
                 n += (await db.execute(q)).scalar() or 0
+    n += await _soft_references(db, table, ids, created)
+    return n
+
+
+async def _soft_references(db, table: str, ids: list, created: dict) -> int:
+    """Re-review N2: rows pointing at these ids through a soft id column (no FK, db/soft_refs). The
+    hard delete below would leave them naming nothing, and a stale id then fails the soft-ref check
+    wherever the app copies it (a checklist template's upsell onto a job). A column whose target
+    depends on a sibling kind column is counted on its value alone: ids are UUIDs, so a match is
+    a reference to this row."""
+    from backend.db.database import Base
+    from backend.db.soft_refs import _registry
+    n = 0
+    for tname, cols in _registry().items():
+        t = Base.metadata.tables.get(tname)
+        if t is None:
+            continue
+        for col, (target, _label) in cols.items():
+            if hasattr(target, "__table__") and target.__table__.name != table:
+                continue
+            if isinstance(target, tuple) and all(m.__table__.name != table for m in target):
+                continue
+            q = select(func.count()).select_from(t).where(t.c[col].in_(ids))
+            own = created.get(tname)
+            if own and "id" in t.c:
+                q = q.where(not_(t.c.id.in_(own)))
+            n += (await db.execute(q)).scalar() or 0
     return n
 
 

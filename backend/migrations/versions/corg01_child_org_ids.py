@@ -5,19 +5,32 @@ org_id: their shop was guessed from parent links (each reader guessing different
 accepted a payment linked to nothing, and the tenant read guard could not filter them at all.
 
 1. Pre-flight, before anything is changed: every existing row must resolve to a shop through its
-   links (the same links, in the same order, as backend/db/tenancy.ORG_PARENTS uses for new rows).
-   If any row can't, the migration ABORTS and lists the counts per table; nothing is touched. Fix
-   or delete those rows (they belong to no shop and no report can see them), then run it again.
+   links (the same links, in the same order, as backend/db/tenancy.ORG_PARENTS uses for new rows),
+   and links that name a shop must all name the SAME one (COALESCE would otherwise pick the first
+   silently). If not, the migration ABORTS and lists the counts per table (no row data); nothing is
+   touched. Fix or delete those rows, then run it again.
 2. Add org_id, backfill it from the parent, then make it NOT NULL with an FK to organisations.
-   Postgres: the FK is added NOT VALID and validated outside the transaction (no long lock).
-   SQLite: one batch rebuild per table (it can't ALTER a column to NOT NULL).
+   Postgres, one table at a time, each step committed on its own (no lock is held across tables
+   or for the whole backfill): add the column (nullable: instant) -> install a BEFORE INSERT
+   trigger that fills org_id from the parent when the inserting code doesn't set it -> backfill
+   in batches of BATCH rows -> CHECK (org_id IS NOT NULL) NOT VALID, VALIDATE (writes go on),
+   SET NOT NULL (reuses the CHECK, no second scan), drop the CHECK -> FK NOT VALID, VALIDATE.
+   The trigger is what keeps code from before this revision working: the old containers while
+   the deploy runs, and the previous image after a rollback (DEPLOY.md, "Rolling back").
+   SQLite (development only): one batch rebuild per table (it can't ALTER a column to NOT NULL);
+   no trigger (SQLite triggers can't change the row being inserted).
 3. Indexes: org_id on those tables (payments and stock_movements get (org_id, paid_at) /
    (org_id, created_at) instead), the hot unindexed FKs (payments.shift_id, summed at every drawer
    close, first), and org_id on 28 other tables. Postgres builds them CONCURRENTLY (writes go on);
    an INVALID one left by a failed build is dropped and rebuilt on the retry.
 
 Idempotent: a column, FK or index that already exists (create_all databases, a retried run) is
-left as it is. Downgrade drops what this added.
+left as it is; a run stopped half-way (lock timeout, cancelled deploy) resumes where it stopped.
+Downgrade drops what this added, triggers included.
+
+Edited after merge (re-review of #219, N1/N3/N4): the schema this builds is unchanged (same
+columns, NOT NULL, FKs, indexes); the triggers are new. Databases that already ran the earlier
+version get the triggers from corg02.
 
 Revision ID: corg01
 Revises: sso01
@@ -36,12 +49,12 @@ log = logging.getLogger("alembic.corg01")
 
 
 def _org(parent: str, col: str) -> str:
-    return f"(SELECT p.org_id FROM {parent} p WHERE p.id = t.{col})"
+    return f"(SELECT p.org_id FROM {parent} p WHERE p.id = {{row}}.{col})"
 
 
 # A cash shift's shop is its location's; a payment that only names its drawer shift is that shop's.
 _SHIFT_ORG = ("(SELECT l.org_id FROM cash_shifts cs JOIN locations l ON l.id = cs.location_id "
-              "WHERE cs.id = t.shift_id)")
+              "WHERE cs.id = {row}.shift_id)")
 
 # table -> where its shop comes from, in order (tenancy.ORG_PARENTS). Order of the dict matters
 # only for readability: every source reads a parent's own org_id, never another child's.
@@ -119,14 +132,18 @@ INDEXES: list[tuple[str, str, str]] = (
 
 _CONVENTION = {"fk": "fk_%(table_name)s_%(column_0_name)s_%(referred_table_name)s"}
 _FK = "fk_{}_org_id_organisations"
+_NOT_NULL_CK = "ck_{}_org_id_not_null"
+BATCH = 5000      # rows per backfill UPDATE on Postgres; each batch commits on its own
 
 
 def _is_pg() -> bool:
     return op.get_bind().dialect.name == "postgresql"
 
 
-def _derived(table: str) -> str:
-    srcs = SOURCES[table]
+def _derived(table: str, row: str = "t") -> str:
+    """The shop a row of `table` takes from its links; `row` is how the row is referred to
+    ("t" in an UPDATE/SELECT alias, "NEW" in the trigger)."""
+    srcs = [s.replace("{row}", row) for s in SOURCES[table]]
     return srcs[0] if len(srcs) == 1 else f"COALESCE({', '.join(srcs)})"
 
 
@@ -134,58 +151,137 @@ def _has_column(table: str) -> bool:
     return "org_id" in {c["name"] for c in sa.inspect(op.get_bind()).get_columns(table)}
 
 
+def _disagree(table: str) -> str | None:
+    """SQL that is true when two of a row's non-null links name different shops (None: one link only)."""
+    n = len(SOURCES[table])
+    if n < 2:
+        return None
+    return " OR ".join(f"(s{i} <> s{j})" for i in range(n) for j in range(i + 1, n))
+
+
 def _preflight() -> None:
-    """Abort before changing anything if a row has no shop to take."""
+    """Abort before changing anything if a row has no shop to take, or its links name two shops
+    (COALESCE would silently pick the first: a payment whose job is shop A's and client is shop
+    B's would become A's). Counts per table only: no ids, no names."""
     bind = op.get_bind()
-    bad = []
+    orphans, mixed = [], []
     for table in SOURCES:
-        own = "t.org_id IS NULL AND " if _has_column(table) else ""
+        own = "t.org_id IS NULL" if _has_column(table) else "1 = 1"
         n = bind.exec_driver_sql(
-            f"SELECT COUNT(*) FROM {table} t WHERE {own}{_derived(table)} IS NULL").scalar() or 0
+            f"SELECT COUNT(*) FROM {table} t WHERE {own} AND {_derived(table)} IS NULL").scalar() or 0
         if n:
-            bad.append(f"{table}: {n} row(s)")
-    if bad:
-        raise RuntimeError(
-            "corg01 aborted, nothing changed: these rows have no shop (none of their links names "
-            "one), so org_id can't be filled:\n  " + "\n  ".join(bad)
-            + "\nLink or delete them, then run the migration again.")
+            orphans.append(f"{table}: {n} row(s)")
+        cond = _disagree(table)
+        if cond:
+            cols = ", ".join(f"{s.replace('{row}', 't')} AS s{i}" for i, s in enumerate(SOURCES[table]))
+            n = bind.exec_driver_sql(
+                f"SELECT COUNT(*) FROM (SELECT {cols} FROM {table} t WHERE {own}) x WHERE {cond}").scalar() or 0
+            if n:
+                mixed.append(f"{table}: {n} row(s)")
+    problems = []
+    if orphans:
+        problems.append("these rows have no shop (none of their links names one), so org_id can't be filled:\n  "
+                        + "\n  ".join(orphans) + "\nLink or delete them.")
+    if mixed:
+        problems.append("these rows link to records of different shops (e.g. a job of one shop and a client of "
+                        "another), so their shop is ambiguous:\n  " + "\n  ".join(mixed)
+                        + "\nList them with scripts/find_cross_shop_rows.py, correct the wrong link (or delete "
+                          "the row).")
+    if problems:
+        raise RuntimeError("corg01 aborted, nothing changed: " + "\n".join(problems)
+                           + "\nThen run the migration again.")
+
+
+def fill_trigger_sql(table: str) -> list[str]:
+    """Postgres: a BEFORE INSERT trigger that gives a row inserted without org_id its parent's shop.
+
+    Code from before this revision (the old containers while the deploy runs, or the previous
+    image after a rollback) inserts these rows without org_id; with the column NOT NULL that would
+    be a 500 on every payment, job line, stock movement... The trigger fills it from the same links
+    as the backfill. A row whose links name no shop still fails (it never invents one). New code
+    always sets org_id itself (backend/db/tenancy), so for it the trigger does nothing."""
+    fn = f"fill_org_id_{table}"
+    return [
+        f"CREATE OR REPLACE FUNCTION {fn}() RETURNS trigger LANGUAGE plpgsql AS $$ BEGIN "
+        f"IF NEW.org_id IS NULL THEN NEW.org_id := {_derived(table, 'NEW')}; END IF; RETURN NEW; END $$",
+        f"DROP TRIGGER IF EXISTS fill_org_id ON {table}",
+        f"CREATE TRIGGER fill_org_id BEFORE INSERT ON {table} FOR EACH ROW EXECUTE FUNCTION {fn}()",
+    ]
+
+
+def drop_trigger_sql(table: str) -> list[str]:
+    return [f"DROP TRIGGER IF EXISTS fill_org_id ON {table}", f"DROP FUNCTION IF EXISTS fill_org_id_{table}()"]
+
+
+def _backfill_pg(bind, table: str) -> int:
+    """Fill org_id in id-ordered batches of BATCH rows, each its own transaction (we are in an
+    autocommit block): only the rows of the current batch are locked, briefly."""
+    done, last = 0, ""
+    while True:
+        hi = bind.execute(sa.text(
+            f"SELECT max(id) FROM (SELECT id FROM {table} WHERE org_id IS NULL AND id > :lo "
+            f"ORDER BY id LIMIT {BATCH}) b"), {"lo": last}).scalar()
+        if hi is None:
+            return done
+        done += bind.execute(sa.text(
+            f"UPDATE {table} AS t SET org_id = {_derived(table)} "
+            f"WHERE t.org_id IS NULL AND t.id > :lo AND t.id <= :hi"), {"lo": last, "hi": hi}).rowcount or 0
+        last = hi
+
+
+def _upgrade_pg(bind) -> None:
+    """Per table, each step committed on its own (no lock held across tables or across the backfill):
+    add the column (nullable, instant) -> install the fill trigger -> backfill in batches ->
+    NOT NULL via a CHECK added NOT VALID and VALIDATEd (reads and writes go on during the scan; SET
+    NOT NULL then reuses it, PG 12+, and the CHECK is dropped) -> FK added NOT VALID, VALIDATEd."""
+    with op.get_context().autocommit_block():
+        for table in SOURCES:
+            op.execute(f"ALTER TABLE {table} ADD COLUMN IF NOT EXISTS org_id VARCHAR")
+            for sql in fill_trigger_sql(table):      # before the backfill: rows the old code adds now are filled
+                op.execute(sql)
+            n = _backfill_pg(bind, table)
+            if n:
+                log.info("corg01: %s %s got their shop from their parent", n, table)
+            insp = sa.inspect(bind)
+            col = next(c for c in insp.get_columns(table) if c["name"] == "org_id")
+            if col["nullable"]:
+                ck = _NOT_NULL_CK.format(table)
+                op.execute(f"ALTER TABLE {table} DROP CONSTRAINT IF EXISTS {ck}")
+                op.execute(f"ALTER TABLE {table} ADD CONSTRAINT {ck} CHECK (org_id IS NOT NULL) NOT VALID")
+                op.execute(f"ALTER TABLE {table} VALIDATE CONSTRAINT {ck}")
+                op.execute(f"ALTER TABLE {table} ALTER COLUMN org_id SET NOT NULL")
+                op.execute(f"ALTER TABLE {table} DROP CONSTRAINT {ck}")
+            if not any(fk["constrained_columns"] == ["org_id"] for fk in insp.get_foreign_keys(table)):
+                op.execute(f"ALTER TABLE {table} ADD CONSTRAINT {_FK.format(table)} "
+                           f"FOREIGN KEY (org_id) REFERENCES organisations (id) NOT VALID")
+                op.execute(f"ALTER TABLE {table} VALIDATE CONSTRAINT {_FK.format(table)}")
+        names = [n for n, _t, _c in INDEXES]
+        invalid = bind.execute(sa.text(
+            "SELECT c.relname FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
+            "WHERE NOT i.indisvalid AND c.relname = ANY(:names)"), {"names": names}).scalars().all()
+        for name in invalid:
+            op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")
+        for name, table, cols in INDEXES:
+            op.execute(f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} ON {table} ({cols})")
 
 
 def upgrade() -> None:
     _preflight()
     bind = op.get_bind()
-    pg = _is_pg()
+    if _is_pg():
+        _upgrade_pg(bind)
+        return
+
     for table in SOURCES:
         if not _has_column(table):
             op.add_column(table, sa.Column("org_id", sa.String(), nullable=True))
-        res = bind.exec_driver_sql(
-            f"UPDATE {table} AS t SET org_id = {_derived(table)} WHERE t.org_id IS NULL" if pg else
-            f"UPDATE {table} SET org_id = {_derived(table).replace('t.', table + '.')} WHERE org_id IS NULL")
+        res = bind.exec_driver_sql(f"UPDATE {table} SET org_id = {_derived(table, table)} WHERE org_id IS NULL")
         if res.rowcount:
             log.info("corg01: %s %s got their shop from their parent", res.rowcount, table)
 
     insp = sa.inspect(bind)
     fk_todo = [t for t in SOURCES
                if not any(fk["constrained_columns"] == ["org_id"] for fk in insp.get_foreign_keys(t))]
-    if pg:
-        for table in SOURCES:
-            op.execute(f"ALTER TABLE {table} ALTER COLUMN org_id SET NOT NULL")
-        for table in fk_todo:
-            op.execute(f"ALTER TABLE {table} ADD CONSTRAINT {_FK.format(table)} "
-                       f"FOREIGN KEY (org_id) REFERENCES organisations (id) NOT VALID")
-        with op.get_context().autocommit_block():
-            for table in fk_todo:
-                op.execute(f"ALTER TABLE {table} VALIDATE CONSTRAINT {_FK.format(table)}")
-            names = [n for n, _t, _c in INDEXES]
-            invalid = bind.execute(sa.text(
-                "SELECT c.relname FROM pg_index i JOIN pg_class c ON c.oid = i.indexrelid "
-                "WHERE NOT i.indisvalid AND c.relname = ANY(:names)"), {"names": names}).scalars().all()
-            for name in invalid:
-                op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")
-            for name, table, cols in INDEXES:
-                op.execute(f"CREATE INDEX CONCURRENTLY IF NOT EXISTS {name} ON {table} ({cols})")
-        return
-
     nullable = {t for t in SOURCES
                 if next(c for c in insp.get_columns(t) if c["name"] == "org_id")["nullable"]}
     for table in SOURCES:
@@ -207,6 +303,8 @@ def downgrade() -> None:
             for name, _table, _cols in reversed(INDEXES):
                 op.execute(f"DROP INDEX CONCURRENTLY IF EXISTS {name}")
         for table in SOURCES:
+            for sql in drop_trigger_sql(table):
+                op.execute(sql)
             op.execute(f"ALTER TABLE {table} DROP COLUMN IF EXISTS org_id")
         return
     for name, _table, _cols in reversed(INDEXES):
