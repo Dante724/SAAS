@@ -713,13 +713,20 @@ async def _rep_labor_cost(db, org, df, dt, **kw):
     billable = sum(e.duration_sec for e in rows if e.billable)
     cost = sum(e.duration_sec / 3600 * (e.cost_rate or 0) for e in rows)
     bill = sum(e.duration_sec / 3600 * (e.billable_rate or 0) for e in rows if e.billable)
-    # Overtime is per person per shop day (RPT-01), the same rule the timesheet pays by.
+    # Overtime is per person per shop day (RPT-01), the same rule the timesheet pays by, on the same
+    # clock payroll counts each person's days on: their branch's zone, else the shop's (N-11; this
+    # used the report location's zone for everyone).
+    from backend.models import Employee
     from backend.routers.timeclock import _overtime_split
-    tz = await shop_tzname(db, org, kw.get("location_id"))
     per_emp: dict = {}
     for e in rows:
         per_emp.setdefault(e.employee_id, []).append(e)
-    ot = sum(_overtime_split(es, tz)[1] for es in per_emp.values())
+    homes = dict((await db.execute(select(Employee.id, Employee.location_id).where(
+        Employee.org_id == org, Employee.id.in_(list(per_emp))))).all()) if per_emp else {}
+    zones: dict = {}
+    for loc in set(homes.values()) | {None}:
+        zones[loc] = await shop_tzname(db, org, loc)
+    ot = sum(_overtime_split(es, zones[homes.get(emp_id)])[1] for emp_id, es in per_emp.items())
     cols = ["Metric", "Value"]
     out = [["Total hours", q2(total / 3600)], ["Billable hours", q2(billable / 3600)],
            ["Overtime hours (>8h/day)", q2(ot)], ["Labor cost", q2(cost)],

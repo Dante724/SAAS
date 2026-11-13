@@ -5704,6 +5704,13 @@ async def delete_line(
             await release_line(db, other.id)
             await db.delete(other)
     await _audit_line(db, current, order_id, line, "order.line_delete")
+    # H2: time billed onto (or attributed to) this line points at it (TimeEntry.order_line_id, a FK
+    # with no ON DELETE): clear it first, so the delete works and the time can be billed again.
+    from sqlalchemy import update as _update
+
+    from backend.models import TimeEntry as _TE
+    await db.execute(_update(_TE).where(_TE.order_line_id == line.id).values(order_line_id=None)
+                     .execution_options(synchronize_session=False))
     await db.delete(line)
     await db.flush()
     if _kit:
@@ -5748,6 +5755,13 @@ async def delete_kit(
             if deducted > 0:
                 await _reverse_fulfillment(db, order, line.ref_id, deducted)
         await _audit_line(db, current, order_id, line, "order.line_delete")     # INV-10
+    # H2: as delete_line, free the time billed onto these lines before they go.
+    from sqlalchemy import update as _update
+
+    from backend.models import TimeEntry as _TE
+    await db.execute(_update(_TE).where(_TE.order_line_id.in_([line.id for line in lines]))
+                     .values(order_line_id=None).execution_options(synchronize_session=False))
+    for line in lines:
         await db.delete(line)
     await db.flush()
     await _recalc_order(db, order)

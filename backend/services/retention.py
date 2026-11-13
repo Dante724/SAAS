@@ -11,7 +11,7 @@ from __future__ import annotations
 import logging
 from datetime import datetime, timedelta
 
-from sqlalchemy import delete, select
+from sqlalchemy import delete, or_, select
 from sqlalchemy.ext.asyncio import AsyncSession
 
 log = logging.getLogger("tekly.retention")
@@ -29,6 +29,12 @@ KINDS = {
     "audit": "Activity log (audit trail)",
 }
 MIN_DAYS = 30          # never shorter: a month of history is needed to answer a customer
+
+# Audit entries that are evidence for money, read by code and not only by people: they are kept
+# whatever the shop's audit retention (N-9). `payroll.attendance_wages` dates when a legacy
+# attendance window was posted; without it payroll falls back to noon on the window's last day and
+# treats shifts that ended in between as paid (an underpayment).
+KEEP_AUDIT_ACTIONS = ("payroll.attendance_wages",)
 MAX_DAYS = 3650
 
 
@@ -71,7 +77,9 @@ def _statements(kind: str, org_id: str, cutoff: datetime) -> list:
             delete(InboxMessage).where(InboxMessage.org_id == org_id, InboxMessage.created_at < cutoff),
         ]
     if kind == "audit":
-        return [delete(AuditLog).where(AuditLog.org_id == org_id, AuditLog.created_at < cutoff)]
+        return [delete(AuditLog).where(AuditLog.org_id == org_id, AuditLog.created_at < cutoff,
+                                       or_(AuditLog.action.is_(None),
+                                           AuditLog.action.notin_(KEEP_AUDIT_ACTIONS)))]
     return []
 
 

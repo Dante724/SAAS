@@ -6,6 +6,8 @@ timer auto-stops the previous (a 'switch'). Stopped entries roll up onto the ord
 (scheduled vs tracked vs billed) and, once a timesheet is approved, post hourly
 wages into the payroll ledger so the existing payroll run picks them up.
 """
+import logging
+import re
 from datetime import date, datetime, timedelta, timezone
 from decimal import Decimal
 from typing import Optional
@@ -47,7 +49,9 @@ def _audit(db, e, action, actor_id, *, field=None, old=None, new=None):
                           new_value=None if new is None else str(new), actor_id=actor_id))
 from backend.services.auth import assert_not_self, get_current_employee, require_perm, record_scope
 from backend.core import paging as _paging
-from backend.services.money import q2, q4
+from backend.services.money import d2, q2, q4
+
+log = logging.getLogger("tekly.timeclock")
 
 router = APIRouter(prefix="/api/timeclock", tags=["timeclock"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -431,7 +435,7 @@ async def _stop_all_running(db: AsyncSession, org_id: str, employee_id: str, new
     others = (await db.execute(select(TimeEntry).where(
         TimeEntry.org_id == org_id, TimeEntry.employee_id == employee_id, TimeEntry.id != newest.id,
         TimeEntry.state == "running", TimeEntry.ended_at.is_(None)))).scalars().all()
-    _stop(newest)
+    await _stop_clipped(db, newest)
     for o in others:
         _stop(o, when=o.started_at, needs_review=True)
     return [newest, *others]
@@ -449,6 +453,22 @@ def _stop(e: TimeEntry, when: Optional[datetime] = None, needs_review: bool = Fa
     e.state = "stopped"
     if needs_review:
         e.needs_review = True
+
+
+async def _stop_clipped(db: AsyncSession, e: TimeEntry) -> None:
+    """Stop a running timer now, or where the person's next entry begins if one was logged inside
+    the time it ran (N-10: a manual entry for a time still ahead of the timer passes the overlap
+    check, and both were then paid). A clipped timer is flagged for review. Call with the employee
+    row locked."""
+    when = now_utc()
+    nxt = (await db.execute(select(func.min(TimeEntry.started_at)).where(
+        TimeEntry.org_id == e.org_id, TimeEntry.employee_id == e.employee_id, TimeEntry.id != e.id,
+        TimeEntry.state != "void", TimeEntry.started_at >= e.started_at,
+        TimeEntry.started_at < when))).scalar()
+    if nxt is not None:
+        _stop(e, when=nxt, needs_review=True)
+    else:
+        _stop(e, when=when)
 
 
 async def _resolve_order(db: AsyncSession, org_id: str, order_id: Optional[str]) -> Optional[Order]:
@@ -521,6 +541,7 @@ async def start_timer(
         if not switch:
             raise HTTPException(409, "You already have a running timer. Stop it or use switch.")
         await _stop_all_running(db, current.org_id, current.id, running)
+    await _assert_free_now(db, current)
     cost, billable = _rates(current)
     # billable/paid labour = a job (order) or a task; break/admin/other are unpaid
     is_labour = bool(data.order_id) or bool(task_id) or data.category == "job"
@@ -545,15 +566,16 @@ async def stop_timer(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
+    await _lock_employee(db, current.id)
     running = await _running_for(db, current.org_id, current.id)
     if not running:
         raise HTTPException(404, "No running timer")
-    _stop(running)
+    await _stop_clipped(db, running)
     await _maybe_emit_stop(db, running)
-    await _apply_labour_billing(db, running)   # optional time→labour billing
+    warn = await _apply_labour_billing(db, running)   # optional time→labour billing
     await db.commit()
     await db.refresh(running)
-    return _ser(running, await _order_no(db, running.order_id), current.name)
+    return _with_warning(_ser(running, await _order_no(db, running.order_id), current.name), warn)
 
 
 @router.post("/entries/{entry_id}/stop")
@@ -571,14 +593,17 @@ async def stop_entry(
         raise HTTPException(404, "Time entry not found")
     if not await _can_manage_emp(db, current, e.employee_id):
         raise HTTPException(403, "Only a manager can stop another technician's timer")
+    await _lock_employee(db, e.employee_id)
+    await db.refresh(e)
     if e.ended_at is not None or e.state != "running":
         raise HTTPException(400, "That timer isn't running")
-    _stop(e)
+    await _stop_clipped(db, e)
     await _maybe_emit_stop(db, e)
-    await _apply_labour_billing(db, e)
+    warn = await _apply_labour_billing(db, e)
     await db.commit()
     await db.refresh(e)
-    return _ser(e, await _order_no(db, e.order_id), (await _emp_map(db, current.org_id)).get(e.employee_id))
+    return _with_warning(_ser(e, await _order_no(db, e.order_id),
+                              (await _emp_map(db, current.org_id)).get(e.employee_id)), warn)
 
 
 class SwitchIn(BaseModel):
@@ -601,6 +626,7 @@ async def switch_timer(
         for e in await _stop_all_running(db, current.org_id, current.id, running):
             await _maybe_emit_stop(db, e)
             await _apply_labour_billing(db, e)    # bill the timer we just stopped
+    await _assert_free_now(db, current)
     cost, billable = _rates(current)
     e = TimeEntry(
         org_id=current.org_id, employee_id=current.id, order_id=data.order_id,
@@ -636,16 +662,32 @@ async def _maybe_emit_stop(db: AsyncSession, e: TimeEntry) -> None:
         pass
 
 
-async def _apply_labour_billing(db: AsyncSession, e: TimeEntry, *, remove: bool = False) -> None:
+def labour_money(seconds, rate, *, ot_seconds=0) -> Decimal:
+    """Money for `seconds` of work at an hourly `rate` (the last `ot_seconds` of them at the overtime
+    multiplier), rounded once, to the cent, from the exact seconds. The one rule for billing tracked
+    time and for paying it (LAB-08: billing rounded the hours to 0.01 h first, so the bill and the
+    wage for the same time differed)."""
+    r = Decimal(str(rate or 0))
+    sec, ot = Decimal(int(seconds or 0)), Decimal(int(ot_seconds or 0))
+    return d2(((sec - ot) * r + ot * r * Decimal(str(OT_MULTIPLIER))) / Decimal(3600))
+
+
+def _with_warning(body: dict, warning: Optional[str]) -> dict:
+    if warning:
+        body["labour_billing_warning"] = warning
+    return body
+
+
+async def _apply_labour_billing(db: AsyncSession, e: TimeEntry, *, remove: bool = False) -> Optional[str]:
     """Optional (org `clock_labour_billing`): turn tracked job time on a work order
     into a priced labour line. Idempotent — the line is keyed to this time entry's
     id, so re-editing time updates the same line instead of stacking new ones.
-    Best-effort: never breaks the timer action if anything goes wrong.
-    """
+    Never breaks the timer action: when the line can't follow the time, the reason is logged and
+    returned (LAB-08: failures were swallowed), and the caller shows it."""
     try:
         async with db.begin_nested():     # a refused invoice change undoes the line change too
             if not e.order_id:
-                return
+                return None
             from backend.models import Order, OrderLine
             line = (await db.execute(select(OrderLine).where(
                 OrderLine.order_id == e.order_id, OrderLine.line_type == "labour",
@@ -654,11 +696,13 @@ async def _apply_labour_billing(db: AsyncSession, e: TimeEntry, *, remove: bool 
             if line:
                 from backend.services.invoice_money import locking_invoice
                 if await locking_invoice(db, line.id):
-                    return       # billed on a sent or paid invoice: the line stays as it was invoiced
-            hours = q2((e.duration_sec or 0) / 3600.0)
+                    # billed on a sent or paid invoice: the line stays as it was invoiced
+                    return "This time is on a sent invoice, so its labour line was not changed"
+            seconds = int(e.duration_sec or 0)
+            hours = q4(seconds / 3600.0)
             enabled = await _clock_labour_billing_on(db, e.org_id)
             # remove the line when: caller asked, entry is void, billing is off, or no time
-            if remove or e.state == "void" or not enabled or hours <= 0 or not e.billable:
+            if remove or e.state == "void" or not enabled or seconds <= 0 or not e.billable:
                 if line:
                     from backend.services.invoice_money import release_line
                     await release_line(db, line.id)   # off any draft invoice that lists it
@@ -667,10 +711,10 @@ async def _apply_labour_billing(db: AsyncSession, e: TimeEntry, *, remove: bool 
                     if order:
                         from backend.routers.orders import _recalc_order
                         await _recalc_order(db, order)
-                return
+                return None
 
             rate = float(e.billable_rate or 0)
-            total = q2(hours * rate)
+            total = labour_money(seconds, rate)
             desc = (e.note or "Labour (tracked time)")
             if line:
                 line.qty = hours
@@ -686,8 +730,11 @@ async def _apply_labour_billing(db: AsyncSession, e: TimeEntry, *, remove: bool 
             if order:
                 from backend.routers.orders import _recalc_order
                 await _recalc_order(db, order)
-    except Exception:
-        pass
+    except Exception as exc:  # noqa: BLE001 — the time change itself must still save
+        log.exception("labour billing failed for time entry %s", e.id)
+        detail = getattr(exc, "detail", None)
+        return f"The labour line could not be updated{': ' + str(detail) if detail else ''}"
+    return None
 
 
 async def _clock_labour_billing_on(db: AsyncSession, org_id: str) -> bool:
@@ -800,6 +847,18 @@ async def _assert_no_overlap(db: AsyncSession, org_id: str, employee_id: str, st
             raise HTTPException(409, "That overlaps an existing time entry")
 
 
+async def _assert_free_now(db: AsyncSession, current: Employee) -> None:
+    """N-10: a timer can't start inside time already logged (a manual entry that runs past now).
+    Call with the employee row locked, after any running timer was stopped."""
+    now = now_utc()
+    hit = (await db.execute(select(TimeEntry.id).where(
+        TimeEntry.org_id == current.org_id, TimeEntry.employee_id == current.id,
+        TimeEntry.state != "void", TimeEntry.ended_at.isnot(None),
+        TimeEntry.started_at <= now, TimeEntry.ended_at > now).limit(1))).first()
+    if hit:
+        raise HTTPException(409, "That overlaps an existing time entry")
+
+
 class ManualIn(BaseModel):
     employee_id: Optional[str] = None
     order_id: Optional[str] = None
@@ -850,10 +909,10 @@ async def create_manual(
     db.add(e)
     await db.flush()
     _audit(db, e, "create", current.id, new=f"{start.isoformat()}→{end.isoformat()}")  # 144ay
-    await _apply_labour_billing(db, e)   # a manual order-linked entry bills too
+    warn = await _apply_labour_billing(db, e)   # a manual order-linked entry bills too
     await db.commit()
     await db.refresh(e)
-    return _ser(e, await _order_no(db, e.order_id), emp.name)
+    return _with_warning(_ser(e, await _order_no(db, e.order_id), emp.name), warn)
 
 
 class EntryPatch(BaseModel):
@@ -876,10 +935,16 @@ async def edit_entry(
         raise HTTPException(404, "Entry not found")
     if not await _can_manage_emp(db, current, e.employee_id):
         raise HTTPException(403, "Not allowed")
+    # N-3: lock, then read the entry fresh, so an approval that just ran is seen (and an approval
+    # waits for this edit) instead of the edit re-timing a paid entry.
+    await _lock_employee(db, e.employee_id)
+    await db.refresh(e)
     if e.state == "approved":
         raise HTTPException(409, "Entry is approved and locked; reopen it first")
     if e.state == "running":
         raise HTTPException(409, "Stop the timer before editing")
+    if e.state == "void":
+        raise HTTPException(409, "This entry was voided")
     # 144ay — record each field change to the append-only audit trail (old → new).
     times_changed = False
     if data.started_at:
@@ -913,10 +978,10 @@ async def edit_entry(
             e.needs_review = True
     if e.ended_at:
         e.duration_sec = int((e.ended_at - e.started_at).total_seconds())
-    await _apply_labour_billing(db, e)   # reprice the labour line if time changed
+    warn = await _apply_labour_billing(db, e)   # reprice the labour line if time changed
     await db.commit()
     await db.refresh(e)
-    return _ser(e, await _order_no(db, e.order_id), None)
+    return _with_warning(_ser(e, await _order_no(db, e.order_id), None), warn)
 
 
 @router.delete("/entries/{eid}")
@@ -931,13 +996,17 @@ async def void_entry(
         raise HTTPException(404, "Entry not found")
     if not await _can_manage_emp(db, current, e.employee_id):
         raise HTTPException(403, "Not allowed")
+    await _lock_employee(db, e.employee_id)      # N-3: as edit_entry
+    await db.refresh(e)
     if e.state == "approved":
         raise HTTPException(409, "Approved entry is locked; reopen it first")
+    if e.state == "void":
+        return {"ok": True}
     _audit(db, e, "void", current.id, field="state", old=e.state, new="void")
     e.state = "void"
-    await _apply_labour_billing(db, e, remove=True)   # drop any labour line it created
+    warn = await _apply_labour_billing(db, e, remove=True)   # drop any labour line it created
     await db.commit()
-    return {"ok": True}
+    return _with_warning({"ok": True}, warn)
 
 
 @router.post("/entries/{eid}/approve")
@@ -1018,14 +1087,25 @@ async def reopen_entry(
     # append-only), and re-prices the rest of that day, whose overtime may move. Approving the
     # corrected entry then pays it once.
     tz = await _emp_tz(db, current.org_id, e.employee_id)
-    reversed_ = await _reverse_legacy_wage(db, e, tz)
+    own_legacy, others_legacy, moved = await _reverse_legacy_wage(db, e, tz)
     _audit(db, e, "reopen", current.id, field="state", old="approved", new="stopped")
     e.state = "stopped"
     e.approved_by_id = None
     await db.flush()
-    amt, _ = await _sync_day_wages(db, current.org_id, e.employee_id, _shop_day(e, tz), tz)
+    # re-price the day(s): the reopened entry's wage comes back, the others' overtime moves, and
+    # legacy-paid entries whose shares were taken off their old row are paid per entry (N-5)
+    deltas: dict = {}
+    posted = Decimal("0")
+    for day in sorted({_shop_day(x, tz) for x in [e, *moved]}):
+        amt, _ = await _sync_day_wages(db, current.org_id, e.employee_id, day, tz,
+                                       fresh=frozenset(x.id for x in moved), deltas=deltas)
+        posted += amt
     await db.commit()
-    return {"ok": True, "state": "stopped", "wage_reversed": float(reversed_ - amt)}
+    # N-11: wage_reversed is this entry's wage taken back; day_repriced what the rest of the day
+    # moved by (it used to be folded into wage_reversed).
+    own = own_legacy - deltas.get(e.id, Decimal("0"))
+    change = posted - own_legacy - others_legacy
+    return {"ok": True, "state": "stopped", "wage_reversed": float(own), "day_repriced": float(change + own)}
 
 
 class DisputeIn(BaseModel):
@@ -1229,17 +1309,18 @@ def _overtime_split(entries: list[TimeEntry], tz: Optional[str] = None) -> tuple
 
 def _day_shares(entries: list[TimeEntry]) -> dict[str, Decimal]:
     """Each entry's pay within one day: entries in time order, each at its own snapshotted rate;
-    hours past the daily threshold at the overtime multiplier. The shares add up to the day's pay."""
-    hours_so_far = 0.0
+    seconds past the daily threshold at the overtime multiplier, rounded once per entry from the
+    exact seconds (labour_money, the rule billing uses too). The shares add up to the day's pay."""
+    secs_so_far = 0
+    limit = int(OT_DAILY_THRESHOLD_H * 3600)
     out: dict[str, Decimal] = {}
     for e in sorted(entries, key=lambda x: (x.started_at, x.id)):
         if e.state == "void" or not e.duration_sec:
             continue
-        h = e.duration_sec / 3600
-        straight = max(0.0, min(h, OT_DAILY_THRESHOLD_H - hours_so_far))
-        rate = e.cost_rate or 0
-        out[e.id] = Decimal(str(q2(straight * rate + (h - straight) * rate * OT_MULTIPLIER)))
-        hours_so_far += h
+        sec = int(e.duration_sec)
+        straight = max(0, min(sec, limit - secs_so_far))
+        out[e.id] = labour_money(sec, e.cost_rate or 0, ot_seconds=sec - straight)
+        secs_so_far += sec
     return out
 
 
@@ -1249,21 +1330,25 @@ def _wage_key(entry_id: str) -> str:
 
 
 async def _sync_day_wages(db: AsyncSession, org_id: str, employee_id: str, day: date, tz: Optional[str],
-                          *, fresh: frozenset = frozenset()) -> tuple[Decimal, int]:
+                          *, fresh: frozenset = frozenset(),
+                          deltas: Optional[dict] = None) -> tuple[Decimal, int]:
     """Make the wage ledger for one person's shop day match what their approved entries earn.
 
     Wages are kept per time entry: every ledger row for an entry carries the accrual key
     `hourly:<entry>`, so the group's sum is what that entry has been paid. An approved entry should
-    hold its share of the day (_day_shares, which places overtime); a reopened one nothing. The
-    difference is posted as a new row, never by changing old ones (the ledger is append-only), so a
-    reopen reverses the wage and approving again pays it once. A first payment is dated to the day
-    worked; a correction to today, so a correction to a period already run reaches the next run.
-    Entries approved before wages were kept per entry have no rows and are left alone unless they are
-    being approved now (`fresh`). Call with the employee row locked. Returns (amount, rows) posted."""
+    hold its share of the day (_day_shares, which places overtime); a reopened or voided one nothing
+    (N-3: a voided entry that was paid is reversed here too). The difference is posted as a new row,
+    never by changing old ones (the ledger is append-only), so a reopen reverses the wage and
+    approving again pays it once. A first payment is dated to the day worked unless an accrued run
+    already covers that day (N-4: open_wage_day dates it to today then); a correction always to
+    today, so a correction to a period already run reaches the next run. Entries approved before
+    wages were kept per entry have no rows and are left alone unless they are being approved now
+    (`fresh`). Call with the employee row locked. Returns (amount, rows) posted; `deltas`, when
+    given, collects the amount posted per entry id."""
     from backend.models import EmployeeBalanceLedger as L
-    from backend.services.payroll import CommissionEngine, _money
+    from backend.services.payroll import CommissionEngine, _money, open_wage_day
     entries = (await db.execute(select(TimeEntry).where(
-        TimeEntry.org_id == org_id, TimeEntry.employee_id == employee_id, TimeEntry.state != "void",
+        TimeEntry.org_id == org_id, TimeEntry.employee_id == employee_id,
         TimeEntry.started_at >= day_start_utc(day, tz),
         TimeEntry.started_at < day_end_utc(day, tz)))).scalars().all()
     shares = _day_shares([e for e in entries if e.state == "approved"])
@@ -1278,72 +1363,146 @@ async def _sync_day_wages(db: AsyncSession, org_id: str, employee_id: str, day: 
     for e in sorted(entries, key=lambda x: (x.started_at, x.id)):
         key = keys[e.id]
         net, n = groups.get(key, (Decimal("0"), 0))
-        if n == 0 and e.id not in fresh:
+        if n == 0 and (e.id not in fresh or e.state == "void"):
             continue
         delta = _money(shares.get(e.id, Decimal("0")) - net)
         if delta == 0:
             continue
-        on = day if n == 0 else today
+        on = await open_wage_day(db, org_id, employee_id, day, today) if n == 0 else today
+        why = ("entry voided" if e.state == "void" else
+               "entry reopened" if e.state != "approved" else "day recalculated")
         note = (f"Hourly wages {day} ({q2((e.duration_sec or 0) / 3600)}h)" if n == 0 else
-                f"Hourly wages {day}: " + ("entry reopened" if e.state != "approved" else "day recalculated"))
+                f"Hourly wages {day}: {why}")
         if await eng._post(employee_id=employee_id, entry_type="hourly_wage", amount=delta, event=None,
                            rule_id=None, ref_type="time_entry", ref_id=f"{e.id}:{on}:{on}",
                            idempotency_key=key if n == 0 else f"{key}@{n}", accrual_key=key, note=note):
             amount += delta
             rows += 1
+            if deltas is not None:
+                deltas[e.id] = deltas.get(e.id, Decimal("0")) + delta
     return amount, rows
 
 
-async def _reverse_legacy_wage(db: AsyncSession, e: TimeEntry, tz: Optional[str]) -> Decimal:
-    """Before wages were kept per entry, a timesheet approval paid one row per employee and UTC day
-    (ref_id `<employee>:<day>:<day>`, no accrual key). Reopening an entry that such a row paid takes
-    its share off that day's pay, so approving it again pays the corrected wage once, not on top.
-    Never takes more than is still standing for that day. Returns the amount reversed (positive).
+_ISO_DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
 
-    Only an entry the row actually paid is reversed. Under the old code the two ways to approve left
-    different traces: approve_entry wrote an "approve" row to the entry's audit trail (144ay) and
-    paid nothing (LAB-03), while a timesheet approval wrote no per-entry audit row and paid the day.
-    So an "approve" audit row since the entry's last reopen means it was approved on its own and the
-    day's row paid only the other entries: nothing is reversed, and approving it again pays it for
-    the first time (which also fixes that old underpay)."""
-    from sqlalchemy import and_, or_
 
+async def _legacy_paid(db: AsyncSession, org_id: str, entries: list[TimeEntry]) -> list[TimeEntry]:
+    """The approved entries among `entries` whose pay sits in a legacy timesheet row: no per-entry
+    wage group, and not approved on their own since their last reopen.
+
+    Under the old code the two ways to approve left different traces: approve_entry wrote an
+    "approve" row to the entry's audit trail (144ay) and paid nothing (LAB-03), while a timesheet
+    approval wrote no per-entry audit row and paid the day (or window). So an "approve" audit row
+    since the entry's last reopen means no timesheet row paid it."""
     from backend.models import EmployeeBalanceLedger as L
-    from backend.services.payroll import CommissionEngine, _money
-    if (await db.execute(select(L.id).where(
-            L.org_id == e.org_id, L.accrual_key == _wage_key(e.id)).limit(1))).first():
-        return Decimal("0")          # paid per entry: _sync_day_wages reverses it
-    trail = (await db.execute(select(TimeEntryAudit.action).where(
-        TimeEntryAudit.org_id == e.org_id, TimeEntryAudit.time_entry_id == e.id,
-        TimeEntryAudit.action.in_(("approve", "reopen")))
-        .order_by(TimeEntryAudit.at, TimeEntryAudit.id))).scalars().all()
-    since_reopen = trail[len(trail) - trail[::-1].index("reopen"):] if "reopen" in trail else trail
-    if "approve" in since_reopen:
-        return Decimal("0")          # approved on its own: no timesheet row paid it
+    cands = [e for e in entries if e.state == "approved"]
+    if not cands:
+        return []
+    keyed = set((await db.execute(select(L.accrual_key).where(
+        L.org_id == org_id, L.accrual_key.in_([_wage_key(e.id) for e in cands])))).scalars().all())
+    trails: dict = {}
+    for eid, action in (await db.execute(select(TimeEntryAudit.time_entry_id, TimeEntryAudit.action).where(
+            TimeEntryAudit.org_id == org_id, TimeEntryAudit.time_entry_id.in_([e.id for e in cands]),
+            TimeEntryAudit.action.in_(("approve", "reopen")))
+            .order_by(TimeEntryAudit.at, TimeEntryAudit.id))).all():
+        trails.setdefault(eid, []).append(action)
+    out = []
+    for e in cands:
+        if _wage_key(e.id) in keyed:
+            continue                 # paid per entry: _sync_day_wages handles it
+        trail = trails.get(e.id, [])
+        since = trail[len(trail) - trail[::-1].index("reopen"):] if "reopen" in trail else trail
+        if "approve" not in since:
+            out.append(e)
+    return out
+
+
+async def _legacy_row_for(db: AsyncSession, e: TimeEntry) -> Optional[tuple[str, Decimal]]:
+    """(reversal accrual key, amount still standing) of the legacy timesheet row that paid entry `e`,
+    or None. Two formats, both `ref_type='timesheet'` with no accrual key:
+      - before 2026-10-19 (af1aaaff) one row per approved window, ref_id `<emp>:<from>:<to>`;
+      - after it, one row per employee and UTC day, ref_id `<emp>:<day>:<day>`.
+    A row covers the entry when its UTC start day falls inside the row's dates. What is still standing
+    is the row less the reversals already posted against it (keyed per window, so several entries'
+    reversals together never take more than the row paid). A one-day row wins over a window, then the
+    narrowest window, then the oldest row with something left."""
+    from backend.models import EmployeeBalanceLedger as L
+    from backend.services.payroll import _money
+    emp, uday = e.employee_id, e.started_at.date()
+    windows: dict = {}
+    for ref, amount, created in (await db.execute(select(L.ref_id, L.amount, L.created_at).where(
+            L.org_id == e.org_id, L.employee_id == emp, L.entry_type == "hourly_wage",
+            L.ref_type == "timesheet", L.accrual_key.is_(None), L.ref_id.like(f"{emp}:%")))).all():
+        days = _ISO_DAY.findall(ref[len(emp) + 1:])
+        if len(days) != 2:
+            continue
+        try:
+            a, b = date.fromisoformat(days[0]), date.fromisoformat(days[1])
+        except ValueError:
+            continue
+        if not a <= uday <= b:
+            continue
+        w = windows.setdefault((a, b), [Decimal("0"), created])
+        w[0] += _money(amount)
+        if created and (w[1] is None or created < w[1]):
+            w[1] = created
+    if not windows:
+        return None
+    keys = {ab: L.normalize_key(f"hourly-legacy:{emp}:{ab[0]}" if ab[0] == ab[1]
+                                else f"hourly-legacy:{emp}:{ab[0]}:{ab[1]}") for ab in windows}
+    taken = {k: _money(v) for k, v in (await db.execute(
+        select(L.accrual_key, func.sum(L.amount)).where(
+            L.org_id == e.org_id, L.accrual_key.in_(list(keys.values()))).group_by(L.accrual_key))).all()}
+    order = sorted(windows, key=lambda ab: ((ab[1] - ab[0]).days, windows[ab][1] or datetime.min))
+    for ab in order:
+        standing = _money(windows[ab][0] + taken.get(keys[ab], Decimal("0")))
+        if standing > 0:
+            return keys[ab], standing
+    return None
+
+
+async def _reverse_legacy_wage(db: AsyncSession, e: TimeEntry,
+                               tz: Optional[str]) -> tuple[Decimal, Decimal, list[TimeEntry]]:
+    """Reopening an entry whose wage sits in a legacy timesheet row (see _legacy_row_for): take its
+    share off that row with a new reversing row (append-only), so approving it again pays the
+    corrected wage once, not on top (H3: window rows were not recognised, and re-approval paid
+    twice). Never takes more than is still standing on that row.
+
+    Removing an entry moves the day's overtime: the later legacy entries of that UTC day earn less
+    (N-5). When the row still holds all of their old shares, those are taken off too and the entries
+    are handed back to be paid per entry at their new shares (the caller syncs them as `fresh`), so
+    from then on they are re-priced like any other entry. Returns (this entry's share reversed, the
+    other entries' shares reversed, those entries)."""
+    from backend.services.payroll import CommissionEngine
+    zero = (Decimal("0"), Decimal("0"), [])
+    if not await _legacy_paid(db, e.org_id, [e]):
+        return zero
+    found = await _legacy_row_for(db, e)
+    if not found:
+        return zero                  # never paid by a timesheet row: nothing to take back
+    lkey, standing = found
     uday = e.started_at.date()
-    lkey = L.normalize_key(f"hourly-legacy:{e.employee_id}:{uday}")
-    standing = _money((await db.execute(select(func.coalesce(func.sum(L.amount), 0)).where(
-        L.org_id == e.org_id, L.employee_id == e.employee_id, L.entry_type == "hourly_wage",
-        or_(and_(L.ref_type == "timesheet", L.ref_id == f"{e.employee_id}:{uday}:{uday}",
-                 L.accrual_key.is_(None)),
-            L.accrual_key == lkey)))).scalar())
-    if standing <= 0:
-        return Decimal("0")          # never paid (approved on its own before LAB-03): nothing to take back
     lo = datetime.combine(uday, datetime.min.time())
     same_day = (await db.execute(select(TimeEntry).where(
         TimeEntry.org_id == e.org_id, TimeEntry.employee_id == e.employee_id,
         TimeEntry.state == "approved", TimeEntry.started_at >= lo,
         TimeEntry.started_at < lo + timedelta(days=1)))).scalars().all()
-    amt = min(_day_shares(same_day).get(e.id, Decimal("0")), standing)
-    if amt <= 0:
-        return Decimal("0")
+    shares = _day_shares(same_day)
+    own = min(shares.get(e.id, Decimal("0")), standing)
+    if own <= 0:
+        return zero
+    siblings = [s for s in await _legacy_paid(db, e.org_id, [s for s in same_day if s.id != e.id])
+                if shares.get(s.id, Decimal("0")) > 0]
+    others = sum((shares[s.id] for s in siblings), Decimal("0"))
+    if not siblings or own + others > standing:
+        siblings, others = [], Decimal("0")     # the row can't hold them: reverse this entry only
     today = today_in(tz)
     posted = await CommissionEngine(db, e.org_id)._post(
-        employee_id=e.employee_id, entry_type="hourly_wage", amount=-amt, event=None, rule_id=None,
-        ref_type="timesheet", ref_id=f"{e.employee_id}:{today}:{today}",
+        employee_id=e.employee_id, entry_type="hourly_wage", amount=-(own + others), event=None,
+        rule_id=None, ref_type="timesheet", ref_id=f"{e.employee_id}:{today}:{today}",
         idempotency_key=f"hourly-legacy-reopen:{e.id}", accrual_key=lkey,
-        note=f"Hourly wages {uday}: entry reopened")
-    return amt if posted else Decimal("0")
+        note=f"Hourly wages {uday}: entry reopened" + (" (day re-priced)" if siblings else ""))
+    return (own, others, siblings) if posted else zero
 
 
 @router.get("/timesheet")
