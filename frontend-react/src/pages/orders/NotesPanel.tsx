@@ -112,7 +112,7 @@ export default function NotesPanel({ orderId, onFlash }: { orderId: string; onFl
                   : <img src={it.media_data!} alt={it.media_name || "photo"} className="mt-1.5 w-20 h-20 rounded-lg object-cover border border-slate-200" />)
                 : it.media_url
                   // The file is fetched with the session (PERF-05: the list no longer carries its bytes).
-                  ? <button type="button" onClick={() => openAuthedDoc(it.media_url!.replace(/^\/api/, "")).catch(() => { /* the row stays */ })} className="mt-1 inline-flex items-center gap-1 text-xs text-primary font-semibold hover:underline break-all text-left"><M n="attach_file" c="text-[14px]" />{it.media_name || "File"}</button>
+                  ? <button type="button" onClick={() => openAuthedDoc(it.media_url!.replace(/^\/api/, "")).catch(() => { /* the row stays */ })} className="mt-1 inline-flex items-center gap-1 text-xs text-primary font-semibold hover:underline break-all text-left"><M n="attach_file" c="text-sm" />{it.media_name || "File"}</button>
                   : <a href={it.media_data || undefined} download={it.media_name || "file"} className="mt-1 inline-flex items-center gap-1 text-xs text-primary font-semibold hover:underline break-all"><M n="attach_file" c="text-[14px]" />{it.media_name || "File"}</a>)}
             </div>
             <VisibilityToggle compact value={it.visibility} disabled={!mayEdit(it)} onChange={(v) => flip(it, v)} />

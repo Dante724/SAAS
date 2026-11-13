@@ -74,11 +74,15 @@ async def two_shops(client):
 class _MapWalks:
     """Counts full walks of a session's identity map (values/items/keys/iteration)."""
 
-    def __init__(self, monkeypatch):
-        from sqlalchemy.orm.identity import WeakInstanceDict
+    def __init__(self, monkeypatch, session):
+        # the identity map's class moved between SQLAlchemy releases (2.0: WeakInstanceDict);
+        # spy on whatever class this session actually uses
+        WeakInstanceDict = type(session.identity_map)
         self.n = 0
         for name in ("values", "items", "keys", "__iter__", "all_states"):
-            real = getattr(WeakInstanceDict, name)
+            real = getattr(WeakInstanceDict, name, None)
+            if real is None:
+                continue
 
             def spy(self_, *a, _real=real, **kw):
                 self.n += 1
@@ -98,7 +102,7 @@ async def test_flush_guard_does_not_walk_the_identity_map(db, two_shops, monkeyp
     db.sync_session.info["tenant_org"] = A["org"]
     db.sync_session.info.pop("tenant_known", None)
     order.client_id = bulk[0].id                        # a real FK change: the guard has work to do
-    walks = _MapWalks(monkeypatch)
+    walks = _MapWalks(monkeypatch, db.sync_session)
     try:
         await db.flush()
         assert walks.n == 0, f"identity map walked {walks.n} time(s) on one flush"
