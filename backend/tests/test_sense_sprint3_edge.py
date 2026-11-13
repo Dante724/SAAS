@@ -265,13 +265,19 @@ async def test_tenant_isolation_with_shared_employee_ids_in_events(client, db):
     ana, ben = await _team(client, H, n=2)
     for _ in range(4):
         await _line(db, org_a, by=ana, disc=30)
+    await db.commit()
+    # junk the audit feared (ben's id on another shop's line): the database refuses it now (DB-03)
+    from sqlalchemy.exc import IntegrityError
+    with pytest.raises(IntegrityError):
+        async with db.begin_nested():
+            await _line(db, org_b, by=ben, disc=30, legacy=True)
+    b_owner = (await client.get("/api/auth/me", headers=HB)).json()["id"]
     for _ in range(4):
-        await _line(db, org_b, by=ben, disc=30, legacy=True)   # junk row: ben's id under another shop
+        await _line(db, org_b, by=b_owner, disc=30, legacy=True)   # shop B's own big discounts
     await db.commit()
     res = await _wd(db, org_a)
     f = _kinds(res, "big_discounts")
     assert ana in f and f[ana]["others_median"] == 0 and ben not in f
-    b_owner = (await client.get("/api/auth/me", headers=HB)).json()["id"]
     assert b_owner not in {r["employee_id"] for r in res["scorecard"]}     # no other shop's people
 
 

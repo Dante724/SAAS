@@ -86,7 +86,9 @@ async def test_every_tenant_table_has_a_non_null_indexed_org_id():
     for t in CHILD_TABLES:
         col = Base.metadata.tables[t].c.org_id
         assert not col.nullable, t
-        assert [fk.column.table.name for fk in col.foreign_keys] == ["organisations"], t
+        # its own FK is to organisations; (org_id, x_id) keys to parents are DB-03's (dbi01)
+        assert [fk.column.table.name for fk in col.foreign_keys if len(fk.constraint.columns) == 1] \
+            == ["organisations"], t
         assert any(ix.columns.keys()[0] == "org_id" for ix in col.table.indexes), t
         assert issubclass(by_table[t], OrgScoped), t
         assert t in ORG_PARENTS, t

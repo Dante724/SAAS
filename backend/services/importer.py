@@ -1211,6 +1211,11 @@ async def undo(db, current, batch: ImportBatch) -> dict:
             kept_categories += 1
             continue
         if t == "parts":
+            # a unit's passport no longer cascades with it (audit DB-12): the undo of the import that
+            # created this product removes the units' events explicitly, before the units
+            from backend.models import SerialEvent
+            await db.execute(delete(SerialEvent).where(SerialEvent.item_id.in_(
+                select(SerializedItem.id).where(SerializedItem.part_id == i))))
             for m in (SerializedItem, StockLevel, StockMovement, StockItemBatch):   # units before their layers
                 await db.execute(delete(m).where(m.part_id == i))
         await db.execute(delete(models[t]).where(models[t].id == i))
