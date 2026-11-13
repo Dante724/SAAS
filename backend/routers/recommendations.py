@@ -10,8 +10,9 @@ from typing import Optional
 
 from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
-from sqlalchemy import select, update
+from sqlalchemy import inspect, select, update
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from backend.db.database import get_db
 from backend.models import Employee, Order, OrderLine, Organisation, Recommendation
@@ -64,7 +65,14 @@ async def _check_item(db: AsyncSession, org_id: str, order_id: str, item_id: Opt
     return item_id
 
 
-def serialize_rec(r: Recommendation) -> dict:
+def _media_url(r: Recommendation, has_media: Optional[bool]) -> Optional[str]:
+    """PERF-05: the photo is loaded from this URL with the staff session, never sent inline."""
+    if has_media is None:          # read only what is loaded (the list defers the column)
+        has_media = bool(inspect(r).dict.get("media_data"))
+    return f"/api/orders/{r.order_id}/recommendations/{r.id}/media" if has_media else None
+
+
+def serialize_rec(r: Recommendation, has_media: Optional[bool] = None) -> dict:
     return {
         "id": r.id,
         "order_id": r.order_id,
@@ -75,7 +83,8 @@ def serialize_rec(r: Recommendation) -> dict:
         "qty": r.qty,
         "unit_price": r.unit_price,
         "line_total": q2((r.qty or 0) * (r.unit_price or 0)),
-        "media_data": r.media_data,
+        "media_data": None,
+        "media_url": _media_url(r, has_media),
         "status": r.status,
         "urgency": r.urgency,
         "decline_reason": r.decline_reason,
@@ -115,10 +124,45 @@ async def list_recommendations(
     current: Employee = Depends(get_current_employee),
 ):
     await _order(db, current.org_id, order_id)
-    rows = (await db.execute(select(Recommendation).where(
-        Recommendation.order_id == order_id, Recommendation.org_id == current.org_id)
-        .order_by(Recommendation.created_at))).scalars().all()
-    return {"items": [serialize_rec(r) for r in rows]}
+    has_media = Recommendation.media_data.is_not(None)
+    rows = (await db.execute(select(Recommendation, has_media).options(defer(Recommendation.media_data))
+                             .where(Recommendation.order_id == order_id,
+                                    Recommendation.org_id == current.org_id)
+                             .order_by(Recommendation.created_at))).all()
+    return {"items": [serialize_rec(r, bool(m)) for r, m in rows]}
+
+
+@router.get("/{order_id}/recommendations/{rec_id}/media")
+async def recommendation_media(
+    order_id: str,
+    rec_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """A recommendation's photo for the staff app (PERF-05). Stored in the media store, or for a
+    row from before PERF-06 (until the backfill moves it) inline."""
+    from fastapi import Response
+
+    from backend.routers.media import MEDIA_CACHE, safe_media_response
+    await _order(db, current.org_id, order_id)
+    r = await _rec(db, current.org_id, order_id, rec_id)
+    got = await _media.load_value(db, current.org_id, r.media_data)
+    if not got:
+        raise HTTPException(404, "Media not found")
+    raw, mime = got
+    kw = safe_media_response(raw, mime or "application/octet-stream", None)
+    kw["headers"]["Cache-Control"] = MEDIA_CACHE
+    return Response(content=raw, **kw)
+
+
+async def _stored_photo(db: AsyncSession, org_id: str, payload: Optional[str]) -> Optional[str]:
+    """PERF-06: a new photo goes through the media store; the column keeps "media:<id>"."""
+    if not payload:
+        return None
+    try:
+        return await _media.store_ref(db, org_id, payload)
+    except ValueError:
+        raise HTTPException(413, "Photo too large")
 
 
 @router.post("/{order_id}/recommendations", status_code=201)
@@ -142,7 +186,7 @@ async def add_recommendation(
         org_id=current.org_id, order_id=order_id, title=data.title.strip(),
         note=data.note, kind=data.kind, ref_id=data.ref_id,
         qty=data.qty or 1.0, unit_price=data.unit_price or 0.0,
-        media_data=data.media_data, status="draft", urgency=data.urgency or None,
+        media_data=await _stored_photo(db, current.org_id, data.media_data), status="draft", urgency=data.urgency or None,
         order_item_id=await _check_item(db, current.org_id, order_id, data.order_item_id),
         author_id=current.id, author_name=current.name)
     db.add(r)
@@ -173,6 +217,10 @@ async def update_recommendation(
             raise HTTPException(422, _URGENCY_MSG)
     if "order_item_id" in fields:
         fields["order_item_id"] = await _check_item(db, current.org_id, order_id, fields["order_item_id"])
+    if "media_data" in fields:
+        old = r.media_data
+        fields["media_data"] = await _stored_photo(db, current.org_id, fields["media_data"])
+        await _media.erase_refs(db, current.org_id, [old])      # the replaced photo's bytes go
     for k, v in fields.items():
         setattr(r, k, v)
     await db.commit()
@@ -266,6 +314,7 @@ async def delete_recommendation(
         # The approved work is already on the job (and maybe invoiced); deleting the
         # recommendation would leave that line with no record of who agreed to it.
         raise HTTPException(409, "The customer already approved this. Remove the line from the job instead.")
+    await _media.erase_refs(db, current.org_id, [r.media_data])
     await db.delete(r)
     await db.commit()
 

@@ -263,6 +263,11 @@ async def _erase_media(db, org_id: str, client_id: str) -> None:
         await db.execute(update(DocumentSignature).where(
             DocumentSignature.org_id == org_id, DocumentSignature.order_id.in_(order_ids))
             .values(signature_png=None, signer_name=None, signer_ip=None, user_agent=None))
+        # PERF-06: a recommendation photo is a "media:<id>" reference to a stored blob
+        refs = (await db.execute(select(Recommendation.media_data).where(
+            Recommendation.org_id == org_id, Recommendation.order_id.in_(order_ids),
+            Recommendation.media_data.startswith(media_svc.REF_PREFIX)))).scalars().all()
+        blob_ids.update(b for b in (media_svc.ref_id(v) for v in refs) if b)
         await db.execute(update(Recommendation).where(
             Recommendation.org_id == org_id, Recommendation.order_id.in_(order_ids))
             .values(media_data=None))

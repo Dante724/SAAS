@@ -15,8 +15,9 @@ async def _order(client, tenant):
 
 
 @pytest.mark.asyncio
-async def test_db_backend_keeps_inline(client, tenant, db, monkeypatch):
-    """Default backend=db → feed media stays inline, no blob pointer (legacy)."""
+async def test_db_backend_goes_through_the_store(client, tenant, db, monkeypatch):
+    """Default backend=db → since PERF-06 the attachment is still a blob (kept in media_blobs),
+    and the feed sends its URL, never the bytes (PERF-05)."""
     from backend.config import settings
     monkeypatch.setattr(settings, "MEDIA_BACKEND", "db")
     oid = await _order(client, tenant)
@@ -25,7 +26,9 @@ async def test_db_backend_keeps_inline(client, tenant, db, monkeypatch):
     assert r.status_code in (200, 201)
     feed = (await client.get(f"/api/feed/order/{oid}", headers=tenant)).json()["items"]
     photo = next(i for i in feed if i["item_type"] == "photo")
-    assert photo["media_data"] is not None and photo["media_url"] is None
+    assert photo["media_data"] is None and photo["media_url"].startswith("/api/media/")
+    got = await client.get(photo["media_url"], headers=tenant)
+    assert got.status_code == 200 and got.content == base64.b64decode(PNG)
 
 
 @pytest.mark.asyncio

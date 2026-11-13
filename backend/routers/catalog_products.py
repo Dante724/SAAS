@@ -446,6 +446,20 @@ def _make_thumb(data_url: str) -> Optional[str]:
         return None
 
 
+# When PIL can't read a photo (a format or variant it lacks, a truncated file) the browser often
+# still can, so the list sends the photo itself, up to this size; past it, a plain grey tile, so
+# the row still shows that the product has a photo (the product view has the full one).
+THUMB_FALLBACK_MAX = 160_000      # characters of data URL (~120 KB)
+THUMB_PLACEHOLDER = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4"
+                     "nGN49OIDAAVqAru/zcVKAAAAAElFTkSuQmCC")          # 1x1 slate-200 PNG
+
+
+def _thumb_fallback(data_url: Optional[str]) -> Optional[str]:
+    if not data_url:
+        return None
+    return data_url if len(data_url) <= THUMB_FALLBACK_MAX else THUMB_PLACEHOLDER
+
+
 async def _thumbnails(db, ids: list) -> dict:
     """{part id: thumbnail} for the products that have a photo. The full photos are read only for
     rows whose photo changed since the last list (keyed by length + a sample of the data)."""
@@ -461,7 +475,8 @@ async def _thumbnails(db, ids: list) -> dict:
         photos = (await db.execute(select(Part.id, Part.image_data).where(Part.id.in_(stale)))).all()
         # N-6: decoding and resizing a page of full photos (PIL) is CPU work: on a cold cache (after
         # a deploy, per worker) it blocked the event loop for every shop. It runs on a worker thread.
-        made = await asyncio.to_thread(lambda: [(pid, _make_thumb(data or "")) for pid, data in photos])
+        made = await asyncio.to_thread(lambda: [(pid, _make_thumb(data or "") or _thumb_fallback(data))
+                                                for pid, data in photos])
         for pid, thumb in made:
             _THUMBS[pid] = (sig[pid], thumb)
     return {pid: _THUMBS[pid][1] for pid in sig}
