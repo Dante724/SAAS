@@ -18,7 +18,7 @@ and, finally, carry Decimal through the hot compute paths unconverted.
 from decimal import Decimal, ROUND_HALF_UP
 from typing import Annotated
 
-from pydantic import Field
+from pydantic import AfterValidator
 
 from backend.db.exact import Exact  # noqa: F401  (re-exported: the type every money column reads as)
 
@@ -187,17 +187,29 @@ MAX_MONEY = 1e9      # a single price/amount above this is a typo, not a repair-
 # NUMERIC(p, s) holds magnitudes below 10**(p - s); Postgres refuses more with "numeric field
 # overflow" (the old double-precision columns took anything). Request models type these fields
 # with the aliases below so a typo (a 13-digit EAN scanned into a qty box) is a 422 that names the
-# field. Anything still reaching the database out of range is mapped to a 422 by
+# field with a sentence ("Quantity is out of range ..."), not pydantic's "Input should be less than
+# or equal to 1000000000". The bound only fires past the column's limit, so a field's own
+# validators ("Quantity must be greater than zero") still speak for every value inside it. Anything still reaching the database out of range is mapped to a 422 by
 # backend.core.db_errors.data_error_handler.
 MAX_QTY = 1_000_000_000            # NUMERIC(14,4) quantities: < 1e10
 MAX_PCT = 99_999                   # NUMERIC(9,4) percentages and tax rates: < 1e5
 MAX_RATE = 1_000_000_000           # NUMERIC(18,8) currency / FX rates: < 1e10
 MAX_POINTS = 100_000_000_000       # NUMERIC(14,2) loyalty points: < 1e12
 
-Qty = Annotated[float, Field(ge=-MAX_QTY, le=MAX_QTY)]
-Pct = Annotated[float, Field(ge=-MAX_PCT, le=MAX_PCT)]
-Rate = Annotated[float, Field(ge=-MAX_RATE, le=MAX_RATE)]
-Points = Annotated[float, Field(ge=-MAX_POINTS, le=MAX_POINTS)]
+
+
+def _bounded(label: str, limit: int, hint: str = "") -> AfterValidator:
+    def check(v):
+        if v is not None and abs(v) > limit:
+            raise ValueError(f"{label} is out of range: it can be at most {limit:,} either way.{hint}")
+        return v
+    return AfterValidator(check)
+
+
+Qty = Annotated[float, _bounded("Quantity", MAX_QTY, " Is that a barcode or serial number?")]
+Pct = Annotated[float, _bounded("Percentage", MAX_PCT)]
+Rate = Annotated[float, _bounded("Rate", MAX_RATE)]
+Points = Annotated[float, _bounded("Points value", MAX_POINTS)]
 
 
 def check_money(v, *, allow_negative: bool = False):

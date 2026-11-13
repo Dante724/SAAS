@@ -97,6 +97,7 @@ async def test_scanned_ean_in_a_qty_field_is_a_422_not_a_500(client, tenant):
     r = await client.post(f"/api/orders/{oid}/lines", headers=tenant, json={
         "line_type": "labour", "kind": "custom", "description": "Work", "qty": 4006381333931, "unit_price": 1})
     assert r.status_code == 422, r.text
+    assert "Quantity is out of range" in r.text, r.text
 
 
 @pytest.mark.parametrize("path,body", [
@@ -106,6 +107,29 @@ async def test_scanned_ean_in_a_qty_field_is_a_422_not_a_500(client, tenant):
 async def test_huge_percentages_are_refused(client, tenant, path, body):
     r = await client.post(path, json=body, headers=tenant)
     assert r.status_code == 422, r.text
+    assert "Percentage is out of range" in r.text, r.text
+
+
+async def test_bound_messages_are_friendly_sentences():
+    """The bounded aliases explain themselves ("Quantity is out of range ...") instead of pydantic's
+    "Input should be less than or equal to 1000000000"; the field's own validators still run for
+    values inside the bound (e.g. "Quantity must be greater than zero")."""
+    from pydantic import TypeAdapter
+
+    from backend.routers.orders import LineIn
+    from backend.services.money import Points, Rate
+    for tp, value, label in ((LineIn, {"description": "x", "qty": 4006381333931}, "Quantity"),
+                             (LineIn, {"description": "x", "tax_rate": -1e6}, "Percentage")):
+        with pytest.raises(ValidationError) as e:
+            tp.model_validate(value)
+        msg = str(e.value)
+        assert f"{label} is out of range" in msg and "less than or equal" not in msg
+    with pytest.raises(ValidationError, match="Rate is out of range"):
+        TypeAdapter(Rate).validate_python(2e10)
+    with pytest.raises(ValidationError, match="Points value is out of range"):
+        TypeAdapter(Points).validate_python(2e12)
+    with pytest.raises(ValidationError, match="greater than zero"):
+        LineIn.model_validate({"description": "x", "qty": 0})
 
 
 async def test_huge_commission_is_refused(client, tenant):
