@@ -207,6 +207,24 @@ def test_dbi02_hashes_existing_tokens_and_keeps_the_plaintext_for_the_old_image(
     assert enc == "tok-orgA"                         # no key in tests: crypto passes it through
 
 
+def test_dbi03_stamps_existing_lines_in_their_current_order(tmp_path):
+    path, url = _at(tmp_path, "dbi02", "dbi03")
+    con = sqlite3.connect(path)
+    _two_shops(con)
+    for lid in ("z-first", "m-second", "a-third"):          # ids sort the other way round
+        _insert(con, "order_lines", {"id": lid, "org_id": "orgA", "order_id": "ord-orgA", "line_type": "labour",
+                                     "description": lid})
+    con.execute("UPDATE orders SET created_at = '2026-01-01 10:00:00'")
+    con.commit()
+    con.close()
+    _ok(url, "upgrade", "dbi03")
+    con = sqlite3.connect(path)
+    got = [r[0] for r in con.execute("SELECT id FROM order_lines ORDER BY created_at, id")]
+    assert got == ["z-first", "m-second", "a-third"]
+    assert con.execute("SELECT COUNT(*) FROM order_lines WHERE created_at IS NULL").fetchone()[0] == 0
+    con.close()
+
+
 def test_dbi01_dbi02_downgrade_and_upgrade_again(tmp_path):
     path, url = _at(tmp_path, "head", "roundtrip")
     _ok(url, "downgrade", "corg02")
@@ -265,6 +283,8 @@ def test_pg_dbi01_keys_are_validated_and_hold():
         _pg(url, _pg_insert(url, "orders", {"id": "ordA", "org_id": "orgA", "client_id": "cl-orgA",
                                             "location_id": "loc-orgA", "public_token": "tok-A"}),
             _pg_insert(url, "devices", {"id": "dev-old", "client_id": "cl-orgA"}, old_code=True),
+            *[_pg_insert(url, "order_lines", {"id": lid, "org_id": "orgA", "order_id": "ordA", "description": lid})
+              for lid in ("z-first", "m-second", "a-third")],
             _pg_insert(url, "sales", {"id": "s1", "org_id": "orgA", "location_id": "loc-orgA",
                                       "sale_number": "S-1", "coupon_id": "gone",
                                       "seller_id": "emp-orgA"}))
@@ -295,6 +315,13 @@ def test_pg_dbi01_keys_are_validated_and_hold():
             _pg(url, _pg_insert(url, "stock_movements", {"id": "m-x", "org_id": "orgA", "part_id": "part-orgB",
                                                          "location_id": "loc-orgA", "movement_type": "adjust",
                                                          "qty": 1}))
+        # dbi03: existing lines stamped in their current (physical) order; the old image's inserts
+        # (no created_at) get the server default
+        assert [r[0] for r in _pg(url, "SELECT id FROM order_lines WHERE order_id = 'ordA' "
+                                       "ORDER BY created_at, id")] == ["z-first", "m-second", "a-third"]
+        _pg(url, _pg_insert(url, "order_lines", {"id": "ol-old", "org_id": "orgA", "order_id": "ordA",
+                                                 "description": "old image"}))
+        assert _pg(url, "SELECT created_at IS NOT NULL FROM order_lines WHERE id = 'ol-old'")[0][0] is True
         # SEC-12: the existing token was hashed, the plaintext kept for the previous image
         h = _pg(url, "SELECT public_token_hash FROM orders WHERE id = 'ordA'")[0][0]
         assert h == hashlib.sha256(b"tok-A").hexdigest()

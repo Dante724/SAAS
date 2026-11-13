@@ -817,7 +817,8 @@ class Order(OrgScoped, Base):
     # passive_deletes="all" makes a delete of the job itself fail on the FK instead of
     # silently nulling or removing its money rows.
     lines: Mapped[list["OrderLine"]] = relationship(back_populates="order", foreign_keys="OrderLine.order_id",
-                                                    cascade="save-update, merge", passive_deletes="all")
+                                                    cascade="save-update, merge", passive_deletes="all",
+                                                    order_by="(OrderLine.created_at, OrderLine.id)")
     status_logs: Mapped[list["OrderStatusLog"]] = relationship(back_populates="order", cascade="save-update, merge", passive_deletes="all")
     comments: Mapped[list["OrderComment"]] = relationship(back_populates="order", cascade="save-update, merge", passive_deletes="all")
     tasks: Mapped[list["Task"]] = relationship(back_populates="order")
@@ -868,6 +869,11 @@ class OrderLine(OrgScoped, Base):
     bundle_price_locked: Mapped[Optional[float]] = mapped_column(Money(12, 2))
     bundle_qty: Mapped[Optional[float]] = mapped_column(Money(14, 4))
     bundle_std_price: Mapped[Optional[float]] = mapped_column(Money(12, 2))
+    # dbi03: when the line was added. A job's lines are read in this order (Order.lines), with id as
+    # the tiebreak; before, they came back in whatever order the database chose. The server default
+    # stamps lines inserted by code that doesn't know the column (the previous image).
+    created_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=_now,
+                                                           server_default=text("CURRENT_TIMESTAMP"))
 
 
 class OrderItem(OrgScoped, Base):
