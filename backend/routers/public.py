@@ -7,6 +7,7 @@ and event-feed items explicitly marked client-visible. The customer can also
 accept or decline an estimate, which is recorded back into the event feed.
 """
 import hashlib
+import hmac
 from fastapi import APIRouter, Depends, HTTPException, Request, Response
 from fastapi.responses import RedirectResponse
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -1750,6 +1751,12 @@ async def public_pay_info(intent_id: str, db: AsyncSession = Depends(get_db)):
 
 
 # ══ Build 109: public status lookup + embeddable widget ══════════════════════
+# Audit SEC-10: lookups per customer phone per hour, whoever asks (on top of the per-caller limits).
+# Someone who knows a customer's phone could otherwise walk order numbers across every shop from
+# many addresses. A real customer types their number a few times at most.
+LOOKUP_PER_PHONE = 10
+
+
 class LookupIn(BaseModel):
     order_number: str = Field(max_length=40)
     phone: str = Field(max_length=32)
@@ -1777,6 +1784,8 @@ async def lookup_order(data: LookupIn, request: Request, db: AsyncSession = Depe
     phone = "".join(ch for ch in data.phone if ch.isdigit())[-10:]  # last 10 digits, format-agnostic
     if not num or not phone:
         raise HTTPException(422, "Order number and phone are both required")
+    # SEC-10: per phone, across every caller (the per-IP buckets don't stop a spread-out walk).
+    await aenforce("lookup_phone", phone, LOOKUP_PER_PHONE, 3600)
 
     # Security: order numbers are unique only WITHIN an org, so a bare
     # ``order_number == num`` with .first() resolves an *arbitrary* tenant's order and
@@ -1799,16 +1808,18 @@ async def lookup_order(data: LookupIn, request: Request, db: AsyncSession = Depe
     await aenforce("lookup_num", f"{org.id if data.shop else '*'}:{ip}:{num}", 5, 3600)
 
     candidates = (await db.execute(q)).all()
+    # SEC-10: one read for every candidate's phone, so the time taken doesn't depend on how far
+    # down the list the match is (or how many shops share the number).
+    cids = {c for _i, _o, c in candidates if c}
+    phones = {(cid, org): p for cid, org, p in (await db.execute(select(Client.id, Client.org_id, Client.phone).where(
+        Client.id.in_(cids or [""])))).all()} if cids else {}
     match = None
     for cand_id, cand_org, cand_client in candidates:
         if not cand_client:
             continue
-        on_file = (await db.execute(select(Client.phone).where(
-            Client.id == cand_client, Client.org_id == cand_org))).scalar_one_or_none()
-        on_file = "".join(ch for ch in (on_file or "") if ch.isdigit())[-10:]
-        if on_file and on_file == phone:
+        on_file = "".join(ch for ch in (phones.get((cand_client, cand_org)) or "") if ch.isdigit())[-10:]
+        if on_file and match is None and hmac.compare_digest(on_file, phone):
             match = (cand_id, cand_org)   # the phone match pins the tenant when no slug was given
-            break
     if not match:
         # same 404 whether the shop, number or phone is wrong — don't confirm a number exists
         raise HTTPException(404, "No matching order — check the number and phone")

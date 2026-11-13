@@ -402,7 +402,7 @@ async def for_order(order_id: str, db: AsyncSession = Depends(get_db),
         from backend.models import OrderLine
         for line in (await db.execute(select(OrderLine).where(OrderLine.order_id == order.id))).scalars().all():
             ms = await svc.memberships_for_line(db, order, line)
-            if ms and await svc.coverage_for_line(db, ms, line):
+            if ms and await svc.coverage_for_line(db, ms, line, lock=False):   # a read: no lock
                 coverable += 1
     offer = None
     if not plans and await has_perm(db, current, "can_sell_memberships"):

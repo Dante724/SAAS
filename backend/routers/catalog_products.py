@@ -458,8 +458,12 @@ async def _thumbnails(db, ids: list) -> dict:
     if stale:
         if len(_THUMBS) > 20_000:
             _THUMBS.clear()
-        for pid, data in (await db.execute(select(Part.id, Part.image_data).where(Part.id.in_(stale)))).all():
-            _THUMBS[pid] = (sig[pid], _make_thumb(data or ""))
+        photos = (await db.execute(select(Part.id, Part.image_data).where(Part.id.in_(stale)))).all()
+        # N-6: decoding and resizing a page of full photos (PIL) is CPU work: on a cold cache (after
+        # a deploy, per worker) it blocked the event loop for every shop. It runs on a worker thread.
+        made = await asyncio.to_thread(lambda: [(pid, _make_thumb(data or "")) for pid, data in photos])
+        for pid, thumb in made:
+            _THUMBS[pid] = (sig[pid], thumb)
     return {pid: _THUMBS[pid][1] for pid in sig}
 
 

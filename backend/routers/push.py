@@ -1,6 +1,8 @@
 """Web Push subscription management for technician devices."""
 
-from fastapi import APIRouter, Depends
+import hmac
+
+from fastapi import APIRouter, Depends, HTTPException
 from pydantic import BaseModel
 from sqlalchemy import select, update
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -38,13 +40,23 @@ async def subscribe(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
-    # A push endpoint is one browser. Whoever subscribes it last owns it, whichever shop had it
-    # before: otherwise a browser that signed in at shop B and then at shop A keeps getting B's
-    # notifications. skip_tenant_filter: the earlier owner may be another shop; only its id is
-    # read, and the row is then deliberately handed to this shop and employee.
-    existing_id = (await db.execute(select(PushSubscription.id).where(
+    # A push endpoint is one browser. The same browser signing in as someone else (or at another
+    # shop) moves its subscription along, otherwise it keeps getting the old account's notifications.
+    # Audit SEC-09: but only the browser itself may move it. Knowing the endpoint URL was enough to
+    # take a subscription over; now a subscription bound to another employee moves only when the
+    # caller also presents its keys (the browser's p256dh + auth secret, which only that browser's
+    # push subscription holds). skip_tenant_filter: the earlier owner may be another shop; only
+    # its id, owner and keys are read, never handed back.
+    existing = (await db.execute(select(
+        PushSubscription.id, PushSubscription.employee_id, PushSubscription.p256dh, PushSubscription.auth).where(
         PushSubscription.endpoint == data.endpoint).order_by(PushSubscription.id)
-        .execution_options(skip_tenant_filter=True))).scalars().first()
+        .execution_options(skip_tenant_filter=True))).first()
+    existing_id = existing[0] if existing else None
+    if existing and existing[1] != current.id and not (
+            hmac.compare_digest((existing[2] or "").encode(), data.keys.p256dh.encode())
+            and hmac.compare_digest((existing[3] or "").encode(), data.keys.auth.encode())):
+        raise HTTPException(409, "This browser's notifications are linked to another account. Turn "
+                                 "notifications off and on again in this browser to move them here.")
     if existing_id:
         await db.execute(update(PushSubscription).where(PushSubscription.endpoint == data.endpoint)
                          .values(employee_id=current.id, org_id=current.org_id, p256dh=data.keys.p256dh,

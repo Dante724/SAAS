@@ -62,8 +62,40 @@ uv pip compile requirements-dev.txt --universal --python-version 3.11 --generate
      database answers, 503 `{"status": "unready", "database": "down"}` when it doesn't. Point the
      load balancer's target health check (and uptime monitors that should page on DB loss) here.
 4. **Smoke test:** sign in, open a work order, take a test payment in Stripe test mode.
-5. **Roll back** by starting the previous image tag. Migrations are additive; only run
-   `alembic downgrade` if a release notes says it's required.
+5. **Roll back** by starting the previous image tag, with no `alembic downgrade`, unless
+   "Rolling back" below names that release. Read that list before every deploy.
+
+### Rolling back (which releases are image-rollback-safe)
+
+Between step 2 and step 3 the OLD containers serve against the NEW schema, and after a rollback
+the previous image runs against it for as long as it takes. So every migration must leave a
+schema the previous image still works with.
+
+| Release | Migrations | Old image on the new schema |
+|---|---|---|
+| Tenant org_id (#219) | corg01, corg02 | **Safe on Postgres** from corg01/corg02 on. org_id is NOT NULL on 23 child tables (payments, order_lines, stock_movements…) and code from before #219 doesn't set it; a BEFORE INSERT trigger fills it from the parent row, so its inserts keep working. A database that ran the first corg01 (before the triggers) is **not** rollback-safe until `upgrade head` has run corg02. SQLite (dev) has no triggers: don't roll a dev database back across #219. |
+| Payment soft-void (#218) | pv01 | Safe: new nullable columns only. |
+| Wave 2 schema rules (#221) | w2b01 | Safe for normal use. The new unique indexes and CHECKs also bind the old code: an action the old code allowed and the new rules refuse (a second open drawer at a location, a duplicate code, a negative stock count) gets a database error (500) instead of a bad row. |
+| Exact decimals (#222) | dec08 | Safe, not verified against the old image: the rate/qty columns are NUMERIC now; old code declares them Float, and SQLAlchemy reads NUMERIC into float and binds floats into it. Values are stored rounded to the new scale. |
+
+A database `alembic downgrade` across these is never needed for an image rollback. If one is
+needed anyway, it runs in reverse order (dec08, w2b01, pv01, then corg01), and corg01's downgrade
+drops org_id from 23 tables: take a backup first.
+
+**Rule for new migrations: NOT NULL and type changes go expand -> contract.** A migration that
+makes a column NOT NULL, renames or drops a column, or changes a type the previous image reads or
+writes differently, ships in steps, and each step is safe with the previous image:
+
+1. **Expand**: add the column nullable (or the new column next to the old one). The new code writes
+   it; a trigger or the app fills it for the old code's writes; backfill in batches, committing per
+   batch.
+2. **Contract**, in a LATER release, once no image without the expand code can be started again:
+   `SET NOT NULL` (on Postgres via `CHECK … NOT VALID` + `VALIDATE` first, so the scan doesn't
+   block writes), drop the old column or the bridging trigger.
+
+A release that can't be split this way is listed in the table above as **not rollback-safe**,
+with what to do instead. The corg01/corg02 triggers are such a bridge: drop them in a later
+release once no image from before #219 can be started again.
 
 ### Migrations and live traffic
 
@@ -78,6 +110,25 @@ uv pip compile requirements-dev.txt --universal --python-version 3.11 --generate
   warning, the deploy continues, and the next upgrade retries. Leftovers of a
   failed REINDEX (`*_ccnew`, `*_ccold`) are only logged: drop those with `DROP INDEX CONCURRENTLY`.
   To check by hand: `SELECT indexrelid::regclass FROM pg_index WHERE NOT indisvalid;`
+
+### Migrations that lock tables (plan a maintenance window)
+
+Some migrations hold heavy locks for as long as they run. `MIGRATION_LOCK_TIMEOUT` only limits
+how long they *wait* for a lock; once a migration holds one, the app's queries on that table queue
+behind it until it commits. Time each one on a restored copy of production first (section 4).
+
+| Migration | What is locked, and for how long | Window? |
+|---|---|---|
+| corg01 (#219) | One table at a time, briefly: adding the column is instant, the backfill commits every 5000 rows, the NOT NULL check is validated without blocking writes, indexes build `CONCURRENTLY`. | No. It runs outside a transaction: if stopped, rerun it, and it resumes. |
+| w2b01 (#221) | One transaction: the data repairs, then the CHECKs (ACCESS EXCLUSIVE on stock_levels, invoices, time_entries, stock_transfers, gift_cards, coupons, purchase_returns, write_offs, postings, memberships, each for a full scan) and the unique indexes (SHARE on cash_shifts, time_entries, memberships, sales, stock_transfers, write_offs, purchase_returns, postings, coupons, gift_cards: reads go on, writes wait). All held until the end. | Yes at scale: the till (sales, stock, invoices) can't write meanwhile. Seconds at today's sizes. |
+| dec08 (#222) | One transaction: 30 tables rewritten, one ALTER each (organisations, orders, order_lines, transactions, stock_movements, stock_levels, sale_lines, invoice_lines are the busy ones), all ACCESS EXCLUSIVE (no reads or writes) until the end. Peak extra disk: about one copy of each table. | **Yes.** Stop the app (or show maintenance) while it runs. |
+
+Both w2b01 and dec08 check the data first and stop with counts (nothing changed) on what they
+can't repair: w2b01 on unknown status values, dec08 on values NUMERIC can't hold (out of range,
+±Infinity, NaN). w2b01 renames duplicate document numbers and gift-card/coupon codes (the oldest
+keeps its code, the others get `-2`, `-3`…) and records each rename in the shop's audit log
+(`gift_card.code_renamed`, `coupon.code_renamed`, `sale.sale_number_renamed`…): tell the shop to
+check it, since a customer holding a renamed card or coupon must now use the new code.
 
 ### Duplicate open attendance shifts (check before and after deploy)
 

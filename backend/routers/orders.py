@@ -3839,13 +3839,17 @@ async def _archive_order(db, current, order_id, reason, do_refund):
                 raise HTTPException(409, f"{amt:.2f} has to go back to the customer from the “{acct.name}” drawer, "
                                          f"but it holds only {float(acct.balance or 0):.2f}. Put the cash back in "
                                          "the drawer (or move it there), then delete the job.")
+        from backend.routers.cash import system_posting
         from backend.routers.returns import book_refund
         for acc_id, amt in plan.items():
             acct = accts.get(acc_id)
             if acct is None or amt <= 0:
                 continue
-            await book_refund(db, current, order, acct, amt, reason=reason,
-                              reference=f"Archive refund: {reason}")
+            # Each cashbox gives back what it took for this job: the system picks the account, not
+            # the cashier, so a till-only role can still delete a job paid by card (re-review N4).
+            with system_posting(db):
+                await book_refund(db, current, order, acct, amt, reason=reason,
+                                  reference=f"Archive refund: {reason}")
             refunds_by_account.append({"account_id": acct.id, "account": acct.name, "amount": amt})
             refunded = q2(refunded + amt)
 
@@ -3881,6 +3885,33 @@ async def _archive_order(db, current, order_id, reason, do_refund):
                     # this job's money is on it: it stays, as the refund left it
                     logging.getLogger("tekly").info("order %s archived; invoice %s kept: %s",
                                                     order.id, _inv.id, kept.detail)
+    # Re-review money N2 (FIN-03 bypass): a deleted job gives back the gift card value, coupon use
+    # and points its redemption lines spent, exactly as deleting each line does (row-locked, capped
+    # by what this job redeemed), and the lines go so a restore can't keep the discount for free.
+    # Runs after the refund and the invoice clean-up above, so an invoice cancelled there no longer
+    # holds the line. A line a sent or paid invoice still bills stays (as on line delete).
+    if not order.is_estimate:
+        from backend.models import OrderLine as _OL
+        from backend.routers.engage import give_back_redemption, redemption_kind
+        from backend.services.invoice_money import locking_invoice, release_line
+        _gone: set = set()
+        _prev_total = float(order.total or 0)
+        for _ln in (await db.execute(select(_OL).where(_OL.order_id == order_id)
+                                     .order_by(_OL.id))).scalars().all():
+            if _ln.id in _gone or not redemption_kind(_ln) or await locking_invoice(db, _ln.id):
+                continue
+            for _other in await give_back_redemption(db, current.org_id, order, _ln, current.id):
+                if _other.id in _gone:
+                    continue
+                _gone.add(_other.id)
+                await release_line(db, _other.id)
+                await _audit_line(db, current, order_id, _other, "order.line_delete")
+                await db.delete(_other)
+        if _gone:
+            await db.flush()
+            await _recalc_order(db, order)
+            await _log_amount_change(db, current.org_id, order, _prev_total)
+
     # Stock lock order: Order → StockLevel sorted by (part_id, location_id) → holds. Every stock row
     # this archive touches — what its lines drew and what it holds — is locked here, sorted, before
     # the lines are put back and the holds released below; putting a drawn Y back and then
@@ -5674,6 +5705,13 @@ async def delete_line(
             await release_line(db, other.id)
             await db.delete(other)
     await _audit_line(db, current, order_id, line, "order.line_delete")
+    # H2: time billed onto (or attributed to) this line points at it (TimeEntry.order_line_id, a FK
+    # with no ON DELETE): clear it first, so the delete works and the time can be billed again.
+    from sqlalchemy import update as _update
+
+    from backend.models import TimeEntry as _TE
+    await db.execute(_update(_TE).where(_TE.order_line_id == line.id).values(order_line_id=None)
+                     .execution_options(synchronize_session=False))
     await db.delete(line)
     await db.flush()
     if _kit:
@@ -5718,6 +5756,13 @@ async def delete_kit(
             if deducted > 0:
                 await _reverse_fulfillment(db, order, line.ref_id, deducted)
         await _audit_line(db, current, order_id, line, "order.line_delete")     # INV-10
+    # H2: as delete_line, free the time billed onto these lines before they go.
+    from sqlalchemy import update as _update
+
+    from backend.models import TimeEntry as _TE
+    await db.execute(_update(_TE).where(_TE.order_line_id.in_([line.id for line in lines]))
+                     .values(order_line_id=None).execution_options(synchronize_session=False))
+    for line in lines:
         await db.delete(line)
     await db.flush()
     await _recalc_order(db, order)

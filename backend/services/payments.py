@@ -330,7 +330,15 @@ async def online_account(db: AsyncSession, org_id: str) -> Account:
 
 # ── Reconciliation (shared by Stripe webhook + simulated confirm) ────────────
 async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentIntent:
-    """Idempotently reconcile a succeeded intent into the cash system."""
+    """Idempotently reconcile a succeeded intent into the cash system. The customer already paid,
+    into the link's account or the online account: no cashier picked it, so a restricted staff
+    request that happens to settle it isn't refused (re-review money N4)."""
+    from backend.routers.cash import system_posting
+    with system_posting(db):
+        return await _mark_succeeded(db, intent)
+
+
+async def _mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentIntent:
     if intent.status == "succeeded" and intent.payment_id:
         return intent  # already reconciled
     # Claim the intent atomically before posting anything: the Stripe webhook, Square webhook and
@@ -480,10 +488,7 @@ async def mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInte
                                  ref_type="payment", ref_id=pay.id,
                                  note=f"Earned on payment ({intent.provider})"))
             # auto-tier from lifetime earned points
-            from sqlalchemy import func as _f
-            earned = (await db.execute(select(_f.coalesce(_f.sum(LoyaltyLedger.points), 0.0)).where(
-                LoyaltyLedger.org_id == intent.org_id, LoyaltyLedger.client_id == client_id,
-                LoyaltyLedger.points > 0))).scalar_one()
+            earned = await lifetime_earned_points(db, intent.org_id, client_id)
             cl = (await db.execute(select(Client).where(Client.id == client_id))).scalar_one_or_none()
             if cl:
                 lifetime = float(earned) + pts
@@ -582,3 +587,16 @@ async def _poll_provider(db: AsyncSession, intent: PaymentIntent, org_creds) -> 
                     return intent
                 return await mark_succeeded(db, intent)
     return intent
+
+
+async def lifetime_earned_points(db, org_id: str, client_id: str) -> float:
+    """Points a client has earned, for the tier. Points given back when a redemption line is
+    removed (ref_type "order", positive) were earned once already, so they don't count again
+    (re-review money N8)."""
+    from sqlalchemy import func as _f
+    from sqlalchemy import or_
+    from backend.models import LoyaltyLedger
+    earned = (await db.execute(select(_f.coalesce(_f.sum(LoyaltyLedger.points), 0.0)).where(
+        LoyaltyLedger.org_id == org_id, LoyaltyLedger.client_id == client_id, LoyaltyLedger.points > 0,
+        or_(LoyaltyLedger.ref_type.is_(None), LoyaltyLedger.ref_type != "order")))).scalar_one()
+    return float(earned or 0)
