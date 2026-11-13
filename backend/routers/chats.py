@@ -392,9 +392,15 @@ async def generic_inbound(org_id: str, data: InboundIn, request: Request,
                                           body=data.body or "", name=data.name,
                                           external_id=data.external_message_id)
     if msg is None:
+        # A duplicate is looked up only by a real provider id, normalised as ingest_inbound stores it.
+        # With no id, `external_id == None` matched (IS NULL) any id-less message of the shop and
+        # handed its thread and message ids to the caller (#235 follow-up).
+        ext = (data.external_message_id or "")[:160] or None
+        if not ext:
+            return {"thread_id": None, "message_id": None, "duplicate": False, "stored": False}
         dup = (await db.execute(select(ChatMessage).join(ChatThread, ChatThread.id == ChatMessage.thread_id)
                                 .where(ChatThread.org_id == org_id,
-                                       ChatMessage.external_id == data.external_message_id))).scalars().first()
+                                       ChatMessage.external_id == ext))).scalars().first()
         return {"thread_id": dup.thread_id if dup else None, "message_id": dup.id if dup else None,
                 "duplicate": True}
     await db.commit()
@@ -438,19 +444,45 @@ async def thread_to_order(
     is_estimate: bool = False,   # additive: win the chat as an estimate instead of a work order
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
+    request: Request = None,
 ):
     """Build 81 — turn a conversation straight into a work order.
 
     Creates the client from the chat contact if there isn't one yet, seeds the
     complaint from the customer's first inbound message, and links the thread to the
     order so the conversation stays attached to the job.
+
+    A double tap makes one job (wave 4, after #228): the thread is locked while it converts, so the
+    second request waits and then sees it linked (409), and a retry with the same Idempotency-Key
+    gets the first answer back.
     """
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "chats.to_order",
+                          {"thread_id": tid, "is_estimate": is_estimate},
+                          lambda: _thread_to_order(tid, is_estimate, db, current))
+
+
+async def _lock_thread(db: AsyncSession, org_id: str, tid: str) -> None:
+    """Serialise conversions of one thread. Postgres: a row lock. SQLite ignores FOR UPDATE, so a
+    no-op UPDATE takes the write lock now (as appointments._lock_appointment does)."""
+    from sqlalchemy import update
+    if db.get_bind().dialect.name == "sqlite":
+        await db.execute(update(ChatThread).where(ChatThread.id == tid, ChatThread.org_id == org_id)
+                         .values(order_id=ChatThread.order_id).execution_options(synchronize_session=False))
+    else:
+        await db.execute(select(ChatThread.id).where(ChatThread.id == tid, ChatThread.org_id == org_id)
+                         .with_for_update())
+
+
+async def _thread_to_order(tid: str, is_estimate: bool, db: AsyncSession, current: Employee):
     from backend.models import Client, Order
     from backend.routers.orders import initial_job_status, job_number
     from backend.services import new_job
 
+    await _lock_thread(db, current.org_id, tid)
     t = (await db.execute(select(ChatThread).where(
-        ChatThread.id == tid, ChatThread.org_id == current.org_id))).scalar_one_or_none()
+        ChatThread.id == tid, ChatThread.org_id == current.org_id)
+        .execution_options(populate_existing=True))).scalar_one_or_none()
     if not t:
         raise HTTPException(404, "Thread not found")
     if t.order_id:

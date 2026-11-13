@@ -317,6 +317,11 @@ async def convert(db: AsyncSession, c: Checkin, *, actor=None) -> dict:
         return {"ok": True, "order_id": o.id, "order_number": o.order_number, "already": True}
     if c.state in ("cancelled", "no_show"):
         raise HTTPException(409, "This check-in was closed. Reopen the inquiry to convert it.")
+    # A check-in becomes a work order: the plan's monthly job limit applies, as on every other way
+    # of making one (wave 4, after #214). After the "already converted" answer, so a repeat press
+    # still returns its job.
+    from backend.services.billing import assert_can_add_job
+    await assert_can_add_job(db, c.org_id)
     lead = (await db.execute(select(Lead).where(Lead.id == c.lead_id, Lead.org_id == c.org_id))).scalar_one()
     org = (await db.execute(select(Organisation).where(Organisation.id == c.org_id))).scalar_one()
     tkey = industry.normalize_template_key(getattr(org, "industry_template", None))

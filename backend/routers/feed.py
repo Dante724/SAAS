@@ -5,7 +5,7 @@ Handles comments, photos, signatures, file attachments, and system events.
 import re
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import desc, select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -135,7 +135,19 @@ async def create_feed_item(
     data: FeedItemIn,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
+    request: Request = None,
 ):
+    """Add a comment, photo, signature or file to a record's timeline. The tech app's offline queue
+    replays this: a retry with the same Idempotency-Key gets the first answer, not a second item
+    (wave 4, after re-review N1)."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "feed.create",
+                          {"entity_type": entity_type, "entity_id": entity_id, "item": data.model_dump(mode="json")},
+                          lambda: _create_feed_item(entity_type, entity_id, data, db, current))
+
+
+async def _create_feed_item(entity_type: str, entity_id: str, data: FeedItemIn, db: AsyncSession,
+                            current: Employee):
     if entity_type not in VALID_ENTITIES:
         raise HTTPException(400, "Invalid entity type")
     if data.item_type not in VALID_ITEMS:

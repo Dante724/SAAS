@@ -152,10 +152,12 @@ def _slug(label: str) -> str:
     base = "".join(c.lower() if c.isalnum() else "_" for c in label).strip("_")
     return base or "field"
 
-def _ser_type(t: WorkOrderType) -> dict:
+def _ser_type(t: WorkOrderType, *, start: Optional[str] = None) -> dict:
+    """`start`: the status its jobs really start in, when the stored one is no longer a status."""
     return {
         "id": t.id, "name": t.name, "color": t.color,
-        "initial_status": t.initial_status, "default_asset_type": t.default_asset_type, "sort_order": t.sort_order,
+        "initial_status": start or t.initial_status, "initial_status_stale": bool(start),
+        "default_asset_type": t.default_asset_type, "sort_order": t.sort_order,
         "is_default": t.is_default, "active": t.active,
         "sched_default_duration": t.sched_default_duration, "sched_required": t.sched_required,
         "requires_signature": bool(t.requires_signature), "requires_checklist": bool(t.requires_checklist),
@@ -362,9 +364,23 @@ async def list_types(
     counts = dict((await db.execute(
         select(CustomField.type_id, func.count()).where(CustomField.type_id.in_([t.id for t in types]))
         .group_by(CustomField.type_id))).all()) if types else {}
+    # Read-time fallback (wave 4, after #214): a starting status saved before the check, or switched
+    # off or deleted since, reads back as the status its jobs really start in (initial_job_status
+    # falls back the same way), flagged, so the editor shows a real status and saving repairs it
+    # instead of a 422 on every edit.
+    from backend.models import OrderStatus
+    from backend.routers.orders import _default_job_status
+    live = set((await db.execute(select(OrderStatus.key).where(
+        OrderStatus.org_id == current.org_id, OrderStatus.record_type == "work_order",
+        OrderStatus.active == True))).scalars().all())  # noqa: E712
+    fallback = None
     out = []
     for t in types:
-        d = _ser_type(t)
+        start = None
+        if live and t.initial_status not in live:     # (no pipeline yet: nothing to compare)
+            fallback = fallback or await _default_job_status(db, current.org_id, "work_order")
+            start = fallback
+        d = _ser_type(t, start=start)
         d["field_count"] = counts.get(t.id, 0)
         out.append(d)
     return {"items": out}

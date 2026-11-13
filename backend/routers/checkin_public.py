@@ -157,10 +157,14 @@ async def checkin_qr(status_token: str, db: AsyncSession = Depends(get_db)):
     """The code the customer shows at the counter; staff scan it to open their check-in."""
     from fastapi.responses import Response
 
+    from backend.routers.media import MEDIA_CACHE
     from backend.services.codes import qr_svg
     c = await _by_status(db, status_token)
+    # Like the other token-reached media (routers/media._public_media): kept briefly by this browser
+    # only (N-8, it was an hour), and the token in the URL isn't sent on or indexed.
     return Response(qr_svg(c.status_token, module=6), media_type="image/svg+xml",
-                    headers={"Cache-Control": "private, max-age=3600"})
+                    headers={"Cache-Control": MEDIA_CACHE, "Referrer-Policy": "no-referrer",
+                             "X-Robots-Tag": "noindex"})
 
 
 @router.post("/s/{status_token}/cancel")
