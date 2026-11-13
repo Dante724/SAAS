@@ -874,6 +874,10 @@ class OrderLine(OrgScoped, Base):
     # stamps lines inserted by code that doesn't know the column (the previous image).
     created_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=_now,
                                                            server_default=text("CURRENT_TIMESTAMP"))
+    # w4i01 (INV-02): the cost layers this line drew and still holds, {"layers": [{"batch_id",
+    # "location_id", "qty"}, ...]} in draw order, so giving units back refills exactly those layers
+    # (services/stock_consume). Null on lines drawn before it existed (they restore newest-first).
+    stock_draws: Mapped[Optional[dict]] = mapped_column(JSON)
 
 
 class OrderItem(OrgScoped, Base):
