@@ -358,7 +358,7 @@ GLOBAL_UNIQUE = {
 _ID_KEYS = {"automation_fires", "price_type_items", "taggables", "user_prefs", "cash_shifts", "storage_bins",
             "stock_levels", "memberships", "membership_assets", "membership_usage", "order_items", "checkins",
             "invoice_orders", "chat_messages", "payment_intents", "task_overdue_alerts", "terminal_charges",
-            "time_entries", "stocktake_serials"}
+            "time_entries", "stocktake_serials", "shifts"}
 
 
 def _org_scoped_uniques():
