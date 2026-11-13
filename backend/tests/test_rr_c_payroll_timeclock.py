@@ -203,9 +203,15 @@ async def _accrue(client, H, emp, d0, d1, draft=False):
     return r.json()
 
 
-def _this_month():
-    from backend.services.dates import today_in
-    t = today_in("UTC")
+async def _this_month(db, emp_id):
+    """This month on the employee's shop clock, the same "today" the wage code dates with
+    (today_in(shop tz)). Using UTC made the test fail every evening on a shop west of UTC."""
+    from sqlalchemy import select as _select
+
+    from backend.models import Employee
+    from backend.services.dates import shop_timezone, today_in
+    emp = (await db.execute(_select(Employee).where(Employee.id == emp_id))).scalar_one()
+    t = today_in(await shop_timezone(db, emp))
     nxt = (t.replace(day=28) + timedelta(days=4)).replace(day=1)
     return t, t.replace(day=1).isoformat(), (nxt - timedelta(days=1)).isoformat()
 
@@ -216,7 +222,7 @@ async def test_n4_late_approval_into_an_accrued_month_lands_in_the_next_open_run
     await _accrue(client, H, emp, "2026-08-01", "2026-08-31")
     eid = await _entry(db, org, emp, "2026-08-28T09:00:00", 8)
     assert (await client.post(f"/api/timeclock/entries/{eid}/approve", headers=H)).status_code == 200
-    today, m0, m1 = _this_month()
+    today, m0, m1 = await _this_month(db, emp)
     rows = [x for x in await _wage_rows(db, org, emp) if float(x.amount) == 160]
     assert rows and rows[0].ref_id.endswith(f"{today}:{today}"), rows[0].ref_id   # was dated 2026-08-28
     assert (await _accrue(client, H, emp, m0, m1, draft=True))["hourly_total"] == 160
@@ -239,7 +245,7 @@ async def test_n4_attendance_shift_paid_after_its_month_was_accrued_lands_in_the
     r = await client.post("/api/payroll/attendance-wages", json={
         "employee_id": emp, "date_from": "2026-08-01", "date_to": "2026-08-31"}, headers=H)
     assert r.status_code == 201 and r.json()["wage_posted"] == 80, r.text
-    _, m0, m1 = _this_month()
+    _, m0, m1 = await _this_month(db, emp)
     assert (await _accrue(client, H, emp, m0, m1, draft=True))["hourly_total"] == 80
 
 

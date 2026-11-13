@@ -11,7 +11,9 @@ being set (a new row, or a changed value) must name a row of the right kind in t
 422. Another shop's id reads exactly like an unknown one. A value already stored is never re-checked,
 so a row holding a stale id from before this check can still be edited in other ways.
 
-To cover a new soft column, add it to `_registry()`. Better still, make it a real foreign key.
+To cover a new soft column, add it to `_registry()`. Better still, make it a real foreign key (and
+keep it registered here if staff can set it: this check gives the clear 422 before the database's
+FK or the tenant guard would refuse it).
 """
 from functools import cache
 
@@ -87,7 +89,11 @@ def _wanted(session: Session, tenant) -> dict:
     return out
 
 
-@event.listens_for(Session, "before_flush")
+# insert=True: runs before the tenant reference guard (tenancy.py). Two registered columns became
+# real foreign keys in dbi01 (locations.price_type_id, directory_items.parent_id, audit DB-13); the
+# tenant guard would otherwise refuse another shop's id first with its generic 404, and the staff
+# member would lose this check's "that price list doesn't exist any more" message.
+@event.listens_for(Session, "before_flush", insert=True)
 def _check_soft_refs(session: Session, flush_context, instances) -> None:
     tenant = session.info.get("tenant_org")
     if not tenant:

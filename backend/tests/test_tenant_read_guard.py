@@ -67,7 +67,8 @@ async def _legacy_row(db, mapped, /, **values) -> str:
 
     from sqlalchemy import insert
     rid = str(_uuid.uuid4())
-    await db.execute(insert(mapped.__table__).values(id=rid, org_id=None, **values))
+    values.setdefault("org_id", None)
+    await db.execute(insert(mapped.__table__).values(id=rid, **values))
     await db.commit()
     return rid
 
@@ -101,28 +102,32 @@ async def test_select_of_another_shops_rows_is_empty(db, two_shops):
     assert joined == [A["client"]]
 
 
-async def test_nullable_org_tables_are_scoped(db, two_shops):
-    """Devices and POs carry a nullable org_id (old backfill). Another shop's row is hidden, and so
-    is a row with no shop at all: it belongs to nobody, so no shop sees it through the guard."""
+async def test_devices_and_pos_of_another_shop_are_hidden_and_none_is_shopless(db, two_shops):
+    """Another shop's device is hidden. A device or PO with no shop can no longer exist: org_id is
+    NOT NULL since dbi01 (audit DB-14), so the old 'belongs to nobody' rows are refused."""
+    from sqlalchemy.exc import IntegrityError
     A, B = two_shops
     dev = Device(org_id=B["org"], client_id=B["client"], brand="B brand", model="B model")
     db.add(dev)
     await db.commit()
-    orphan = await _legacy_row(db, Device, brand="nobody's", model="x")
+    dev_id = dev.id
+    with pytest.raises(IntegrityError):
+        await _legacy_row(db, Device, brand="nobody's", model="x")
+    await db.rollback()
     db.expunge_all()
     _as_shop(db, A["org"])
-    assert await db.get(Device, dev.id) is None
-    assert await db.get(Device, orphan) is None
-    assert (await db.execute(select(Device.id).where(Device.org_id.is_(None)))).all() == []
+    assert await db.get(Device, dev_id) is None
 
 
 async def test_legacy_asset_reads_only_reach_own_clients_devices(client, db, two_shops):
-    """The two legacy reads that still match an org-less device through its owning client
-    (scan-resolve, conversions list) opt out narrowly: shop A never gets shop B's org-less device."""
+    """The two legacy reads that match a device through its owning client (scan-resolve,
+    conversions list) opt out narrowly: shop A never gets shop B's device."""
     from backend.routers.industry import _match_existing
     A, B = two_shops
-    mine = await _legacy_row(db, Device, client_id=A["client"], brand="A", model="legacy", serial="SN-LEG-1")
-    await _legacy_row(db, Device, client_id=B["client"], brand="B", model="legacy", serial="SN-LEG-2")
+    mine = await _legacy_row(db, Device, org_id=A["org"], client_id=A["client"], brand="A", model="legacy",
+                             serial="SN-LEG-1")
+    await _legacy_row(db, Device, org_id=B["org"], client_id=B["client"], brand="B", model="legacy",
+                      serial="SN-LEG-2")
     db.expunge_all()
     _as_shop(db, A["org"])
     assert (await _match_existing(db, A["org"], "serial", "SN-LEG-1")).id == mine
@@ -308,36 +313,9 @@ async def test_enforce_mode_records_nothing_for_own_rows(db, two_shops):
     _as_shop(db, A["org"])
     assert await db.get(Client, A["client"]) is not None
     assert tenancy.cross_org_reads == []
-
+# ── devices and POs always get a shop (dbi01 made org_id NOT NULL) ──────────────
 
 # ── migration trg01: give org-less devices and POs their shop ────────────────
-async def test_backfill_gives_orgless_devices_and_pos_their_shop(client, db, two_shops):
-    import importlib
-
-    from backend.models import PurchaseOrder, Supplier
-    mod = importlib.import_module("backend.migrations.versions.trg01_backfill_device_po_org")
-    A, B = two_shops
-    loc_b = await _loc(client, B["h"])
-    via_client = await _legacy_row(db, Device, client_id=A["client"], brand="x", model="y")
-    via_location = await _legacy_row(db, Device, location_id=loc_b, brand="x", model="y")
-    unknown = await _legacy_row(db, Device, brand="x", model="y")
-    sup = Supplier(org_id=A["org"], name="Sup A")
-    db.add(sup)
-    await db.commit()
-    po = await _legacy_row(db, PurchaseOrder, supplier_id=sup.id, location_id=loc_b, po_number="PO-LEG-1",
-                           status="ordered")
-    await db.run_sync(lambda s: (mod._fill(s.connection(), "devices", mod._DEVICE_SOURCES),
-                                 mod._fill(s.connection(), "purchase_orders", mod._PO_SOURCES)))
-    await db.commit()
-    db.expunge_all()
-    got = dict((await db.execute(select(Device.id, Device.org_id).where(
-        Device.id.in_([via_client, via_location, unknown])))).all())
-    assert got == {via_client: A["org"], via_location: B["org"], unknown: None}   # nothing deleted
-    # The location is the reliable source for a PO (the supplier here is A's, the location B's).
-    assert (await db.execute(select(PurchaseOrder.org_id).where(
-        PurchaseOrder.id == po))).scalar_one() == B["org"]
-
-
 async def test_new_devices_and_pos_never_written_without_a_shop(client, db, two_shops):
     """A device or PO saved without org_id takes its shop from its links (client / location /
     supplier), the same rules as trg01, so no new row is invisible to every shop."""
