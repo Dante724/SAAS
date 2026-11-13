@@ -46,9 +46,22 @@ async def rows(db, part_id: str, location_id: str, *, lock: bool = False) -> lis
 
 
 async def totals(db, part_id: str, location_id: str) -> tuple[float, float]:
-    """(available, reserved) at the location, over every bin."""
+    """(available, reserved) at the location, over every bin.
+
+    Wave 4 (follow-up of re-review N3): `available` counts only the rows the person on the request
+    can reach — the same rows `draw` may take from — so an availability check can't promise units
+    in a warehouse they can't touch (the draw then fell short: a hold on stock nobody could pick,
+    a sale told "stock changed, retry", a job line silently pending past `can_add_without_stock`).
+    `reserved` stays the whole location's: holds are per location, not per warehouse, so free
+    stock (available - reserved) errs on the safe side. No person (background jobs) = every row."""
+    from backend.services import warehouses as _wh
+    reach = await _wh.reach(db)
+    avail_col = StockLevel.qty_available
+    if reach is not None:
+        from sqlalchemy import case
+        avail_col = case((_wh.reach_clause(reach), StockLevel.qty_available), else_=0)
     avail, res = (await db.execute(select(
-        func.coalesce(func.sum(StockLevel.qty_available), 0),
+        func.coalesce(func.sum(avail_col), 0),
         func.coalesce(func.sum(StockLevel.qty_reserved), 0)).where(
         StockLevel.part_id == part_id, StockLevel.location_id == location_id))).one()
     return float(avail or 0), float(res or 0)
@@ -199,7 +212,11 @@ async def reserve(db, part_id: str, location_id: str, delta: float, *,
     document behind it when the caller gives one."""
     from backend.models import StockMovement
     if delta > 0:     # a release is always allowed: it only frees what someone else held
-        main = await row_for(db, part_id, location_id, None, create=True)
+        # Wave 4: a limited person's hold sits on a row they can reach (their warehouse's unbinned
+        # row), not on whichever unbinned row is largest — that was often another warehouse's, so
+        # the hold was refused although the units it is checked against are theirs.
+        target = await _check_reach(db, location_id, None)
+        main = await row_for(db, part_id, location_id, None, create=True, warehouse_id=target)
         await _check_reach(db, location_id, main.warehouse_id)
         await _bump(db, main, "qty_reserved", delta)
         db.add(StockMovement(part_id=part_id, location_id=location_id, warehouse_id=main.warehouse_id,

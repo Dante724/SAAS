@@ -28,6 +28,7 @@ class ReturnLineIn(BaseModel):
 
 class ReturnIn(BaseModel):
     order_id: Optional[str] = None
+    sale_id: Optional[str] = None     # INV-06: the counter sale the goods came from (bounds the return)
     client_id: Optional[str] = None
     reason: Optional[str] = None
     lines: list[ReturnLineIn] = []
@@ -59,6 +60,8 @@ async def create_return(
 async def _create_return(data: ReturnIn, db: AsyncSession, current: Employee):
     if not data.lines:
         raise HTTPException(400, "A return needs at least one line")
+    if data.order_id and data.sale_id:
+        raise HTTPException(422, "A return comes back against a job or a sale, not both")
     loc_id = current.location_id
     if not loc_id:      # an owner without a home location: the shop's first location (as the till does)
         from backend.models import Location
@@ -73,8 +76,13 @@ async def _create_return(data: ReturnIn, db: AsyncSession, current: Employee):
         # W3-C: two returns for one job queue up here, and each sees what the other took back
         from backend.services.invoice_money import lock_order
         await lock_order(db, order.id)
-    ret = ClientReturn(org_id=current.org_id, order_id=data.order_id,
-                       client_id=data.client_id or (order.client_id if order else None), location_id=loc_id,
+    sale, sale_lines = None, []
+    if data.sale_id:
+        sale, sale_lines = await _lock_sale(db, current, data.sale_id)
+        loc_id = sale.location_id          # back on the shelf the sale took it from
+    ret = ClientReturn(org_id=current.org_id, order_id=data.order_id, sale_id=sale.id if sale else None,
+                       client_id=data.client_id or (order.client_id if order else None)
+                       or (sale.client_id if sale else None), location_id=loc_id,
                        reason=data.reason, created_by_id=current.id)
     db.add(ret)
     await db.flush()
@@ -88,9 +96,14 @@ async def _create_return(data: ReturnIn, db: AsyncSession, current: Employee):
             raise HTTPException(422, "Return a positive quantity")
         if order is not None:
             await _check_job_holds(db, order, part, li.qty)
+        elif sale is not None:
+            _check_sale_left(sale, sale_lines, part, li.qty)
         elif li.restock:
             await _check_free_standing(db, current, part, li.qty)
-        units = await _returned_units(db, current, part, li, order) if li.restock and li.qty > 0 else []
+        sold_ids = [u for ln in sale_lines if ln.ref_id == part.id
+                    for u in ((ln.stock_draws or {}).get("serials") or [])] if sale is not None else None
+        units = (await _returned_units(db, current, part, li, order, sold_ids=sold_ids)
+                 if li.restock and li.qty > 0 else [])
         db.add(ClientReturnLine(return_id=ret.id, part_id=li.part_id,
                                 qty=li.qty, restock=li.restock))
         await db.flush()
@@ -106,6 +119,10 @@ async def _create_return(data: ReturnIn, db: AsyncSession, current: Employee):
                                       label=data.reason or "Customer return", actor_id=current.id)
                 restocked += 1
             continue
+        if sale is not None:
+            await _return_against_sale(db, current, ret, sale, sale_lines, part, li, units, data.reason)
+            restocked += 1 if li.restock else 0
+            continue
         if li.restock and li.qty > 0:
             await _restock_free_standing(db, current, ret, part, loc_id, li.qty, units, data.reason)
             restocked += 1
@@ -117,6 +134,103 @@ async def _create_return(data: ReturnIn, db: AsyncSession, current: Employee):
 
 
 MAX_RETURN_QTY = 10_000     # one line of goods back over the counter; more is a typo or a scan
+
+
+# ── INV-06: a walk-in return that names the sale the goods came from ──────────────────────────────
+# Bounded by that sale, like a return against a job is bounded by the job: only products it sold,
+# never more than it sold less what already came back — through the till (POST /sales/{id}/returns)
+# or an earlier walk-in return, which share one counter (sale_lines.stock_draws["returned"]) — and
+# a serialized unit only if this sale sold it. The goods go back on the sale's own cost layers at
+# its location, so the front desk needs no inventory rights for it. Money is a separate Refund.
+
+async def _lock_sale(db, current, sale_id: str):
+    """The sale, locked (a write on its row: FOR UPDATE is a no-op on SQLite) and read fresh, with
+    its lines — so two returns of one sale queue up and the second sees what the first took back."""
+    from sqlalchemy import update as sa_update
+
+    from backend.models import Sale, SaleLine
+    sale = (await db.execute(select(Sale).where(Sale.id == sale_id, Sale.org_id == current.org_id)
+                             .with_for_update())).scalar_one_or_none()
+    if sale is None:
+        raise HTTPException(404, "Sale not found")
+    await db.execute(sa_update(Sale).where(Sale.id == sale.id).values(paid=Sale.paid)
+                     .execution_options(synchronize_session=False))
+    await db.refresh(sale)
+    if sale.voided_at:
+        raise HTTPException(409, "This sale was deleted, so nothing can come back on it")
+    lines = list((await db.execute(select(SaleLine).where(SaleLine.sale_id == sale.id)
+                                   .execution_options(populate_existing=True))).scalars().all())
+    return sale, lines
+
+
+def _back_already(ln) -> float:
+    return float((ln.stock_draws or {}).get("returned") or 0)
+
+
+def _sold_left(ln) -> float:
+    return float(ln.qty or 0) - _back_already(ln)
+
+
+def _check_sale_left(sale, lines, part, qty: float) -> None:
+    from backend.services import stock_rows
+    if qty > MAX_RETURN_QTY:
+        raise HTTPException(422, f"At most {MAX_RETURN_QTY:,} units of “{part.name}” per return line")
+    stock_rows.check_whole(part, qty)
+    mine = [ln for ln in lines if ln.kind == "product" and ln.ref_id == part.id]
+    num = sale.sale_number or "this sale"
+    if not mine:
+        raise HTTPException(409, f"“{part.name}” wasn't sold on sale {num}, so it can't come back on it")
+    sold = sum(float(ln.qty or 0) for ln in mine)
+    left = max(sum(_sold_left(ln) for ln in mine), 0.0)
+    if qty > left + 1e-9:
+        raise HTTPException(409, f"Only {left:g} of “{part.name}” from sale {num} can still come back "
+                                 f"(it sold {sold:g}; the rest is already back)")
+
+
+async def _return_against_sale(db, current, ret, sale, lines, part, li, units: list, reason) -> None:
+    """Spread the qty over the sale's lines for this product (each unit on the line that sold it,
+    the rest oldest line first): count it as returned there and, when restocked, put it back on
+    the shelf with a `return` movement and onto the cost layers that line drew."""
+    from backend.models import StockMovement
+    from backend.routers.sales import _restore_layers, _unsell_serials
+    from backend.services import stock_rows
+    from backend.services.money import q4
+    mine = [ln for ln in lines if ln.kind == "product" and ln.ref_id == part.id]
+    by_line: dict = {}
+    for u in units:
+        ln = next(x for x in mine if u.id in ((x.stock_draws or {}).get("serials") or []))
+        by_line.setdefault(ln.id, []).append(u)
+    plan = {ln_id: float(len(us)) for ln_id, us in by_line.items()}
+    left = float(li.qty) - sum(plan.values())
+    for ln in mine:
+        if left <= 1e-9:
+            break
+        take = min(max(_sold_left(ln) - plan.get(ln.id, 0.0), 0.0), left)
+        if take > 1e-9:
+            plan[ln.id] = plan.get(ln.id, 0.0) + take
+            left -= take
+    label = f"Returned from sale {sale.sale_number or ''}".strip()
+    for ln in mine:
+        q = plan.get(ln.id, 0.0)
+        if q <= 1e-9:
+            continue
+        back = by_line.get(ln.id, [])
+        draws = dict(ln.stock_draws or {})
+        draws["returned"] = q4(_back_already(ln) + q)
+        if li.restock:
+            back_ids = {u.id for u in back}
+            draws["serials"] = [u for u in (draws.get("serials") or []) if u not in back_ids]
+            await _unsell_serials(db, current.org_id, list(back_ids), ref_type="client_return", ref_id=ret.id,
+                                  label=reason or label, actor_id=current.id)
+            for u in back:          # back on the unbinned row at the sale's shop, like a till return
+                u.bin_id, u.location_id, u.warehouse_id, u.order_id = None, sale.location_id, None, None
+            draws["layers"] = await _restore_layers(db, current.org_id, draws.get("layers") or [], q,
+                                                    first=[u.batch_id for u in back if u.batch_id])
+            await stock_rows.add(db, part.id, sale.location_id, q)
+            db.add(StockMovement(part_id=part.id, location_id=sale.location_id, movement_type="return",
+                                 qty=q, unit_cost=ln.cost_price or 0, ref_type="client_return",
+                                 ref_id=ret.id, created_by_id=current.id))
+        ln.stock_draws = draws
 
 
 async def _check_free_standing(db, current, part, qty: float) -> None:
@@ -171,10 +285,10 @@ async def _check_job_holds(db, order, part, qty: float) -> None:
                                  f"(it used {used:g}; the rest is already returned)")
 
 
-async def _returned_units(db, current, part, li, order=None) -> list:
+async def _returned_units(db, current, part, li, order=None, *, sold_ids=None) -> list:
     """QA F2 — the units of a serialized product that came back: one serial per unit, each one this
     shop sold or used on a job (a unit still in stock can't come back). Against a job, a unit of
-    that job."""
+    that job; against a sale (`sold_ids`, INV-06), a unit that sale sold and that isn't back yet."""
     from backend.models import SerializedItem
     from backend.services.serial_intake import matches as _sn_matches
     named = list(dict.fromkeys(x.strip() for x in (li.serials or []) if x and x.strip()))
@@ -193,8 +307,11 @@ async def _returned_units(db, current, part, li, order=None) -> list:
             SerializedItem.org_id == current.org_id, SerializedItem.part_id == part.id,
             SerializedItem.status.in_(statuses),
             *([SerializedItem.order_id == order.id] if order is not None else []),
+            *([SerializedItem.id.in_(list(sold_ids) or [""])] if sold_ids is not None else []),
             _sn_matches(SerializedItem.serial_number, sn)).with_for_update())).scalars().first()
         if u is None:
+            if sold_ids is not None:
+                raise HTTPException(409, f"{sn} wasn't sold on this sale, or is already back")
             if order is None:
                 await _refuse_unit_on_a_job(db, current, part, sn)
             raise HTTPException(409, f"{sn} isn't a “{part.name}” this shop sold")
