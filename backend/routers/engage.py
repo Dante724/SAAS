@@ -150,21 +150,32 @@ async def give_back_redemption(db, org_id: str, order: Order, line: OrderLine,
         siblings = [s for s in siblings if redemption_kind(s) == "coupon"] or [line]
         c = (await db.execute(select(Coupon).where(Coupon.org_id == org_id, Coupon.code == code)
                               .with_for_update())).scalar_one_or_none()
-        if c is not None:
+        # Re-review N5: only a line apply-coupon made (ref_id = the coupon) gives a use back; a line
+        # that merely says "Coupon CODE" never took one. Lines from before the link give none back.
+        if c is not None and any(s.ref_id == c.id for s in siblings):
             await db.execute(sa_update(Coupon).where(Coupon.id == c.id, Coupon.uses > 0)
                              .values(uses=Coupon.uses - 1).execution_options(synchronize_session=False))
         return siblings
-    # loyalty
-    if order.client_id:
-        await db.execute(select(Client.id).where(Client.id == order.client_id).with_for_update())
+    # loyalty: the points go back to the client who spent them (re-review N8), which is the burn
+    # row's client, not the job's current one if the job changed hands since.
+    burn_row = None
+    if line.ref_id:
+        burn_row = (await db.execute(select(LoyaltyLedger).where(
+            LoyaltyLedger.id == line.ref_id, LoyaltyLedger.org_id == org_id))).scalar_one_or_none()
+    spender = burn_row.client_id if burn_row is not None else order.client_id
+    if burn_row is None:   # a line from before ref_id was set: whoever burned points on this job
+        net = (await db.execute(select(LoyaltyLedger.client_id, func.sum(LoyaltyLedger.points)).where(
+            LoyaltyLedger.org_id == org_id, LoyaltyLedger.ref_type == "order",
+            LoyaltyLedger.ref_id == order.id).group_by(LoyaltyLedger.client_id))).all()
+        spent = sorted(((float(p or 0), cid) for cid, p in net if float(p or 0) < 0))
+        if spent and not any(cid == order.client_id for _p, cid in spent):
+            spender = spent[0][1]
+    if spender:
+        await db.execute(select(Client.id).where(Client.id == spender).with_for_update())
         burned = -float((await db.execute(select(func.coalesce(func.sum(LoyaltyLedger.points), 0.0)).where(
-            LoyaltyLedger.org_id == org_id, LoyaltyLedger.client_id == order.client_id,
+            LoyaltyLedger.org_id == org_id, LoyaltyLedger.client_id == spender,
             LoyaltyLedger.ref_type == "order", LoyaltyLedger.ref_id == order.id))).scalar() or 0)
-        points = None
-        if line.ref_id:
-            row = (await db.execute(select(LoyaltyLedger.points).where(
-                LoyaltyLedger.id == line.ref_id, LoyaltyLedger.org_id == org_id))).scalar_one_or_none()
-            points = -float(row) if row is not None else None
+        points = -float(burn_row.points) if burn_row is not None else None
         if points is None:   # a line from before ref_id was set: the points its description shows
             try:
                 points = float(desc[len(LOYALTY_PREFIX):].split(")")[0])
@@ -172,7 +183,7 @@ async def give_back_redemption(db, org_id: str, order: Order, line: OrderLine,
                 points = 0.0
         back = q2(min(points, burned))
         if back > 0:
-            db.add(LoyaltyLedger(org_id=org_id, client_id=order.client_id, points=back, ref_type="order",
+            db.add(LoyaltyLedger(org_id=org_id, client_id=spender, points=back, ref_type="order",
                                  ref_id=order.id, note=f"Returned: {label}"[:200]))
     return [line]
 
@@ -502,7 +513,7 @@ async def apply_coupon(
         raise HTTPException(409, "Coupon usage limit reached")
     from backend.routers.orders import _recalc_order
     for p in parts:
-        db.add(OrderLine(order_id=order.id, line_type="fee", kind="custom",
+        db.add(OrderLine(order_id=order.id, line_type="fee", kind="custom", ref_id=c.id,   # N5: the link
                          description=f"Coupon {c.code}", qty=1, unit_price=p["unit_price"],
                          tax_rate=p["tax_rate"], tax_mode=p["tax_mode"], total=p["total"]))
     await db.flush()
