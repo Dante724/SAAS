@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Employee, MediaBlob
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.media import _decode_payload, active_backend, load, store
+from backend.services.media import active_backend, decode, load, store
 
 router = APIRouter(prefix="/api/media", tags=["media"])
 
@@ -67,12 +67,14 @@ async def get_media(
     raw, mime = await load(blob)
     kw = safe_media_response(raw, mime, blob.name)
     # A blob's bytes never change under its id (PERF-02): let the signed-in browser keep it for
-    # a while instead of re-downloading every thumbnail. Never a shared cache.
+    # a short while instead of re-downloading every thumbnail. Never a shared cache.
     kw["headers"]["Cache-Control"] = MEDIA_CACHE
     return Response(content=raw, **kw)
 
 
-MEDIA_CACHE = "private, max-age=3600"
+# N-8: short, so media that is erased (GDPR, retention), hidden from the customer, or left on a
+# shared terminal after logout drops out of the browser's cache within a minute (it was an hour).
+MEDIA_CACHE = "private, max-age=60"
 
 
 # ── Customer-facing media (PERF-01) ─────────────────────────────────────────────────────────
@@ -99,7 +101,7 @@ async def _feed_media(db: AsyncSession, order, item_id: str) -> Response:
         raw, mime = await load(blob)
         mime = it.media_mime or mime
     elif it.media_data:
-        raw, sniffed = _decode_payload(it.media_data)
+        raw, sniffed = await decode(it.media_data)
         mime = it.media_mime or sniffed or "application/octet-stream"
     else:
         raise HTTPException(404, "Media not found")
@@ -116,7 +118,7 @@ async def _rec_media(db: AsyncSession, order, rec_id: str) -> Response:
         Recommendation.status.in_(("sent", "approved", "declined"))))).scalar_one_or_none()
     if not r or not r.media_data or not await _recommend_enabled(db, order.org_id):
         raise HTTPException(404, "Media not found")
-    raw, sniffed = _decode_payload(r.media_data)
+    raw, sniffed = await decode(r.media_data)
     return _public_media(raw, sniffed or "application/octet-stream", None)
 
 

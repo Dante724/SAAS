@@ -118,6 +118,34 @@ async def test_parts_list_sends_thumbnails_not_full_photos(client, tenant, db):
     assert full.status_code == 200 and full.json()["image_data"] == photo
 
 
+async def test_parts_list_cold_cache_builds_thumbnails_off_the_event_loop(client, tenant, db, monkeypatch):
+    """N-6 (re-review): the test above warms the cache first. On a cold cache (after a deploy, per
+    worker) the page's full photos are read and resized; that PIL work must not run on the loop."""
+    import threading
+
+    from backend.models import Part
+    from backend.routers import catalog_products
+    photo = _real_photo()
+    for k in range(3):
+        pid = (await client.post("/api/inventory/parts", headers=tenant,
+                                 json={"name": f"Cold {k}", "sku": f"COLD-{k}"})).json()["id"]
+        (await db.execute(select(Part).where(Part.id == pid))).scalar_one().image_data = photo
+        await db.commit()
+    catalog_products._THUMBS.clear()
+    real, threads = catalog_products._make_thumb, []
+
+    def spy(data):
+        threads.append(threading.get_ident())
+        return real(data)
+    monkeypatch.setattr(catalog_products, "_make_thumb", spy)
+    r = await client.get("/api/inventory/parts", headers=tenant)
+    assert r.status_code == 200
+    items = r.json()["items"]
+    assert len(items) == 3 and all(i["image_data"] and i["image_data"] != photo for i in items)
+    assert len(threads) == 3
+    assert threading.get_ident() not in threads                  # was resized on the loop thread
+
+
 async def test_parts_list_pages_are_ordered_and_total_counts_everything(client, tenant):
     """PERF-20: no ORDER BY (pages could repeat or skip rows) and `total` was the page length."""
     for k in range(7):
