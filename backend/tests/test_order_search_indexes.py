@@ -231,10 +231,22 @@ async def test_postgres_plan_reads_the_trigram_indexes(db):
     ]
     conn = await db.connection()
     await conn.exec_driver_sql("SET enable_seqscan = off")   # a 12-row table would be scanned otherwise
-    # Within this transaction only (rolled back below): the single-column shop indexes tie with the
-    # (org_id, job digits) one on a near-empty table, which would make the digits check a coin toss.
-    for ix in ("ix_orders_org_id", "ix_orders_org_created", "ix_orders_org_status"):
-        await conn.exec_driver_sql(f"DROP INDEX IF EXISTS {ix}")
+    # Within this transaction only (rolled back below): every other index that leads with org_id
+    # ties with the (org_id, job digits) one on a near-empty table, which made the digits check a
+    # coin toss (uq_order_org_number won it in CI). Found from the catalogue, not a fixed list, so
+    # an index added later can't bring the flake back. A constraint's index goes with its constraint.
+    rivals = (await conn.exec_driver_sql(
+        "SELECT ic.relname, con.conname FROM pg_index i "
+        "JOIN pg_class ic ON ic.oid = i.indexrelid "
+        "JOIN pg_attribute a ON a.attrelid = i.indrelid AND a.attnum = i.indkey[0] "
+        "LEFT JOIN pg_constraint con ON con.conindid = i.indexrelid "
+        "WHERE i.indrelid = 'orders'::regclass AND a.attname = 'org_id' "
+        "AND ic.relname <> 'ix_orders_number_digits'")).all()
+    for index_name, constraint in rivals:
+        if constraint:
+            await conn.exec_driver_sql(f'ALTER TABLE orders DROP CONSTRAINT "{constraint}" CASCADE')
+        else:
+            await conn.exec_driver_sql(f'DROP INDEX IF EXISTS "{index_name}"')
     try:
         for name, q in expect:
             plan = "\n".join(r[0] for r in (await conn.exec_driver_sql("EXPLAIN " + _pg(q))).all())
