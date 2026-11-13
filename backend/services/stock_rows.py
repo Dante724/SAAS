@@ -53,11 +53,15 @@ async def totals(db, part_id: str, location_id: str) -> tuple[float, float]:
     in a warehouse they can't touch (the draw then fell short: a hold on stock nobody could pick,
     a sale told "stock changed, retry", a job line silently pending past `can_add_without_stock`).
     `reserved` stays the whole location's: holds are per location, not per warehouse, so free
-    stock (available - reserved) errs on the safe side. No person (background jobs) = every row."""
+    stock (available - reserved) errs on the safe side. A location they reach nothing at is a 403,
+    as in `draw`. No person (background jobs) = every row."""
     from backend.services import warehouses as _wh
     reach = await _wh.reach(db)
     avail_col = StockLevel.qty_available
     if reach is not None:
+        # nothing at this location is theirs: the same 403 a draw gives (not "only 0 here")
+        if not (reach.touches(location_id) if isinstance(reach, _wh.Reach) else _wh.reachable(reach, location_id)):
+            raise await _wh.deny(db, location_id)
         from sqlalchemy import case
         avail_col = case((_wh.reach_clause(reach), StockLevel.qty_available), else_=0)
     avail, res = (await db.execute(select(
