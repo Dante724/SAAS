@@ -215,36 +215,116 @@ class ShiftFixIn(BaseModel):
     reason: str = Field(min_length=1, max_length=500)
 
 
-async def _reprice_paid_shift(db: AsyncSession, org_id: str, s, old_hours: float) -> Decimal:
+_NOTE_HOURS = re.compile(r"\(([\d.]+)h\)\s*$")
+
+
+def _shift_pay(hours, rate) -> Decimal:
+    """A shift's wage, rounded as payroll.post_attendance_wages rounds it (to the cent)."""
+    from backend.services.payroll import _money
+    return _money(d2(Decimal(str(hours or 0)) * Decimal(str(rate or 0))))
+
+
+def _paid_rate(emp: Employee, hours, amount) -> Decimal:
+    """The hourly rate `amount` was paid at for `hours`. The person's rate when it explains the
+    amount (the amount was rounded to the cent, so amount / hours drifts by cents: 5.13 for 0.33 h
+    at 15.55 gives 15.5454, and 8 h then pays 124.36 instead of 124.40); otherwise amount / hours,
+    so a rate changed since is not applied to time already paid."""
+    rate = Decimal(str(emp.hourly_cost_rate or (emp.wage_value if emp.wage_type == "hourly" else 0) or 0))
+    if not hours or Decimal(str(hours)) <= 0 or _shift_pay(hours, rate) == Decimal(str(amount)):
+        return rate
+    return Decimal(str(amount)) / Decimal(str(hours))
+
+
+async def _legacy_shift_rate(db: AsyncSession, org_id: str, s) -> Optional[Decimal]:
+    """The rate a shift was paid at by an attendance window row from before per-shift wages (#209:
+    one row per window, ref_id `<emp>:<from>:<to>`, no accrual key), or None when no such row paid
+    it. Same test as payroll.post_attendance_wages: the shift started on a UTC day inside the window
+    and had ended by the time the window was posted (its payroll.attendance_wages audit entry, else
+    the row's created_at). Call with the shift's times as they were before any correction."""
+    from backend.models import AuditLog
+    from backend.models import EmployeeBalanceLedger as L
+    if s.ended_at is None:
+        return None
+    rows = (await db.execute(select(L.ref_id, L.amount, L.created_at, L.note).where(
+        L.org_id == org_id, L.employee_id == s.employee_id, L.entry_type == "hourly_wage",
+        L.ref_type == "attendance", L.accrual_key.is_(None)))).all()
+    if not rows:
+        return None
+    posted_at: dict = {}
+    for when_, diff in (await db.execute(select(AuditLog.created_at, AuditLog.diff).where(
+            AuditLog.org_id == org_id, AuditLog.action == "payroll.attendance_wages",
+            AuditLog.entity_id == s.employee_id))).all():
+        win = (diff or {}).get("window") if isinstance(diff, dict) else None
+        if isinstance(win, list) and len(win) == 2:
+            k = (str(win[0])[:10], str(win[1])[:10])
+            posted_at[k] = min(when_, posted_at.get(k, when_))
+    paid = []
+    for ref, amount, created, note in rows:
+        parts = (ref or "").split(":")
+        try:
+            a, b = date.fromisoformat(parts[-2]), date.fromisoformat(parts[-1])
+        except (IndexError, ValueError):
+            continue
+        at = posted_at.get((parts[-2], parts[-1]), created)
+        if a <= s.started_at.date() <= b and at is not None and s.ended_at <= at:
+            m = _NOTE_HOURS.search(note or "")
+            paid.append(((b - a).days, at, amount, float(m.group(1)) if m else None))
+    if not paid:
+        return None
+    _span, _at, amount, hours = min(paid, key=lambda x: (x[0], x[1]))
+    emp = (await db.execute(select(Employee).where(Employee.id == s.employee_id))).scalar_one()
+    return _paid_rate(emp, hours, amount)
+
+
+async def _reprice_paid_shift(db: AsyncSession, org_id: str, s, old_hours: float,
+                              legacy_rate: Optional[Decimal] = None) -> Decimal:
     """A shift whose attendance wage was already posted is paid again for its corrected hours:
     the difference goes in as a new ledger row in the shift's group (`attendance:<shift>`, as
     payroll.post_attendance_wages keys it), never by editing the old row (the ledger is
     append-only), dated to today so a correction to a period already run reaches the next run.
-    Same shape as the per-entry wages of timesheets (_sync_day_wages). The rate is the one the
-    shift was paid at. A shift not yet paid posts nothing: the next posting pays the new hours.
+    Same shape as the per-entry wages of timesheets (_sync_wages). The rate is the one the
+    shift was paid at (_paid_rate). A shift not yet paid posts nothing: the next posting pays the
+    new hours.
+
+    A shift paid by a window row from before per-shift wages (`legacy_rate`, from
+    _legacy_shift_rate) has no group yet. Its old share is taken off the window with a reversing
+    row (`attendance-legacy:<shift>`, once) and its corrected wage starts the shift's group, so it
+    is re-priced like any other shift from then on, and a later posting sees it as paid even when
+    the correction moved its end past the time the window was posted (which used to pay it again).
     Call with the employee row locked. Returns the change posted."""
     from backend.models import EmployeeBalanceLedger as L
     from backend.services.payroll import CommissionEngine, _money
     key = L.normalize_key(f"attendance:{s.id}")
     net, n = (await db.execute(select(func.coalesce(func.sum(L.amount), 0), func.count(L.id)).where(
         L.org_id == org_id, L.accrual_key == key))).one()
-    if not n:
-        return Decimal("0")
-    net = _money(net)
-    if old_hours and old_hours > 0:
-        rate = Decimal(str(net)) / Decimal(str(old_hours))
-    else:
-        emp = (await db.execute(select(Employee).where(Employee.id == s.employee_id))).scalar_one()
-        rate = Decimal(str(emp.hourly_cost_rate or (emp.wage_value if emp.wage_type == "hourly" else 0) or 0))
-    delta = _money(_money(Decimal(str(s.hours_worked or 0)) * rate) - net)
-    if delta == 0:
+    if not n and legacy_rate is None:
         return Decimal("0")
     tz = await _emp_tz(db, org_id, s.employee_id)
     today, day = today_in(tz), utc_to_wall(s.started_at, tz).date()
-    posted = await CommissionEngine(db, org_id)._post(
+    hours = q2(s.hours_worked or 0)
+    eng = CommissionEngine(db, org_id)
+    if not n:
+        old, new = _shift_pay(old_hours, legacy_rate), _shift_pay(s.hours_worked, legacy_rate)
+        lkey = L.normalize_key(f"attendance-legacy:{s.id}")
+        took = await eng._post(
+            employee_id=s.employee_id, entry_type="hourly_wage", amount=-old, event=None, rule_id=None,
+            ref_type="attendance", ref_id=f"{s.id}:{today}:{today}", idempotency_key=lkey, accrual_key=lkey,
+            note=f"Shop attendance wages {day}: shift corrected, taken off its window ({q2(old_hours)}h)")
+        paid = await eng._post(
+            employee_id=s.employee_id, entry_type="hourly_wage", amount=new, event=None, rule_id=None,
+            ref_type="attendance", ref_id=f"{s.id}:{today}:{today}", idempotency_key=key, accrual_key=key,
+            note=f"Shop attendance wages {day}: shift corrected ({hours}h)")
+        return (new if paid else Decimal("0")) - (old if took else Decimal("0"))
+    net = _money(net)
+    emp = (await db.execute(select(Employee).where(Employee.id == s.employee_id))).scalar_one()
+    rate = _paid_rate(emp, old_hours, net)
+    delta = _money(_shift_pay(s.hours_worked, rate) - net)
+    if delta == 0:
+        return Decimal("0")
+    posted = await eng._post(
         employee_id=s.employee_id, entry_type="hourly_wage", amount=delta, event=None, rule_id=None,
         ref_type="attendance", ref_id=f"{s.id}:{today}:{today}", idempotency_key=f"{key}@{n}",
-        accrual_key=key, note=f"Shop attendance wages {day}: shift corrected ({q2(s.hours_worked or 0)}h)")
+        accrual_key=key, note=f"Shop attendance wages {day}: shift corrected ({hours}h)")
     return delta if posted else Decimal("0")
 
 
@@ -282,10 +362,11 @@ async def correct_shift(
     before = {"started_at": utc_iso(s.started_at), "ended_at": utc_iso(s.ended_at),
               "hours_worked": float(q2(s.hours_worked or 0))}
     old_hours = float(s.hours_worked or 0)
+    legacy_rate = await _legacy_shift_rate(db, current.org_id, s)    # read before the times move
     s.started_at, s.ended_at = start, end
     s.hours_worked = q2((end - start).total_seconds() / 3600.0)
     await db.flush()
-    wage_change = await _reprice_paid_shift(db, current.org_id, s, old_hours)
+    wage_change = await _reprice_paid_shift(db, current.org_id, s, old_hours, legacy_rate)
     after = {"started_at": utc_iso(s.started_at), "ended_at": utc_iso(s.ended_at),
              "hours_worked": float(q2(s.hours_worked))}
     diff = {k: [before[k], after[k]] for k in before if before[k] != after[k]}
@@ -456,11 +537,18 @@ def _stop(e: TimeEntry, when: Optional[datetime] = None, needs_review: bool = Fa
         e.needs_review = True
 
 
-async def _stop_clipped(db: AsyncSession, e: TimeEntry) -> None:
+async def stop_clipped(db: AsyncSession, e: TimeEntry, *, lock: bool = True) -> None:
     """Stop a running timer now, or where the person's next entry begins if one was logged inside
     the time it ran (N-10: a manual entry for a time still ahead of the timer passes the overlap
-    check, and both were then paid). A clipped timer is flagged for review. Call with the employee
-    row locked."""
+    check, and both were then paid). A clipped timer is flagged for review.
+
+    Public: every path that stops a timer should stop it here (the Stop buttons, a switch, and the
+    job-close stop in orders._stop_job_timers). It takes the person's row lock first (`lock=False`
+    when the caller already holds it), so a manual entry can't be written between the check and
+    the stop. It doesn't emit the stop event or bill labour: callers do that (_maybe_emit_stop,
+    _apply_labour_billing)."""
+    if lock:
+        await _lock_employee(db, e.employee_id)
     when = now_utc()
     nxt = (await db.execute(select(func.min(TimeEntry.started_at)).where(
         TimeEntry.org_id == e.org_id, TimeEntry.employee_id == e.employee_id, TimeEntry.id != e.id,
@@ -470,6 +558,11 @@ async def _stop_clipped(db: AsyncSession, e: TimeEntry) -> None:
         _stop(e, when=nxt, needs_review=True)
     else:
         _stop(e, when=when)
+
+
+async def _stop_clipped(db: AsyncSession, e: TimeEntry) -> None:
+    """stop_clipped for callers that already hold the employee lock."""
+    await stop_clipped(db, e, lock=False)
 
 
 async def _resolve_order(db: AsyncSession, org_id: str, order_id: Optional[str]) -> Optional[Order]:
@@ -1096,11 +1189,8 @@ async def reopen_entry(
     # re-price the day(s): the reopened entry's wage comes back, the others' overtime moves, and
     # legacy-paid entries whose shares were taken off their old row are paid per entry (N-5)
     deltas: dict = {}
-    posted = Decimal("0")
-    for day in sorted({_shop_day(x, tz) for x in [e, *moved]}):
-        amt, _ = await _sync_day_wages(db, current.org_id, e.employee_id, day, tz,
-                                       fresh=frozenset(x.id for x in moved), deltas=deltas)
-        posted += amt
+    posted, _ = await _sync_wages(db, current.org_id, e.employee_id, {_shop_day(x, tz) for x in [e, *moved]},
+                                  tz, fresh=frozenset(x.id for x in moved), deltas=deltas)
     await db.commit()
     # N-11: wage_reversed is this entry's wage taken back; day_repriced what the rest of the day
     # moved by (it used to be folded into wage_reversed).
@@ -1333,54 +1423,85 @@ def _wage_key(entry_id: str) -> str:
 async def _sync_day_wages(db: AsyncSession, org_id: str, employee_id: str, day: date, tz: Optional[str],
                           *, fresh: frozenset = frozenset(),
                           deltas: Optional[dict] = None) -> tuple[Decimal, int]:
-    """Make the wage ledger for one person's shop day match what their approved entries earn.
+    """_sync_wages for one shop day."""
+    return await _sync_wages(db, org_id, employee_id, [day], tz, fresh=fresh, deltas=deltas)
+
+
+async def _sync_wages(db: AsyncSession, org_id: str, employee_id: str, days, tz: Optional[str],
+                      *, fresh: frozenset = frozenset(),
+                      deltas: Optional[dict] = None) -> tuple[Decimal, int]:
+    """Make the wage ledger for each of one person's shop `days` match what their approved
+    entries earn.
 
     Wages are kept per time entry: every ledger row for an entry carries the accrual key
     `hourly:<entry>`, so the group's sum is what that entry has been paid. An approved entry should
-    hold its share of the day (_day_shares, which places overtime); a reopened or voided one nothing
+    hold its share of its day (_day_shares, which places overtime); a reopened or voided one nothing
     (N-3: a voided entry that was paid is reversed here too). The difference is posted as a new row,
     never by changing old ones (the ledger is append-only), so a reopen reverses the wage and
     approving again pays it once. A first payment is dated to the day worked unless an accrued run
-    already covers that day (N-4: open_wage_day dates it to today then); a correction always to
-    today, so a correction to a period already run reaches the next run. Entries approved before
+    already covers that day (N-4, the rule of payroll.open_wage_day: today then); a correction always
+    to today, so a correction to a period already run reaches the next run. Entries approved before
     wages were kept per entry have no rows and are left alone unless they are being approved now
     (`fresh`). Call with the employee row locked. Returns (amount, rows) posted; `deltas`, when
-    given, collects the amount posted per entry id."""
+    given, collects the amount posted per entry id.
+
+    The window's entries, their wage groups and the person's accrued runs are each read once for
+    all the days (they used to be read per day), then each day is priced in memory."""
     from backend.models import EmployeeBalanceLedger as L
-    from backend.services.payroll import CommissionEngine, _money, open_wage_day
-    entries = (await db.execute(select(TimeEntry).where(
-        TimeEntry.org_id == org_id, TimeEntry.employee_id == employee_id,
-        TimeEntry.started_at >= day_start_utc(day, tz),
-        TimeEntry.started_at < day_end_utc(day, tz)))).scalars().all()
-    shares = _day_shares([e for e in entries if e.state == "approved"])
-    keys = {e.id: _wage_key(e.id) for e in entries}
+    from backend.models import PayrollRun
+    from backend.services.payroll import CommissionEngine, _money
+    days = sorted(set(days))
+    if not days:
+        return Decimal("0"), 0
+    by_day: dict[date, list[TimeEntry]] = {d: [] for d in days}
+    for e in (await db.execute(select(TimeEntry).where(
+            TimeEntry.org_id == org_id, TimeEntry.employee_id == employee_id,
+            TimeEntry.started_at >= day_start_utc(days[0], tz),
+            TimeEntry.started_at < day_end_utc(days[-1], tz)))).scalars().all():
+        d = _shop_day(e, tz)
+        if d in by_day:
+            by_day[d].append(e)
+    keys = {e.id: _wage_key(e.id) for es in by_day.values() for e in es}
+    if not keys:
+        return Decimal("0"), 0
     groups = {k: (_money(net), int(n)) for k, net, n in (await db.execute(
         select(L.accrual_key, func.sum(L.amount), func.count(L.id)).where(
             L.org_id == org_id, L.accrual_key.in_(list(keys.values())))
-        .group_by(L.accrual_key))).all()} if keys else {}
+        .group_by(L.accrual_key))).all()}
+    runs = None                      # accrued/paid runs over the window, read when a first payment needs them
     eng = CommissionEngine(db, org_id)
     today = today_in(tz)
     amount, rows = Decimal("0"), 0
-    for e in sorted(entries, key=lambda x: (x.started_at, x.id)):
-        key = keys[e.id]
-        net, n = groups.get(key, (Decimal("0"), 0))
-        if n == 0 and (e.id not in fresh or e.state == "void"):
-            continue
-        delta = _money(shares.get(e.id, Decimal("0")) - net)
-        if delta == 0:
-            continue
-        on = await open_wage_day(db, org_id, employee_id, day, today) if n == 0 else today
-        why = ("entry voided" if e.state == "void" else
-               "entry reopened" if e.state != "approved" else "day recalculated")
-        note = (f"Hourly wages {day} ({q2((e.duration_sec or 0) / 3600)}h)" if n == 0 else
-                f"Hourly wages {day}: {why}")
-        if await eng._post(employee_id=employee_id, entry_type="hourly_wage", amount=delta, event=None,
-                           rule_id=None, ref_type="time_entry", ref_id=f"{e.id}:{on}:{on}",
-                           idempotency_key=key if n == 0 else f"{key}@{n}", accrual_key=key, note=note):
-            amount += delta
-            rows += 1
-            if deltas is not None:
-                deltas[e.id] = deltas.get(e.id, Decimal("0")) + delta
+    for day in days:
+        entries = sorted(by_day[day], key=lambda x: (x.started_at, x.id))
+        shares = _day_shares([e for e in entries if e.state == "approved"])
+        for e in entries:
+            key = keys[e.id]
+            net, n = groups.get(key, (Decimal("0"), 0))
+            if n == 0 and (e.id not in fresh or e.state == "void"):
+                continue
+            delta = _money(shares.get(e.id, Decimal("0")) - net)
+            if delta == 0:
+                continue
+            on = today
+            if n == 0:
+                if runs is None:     # as payroll.open_wage_day, for the whole window at once
+                    runs = (await db.execute(select(PayrollRun.period_start, PayrollRun.period_end).where(
+                        PayrollRun.org_id == org_id, PayrollRun.employee_id == employee_id,
+                        PayrollRun.status.notin_(("draft", "void")),
+                        PayrollRun.period_start <= days[-1], PayrollRun.period_end >= days[0]))).all()
+                on = today if any(a <= day <= b for a, b in runs) else day
+            why = ("entry voided" if e.state == "void" else
+                   "entry reopened" if e.state != "approved" else "day recalculated")
+            note = (f"Hourly wages {day} ({q2((e.duration_sec or 0) / 3600)}h)" if n == 0 else
+                    f"Hourly wages {day}: {why}")
+            if await eng._post(employee_id=employee_id, entry_type="hourly_wage", amount=delta, event=None,
+                               rule_id=None, ref_type="time_entry", ref_id=f"{e.id}:{on}:{on}",
+                               idempotency_key=key if n == 0 else f"{key}@{n}", accrual_key=key, note=note):
+                amount += delta
+                rows += 1
+                if deltas is not None:
+                    deltas[e.id] = deltas.get(e.id, Decimal("0")) + delta
     return amount, rows
 
 
@@ -1557,7 +1678,7 @@ async def approve_timesheet(
     current: Employee = Depends(require_perm("can_manage_payroll")),
 ):
     """Approve (lock) every stopped entry in the window and pay each one into the payroll ledger
-    (_sync_day_wages). Days are the shop's days. Nothing is paid twice: an entry already paid is
+    (_sync_wages). Days are the shop's days. Nothing is paid twice: an entry already paid is
     no longer 'stopped', and each entry's wage has its own key."""
     emp = (await db.execute(select(Employee).where(
         Employee.id == data.employee_id, Employee.org_id == current.org_id))).scalar_one_or_none()
@@ -1597,10 +1718,7 @@ async def approve_timesheet(
                 "wage_posted": 0.0, "ledger_posted": False, "paid_from": "attendance"}
     await db.flush()
     fresh = frozenset(e.id for e in rows)
-    wage, posted = Decimal("0"), 0
-    for day in days:
-        amt, n = await _sync_day_wages(db, current.org_id, emp.id, day, tz, fresh=fresh)
-        wage, posted = wage + amt, posted + n
+    wage, posted = await _sync_wages(db, current.org_id, emp.id, days, tz, fresh=fresh)
     await audit.record(db, org_id=current.org_id, actor_id=current.id, action="payroll.timesheet_approve",
                        entity_type="employee", entity_id=data.employee_id,
                        diff={"window": [data.date_from, data.date_to], "entries": len(rows),
