@@ -18,7 +18,6 @@ from decimal import ROUND_HALF_UP, Decimal
 from sqlalchemy import Numeric
 from sqlalchemy.types import TypeDecorator
 
-
 _FIXED = re.compile(r"^(?:.?[<>=^])?[+\- ]?#?0?\d*[,_]?\.(?P<prec>\d+)[fF]$")
 
 
