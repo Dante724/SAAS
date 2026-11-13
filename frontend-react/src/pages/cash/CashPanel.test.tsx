@@ -10,17 +10,19 @@ import CashPanel from "./CashPanel";
 
 let calls: { method: string; url: string; key?: string; body?: any }[] = [];
 let failNextPost = false;
+const ROW = { id: "t1", txn_type: "income", amount: 50, comment: "Screen repair", status: "posted" };
+let txnItems: Record<string, unknown>[] = [ROW];
 const reply = (body: unknown) => ({ ok: true, status: 200, headers: new Headers(), json: async () => body, text: async () => JSON.stringify(body) }) as Response;
 
 beforeEach(() => {
-  calls = []; failNextPost = false;
+  calls = []; failNextPost = false; txnItems = [ROW];
   vi.stubGlobal("fetch", vi.fn(async (url: string, init?: RequestInit) => {
     const method = init?.method || "GET";
     calls.push({ method, url, key: (init?.headers as Record<string, string> | undefined)?.["Idempotency-Key"],
                  body: init?.body ? JSON.parse(String(init.body)) : undefined });
     if (method === "POST" && failNextPost) { failNextPost = false; return { ok: false, status: 502, statusText: "", headers: new Headers(), json: async () => ({ detail: "Bad gateway" }), text: async () => "{\"detail\":\"Bad gateway\"}" } as Response; }
     if (url.startsWith("/api/cash/accounts")) return reply({ items: [{ id: "acc1", name: "Till", payment_option: "cash", balance: 100 }, { id: "acc2", name: "Bank", payment_option: "card", balance: 0 }] });
-    if (url.startsWith("/api/cash/transactions?")) return reply({ items: [{ id: "t1", txn_type: "income", amount: 50, comment: "Screen repair", status: "posted" }], total: 240,
+    if (url.startsWith("/api/cash/transactions?")) return reply({ items: txnItems, total: 240,
       summary: { count: 237, income: 9000, expense: 10, today_in: 50, today_out: 0, today_net: 50 } });
     return reply({ items: [] });
   }));
@@ -124,5 +126,51 @@ describe("CashPanel money entries send an Idempotency-Key", { timeout: 15000 }, 
     await vi.waitFor(() => expect(posts("/api/cash/transfer")).toHaveLength(1));
     expect(posts("/api/cash/transfer")[0].key).toBeTruthy();
     expect(posts("/api/cash/transfer")[0].body).toMatchObject({ from_account_id: "acc1", to_account_id: "acc2", amount: 40 });
+  });
+});
+
+// Wave 4 C1: "Accept" only where the server says a split contact leg is pending; "Reverse payment" only on
+// a reversible supplier payment, sent once with an Idempotency-Key.
+describe("CashPanel split-leg and supplier-payment actions", { timeout: 15000 }, () => {
+  const posts = () => calls.filter((c) => c.method === "POST");
+
+  it("shows Accept only on a pending split leg and sends the reason", async () => {
+    txnItems = [ROW, { id: "t2", txn_type: "income", amount: 60, comment: "Advance", status: "deleted", ref_type: "client", split_pending: true }];
+    const u = userEvent.setup();
+    render(<CashPanel />);
+    const accept = await screen.findAllByRole("button", { name: "Accept" }, LOAD);
+    expect(accept).toHaveLength(1);
+    await u.click(accept[0]);
+    await u.type(await screen.findByRole("textbox"), "refunded by bank transfer");
+    await u.click(screen.getByRole("button", { name: "OK" }));
+    await vi.waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0].url).toBe("/api/cash/transactions/t2/accept-split");
+    expect(posts()[0].body).toEqual({ reason: "refunded by bank transfer" });
+  });
+
+  it("Cancel on Accept sends nothing", async () => {
+    txnItems = [{ ...ROW, split_pending: true }];
+    const u = userEvent.setup();
+    render(<CashPanel />);
+    await u.click(await screen.findByRole("button", { name: "Accept" }, LOAD));
+    await u.click(await screen.findByRole("button", { name: "Cancel" }));
+    await new Promise((r) => setTimeout(r, 0));
+    expect(posts()).toHaveLength(0);
+  });
+
+  it("reverses a supplier payment with a key", async () => {
+    txnItems = [ROW, { id: "t3", txn_type: "expense", amount: -310, comment: "Invoice PP-2231", status: "active", ref_type: "supplier_payment", ref_id: "sup1", supplier_payment_reversible: true }];
+    const u = userEvent.setup();
+    render(<CashPanel />);
+    const rev = await screen.findAllByRole("button", { name: "Reverse payment" }, LOAD);
+    expect(rev).toHaveLength(1);
+    expect(screen.queryByRole("button", { name: "Accept" })).toBeNull();
+    await u.click(rev[0]);
+    await u.type(await screen.findByRole("textbox"), "paid twice");
+    await u.click(screen.getByRole("button", { name: "OK" }));
+    await vi.waitFor(() => expect(posts()).toHaveLength(1));
+    expect(posts()[0].url).toBe("/api/suppliers/sup1/payments/t3/reverse");
+    expect(posts()[0].body).toEqual({ reason: "paid twice" });
+    expect(posts()[0].key).toBeTruthy();
   });
 });
