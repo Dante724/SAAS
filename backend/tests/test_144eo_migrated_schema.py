@@ -178,6 +178,27 @@ def test_every_model_check_constraint_and_partial_index_is_in_the_migrated_db(mi
     assert not missing, "The migrations don't build these (add them in a migration):\n  " + "\n  ".join(missing)
 
 
+def test_every_model_index_exists_by_name_in_the_migrated_db(migrated_db):
+    """alembic's compare can't reflect expression indexes (coalesce(...), lower(...)), so the drift
+    gate never sees one go missing: a SQLite batch rebuild in dec08 silently dropped three unique
+    ones. Every index the models declare must exist, by name, on the migrated database."""
+    def names(sync_conn):
+        sql = ("SELECT indexname FROM pg_indexes WHERE schemaname = current_schema()" if MIGRATED_ON_PG
+               else "SELECT name FROM sqlite_master WHERE type = 'index'")
+        return {r[0] for r in sync_conn.exec_driver_sql(sql)}
+
+    have = _migrated(migrated_db, names)
+    dialect = "postgresql" if MIGRATED_ON_PG else "sqlite"
+
+    def built_here(ix):          # .ddl_if(dialect="postgresql") indexes exist on Postgres only
+        only = getattr(ix, "_ddl_if", None)
+        return only is None or only.dialect is None or only.dialect == dialect
+
+    missing = sorted(f"{ix.name} on {t.name}" for t in Base.metadata.sorted_tables for ix in t.indexes
+                     if ix.name and built_here(ix) and ix.name not in have)
+    assert not missing, "The migrated database lacks these model indexes:\n  " + "\n  ".join(missing)
+
+
 def test_fired_rule_delete_keeps_logs_on_migrated_schema(migrated_db):
     if MIGRATED_ON_PG:
         pytest.skip("SQLite-only probe (PRAGMA-driven inserts); the SQLite job runs it")
