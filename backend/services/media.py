@@ -191,6 +191,167 @@ def public_ref(blob: MediaBlob) -> str:
     return f"/api/media/{blob.id}"
 
 
+# ── references in plain text columns (PERF-06) ─────────────────────────────────────────────
+# A Text column that used to hold a data URL (e.g. recommendations.media_data) can instead hold
+# "media:<blob id>": the bytes go through store() like every other upload, and no schema change is
+# needed. Readers call load_value(), which takes either form, so old inline rows keep working.
+REF_PREFIX = "media:"
+_REF = re.compile(r"^media:([0-9A-Za-z-]{1,64})$")
+
+
+def ref_id(value: Optional[str]) -> Optional[str]:
+    """The blob id behind a "media:<id>" value, else None (inline data or empty)."""
+    m = _REF.match(value or "")
+    return m.group(1) if m else None
+
+
+def as_ref(blob: MediaBlob) -> str:
+    return f"{REF_PREFIX}{blob.id}"
+
+
+async def store_ref(db, org_id: str, payload: str, *, name: Optional[str] = None,
+                    mime: Optional[str] = None) -> str:
+    """store() the payload and return the "media:<id>" value to keep in the text column."""
+    return as_ref(await store(db, org_id, payload, name=name, mime=mime))
+
+
+async def _blob(db, org_id: str, blob_id: str) -> Optional[MediaBlob]:
+    from sqlalchemy import select
+    return (await db.execute(select(MediaBlob).where(
+        MediaBlob.id == blob_id, MediaBlob.org_id == org_id))).scalar_one_or_none()
+
+
+async def load_value(db, org_id: str, value: Optional[str]) -> Optional[Tuple[bytes, Optional[str]]]:
+    """(bytes, mime|None) for a column value that is either a "media:<id>" reference (the blob
+    must be this shop's) or a legacy inline data URL / base64. None when there is nothing."""
+    if not value:
+        return None
+    bid = ref_id(value)
+    if bid:
+        blob = await _blob(db, org_id, bid)
+        if blob is None or (not blob.inline_data and not blob.storage_key):
+            return None
+        raw, mime = await load(blob)
+        return raw, blob.mime or mime
+    return await decode(value)
+
+
+async def erase_refs(db, org_id: str, values) -> int:
+    """Erase the blobs behind any "media:<id>" values (inline values have nothing to erase)."""
+    from sqlalchemy import select
+    ids = {b for b in (ref_id(v) for v in values) if b}
+    if not ids:
+        return 0
+    blobs = (await db.execute(select(MediaBlob).where(
+        MediaBlob.org_id == org_id, MediaBlob.id.in_(ids)))).scalars().all()
+    return await erase(db, list(blobs))
+
+
+async def relocate(blob: MediaBlob) -> bool:
+    """Move a blob kept inline (backend "db") to the active backend, keeping its id so every
+    pointer to it stays valid. False when there is nothing to move."""
+    backend = active_backend()
+    if backend == "db" or blob.backend != "db" or not blob.inline_data:
+        return False
+    raw, sniffed = await decode(blob.inline_data)
+    key = _key_for(blob.org_id, raw, blob.name)
+    if backend == "local":
+        await asyncio.to_thread(_write_file, os.path.join(settings.MEDIA_LOCAL_DIR, key), raw)
+    else:
+        await _s3_call("put_object", Bucket=settings.MEDIA_S3_BUCKET, Key=key, Body=raw,
+                       ContentType=blob.mime or sniffed or "application/octet-stream")
+    blob.backend, blob.storage_key, blob.inline_data = backend, key, None
+    blob.mime = blob.mime or sniffed
+    blob.size_bytes = len(raw)
+    return True
+
+
+# ── backfill (PERF-06) ──────────────────────────────────────────────────────────────────────
+async def _keyset(db, stmt, id_col, after: str, batch: int) -> list:
+    return list((await db.execute(stmt.where(id_col > after).order_by(id_col).limit(batch)
+                                  .execution_options(skip_tenant_filter=True))).scalars().all())
+
+
+async def backfill(db, *, batch: int = 50, org_id: Optional[str] = None, dry_run: bool = False,
+                   on_batch=None) -> dict:
+    """Move binary data still kept inline into the media store, a batch at a time, committing
+    after each batch. Safe to stop and run again: rows already moved are skipped.
+
+      * event_feed_items.media_data   -> a blob, pointed at by media_blob_id
+      * recommendations.media_data    -> a blob, the column keeps "media:<id>"
+      * media_blobs kept inline (db)  -> the active backend, when it is local or s3
+
+    Only one payload is held in memory at a time (ids are paged, each row is read on its own).
+    `org_id` limits it to one shop. Returns how many of each were moved (or would be, dry_run)."""
+    from sqlalchemy import select
+
+    from backend.models import EventFeedItem, Recommendation
+
+    def _scope(stmt, col):
+        return stmt.where(col == org_id) if org_id else stmt
+
+    async def _done():
+        if dry_run:
+            await db.rollback()
+        else:
+            await db.commit()
+        if on_batch:
+            on_batch()
+
+    out = {"feed": 0, "recommendations": 0, "blobs": 0}
+
+    # feed attachments
+    after = ""
+    q = _scope(select(EventFeedItem.id).where(EventFeedItem.media_data.is_not(None),
+                                              EventFeedItem.media_data != "",
+                                              EventFeedItem.media_blob_id.is_(None)),
+               EventFeedItem.org_id)
+    while ids := await _keyset(db, q, EventFeedItem.id, after, batch):
+        for iid in ids:
+            it = (await db.execute(select(EventFeedItem).where(EventFeedItem.id == iid)
+                                   .execution_options(skip_tenant_filter=True))).scalar_one()
+            if not dry_run:
+                blob = await store(db, it.org_id, it.media_data, name=it.media_name, mime=it.media_mime)
+                it.media_blob_id, it.media_data = blob.id, None
+            out["feed"] += 1
+        after = ids[-1]
+        await _done()
+        db.expunge_all()
+
+    # recommendation photos
+    after = ""
+    q = _scope(select(Recommendation.id).where(Recommendation.media_data.is_not(None),
+                                               Recommendation.media_data != "",
+                                               ~Recommendation.media_data.startswith(REF_PREFIX)),
+               Recommendation.org_id)
+    while ids := await _keyset(db, q, Recommendation.id, after, batch):
+        for rid in ids:
+            r = (await db.execute(select(Recommendation).where(Recommendation.id == rid)
+                                  .execution_options(skip_tenant_filter=True))).scalar_one()
+            if not dry_run:
+                r.media_data = await store_ref(db, r.org_id, r.media_data)
+            out["recommendations"] += 1
+        after = ids[-1]
+        await _done()
+        db.expunge_all()
+
+    # blobs kept inline while MEDIA_BACKEND was db
+    if active_backend() != "db":
+        after = ""
+        q = _scope(select(MediaBlob.id).where(MediaBlob.backend == "db", MediaBlob.inline_data.is_not(None)),
+                   MediaBlob.org_id)
+        while ids := await _keyset(db, q, MediaBlob.id, after, batch):
+            for bid in ids:
+                blob = (await db.execute(select(MediaBlob).where(MediaBlob.id == bid)
+                                         .execution_options(skip_tenant_filter=True))).scalar_one()
+                if dry_run or await relocate(blob):
+                    out["blobs"] += 1
+            after = ids[-1]
+            await _done()
+            db.expunge_all()
+    return out
+
+
 async def offload_if_enabled(db, org_id, payload, *, name=None, mime=None):
     """Convenience: when a non-db backend is active, store the payload and return
     (blob_id, None) so the caller nulls the inline column. Under db, returns

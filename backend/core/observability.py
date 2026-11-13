@@ -42,11 +42,17 @@ def render_metrics() -> str:
     lines += ["# HELP repairos_slow_queries_total SQL statements slower than SLOW_QUERY_MS",
               "# TYPE repairos_slow_queries_total counter",
               f"repairos_slow_queries_total {_SLOW_QUERIES[0]}"]
-    from backend.services.reconcile import LAST_COUNTS
-    if LAST_COUNTS:       # set by the nightly integrity sweep, on the worker that ran it
+    from backend.services import reconcile
+    if reconcile.LAST_COUNTS:       # set by the nightly integrity sweep, on the worker that ran it
         lines += ["# HELP repairos_integrity_mismatches Stored totals that disagree with their ledger (last sweep)",
                   "# TYPE repairos_integrity_mismatches gauge"]
-        lines += [f'repairos_integrity_mismatches{{check="{c}"}} {n}' for c, n in sorted(LAST_COUNTS.items())]
+        lines += [f'repairos_integrity_mismatches{{check="{c}"}} {n}'
+                  for c, n in sorted(reconcile.LAST_COUNTS.items())]
+        # PERF-17: a shop the sweep could not check (timeout, failed statement) is not a pass.
+        # Read from the module each time: sweep() rebinds the global.
+        lines += ["# HELP repairos_integrity_failed_shops Shops the last integrity sweep could not check",
+                  "# TYPE repairos_integrity_failed_shops gauge",
+                  f"repairos_integrity_failed_shops {int(reconcile.LAST_FAILED)}"]
     return "\n".join(lines) + "\n"
 
 

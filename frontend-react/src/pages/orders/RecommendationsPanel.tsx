@@ -3,6 +3,7 @@ import TeklySelect from "../../components/TeklySelect";
 import { buttonClass } from "../../components/Button";
 import { M } from "../../components/Shell";
 import { api } from "../../api/client";
+import AuthedImage from "../../components/AuthedImage";
 import { confirmDialog, promptDialog } from "../../lib/dialog";
 import { readAsDataUrl } from "../../lib/files";
 import { Gate, useMe } from "../../context/Me";
@@ -21,7 +22,7 @@ import { Badge, type BadgeTone } from "../../components/Card";
 export type RecRow = {
   id: string; title: string; note?: string | null; kind?: string; qty?: number; unit_price?: number; line_total?: number;
   status: "draft" | "sent" | "approved" | "declined" | string; urgency?: "now" | "soon" | null;
-  media_data?: string | null; order_item_id?: string | null; source?: string;
+  media_data?: string | null; media_url?: string | null; order_item_id?: string | null; source?: string;
   decline_reason?: string | null; remind_after?: string | null; decided_by_name?: string | null; decided_at?: string | null;
 };
 type Item = { id: string; name: string };
@@ -213,7 +214,7 @@ export default function RecommendationsPanel({ orderId, items, onFlash, onChange
             const itemName = r.order_item_id ? items.find((it) => it.id === r.order_item_id)?.name : null;
             return (
               <li key={r.id} className="flex gap-3 py-3">
-                {r.media_data ? <img src={r.media_data} alt="" className="h-12 w-12 shrink-0 rounded-lg object-cover border border-slate-200" />
+                {r.media_url ? <AuthedImage src={r.media_url} alt="" className="h-12 w-12 shrink-0 rounded-lg object-cover border border-slate-200" />
                   : <span className="grid h-12 w-12 shrink-0 place-items-center rounded-lg bg-slate-100 text-ink-tertiary"><M n={r.kind === "product" ? "inventory_2" : "build"} c="text-base" /></span>}
                 <div className="min-w-0 flex-1">
                   <div className="flex flex-wrap items-center gap-1.5">

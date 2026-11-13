@@ -11,7 +11,7 @@ from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.models import Employee, MediaBlob
 from backend.services.auth import get_current_employee, require_perm
-from backend.services.media import active_backend, decode, load, store
+from backend.services.media import active_backend, backfill, decode, load, load_value, store
 
 router = APIRouter(prefix="/api/media", tags=["media"])
 
@@ -118,7 +118,10 @@ async def _rec_media(db: AsyncSession, order, rec_id: str) -> Response:
         Recommendation.status.in_(("sent", "approved", "declined"))))).scalar_one_or_none()
     if not r or not r.media_data or not await _recommend_enabled(db, order.org_id):
         raise HTTPException(404, "Media not found")
-    raw, sniffed = await decode(r.media_data)
+    got = await load_value(db, order.org_id, r.media_data)     # "media:<id>" or legacy inline
+    if not got:
+        raise HTTPException(404, "Media not found")
+    raw, sniffed = got
     return _public_media(raw, sniffed or "application/octet-stream", None)
 
 
@@ -209,22 +212,9 @@ async def migrate_feed_media(
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_settings")),
 ):
-    """Offload existing inline feed media into the active backend (local/s3),
-    replacing inline payloads with blob pointers. No-op when backend=db.
-    Idempotent + batched; returns how many items were moved."""
-    from backend.models import EventFeedItem
-    if active_backend() == "db":
-        return {"migrated": 0, "note": "MEDIA_BACKEND=db — nothing to offload"}
-    rows = (await db.execute(select(EventFeedItem).where(
-        EventFeedItem.org_id == current.org_id,
-        EventFeedItem.media_data.isnot(None),
-        EventFeedItem.media_blob_id.is_(None)).limit(limit))).scalars().all()
-    moved = 0
-    for it in rows:
-        blob = await store(db, current.org_id, it.media_data,
-                          name=it.media_name, mime=it.media_mime)
-        it.media_blob_id = blob.id
-        it.media_data = None
-        moved += 1
-    await db.commit()
-    return {"migrated": moved, "backend": active_backend()}
+    """Move this shop's media still kept inline into the media store (PERF-06): timeline
+    attachments and recommendation photos, and, when MEDIA_BACKEND is local/s3, blobs kept in
+    the database. Idempotent and batched (services.media.backfill; the platform-wide run is
+    `python -m backend.scripts.media_backfill`). Returns how many were moved."""
+    out = await backfill(db, batch=max(1, min(limit, 500)), org_id=current.org_id)
+    return {"migrated": sum(out.values()), **out, "backend": active_backend()}
