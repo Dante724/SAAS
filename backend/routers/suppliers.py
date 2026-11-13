@@ -13,7 +13,7 @@ CRUD, plus the two things a shop actually does with a supplier:
 """
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel, Field
 from sqlalchemy import or_, select
 from sqlalchemy import update as sa_update
@@ -112,9 +112,20 @@ class SupplierPayIn(BaseModel):
 async def pay_supplier(
     supplier_id: str,
     data: SupplierPayIn,
+    request: Request,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_manage_inventory")),
 ):
+    """Re-review N9 (FIN-01 pattern): a retry with the same Idempotency-Key gets the first answer
+    back; without a key, the same payment again within a few seconds is refused as a double click."""
+    from backend.routers.cash import _keyed
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "suppliers.pay", {"supplier_id": supplier_id, "body": data},
+                          lambda: _pay_supplier(supplier_id, data, db, current, keyed=_keyed(request)))
+
+
+async def _pay_supplier(supplier_id: str, data: SupplierPayIn, db: AsyncSession, current: Employee, *,
+                        keyed: bool):
     """144bf — settle what we owe a supplier. Three linked, audited movements in one
     transaction: money leaves a cashbox (expense), the supplier's AP balance drops, and
     the unified contact ledger records the settlement. All reversible via the cash
@@ -139,6 +150,23 @@ async def pay_supplier(
     new_balance = q2(float(s.balance or 0) - amount)
     await db.execute(sa_update(Supplier).where(
         Supplier.id == s.id, Supplier.org_id == current.org_id).values(balance=Supplier.balance - amount))
+    if not keyed:
+        # The supplier row is locked by the UPDATE above, so a second identical request waits here
+        # and then sees the first one's cash leg.
+        from datetime import timedelta
+
+        from backend.models import Transaction
+        from backend.routers.cash import _DOUBLE_CLICK_S
+        from backend.services.dates import now_utc
+        hit = (await db.execute(select(Transaction.id).where(
+            Transaction.org_id == current.org_id, Transaction.ref_type == "supplier_payment",
+            Transaction.ref_id == s.id, Transaction.account_id == acc.id, Transaction.amount == -amount,
+            Transaction.status != "deleted",
+            Transaction.created_at >= now_utc() - timedelta(seconds=_DOUBLE_CLICK_S)).limit(1))).first()
+        if hit:
+            await db.rollback()
+            raise HTTPException(409, f"{amount:.2f} was just paid to this supplier from this cashbox. "
+                                     "If it's owed twice, pay again in a moment.")
 
     note = (data.note or f"Payment to {s.name}").strip()
     from backend.routers.cash import post_transaction
