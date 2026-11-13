@@ -1234,21 +1234,20 @@ async def void_run(
         raise HTTPException(400, "A draft posts nothing, so there is nothing to void")
     await assert_not_self(db, current, run.employee_id, "void your own pay run")
     # SEC-02 (re-review): voiding puts the payout back into its cashbox. Check, before anything is
-    # posted or moved, that the caller's role may use that cashbox (the role's account list, bound to
-    # this request's session), as cash.void_document_legs does.
+    # posted or moved, that the caller may use that cashbox, with the one check every cash move uses
+    # (scoping.assert_account_allowed: the role's list bound to this request's session, and no limit
+    # for the shop owner), as cash.void_document_legs does.
     t = acc = None
     if run.cash_txn_id:
-        from backend.services.scoping import account_allowed, may_use_account
+        from backend.services import scoping
         t = (await db.execute(select(Transaction).where(
             Transaction.id == run.cash_txn_id, Transaction.org_id == current.org_id))).scalar_one_or_none()
         if t and t.status != "deleted":
             acc = (await db.execute(select(Account).where(
                 Account.id == t.account_id, Account.org_id == current.org_id))).scalar_one_or_none()
-            role = None
-            if current.role_id:
-                from backend.models import Role
-                role = (await db.execute(select(Role).where(Role.id == current.role_id))).scalar_one_or_none()
-            if not account_allowed(db, t.account_id) or not may_use_account(role, t.account_id):
+            try:
+                scoping.assert_account_allowed(db, t.account_id)
+            except HTTPException:
                 name = acc.name if acc else "the cashbox it was paid from"
                 raise HTTPException(403, f"Your role can't use the cashbox \"{name}\" this run was paid from, "
                                          "so it can't void it.")

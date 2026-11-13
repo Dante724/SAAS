@@ -183,6 +183,100 @@ async def _pay_supplier(supplier_id: str, data: SupplierPayIn, db: AsyncSession,
     return {"ok": True, "supplier_id": s.id, "paid": amount, "balance": new_balance}
 
 
+class ReversePaymentIn(BaseModel):
+    reason: str
+
+
+@router.post("/{supplier_id}/payments/{txn_id}/reverse")
+async def reverse_supplier_payment(
+    supplier_id: str,
+    txn_id: str,
+    data: ReversePaymentIn,
+    request: Request,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(require_perm("can_manage_inventory")),
+):
+    """Re-review N9: undo a supplier payment made by mistake (wrong supplier, paid twice). Cash refuses
+    to void the payment's till row on its own (FIN-02), so this is the one way back, and it undoes all
+    three sides together: the till gets the money back with an opposite row (the payment stays on
+    record, marked corrected), the supplier owes it again, and the contact ledger takes the opposite
+    entry. Needs the right to pay suppliers and to void cash, and the payment's cashbox. A retry
+    (same Idempotency-Key, or a second click) gets the first reversal back; nothing moves twice."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "suppliers.reverse_payment",
+                          {"supplier_id": supplier_id, "txn_id": txn_id, "body": data},
+                          lambda: _reverse_supplier_payment(supplier_id, txn_id, data, db, current))
+
+
+async def _existing_reversal(db, org_id: str, txn_id: str):
+    from backend.models import Transaction
+    from backend.routers.cash import SUPPLIER_PAYMENT_REVERSAL
+    return (await db.execute(select(Transaction).where(
+        Transaction.org_id == org_id, Transaction.reverses_txn_id == txn_id,
+        Transaction.ref_type == SUPPLIER_PAYMENT_REVERSAL).limit(1))).scalar_one_or_none()
+
+
+async def _reverse_supplier_payment(supplier_id: str, txn_id: str, data: ReversePaymentIn, db: AsyncSession,
+                                    current: Employee):
+    from backend.models import Transaction
+    from backend.routers.cash import _CHANGED, SUPPLIER_PAYMENT_REVERSAL, post_transaction
+    from backend.services import audit, scoping
+    from backend.services.auth import assert_perm
+    from backend.services.money import claim_status
+    await assert_perm(db, current, "can_delete_transactions")   # it voids a cash movement
+    s = await _load(db, current, supplier_id)
+    t = (await db.execute(select(Transaction).where(
+        Transaction.id == txn_id, Transaction.org_id == current.org_id,
+        Transaction.ref_type == "supplier_payment", Transaction.ref_id == s.id))).scalar_one_or_none()
+    if not t:
+        raise HTTPException(404, "Payment not found for this supplier")
+    scoping.assert_account_allowed(db, t.account_id)   # before anything moves
+    reason = (data.reason or "").strip()
+    if not reason:
+        raise HTTPException(400, "Give a reason for reversing this payment")
+    if t.reverses_txn_id or float(t.amount or 0) >= 0:
+        raise HTTPException(409, "This row is an adjustment to a payment, not a payment.")
+
+    sid, paid = s.id, q2(-float(t.amount))   # plain values: a rollback below expires the rows
+
+    def answer(rev):
+        return {"ok": True, "supplier_id": sid, "reversed": True, "payment_id": txn_id,
+                "reversal_id": rev.id, "amount": paid}
+
+    done = await _existing_reversal(db, current.org_id, t.id)
+    if done:
+        return answer(done)
+    if t.status != "active":
+        raise HTTPException(409, "This payment was changed in Cash, so it can't be reversed here.")
+    # Claim the payment first: a second click that read it as active finds it taken and moves nothing.
+    if not await claim_status(db, t, "active", "corrected"):
+        await db.rollback()
+        done = await _existing_reversal(db, current.org_id, txn_id)
+        if done:
+            return answer(done)
+        raise HTTPException(409, _CHANGED)
+    amount = paid                            # what was paid, positive
+    await db.execute(sa_update(Supplier).where(
+        Supplier.id == s.id, Supplier.org_id == current.org_id).values(balance=Supplier.balance + amount))
+    note = f"Reversed payment to {s.name}: {reason}"[:300]
+    rev = await post_transaction(db, current.org_id, t.account_id, t.txn_type or "expense", amount,
+                                 cash_flow_item_id=t.cash_flow_item_id, comment=note,
+                                 ref_type=SUPPLIER_PAYMENT_REVERSAL, ref_id=s.id, employee_id=current.id,
+                                 native_amount=True)   # the exact amount the till paid out
+    rev.reverses_txn_id = t.id
+    if s.client_id:
+        from backend.services.ledger import post_contact_ledger
+        await post_contact_ledger(db, current.org_id, s.client_id, "payout_void", -amount,
+                                  note=note, ref_type="supplier_payment", ref_id=s.id,
+                                  created_by_id=current.id)
+    await audit.record(db, org_id=current.org_id, actor_id=current.id, action="supplier.payment_reverse",
+                       entity_type="transaction", entity_id=t.id,
+                       diff={"supplier_id": s.id, "amount": float(amount), "account_id": t.account_id,
+                             "reversal_id": rev.id, "reason": reason[:300]})
+    await db.commit()
+    return answer(rev)
+
+
 @router.get("/{supplier_id}/performance")
 async def supplier_performance(
     supplier_id: str,

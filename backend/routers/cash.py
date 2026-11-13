@@ -152,7 +152,17 @@ async def open_drawer_shift(db, org_id, acc) -> Optional[str]:
     if acc.location_id:
         q = q.where(CashShift.location_id == acc.location_id)
     shifts = (await db.execute(q)).scalars().all()
-    return shifts[0].id if len(shifts) == 1 else None
+    if len(shifts) != 1:
+        return None
+    # Audit FIN-12: a close running now claims the shift (UPDATE ... WHERE closed_at IS NULL) and then
+    # totals what the drawer should hold. Lock the shift row (FOR SHARE on Postgres: payments on the
+    # same drawer don't wait for each other, a close does) and re-check it is still open in the same
+    # statement. Either this payment's transaction ends first and the close counts it, or the close
+    # committed first and the payment links to no shift; never to one that has been totalled already.
+    # SQLite ignores the lock; it serialises writers anyway.
+    return (await db.execute(select(CashShift.id).where(
+        CashShift.id == shifts[0].id, CashShift.closed_at.is_(None))
+        .with_for_update(read=True))).scalar_one_or_none()
 
 
 def _ser_account(a: Account) -> dict:
@@ -402,6 +412,8 @@ _DOCUMENT_LEGS = {"order": "work order payment", "invoice": "invoice payment", "
 _CHANGED = "Someone else just changed this transaction. Refresh and try again."
 
 
+SUPPLIER_PAYMENT_REVERSAL = "supplier_payment_reversal"   # Transaction.ref_type of a reversal row
+
 # Audit FIN-02: cash legs with a twin on a contact's books. A client advance or payout (and an
 # invoice overpayment kept as credit) also moved the client's balance; a supplier payment also
 # lowered what we owe them. Voiding or correcting only the cash row reversed the till while the
@@ -417,6 +429,11 @@ _CONTACT_LEGS = {
     "supplier_payment": "This transaction is the cash side of a supplier payment, which also lowered what "
                         "you owe that supplier. It can't be undone from Cash on its own, or the supplier "
                         "would still show as paid.",
+    # The till side of a reversed supplier payment (routers/suppliers.reverse_supplier_payment): it put
+    # the money back and the supplier balance up again, so voiding it alone would split them again.
+    SUPPLIER_PAYMENT_REVERSAL: "This transaction reversed a supplier payment, which also put what you owe "
+                               "that supplier back. It can't be undone from Cash on its own; pay the "
+                               "supplier again instead.",
     # Audit FIN-09: the money a gift card was sold for. Voiding it alone leaves the card spendable.
     "gift_card": "This transaction is the money a gift card was sold for. It can't be undone from Cash on "
                  "its own, or the card would stay spendable with no money behind it.",
@@ -543,6 +560,23 @@ class AcceptSplitIn(BaseModel):
     reason: str
 
 
+# Contact legs that accept-split takes, and the shape that makes one split: voided on its own, or a
+# correction delta the contact never saw (services/reconcile._split_legs reports the same rows).
+_SPLIT_LEG_TYPES = ("client", "supplier_payment")
+
+
+def _is_split_leg(t) -> bool:
+    if t.ref_type not in _SPLIT_LEG_TYPES:
+        return False
+    return bool((t.status == "deleted" and not t.reverses_txn_id) or (t.status != "deleted" and t.reverses_txn_id))
+
+
+def supplier_payment_reversible(t) -> bool:
+    """A supplier payment as booked (not a correction delta), still standing."""
+    return (t.ref_type == "supplier_payment" and t.status == "active" and not t.reverses_txn_id
+            and float(t.amount or 0) < 0)
+
+
 async def _split_leg_accepted(db, org_id: str, txn_id: str) -> bool:
     from backend.models import AuditLog
     return (await db.execute(select(AuditLog.id).where(
@@ -563,11 +597,10 @@ async def accept_split_leg(
     the nightly split_leg sweep stops reporting it, and a voided one can't be restored any more
     (that would put the till off by the same amount again). Nothing moves; the record says who and why."""
     t = await _get_txn(db, current.org_id, txn_id)
-    if t.ref_type not in ("client", "supplier_payment"):
+    if t.ref_type not in _SPLIT_LEG_TYPES:
         raise HTTPException(409, "Only the cash side of a client balance movement or a supplier payment is "
                                  "checked against its contact.")
-    split = (t.status == "deleted" and not t.reverses_txn_id) or (t.status != "deleted" and t.reverses_txn_id)
-    if not split:
+    if not _is_split_leg(t):
         raise HTTPException(409, "This transaction is in step with its contact; there's nothing to accept.")
     scoping.assert_account_allowed(db, t.account_id)
     reason = (data.reason or "").strip()
@@ -1260,6 +1293,14 @@ async def list_transactions(
     accts = {a.id: a.name for a in (await db.execute(select(Account).where(Account.org_id == current.org_id))).scalars().all()}
     emps = {e.id: e.name for e in (await db.execute(select(Employee).where(Employee.org_id == current.org_id))).scalars().all()}
     items = {c.id: c.name for c in (await db.execute(select(CashFlowItem).where(CashFlowItem.org_id == current.org_id))).scalars().all()}
+    # Re-review N7: which rows on this page are a split contact leg nobody has accepted yet, so the UI
+    # offers "Accept" only there (POST /transactions/{id}/accept-split).
+    split_ids = {t.id for t in rows if _is_split_leg(t)}
+    if split_ids:
+        from backend.models import AuditLog
+        split_ids -= set((await db.execute(select(AuditLog.entity_id).where(
+            AuditLog.org_id == current.org_id, AuditLog.action == SPLIT_LEG_ACCEPTED,
+            AuditLog.entity_type == "transaction", AuditLog.entity_id.in_(sorted(split_ids))))).scalars().all())
 
     return {"items": [{
         "id": t.id, "txn_type": t.txn_type, "amount": t.amount,
@@ -1271,6 +1312,8 @@ async def list_transactions(
         # A1: append-only ledger fields
         "status": t.status, "balance_after": t.balance_after,
         "reverses_txn_id": t.reverses_txn_id, "void_reason": t.void_reason,
+        "split_pending": t.id in split_ids,
+        "supplier_payment_reversible": supplier_payment_reversible(t),
     } for t in rows], "total": total, "skip": skip, "limit": limit, **extra}
 
 

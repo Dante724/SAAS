@@ -20,7 +20,10 @@ import { Badge } from "../../components/Card";
 import { theadRowClass } from "../../components/Table";
 
 type TxnSummary = { count: number; income: number; expense: number; today_in?: number; today_out?: number; today_net?: number };
-type Txn = { id: string; txn_type?: string; amount?: number; account?: string; account_id?: string; cash_flow_item?: string; comment?: string; actual_date?: string; status?: string; balance_after?: number; reverses_txn_id?: string; void_reason?: string };
+type Txn = { id: string; txn_type?: string; amount?: number; account?: string; account_id?: string; cash_flow_item?: string; comment?: string; actual_date?: string; status?: string; balance_after?: number; reverses_txn_id?: string; void_reason?: string; ref_type?: string; ref_id?: string;
+  // From the server: a client/supplier cash leg out of step with its contact that nobody has accepted
+  // yet (accept-split), and a supplier payment that can still be reversed.
+  split_pending?: boolean; supplier_payment_reversible?: boolean };
 type FlowItem = { id: string; name?: string; direction?: string };
 
 const CCY: Record<string, string> = { INR: "₹", EUR: "€", USD: "$", GBP: "£", AED: "د.إ" };
@@ -98,6 +101,20 @@ export default function CashPanel() {
     // null = Cancel / Escape / backdrop → abort; "" = OK with no reason → still void.
     const reason = await promptDialog("Delete this transaction? Optional reason:", { defaultValue: "" }); if (reason === null) return;
     try { await api.del(`/cash/transactions/${t.id}${reason ? `?reason=${encodeURIComponent(reason)}` : ""}`); flash("Transaction voided"); await reloadTxns(); }
+    catch (e: any) { flash(`Failed: ${e.message}`); }
+  }
+  async function acceptSplit(t: Txn) {
+    const reason = await promptDialog("Accept this transaction as settled on the contact's side? Say how it was settled (required):", { defaultValue: "" });
+    if (reason === null) return;
+    if (!reason.trim()) { flash("A reason is required"); return; }
+    try { await api.post(`/cash/transactions/${t.id}/accept-split`, { reason: reason.trim() }); flash("Accepted as settled"); await reloadTxns(); }
+    catch (e: any) { flash(`Failed: ${e.message}`); }
+  }
+  async function reverseSupplierPayment(t: Txn) {
+    const reason = await promptDialog(`Reverse this supplier payment? ${money(Math.abs(t.amount || 0), sym)} goes back into ${sel?.name || "the cashbox"} and you owe the supplier it again. Reason (required):`, { defaultValue: "" });
+    if (reason === null) return;
+    if (!reason.trim()) { flash("A reason is required"); return; }
+    try { await api.postOnce(`/suppliers/${t.ref_id}/payments/${t.id}/reverse`, { reason: reason.trim() }, idempotencyKey()); flash("Supplier payment reversed"); await reloadTxns(); }
     catch (e: any) { flash(`Failed: ${e.message}`); }
   }
   async function restoreTxn(t: Txn) {
@@ -197,19 +214,23 @@ export default function CashPanel() {
                   const inc = txnDirection(t) === "in";
                   const del = t.status === "deleted";
                   const corrected = t.status === "corrected";
+                  // a voided row is struck through, but its actions (Restore, Accept) stay readable
+                  const dim = del ? "opacity-50 line-through" : "";
                   return (
-                    <tr key={t.id} className={`hover:bg-blue-50/30 ${del ? "opacity-50 line-through" : ""}`} title={del ? `Deleted${t.void_reason ? `: ${t.void_reason}` : ""}` : corrected ? "Corrected — see the linked adjustment row" : ""}>
-                      <td className="py-2.5 px-4 text-ink-tertiary">{fmtServerTime(t.actual_date, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }) || "—"}</td>
-                      <td className="py-2.5 px-4 text-ink-primary font-semibold">{t.comment || "—"}{corrected && <Badge tone="warning" size="sm" className="ml-2 no-underline">Corrected</Badge>}{t.reverses_txn_id && <Badge tone="info" size="sm" className="ml-2 no-underline">Adjustment</Badge>}</td>
-                      <td className="py-2.5 px-4">{t.cash_flow_item || "—"}</td>
-                      <td className="py-2.5 px-4 text-right tabular-nums font-bold text-emerald-600">{inc ? money(Math.abs(t.amount || 0), sym) : ""}</td>
-                      <td className="py-2.5 px-4 text-right tabular-nums font-bold text-rose-600">{!inc ? money(Math.abs(t.amount || 0), sym) : ""}</td>
-                      <td className="py-2.5 px-4 text-right tabular-nums text-ink-tertiary">{t.balance_after != null ? money(t.balance_after, sym) : "—"}</td>
+                    <tr key={t.id} className="hover:bg-blue-50/30" title={del ? `Deleted${t.void_reason ? `: ${t.void_reason}` : ""}` : corrected ? "Corrected — see the linked adjustment row" : ""}>
+                      <td className={`py-2.5 px-4 text-ink-tertiary whitespace-nowrap ${dim}`}>{fmtServerTime(t.actual_date, { month: "short", day: "numeric", year: "numeric", hour: "numeric", minute: "2-digit" }) || "—"}</td>
+                      <td className={`py-2.5 px-4 text-ink-primary font-semibold ${dim}`}>{t.comment || "—"}{corrected && <Badge tone="warning" size="sm" className="ml-2 no-underline">Corrected</Badge>}{t.reverses_txn_id && <Badge tone="info" size="sm" className="ml-2 no-underline">Adjustment</Badge>}{t.split_pending && <span title="Only the till moved; the contact's balance didn't. Settle it with the contact, then accept it here."><Badge tone="warning" size="sm" className="ml-2 no-underline">Out of step with contact</Badge></span>}</td>
+                      <td className={`py-2.5 px-4 ${dim}`}>{t.cash_flow_item || "—"}</td>
+                      <td className={`py-2.5 px-4 text-right tabular-nums font-bold text-emerald-600 ${dim}`}>{inc ? money(Math.abs(t.amount || 0), sym) : ""}</td>
+                      <td className={`py-2.5 px-4 text-right tabular-nums font-bold text-rose-600 ${dim}`}>{!inc ? money(Math.abs(t.amount || 0), sym) : ""}</td>
+                      <td className={`py-2.5 px-4 text-right tabular-nums text-ink-tertiary ${dim}`}>{t.balance_after != null ? money(t.balance_after, sym) : "—"}</td>
                       <td className="py-2.5 px-4 text-right whitespace-nowrap no-underline">
+                        {t.split_pending && can("can_correct_transactions") && <button onClick={() => acceptSplit(t)} className="text-2xs font-bold text-primary hover:underline mr-3">Accept</button>}
                         {del ? (
                           <button onClick={() => restoreTxn(t)} className="text-[11px] font-bold text-sky-600 hover:underline">Restore</button>
                         ) : (
                           <>
+                            {t.supplier_payment_reversible && t.ref_id && can("can_manage_inventory") && can("can_delete_transactions") && <button onClick={() => reverseSupplierPayment(t)} className="text-2xs font-bold text-primary hover:underline mr-3">Reverse payment</button>}
                             <button onClick={() => correctTxn(t)} className="text-[11px] font-bold text-amber-600 hover:underline mr-3">Correct</button>
                             <button onClick={() => deleteTxn(t)} className="text-[11px] font-bold text-rose-600 hover:underline">Delete</button>
                           </>
