@@ -128,7 +128,7 @@ async def warehouse_for(db, location_id: str, bin_id: Optional[str] = None) -> O
 async def add(db, part_id: str, location_id: str, qty: float, *, bin_id: Optional[str] = None,
               warehouse_id: Optional[str] = None) -> StockLevel:
     """Add `qty` (may be negative for a correction the caller has checked) to the exact row."""
-    await _check_reach(db, location_id, warehouse_id)
+    warehouse_id = await _check_reach(db, location_id, warehouse_id, bin_id=bin_id)
     row = await row_for(db, part_id, location_id, bin_id, create=True, warehouse_id=warehouse_id)
     await _bump(db, row, "qty_available", qty)
     return row
@@ -145,12 +145,18 @@ async def draw(db, part_id: str, location_id: str, qty: float, *, bin_id: Option
     the unbinned row, had no caller left and is gone). `only` limits the draw to the given rows (a warehouse's rows, for stock documents)."""
     if qty <= _EPS:
         return []
-    await _check_reach(db, location_id)
+    from backend.services import warehouses as _wh
+    reach = await _wh.reach(db)
+    if reach is not None and not (reach.touches(location_id) if isinstance(reach, _wh.Reach)
+                                  else _wh.reachable(reach, location_id)):
+        raise await _wh.deny(db, location_id)
     for _attempt in range(5):
         candidates = only if only is not None else await rows(db, part_id, location_id)
         if only is not None:
             for r in candidates:
                 await db.refresh(r, attribute_names=["qty_available"])
+        if reach is not None:      # re-review N3: only the warehouses this person can reach
+            candidates = [r for r in candidates if _wh.reachable(reach, r.location_id, r.warehouse_id)]
         if bin_id:
             candidates = sorted(candidates, key=lambda r: r.bin_id != bin_id)
         have = sum(max(r.qty_available or 0, 0) for r in candidates)
@@ -193,8 +199,8 @@ async def reserve(db, part_id: str, location_id: str, delta: float, *,
     document behind it when the caller gives one."""
     from backend.models import StockMovement
     if delta > 0:     # a release is always allowed: it only frees what someone else held
-        await _check_reach(db, location_id)
         main = await row_for(db, part_id, location_id, None, create=True)
+        await _check_reach(db, location_id, main.warehouse_id)
         await _bump(db, main, "qty_reserved", delta)
         db.add(StockMovement(part_id=part_id, location_id=location_id, warehouse_id=main.warehouse_id,
                              movement_type="reserve", qty=0, ref_type=ref_type, ref_id=ref_id,
@@ -248,11 +254,32 @@ async def default_bin(db, org_id: str, location_id: str) -> Optional[str]:
         StorageBin.location_id == location_id).order_by(Warehouse.is_default.desc()))).scalars().first()
 
 
-async def _check_reach(db, location_id: Optional[str], warehouse_id: Optional[str] = None) -> None:
+async def _check_reach(db, location_id: Optional[str], warehouse_id: Optional[str] = None, *,
+                       bin_id: Optional[str] = None) -> Optional[str]:
     """Audit SEC-04: every stock change checks the warehouse scope of the person on the request
-    (none for background jobs), here rather than in each of the many routes that move stock."""
+    (none for background jobs), here rather than in each of the many routes that move stock.
+
+    Re-review N3: the check is per warehouse. Stock added with no warehouse named lands in the
+    bin's warehouse, else the location's default one, else (for someone who can reach only
+    another warehouse at the location) the warehouse they can reach. Returns the warehouse the
+    row should be in (None = leave it to `row_for`, unchanged for unrestricted people)."""
     from backend.services import warehouses as _wh
-    await _wh.require_reach(db, location_id, warehouse_id)
+    reach = await _wh.reach(db)
+    if reach is None:
+        return warehouse_id
+    if not isinstance(reach, _wh.Reach) or location_id in reach.locations:
+        await _wh.require_reach(db, location_id, warehouse_id)
+        return warehouse_id
+    target = warehouse_id or await warehouse_for(db, location_id, bin_id)
+    if target is not None and not _wh.reachable(reach, location_id, target) and not warehouse_id and not bin_id:
+        from backend.models import Warehouse
+        mine = (await db.execute(select(Warehouse.id).where(
+            Warehouse.location_id == location_id, Warehouse.kind == "product", Warehouse.deleted_at.is_(None),
+            Warehouse.id.in_(list(reach.warehouses) or [""])).order_by(Warehouse.created_at))).scalars().first()
+        target = mine or target
+    if not _wh.reachable(reach, location_id, target):
+        raise await _wh.deny(db, location_id, target if warehouse_id or bin_id else None)
+    return target
 
 
 async def _bump(db, row: StockLevel, attr: str, delta: float) -> None:

@@ -234,6 +234,14 @@ async def create_asset(
 ):
     if data.owner_type == "client" and not data.client_id:
         raise HTTPException(400, "Client is required for a client-owned asset")
+    # Re-review N5: a client's device booked in at the counter is any staff member's job; a company
+    # asset is shop inventory, so it needs inventory rights, and either kind may only be placed at
+    # a location the person's role can act on.
+    from backend.services.auth import check_location_access
+    if data.owner_type != "client" and not await has_perm(db, current, "can_manage_inventory"):
+        raise HTTPException(403, "Adding a company-owned asset needs inventory rights. Set the owner to the "
+                                 "customer, or ask a manager.")
+    await check_location_access(db, current, data.location_id)
     if not await has_perm(db, current, "can_see_asset_cost"):
         data.purchase_price = 0.0
     from backend.routers.forms import check_entity_required

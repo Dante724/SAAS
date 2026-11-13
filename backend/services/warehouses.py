@@ -150,12 +150,39 @@ async def guard_action(db: AsyncSession, current: Employee, action: str,
 _REACH_KEY = "warehouse_reach"
 
 
-async def reach(db: AsyncSession, employee: Optional[Employee] = None) -> Optional[frozenset]:
-    """Location and warehouse ids this person may work with in inventory; None = all of them.
+class Reach(frozenset):
+    """What a limited person may reach in inventory (from `reach`).
 
-    A location listed on the role reaches every warehouse there; a warehouse listed reaches its
-    location's stock rows (stock is still addressed by location). A per-employee warehouse access
-    row (Build 89) with any action grants reach to that warehouse too."""
+    Re-review N3: reach is per warehouse, like `guard_action`. A **location** listed on the role
+    reaches every warehouse there (`locations`). A **warehouse** listed (or a per-employee access
+    row) reaches that warehouse only (`warehouses`), never the other warehouses at its location.
+    Stock rows with no warehouse tag (older data) are the location's default product warehouse,
+    so they are reached through it (`default_locs`). `wh_locs` = locations where at least one
+    warehouse is reached. The frozenset itself is every id above (callers only test membership
+    through `reachable` / `reach_clause`)."""
+
+    locations: frozenset
+    warehouses: frozenset
+    default_locs: frozenset
+    wh_locs: frozenset
+
+    def __new__(cls, locations=(), warehouses=(), default_locs=(), wh_locs=()):
+        self = super().__new__(cls, set(locations) | set(warehouses))
+        self.locations = frozenset(locations)
+        self.warehouses = frozenset(warehouses)
+        self.default_locs = frozenset(default_locs)
+        self.wh_locs = frozenset(wh_locs) | self.default_locs
+        return self
+
+    def touches(self, location_id: Optional[str]) -> bool:
+        """Can this person reach anything at all at this location?"""
+        return location_id in self.locations or location_id in self.wh_locs
+
+
+async def reach(db: AsyncSession, employee: Optional[Employee] = None) -> Optional[Reach]:
+    """The places this person may work with in inventory (a `Reach`); None = all of them.
+    A per-employee warehouse access row (Build 89) with any action grants reach to that
+    warehouse too."""
     actor_id = employee.id if employee is not None else db.info.get("actor_id")
     if not actor_id:
         return None
@@ -169,46 +196,82 @@ async def reach(db: AsyncSession, employee: Optional[Employee] = None) -> Option
     if allowed is None or emp is None:
         cache[actor_id] = None
         return None
-    ids = set(allowed)
     from sqlalchemy import or_
-    for wid, lid in (await db.execute(select(Warehouse.id, Warehouse.location_id).where(
-            Warehouse.org_id == emp.org_id,
-            or_(Warehouse.id.in_(allowed or [""]), Warehouse.location_id.in_(allowed or [""]))))).all():
-        ids.add(wid)
+
+    from backend.models import Location
+    listed = set(allowed)
+    locations = set((await db.execute(select(Location.id).where(
+        Location.org_id == emp.org_id, Location.id.in_(listed or [""])))).scalars().all())
+    warehouses, default_locs, wh_locs = set(), set(), set()
+
+    def _take(wid, lid, is_default, kind):
+        warehouses.add(wid)
         if lid:
-            ids.add(lid)
-    for wid, lid, acts in (await db.execute(select(Warehouse.id, Warehouse.location_id, WarehouseAccess.actions)
-                                            .join(WarehouseAccess, WarehouseAccess.warehouse_id == Warehouse.id)
-                                            .where(WarehouseAccess.employee_id == emp.id))).all():
+            wh_locs.add(lid)
+            if is_default and kind == "product":
+                default_locs.add(lid)
+
+    for wid, lid, dflt, kind in (await db.execute(select(
+            Warehouse.id, Warehouse.location_id, Warehouse.is_default, Warehouse.kind).where(
+            Warehouse.org_id == emp.org_id,
+            or_(Warehouse.id.in_(listed or [""]), Warehouse.location_id.in_(locations or [""]))))).all():
+        _take(wid, lid, dflt, kind)
+    for wid, lid, dflt, kind, acts in (await db.execute(
+            select(Warehouse.id, Warehouse.location_id, Warehouse.is_default, Warehouse.kind, WarehouseAccess.actions)
+            .join(WarehouseAccess, WarehouseAccess.warehouse_id == Warehouse.id)
+            .where(WarehouseAccess.employee_id == emp.id))).all():
         if isinstance(acts, list) and acts:
-            ids.add(wid)
-            if lid:
-                ids.add(lid)
-    cache[actor_id] = frozenset(ids)
+            _take(wid, lid, dflt, kind)
+    cache[actor_id] = Reach(locations, warehouses, default_locs, wh_locs)
     return cache[actor_id]
 
 
 def reachable(r: Optional[frozenset], location_id: Optional[str], warehouse_id: Optional[str] = None) -> bool:
-    """Is stock at this place visible/usable under `r` (from `reach`)?"""
+    """Is stock at this place visible/usable under `r` (from `reach`)? With no warehouse given,
+    the place is the location's default product warehouse."""
     if r is None or (location_id is None and warehouse_id is None):
         return True
-    return (location_id in r) or (warehouse_id is not None and warehouse_id in r)
+    if not isinstance(r, Reach):                 # a plain set of ids (older callers / tests)
+        return (location_id in r) or (warehouse_id is not None and warehouse_id in r)
+    if location_id is not None and location_id in r.locations:
+        return True
+    if warehouse_id is not None:
+        return warehouse_id in r.warehouses
+    return location_id in r.default_locs
 
 
 def reach_clause(r: Optional[frozenset], model=StockLevel):
     """SQL filter for rows (stock levels, movements, layers, units) at reachable places, or None."""
     if r is None:
         return None
-    from sqlalchemy import or_
-    ids = list(r) or [""]
-    return or_(model.location_id.in_(ids), model.warehouse_id.in_(ids))
+    from sqlalchemy import and_, or_
+    if not isinstance(r, Reach):
+        ids = list(r) or [""]
+        return or_(model.location_id.in_(ids), model.warehouse_id.in_(ids))
+    return or_(model.location_id.in_(list(r.locations) or [""]),
+               model.warehouse_id.in_(list(r.warehouses) or [""]),
+               and_(model.warehouse_id.is_(None), model.location_id.in_(list(r.default_locs) or [""])))
+
+
+async def deny(db: AsyncSession, location_id: Optional[str], warehouse_id: Optional[str] = None):
+    """The 403 for stock out of reach, naming the place (re-review N5: a part going back to the
+    branch a moved job took it from must say which branch, not just "this warehouse")."""
+    from backend.models import Location
+    place = None
+    if warehouse_id:
+        place = (await db.execute(select(Warehouse.name).where(Warehouse.id == warehouse_id))).scalar_one_or_none()
+    loc = (await db.execute(select(Location.name).where(Location.id == location_id))).scalar_one_or_none() \
+        if location_id else None
+    where = " › ".join(x for x in (loc, place) if x) or "this warehouse"
+    return HTTPException(403, f"You don't have access to stock at {where}. Ask a manager, or someone who "
+                              f"works there, to do this.")
 
 
 async def require_reach(db: AsyncSession, location_id: Optional[str], warehouse_id: Optional[str] = None,
                         employee: Optional[Employee] = None) -> None:
     """403 unless the person on this request may move stock at this location / warehouse."""
     if not reachable(await reach(db, employee), location_id, warehouse_id):
-        raise HTTPException(403, "You don't have access to this warehouse")
+        raise await deny(db, location_id, warehouse_id)
 
 
 async def balance(db: AsyncSession, warehouse: Warehouse) -> float:

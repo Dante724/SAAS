@@ -2734,6 +2734,15 @@ async def merge_parts(
     from backend.models import BundleComponent, Order, OrderLine, PurchaseOrder
     from backend.services import stock_posting, valuation
     all_ids = [target.id] + [s.id for s in sources]
+    # Re-review N4: the fold moves stock at every place these products are held, outside the stock
+    # row service, so it checks warehouse reach itself: every row must be one this person can reach.
+    from backend.services import warehouses as _whs
+    _r = await _whs.reach(db, current)
+    if _r is not None:
+        for _loc, _wid in (await db.execute(select(StockLevel.location_id, StockLevel.warehouse_id).where(
+                StockLevel.part_id.in_(all_ids)).distinct())).all():
+            if not _whs.reachable(_r, _loc, _wid):
+                raise await _whs.deny(db, _loc, _wid)
     await stock_posting.lock_parts(db, all_ids)
     for p in [target, *sources]:
         await db.refresh(p)
