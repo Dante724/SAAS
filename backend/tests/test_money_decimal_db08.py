@@ -177,3 +177,12 @@ async def test_rates_and_percentages_are_exact(client, tenant, db):
     await db.commit()
     await db.refresh(emp)
     assert emp.commission_labour == Decimal("12.345")
+
+
+async def test_exact_prints_like_the_float_it_replaced():
+    """Receipts, exports and messages were written against floats: a NUMERIC(14,4) quantity of 2
+    still prints "2.0" / "2", and a fixed-point format rounds half-up."""
+    q, m = Exact("2.0000"), Exact("10.50")
+    assert (str(q), f"{q}", f"{q:g}", str(m), f"{m:.2f}") == ("2.0", "2.0", "2", "10.5", "10.50")
+    assert f"{Exact('2.675'):.2f}" == "2.68" and f"{Exact('1234.5'):,.2f}" == "1,234.50"
+    assert repr(m) == "Exact('10.50')" and str(Exact("16000.12345678")) == "16000.12345678"

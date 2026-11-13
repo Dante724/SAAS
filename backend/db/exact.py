@@ -12,10 +12,14 @@ convention, not Python's banker's rounding.
 ``Numeric``), ``Exact`` in Python. A float written to it is lifted the same way, so the stored
 value is the float's decimal text rounded by the database to the column's scale.
 """
+import re
 from decimal import ROUND_HALF_UP, Decimal
 
 from sqlalchemy import Numeric
 from sqlalchemy.types import TypeDecorator
+
+
+_FIXED = re.compile(r"^(?:.?[<>=^])?[+\- ]?#?0?\d*[,_]?\.(?P<prec>\d+)[fF]$")
 
 
 def _lift(o):
@@ -37,7 +41,31 @@ class Exact(Decimal):
         return Decimal.__new__(cls, value, context)
 
     def __repr__(self):
-        return f"Exact('{self}')"
+        return f"Exact('{Decimal.__str__(self)}')"
+
+    # ── text: the same as the float the column used to return ───────────────
+    # Receipts, CSV/XLSX exports, messages and f-strings were written against floats: str(2.0) is
+    # "2.0" and f"{2.0:g}" is "2", where a NUMERIC(14,4) Decimal would print "2.0000". So text and
+    # float-style formats render through the float when it carries the exact same value (every
+    # stored money/qty value does), and fixed-point formats ("{:.2f}") round half-up exactly.
+    def _as_float(self):
+        f = float(self)
+        return f if Decimal(repr(f)) == Decimal.__pos__(self) else None
+
+    def __str__(self):
+        f = self._as_float()
+        return repr(f) if f is not None else Decimal.__str__(self)
+
+    def __format__(self, spec, *args):
+        m = _FIXED.match(spec or "")
+        if m:                                     # "{:.2f}", "{:,.2f}", "{:>10.3f}"
+            q = Decimal.quantize(self, Decimal(1).scaleb(-int(m.group("prec"))), rounding=ROUND_HALF_UP)
+            return Decimal.__format__(q, spec)
+        if not spec or spec[-1] in "gGn" or spec[-1] not in "eEfF%":
+            f = self._as_float()
+            if f is not None:
+                return format(f, spec)
+        return Decimal.__format__(self, spec)
 
     # ── comparisons: lift floats so 30.01 == Exact("30.01") ─────────────────
     def __eq__(self, other):
@@ -111,6 +139,8 @@ class ExactNumeric(TypeDecorator):
     def process_bind_param(self, value, dialect):
         if isinstance(value, float):
             return Decimal(repr(value))
+        if isinstance(value, Exact):            # drivers may str() a Decimal: hand them the exact one
+            return Decimal(Decimal.__str__(value))
         return value
 
     def process_result_value(self, value, dialect):
