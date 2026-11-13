@@ -1477,13 +1477,74 @@ async def post_stocktake(
                              ref_type="stocktake", ref_id=st.id, created_by_id=current.id))
         adjusted += 1
     await _settle_counted_units(db, current, st)
+    warnings = await _fit_holds_to_shelf(db, current, st,
+                                         sorted({l.part_id for l in lines if l.variance and l.variance < 0}))
     st.status = "posted"
     st.posted_at = now_utc()
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "stocktake", st.id,
-                           f"Stocktake posted: {adjusted} adjustment(s)")
+                           f"Stocktake posted: {adjusted} adjustment(s)"
+                           + (f". {' '.join(warnings)}" if warnings else ""))
     await db.commit()
-    return {"ok": True, "adjustments": adjusted}
+    out = {"ok": True, "adjustments": adjusted}
+    if warnings:
+        out["warnings"] = warnings
+    return out
+
+
+async def _fit_holds_to_shelf(db, current, st: Stocktake, part_ids: list) -> list[str]:
+    """Follow-up of #207: a count that finds fewer units than are reserved used to leave
+    `qty_reserved` above on-hand, so the shelf showed negative free stock and every hold looked
+    covered while some of them could never be picked.
+
+    The count is not refused: it is what is physically on the shelf, and refusing it would leave the
+    book wrong with no way to correct it. Reservations already work this way — a hold can only be
+    placed on free stock (inventory.reserve), a transfer can't box held units, and a job can't take
+    another job's hold without override — so after a count the holds are trimmed to what is there,
+    the newest hold first (expired holds before live ones): the job that asked first keeps its
+    units. The trimmed amount is released with an `unreserve` movement naming the stocktake, and
+    the poster gets one sentence per product saying which jobs lost how many units (also on the
+    stocktake's feed event). Returns those sentences."""
+    from backend.models import Order, StockLevel, StockReservation
+    out: list[str] = []
+    now = now_utc()
+    for pid in part_ids:
+        avail, held = (await db.execute(select(
+            func.coalesce(func.sum(StockLevel.qty_available), 0),
+            func.coalesce(func.sum(StockLevel.qty_reserved), 0)).where(
+            StockLevel.part_id == pid, StockLevel.location_id == st.location_id))).one()
+        avail, held = max(float(avail or 0), 0.0), float(held or 0)
+        excess = held - avail
+        if excess <= 1e-9:
+            continue
+        holds = (await db.execute(select(StockReservation).where(
+            StockReservation.org_id == current.org_id, StockReservation.part_id == pid,
+            StockReservation.location_id == st.location_id, StockReservation.released == False)  # noqa: E712
+            .with_for_update().execution_options(populate_existing=True))).scalars().all()
+        holds = sorted(holds, key=lambda h: (not (h.expires_at and h.expires_at < now),
+                                             -(h.created_at or datetime.min).timestamp(), h.id))
+        left, cut = excess, []
+        for h in holds:
+            if left <= 1e-9:
+                break
+            take = min(float(h.qty or 0), left)
+            if take <= 1e-9:
+                continue
+            h.qty = q4(float(h.qty or 0) - take)
+            if float(h.qty) <= 1e-9:
+                h.released = True
+            left -= take
+            cut.append((h.order_id, take, float(h.qty)))
+        # the whole excess comes off the location's reserved (also any that no hold row explains)
+        await stock_rows.reserve(db, pid, st.location_id, -excess, ref_type="stocktake", ref_id=st.id)
+        name = (await db.execute(select(Part.name).where(Part.id == pid))).scalar_one_or_none() or "a product"
+        nums = dict((await db.execute(select(Order.id, Order.order_number).where(
+            Order.id.in_([o for o, _t, _k in cut if o] or [""])))).all())
+        who = ", ".join((f"job {nums.get(o) or '?'}" if o else "a hold with no job") + f" lost {t:g}"
+                        + (f" (keeps {k:g})" if k > 1e-9 else "") for o, t, k in cut) or "no hold named them"
+        out.append(f"Only {avail:g} of “{name}” counted but {held:g} were reserved, so {excess:g} "
+                   f"reserved unit(s) were released: {who}.")
+    return out
 
 
 async def _settle_counted_units(db, current, st: Stocktake) -> None:

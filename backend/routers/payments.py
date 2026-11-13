@@ -187,6 +187,9 @@ async def simulate_pay(intent_id: str, db: AsyncSession = Depends(get_db)):
     if not i:
         raise HTTPException(404, "Intent not found")
     set_tenant(db, i.org_id)   # the pay link is the credential: scope the request to its shop
+    from backend.services.org_live import PAY_OFF_MESSAGE, org_id_is_live
+    if not await org_id_is_live(db, i.org_id):      # a suspended shop takes no payment
+        raise HTTPException(403, PAY_OFF_MESSAGE)
     if i.provider != "simulated":
         raise HTTPException(400, "This intent uses a live gateway; pay via its checkout URL")
     i = await pay.mark_succeeded(db, i)

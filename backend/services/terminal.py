@@ -741,16 +741,19 @@ async def settle_succeeded(db: AsyncSession, ch: TerminalCharge, *, provider_pay
     ch.error = None
     ch.provider_payment_id = provider_payment_id or ch.provider_payment_id
     ch.updated_at = now_utc()
+    # payment_received (customer receipt + staff) is queued in THIS transaction, so the payment and
+    # its messages are saved together or not at all (WO-08; they used to be made after the commit,
+    # so a crash in between kept the payment and lost the receipt). A rule error rolls back only
+    # the messages (savepoint); staff web pushes go out after the commit.
+    pushes: list = []
+    if ch.order_id:
+        from backend.services.notification_rules import queue_payment_received
+        await queue_payment_received(db, ch.org_id, [ch.order_id], ch.created_by_id, push_later=pushes)
     await db.commit()
     await db.refresh(ch)
-    if ch.order_id:
-        try:
-            from backend.services import notification_rules as _nr
-            await _nr.evaluate(db, org_id=ch.org_id, order_id=ch.order_id, event="payment_received")
-            await _nr.notify_staff_order(db, org_id=ch.org_id, order_id=ch.order_id,
-                                         event="payment_received", actor_id=ch.created_by_id)
-        except Exception:  # noqa: BLE001 — notifications are best-effort
-            log.exception("payment_received notification failed for charge %s", ch.id)
+    if pushes:
+        from backend.services.push import dispatch_deferred
+        await dispatch_deferred(db, pushes)
     return ch
 
 

@@ -20,6 +20,9 @@ SUSPENDED = "suspended"
 
 PUBLIC_OFF_MESSAGE = ("This shop isn't taking requests online right now. "
                       "Please contact the shop directly.")
+# The public pay page's wording: the customer only learns that online payment is off, never why.
+PAY_OFF_MESSAGE = ("This shop isn't taking payments online right now. "
+                   "Please contact the shop directly.")
 
 
 def live_org_clause():

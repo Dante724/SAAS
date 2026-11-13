@@ -2269,7 +2269,9 @@ export function JobNotes({ orderId, filter, onFlash }: { orderId: string; filter
                   {isImg && (i.media_url || i.media_data) && (i.media_url
                     ? <AuthedImage src={i.media_url} alt={i.media_name || "attachment"} className="mt-1 h-20 max-w-[200px] object-cover rounded-lg border border-slate-200" />
                     : <img src={i.media_data!} alt={i.media_name || "attachment"} className="mt-1 h-20 max-w-[200px] object-cover rounded-lg border border-slate-200" />)}
-                  {!isImg && i.media_name && <p className="text-xs text-ink-secondary flex items-center gap-1"><M n="description" c="text-sm" />{i.media_name}</p>}
+                  {!isImg && i.media_name && (i.media_url
+                    ? <button type="button" onClick={() => openAuthedDoc(i.media_url!.replace(/^\/api/, "")).catch(() => { /* the row stays */ })} className="text-xs text-primary font-semibold hover:underline flex items-center gap-1 text-left"><M n="description" c="text-sm" />{i.media_name}</button>
+                    : <p className="text-xs text-ink-secondary flex items-center gap-1"><M n="description" c="text-sm" />{i.media_name}</p>)}
                   <p className="text-[11px] text-ink-tertiary flex flex-wrap items-center gap-1.5">
                     <span>{i.item_type === "system" ? "Automatic" : i.author_name || "Staff"} · {fmtServerTime(i.created_at)}</span>
                     {i.visibility === "client" && <Badge tone="warning" size="sm" className="gap-0.5"><M n="visibility" c="text-[11px]" />Customer can see</Badge>}

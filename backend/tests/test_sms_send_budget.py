@@ -10,7 +10,7 @@ clear message; a shop on its own Twilio account is never capped.
 """
 import asyncio
 import os
-from datetime import datetime, timezone
+from datetime import datetime, timedelta, timezone
 
 import httpx
 import pytest
@@ -293,7 +293,7 @@ async def test_scheduled_win_back_texts_use_the_marketing_budget(client, tenant,
                             "agent.collections:e", "agent.collections:f"]):
         db.add(NotificationLog(org_id=org.id, scope="client", channel="sms", trigger_event=ev,
                                recipient=f"+1555000900{i}", body="x", status="scheduled",
-                               send_at=datetime(2020, 1, 1)))
+                               send_at=datetime.now(timezone.utc).replace(tzinfo=None) - timedelta(hours=1)))  # due, not stale
     await db.commit()
     await notification_rules.run_due(db, org_id=org.id)
     rows = {r.trigger_event: r.status for r in (await db.execute(select(NotificationLog).where(

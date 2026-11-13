@@ -512,6 +512,14 @@ OUTBOX_BATCH_SECONDS = 120
 SEND_TIMEOUT_S = 60
 LAST_ERROR_MAX = 240
 INTERRUPTED = "Interrupted while sending"
+# A queued message more than this late is skipped, not sent. Rows wait while their shop is
+# suspended (services/org_live), and "your device is ready" or a reminder for yesterday's booking
+# arriving days late is wrong, not helpful. 24 hours outlasts the whole retry ladder above
+# (about 10.6 hours of backoff, plus STUCK_SENDING_AFTER per reclaimed try), so a message that is
+# merely retrying is never cut off; anything past it has missed its moment. The cutoff runs from
+# send_at, the time the message was meant to go out.
+MAX_SEND_LATENESS = timedelta(hours=24)
+TOO_LATE = "Too late to send: it was due more than 24 hours ago"
 
 _PERMANENT_TEXT = (
     "on file",                        # "No phone number on file", "Client has no sms on file"
@@ -622,6 +630,10 @@ async def _hold_or_skip(db: AsyncSession, org_id: str, log, now: datetime) -> bo
     was settled here (skipped, or put back to wait) and must not be sent now."""
     if not log.recipient:
         log.status, log.claimed_at = "skipped", None
+        return True
+    # Missed its moment (typically waited out a long suspension): skip it rather than send late.
+    if log.send_at is not None and log.send_at < now - MAX_SEND_LATENESS:
+        log.status, log.error, log.claimed_at = "skipped", TOO_LATE, None
         return True
     # Tekly Sense agent messages: the agent must still be on (and the platform switch off),
     # win-back still needs marketing consent, and nothing goes outside opening hours.

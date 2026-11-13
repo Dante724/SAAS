@@ -19,6 +19,7 @@ from backend.models import Call, Campaign, Client, Employee
 from backend.services import call_contacts
 from backend.services.auth import get_current_employee, require_perm
 from backend.services.dates import now_utc
+from backend.services.org_live import org_id_is_live
 
 router = APIRouter(prefix="/api/comms", tags=["comms"])
 
@@ -128,6 +129,10 @@ async def call_webhook(
     present the org's X-Webhook-Token; records the call and matches (or, per the
     D2 automation, creates) the client by phone so an incoming call can pop their record."""
     await verify_org_webhook(db, org_id, request)
+    if not await org_id_is_live(db, org_id):
+        # Suspended: acknowledge (so the provider stops retrying) but log no call and raise no
+        # inquiry, task or alert (services/org_live).
+        return {"id": None, "ignored": "shop_not_live"}
     if data.direction not in ("inbound", "outbound"):
         raise HTTPException(422, "direction must be inbound or outbound")
     provider = (data.provider or "manual")[:20]
@@ -214,6 +219,10 @@ async def _twilio_request(request: Request, db, org_id: str, *, status_only: boo
     return cfg, f
 
 
+# Twilio's verb for refusing an incoming call without answering it (no call minutes billed).
+REJECT = '<Reject reason="busy"/>'
+
+
 def _xml(body: str) -> Response:
     return Response(content=body, media_type="application/xml")
 
@@ -231,6 +240,10 @@ async def twilio_voice_webhook(
     the customer."""
     from backend.services import twilio_voice as tv
     cfg, f = await _twilio_request(request, db, org_id)
+    if not await org_id_is_live(db, org_id):
+        # Suspended: decline the call unanswered (Twilio bills nothing for a rejected call) and
+        # log nothing. A plain busy tone tells the caller nothing about the shop's account.
+        return _xml(tv.twiml(REJECT))
     sid = f.get("CallSid") or ""
     if not sid:
         raise HTTPException(400, "Missing CallSid")
@@ -301,6 +314,8 @@ async def twilio_status_webhook(
     keeps its outcome, and the missed-call task is raised only on the move to missed."""
     from backend.services import twilio_voice as tv
     _cfg, f = await _twilio_request(request, db, org_id, status_only=True)
+    if not await org_id_is_live(db, org_id):
+        return _xml(tv.twiml())          # suspended: acknowledge, record nothing, raise nothing
     sid = f.get("ParentCallSid") or f.get("CallSid") or ""
     call = None
     if sid:

@@ -12,7 +12,7 @@ OrderChecklistItem.required/done for both the flat and the v2 items.
 import json
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -736,7 +736,17 @@ async def add_checklist(
     data: AddItemIn,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(require_perm("can_create_checklist")),
+    request: Request = None,
 ):
+    """Add an item (or a template's items) to the job's checklist. The tech app's offline queue
+    replays this: a retry with the same Idempotency-Key gets the first answer, not the items twice."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "checklist.add",
+                          {"order_id": order_id, "item": data.model_dump(mode="json")},
+                          lambda: _add_checklist(order_id, data, db, current))
+
+
+async def _add_checklist(order_id: str, data: AddItemIn, db: AsyncSession, current: Employee):
     await _order_or_404(db, current.org_id, order_id)
     existing = await _items(db, order_id)
     base = len(existing)

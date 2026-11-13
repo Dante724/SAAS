@@ -273,6 +273,8 @@ async def _stock_for(db, part_id, warehouse_id=None, wh_location_id=None, reach=
 async def list_products(search: Optional[str] = None, category_id: Optional[str] = None,
                         warehouse_id: Optional[str] = None, include_variants: bool = False,
                         q_: Optional[str] = Query(None, alias="q"),     # QA E6: `q` is the usual name
+                        # PERF-12: an optional page (no limit = the whole catalogue, as before)
+                        limit: Optional[int] = Query(None, ge=1, le=1000), skip: int = Query(0, ge=0),
                         db: AsyncSession = Depends(get_db), current: Employee = Depends(get_current_employee)):
     search = search or q_
     q = select(Part).where(Part.org_id == current.org_id, Part.active == True)  # noqa: E712
@@ -287,7 +289,14 @@ async def list_products(search: Optional[str] = None, category_id: Optional[str]
         from backend.models import Warehouse
         wh_location_id = (await db.execute(select(Warehouse.location_id).where(
             Warehouse.id == warehouse_id, Warehouse.org_id == current.org_id))).scalar_one_or_none()
-    rows = (await db.execute(q.options(defer(Part.image_data)).order_by(Part.name))).scalars().all()
+    paged = bool(limit is not None or skip)
+    total = None
+    if paged and not warehouse_id:
+        total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
+        q = q.order_by(Part.name, Part.id).offset(skip).limit(limit)
+    else:
+        q = q.order_by(Part.name, Part.id)
+    rows = (await db.execute(q.options(defer(Part.image_data)))).scalars().all()
     # Stock and variant counts for the whole page in two grouped queries (this used to be two
     # queries per product — ~2,000 round trips for a 1,000-item catalogue).
     ids = [p.id for p in rows]
@@ -324,7 +333,12 @@ async def list_products(search: Optional[str] = None, category_id: Optional[str]
         out.append({**_ser_product(p, qty, res, variants.get(p.id, 0), image=thumbs.get(p.id),
                                    has_image=p.id in thumbs),
                     "extra_barcodes": extras.get(p.id, [])})   # ii144a: the list's search finds them
-    return {"items": out}
+    if total is None:
+        # one warehouse's view drops the parts with nothing there, so its page is cut after that
+        total = len(out)
+        if paged:
+            out = out[skip:skip + limit] if limit is not None else out[skip:]
+    return {"items": out, "total": total}
 
 
 async def _checked_mpn(db, org_id, mpn, exclude_id=None) -> Optional[str]:
@@ -446,6 +460,20 @@ def _make_thumb(data_url: str) -> Optional[str]:
         return None
 
 
+# When PIL can't read a photo (a format or variant it lacks, a truncated file) the browser often
+# still can, so the list sends the photo itself, up to this size; past it, a plain grey tile, so
+# the row still shows that the product has a photo (the product view has the full one).
+THUMB_FALLBACK_MAX = 160_000      # characters of data URL (~120 KB)
+THUMB_PLACEHOLDER = ("data:image/png;base64,iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADElEQVR4"
+                     "nGN49OIDAAVqAru/zcVKAAAAAElFTkSuQmCC")          # 1x1 slate-200 PNG
+
+
+def _thumb_fallback(data_url: Optional[str]) -> Optional[str]:
+    if not data_url:
+        return None
+    return data_url if len(data_url) <= THUMB_FALLBACK_MAX else THUMB_PLACEHOLDER
+
+
 async def _thumbnails(db, ids: list) -> dict:
     """{part id: thumbnail} for the products that have a photo. The full photos are read only for
     rows whose photo changed since the last list (keyed by length + a sample of the data)."""
@@ -461,7 +489,8 @@ async def _thumbnails(db, ids: list) -> dict:
         photos = (await db.execute(select(Part.id, Part.image_data).where(Part.id.in_(stale)))).all()
         # N-6: decoding and resizing a page of full photos (PIL) is CPU work: on a cold cache (after
         # a deploy, per worker) it blocked the event loop for every shop. It runs on a worker thread.
-        made = await asyncio.to_thread(lambda: [(pid, _make_thumb(data or "")) for pid, data in photos])
+        made = await asyncio.to_thread(lambda: [(pid, _make_thumb(data or "") or _thumb_fallback(data))
+                                                for pid, data in photos])
         for pid, thumb in made:
             _THUMBS[pid] = (sig[pid], thumb)
     return {pid: _THUMBS[pid][1] for pid in sig}

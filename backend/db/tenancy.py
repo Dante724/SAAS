@@ -432,17 +432,27 @@ def _guard_cross_tenant_references(session: Session, flush_context, instances) -
             wanted.setdefault((target, pk), {}).setdefault(val, set()).add((org, f"{state.mapper.local_table.name}.{colname}"))
     if not wanted:
         return
-    # Owners already known this request: rows loaded in the session, and ids checked earlier
-    # (every autoflush runs this guard, so a 50-line sale would otherwise re-query the same rows).
+    # Owners already known this request: ids checked earlier (every autoflush runs this guard, so
+    # a 50-line sale would otherwise re-query the same rows), and the referenced rows this session
+    # holds. Those are found by identity key and among the new/modified rows of the referenced
+    # tables only: walking the whole identity map on every flush made a bulk import, which
+    # autoflushes once per row in a session of thousands of rows, quadratic (re-review follow-up).
     known: dict = session.info.setdefault("tenant_known", {})
-    for o in session.identity_map.values():
-        st = inspect(o)
-        loaded = st.dict             # loaded values only: never trigger a lazy load mid-flush
-        oid, oorg = loaded.get("id"), loaded.get("org_id")
-        if oid and oorg:
-            known[(st.mapper.local_table.name, oid)] = oorg
+    targets = {target.name for target, _pk in wanted}
+    for o in list(session.new) + list(session.dirty):
+        table = _table_of(o)
+        if table in targets:
+            loaded = o.__dict__          # loaded values only: never trigger a lazy load mid-flush
+            oid, oorg = loaded.get("id"), loaded.get("org_id")
+            if oid and oorg:
+                known[(table, oid)] = oorg
     with session.no_autoflush:
         for (target, pk), refs in wanted.items():
+            for i in refs:
+                held = _loaded(session, target.name, i)
+                oorg = held.__dict__.get("org_id") if held is not None else None
+                if oorg:
+                    known[(target.name, i)] = oorg
             owners = {i: known[(target.name, i)] for i in refs if (target.name, i) in known}
             missing = [i for i in refs if i not in owners]
             if missing:

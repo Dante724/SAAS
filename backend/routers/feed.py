@@ -5,10 +5,11 @@ Handles comments, photos, signatures, file attachments, and system events.
 import re
 from typing import Optional
 
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
-from sqlalchemy import desc, select
+from sqlalchemy import desc, inspect, select
 from sqlalchemy.ext.asyncio import AsyncSession
+from sqlalchemy.orm import defer
 
 from backend.core import paging as _paging
 from backend.db.database import get_db
@@ -48,13 +49,24 @@ class FeedItemIn(BaseModel):
     visibility: Optional[str] = None
 
 
-def _serialize(it: EventFeedItem) -> dict:
+def _media_url(it: EventFeedItem, inline: Optional[bool] = None) -> Optional[str]:
+    """Where the staff app loads this item's attachment (PERF-05): the stored blob, or for a row
+    written inline before PERF-06 (until the backfill moves it) the item's own media route."""
+    if it.media_blob_id:
+        return f"/api/media/{it.media_blob_id}"
+    if inline is None:      # read only what is loaded: the list defers the bytes
+        inline = bool(inspect(it).dict.get("media_data"))
+    return f"/api/feed/item/{it.id}/media" if inline else None
+
+
+def _serialize(it: EventFeedItem, inline: Optional[bool] = None) -> dict:
     return {
         "id": it.id,
         "item_type": it.item_type,
         "body": it.body,
-        "media_data": it.media_data,
-        "media_url": (f"/api/media/{it.media_blob_id}" if it.media_blob_id else None),
+        # PERF-05: never the bytes; the attachment is fetched from media_url.
+        "media_data": None,
+        "media_url": _media_url(it, inline),
         "media_name": it.media_name,
         "media_mime": it.media_mime,
         "visibility": it.visibility,
@@ -108,8 +120,10 @@ async def list_feed(
     if entity_type not in VALID_ENTITIES:
         raise HTTPException(400, "Invalid entity type")
     await _verify_entity(db, current.org_id, entity_type, entity_id, current)
+    has_inline = EventFeedItem.media_data.is_not(None)
     result = await db.execute(
-        select(EventFeedItem)
+        select(EventFeedItem, has_inline)
+        .options(defer(EventFeedItem.media_data))       # PERF-05: the bytes stay in the database
         .where(
             EventFeedItem.org_id == current.org_id,
             EventFeedItem.entity_type == entity_type,
@@ -118,14 +132,43 @@ async def list_feed(
         .order_by(desc(EventFeedItem.created_at))
         .limit(_paging.clamp(limit))
     )
-    items = result.scalars().all()
+    rows = result.all()
     # 144ba: opening a work-order feed clears its unread customer-message badge
     if entity_type == "order":
         o = (await db.execute(select(Order).where(Order.id == entity_id, Order.org_id == current.org_id))).scalar_one_or_none()
         if o is not None and (getattr(o, "client_msg_unread", 0) or 0):
             o.client_msg_unread = 0
             await db.commit()
-    return {"items": [_serialize(i) for i in items]}
+    return {"items": [_serialize(i, bool(inline)) for i, inline in rows]}
+
+
+@router.get("/item/{item_id}/media")
+async def feed_item_media(
+    item_id: str,
+    db: AsyncSession = Depends(get_db),
+    current: Employee = Depends(get_current_employee),
+):
+    """The attachment of a timeline item kept inline (written before PERF-06, not yet moved by
+    the media backfill). Same access as the timeline itself; served inert like /api/media."""
+    from fastapi import Response
+
+    from backend.routers.media import MEDIA_CACHE, safe_media_response
+    from backend.services import media as _media
+    it = (await db.execute(select(EventFeedItem).where(
+        EventFeedItem.id == item_id, EventFeedItem.org_id == current.org_id))).scalar_one_or_none()
+    if not it or it.entity_type not in VALID_ENTITIES:
+        raise HTTPException(404, "Media not found")
+    await _verify_entity(db, current.org_id, it.entity_type, it.entity_id, current)
+    if it.media_blob_id:
+        got = await _media.load_value(db, current.org_id, f"{_media.REF_PREFIX}{it.media_blob_id}")
+    else:
+        got = await _media.load_value(db, current.org_id, it.media_data)
+    if not got:
+        raise HTTPException(404, "Media not found")
+    raw, sniffed = got
+    kw = safe_media_response(raw, it.media_mime or sniffed or "application/octet-stream", it.media_name)
+    kw["headers"]["Cache-Control"] = MEDIA_CACHE
+    return Response(content=raw, **kw)
 
 
 @router.post("/{entity_type}/{entity_id}", status_code=201)
@@ -135,7 +178,19 @@ async def create_feed_item(
     data: FeedItemIn,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
+    request: Request = None,
 ):
+    """Add a comment, photo, signature or file to a record's timeline. The tech app's offline queue
+    replays this: a retry with the same Idempotency-Key gets the first answer, not a second item
+    (wave 4, after re-review N1)."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "feed.create",
+                          {"entity_type": entity_type, "entity_id": entity_id, "item": data.model_dump(mode="json")},
+                          lambda: _create_feed_item(entity_type, entity_id, data, db, current))
+
+
+async def _create_feed_item(entity_type: str, entity_id: str, data: FeedItemIn, db: AsyncSession,
+                            current: Employee):
     if entity_type not in VALID_ENTITIES:
         raise HTTPException(400, "Invalid entity type")
     if data.item_type not in VALID_ITEMS:
@@ -154,17 +209,17 @@ async def create_feed_item(
 
     await _verify_entity(db, current.org_id, entity_type, entity_id, current)
 
-    # B3: offload media to the configured backend (local/s3). When backend=db,
-    # store() keeps it inline, so behaviour is identical to before.
+    # PERF-06: every attachment goes through the media store, whatever the backend: on "db" the
+    # bytes sit in media_blobs, out of the timeline table; on local/s3 they leave the database.
     media_blob_id = None
-    stored_media_data = data.media_data
+    stored_media_data = None
     if data.media_data:
-        from backend.services.media import active_backend, store
-        if active_backend() != "db":
-            blob = await store(db, current.org_id, data.media_data,
-                               name=data.media_name, mime=data.media_mime)
-            media_blob_id = blob.id
-            stored_media_data = None      # bytes now live outside the DB
+        try:
+            blob = await _media.store(db, current.org_id, data.media_data,
+                                      name=data.media_name, mime=data.media_mime)
+        except ValueError:
+            raise HTTPException(413, _media.too_large_message())
+        media_blob_id = blob.id
 
     item = EventFeedItem(
         org_id=current.org_id,
