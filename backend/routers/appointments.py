@@ -2,9 +2,9 @@
 cannot hold two overlapping appointments (the schedule-gate intersection test)."""
 from datetime import datetime, timedelta
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException, Request
+from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from pydantic import BaseModel
-from sqlalchemy import select, and_
+from sqlalchemy import func, select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
 from backend.db.database import get_db
 from backend.services.dates import parse_dt, parse_wall_dt
@@ -40,6 +40,9 @@ async def _names(db, org_id):
 async def list_appointments(
     date_str: Optional[str] = None,
     unassigned: bool = False,          # 144dr: only appointments with no assignee
+    # PERF-12: an optional page (no limit = every match, as before); `total` counts every match
+    limit: Optional[int] = Query(None, ge=1, le=1000),
+    skip: int = Query(0, ge=0),
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
 ):
@@ -50,9 +53,14 @@ async def list_appointments(
         day = parse_dt(date_str, "date_str")
         q = q.where(Appointment.scheduled_for >= day,
                     Appointment.scheduled_for < day + timedelta(days=1))
-    rows = (await db.execute(q.order_by(Appointment.scheduled_for))).scalars().all()
+    paged = limit is not None or skip
+    page = q.order_by(Appointment.scheduled_for, Appointment.id)
+    if paged:
+        page = page.offset(skip).limit(limit)
+    rows = (await db.execute(page)).scalars().all()
+    total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0         if paged else len(rows)
     names = await _names(db, current.org_id)
-    return {"items": [_ser(b, names) for b in rows]}
+    return {"items": [_ser(b, names) for b in rows], "total": total}
 
 
 class AppointmentIn(BaseModel):

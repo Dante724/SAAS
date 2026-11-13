@@ -273,6 +273,8 @@ async def _stock_for(db, part_id, warehouse_id=None, wh_location_id=None, reach=
 async def list_products(search: Optional[str] = None, category_id: Optional[str] = None,
                         warehouse_id: Optional[str] = None, include_variants: bool = False,
                         q_: Optional[str] = Query(None, alias="q"),     # QA E6: `q` is the usual name
+                        # PERF-12: an optional page (no limit = the whole catalogue, as before)
+                        limit: Optional[int] = Query(None, ge=1, le=1000), skip: int = Query(0, ge=0),
                         db: AsyncSession = Depends(get_db), current: Employee = Depends(get_current_employee)):
     search = search or q_
     q = select(Part).where(Part.org_id == current.org_id, Part.active == True)  # noqa: E712
@@ -287,7 +289,14 @@ async def list_products(search: Optional[str] = None, category_id: Optional[str]
         from backend.models import Warehouse
         wh_location_id = (await db.execute(select(Warehouse.location_id).where(
             Warehouse.id == warehouse_id, Warehouse.org_id == current.org_id))).scalar_one_or_none()
-    rows = (await db.execute(q.options(defer(Part.image_data)).order_by(Part.name))).scalars().all()
+    paged = bool(limit is not None or skip)
+    total = None
+    if paged and not warehouse_id:
+        total = (await db.execute(select(func.count()).select_from(q.subquery()))).scalar() or 0
+        q = q.order_by(Part.name, Part.id).offset(skip).limit(limit)
+    else:
+        q = q.order_by(Part.name, Part.id)
+    rows = (await db.execute(q.options(defer(Part.image_data)))).scalars().all()
     # Stock and variant counts for the whole page in two grouped queries (this used to be two
     # queries per product — ~2,000 round trips for a 1,000-item catalogue).
     ids = [p.id for p in rows]
@@ -324,7 +333,12 @@ async def list_products(search: Optional[str] = None, category_id: Optional[str]
         out.append({**_ser_product(p, qty, res, variants.get(p.id, 0), image=thumbs.get(p.id),
                                    has_image=p.id in thumbs),
                     "extra_barcodes": extras.get(p.id, [])})   # ii144a: the list's search finds them
-    return {"items": out}
+    if total is None:
+        # one warehouse's view drops the parts with nothing there, so its page is cut after that
+        total = len(out)
+        if paged:
+            out = out[skip:skip + limit] if limit is not None else out[skip:]
+    return {"items": out, "total": total}
 
 
 async def _checked_mpn(db, org_id, mpn, exclude_id=None) -> Optional[str]:
