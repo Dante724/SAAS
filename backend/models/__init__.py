@@ -30,6 +30,7 @@ from sqlalchemy.orm import Mapped, Session, mapped_column, relationship, validat
 
 from backend.core.client_source import current_client
 from backend.db.database import Base
+from backend.db.exact import Money   # DB-08: NUMERIC that reads back as an exact Decimal
 from backend.db.tenancy import OrgScoped  # read-side shop isolation
 from backend.db.secret_json import SecretFieldsJSON   # passcode-like custom fields, encrypted
 from backend.services.dates import now_utc
@@ -153,22 +154,22 @@ class Organisation(Base):
     retention_days: Mapped[Optional[dict]] = mapped_column(JSON)
     # Build 144ah — POs whose total exceeds this need a manager (role with can_manage_settings)
     # to send. 0/None disables the gate.
-    po_approval_threshold: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
+    po_approval_threshold: Mapped[Optional[float]] = mapped_column(Money(12, 2))
     # tk02: how a task_closed commission is paid when a task has several assignees:
     # split (default; null reads as split) | each_full | first_only (the primary owner, the old way).
     task_commission_mode: Mapped[Optional[str]] = mapped_column(String(12))
     payment_provider: Mapped[str] = mapped_column(String(20), default="auto")  # auto|stripe|square|sumup|simulated
-    loyalty_earn_rate: Mapped[float] = mapped_column(Float, default=0.0)   # points per 1.00 paid; 0 = program off
-    loyalty_point_value: Mapped[float] = mapped_column(Numeric(12, 4, asdecimal=False), default=0.0)  # currency value of 1 point at redemption
+    loyalty_earn_rate: Mapped[float] = mapped_column(Money(12, 4), default=0.0)   # points per 1.00 paid; 0 = program off
+    loyalty_point_value: Mapped[float] = mapped_column(Money(12, 4), default=0.0)  # currency value of 1 point at redemption
     price_type_tickets_id: Mapped[Optional[str]] = mapped_column(String)   # default price list per doc type
     price_type_sales_id: Mapped[Optional[str]] = mapped_column(String)
     price_type_invoices_id: Mapped[Optional[str]] = mapped_column(String)
     price_decimals: Mapped[int] = mapped_column(Integer, default=2)
     # 144gy — margin-floor guardrail: warn/block a line whose margin falls below this.
-    min_margin_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    min_margin_pct: Mapped[float] = mapped_column(Money(9, 4), default=0.0)
     margin_guard: Mapped[str] = mapped_column(String, default="off")   # off | warn | block
     # 144hd — line discounts above this % need can_approve_discount (or manager). 0 = off.
-    discount_approval_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    discount_approval_pct: Mapped[float] = mapped_column(Money(9, 4), default=0.0)
     contact_consent_phone_default: Mapped[bool] = mapped_column(Boolean, default=True)
     contact_consent_email_default: Mapped[bool] = mapped_column(Boolean, default=True)
     prohibit_dup_phone: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -197,7 +198,7 @@ class Organisation(Base):
     sub_status: Mapped[str] = mapped_column(String(20), default="trial")
     sub_start: Mapped[Optional[date]] = mapped_column(Date)
     sub_end: Mapped[Optional[date]] = mapped_column(Date)     # term end; past this the tenant is locked
-    discount_pct: Mapped[float] = mapped_column(Numeric(5, 2, asdecimal=False), default=0.0)   # per-account discount %
+    discount_pct: Mapped[float] = mapped_column(Money(5, 2), default=0.0)   # per-account discount %
     # Subscription billing (Tekly's own Stripe account, not the shop's). sub_status also takes
     # past_due (card failed, Stripe still retrying) and unpaid (retries gave up) from Stripe.
     billing_period: Mapped[str] = mapped_column(String(10), default="month")   # month | year
@@ -300,7 +301,7 @@ class Organisation(Base):
     membership_lapse_days: Mapped[int] = mapped_column(Integer, default=30)
     membership_renewal_notice_days: Mapped[int] = mapped_column(Integer, default=30)
     membership_checkout_prompt: Mapped[bool] = mapped_column(Boolean, default=True)
-    membership_prompt_threshold_pct: Mapped[float] = mapped_column(Float, default=25.0)
+    membership_prompt_threshold_pct: Mapped[float] = mapped_column(Money(9, 4), default=25.0)
     membership_prompt_snooze_days: Mapped[int] = mapped_column(Integer, default=90)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
@@ -351,7 +352,7 @@ class Role(OrgScoped, Base):
     # E3: whose payroll this role may see and manage (own | all | selected); selected = payroll_employee_ids
     payroll_scope: Mapped[str] = mapped_column(String(10), default="all", server_default="all")
     payroll_employee_ids: Mapped[Optional[list]] = mapped_column(JSON)
-    refund_ceiling: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2))  # Build 108: above this needs approval
+    refund_ceiling: Mapped[Optional[Numeric]] = mapped_column(Money(12, 2))  # Build 108: above this needs approval
     # A5: per-status VIEW ACL — order/estimate status keys this role may NOT see
     # (deny-wins, default-allow). Complements the existing transition (set) ACL.
     hidden_status_keys: Mapped[Optional[dict]] = mapped_column(JSON)  # list of OrderStatus.key
@@ -400,11 +401,11 @@ class Employee(OrgScoped, Base):
     pin_hash: Mapped[Optional[str]] = mapped_column(String(255))
     phone: Mapped[Optional[str]] = mapped_column(String(50))
     wage_type: Mapped[str] = mapped_column(String(20), default="fixed")  # fixed|hourly|commission
-    wage_value: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    hourly_cost_rate: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)   # labor cost per hour (time clock)
-    billable_rate: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)      # charge-out rate per hour
-    commission_labour: Mapped[float] = mapped_column(Float, default=0.0)
-    commission_parts: Mapped[float] = mapped_column(Float, default=0.0)
+    wage_value: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    hourly_cost_rate: Mapped[float] = mapped_column(Money(12, 2), default=0.0)   # labor cost per hour (time clock)
+    billable_rate: Mapped[float] = mapped_column(Money(12, 2), default=0.0)      # charge-out rate per hour
+    commission_labour: Mapped[float] = mapped_column(Money(9, 4), default=0.0)
+    commission_parts: Mapped[float] = mapped_column(Money(9, 4), default=0.0)
     weekly_hours: Mapped[Optional[float]] = mapped_column(Float)   # build 144: expected working hours/week
     # build 144i: which clock drives hourly pay — labour hours (time on work
     # orders) or shop attendance (clock-in/out shifts). null = labour (default).
@@ -459,11 +460,11 @@ class WageRecord(OrgScoped, Base):
     employee_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id"))
     period_start: Mapped[date] = mapped_column(Date)
     period_end: Mapped[date] = mapped_column(Date)
-    base_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
-    commission_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
-    bonus: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
-    deductions: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
-    net_payable: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    base_amount: Mapped[Decimal] = mapped_column(Money(12, 2), default=Decimal("0"))
+    commission_amount: Mapped[Decimal] = mapped_column(Money(12, 2), default=Decimal("0"))
+    bonus: Mapped[Decimal] = mapped_column(Money(12, 2), default=Decimal("0"))
+    deductions: Mapped[Decimal] = mapped_column(Money(12, 2), default=Decimal("0"))
+    net_payable: Mapped[Decimal] = mapped_column(Money(12, 2), default=Decimal("0"))
 
 # ─────────────────────────────────────────────
 # CLIENTS & DEVICES
@@ -513,7 +514,7 @@ class Client(OrgScoped, Base):
     # WhatsApp is its own consent (agreeing to texts isn't agreeing to WhatsApp).
     # None = not asked yet; staff record the customer's answer from the phone app.
     consent_whatsapp: Mapped[Optional[bool]] = mapped_column(Boolean, nullable=True)
-    balance: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    balance: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     blacklisted: Mapped[bool] = mapped_column(Boolean, default=False)
     # Build 122: preferred billing currency for this contact (None → org base). Documents
     # default to it, and it drives converted price/balance display.
@@ -524,10 +525,10 @@ class Client(OrgScoped, Base):
     # Discount matrix (Orderry "Managing contact discounts") — orders & invoices.
     # mode: none | percent | price_type. Sales-page discounts arrive with the Sales module.
     disc_services_mode: Mapped[str] = mapped_column(String(12), default="none")
-    disc_services_value: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    disc_services_value: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     disc_services_price_type_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("price_types.id"))
     disc_materials_mode: Mapped[str] = mapped_column(String(12), default="none")
-    disc_materials_value: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    disc_materials_value: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     disc_materials_price_type_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("price_types.id"))
     devices: Mapped[list["Device"]] = relationship(back_populates="client")
     orders: Mapped[list["Order"]] = relationship(back_populates="client")
@@ -572,8 +573,8 @@ class Device(OrgScoped, Base):
     location_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("locations.id"), index=True)  # warehouse the asset sits in
     warehouse_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("warehouses.id"), index=True)  # Build 90: asset warehouse
     asset_status: Mapped[str] = mapped_column(String(20), default="in_use")  # in_use|in_stock|for_sale|sold|written_off
-    purchase_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    sale_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    purchase_price: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    sale_price: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     converted_to_part_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("parts.id"))  # if turned into sellable product
     asset_type: Mapped[Optional[str]] = mapped_column(String(50))  # Device|Vehicle|Tool|Appliance
     brand: Mapped[Optional[str]] = mapped_column(String(100))
@@ -727,21 +728,21 @@ class Order(OrgScoped, Base):
     cancel_reason: Mapped[Optional[str]] = mapped_column(String(120))
     # What the customer still owed when the job was dropped, written off so it isn't left as a
     # debt (balance due and the contact ledger both net it out). Back to 0 when reopened.
-    written_off: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0, server_default="0")
+    written_off: Mapped[float] = mapped_column(Money(12, 2), default=0.0, server_default="0")
     tech_notes: Mapped[Optional[str]] = mapped_column(Text)   # 144bj: technician's working notes
     conclusion: Mapped[Optional[str]] = mapped_column(Text)   # 144bj: conclusion / client recommendations
-    labour_total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    parts_total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    labour_total: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    parts_total: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     # Build 122: stored money is always in the org base currency. currency_code + fx_rate
     # (units of this currency per 1 base) tell the UI/print layer how to *display* converted
     # amounts; the rate is snapshotted at creation so later rate changes don't alter old docs.
     currency_code: Mapped[Optional[str]] = mapped_column(String(8))
-    fx_rate: Mapped[Optional[float]] = mapped_column(Float)
-    discount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    tax: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    prepayment_total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    deposit_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)  # requested deposit (e.g. on an estimate) the client can pay via pay-link
+    fx_rate: Mapped[Optional[float]] = mapped_column(Money(18, 8))
+    discount: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    tax: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    total: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    prepayment_total: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    deposit_amount: Mapped[float] = mapped_column(Money(12, 2), default=0.0)  # requested deposit (e.g. on an estimate) the client can pay via pay-link
     warranty_until: Mapped[Optional[date]] = mapped_column(Date)
     due_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     status_entered_at: Mapped[Optional[datetime]] = mapped_column(DateTime, default=_now)
@@ -793,31 +794,31 @@ class OrderLine(OrgScoped, Base):
     line_type: Mapped[str] = mapped_column(String(20))  # labour|part|fee
     ref_id: Mapped[Optional[str]] = mapped_column(String)
     description: Mapped[str] = mapped_column(String(500))
-    qty: Mapped[float] = mapped_column(Float, default=1.0)
-    unit_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    cost_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    qty: Mapped[float] = mapped_column(Money(14, 4), default=1.0)
+    unit_price: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    cost_price: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     kind: Mapped[Optional[str]] = mapped_column(String(20))  # service|product|custom|membership
     technician_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"), index=True)
     # Memberships: set by the server only, when a plan covers or discounts this line (the
     # selling line of a plan carries it too). Never accepted from the client.
     membership_id: Mapped[Optional[str]] = mapped_column(String, index=True)
-    work_share: Mapped[float] = mapped_column(Float, default=1.0)  # for split lines (0.5/0.5)
+    work_share: Mapped[float] = mapped_column(Money(9, 4), default=1.0)  # for split lines (0.5/0.5)
     # 144av #2 — flat-rate/estimated labour hours we bill, to compare against actual clocked time.
     booked_hours: Mapped[float] = mapped_column(Float, default=0.0)
     # 144av #3 — split one service across techs: [{"employee_id": "...", "share": 0.5}, ...].
     # When set it overrides technician_id/work_share for payroll + time attribution.
     co_technicians: Mapped[Optional[list]] = mapped_column(JSON, default=list)
-    pending_stock: Mapped[float] = mapped_column(Float, default=0.0)  # qty added without deduction
+    pending_stock: Mapped[float] = mapped_column(Money(14, 4), default=0.0)  # qty added without deduction
     warranty_days: Mapped[int] = mapped_column(Integer, default=0)  # per-line client warranty (Phase E)
-    discount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    discount: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     discount_type: Mapped[str] = mapped_column(String(10), default="pct")  # pct|fixed
     discount_paid_by: Mapped[str] = mapped_column(String(10), default="client")  # client|company
     # Who set the discount (stamped by backend/db/actors.py on every path); feeds Tekly Sense Watchdog.
     discount_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"), index=True)
     tax_id: Mapped[Optional[str]] = mapped_column(String)
-    tax_rate: Mapped[float] = mapped_column(Float, default=0.0)
+    tax_rate: Mapped[float] = mapped_column(Money(9, 4), default=0.0)
     tax_mode: Mapped[str] = mapped_column(String(10), default="imposed")  # included|imposed
-    total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    total: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     order: Mapped["Order"] = relationship(back_populates="lines")
     # Several items per job: which of the job's items this line is for (null = the whole job).
     order_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("order_items.id"), index=True)
@@ -827,9 +828,9 @@ class OrderLine(OrgScoped, Base):
     bundle_group_id: Mapped[Optional[str]] = mapped_column(String(36), index=True)
     bundle_name: Mapped[Optional[str]] = mapped_column(String(200))
     bundle_print_mode: Mapped[Optional[str]] = mapped_column(String(20))  # itemized|one_line|one_line_includes
-    bundle_price_locked: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
-    bundle_qty: Mapped[Optional[float]] = mapped_column(Float)
-    bundle_std_price: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
+    bundle_price_locked: Mapped[Optional[float]] = mapped_column(Money(12, 2))
+    bundle_qty: Mapped[Optional[float]] = mapped_column(Money(14, 4))
+    bundle_std_price: Mapped[Optional[float]] = mapped_column(Money(12, 2))
 
 
 class OrderItem(OrgScoped, Base):
@@ -895,7 +896,7 @@ class Bundle(OrgScoped, Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     name: Mapped[str] = mapped_column(String(200))
     price_mode: Mapped[str] = mapped_column(String(10), default="sum")  # sum|fixed
-    price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)            # used when fixed
+    price: Mapped[float] = mapped_column(Money(12, 2), default=0.0)            # used when fixed
     category_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("categories.id"), index=True)  # 144ax
     # How the kit prints for the customer: itemized (default) | one_line | one_line_includes.
     print_mode: Mapped[Optional[str]] = mapped_column(String(20), default="itemized", server_default="itemized")
@@ -910,7 +911,7 @@ class BundleComponent(OrgScoped, Base):
     bundle_id: Mapped[str] = mapped_column(String, ForeignKey("bundles.id"), index=True)
     ref_type: Mapped[str] = mapped_column(String(10))  # service|product
     ref_id: Mapped[str] = mapped_column(String)
-    qty: Mapped[float] = mapped_column(Float, default=1.0)
+    qty: Mapped[float] = mapped_column(Money(14, 4), default=1.0)
     # 144db — device-aware kit: when True, this product slot resolves at apply-time to the in-category
     # part that fits the work order's device (the configured ref_id is the fallback / default).
     device_variant: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -1008,17 +1009,17 @@ class Part(OrgScoped, Base):
     description: Mapped[Optional[str]] = mapped_column(Text)  # 144av: product description (form)
     default_supplier_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("suppliers.id", ondelete="SET NULL"))  # 144av; 144ep: supplier mirror can be removed -> clear the preference
     category: Mapped[Optional[str]] = mapped_column(String(100))
-    cost_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    avg_cost: Mapped[float] = mapped_column(Numeric(12, 4, asdecimal=False), default=0.0)  # weighted moving-average cost
-    sell_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)   # store / counter price
-    repair_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)  # 144bk: price when used on a work order (0 = fall back to sell_price)
+    cost_price: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    avg_cost: Mapped[float] = mapped_column(Money(12, 4), default=0.0)  # weighted moving-average cost
+    sell_price: Mapped[float] = mapped_column(Money(12, 2), default=0.0)   # store / counter price
+    repair_price: Mapped[float] = mapped_column(Money(12, 2), default=0.0)  # 144bk: price when used on a work order (0 = fall back to sell_price)
     uom: Mapped[str] = mapped_column(String(10), default="pcs")  # pcs|m|kg|l|hr|set
     barcode: Mapped[Optional[str]] = mapped_column(String(100))
     warranty_days: Mapped[int] = mapped_column(Integer, default=0)  # client warranty (Phase E)
     supplier_warranty_days: Mapped[int] = mapped_column(Integer, default=0)
     min_stock: Mapped[int] = mapped_column(Integer, default=0)
     # build 144aa: default quantity to reorder when raising a PO for this product
-    min_order_qty: Mapped[float] = mapped_column(Float, default=0)
+    min_order_qty: Mapped[float] = mapped_column(Money(14, 4), default=0)
     # build 144bo: one-shot low-stock alert dedupe — set True when a low-stock alert fires,
     # reset False when a receipt lifts on-hand back above min_stock ("once until restocked").
     low_stock_alerted: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -1062,8 +1063,8 @@ class Service(OrgScoped, Base):
     category_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("categories.id"), index=True)  # 144bu: shared category tree
     is_labor: Mapped[bool] = mapped_column(Boolean, default=False)         # 144ee: Labor vs Service (Orderry type)
     unit: Mapped[str] = mapped_column(String(24), default="pc")            # 144ee: unit of measurement
-    price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    cost_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    price: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    cost_price: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     duration_min: Mapped[int] = mapped_column(Integer, default=60)  # drives appointment slot length
     # 144ax G3 — flat-rate labour: bill the booked (standard) hours × this price-as-hourly-rate
     # rather than a flat qty×price. When on, adding the service sets the line qty = booked hours.
@@ -1297,7 +1298,7 @@ class PlatformCoupon(Base):
     __tablename__ = "platform_coupons"
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     code: Mapped[str] = mapped_column(String(40), unique=True, index=True)
-    percent: Mapped[float] = mapped_column(Float, default=0.0)
+    percent: Mapped[float] = mapped_column(Money(9, 4), default=0.0)
     plan: Mapped[Optional[str]] = mapped_column(String(50))    # null = any plan
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     expires_at: Mapped[Optional[date]] = mapped_column(Date)
@@ -1322,7 +1323,7 @@ class Tax(OrgScoped, Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     name: Mapped[str] = mapped_column(String(100))
-    rate: Mapped[float] = mapped_column(Float, default=0.0)   # percent
+    rate: Mapped[float] = mapped_column(Money(9, 4), default=0.0)   # percent
     mode: Mapped[str] = mapped_column(String(10), default="imposed")  # included|imposed (aka inclusive|exclusive)
     code: Mapped[Optional[str]] = mapped_column(String(40))               # tax code (e.g. VAT reg)
     name_for_document: Mapped[Optional[str]] = mapped_column(String(100)) # print label if different from name
@@ -1374,8 +1375,8 @@ class StockLevel(OrgScoped, Base):
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"), index=True)
     warehouse_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("warehouses.id"), index=True)  # Build 84
     bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id"), index=True)  # micro-location
-    qty_available: Mapped[float] = mapped_column(Float, default=0.0)
-    qty_reserved: Mapped[float] = mapped_column(Float, default=0.0)
+    qty_available: Mapped[float] = mapped_column(Money(14, 4), default=0.0)
+    qty_reserved: Mapped[float] = mapped_column(Money(14, 4), default=0.0)
     part: Mapped["Part"] = relationship(back_populates="stock_levels")
     location: Mapped["Location"] = relationship(back_populates="stock_levels")
 
@@ -1391,8 +1392,8 @@ class StockMovement(OrgScoped, Base):
     warehouse_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("warehouses.id"), index=True)  # Build 84
     bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id"), index=True)  # source/target bin
     movement_type: Mapped[str] = mapped_column(String(30))  # receive|use|return|writeoff|transfer
-    qty: Mapped[float] = mapped_column(Float)
-    unit_cost: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)  # batch cost price for this movement
+    qty: Mapped[float] = mapped_column(Money(14, 4))
+    unit_cost: Mapped[float] = mapped_column(Money(12, 2), default=0.0)  # batch cost price for this movement
     ref_id: Mapped[Optional[str]] = mapped_column(String)
     ref_type: Mapped[Optional[str]] = mapped_column(String(50))
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"), index=True)
@@ -1447,7 +1448,7 @@ class Supplier(OrgScoped, Base):
     phone: Mapped[Optional[str]] = mapped_column(String(50))
     email: Mapped[Optional[str]] = mapped_column(String(200))
     lead_days: Mapped[int] = mapped_column(Integer, default=3)
-    balance: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)  # what we owe the supplier (credit)
+    balance: Mapped[float] = mapped_column(Money(12, 2), default=0.0)  # what we owe the supplier (credit)
     currency: Mapped[str] = mapped_column(String(8), default="₹")
     # Build 114: link back to the unified Contact (Client) this supplier mirrors, so a
     # contact marked "supplier" and a PO-facing Supplier row stay in sync.
@@ -1471,16 +1472,16 @@ class PurchaseOrder(OrgScoped, Base):
     workflow_status: Mapped[Optional[str]] = mapped_column(String(50))
     # 144ap — landed cost: how much freight/charges has already been capitalised into the
     # cost of received units, so a later freight bill only applies the *delta* (recost).
-    freight_capitalised: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    freight_capitalised: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     # 144ar — how PO charges are spread across lines when capitalised into landed cost:
     # value (default, cost-weighted) | qty (per unit) | weight (per kg, uses Part.weight).
     alloc_basis: Mapped[str] = mapped_column(String(10), default="value")
     # 144ar — per-shipment freight already capitalised at receive time (freight billed WITH a
     # partial delivery), tracked separately from PO-level charge recost above.
-    shipment_freight: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    shipment_freight: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    total: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     on_credit: Mapped[bool] = mapped_column(Boolean, default=False)  # buy on credit → adds to supplier balance
-    received_cost: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)  # cost of goods actually received
+    received_cost: Mapped[float] = mapped_column(Money(12, 2), default=0.0)  # cost of goods actually received
     expected_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     ordered_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     received_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
@@ -1489,7 +1490,7 @@ class PurchaseOrder(OrgScoped, Base):
     supplier_invoice_date: Mapped[Optional[date]] = mapped_column(Date)
     # Build 144aac — three-way match: the amount the supplier actually billed us, matched
     # against what we ordered and what we received.
-    supplier_invoice_total: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
+    supplier_invoice_total: Mapped[Optional[float]] = mapped_column(Money(12, 2))
     # Build 144aj — the supplier's invoice PDF/image, stored as a media blob (evidence for
     # the three-way match).
     supplier_invoice_blob_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("media_blobs.id"))
@@ -1509,9 +1510,9 @@ class POLine(OrgScoped, Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
     po_id: Mapped[str] = mapped_column(String, ForeignKey("purchase_orders.id"), index=True)
     part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
-    qty_ordered: Mapped[float] = mapped_column(Float, default=1.0)
-    qty_received: Mapped[float] = mapped_column(Float, default=0.0)
-    unit_cost: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    qty_ordered: Mapped[float] = mapped_column(Money(14, 4), default=1.0)
+    qty_received: Mapped[float] = mapped_column(Money(14, 4), default=0.0)
+    unit_cost: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     po: Mapped["PurchaseOrder"] = relationship(back_populates="lines")
 
 # ─────────────────────────────────────────────
@@ -1539,13 +1540,13 @@ class Invoice(OrgScoped, Base):
     comment: Mapped[str] = mapped_column(String(1000), default="")              # 144ed: free-text note (Orderry parity)
     auto_drafted: Mapped[bool] = mapped_column(Boolean, default=False)          # created by the on-close automation
     status: Mapped[str] = mapped_column(String(30), default="draft")
-    subtotal: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    discount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    tax: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    amount_paid: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    subtotal: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    discount: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    tax: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    total: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    amount_paid: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     # opb — sum of ISSUED credit notes linked to this invoice; balance due = total − paid − credited.
-    credited: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0, server_default="0")
+    credited: Mapped[float] = mapped_column(Money(12, 2), default=0.0, server_default="0")
     legal_entity_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("legal_entities.id"))
     issued_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     due_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
@@ -1585,7 +1586,7 @@ class DocumentSignature(OrgScoped, Base):
     signer_name: Mapped[Optional[str]] = mapped_column(String(200))
     signature_png: Mapped[Optional[str]] = mapped_column(Text)              # drawn signature data URL
     doc_hash: Mapped[Optional[str]] = mapped_column(String(64))             # sha256 of doc snapshot
-    doc_total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    doc_total: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     currency_code: Mapped[Optional[str]] = mapped_column(String(3))
     signer_ip: Mapped[Optional[str]] = mapped_column(String(64))
     user_agent: Mapped[Optional[str]] = mapped_column(String(300))
@@ -1604,9 +1605,9 @@ class EstimateRevision(OrgScoped, Base):
     order_id: Mapped[str] = mapped_column(String, ForeignKey("orders.id"), index=True)
     revision: Mapped[int] = mapped_column(Integer, default=1)
     lines: Mapped[Optional[list]] = mapped_column(JSON, default=list)
-    total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    total: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     valid_until: Mapped[Optional[date]] = mapped_column(Date)
-    deposit_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    deposit_amount: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     decision: Mapped[Optional[str]] = mapped_column(String(20))       # approved | declined | None (not answered)
     decline_reason: Mapped[Optional[str]] = mapped_column(Text)
     skipped: Mapped[Optional[list]] = mapped_column(JSON, default=list)   # lines the customer left out
@@ -1642,7 +1643,7 @@ class Payment(OrgScoped, Base):
     kind: Mapped[str] = mapped_column(String(20), default="payment")  # prepayment|payment|refund
     order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     account_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("accounts.id"), index=True)
-    amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False))
+    amount: Mapped[float] = mapped_column(Money(12, 2))
     received_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"), index=True)
     shift_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("cash_shifts.id"), index=True)
     reference: Mapped[Optional[str]] = mapped_column(String(200))
@@ -1666,9 +1667,9 @@ class CashShift(OrgScoped, Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
     opened_by_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id"))
-    opening_float: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
-    closing_float: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
-    expected_cash: Mapped[Optional[Decimal]] = mapped_column(Numeric(12, 2))
+    opening_float: Mapped[Decimal] = mapped_column(Money(12, 2), default=Decimal("0"))
+    closing_float: Mapped[Optional[Decimal]] = mapped_column(Money(12, 2))
+    expected_cash: Mapped[Optional[Decimal]] = mapped_column(Money(12, 2))
     opened_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     closed_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     closed_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"), index=True)  # who closed (counted) the drawer
@@ -1687,7 +1688,7 @@ class CashDrawerMovement(OrgScoped, Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     shift_id: Mapped[str] = mapped_column(String, ForeignKey("cash_shifts.id"), index=True)
     direction: Mapped[str] = mapped_column(String(4))        # in | out
-    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    amount: Mapped[Decimal] = mapped_column(Money(12, 2))
     note: Mapped[str] = mapped_column(String(300))
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -1703,9 +1704,9 @@ class ProcessorPayout(OrgScoped, Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     provider: Mapped[str] = mapped_column(String(20), default="manual")   # stripe|square|sumup|manual
     payout_date: Mapped[date] = mapped_column(Date, default=date.today)
-    gross_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
-    fee_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
-    net_amount: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    gross_amount: Mapped[Decimal] = mapped_column(Money(12, 2), default=Decimal("0"))
+    fee_amount: Mapped[Decimal] = mapped_column(Money(12, 2), default=Decimal("0"))
+    net_amount: Mapped[Decimal] = mapped_column(Money(12, 2), default=Decimal("0"))
     reference: Mapped[Optional[str]] = mapped_column(String(120))
     note: Mapped[Optional[str]] = mapped_column(String(300))
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
@@ -1719,7 +1720,7 @@ class Expense(OrgScoped, Base):
     category: Mapped[Optional[str]] = mapped_column(String(100))
     recorded_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     description: Mapped[str] = mapped_column(String(500))
-    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))
+    amount: Mapped[Decimal] = mapped_column(Money(12, 2))
     receipt_url: Mapped[Optional[str]] = mapped_column(String(500))
     expense_date: Mapped[date] = mapped_column(Date, default=date.today)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -1737,12 +1738,12 @@ class Account(OrgScoped, Base):
     payment_option: Mapped[str] = mapped_column(String(20), default="cash")  # cash|cashless|card
     is_company: Mapped[bool] = mapped_column(Boolean, default=False)
     is_virtual: Mapped[bool] = mapped_column(Boolean, default=False)
-    balance: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    balance: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     # Build 144cr: an account is denominated in one currency. Null = org base
     # currency. Set at creation and locked afterwards; the balance stays native.
     currency_code: Mapped[Optional[str]] = mapped_column(String(8))
-    fee_pct: Mapped[float] = mapped_column(Float, default=0.0)      # transaction fee %
-    fee_fixed: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)    # transaction fee fixed
+    fee_pct: Mapped[float] = mapped_column(Money(9, 4), default=0.0)      # transaction fee %
+    fee_fixed: Mapped[float] = mapped_column(Money(12, 2), default=0.0)    # transaction fee fixed
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
@@ -1772,7 +1773,7 @@ class Currency(OrgScoped, Base):
     code: Mapped[str] = mapped_column(String(8))
     symbol: Mapped[str] = mapped_column(String(8), default="")
     position: Mapped[str] = mapped_column(String(10), default="before")  # before|after
-    rate: Mapped[float] = mapped_column(Float, default=1.0)
+    rate: Mapped[float] = mapped_column(Money(18, 8), default=1.0)
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -1784,7 +1785,7 @@ class CurrencyRateHistory(OrgScoped, Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     currency_id: Mapped[str] = mapped_column(String, ForeignKey("currencies.id"), index=True)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
-    rate: Mapped[float] = mapped_column(Float)
+    rate: Mapped[float] = mapped_column(Money(18, 8))
     changed_by: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     changed_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
@@ -1810,7 +1811,7 @@ class Transaction(OrgScoped, Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     account_id: Mapped[str] = mapped_column(String, ForeignKey("accounts.id"), index=True)
     txn_type: Mapped[str] = mapped_column(String(20))  # income|expense|transfer|invoice_payment|fee
-    amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False))        # signed: + in, - out
+    amount: Mapped[float] = mapped_column(Money(12, 2))        # signed: + in, - out
     cash_flow_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("cash_flow_items.id"), index=True)
     comment: Mapped[Optional[str]] = mapped_column(String(500))
     ref_type: Mapped[Optional[str]] = mapped_column(String(30))  # order|invoice|sale|manual
@@ -1820,7 +1821,7 @@ class Transaction(OrgScoped, Base):
     # 144bh: manual cash income/expense on a till during an open shift links here so the drawer's
     # expected cash includes it (sales go through Payment.shift_id; this covers manual till money).
     shift_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("cash_shifts.id"), index=True)
-    fx_rate: Mapped[Optional[float]] = mapped_column(Float)  # Build 144cr: rate snapshotted on a cross-currency transfer
+    fx_rate: Mapped[Optional[float]] = mapped_column(Money(18, 8))  # Build 144cr: rate snapshotted on a cross-currency transfer
     is_retroactive: Mapped[bool] = mapped_column(Boolean, default=False)
     actual_date: Mapped[datetime] = mapped_column(DateTime, default=_now)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -1830,7 +1831,7 @@ class Transaction(OrgScoped, Base):
     # account balance at post time — frozen forever, never recomputed after a
     # later delete/correction (matches Orderry's strikethrough ledger).
     status: Mapped[str] = mapped_column(String(12), default="active", server_default="active")  # active|corrected|deleted
-    balance_after: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))  # frozen snapshot at post time
+    balance_after: Mapped[Optional[float]] = mapped_column(Money(12, 2))  # frozen snapshot at post time
     reverses_txn_id: Mapped[Optional[str]] = mapped_column(String)  # set on a correction delta row
     void_reason: Mapped[Optional[str]] = mapped_column(String(300))
     voided_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
@@ -2069,7 +2070,7 @@ class CustomField(OrgScoped, Base):
     # same shared surface as checklist items. One rule per field.
     upsell_ref_id: Mapped[Optional[str]] = mapped_column(String)
     upsell_kind: Mapped[Optional[str]] = mapped_column(String(20))         # service|product|custom
-    upsell_price: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
+    upsell_price: Mapped[Optional[float]] = mapped_column(Money(12, 2))
     upsell_comparator: Mapped[Optional[str]] = mapped_column(String(6))    # is|is_not|lt|gt
     upsell_value: Mapped[Optional[str]] = mapped_column(String(200))       # match value (is/is_not)
     upsell_threshold: Mapped[Optional[float]] = mapped_column(Float)       # numeric (lt/gt)
@@ -2144,8 +2145,8 @@ class Recommendation(OrgScoped, Base):
     note: Mapped[Optional[str]] = mapped_column(Text)          # "why we recommend this"
     kind: Mapped[str] = mapped_column(String(20), default="custom")   # service|product|custom
     ref_id: Mapped[Optional[str]] = mapped_column(String)      # linked service/product id
-    qty: Mapped[float] = mapped_column(Float, default=1.0)
-    unit_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    qty: Mapped[float] = mapped_column(Money(14, 4), default=1.0)
+    unit_price: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     media_data: Mapped[Optional[str]] = mapped_column(Text)    # inline photo proof (data URL)
     status: Mapped[str] = mapped_column(String(20), default="draft", index=True)
     order_line_id: Mapped[Optional[str]] = mapped_column(String)  # set once approved
@@ -2180,9 +2181,9 @@ class InvoiceLine(OrgScoped, Base):
     source_id: Mapped[Optional[str]] = mapped_column(String)                    # 144ed: catalog ref
     sort_order: Mapped[int] = mapped_column(Integer, default=0)                 # 144ed
     description: Mapped[str] = mapped_column(String(500), default="")
-    qty: Mapped[float] = mapped_column(Float, default=1.0)
-    unit_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    qty: Mapped[float] = mapped_column(Money(14, 4), default=1.0)
+    unit_price: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    total: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
 
 
 class StatusTransition(OrgScoped, Base):
@@ -2227,7 +2228,7 @@ class StockReservation(OrgScoped, Base):
     location_id: Mapped[str] = mapped_column(String, ForeignKey("locations.id"))
     warehouse_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("warehouses.id"), index=True)  # Build 84
     order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
-    qty: Mapped[float] = mapped_column(Float, default=0.0)
+    qty: Mapped[float] = mapped_column(Money(14, 4), default=0.0)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     released: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
@@ -2328,8 +2329,8 @@ class CommissionRule(OrgScoped, Base):
     event: Mapped[str] = mapped_column(String(30))  # order_created|order_closed|labor_performed|product_sold
     calc_type: Mapped[str] = mapped_column(String(10), default="percent")  # percent|flat
     percent_basis: Mapped[str] = mapped_column(String(10), default="total")  # total|margin
-    amount: Mapped[Numeric] = mapped_column(Numeric(12, 4), default=0)  # % (0-100) or flat money
-    coefficient: Mapped[Numeric] = mapped_column(Numeric(8, 4), default=1)  # seniority multiplier
+    amount: Mapped[Numeric] = mapped_column(Money(12, 4), default=0)  # % (0-100) or flat money
+    coefficient: Mapped[Numeric] = mapped_column(Money(8, 4), default=1)  # seniority multiplier
     category: Mapped[Optional[str]] = mapped_column(String(120))  # optional product/labor category override
     # ── Build 70: rule conditions & timing ────────────────────────────────
     wo_type_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("work_order_types.id"))
@@ -2356,7 +2357,7 @@ class EmployeeCoefficient(OrgScoped, Base):
     scope_type: Mapped[str] = mapped_column(String(20))   # product|service|product_category|service_category
     scope_ref: Mapped[str] = mapped_column(String(160))   # part id or category name
     context: Mapped[str] = mapped_column(String(10), default="order")  # order|sales
-    coefficient: Mapped[Numeric] = mapped_column(Numeric(8, 4), default=1)
+    coefficient: Mapped[Numeric] = mapped_column(Money(8, 4), default=1)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 
 
@@ -2386,7 +2387,7 @@ class EmployeeBalanceLedger(OrgScoped, Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     employee_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id"), index=True)
     entry_type: Mapped[str] = mapped_column(String(20))  # commission|base|bonus|penalty|clawback|payout
-    amount: Mapped[Numeric] = mapped_column(Numeric(12, 4), default=0)  # signed
+    amount: Mapped[Numeric] = mapped_column(Money(12, 4), default=0)  # signed
     event: Mapped[Optional[str]] = mapped_column(String(30))
     rule_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("commission_rules.id"))
     ref_type: Mapped[Optional[str]] = mapped_column(String(40))  # order|order_line|refund|payroll_run
@@ -2426,12 +2427,12 @@ class PayrollRun(OrgScoped, Base):
     employee_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id"), index=True)
     period_start: Mapped[date] = mapped_column(Date)
     period_end: Mapped[date] = mapped_column(Date)
-    base_salary: Mapped[Numeric] = mapped_column(Numeric(12, 4), default=0)
-    commissions_total: Mapped[Numeric] = mapped_column(Numeric(12, 4), default=0)
-    hourly_total: Mapped[Numeric] = mapped_column(Numeric(12, 4), default=0)
-    bonuses_total: Mapped[Numeric] = mapped_column(Numeric(12, 4), default=0)
-    penalties_total: Mapped[Numeric] = mapped_column(Numeric(12, 4), default=0)
-    gross_total: Mapped[Numeric] = mapped_column(Numeric(12, 4), default=0)
+    base_salary: Mapped[Numeric] = mapped_column(Money(12, 4), default=0)
+    commissions_total: Mapped[Numeric] = mapped_column(Money(12, 4), default=0)
+    hourly_total: Mapped[Numeric] = mapped_column(Money(12, 4), default=0)
+    bonuses_total: Mapped[Numeric] = mapped_column(Money(12, 4), default=0)
+    penalties_total: Mapped[Numeric] = mapped_column(Money(12, 4), default=0)
+    gross_total: Mapped[Numeric] = mapped_column(Money(12, 4), default=0)
     status: Mapped[str] = mapped_column(String(20), default="draft")  # draft|accrued|paid|void
     accrued_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     paid_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
@@ -2457,9 +2458,9 @@ class StockItemBatch(OrgScoped, Base):
     warehouse_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("warehouses.id"), index=True)  # Build 84
     bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id"), index=True)
     po_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("purchase_orders.id"))
-    unit_cost: Mapped[Numeric] = mapped_column(Numeric(12, 4), default=0)  # this layer's cost
-    qty_received: Mapped[Numeric] = mapped_column(Numeric(14, 3), default=0)
-    qty_remaining: Mapped[Numeric] = mapped_column(Numeric(14, 3), default=0)  # consumed FIFO/LIFO
+    unit_cost: Mapped[Numeric] = mapped_column(Money(12, 4), default=0)  # this layer's cost
+    qty_received: Mapped[Numeric] = mapped_column(Money(14, 3), default=0)
+    qty_remaining: Mapped[Numeric] = mapped_column(Money(14, 3), default=0)  # consumed FIFO/LIFO
     expiry_date: Mapped[Optional[date]] = mapped_column(Date, index=True)  # FEFO when set
     lot_number: Mapped[Optional[str]] = mapped_column(String(40))          # ii144b: GS1 (10) batch/lot from the label
     received_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
@@ -2484,7 +2485,7 @@ class SerializedItem(OrgScoped, Base):
     warehouse_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("warehouses.id"), index=True)  # Build 84
     batch_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("stock_item_batches.id"), index=True)
     po_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("purchase_orders.id"), index=True)
-    unit_cost: Mapped[Numeric] = mapped_column(Numeric(12, 4), default=0)
+    unit_cost: Mapped[Numeric] = mapped_column(Money(12, 4), default=0)
     status: Mapped[str] = mapped_column(String(20), default="in_stock")  # in_stock|allocated_to_order|sold|written_off|converted_to_asset|in_transit
     order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     converted_asset_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("devices.id"))  # Build 76
@@ -2613,8 +2614,8 @@ class TimeEntry(OrgScoped, Base):
     ended_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     duration_sec: Mapped[int] = mapped_column(Integer, default=0)
     billable: Mapped[bool] = mapped_column(Boolean, default=True)
-    cost_rate: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)      # per hour, snapshot
-    billable_rate: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)  # per hour, snapshot
+    cost_rate: Mapped[float] = mapped_column(Money(12, 2), default=0.0)      # per hour, snapshot
+    billable_rate: Mapped[float] = mapped_column(Money(12, 2), default=0.0)  # per hour, snapshot
     note: Mapped[Optional[str]] = mapped_column(Text)
     gps_lat: Mapped[Optional[float]] = mapped_column(Float)  # capture at clock-in if permission granted
     gps_lng: Mapped[Optional[float]] = mapped_column(Float)
@@ -2824,7 +2825,7 @@ class PriceType(OrgScoped, Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     name: Mapped[str] = mapped_column(String(120))
-    markup_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    markup_pct: Mapped[float] = mapped_column(Money(9, 4), default=0.0)
     location_scope: Mapped[str] = mapped_column(String(10), default="all")  # all|selected
     location_ids: Mapped[Optional[str]] = mapped_column(Text)  # JSON list when scope=selected
     is_default: Mapped[bool] = mapped_column(Boolean, default=False)
@@ -2849,11 +2850,11 @@ class Sale(OrgScoped, Base):
     client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"), index=True)
     seller_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id"))
     account_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("accounts.id"))
-    total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    total_cost: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    discount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)  # whole-sale discount amount
+    total: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    total_cost: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    discount: Mapped[float] = mapped_column(Money(12, 2), default=0.0)  # whole-sale discount amount
     # Launch B4: the tax inside `total` (imposed tax added on top + VAT contained in the price).
-    tax: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0, server_default="0")
+    tax: Mapped[float] = mapped_column(Money(12, 2), default=0.0, server_default="0")
     paid: Mapped[bool] = mapped_column(Boolean, default=False)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     coupon_id: Mapped[Optional[str]] = mapped_column(String)          # the coupon used, so a void can give the use back
@@ -2870,15 +2871,15 @@ class SaleLine(OrgScoped, Base):
     kind: Mapped[str] = mapped_column(String(10))  # product|service
     ref_id: Mapped[Optional[str]] = mapped_column(String)
     description: Mapped[str] = mapped_column(String(300), default="")
-    qty: Mapped[float] = mapped_column(Float, default=1.0)
-    unit_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    cost_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)  # exact FIFO COGS for products
-    discount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)    # pct
-    total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    qty: Mapped[float] = mapped_column(Money(14, 4), default=1.0)
+    unit_price: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    cost_price: Mapped[float] = mapped_column(Money(12, 2), default=0.0)  # exact FIFO COGS for products
+    discount: Mapped[float] = mapped_column(Money(12, 2), default=0.0)    # pct
+    total: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     # Launch B4: the tax the line carried (services/tax.pos_line_tax). total includes imposed tax.
-    tax_rate: Mapped[float] = mapped_column(Float, default=0.0, server_default="0")
+    tax_rate: Mapped[float] = mapped_column(Money(9, 4), default=0.0, server_default="0")
     tax_mode: Mapped[str] = mapped_column(String(10), default="imposed", server_default="imposed")
-    tax: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0, server_default="0")
+    tax: Mapped[float] = mapped_column(Money(12, 2), default=0.0, server_default="0")
     # What the line drew, so a void puts it back exactly: {"layers": [{batch_id, qty}],
     # "holds": [{hold_id, qty}]} — FIFO cost layers and other jobs' reservations (override).
     stock_draws: Mapped[Optional[dict]] = mapped_column(JSON)
@@ -2910,9 +2911,9 @@ class StocktakeLine(OrgScoped, Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
     stocktake_id: Mapped[str] = mapped_column(String, ForeignKey("stocktakes.id"), index=True)
     part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
-    system_qty: Mapped[float] = mapped_column(Float, default=0.0)
-    counted_qty: Mapped[Optional[float]] = mapped_column(Float)
-    variance: Mapped[float] = mapped_column(Float, default=0.0)
+    system_qty: Mapped[float] = mapped_column(Money(14, 4), default=0.0)
+    counted_qty: Mapped[Optional[float]] = mapped_column(Money(14, 4))
+    variance: Mapped[float] = mapped_column(Money(14, 4), default=0.0)
     # ── Build 91 ─────────────────────────────────────────────────────────────
     bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id"), index=True)
     serialized_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("serialized_items.id"))
@@ -2950,9 +2951,9 @@ class ClientReturn(OrgScoped, Base):
     # A till return (POST /sales/{id}/returns): its sale and what came back, for net sales (ret01).
     # amount = the items' worth to the customer, tax included (cash refund + gift-card part).
     sale_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("sales.id"), index=True)
-    amount: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
-    tax: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
-    cost: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
+    amount: Mapped[Optional[float]] = mapped_column(Money(12, 2))
+    tax: Mapped[Optional[float]] = mapped_column(Money(12, 2))
+    cost: Mapped[Optional[float]] = mapped_column(Money(12, 2))
 
 
 class ClientReturnLine(OrgScoped, Base):
@@ -2961,7 +2962,7 @@ class ClientReturnLine(OrgScoped, Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
     return_id: Mapped[str] = mapped_column(String, ForeignKey("client_returns.id"), index=True)
     part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
-    qty: Mapped[float] = mapped_column(Float, default=1.0)
+    qty: Mapped[float] = mapped_column(Money(14, 4), default=1.0)
     restock: Mapped[bool] = mapped_column(Boolean, default=True)
 
 
@@ -2975,7 +2976,7 @@ class Refund(OrgScoped, Base):
     order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     return_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("client_returns.id"), index=True)
     account_id: Mapped[str] = mapped_column(String, ForeignKey("accounts.id"), index=True)
-    amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    amount: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     reason: Mapped[Optional[str]] = mapped_column(Text)
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
     payment_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("payments.id"), index=True)  # the refund Payment
@@ -3019,11 +3020,11 @@ class StockTransferLine(OrgScoped, Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
     transfer_id: Mapped[str] = mapped_column(String, ForeignKey("stock_transfers.id"), index=True)
     part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
-    qty: Mapped[float] = mapped_column(Float, default=1.0)
+    qty: Mapped[float] = mapped_column(Money(14, 4), default=1.0)
 
 
 # ════════ Phase E — Customer Feedback ════════
-    qty_received: Mapped[Optional[float]] = mapped_column(Float)  # Build 93: what actually turned up
+    qty_received: Mapped[Optional[float]] = mapped_column(Money(14, 4))  # Build 93: what actually turned up
     # QA F2: the serialized units in the box (SerializedItem ids) — they travel with the transfer
     serial_ids: Mapped[Optional[list]] = mapped_column(JSON)
     received_serial_ids: Mapped[Optional[list]] = mapped_column(JSON)   # the ones that arrived (short delivery)
@@ -3151,7 +3152,7 @@ class PaymentIntent(OrgScoped, Base):
     account_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("accounts.id"))  # target cashbox
     provider: Mapped[str] = mapped_column(String(20), default="simulated")  # stripe|simulated
     provider_ref: Mapped[Optional[str]] = mapped_column(String(120), index=True)  # session/intent id
-    amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    amount: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     currency: Mapped[str] = mapped_column(String(8), default="usd")
     status: Mapped[str] = mapped_column(String(16), default="created")  # created|pending|succeeded|failed|canceled
     checkout_url: Mapped[Optional[str]] = mapped_column(String(600))
@@ -3316,7 +3317,7 @@ class ChecklistTemplateItem(OrgScoped, Base):
     # recommendation for the linked catalog item.
     upsell_ref_id: Mapped[Optional[str]] = mapped_column(String)            # linked service/product id
     upsell_kind: Mapped[Optional[str]] = mapped_column(String(20))         # service | product | custom
-    upsell_price: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))           # snapshot price for the draft line
+    upsell_price: Mapped[Optional[float]] = mapped_column(Money(12, 2))           # snapshot price for the draft line
     upsell_threshold: Mapped[Optional[float]] = mapped_column(Float)       # numeric trigger threshold
     upsell_comparator: Mapped[Optional[str]] = mapped_column(String(4))    # lt | gt | fail
 
@@ -3365,7 +3366,7 @@ class OrderChecklistItem(OrgScoped, Base):
     # 144go — snapshotted upsell config (see ChecklistTemplateItem)
     upsell_ref_id: Mapped[Optional[str]] = mapped_column(String)
     upsell_kind: Mapped[Optional[str]] = mapped_column(String(20))
-    upsell_price: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
+    upsell_price: Mapped[Optional[float]] = mapped_column(Money(12, 2))
     upsell_threshold: Mapped[Optional[float]] = mapped_column(Float)
     upsell_comparator: Mapped[Optional[str]] = mapped_column(String(4))
 
@@ -3392,8 +3393,8 @@ class GiftCard(OrgScoped, Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     code: Mapped[str] = mapped_column(String(40), index=True)          # e.g. GC-8F3K2P
-    initial_value: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
-    balance: Mapped[Decimal] = mapped_column(Numeric(12, 2), default=Decimal("0"))
+    initial_value: Mapped[Decimal] = mapped_column(Money(12, 2), default=Decimal("0"))
+    balance: Mapped[Decimal] = mapped_column(Money(12, 2), default=Decimal("0"))
     client_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("clients.id"))
     active: Mapped[bool] = mapped_column(Boolean, default=True)
     expires_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
@@ -3406,7 +3407,7 @@ class GiftCardLedger(OrgScoped, Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     gift_card_id: Mapped[str] = mapped_column(String, ForeignKey("gift_cards.id"), index=True)
-    amount: Mapped[Decimal] = mapped_column(Numeric(12, 2))                        # + load / − redeem
+    amount: Mapped[Decimal] = mapped_column(Money(12, 2))                        # + load / − redeem
     ref_type: Mapped[Optional[str]] = mapped_column(String(20))         # order|sale|manual
     ref_id: Mapped[Optional[str]] = mapped_column(String)
     note: Mapped[Optional[str]] = mapped_column(String(200))
@@ -3430,8 +3431,8 @@ class Coupon(OrgScoped, Base):
     code: Mapped[str] = mapped_column(String(40), index=True)
     name: Mapped[str] = mapped_column(String(120), default="")
     kind: Mapped[str] = mapped_column(String(10), default="pct")        # pct|fixed
-    value: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    min_total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    value: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    min_total: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     starts_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     ends_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
     max_uses: Mapped[int] = mapped_column(Integer, default=0)           # 0 = unlimited
@@ -3446,7 +3447,7 @@ class LoyaltyLedger(OrgScoped, Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     client_id: Mapped[str] = mapped_column(String, ForeignKey("clients.id"), index=True)
-    points: Mapped[float] = mapped_column(Float)                        # + earn / − burn
+    points: Mapped[float] = mapped_column(Money(14, 2))                        # + earn / − burn
     ref_type: Mapped[Optional[str]] = mapped_column(String(20))         # payment|order|manual
     ref_id: Mapped[Optional[str]] = mapped_column(String)
     note: Mapped[Optional[str]] = mapped_column(String(200))
@@ -3547,7 +3548,7 @@ class PriceTypeItem(OrgScoped, Base):
     price_type_id: Mapped[str] = mapped_column(String, ForeignKey("price_types.id"), index=True)
     item_type: Mapped[str] = mapped_column(String(10))   # product|service
     item_id: Mapped[str] = mapped_column(String)
-    price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    price: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
 
 
 class PriceTypeTier(OrgScoped, Base):
@@ -3557,8 +3558,8 @@ class PriceTypeTier(OrgScoped, Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     price_type_id: Mapped[str] = mapped_column(String, ForeignKey("price_types.id"), index=True)
-    min_qty: Mapped[float] = mapped_column(Float, default=1.0)
-    markup_pct: Mapped[float] = mapped_column(Float, default=0.0)
+    min_qty: Mapped[float] = mapped_column(Money(14, 4), default=1.0)
+    markup_pct: Mapped[float] = mapped_column(Money(9, 4), default=0.0)
 
 
 
@@ -3905,7 +3906,7 @@ class PurchaseReturn(OrgScoped, Base):
     supplier_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("suppliers.id"), index=True)
     settlement: Mapped[str] = mapped_column(String(16), default="balance")  # balance|cash
     account_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("accounts.id"))
-    total: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
+    total: Mapped[Numeric] = mapped_column(Money(12, 2), default=0)
     status: Mapped[str] = mapped_column(String(16), default="posted")  # posted|deleted
     note: Mapped[Optional[str]] = mapped_column(Text)
     paid: Mapped[bool] = mapped_column(Boolean, default=False)  # a paid return can't be deleted
@@ -3920,9 +3921,9 @@ class PurchaseReturnLine(OrgScoped, Base):
     return_id: Mapped[str] = mapped_column(String, ForeignKey("purchase_returns.id"), index=True)
     part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
     serialized_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("serialized_items.id"))
-    qty: Mapped[float] = mapped_column(Float, default=1)
-    unit_cost: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
-    total: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
+    qty: Mapped[float] = mapped_column(Money(14, 4), default=1)
+    unit_cost: Mapped[Numeric] = mapped_column(Money(12, 2), default=0)
+    total: Mapped[Numeric] = mapped_column(Money(12, 2), default=0)
 
 
 class WriteOff(OrgScoped, Base):
@@ -3945,7 +3946,7 @@ class WriteOff(OrgScoped, Base):
     reason: Mapped[Optional[str]] = mapped_column(String(120))
     status: Mapped[str] = mapped_column(String(16), default="posted")  # posted|reverted
     note: Mapped[Optional[str]] = mapped_column(Text)
-    total_cost: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
+    total_cost: Mapped[Numeric] = mapped_column(Money(12, 2), default=0)
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
     reverted_at: Mapped[Optional[datetime]] = mapped_column(DateTime)
@@ -3959,8 +3960,8 @@ class WriteOffLine(OrgScoped, Base):
     part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
     serialized_item_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("serialized_items.id"))
     bin_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("storage_bins.id"), index=True)
-    qty: Mapped[float] = mapped_column(Float, default=1)
-    unit_cost: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
+    qty: Mapped[float] = mapped_column(Money(14, 4), default=1)
+    unit_cost: Mapped[Numeric] = mapped_column(Money(12, 2), default=0)
     comment: Mapped[Optional[str]] = mapped_column(Text)          # internal by default
     comment_public: Mapped[bool] = mapped_column(Boolean, default=False)
 
@@ -3988,7 +3989,7 @@ class Posting(OrgScoped, Base):
     settlement: Mapped[str] = mapped_column(String(16), default="balance")  # balance|cash
     account_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("accounts.id"))
     reference: Mapped[Optional[str]] = mapped_column(String(120))   # supplier invoice no.
-    total: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
+    total: Mapped[Numeric] = mapped_column(Money(12, 2), default=0)
     status: Mapped[str] = mapped_column(String(16), default="posted")  # posted|deleted
     paid: Mapped[bool] = mapped_column(Boolean, default=False)
     note: Mapped[Optional[str]] = mapped_column(Text)
@@ -4002,11 +4003,11 @@ class PostingLine(OrgScoped, Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)   # DB-02: its own shop, filled from the parent (tenancy.ORG_PARENTS)
     posting_id: Mapped[str] = mapped_column(String, ForeignKey("postings.id"), index=True)
     part_id: Mapped[str] = mapped_column(String, ForeignKey("parts.id"), index=True)
-    qty: Mapped[float] = mapped_column(Float, default=1)
-    unit_cost: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
-    markup_pct: Mapped[Optional[float]] = mapped_column(Float)
+    qty: Mapped[float] = mapped_column(Money(14, 4), default=1)
+    unit_cost: Mapped[Numeric] = mapped_column(Money(12, 2), default=0)
+    markup_pct: Mapped[Optional[float]] = mapped_column(Money(9, 4))
     price_type_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("price_types.id"))
-    total: Mapped[Numeric] = mapped_column(Numeric(12, 2), default=0)
+    total: Mapped[Numeric] = mapped_column(Money(12, 2), default=0)
 
 
 class LabelTemplate(OrgScoped, Base):
@@ -4145,7 +4146,7 @@ class ApprovalRequest(OrgScoped, Base):
     id: Mapped[str] = mapped_column(String, primary_key=True, default=_uuid)
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     kind: Mapped[str] = mapped_column(String(24))                 # refund|discount|retro_edit
-    amount: Mapped[Optional[Numeric]] = mapped_column(Numeric(12, 2))
+    amount: Mapped[Optional[Numeric]] = mapped_column(Money(12, 2))
     ref_type: Mapped[Optional[str]] = mapped_column(String(40))
     ref_id: Mapped[Optional[str]] = mapped_column(String)
     requested_by_id: Mapped[str] = mapped_column(String, ForeignKey("employees.id"))
@@ -4169,7 +4170,7 @@ class ClientLedgerEntry(OrgScoped, Base):
     org_id: Mapped[str] = mapped_column(String, ForeignKey("organisations.id"), index=True)
     client_id: Mapped[str] = mapped_column(String, ForeignKey("clients.id"), index=True)
     entry_type: Mapped[str] = mapped_column(String(16))   # advance|payout|charge|adjustment
-    amount: Mapped[Numeric] = mapped_column(Numeric(12, 2))  # signed: + owed to us, - we owe
+    amount: Mapped[Numeric] = mapped_column(Money(12, 2))  # signed: + owed to us, - we owe
     note: Mapped[Optional[str]] = mapped_column(Text)
     ref_type: Mapped[Optional[str]] = mapped_column(String(32))
     ref_id: Mapped[Optional[str]] = mapped_column(String)
@@ -4261,9 +4262,9 @@ class CreditNote(OrgScoped, Base):
     invoice_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("invoices.id"), index=True)
     status: Mapped[str] = mapped_column(String(12), default="draft")   # draft|issued|canceled
     reason: Mapped[str] = mapped_column(String(500), default="")
-    subtotal: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    tax_total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    subtotal: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    tax_total: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    total: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     issued_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     canceled_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
@@ -4284,12 +4285,12 @@ class CreditNoteLine(OrgScoped, Base):
         String, ForeignKey("credit_notes.id", ondelete="CASCADE"), index=True)
     sort_order: Mapped[int] = mapped_column(Integer, default=0)
     description: Mapped[str] = mapped_column(String(500), default="")
-    qty: Mapped[float] = mapped_column(Numeric(12, 3, asdecimal=False), default=1.0)
-    unit_price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    tax_rate: Mapped[float] = mapped_column(Numeric(7, 3, asdecimal=False), default=0.0)   # percent
-    net: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    tax: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
-    total: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    qty: Mapped[float] = mapped_column(Money(12, 3), default=1.0)
+    unit_price: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    tax_rate: Mapped[float] = mapped_column(Money(7, 3), default=0.0)   # percent
+    net: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    tax: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
+    total: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
 
 
 class PaymentTerminal(OrgScoped, Base):
@@ -4327,12 +4328,12 @@ class TerminalCharge(OrgScoped, Base):
     order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     sale_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("sales.id"), index=True)
     account_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("accounts.id"))
-    amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    amount: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     currency: Mapped[str] = mapped_column(String(8), default="usd")
     status: Mapped[str] = mapped_column(String(16), default="pending")   # pending|processing|succeeded|declined|canceled|failed
     error: Mapped[Optional[str]] = mapped_column(Text)
     payment_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("payments.id"), unique=True)
-    refunded_amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    refunded_amount: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     created_by_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("employees.id"))
     created_at: Mapped[datetime] = mapped_column(DateTime, default=_now, index=True)
     updated_at: Mapped[datetime] = mapped_column(DateTime, default=_now, onupdate=_now)
@@ -4466,8 +4467,8 @@ class MembershipPlan(OrgScoped, Base):
     description: Mapped[str] = mapped_column(Text, default="")
     template_key: Mapped[Optional[str]] = mapped_column(String(30))       # null = any asset
     asset_group_ids: Mapped[Optional[list]] = mapped_column(JSON)          # empty = any group
-    price_monthly: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
-    price_yearly: Mapped[Optional[float]] = mapped_column(Numeric(12, 2, asdecimal=False))
+    price_monthly: Mapped[Optional[float]] = mapped_column(Money(12, 2))
+    price_yearly: Mapped[Optional[float]] = mapped_column(Money(12, 2))
     term: Mapped[str] = mapped_column(String(10), default="rolling")      # rolling|season
     season_start: Mapped[Optional[str]] = mapped_column(String(5))        # "MM-DD"
     season_end: Mapped[Optional[str]] = mapped_column(String(5))
@@ -4489,7 +4490,7 @@ class MembershipPlanItem(OrgScoped, Base):
     service_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("services.id"))
     label: Mapped[str] = mapped_column(String(200), default="")
     qty: Mapped[int] = mapped_column(Integer, default=1)
-    pct: Mapped[float] = mapped_column(Float, default=0.0)
+    pct: Mapped[float] = mapped_column(Money(9, 4), default=0.0)
     applies_to: Mapped[str] = mapped_column(String(10), default="labour")  # labour|parts|both
     window_start: Mapped[Optional[str]] = mapped_column(String(5))        # "MM-DD", seasonal items
     window_end: Mapped[Optional[str]] = mapped_column(String(5))
@@ -4518,7 +4519,7 @@ class Membership(OrgScoped, Base):
     client_id: Mapped[str] = mapped_column(String, ForeignKey("clients.id"), index=True)
     device_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("devices.id"), index=True)
     billing: Mapped[str] = mapped_column(String(10), default="yearly")    # monthly|yearly
-    price: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    price: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     # scheduled (pre-sold) | active | paused (unpaid, in grace) | lapsed | cancelled
     status: Mapped[str] = mapped_column(String(12), default="active")
     term_start: Mapped[date] = mapped_column(Date)                         # plan year / season
@@ -4552,7 +4553,7 @@ class MembershipPeriod(OrgScoped, Base):
     membership_id: Mapped[str] = mapped_column(String, ForeignKey("memberships.id"), index=True)
     period_start: Mapped[date] = mapped_column(Date)
     period_end: Mapped[date] = mapped_column(Date)
-    amount: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    amount: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     invoice_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("invoices.id"), index=True)
     order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     due_on: Mapped[date] = mapped_column(Date)
@@ -4572,8 +4573,8 @@ class MembershipUsage(OrgScoped, Base):
     device_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("devices.id"))
     order_id: Mapped[Optional[str]] = mapped_column(String, ForeignKey("orders.id"), index=True)
     order_line_id: Mapped[Optional[str]] = mapped_column(String)
-    qty: Mapped[float] = mapped_column(Float, default=1.0)
-    value: Mapped[float] = mapped_column(Numeric(12, 2, asdecimal=False), default=0.0)
+    qty: Mapped[float] = mapped_column(Money(14, 4), default=1.0)
+    value: Mapped[float] = mapped_column(Money(12, 2), default=0.0)
     term_start: Mapped[date] = mapped_column(Date)                         # which plan year it counts in
     used_at: Mapped[datetime] = mapped_column(DateTime, default=_now)
 

@@ -247,7 +247,14 @@ def envelope(event_id: str, name: str, org_id: str, data: dict, created_at: date
         "id": event_id, "event": name, "api_version": API_VERSION, "org_id": org_id,
         "created_at": _iso(created_at), "data": data,
         "at": created_at.isoformat(),          # deprecated: the pre-envelope timestamp field
-    }, default=str)
+    }, default=_json_default)
+
+
+def _json_default(o):
+    """Decimal money (DB-08: columns read as Decimal) stays a JSON number; anything else as text."""
+    from decimal import Decimal
+    from backend.services.money import json_default
+    return json_default(o) if isinstance(o, Decimal) else str(o)
 
 
 def order_data(o) -> dict:

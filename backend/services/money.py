@@ -17,6 +17,8 @@ and, finally, carry Decimal through the hot compute paths unconverted.
 """
 from decimal import Decimal, ROUND_HALF_UP
 
+from backend.db.exact import Exact  # noqa: F401  (re-exported: the type every money column reads as)
+
 _CENT = Decimal("0.01")
 _TT = Decimal("0.0001")
 
