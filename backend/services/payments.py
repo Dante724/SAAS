@@ -518,9 +518,13 @@ async def _mark_succeeded(db: AsyncSession, intent: PaymentIntent) -> PaymentInt
     except Exception:
         pass
 
+    from backend.services.notification_rules import queue_payment_received
+    from backend.services.push import dispatch_deferred
+    _pushes: list = []
+    await queue_payment_received(db, intent.org_id, job_ids, push_later=_pushes)   # WO-08: saved with it
     await db.commit()
     await db.refresh(intent)
-    await im.notify_payment_received(db, intent.org_id, job_ids)
+    await dispatch_deferred(db, _pushes)
     return intent
 
 

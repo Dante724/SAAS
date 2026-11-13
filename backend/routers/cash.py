@@ -913,7 +913,7 @@ async def _pay_order(order_id: str, data: OrderPaymentIn, db: AsyncSession, curr
 
     from backend.routers.feed import log_system_event
 
-    from backend.services.invoice_money import apply_order_payment, notify_payment_received
+    from backend.services.invoice_money import apply_order_payment
     if data.method == "balance":
         # Paid out of credit the client already has with the shop (an advance, an overpayment).
         # No money moves: posting "income" here erased real debt when the client had no credit at
@@ -933,8 +933,12 @@ async def _pay_order(order_id: str, data: OrderPaymentIn, db: AsyncSession, curr
                                f"Paid from client credit: {amount}")
         await db.flush()
         await cancel_open_pay_links(db, o)
+        from backend.services.notification_rules import queue_payment_received
+        _pushes: list = []
+        await queue_payment_received(db, current.org_id, [order_id], current.id, push_later=_pushes)   # WO-08
         await db.commit()
-        await notify_payment_received(db, current.org_id, [order_id], current.id)
+        from backend.services.push import dispatch_deferred
+        await dispatch_deferred(db, _pushes)
         return {"ok": True, "method": "balance", "amount": amount}
 
     # cash/cashless/card -> must hit an account
@@ -952,9 +956,13 @@ async def _pay_order(order_id: str, data: OrderPaymentIn, db: AsyncSession, curr
     _pay, fee = await post_order_payment(db, current.org_id, o, amount, acc, data.method, actor_id=current.id)
     await log_system_event(db, current.org_id, "order", order_id,
                            f"Payment {amount} via {data.method} to {acc.name}")
+    # 144jc: payment_received notifications (client receipt + staff), saved with the payment.
+    from backend.services.notification_rules import queue_payment_received
+    _pushes: list = []
+    await queue_payment_received(db, current.org_id, [order_id], current.id, push_later=_pushes)   # WO-08
     await db.commit()
-    # 144jc: payment_received notifications (client receipt + staff), best-effort.
-    await notify_payment_received(db, current.org_id, [order_id], current.id)
+    from backend.services.push import dispatch_deferred
+    await dispatch_deferred(db, _pushes)
     return {"ok": True, "method": data.method, "amount": amount, "fee": fee, "account": acc.name}
 
 
@@ -1028,7 +1036,7 @@ async def _prepay_order(order_id: str, data: PrepayIn, db: AsyncSession, current
     o.prepayment_total = (o.prepayment_total or 0) + data.amount
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "order", order_id, f"Prepayment {data.amount} to {acc.name}")
-    from backend.services.invoice_money import apply_order_money, notify_payment_received
+    from backend.services.invoice_money import apply_order_money
     from backend.services.order_money import cancel_open_pay_links, resync_write_off
     await db.flush()
     # The invoice before the client ledger (Invoice -> Client), the order Invoices › Record
@@ -1042,8 +1050,12 @@ async def _prepay_order(order_id: str, data: PrepayIn, db: AsyncSession, current
                                   ref_id=pay.id, created_by_id=current.id)
     await resync_write_off(db, o, current.id)   # paid after dropping: less is written off
     await cancel_open_pay_links(db, o)
+    from backend.services.notification_rules import queue_payment_received
+    _pushes: list = []
+    await queue_payment_received(db, current.org_id, [order_id], current.id, push_later=_pushes)   # WO-08
     await db.commit()
-    await notify_payment_received(db, current.org_id, [order_id], current.id)
+    from backend.services.push import dispatch_deferred
+    await dispatch_deferred(db, _pushes)
     return {"ok": True, "prepaid": o.prepayment_total}
 
 

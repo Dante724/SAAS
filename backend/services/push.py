@@ -20,6 +20,7 @@ from sqlalchemy.orm import Session
 
 from backend.config import settings
 from backend.models import PushSubscription, StaffNotification
+from backend.services.after_commit import current_tx, is_outermost, undone
 from backend.services.dates import now_utc
 from backend.services.money import json_default
 
@@ -59,6 +60,8 @@ async def notify(db: AsyncSession, *, org_id: str, employee_id: str, kind: str,
     commit: it is sent once that commit succeeds and dropped if the caller rolls back, so a push
     never announces work that wasn't saved (audit NTF-01 follow-up).
     """
+    if not await _still_works_here(db, employee_id):
+        return None                            # re-review N3: nobody who has left gets a bell or push
     if respect_prefs and not await _kind_enabled(db, employee_id, kind):
         return None
     n = StaffNotification(org_id=org_id, employee_id=employee_id, kind=kind,
@@ -67,8 +70,8 @@ async def notify(db: AsyncSession, *, org_id: str, employee_id: str, kind: str,
     if commit:
         await db.commit()
         await db.refresh(n)
-    elif deferred is not None:
-        await db.flush()                       # gives the notification its id, no commit
+    else:
+        await db.flush()                       # gives the notification its id (the push's "id"), no commit
     payload = {
         "title": title, "body": body, "kind": kind,
         # "url" mirrors deep_link for clients that look for the conventional key
@@ -91,12 +94,15 @@ _SENDING: set = set()          # tasks sending pushes after a commit, kept refer
 
 def _after_commit(db: AsyncSession, org_id: str, employee_id: str, payload: dict) -> None:
     sync = getattr(db, "sync_session", db)
-    sync.info.setdefault(_AFTER_COMMIT, []).append((db.bind, org_id, employee_id, payload))
+    # Tagged with the transaction (or savepoint) it was queued in: see services/after_commit.
+    sync.info.setdefault(_AFTER_COMMIT, []).append((current_tx(sync), db.bind, org_id, employee_id, payload))
 
 
 @event.listens_for(Session, "after_commit")
 def _send_committed(session) -> None:
-    items = session.info.pop(_AFTER_COMMIT, None)
+    if not is_outermost(session):
+        return                      # a SAVEPOINT release: the caller's work isn't saved yet (N4)
+    items = [i[1:] for i in session.info.pop(_AFTER_COMMIT, None) or ()]
     if not items:
         return
     try:
@@ -109,9 +115,18 @@ def _send_committed(session) -> None:
     task.add_done_callback(_SENDING.discard)
 
 
-@event.listens_for(Session, "after_rollback")
-def _drop_rolled_back(session) -> None:
-    session.info.pop(_AFTER_COMMIT, None)     # their bell items were rolled back too
+@event.listens_for(Session, "after_soft_rollback")
+def _drop_rolled_back(session, rolled_back) -> None:
+    """Drop the pushes whose bell items were rolled back. A SAVEPOINT rollback (a failed audit row,
+    a rule, an automation) undoes only what was queued inside it; earlier pushes stay (N4)."""
+    items = session.info.get(_AFTER_COMMIT)
+    if not items:
+        return
+    kept = [i for i in items if not undone(i[0], rolled_back)]
+    if kept:
+        session.info[_AFTER_COMMIT] = kept
+    else:
+        session.info.pop(_AFTER_COMMIT, None)
 
 
 async def _send_items(items: list) -> None:
@@ -142,6 +157,13 @@ async def dispatch_deferred(db: AsyncSession, items: list) -> None:
             await _dispatch_push(db, employee_id, payload, commit=True)
         except Exception:  # noqa: BLE001 — a push is best-effort, never the caller's failure
             log.exception("deferred push failed (employee=%s)", employee_id)
+
+
+async def _still_works_here(db: AsyncSession, employee_id: Optional[str]) -> bool:
+    """False for a deactivated employee (left the shop); unknown ids are left to the caller."""
+    from backend.models import Employee
+    active = (await db.execute(select(Employee.active).where(Employee.id == employee_id))).scalar_one_or_none()
+    return active is not False
 
 
 async def _kind_enabled(db: AsyncSession, employee_id: str, kind: str) -> bool:

@@ -816,7 +816,7 @@ async def _record_payment(invoice_id: str, data: "PaymentIn", db: AsyncSession, 
     received = amount if data.overpay == "refund" and excess > 0 else applied
     # Split across every job the invoice bills (F3), each up to its balance, so every job's paid
     # math sees its share. Money handed straight back is booked in and out on the primary job.
-    from backend.services.invoice_money import apply_payment_to_invoice, notify_payment_received
+    from backend.services.invoice_money import apply_payment_to_invoice
     parts = await apply_payment_to_invoice(
         db, inv, float(applied), method=data.method, shift_id=shift_id, account_id=data.account_id,
         received_by_id=current.id, paid_at=paid_at, reference=data.reference) if applied > 0 else []
@@ -877,8 +877,12 @@ async def _record_payment(invoice_id: str, data: "PaymentIn", db: AsyncSession, 
     for order in (await db.execute(select(Order).where(Order.id.in_(job_ids)))).scalars().all() if job_ids else []:
         await db.flush()
         await cancel_open_pay_links(db, order)
+    from backend.services.notification_rules import queue_payment_received
+    from backend.services.push import dispatch_deferred
+    _pushes: list = []
+    await queue_payment_received(db, current.org_id, job_ids, current.id, push_later=_pushes)   # WO-08
     await db.commit()
-    await notify_payment_received(db, current.org_id, job_ids, current.id)
+    await dispatch_deferred(db, _pushes)
     return {"ok": True, "amount_paid": inv.amount_paid, "status": inv.status,
             "balance_due": _balance_due(inv), "applied": float(applied),
             "kept_as_balance": float(kept), "refunded": float(refunded)}

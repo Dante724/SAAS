@@ -101,7 +101,9 @@
     const rest = list.filter((x) => x.id !== id);
     await _saveConflicts(rest);
     if (c && action === 'retry') {         // re-queue the mutation to run against latest server state
-      await enqueue({ method: c.method, url: c.url, body: c.body });
+      // Same Idempotency-Key: if the first try did go through after all, the server answers with
+      // its result instead of doing it twice (a key whose request failed is free to run again).
+      await enqueue({ method: c.method, url: c.url, body: c.body, headers: c.headers });
       if (navigator.onLine) flush();
     }
     emit('sync', await status());
@@ -126,7 +128,7 @@
             conflicts++; await remove(row.id);
             let server = null;
             try { server = await res.clone().json(); } catch (e) {}
-            await recordConflict({ method: item.method, url: item.url, body: item.body,
+            await recordConflict({ method: item.method, url: item.url, body: item.body, headers: item.headers,
                                    detail: (server && (server.detail || server.message)) || 'Conflicts with a newer change',
                                    at: Date.now() });
             emit('conflict', { item, status: 409 });
@@ -143,11 +145,20 @@
     }
   }
 
+  // One key per mutation, made when it is first sent and kept in the queue with it, so a replay
+  // of a request whose answer was lost (weak signal) is recognised by the server and not done
+  // twice: no second comment, status change or customer SMS (re-review N1).
+  function newIdempotencyKey() {
+    try { if (crypto && crypto.randomUUID) return 'tech-' + crypto.randomUUID(); } catch (e) {}
+    return 'tech-' + Date.now().toString(36) + '-' + Math.random().toString(36).slice(2, 12);
+  }
+
   // ── Public mutation helper: online-first, queue on failure/offline ──
   async function mutate(method, url, body, opts) {
     opts = opts || {};
+    const keep = { 'Idempotency-Key': newIdempotencyKey() };   // stored with a queued item (never the token)
     const tok = localStorage.getItem(TOKEN_KEY);
-    const headers = { 'Content-Type': 'application/json' };
+    const headers = Object.assign({ 'Content-Type': 'application/json' }, keep);
     if (tok) headers['Authorization'] = 'Bearer ' + tok;
     if (navigator.onLine) {
       try {
@@ -157,7 +168,7 @@
         return { ok: false, queued: false, status: res.status, data: await res.json().catch(() => ({})) };
       } catch (e) { /* fall through to queue */ }
     }
-    await enqueue({ method, url, body });
+    await enqueue({ method, url, body, headers: keep });
     return { ok: true, queued: true };
   }
 

@@ -56,6 +56,7 @@ import { jobTypeLabel, type WOTypeRef } from "./jobType";
 import { Badge } from "../../components/Card";
 import { theadRowClass } from "../../components/Table";
 import { rememberJob } from "../../lib/recentJob";
+import { isStaleOrder, patchOrderHeader, rememberOrderVersion } from "./orderVersion";
 
 type Emp = { id: string; name: string; in_managers?: boolean; in_assignees?: boolean };
 type Line = { id: string; kind?: string; line_type?: string; description?: string; qty?: number; unit_price?: number; discount?: number; discount_type?: string; technician_id?: string | null; work_share?: number; booked_hours?: number; co_technicians?: { employee_id: string; share: number }[]; total?: number; in_stock?: boolean; order_item_id?: string | null;
@@ -144,7 +145,12 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
     toastTimer.current = setTimeout(() => setToast(null), tone ? 6000 : 2200);
   };
 
-  const reload = () => api.get<Detail>(`/orders/${order.id}`).then(setD).catch(loadFailed("the job"));
+  // WO-03: the job's version (updated_at) comes with every load; header saves send it back.
+  const reload = () => api.get<Detail>(`/orders/${order.id}`)
+    .then((x) => { rememberOrderVersion(order.id, (x as any)?.updated_at); setD(x); }).catch(loadFailed("the job"));
+  // A header save refused because someone else saved the job first (409 stale_order): say so, and
+  // show their version. Returns true when it handled the error.
+  const staleReload = (e: any) => { if (!isStaleOrder(e)) return false; flash(e.message, "warn"); void reload(); return true; };
   useEffect(() => { reload(); }, [order.id]);
   // 144bl Comeback Shield: flag a device that's back soon after a prior visit (gated by role).
   const [comeback, setComeback] = useState<{ is_comeback?: boolean; count?: number; days_since?: number | null; prior_order_number?: string } | null>(null);
@@ -177,6 +183,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
     const prev = d.status; setD({ ...d, status: key });
     try {
       const r = await api.patch<any>(`/orders/${order.id}/status`, { status: key, reason: reason || undefined, comment: extra.comment, allow_unpaid: extra.allow_unpaid || undefined });
+      rememberOrderVersion(order.id, r?.updated_at);   // N6: our own status change isn't someone else's save
       setGate(null); flash("Status updated"); void autoPrintIfClosed(order.id, r); onChanged?.(); reload(); loadLabor();
     } catch (e: any) {
       setD({ ...d, status: prev });
@@ -197,8 +204,8 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
     } catch (e: any) { flash(e.message || "That didn't save. Try again."); }
   }
   async function saveNotes(tech_notes: string, conclusion: string) {
-    try { await api.patch(`/orders/${order.id}/notes`, { tech_notes, conclusion }); setD((p) => ({ ...p, tech_notes, conclusion })); flash("Notes saved"); return true; }
-    catch (e: any) { flash(e.message || "That didn't save. Try again."); return false; }
+    try { await patchOrderHeader(order.id, `/orders/${order.id}/notes`, { tech_notes, conclusion }); setD((p) => ({ ...p, tech_notes, conclusion })); flash("Notes saved"); return true; }
+    catch (e: any) { if (!staleReload(e)) flash(e.message || "That didn't save. Try again."); return false; }
   }
   // Copies the customer's tracking link; staff open it from the "Open" link beside it (a real
   // new-tab link), so the staff tab never turns into the customer page.
@@ -250,16 +257,16 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   async function changeType(typeId: string) {
     if (!typeId || typeId === (d as any).type_id) return;
     try {
-      const r = await api.patch<{ status: string; remapped_to?: string | null }>(`/orders/${order.id}/type`, { type_id: typeId });
+      const r = await patchOrderHeader<{ status: string; remapped_to?: string | null }>(order.id, `/orders/${order.id}/type`, { type_id: typeId });
       flash(r.remapped_to ? "Job type changed, and the status moved to its starting status" : "Job type changed");
       await reload(); onChanged?.();
-    } catch (e: any) { flash(e.message || "Couldn't change the job type", "warn"); }
+    } catch (e: any) { if (!staleReload(e)) flash(e.message || "Couldn't change the job type", "warn"); }
   }
   async function changePriority(p: number) {
     const prev = d.priority;
     setD({ ...d, priority: p });
-    try { await api.patch(`/orders/${order.id}/priority`, { priority: p }); flash("Priority updated"); onChanged?.(); }
-    catch (e: any) { setD((x) => ({ ...x, priority: prev })); flash(e.message || "Couldn't change the priority", "warn"); }
+    try { await patchOrderHeader(order.id, `/orders/${order.id}/priority`, { priority: p }); flash("Priority updated"); onChanged?.(); }
+    catch (e: any) { setD((x) => ({ ...x, priority: prev })); if (!staleReload(e)) flash(e.message || "Couldn't change the priority", "warn"); }
   }
   // J1 — customer signs on the shop's screen (e.g. at pick-up).
   const [sigOpen, setSigOpen] = useState(false);
@@ -298,15 +305,15 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
   }
   async function reassign(field: "assigned_to_id" | "manager_id", id: string) {
     try {
-      await api.patch(`/orders/${order.id}/assign`, { [field]: id });
+      await patchOrderHeader(order.id, `/orders/${order.id}/assign`, { [field]: id });
       const who = emps.find((e) => e.id === id);
       setD((prev) => field === "manager_id" ? { ...prev, manager: who ? { id, name: who.name } : null } : { ...prev, assigned_to: who ? { id, name: who.name } : null } as any);
       flash("Reassigned"); onChanged?.();
-    } catch (e: any) { flash(e.message || "That didn't save. Try again."); }
+    } catch (e: any) { if (!staleReload(e)) flash(e.message || "That didn't save. Try again."); }
   }
   async function reschedule(iso: string) {
-    try { await api.patch(`/orders/${order.id}/schedule`, { scheduled_for: iso || null }); setD((p) => ({ ...p, scheduled_for: iso })); flash("Rescheduled"); onChanged?.(); }
-    catch (e: any) { flash(e.message || "That didn't save. Try again."); }
+    try { await patchOrderHeader(order.id, `/orders/${order.id}/schedule`, { scheduled_for: iso || null }); setD((p) => ({ ...p, scheduled_for: iso })); flash("Rescheduled"); onChanged?.(); }
+    catch (e: any) { if (!staleReload(e)) flash(e.message || "That didn't save. Try again."); }
   }
   // Start the job/labour timer on THIS work order (switch stops any running one first),
   // so the top-bar clock shows which job you're on and time is attributed here.
@@ -718,7 +725,7 @@ export default function WODrawer({ order, onClose, onChanged }: { order: Order; 
                   <p className={`text-sm leading-relaxed whitespace-pre-wrap ${d.complaint ? "text-ink-primary" : "text-ink-tertiary"}`}>{or(d.complaint, "No complaint recorded yet.")}</p>
                 </Ro>
                 <JobCardFields orderId={order.id} typeId={(d as any).type_id} value={(d as any).custom_data} onFlash={flash}
-                  onSaved={(cd) => setD({ ...d, custom_data: cd } as Detail)} />
+                  onSaved={(cd) => setD({ ...d, custom_data: cd } as Detail)} onStale={() => void reload()} />
                 <NotesEditor initTech={d.tech_notes || ""} initConcl={d.conclusion || ""} diagnosis={d.diagnosis || ""} onSave={saveNotes} onPending={(f) => setPending("notes", f)} />
                 </div>
               </Section>
@@ -1288,6 +1295,7 @@ function CustomLineForm({ orderId, forItem, kitId, onFlash, onClose, onAdded }: 
         ...(save && canSave ? { save_to_catalog: true, catalog_kind: type,
           ...(type === "product" ? { catalog_sku: sku.trim() || null, catalog_barcode: barcode.trim() || null } : {}) } : {}),
       }, lineKey.current);
+      rememberOrderVersion(orderId, r?.updated_at);   // N6
       lineKey.current = idempotencyKey();
       onFlash(save && canSave ? `Added and saved to the catalog${r?.margin_warning ? `. ${r.margin_warning}` : ""}` : (r?.margin_warning ? `Added. ${r.margin_warning}` : "Line added"));
       onAdded();
@@ -1359,7 +1367,7 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, onFla
   const [splitOpen, setSplitOpen] = useState(false);                   // split choices folded until asked for
   const [techQuery, setTechQuery] = useState("");                      // filter, shown for bigger teams
   async function patchLine(lineId: string, body: any) {
-    try { await api.patch(`/orders/${orderId}/lines/${lineId}`, body); onChanged?.(); }
+    try { const r = await api.patch<any>(`/orders/${orderId}/lines/${lineId}`, body); rememberOrderVersion(orderId, r?.updated_at); onChanged?.(); }
     catch (e: any) { onFlash(e.message || "Could not update line"); }
   }
   // Removing a line or a whole kit goes through the server, which returns stock for parts, re-spreads
@@ -1423,6 +1431,7 @@ export function ServicesTab({ orderId, locationId, deviceId, lines, total, onFla
         ...(intoKit && pick.kind !== "bundle" ? { bundle_group_id: intoKit.id } : {}),
         ...(pick.kind === "product" && takeBin ? { bin_id: takeBin } : {}),
       }, key);
+      rememberOrderVersion(orderId, r?.updated_at);   // N6
       delete addKeys.current[pick.ref_id];
       const out = pick.kind === "product" && pick.available != null && pick.available <= 0 ? ". It's out of stock: order or transfer it" : "";
       const inKitNow = intoKit && pick.kind !== "bundle";
@@ -1911,10 +1920,10 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
   const { can } = useMe();
   const changeCurrency = async (code: string) => {
     try {
-      const r = await api.patch<any>(`/orders/${orderId}/currency`, { currency_code: code || (base?.code ?? "") });
+      const r = await patchOrderHeader<any>(orderId, `/orders/${orderId}/currency`, { currency_code: code || (base?.code ?? "") });
       onCurrencyChange?.(r.currency_code, r.fx_rate, r.symbol);
       onFlash(`Document currency: ${r.currency_code}`);
-    } catch (e: any) { onFlash(e.message || "That didn't go through. Try again."); }
+    } catch (e: any) { onFlash(e.message || "That didn't go through. Try again."); if (isStaleOrder(e)) onChanged?.(); }
   };
   // fxRate is display-per-base (order snapshot); converted display = base amount × fxRate.
   const isForeign = !!(currencyCode && base && currencyCode !== base.code && fxRate);
@@ -1951,8 +1960,8 @@ export function InvoicesTab({ orderId, total, writtenOff = 0, nothingDone = fals
   const [depBusy, setDepBusy] = useState(false);
   async function requestDeposit(body: { percent?: number; amount?: number }) {
     setDepBusy(true);
-    try { const r = await api.patch<{ deposit_amount: number }>(`/orders/${orderId}/deposit`, body); setDep(r.deposit_amount); setDepInput(""); onFlash(r.deposit_amount > 0 ? `Deposit set: ${money(r.deposit_amount)}` : "Deposit cleared"); }
-    catch (e: any) { onFlash(e.message || "Could not set deposit"); } finally { setDepBusy(false); }
+    try { const r = await patchOrderHeader<{ deposit_amount: number }>(orderId, `/orders/${orderId}/deposit`, body); setDep(r.deposit_amount); setDepInput(""); onFlash(r.deposit_amount > 0 ? `Deposit set: ${money(r.deposit_amount)}` : "Deposit cleared"); }
+    catch (e: any) { onFlash(e.message || "Could not set deposit"); if (isStaleOrder(e)) onChanged?.(); } finally { setDepBusy(false); }
   }
 
   // A2 pay-link

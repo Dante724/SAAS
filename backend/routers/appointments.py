@@ -2,7 +2,7 @@
 cannot hold two overlapping appointments (the schedule-gate intersection test)."""
 from datetime import datetime, timedelta
 from typing import Optional
-from fastapi import APIRouter, Depends, HTTPException
+from fastapi import APIRouter, Depends, HTTPException, Request
 from pydantic import BaseModel
 from sqlalchemy import select, and_
 from sqlalchemy.ext.asyncio import AsyncSession
@@ -285,11 +285,33 @@ async def appointment_to_order(
     record: str = "work_order",   # work_order | estimate — what the appointment becomes
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
+    request: Request = None,
 ):
     """Turn an appointment into a work order or estimate — the client, the time and
     the service all carry across, and the appointment is marked done and linked to the job.
     WO-05: the job gets the same treatment as one made at the counter (valid starting status,
-    order.create audit row, then notifications, commissions, automations, checklists, webhook)."""
+    order.create audit row, then notifications, commissions, automations, checklists, webhook).
+    Re-review N8: a double tap makes one job. The appointment is locked while it converts (the
+    second request then sees it linked: 409), and a retry with the same Idempotency-Key gets the
+    first answer back."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "appointments.to_order",
+                          {"appointment_id": bid, "record": record},
+                          lambda: _appointment_to_order(bid, record, db, current))
+
+
+async def _lock_appointment(db: AsyncSession, bid: str) -> None:
+    """Serialise conversions of one appointment. Postgres: a row lock. SQLite ignores FOR UPDATE,
+    so a no-op UPDATE takes the write lock now (as invoice_money.lock_order does)."""
+    from sqlalchemy import update
+    if db.get_bind().dialect.name == "sqlite":
+        await db.execute(update(Appointment).where(Appointment.id == bid)
+                         .values(order_id=Appointment.order_id).execution_options(synchronize_session=False))
+    else:
+        await db.execute(select(Appointment.id).where(Appointment.id == bid).with_for_update())
+
+
+async def _appointment_to_order(bid: str, record: str, db: AsyncSession, current: Employee):
     from backend.models import Order
     from backend.routers.orders import (
         _new_job_steps, _queue_created_messages, active_employee_id, initial_job_status, record_job_created, stamp_new_job)
@@ -301,8 +323,10 @@ async def appointment_to_order(
         from backend.services.billing import assert_can_add_job
         await assert_can_add_job(db, current.org_id)
 
+    await _lock_appointment(db, bid)
     b = (await db.execute(select(Appointment).where(
-        Appointment.id == bid, Appointment.org_id == current.org_id))).scalar_one_or_none()
+        Appointment.id == bid, Appointment.org_id == current.org_id)
+        .execution_options(populate_existing=True))).scalar_one_or_none()
     if not b:
         raise HTTPException(404, "Appointment not found")
     if b.order_id:

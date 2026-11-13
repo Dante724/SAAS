@@ -217,7 +217,8 @@ export const api = {
   // request per Idempotency-Key and answers a repeat with the first result (backend/services/idempotency.py).
   postOnce: <T>(p: string, b: unknown, key: string) => request<T>("POST", p, b, { "Idempotency-Key": key }),
   postForm,
-  patch: <T>(p: string, b?: unknown) => request<T>("PATCH", p, b),
+  // `headers`: e.g. If-Match on a job header edit (pages/orders/orderVersion.ts).
+  patch: <T>(p: string, b?: unknown, headers?: Record<string, string>) => request<T>("PATCH", p, b, headers),
   put: <T>(p: string, b?: unknown) => request<T>("PUT", p, b),
   del: <T>(p: string) => request<T>("DELETE", p),
 };
