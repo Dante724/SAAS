@@ -5279,7 +5279,7 @@ async def _reverse_fulfillment(db, order, part_id, qty, *, ref_type="order", ref
     # locked, like sales and write-offs — newest layer first, never above what a layer received).
     from backend.services import stock_consume
     for loc_id, _b, q in plan:
-        await stock_consume.restore_layers(db, order.org_id, part_id, loc_id, q)
+        await stock_consume.restore_layers(db, order.org_id, part_id, loc_id, q, order_id=order.id)
     return float(qty)
 
 
@@ -5414,7 +5414,8 @@ async def _consume_from_bins(db, order, line, qty, current, *, bin_id=None, seri
                              movement_type="use", qty=-t_qty, ref_type="order", ref_id=order.id,
                              created_by_id=current.id))
     # FIFO cost layers for the drawn units; the line's other units keep their cost.
-    layered, layer_cost = await stock_consume._consume_layers(db, order.org_id, part_id, taken, order.location_id)
+    layered, layer_cost = await stock_consume._consume_layers(db, order.org_id, part_id, taken, order.location_id,
+                                                              journal=line)
     if layered > 1e-9:
         old_cost = float(line.cost_price or 0)
         new_unit = (layer_cost + (taken - layered) * old_cost) / taken
