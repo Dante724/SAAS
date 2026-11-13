@@ -12,7 +12,7 @@ from backend.core import paging as _paging
 from backend.services.money import MAX_MONEY, check_money, d2, dec, msum, q2, q4  # noqa: F401 — money quantizers used module-wide
 from backend.core.spreadsheet import safe_row
 from backend.services.invoicing import DISPLAY_MODES, balance_due as _balance_due
-from backend.services.dates import day_end_utc, day_start_utc, now_utc, range_edge, shop_today, shop_tzname, today_in
+from backend.services.dates import day_end_utc, day_start_utc, now_utc, report_edge, shop_today, shop_tzname, today_in
 from backend.services.money import Pct, Qty  # NUMERIC input bounds (N3)
 
 router = APIRouter(prefix="/api/finance", tags=["finance"],
@@ -1293,13 +1293,32 @@ async def finance_summary(
     current: Employee = Depends(require_perm("can_view_finance")),
 ):
     # Revenue, what's owed and expenses as every report defines them (services/revenue)
+    from backend.routers.reports import _allowed_for, _require_some
     from backend.services import revenue as money_rules
-    total_revenue = (await money_rules.net_sales(db, current.org_id))["revenue"]
-    total_outstanding = await money_rules.receivables(db, current.org_id)
-    total_expenses = await money_rules.operating_expenses(db, current.org_id)
-    invoice_count = (await db.execute(
-        select(func.count()).select_from(Invoice).where(Invoice.org_id == current.org_id)
-    )).scalar() or 0
+    oid = current.org_id
+    # SEC-04: a location-limited role sees its own branches' figures only ("selected" with no
+    # branch ticked = none, a 403)
+    allow = await _allowed_for(db, current)
+    _require_some(allow)
+    if allow is None:
+        total_revenue = (await money_rules.net_sales(db, oid))["revenue"]
+        total_outstanding = await money_rules.receivables(db, oid)
+        total_expenses = await money_rules.operating_expenses(db, oid)
+        invoice_count = (await db.execute(
+            select(func.count()).select_from(Invoice).where(Invoice.org_id == oid)
+        )).scalar() or 0
+    else:
+        locs = sorted(allow)
+        dropped = await money_rules.dropped_keys(db, oid)
+        total_revenue = total_outstanding = 0.0
+        for loc in locs:
+            total_revenue += (await money_rules.net_sales(db, oid, None, None, loc, dropped=dropped))["revenue"]
+            total_outstanding += await money_rules.receivables(db, oid, loc, dropped=dropped)
+        total_expenses = await _branch_expenses(db, oid, locs)
+        invoice_count = (await db.execute(select(func.count()).select_from(Invoice).where(
+            Invoice.org_id == oid,
+            Invoice.order_id.in_(select(Order.id).where(Order.org_id == oid, Order.location_id.in_(locs))))
+        )).scalar() or 0
     return {
         "total_revenue": q2(total_revenue),
         "total_outstanding": q2(total_outstanding),
@@ -1307,6 +1326,20 @@ async def finance_summary(
         "gross_profit": q2(dec(total_revenue) - dec(total_expenses)),
         "invoice_count": invoice_count,
     }
+
+
+async def _branch_expenses(db, oid: str, locs: list) -> float:
+    """services/revenue.operating_expenses for some branches only: their expense records, plus
+    expense transactions on their branches' cashboxes (never a refund to a customer)."""
+    from backend.models import Account, Transaction
+    from backend.services.revenue import is_customer_refund
+    txns = (await db.execute(select(func.coalesce(func.sum(func.abs(Transaction.amount)), 0))
+        .join(Account, Account.id == Transaction.account_id).where(
+        Transaction.org_id == oid, Transaction.txn_type == "expense", Transaction.status != "deleted",
+        ~is_customer_refund(), Account.location_id.in_(locs)))).scalar() or 0
+    recs = (await db.execute(select(func.coalesce(func.sum(Expense.amount), 0)).where(
+        Expense.org_id == oid, Expense.location_id.in_(locs)))).scalar() or 0
+    return q2(float(txns) + float(recs))
 
 
 # ── 144bk: accountant export ──────────────────────────────────────────
@@ -1327,8 +1360,8 @@ async def accountant_export(
     # instants for actual_date — the same rule as the P&L and every report, so the CPA's file for a
     # month holds exactly what those screens counted for it. expense_date is already a shop day.
     try:
-        df = range_edge(date_from, tz, end=False) if date_from else day_start_utc(today.replace(day=1), tz)
-        dt = range_edge(date_to, tz, end=True) if date_to else day_end_utc(today, tz) - timedelta(microseconds=1)
+        df = report_edge(date_from, tz, end=False) if date_from else day_start_utc(today.replace(day=1), tz)
+        dt = report_edge(date_to, tz, end=True) if date_to else day_end_utc(today, tz) - timedelta(microseconds=1)
     except ValueError:
         raise HTTPException(400, "Invalid date range: expected YYYY-MM-DD")
     exp_from = date.fromisoformat(date_from[:10]) if date_from else today.replace(day=1)

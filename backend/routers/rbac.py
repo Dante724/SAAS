@@ -118,6 +118,24 @@ def _apply_scope(r: Role, data: "RoleIn") -> None:
     r.home_route = (data.home_route or "").strip() or None
 
 
+async def _check_locations(db: AsyncSession, org_id: str, data: "RoleIn") -> "RoleIn":
+    """A role limited to "selected" locations must name at least one, all of them this shop's
+    (F1: an empty list was read as "every location" by some screens and "none" by others)."""
+    if data.location_scope not in ("all", "selected"):
+        raise HTTPException(422, "location_scope must be all|selected")
+    if data.location_scope != "selected":
+        return data
+    ids = list(dict.fromkeys(i for i in (data.location_ids or []) if i))
+    if not ids:
+        raise HTTPException(422, "Pick at least one location for a role limited to selected locations")
+    from backend.models import Location
+    found = (await db.execute(select(func.count()).select_from(Location).where(
+        Location.org_id == org_id, Location.id.in_(ids)))).scalar() or 0
+    if found != len(ids):
+        raise HTTPException(422, "One of the selected locations doesn't exist")
+    return data.model_copy(update={"location_ids": ids})
+
+
 def _validate(perms: dict):
     errors = permission_errors(perms)
     if errors:
@@ -196,6 +214,7 @@ async def create_role(data: RoleIn, db: AsyncSession = Depends(get_db),
     if data.template and data.template not in TEMPLATES:
         raise HTTPException(422, f"Unknown template. Valid: {list(TEMPLATES)}")
     await require_unique_name(db, Role, current.org_id, data.name, "role")
+    data = await _check_locations(db, current.org_id, data)
     perms = new_role_permissions(data.template, data.permissions)
     perms = await guard_role_change(db, current, None, perms, data)
     r = Role(org_id=current.org_id, name=data.name, permissions=perms, perms_explicit=True,
@@ -226,8 +245,7 @@ async def update_role(role_id: str, data: RoleIn, db: AsyncSession = Depends(get
     missing = {k: current_vals[k] for k in _SCOPE_FIELDS if k not in data.model_fields_set}
     if missing:
         data = RoleIn(**{**data.model_dump(), **missing})
-    if data.location_scope not in ("all", "selected"):
-        raise HTTPException(422, "location_scope must be all|selected")
+    data = await _check_locations(db, current.org_id, data)
     # Codes the editor didn't send keep their current value (the role is an explicit allow-list).
     make_explicit(r)
     merged = {**(r.permissions or {}), **{k: bool(v) for k, v in data.permissions.items()}}
