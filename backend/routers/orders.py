@@ -2842,11 +2842,20 @@ async def capture_signature(
     data: SignatureIn,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
+    request: Request = None,
 ):
     """Capture a customer signature in-shop (e.g. on device pickup/handover).
 
-    Stores it on the order and writes a signature item to the activity timeline.
+    Stores it on the order and writes a signature item to the activity timeline. The tech app's
+    offline queue replays this: the same Idempotency-Key gets the first answer, not a second item.
     """
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "orders.signature",
+                          {"order_id": order_id, "signature": data.model_dump(mode="json")},
+                          lambda: _capture_signature(order_id, data, db, current))
+
+
+async def _capture_signature(order_id: str, data: SignatureIn, db: AsyncSession, current: Employee):
     order = (await db.execute(
         select(Order).where(Order.id == order_id, Order.org_id == current.org_id)
     )).scalar_one_or_none()
@@ -3113,10 +3122,20 @@ async def complete_order(
     data: CompleteIn,
     db: AsyncSession = Depends(get_db),
     current: Employee = Depends(get_current_employee),
+    request: Request = None,
 ):
     """One-call completion for the mobile app: optionally capture a signature,
     then move to a terminal status. The completion gate (required checklist +
-    signature) is enforced inside change_status, so this can return 409."""
+    signature) is enforced inside change_status, so this can return 409.
+    The tech app's offline queue replays this: the same Idempotency-Key gets the first answer
+    (not "unchanged", and no second signature item)."""
+    from backend.services.idempotency import run_once
+    return await run_once(db, current.org_id, request, "orders.complete",
+                          {"order_id": order_id, "complete": data.model_dump(mode="json")},
+                          lambda: _complete_order(order_id, data, db, current))
+
+
+async def _complete_order(order_id: str, data: CompleteIn, db: AsyncSession, current: Employee):
     order = (await db.execute(select(Order).where(
         Order.id == order_id, Order.org_id == current.org_id))).scalar_one_or_none()
     if not order:
@@ -3138,7 +3157,7 @@ async def complete_order(
         if not term:
             raise HTTPException(409, "No terminal status configured to complete into.")
         target = term.key
-    return await change_status(order_id, StatusChange(status=target), db, current)
+    return await _change_status(order_id, StatusChange(status=target), db, current)
 
 
 class FinishPaymentIn(BaseModel):
@@ -3224,16 +3243,19 @@ async def _finish_order(order_id: str, data: FinishIn, db: AsyncSession, current
                                f"Payment {q2(p.amount)} via {p.method} to {acc.name}")
         await db.flush()
         paid = {"amount": q2(p.amount), "method": p.method, "fee": fee, "account": acc.name}
+    # The payment's receipt (customer + staff) is queued in this transaction, before the close
+    # commits it (WO-08: it ran after the commit, so a crash in between kept the money and lost the
+    # receipt). A refused close rolls the receipt back with the payment.
+    pushes: list = []
+    if paid:
+        from backend.services.notification_rules import queue_payment_received
+        await queue_payment_received(db, current.org_id, [order.id], current.id, push_later=pushes)
     # The close commits the payment with it (a part payment that leaves money owed is refused here,
     # and rolls the payment back).
     res = await _apply_status_change(db, current, order, target)
-    if paid:
-        async def payment_rules():
-            from backend.services import notification_rules as _nr
-            await _nr.evaluate(db, org_id=current.org_id, order_id=order.id, event="payment_received")
-            await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
-                                         event="payment_received", actor_id=current.id)
-        await _order_side_effect(db, order, "payment notification rules", payment_rules, current)
+    if pushes:
+        from backend.services.push import dispatch_deferred
+        await dispatch_deferred(db, pushes)
     return {"ok": True, "status": target, "payment": paid,
             "order": res if isinstance(res, dict) else None}
 
@@ -4632,12 +4654,16 @@ async def _stop_job_timers(db, order, bill: bool = True) -> None:
     """Stop every timer still running on this job, the same way the Stop button does (and bill it
     as labour where the shop bills tracked time, unless `bill` is off — a cancelled job)."""
     from backend.models import TimeEntry
-    from backend.routers.timeclock import _apply_labour_billing, _maybe_emit_stop, _stop
+    from backend.routers.timeclock import _apply_labour_billing, _maybe_emit_stop, stop_clipped
     running = (await db.execute(select(TimeEntry).where(
         TimeEntry.org_id == order.org_id, TimeEntry.order_id == order.id,
         TimeEntry.state == "running", TimeEntry.ended_at.is_(None)))).scalars().all()
-    for e in running:
-        _stop(e)
+    # N-10, as the Stop button does: stop_clipped takes the person's lock, then stops the timer where
+    # their next logged entry begins if one was entered inside the time it ran (not "now": both
+    # were paid), flagged for review. One person at a time, in id order, so two closes can't
+    # deadlock. It doesn't emit or bill: that stays here.
+    for e in sorted(running, key=lambda x: (x.employee_id, x.id)):
+        await stop_clipped(db, e)
         e.note = ((e.note + " · ") if e.note else "") + "Stopped when the job closed"
         await _maybe_emit_stop(db, e)
         if bill:
@@ -5198,7 +5224,12 @@ async def _reverse_fulfillment(db, order, part_id, qty, *, ref_type="order", ref
         StorageBin.active == True))).scalars().all()) if any(b for _l, b, _q in plan) else set()
     for loc_id, back_bin, q in plan:
         back_bin = back_bin if back_bin in live else None
-        await stock_rows.add(db, part_id, loc_id, q, bin_id=back_bin)
+        try:
+            await stock_rows.add(db, part_id, loc_id, q, bin_id=back_bin)
+        except HTTPException as e:
+            if e.status_code != 403:
+                raise
+            raise await _unwind_out_of_reach(db, order, part_id, loc_id) from e
         db.add(StockMovement(part_id=part_id, location_id=loc_id, bin_id=back_bin,
                              movement_type="return", qty=q, ref_type=ref_type, ref_id=ref_id or order.id))
     from backend.models import SerializedItem
@@ -5222,6 +5253,20 @@ async def _reverse_fulfillment(db, order, part_id, qty, *, ref_type="order", ref
     for loc_id, _b, q in plan:
         await stock_consume.restore_layers(db, order.org_id, part_id, loc_id, q)
     return float(qty)
+
+
+async def _unwind_out_of_reach(db, order, part_id, location_id) -> HTTPException:
+    """The 403 when a job's part goes back to a shelf the person can't reach, saying which job,
+    which part and which branch (E1 follow-up: the generic stock-reach 403 named only the branch,
+    so it read as unrelated to the line being removed)."""
+    from backend.models import Location, Part
+    part = (await db.execute(select(Part.name).where(Part.id == part_id))).scalar_one_or_none() or "This part"
+    where = (await db.execute(select(Location.name).where(Location.id == location_id))).scalar_one_or_none() \
+        if location_id else None
+    where = where or "the branch it came from"
+    return HTTPException(403, f"{part} on {order.order_number} goes back to {where}, where it was taken "
+                              f"from, and you don't have access to stock there. Ask a manager, or someone "
+                              f"who works at {where}, to do this.")
 
 
 def _can_override_reservation(perms, current) -> bool:
@@ -6040,15 +6085,26 @@ async def post_customer_message(db, current, order_id: str, body: str, channel: 
     from backend.routers.feed import log_system_event
     await log_system_event(db, current.org_id, "order", order.id,
                            f"Message to customer: {delivery['message']}")
-    await db.commit()
-    # Internal workflows on "comment added" (assignee / manager), as for any customer-visible comment.
+    # Internal workflows on "comment added" (assignee / manager), as for any customer-visible
+    # comment. Saved in THIS transaction (wave 4, after WO-08): they ran after the commit, so a
+    # crash in between kept the message and lost the alerts. They run in a savepoint: a rule error
+    # undoes only the alerts and is logged, never the message, which may already be on its way to
+    # the customer (send_to_customer above can't be taken back, so failing the request would only
+    # invite a second send). Staff web pushes go out after the commit.
+    from backend.services import notification_rules as _nr
+    pushes: list = []
     try:
-        from backend.services import notification_rules as _nr
-        await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
-                                     event="comment_added", actor_id=current.id)
-    except Exception:  # noqa: BLE001
-        import logging
+        async with db.begin_nested():
+            await _nr.notify_staff_order(db, org_id=current.org_id, order_id=order.id,
+                                         event="comment_added", actor_id=current.id, commit=False,
+                                         push_later=pushes)
+    except Exception:  # noqa: BLE001 — staff alerts never undo the message to the customer
+        pushes.clear()
         logging.getLogger("tekly").exception("comment_added staff rules failed for order %s", order.id)
+    await db.commit()
+    if pushes:
+        from backend.services.push import dispatch_deferred
+        await dispatch_deferred(db, pushes)
     return {"id": c.id, "from": "staff", "who": current.name, "body": c.body,
             "at": c.created_at.isoformat(), "delivery": delivery}
 
