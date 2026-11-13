@@ -33,6 +33,7 @@ from backend.services.auth import assert_perm, get_current_employee, has_perm, r
 from backend.core import paging as _paging
 from backend.services.money import MAX_MONEY, add_to_column, check_money, claim_status, q2
 from backend.services import scoping
+from backend.services.money import Pct, Rate  # NUMERIC input bounds (N3)
 
 
 async def _check_backdating(db, org_id, issued_at: Optional[datetime] = None):
@@ -172,7 +173,7 @@ class AccountIn(BaseModel):
     is_company: bool = False
     is_virtual: bool = False
     location_id: Optional[str] = None
-    fee_pct: float = 0.0
+    fee_pct: Pct = 0.0
     fee_fixed: float = 0.0
     currency_code: Optional[str] = None   # Build 144cr: chosen at create, locked after
 
@@ -630,7 +631,7 @@ class TransferIn(BaseModel):
     from_account_id: str
     to_account_id: str
     amount: float
-    rate: Optional[float] = None       # Build 144cr: exchange rate for cross-currency (1 secondary = rate base)
+    rate: Optional[Rate] = None       # Build 144cr: exchange rate for cross-currency (1 secondary = rate base)
     comment: Optional[str] = None
 
     @field_validator("amount")

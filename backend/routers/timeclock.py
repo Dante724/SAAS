@@ -30,6 +30,7 @@ from backend.services.dates import (
     utc_iso,
     utc_to_wall,
 )
+from backend.services.money import Rate  # NUMERIC input bounds (N3)
 
 
 def _udt(value, field: str):
@@ -1640,7 +1641,7 @@ async def order_time(
 
 
 class BillIn(BaseModel):
-    rate: Optional[float] = None       # ignored: the rate is the one snapshotted on each time entry (WO-02)
+    rate: Optional[Rate] = None       # ignored: the rate is the one snapshotted on each time entry (WO-02)
     round_to_min: int = Field(0, ge=0, le=240)   # 0 = no rounding, e.g. 15 = round up to 15-min
 
 

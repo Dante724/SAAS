@@ -39,6 +39,7 @@ from backend.services.numbering import next_number
 from backend.services.money import add_to_column, claim_status, q2
 from backend.services.dates import now_utc
 from backend.services.owned import require_location, require_owned_ids
+from backend.services.money import Qty  # NUMERIC input bounds (N3)
 
 router = APIRouter(prefix="/api/transfers", tags=["transfers"])
 
@@ -316,7 +317,7 @@ async def transfer_detail(
 
 class TransferLineIn(BaseModel):
     part_id: str
-    qty: float = 1
+    qty: Qty = 1
     serials: Optional[list[str]] = Field(None, max_length=500)   # QA F2: a serialized product's units
 
 
@@ -571,7 +572,7 @@ class ReceiveLine(BaseModel):
     line_id: Optional[str] = None
     part_id: Optional[str] = None     # QA F2: or name the product, as the person holding the box knows it
     code: Optional[str] = None        # … by its barcode / SKU
-    qty_received: float
+    qty_received: Qty
     serials: Optional[list[str]] = None   # a serialized line: the IMEIs / serials that arrived
 
 
@@ -672,7 +673,7 @@ async def _arrived_units(db, org_id: str, ln: StockTransferLine, r: ReceiveLine)
 
 class TransferScanIn(BaseModel):
     code: str                 # barcode or SKU
-    qty: float = 1
+    qty: Qty = 1
 
 
 @router.post("/{tid}/scan")

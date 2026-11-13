@@ -31,6 +31,7 @@ from backend.models import (
 from backend.services.auth import get_current_employee, require_perm, record_scope
 from backend.services.money import d2, dec, q2
 from backend.services.dates import now_utc
+from backend.services.money import Points  # NUMERIC input bounds (N3)
 
 router = APIRouter(prefix="/api", tags=["engage"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -550,7 +551,7 @@ async def client_loyalty(
 
 
 class RedeemPointsIn(BaseModel):
-    points: float
+    points: Points
 
 
 @router.post("/orders/{order_id}/redeem-loyalty")

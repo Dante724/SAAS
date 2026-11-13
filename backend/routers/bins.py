@@ -12,6 +12,7 @@ from backend.db.database import get_db
 from backend.models import StorageBin, StockLevel, StockMovement, Location, Organisation, Part
 from backend.services import numbering, stock_rows
 from backend.services.auth import get_current_employee, require_perm, Employee
+from backend.services.money import Qty  # NUMERIC input bounds (N3)
 
 router = APIRouter(prefix="/api/bins", tags=["bins"])
 
@@ -286,7 +287,7 @@ class TransferIn(BaseModel):
     part_id: str
     source_bin_id: Optional[str] = None      # ii144c: None = the location's unbinned stock (put away)
     destination_bin_id: str
-    qty: float
+    qty: Qty
     location_id: Optional[str] = None        # needed only when there's no source bin
     serial_numbers: Optional[list[Annotated[str, Field(max_length=120)]]] = Field(None, max_length=500)  # which units move (default: oldest)
 

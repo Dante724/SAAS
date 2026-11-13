@@ -13,6 +13,7 @@ from backend.services.money import MAX_MONEY, check_money, d2, dec, msum, q2, q4
 from backend.core.spreadsheet import safe_row
 from backend.services.invoicing import DISPLAY_MODES, balance_due as _balance_due
 from backend.services.dates import day_end_utc, day_start_utc, now_utc, range_edge, shop_today, shop_tzname, today_in
+from backend.services.money import Pct, Qty  # NUMERIC input bounds (N3)
 
 router = APIRouter(prefix="/api/finance", tags=["finance"],
                    dependencies=[Depends(record_scope)])   # role record scope on {order_id}/{client_id}
@@ -21,7 +22,7 @@ class InvoiceLineIn(BaseModel):
     kind: str = "custom"                            # service|product|labor|custom
     source_id: Optional[str] = None                 # catalog ref (null for hand-typed)
     description: str = ""
-    qty: float = 1.0
+    qty: Qty = 1.0
     unit_price: float = 0.0
 
     # B3: a 0 or negative quantity or price made negative invoices.
@@ -49,8 +50,8 @@ class InvoiceIn(BaseModel):
     # Invoices store discount and tax as amounts. A manual invoice sets them as percentages:
     # discount_pct / tax_pct (tax on the discounted subtotal). Older clients send the
     # percentages in discount / tax, which are read the same way when the _pct fields are absent.
-    discount_pct: Optional[float] = None
-    tax_pct: Optional[float] = None
+    discount_pct: Optional[Pct] = None
+    tax_pct: Optional[Pct] = None
     discount: float = 0.0
     tax: float = 0.0
     comment: str = ""                               # 144ed

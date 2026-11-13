@@ -38,13 +38,14 @@ from backend.services.auth import get_current_employee, require_perm
 from backend.services.batching import names_by_id, rows_by
 from backend.services.money import claim_status, q2
 from backend.services.dates import now_utc, shop_today
+from backend.services.money import Qty  # NUMERIC input bounds (N3)
 
 router = APIRouter(prefix="/api/stock-docs", tags=["inventory"])
 
 
 class DocLine(BaseModel):
     part_id: str
-    qty: float = 1
+    qty: Qty = 1
     unit_cost: Optional[float] = None
 
     @field_validator("qty")
@@ -474,7 +475,7 @@ async def create_write_off(
 
 
 class WriteOffLinePatch(BaseModel):
-    qty: Optional[float] = None
+    qty: Optional[Qty] = None
 
     @field_validator("qty")
     @classmethod

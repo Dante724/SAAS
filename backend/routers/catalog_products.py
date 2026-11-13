@@ -35,6 +35,7 @@ from backend.services import valuation
 from backend.core.spreadsheet import (
     MAX_IMPORT_ROWS, MAX_XLSX_BYTES, open_xlsx, safe_row, too_many_rows, unguard_cell,
 )
+from backend.services.money import Pct, Qty  # NUMERIC input bounds (N3)
 
 router = APIRouter(prefix="/api/catalog", tags=["catalog-products"])
 
@@ -498,7 +499,7 @@ class BulkProductsIn(BaseModel):
     ids: list[str]
     action: str                       # category | price | delete
     category_id: Optional[str] = None
-    price_pct: Optional[float] = None  # adjust by +/- percent
+    price_pct: Optional[Pct] = None  # adjust by +/- percent
     price_set: Optional[float] = None  # set absolute price
     write_off_remaining: bool = False  # delete: write off what's still in stock, then archive
 
@@ -1089,7 +1090,7 @@ async def generate_serials(pid: str, data: SerialsIn, db: AsyncSession = Depends
 # ── Write-off (Orderry rules: serial vs non-serial, FEFO) ─────────────────────
 class WriteOffIn(BaseModel):
     location_id: str
-    qty: Optional[float] = None           # non-serialized
+    qty: Optional[Qty] = None           # non-serialized
     serials: Optional[list[str]] = None   # serialized: specific serial numbers
     comment: Optional[str] = None
 
