@@ -27,6 +27,13 @@
       <h1>This link isn't valid</h1>
       <p>It may have expired or been cancelled. ${contact(d)}</p></div></div>`;
   }
+  function unavailable(d) {
+    // The shop can't take online payments right now; the server words it for the customer.
+    card.innerHTML = `${shopHeader(d)}<div class="body"><div class="state">
+      <div class="badge bad" aria-hidden="true">!</div>
+      <h1>Online payment is unavailable</h1>
+      <p>${esc(d.message)}</p></div></div>`;
+  }
   function paid(d) {
     card.innerHTML = `${shopHeader(d)}<div class="body"><div class="state">
       <div class="badge ok" aria-hidden="true">✓</div>
@@ -43,6 +50,7 @@
     } catch (e) { card.innerHTML = '<div class="body"><div class="state"><h1>Couldn\'t load this payment</h1><p>Check your connection and refresh the page.</p></div></div>'; return; }
     if (d.shop_name) document.title = 'Payment request · ' + d.shop_name;
     if (d.status === 'succeeded' || d.status === 'paid') return paid(d);
+    if (!d.payable && d.message) return unavailable(d);
     if (!d.payable || !(d.amount > 0)) return invalid(d);
     if (d.provider !== 'simulated' && (d.status === 'pending' || d.status === 'created')) {
       // Live providers: poll once in case the customer already paid on the hosted page.

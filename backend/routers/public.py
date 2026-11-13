@@ -1736,6 +1736,13 @@ async def public_pay_info(intent_id: str, db: AsyncSession = Depends(get_db)):
     }
     # A cancelled request, or one for nothing, must never show a live Pay button.
     payable = i.status in ("created", "pending", "failed") and (i.amount or 0) > 0
+    # A link sent before the shop was suspended takes no money while it is (services/org_live):
+    # no Pay button and no provider checkout link, only a neutral line on whom to contact.
+    # Resuming the shop makes the same link payable again. A paid link still reads as paid.
+    from backend.services.org_live import PAY_OFF_MESSAGE, org_is_live
+    message, checkout_url = None, i.checkout_url
+    if not org_is_live(org) and i.status != "succeeded":
+        payable, checkout_url, message = False, None, PAY_OFF_MESSAGE
     # Build 144dv — when the intent bills an invoice, show its line items exactly as
     # the invoice's Order-display mode resolves them, so the client sees the same
     # breakdown (per-line, per-ticket, or a single line) as the printed document.
@@ -1750,8 +1757,8 @@ async def public_pay_info(intent_id: str, db: AsyncSession = Depends(get_db)):
     return {"intent_id": i.id, "amount": i.amount, "currency": i.currency,
             "status": i.status, "order_number": order_no,
             "invoice_number": invoice_number, "display_mode": display_mode, "lines": lines,
-            "provider": i.provider, "checkout_url": i.checkout_url,
-            "payable": payable, **shop}
+            "provider": i.provider, "checkout_url": checkout_url,
+            "payable": payable, "message": message, **shop}
 
 
 # ══ Build 109: public status lookup + embeddable widget ══════════════════════

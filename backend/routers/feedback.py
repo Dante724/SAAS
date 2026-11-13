@@ -118,7 +118,13 @@ async def public_form(token: str, db: AsyncSession = Depends(get_db)):
         raise HTTPException(404, "Feedback link not found")
     set_tenant(db, fb.org_id)   # the rest of this public request only sees this shop
     s = (await db.execute(select(FeedbackSettings).where(FeedbackSettings.org_id == fb.org_id))).scalar_one_or_none()
+    # A suspended shop takes no feedback (services/org_live): the page says so up front instead
+    # of letting the customer write a review that would be refused on submit.
+    from backend.services.org_live import PUBLIC_OFF_MESSAGE, org_id_is_live
+    accepting = await org_id_is_live(db, fb.org_id)
     return {
+        "accepting": accepting,
+        "message": None if accepting else PUBLIC_OFF_MESSAGE,
         "system": fb.system,
         "already_submitted": fb.submitted_at is not None,
         "rating": fb.rating,
@@ -157,6 +163,8 @@ async def submit_feedback(token: str, data: SubmitIn, db: AsyncSession = Depends
     if not fb:
         raise HTTPException(404, "Feedback link not found")
     set_tenant(db, fb.org_id)   # the rest of this public request only sees this shop
+    from backend.services.org_live import assert_public_live
+    await assert_public_live(db, fb.org_id)       # suspended: 403 with a polite, neutral message
     if fb.submitted_at:
         raise HTTPException(409, "Feedback already submitted")
     fb.rating = data.rating

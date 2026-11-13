@@ -62,7 +62,17 @@ async def ingest_inbound(db: AsyncSession, org_id: str, *, channel: str, handle:
     """Store one inbound message, opening the thread if needed. Returns (thread, message), or
     (thread, None) when this provider message id was already stored (webhook retry).
     The caller commits, then calls `notify_inbound`. Long names / handles are cut to the
-    column sizes so a provider can't make the insert fail."""
+    column sizes so a provider can't make the insert fail.
+
+    A suspended (or switched-off) shop takes nothing in (services/org_live): this returns
+    (None, None) exactly like a provider retry, so every webhook still answers 2xx (the provider
+    stops retrying) but nothing is stored and nobody is alerted. The one exception is a carrier
+    STOP / START by text, which still sets the customer's consent (compliance, like unsubscribe
+    links) so a resumed shop never texts someone who opted out meanwhile."""
+    from backend.services.org_live import org_id_is_live
+    if not await org_id_is_live(db, org_id):
+        await _consent_keyword_while_closed(db, org_id, channel, handle, body)
+        return None, None
     handle = (handle or "")[:160]
     name = (name or "")[:200] or None
     external_id = (external_id or "")[:160] or None
@@ -95,6 +105,22 @@ async def ingest_inbound(db: AsyncSession, org_id: str, *, channel: str, handle:
         db.add(msg)
     mark_inbound(thread)
     return thread, msg
+
+
+async def _consent_keyword_while_closed(db: AsyncSession, org_id: str, channel: str,
+                                        handle: str | None, body: str | None) -> None:
+    """STOP / START by text for a shop that isn't live: update consent only, and commit (callers
+    treat this as a retry and commit nothing)."""
+    if channel not in ("sms", "whatsapp"):
+        return
+    from backend.routers.chats import OPT_IN_WORDS, OPT_OUT_WORDS
+    kw = (body or "").strip().upper().rstrip(".!")
+    if kw not in OPT_OUT_WORDS and kw not in OPT_IN_WORDS:
+        return
+    c = await link_client(db, org_id, (handle or "")[:160])
+    if c:
+        c.consent_phone = kw in OPT_IN_WORDS
+        await db.commit()
 
 
 async def notify_inbound(db: AsyncSession, org_id: str, thread: ChatThread, body: str) -> None:
